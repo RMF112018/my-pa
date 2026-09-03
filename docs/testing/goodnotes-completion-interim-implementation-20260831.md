@@ -30,7 +30,7 @@ evidence only and was not transplanted.
 | RI WP12 | clean commit `fc8911b2241654f03210d77bfe22894dd2d41ddd`; tree `1ba3ae769d3594516b684c6bbe9e69f8860c3950` | Owns successor migration `b8e4d1a6c073`, shared service/plans/runbooks, and schema-test ancestry. GoodNotes migration or shared-path work remains serialized behind it. |
 | RI WP13 | commit `e94dd4b35966777e675079911a9350fc75de39f4`; tree `f1b2eecce4d54f761f42e26202fd19bda042958b`; PR #181 open and conflicting | An active staged merge owns broad shared paths, including plans, service, ports, authorization, transports, the `16f05c46b8c3` migration, and schema/contract/security tests. It is not incorporated or modified here. |
 
-The GoodNotes delta from current `origin/main` contains 21 paths. It does not
+The GoodNotes delta from current `origin/main` contains 22 paths. It does not
 edit either shared plan, `src/my_pa/application/service.py`,
 `src/my_pa/contracts/ports.py`, a migration, or an RI semantic implementation
 path. Its mechanical changed-path intersection with the current WP12 commit and

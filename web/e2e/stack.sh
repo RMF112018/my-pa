@@ -16,9 +16,13 @@
 #                once pointed at the gateway, once pointed at a dead port so the
 #                failure states come from a real refused connection.
 #
-# Nothing here holds a credential. The database is password-less over loopback
-# through ~/.pgpass, exactly as the Python suites reach it, and the session
-# signing key is a synthetic value that signs cookies for a disposable database.
+# Nothing here holds a credential or live personal data. The database is
+# password-less over loopback through ~/.pgpass, exactly as the Python suites
+# reach it. The browser cookie is an opaque 64-hex SID; PostgreSQL
+# AuthSessionStore is the authority. The BFF→Python session-service HMAC and
+# WebAuthn RP values below are synthetic dummies that match
+# playwright.config.ts so verification succeeds. Session-service routes 503 when
+# RP is unset or the secret is short, so the gateway must receive them.
 #
 # Usage:  npm run e2e            (from web/)
 #         npm run e2e -- --project=desktop
@@ -82,6 +86,11 @@ echo "e2e: starting the Python gateway on 127.0.0.1:${GATEWAY_PORT}"
   MY_PA_ENVIRONMENT=local \
   MY_PA_AUTH_MODE=local_operator \
   MY_PA_DATABASE_URL="${DATABASE_URL}" \
+  MY_PA_SESSION_SERVICE_SECRET=synthetic-e2e-session-service-secret-00 \
+  MY_PA_WEBAUTHN_BFF_SECRET=synthetic-e2e-webauthn-bff-secret-0000 \
+  MY_PA_WEBAUTHN_RP_ID=localhost \
+  MY_PA_WEBAUTHN_RP_NAME=my-pa \
+  MY_PA_WEBAUTHN_ALLOWED_ORIGINS=http://localhost:3100 \
   "${PYTHON}" apps/gateway.py run --port "${GATEWAY_PORT}"
 ) >"${GATEWAY_LOG}" 2>&1 &
 gateway_pid=$!

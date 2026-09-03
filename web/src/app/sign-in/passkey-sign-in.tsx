@@ -1,18 +1,24 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
   getPasskey,
   WebAuthnBrowserError,
 } from "@/lib/auth/webauthn-ceremony";
+import { safeReturnPath } from "@/lib/auth/return-path";
 
 export function PasskeySignIn() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [status, setStatus] = useState<string | null>(null);
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
+
+  function destination(fallback: string): string {
+    return safeReturnPath(searchParams.get("next")) ?? fallback;
+  }
 
   async function authenticate() {
     setBusy(true);
@@ -40,7 +46,7 @@ export function PasskeySignIn() {
         setStatus("Passkey sign-in failed.");
         return;
       }
-      router.push("/today");
+      router.push(destination("/today"));
       router.refresh();
     } catch (error) {
       setStatus(
@@ -70,7 +76,7 @@ export function PasskeySignIn() {
       setBusy(false);
       return;
     }
-    router.push("/system/security");
+    router.push(destination("/system/security"));
     router.refresh();
   }
 

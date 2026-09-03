@@ -1,4 +1,11 @@
-/** Server-only WebAuthn BFF helpers. Do not import from client components. */
+/**
+ * Server-only WebAuthn BFF helpers for ceremony routes.
+ *
+ * Attestation (`x-my-pa-webauthn-attestation`) is for WP03 ceremony calls that
+ * already have a Principal. Session-service routes (resolve/touch/rotate/revoke/
+ * issue-synthetic) must go through `session-service.ts` and must not send this
+ * header. Cookie set and `issuedSid` stripping happen in the route handler.
+ */
 
 import { createHmac } from "node:crypto";
 import type { PrincipalSession } from "@/contracts/identity";

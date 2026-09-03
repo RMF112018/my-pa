@@ -5,17 +5,19 @@
  * not a tidiness measure.** This suite runs against `next dev` — it has to, since
  * the only sign-in this build implements is refused in a production build (see
  * `playwright.config.ts`). A dev server compiles routes on demand, and that
- * compilation can reload the server's module context. The session registry is a
- * process-local, in-memory structure by design (`lib/auth/session-registry.ts`
- * says so in its own docstring: "lost on restart, which is the safe direction"),
- * so a reload in the middle of a test revokes the session that test signed in
- * with, and the test then sees the sign-in screen for no reason it can observe.
+ * compilation can reload the server's module context mid-test. The compile is
+ * what this loop is for: fetch every route once so the first signed-in request
+ * is not also the first compile.
  *
- * That is a **development-mode artefact**, not a defect in the product: a
- * production server evaluates its modules once and does not recompile under
- * traffic. But it is real enough to make a browser suite flap, so the fix is to
- * do the compiling *before* any session exists — every route, on both servers,
- * fetched once here.
+ * Session **authority is PostgreSQL `AuthSessionStore`**, reached through the
+ * Python session-service. It is not a process-local Map. A Next reload does not
+ * revoke a live SID; `lib/auth/session-registry.ts` is a no-op shim. Warm-up
+ * remains useful so `next-dev` is not compiling under a signed-in cookie. It is
+ * **not** product proof that in-memory registry revocation is how sessions die.
+ * Multi-instance / restart proof lives in
+ * `tests/database/test_webauthn_auth_persistence.py`
+ * (`test_session_authority_is_postgresql_not_process_local`). Playwright restart
+ * of Next is not that proof.
  *
  * Nothing is asserted and nothing is signed in. A route that 307s to `/sign-in`
  * is a perfectly good warm-up: the compile is what is wanted.

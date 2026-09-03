@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { backendDisclosure, callGateway, transportLimitations, type GatewayCapability } from "@/lib/api/gateway";
+import { backendDisclosure, invokeGateway, transportLimitations, type GatewayCapability } from "@/lib/api/gateway";
 import { requirePrincipal, readCleanBody } from "@/lib/api/guard";
 import { gatewayRefusal, notImplemented, resolveServing } from "@/lib/api/serving";
 import type { PrincipalSession } from "@/contracts/identity";
@@ -196,19 +196,30 @@ async function dispatch(
   if (serving.kind === "synthetic") {
     return notImplemented(scope, "Work mutations and reads require the executable Python Work plane; synthetic fixtures are not canonical Task or Commitment state.");
   }
-  const outcome = await callGateway<Record<string, unknown>>(principal, capability, payload);
+  const outcome = await invokeGateway(principal, capability, payload);
   if (!outcome.ok) {
     const identifier = typeof payload.task_id === "string" ? { capability: "tasks.read" as const, payload: { task_id: payload.task_id }, key: "task" }
       : typeof payload.commitment_id === "string" ? { capability: "commitments.read" as const, payload: { commitment_id: payload.commitment_id }, key: "commitment" }
       : undefined;
     if (outcome.status === 409 && identifier) {
-      const current = await callGateway<Record<string, unknown>>(principal, identifier.capability, identifier.payload);
-      if (current.ok) {
+      const current = await invokeGateway(principal, identifier.capability, identifier.payload);
+      if (current.ok && isRecord(current.result)) {
+        const record = current.result[identifier.key];
+        if (!isRecord(record)) {
+          return gatewayRefusal(scope, outcome.status, outcome.error);
+        }
         const refusal = await gatewayRefusal(scope, outcome.status, outcome.error).json();
-        return NextResponse.json({ ...refusal, current: publicResult(current.result)[identifier.key] ?? publicResult(current.result) }, { status: 409 });
+        return NextResponse.json({ ...refusal, current: publicResult(record) }, { status: 409 });
       }
     }
     return gatewayRefusal(scope, outcome.status, outcome.error);
+  }
+  if (!isRecord(outcome.result)) {
+    return gatewayRefusal(scope, 503, {
+      errorClass: "unavailable",
+      code: "upstream_contract_invalid",
+      message: "the gateway result did not match the capability contract",
+    });
   }
   return NextResponse.json({
     shape: "backend",

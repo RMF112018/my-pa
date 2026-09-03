@@ -1,8 +1,6 @@
 import type { Decoder } from "../types";
+import { decodeTaskMutation, type TaskMutationResult } from "./_mutation-helpers";
 
-/** Fail-closed stub. Workers C/D replace this module with the real capability guard. */
-export const decodeTasksUpdate: Decoder<unknown> = () => ({
-  ok: false,
-  code: "capability_decoder_pending",
-  message: "the capability result was rejected as uncontracted",
-});
+export type TasksUpdateResult = TaskMutationResult;
+
+export const decodeTasksUpdate: Decoder<TasksUpdateResult> = decodeTaskMutation;

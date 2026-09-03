@@ -35,7 +35,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { requirePrincipal, readCleanBody } from "@/lib/api/guard";
 import { admitBrowserMutation } from "@/lib/http/mutation-admission";
 import contract from "@/contracts/gateway.json";
-import { backendDisclosure, callGateway, transportLimitations } from "@/lib/api/gateway";
+import { backendDisclosure, invokeGateway, transportLimitations } from "@/lib/api/gateway";
 import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
 import {
   REVIEW_DISPOSITIONS,
@@ -43,21 +43,11 @@ import {
   syntheticDecisionReceipt,
 } from "@/lib/fixtures/review";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
+import type { ReviewDecideResult } from "@/lib/api/decode/capabilities/review.decide";
 import type { ReviewDisposition, ReviewDecisionReceipt } from "@/contracts/views";
 
 /** The five verbs the workbench may submit, read off the shared contract. */
 const DISPOSITIONS = contract.dispositions as Record<string, string>;
-
-interface PythonDecision {
-  readonly review_case_id: string;
-  readonly decision_id?: string;
-  readonly review_version?: number;
-  readonly disposition?: string;
-  readonly proposal_state?: string;
-  readonly assertion_id?: string | null;
-  readonly receipt_id?: string | null;
-  readonly result?: string;
-}
 
 function refuse(code: string, message: string, status: number): NextResponse {
   return NextResponse.json({ error: { errorClass: "validation", code, message } }, { status });
@@ -142,33 +132,32 @@ export async function POST(
     );
   }
 
-  const outcome = await callGateway<PythonDecision>(guard.principal, "review.decide", {
+  const outcome = await invokeGateway(guard.principal, "review.decide", {
     review_case_id: id,
     expected_review_version: expected,
     disposition: DISPOSITIONS[disposition],
     corrected_value: disposition === "correct" ? (correctedValue as string).trim() : undefined,
   });
   if (!outcome.ok) return gatewayRefusal(scope, outcome.status, outcome.error);
+  const decoded = outcome.result as ReviewDecideResult;
 
-  // A proposal invalidated before the decision landed has no decision row, so
-  // the backend reports the outcome rather than a receipt. Reported as it is.
-  if (outcome.result.decision_id === undefined) {
+  if (!("decision_id" in decoded)) {
     return NextResponse.json({
       shape: "backend",
-      status: outcome.result.result ?? "no_decision_recorded",
+      status: decoded.result,
       receipt: null,
       disclosure: backendDisclosure(scope, outcome.disclosure, transportLimitations()),
     });
   }
 
   const receipt: ReviewDecisionReceipt = {
-    reviewCaseId: outcome.result.review_case_id,
-    decisionId: outcome.result.decision_id,
-    reviewVersion: outcome.result.review_version ?? expected + 1,
-    disposition: outcome.result.disposition ?? DISPOSITIONS[disposition],
-    proposalState: outcome.result.proposal_state ?? "unknown",
-    assertionId: outcome.result.assertion_id ?? null,
-    receiptId: outcome.result.receipt_id ?? null,
+    reviewCaseId: decoded.review_case_id,
+    decisionId: decoded.decision_id,
+    reviewVersion: decoded.review_version,
+    disposition: decoded.disposition,
+    proposalState: decoded.proposal_state,
+    assertionId: decoded.assertion_id,
+    receiptId: decoded.receipt_id,
   };
   return NextResponse.json({
     shape: "backend",

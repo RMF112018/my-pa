@@ -1,8 +1,23 @@
+import { ok } from "../primitives";
 import type { Decoder } from "../types";
+import {
+  decodeCommitmentView,
+  pick,
+  requiredBoolean,
+  type CommitmentView,
+} from "./_mutation-helpers";
 
-/** Fail-closed stub. Workers C/D replace this module with the real capability guard. */
-export const decodeCommitmentsClose: Decoder<unknown> = () => ({
-  ok: false,
-  code: "capability_decoder_pending",
-  message: "the capability result was rejected as uncontracted",
-});
+export interface CommitmentsCloseResult {
+  readonly commitment: CommitmentView;
+  readonly replayed: boolean;
+}
+
+export const decodeCommitmentsClose: Decoder<CommitmentsCloseResult> = (input) => {
+  const known = pick(input, ["commitment", "replayed"]);
+  if (!known.ok) return known;
+  const commitment = decodeCommitmentView(known.value.commitment);
+  if (!commitment.ok) return commitment;
+  const replayed = requiredBoolean(known.value.replayed);
+  if (!replayed.ok) return replayed;
+  return ok({ commitment: commitment.value, replayed: replayed.value });
+};

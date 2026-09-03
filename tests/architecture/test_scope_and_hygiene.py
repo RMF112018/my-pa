@@ -253,6 +253,7 @@ CONFINED_IMPORT_ROOTS = {
     # pypdfium2 rasterizes admitted GoodNotes pages. Application code must not
     # import it; identity matching consumes PageRender values instead.
     "pypdfium2": "infrastructure/goodnotes",
+    "webauthn": "infrastructure/security",
 }
 
 
@@ -355,6 +356,7 @@ def test_the_derivation_prohibits_nothing_the_package_legitimately_uses() -> Non
         "pypdfium2",
         "sqlalchemy",
         "starlette",
+        "webauthn",
     }, f"the package's third-party surface changed to {sorted(third_party)}"
 
 
@@ -410,6 +412,7 @@ def test_declared_runtime_dependencies_are_the_agreed_set() -> None:
         "mcp",
         "pyjwt",
         "pypdfium2",
+        "webauthn",
     }
 
 

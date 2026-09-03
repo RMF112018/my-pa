@@ -80,6 +80,7 @@ from my_pa.adapters.http import (
     APPLE_POLL_PATH,
     PATH_TEMPLATE,
     REMOTE_CAPTURE_PATH,
+    WEBAUTHN_PATH,
     create_http_app,
 )
 from my_pa.adapters.normalization import _BUILDERS
@@ -1877,6 +1878,7 @@ def test_the_transport_routes_no_mutating_capability() -> None:
         REMOTE_CAPTURE_PATH,
         APPLE_POLL_PATH,
         APPLE_ADMIT_PATH,
+        WEBAUTHN_PATH,
         PATH_TEMPLATE,
     ]
     assert all(route.methods == {"POST"} for route in routes)

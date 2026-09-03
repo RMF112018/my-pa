@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-Three hundred and twelve Python modules under `src/my_pa` and four hundred and forty-four test modules —
+Three hundred and sixteen Python modules under `src/my_pa` and four hundred and forty-six test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale three times: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
@@ -183,7 +183,23 @@ module on either side. It brings content changes to two files only --
 `tests/database/test_entity_resolution_value_reads.py` (the `NameTypeCode`
 member that never existed) and `tests/database/test_entity_search_reaches_context.py`
 (two further tests for the widened search's active-state filter) -- both of
-which already existed here. The pair standing before this
+which already existed here. **Moved on 2026-09-02 by the UI-IMP-WP03
+integration** (`origin/main` at `20638373`), which added four source modules --
+`src/my_pa/adapters/http/webauthn.py`,
+`src/my_pa/application/webauthn_bff_attestation.py`,
+`src/my_pa/domain/identity/webauthn_relying_party.py` and
+`src/my_pa/infrastructure/security/webauthn_ceremony.py` -- and two test
+modules, `tests/unit/test_webauthn_ceremony.py` and
+`tests/database/test_webauthn_ceremony.py`. Its isolation commit moved ceremony
+execution into the existing `bootstrap.gateway` composition root and added a
+module on neither side. `origin/main` recorded the resulting pair as three
+hundred and fifteen and four hundred and forty-three, true of *its* tree and
+not of this one, which also carries RI-ENT-WP-10/11's source and test modules.
+The pair stated at the head of this section was re-measured by running the two
+commands above against the merged tree once every conflict marker was gone --
+never by adding this integration's four and two to the previous pair, which is
+the arithmetic RULING-M2 forbids and which would have been wrong here for the
+third consecutive integration. The pair standing before this
 correction, three hundred and
 five and four hundred and twenty-nine, was true at `f4eaa4f`; the chain above
 therefore skips from four hundred and twenty-six to four hundred and

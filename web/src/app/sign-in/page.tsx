@@ -19,6 +19,7 @@ import { admissibleSyntheticPrincipals } from "@/lib/auth/synthetic";
 import { authMode } from "@/lib/auth/mode";
 import { SignInForm } from "@/app/sign-in/sign-in-form";
 import { LocalOperatorSignInForm } from "@/app/sign-in/local-operator-sign-in-form";
+import { PasskeySignIn } from "@/app/sign-in/passkey-sign-in";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
@@ -55,6 +56,7 @@ export default function SignInPage() {
             <a className="mt-4 inline-flex rounded-md bg-moss-green px-4 py-2 text-on-interactive" href="/auth/sign-in">
               Continue with Microsoft Entra
             </a>
+            <PasskeySignIn />
           </CardBody>
         </Card>
       </main>
@@ -74,6 +76,7 @@ export default function SignInPage() {
           <CardBody>
             <p>Authenticate as this deployment&apos;s single, server-selected operator.</p>
             <LocalOperatorSignInForm />
+            <PasskeySignIn />
           </CardBody>
         </Card>
       </main>
@@ -97,6 +100,7 @@ export default function SignInPage() {
             Identity is derived from validated claims only — never from anything you type.
           </p>
           <SignInForm principals={offered} />
+          <PasskeySignIn />
         </CardBody>
       </Card>
     </main>

@@ -24,7 +24,8 @@ evidence only and was not transplanted.
 | Item | Exact state | Treatment |
 | --- | --- | --- |
 | Current `origin/main` | commit `8f0e47795a698a5e51e55e06253d91312ef932fb`; tree `46afa161aa0f94dd568ff9db984bcc369d6a7c03` | Exact merge-base for the current isolated GoodNotes synchronization. |
-| Current GoodNotes corrected code head | commit `11f77f4770af8c335e9590bd5db4a2925cdc0196`; tree `bad9b8042ddf37f360140c40211d04885439806d` | Clean isolated integration state before this one-file ledger update. It includes the bounded R7 identity-target seam and the validator-driven correction described below. |
+| Current GoodNotes corrected code head | commit `11f77f4770af8c335e9590bd5db4a2925cdc0196`; tree `bad9b8042ddf37f360140c40211d04885439806d` | Contains the bounded R7 identity-target seam and the validator-driven code correction described below. |
+| Current pre-review GoodNotes ledger head | commit `191ae002d522ac16538276cbf6f1b32d5b4687e3`; tree `d67c07fba61cedab5ff719c02b1443d7e636efa6` | Clean isolated integration state before this one-file reconciliation. Independent validation passed at this exact head, but no independent exact-head review or PR eligibility is claimed. |
 | Frozen pre-WP08 GoodNotes branch | commit `50f29a042da716e75820bf150d606b67aa99718e`; tree `2c68219fb3db82a6b071a84f8d18a402ff6adda3` | Preserved without mutation as historical evidence. |
 | Current main Alembic graph | sole head `16f05c46b8c3` | The GoodNotes tranche adds no migration. |
 | RI WP12 | clean commit `fc8911b2241654f03210d77bfe22894dd2d41ddd`; tree `1ba3ae769d3594516b684c6bbe9e69f8860c3950` | Owns successor migration `b8e4d1a6c073`, shared service/plans/runbooks, and schema-test ancestry. GoodNotes migration or shared-path work remains serialized behind it. |
@@ -84,6 +85,13 @@ Commit `11f77f4770af8c335e9590bd5db4a2925cdc0196`, tree
 successfully parsed identifier is exact-ID-only, and associated result objects
 enforce `ent_` for person or organization targets and `prj_` for project
 targets.
+
+Independent validation then passed at exact ledger head
+`191ae002d522ac16538276cbf6f1b32d5b4687e3`, tree
+`d67c07fba61cedab5ff719c02b1443d7e636efa6`, confirming that the prior major
+and minor were closed. That result is validation evidence, not the independent
+exact-head review required for PR or merge eligibility. This reconciliation
+commit will itself require a fresh exact-head review.
 
 During synchronization, a worker mistakenly operated in the primary checkout.
 The tracked checkout was restored to its pre-incident detached commit
@@ -152,8 +160,23 @@ commits:
   focused R7 identity selection with `39 passed`, the broader GoodNotes unit
   selection with `216 passed`, and the dependency-architecture selection with
   `1,520 passed`; Ruff check, Ruff format check, targeted mypy over the two
-  changed source files, and `git diff --check` also passed. These author results
-  do not substitute for fresh independent validation or exact-head review;
+  changed source files, and `git diff --check` also passed. Those author results
+  did not themselves substitute for later independent validation or exact-head
+  review;
+- on exact ledger head `191ae002`, independent validation confirmed the prior
+  major and minor closed: the focused R7 identity selection completed with
+  `39 passed`, the broader GoodNotes unit selection with `216 passed`, and the
+  dependency-architecture selection with `1,520 passed`; Ruff check and format
+  check covered 20 files, targeted mypy covered the two changed source files,
+  and `git diff --check` passed. This was validation, not independent exact-head
+  review or an applicable PR-tier result;
+- the count guards rerun at `191ae002` completed with `48 passed, 5 failed`.
+  Current exact mismatches are: FAST claims `16,380` while collection reports
+  `16,527`; database/recovery/e2e claims `2,081` while collection reports
+  `2,082`; mypy claims 449 sources while mypy reports 452; architecture claims
+  `4,932` while collection reports `4,971`; and the MCV plan claims 318 source
+  modules while the repository holds 321. These authoritative claims remain
+  owned by their active shared plans;
 - the isolated database campaign partially executed `1,462 passed, 0 failed`
   in `56:03`; 620 tests in the named database/recovery/e2e selection were not
   executed, so this is not a completed database tier or an applicable PR-tier
@@ -198,8 +221,11 @@ The review chronology is preserved rather than overwritten:
   the legacy/other-identifier normalized-name fallback major and the direct
   wrong-plane result-construction minor described above; and
 - correction `11f77f47`, tree `bad9b804`, addresses those findings, but neither
-  it nor the commit containing this ledger update has a fresh independent
-  validation or exact-head review verdict.
+  it nor the then-current ledger had an independent review verdict; and
+- independent validation of `191ae002`, tree `d67c07fb`, returned `PASS` and
+  confirmed the prior major and minor closed. This is not an independent
+  exact-head review, does not establish PR eligibility, and will not apply to
+  the later commit containing this ledger reconciliation.
 
 No historical verdict authorizes the current or eventual head. Required count
 guards remain red because their authoritative claims are in shared plans, the
@@ -230,8 +256,8 @@ The objective remains incomplete pending:
   required for the final changed surface;
 - operator decisions for R11, R12, and OP-GN-01; and
 - a fresh independent review bound to the final exact head, followed by the
-  applicable PR and merge decisions. Fresh validation must first confirm the
-  two R7 findings are closed on the current head.
+  applicable PR and merge decisions. Independent validation has confirmed the
+  two R7 findings closed through `191ae002`, but has not supplied that review.
 
 No blocker was bypassed. This ledger records the bounded R7 Option 2 decision,
 but no R7 completion, request completion, applicable PR-tier pass, PR or merge

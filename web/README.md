@@ -37,6 +37,10 @@ All application pages require a verified session. `/sign-in` is public.
 | `/library`, `GET /api/library` | `knowledge.read`, `knowledge.search`, `capture.search`, or `capture.list` | Chooses one capability from the request shape; no synthetic Library fixture is invented |
 | `POST /api/reveal` | `knowledge.reveal` | Preserves `evidence`, `no_evidence`, and `unavailable` as distinct answers |
 | `/review`, `GET /api/review` | `review.list` | Lists the acting Principal's review cases |
+| `/intelligence`, `GET /api/intelligence` | `reports.list`, `reports.search` | Lists or searches Principal-scoped Intelligence artifacts; `structured_content` is persisted opaque JSON, not scraped from markdown |
+| `GET /api/intelligence/:reportId` | `reports.read` | Reads one same-Principal Intelligence artifact |
+| `GET /api/intelligence/latest` | `reports.latest` | Reads the current-head artifact for a cycle run |
+| `GET /api/intelligence/readiness` | `reports.resolve_set` | Returns aggregate and per-member resolver states; members are not flattened to a boolean |
 | `POST /api/review/:id/decide` | `review.decide` | Applies an optimistic-concurrency review decision |
 | `POST /api/capture` | `capture.create` | Persists a Quick Capture with backend-owned idempotency and a verifiable receipt |
 | `GET /api/tasks` | `tasks.list`, `tasks.search` | Lists or searches server-owned Tasks with Work-view filters and opaque cursors |

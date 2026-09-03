@@ -11,7 +11,7 @@ export type { DecodeResult } from "./primitives";
 
 export type Decoder<T> = (input: unknown) => DecodeResult<T>;
 
-/** Same 29 keys as `gateway.json`; kept here so the registry does not import `gateway.ts`. */
+/** Same keys as `gateway.json`; kept here so the registry does not import `gateway.ts`. */
 export type GatewayCapability = keyof typeof contract.capabilities;
 
 export type CapabilityResults = {

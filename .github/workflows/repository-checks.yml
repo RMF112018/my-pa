@@ -17,7 +17,13 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 30, raised from 20 on 2026-09-03. The FAST selection this job runs grew to
+    # 16,380 tests and its wall-clock sat within twenty seconds of the limit for
+    # a week (19m10s, 19m42s, 19m36s) before crossing it (20m2s, 20m18s) on two
+    # consecutive runs with zero test failures. A timeout that fires on a green
+    # suite reports a red job for a reason no test names; the value is sized to
+    # the measured duration, not to a guess.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -235,7 +241,13 @@ jobs:
     # green. `src/my_pa/contracts/v1/envelope.py` avoids that form for this
     # reason, and this job is what keeps that reason true.
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 30, raised from 20 on 2026-09-03. The FAST selection this job runs grew to
+    # 16,380 tests and its wall-clock sat within twenty seconds of the limit for
+    # a week (19m10s, 19m42s, 19m36s) before crossing it (20m2s, 20m18s) on two
+    # consecutive runs with zero test failures. A timeout that fires on a green
+    # suite reports a red job for a reason no test names; the value is sized to
+    # the measured duration, not to a guess.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

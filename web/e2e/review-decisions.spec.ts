@@ -44,7 +44,7 @@ test("Review accept persists a decision and does not invent proposal text", asyn
       '[data-testid="reveal-evidence"], [data-testid="reveal-no-evidence"], [data-testid="reveal-unavailable"]',
     ),
   ).toBeVisible();
-  await reveal.getByRole("button", { name: "Close" }).click();
+  await reveal.getByRole("button", { name: "Close", exact: true }).click();
   expect(versionBefore).toBeGreaterThanOrEqual(0);
 });
 

@@ -20,12 +20,21 @@ import {
   syntheticSituations,
   syntheticPersonId,
 } from "@/lib/fixtures/situation";
-import { callGateway } from "@/lib/api/gateway";
+import { invokeGateway, type GatewayOutcome } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { SituationBoard } from "@/components/situation/situation-board";
 import { BackendSituationBoard } from "@/components/situation/backend-situation-board";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
+import type {
+  ContinuitySituationsResult,
+  ContinuityWorkspace,
+  SituationRow,
+} from "@/lib/api/decode/capabilities/continuity.situations";
+import type {
+  ContinuityProjectsResult,
+  ProjectRow,
+} from "@/lib/api/decode/capabilities/continuity.projects";
 import type {
   BackendProject,
   BackendSituation,
@@ -37,42 +46,13 @@ const BLURB =
   "Situations gather what matters about a project, relationship, or topic into one purposeful " +
   "view. Each references records it does not own, and only accepted records appear.";
 
-interface PythonSituation {
-  readonly situation_id: string;
-  readonly title: string;
-  readonly state: string;
-  readonly description: string | null;
-  readonly object_refs: readonly string[];
-  readonly opened_at: string;
-  readonly closed_at: string | null;
-  readonly outcome: string | null;
-}
-
-interface PythonProject {
-  readonly project_id: string;
-  readonly name: string;
-  readonly state: string;
-  readonly description: string | null;
-  readonly participants: readonly string[];
-  readonly opened_at: string;
-  readonly closed_at: string | null;
-}
-
-interface PythonContinuityWorkspace {
-  readonly frames?: readonly { readonly frame_id: string; readonly label: string; readonly state: string }[];
-  readonly traces?: readonly { readonly trace_id: string; readonly object_type: string; readonly object_id: string }[];
-  readonly commitments?: readonly { readonly commitment_id: string; readonly summary: string; readonly state: string }[];
-  readonly decisions?: readonly { readonly decision_id: string; readonly question: string; readonly state: string }[];
-  readonly tasks?: readonly { readonly task_id: string; readonly title: string; readonly state: string }[];
-}
-
-function ContinuityWorkspace({ data }: { data: PythonContinuityWorkspace }) {
+function ContinuityWorkspacePanel({ data }: { data: ContinuityWorkspace }) {
   const groups = [
-    ["Frames", data.frames ?? [], (item: { label: string }) => item.label],
-    ["Trace", data.traces ?? [], (item: { object_type: string; object_id: string }) => `${item.object_type}: ${item.object_id}`],
-    ["Commitments", data.commitments ?? [], (item: { summary: string }) => item.summary],
-    ["Decisions", data.decisions ?? [], (item: { question: string }) => item.question],
-    ["Tasks", data.tasks ?? [], (item: { title: string }) => item.title],
+    ["Frames", data.frames, (item: { label: string }) => item.label],
+    ["Trace", data.traces, (item: { object_type: string; object_id: string }) => `${item.object_type}: ${item.object_id}`],
+    ["Commitments", data.commitments, (item: { summary: string }) => item.summary],
+    ["Decisions", data.decisions, (item: { question: string }) => item.question],
+    ["Tasks", data.tasks, (item: { title: string }) => item.title],
   ] as const;
   return (
     <section aria-label="Continuity workspace" className="mt-8 grid gap-4 sm:grid-cols-2">
@@ -94,7 +74,7 @@ function ContinuityWorkspace({ data }: { data: PythonContinuityWorkspace }) {
   );
 }
 
-function toSituation(row: PythonSituation): BackendSituation {
+function toSituation(row: SituationRow): BackendSituation {
   return {
     situationId: row.situation_id,
     title: row.title,
@@ -107,7 +87,7 @@ function toSituation(row: PythonSituation): BackendSituation {
   };
 }
 
-function toProject(row: PythonProject): BackendProject {
+function toProject(row: ProjectRow): BackendProject {
   return {
     projectId: row.project_id,
     name: row.name,
@@ -156,22 +136,23 @@ export async function WorkPage() {
   }
 
   const [situationsOutcome, projectsOutcome] = await Promise.all([
-    callGateway<{ situations?: readonly PythonSituation[] } & PythonContinuityWorkspace>(
-      principal,
-      "continuity.situations",
-    ),
-    callGateway<{ projects?: readonly PythonProject[] }>(principal, "continuity.projects"),
+    invokeGateway(principal, "continuity.situations") as Promise<
+      GatewayOutcome<ContinuitySituationsResult>
+    >,
+    invokeGateway(principal, "continuity.projects") as Promise<
+      GatewayOutcome<ContinuityProjectsResult>
+    >,
   ]);
 
   const situationsAnswer = surfaceAnswer(
     "situations:continuity.situations",
     situationsOutcome,
-    (result) => (result.situations ?? []).length,
+    (result) => result.situations.length,
   );
   const projectsAnswer = surfaceAnswer(
     "situations:continuity.projects",
     projectsOutcome,
-    (result) => (result.projects ?? []).length,
+    (result) => result.projects.length,
   );
 
   // **Either read failing makes the whole board unavailable, and it is not
@@ -198,11 +179,9 @@ export async function WorkPage() {
   }
 
   const situations =
-    situationsAnswer.kind === "empty"
-      ? []
-      : (situationsAnswer.result.situations ?? []).map(toSituation);
+    situationsAnswer.kind === "empty" ? [] : situationsAnswer.result.situations.map(toSituation);
   const projects =
-    projectsAnswer.kind === "empty" ? [] : (projectsAnswer.result.projects ?? []).map(toProject);
+    projectsAnswer.kind === "empty" ? [] : projectsAnswer.result.projects.map(toProject);
   const degraded = situationsAnswer.kind === "degraded" || projectsAnswer.kind === "degraded";
 
   return (
@@ -257,8 +236,9 @@ export async function WorkPage() {
           projectsPartial={projectsAnswer.kind === "degraded"}
         />
       )}
-      {situationsAnswer.kind === "empty" ? null : (
-        <ContinuityWorkspace data={situationsAnswer.result} />
+      {situationsAnswer.kind === "empty" ||
+      situationsAnswer.result.relationship_events === undefined ? null : (
+        <ContinuityWorkspacePanel data={situationsAnswer.result as ContinuityWorkspace} />
       )}
     </section>
   );

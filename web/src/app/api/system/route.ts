@@ -21,13 +21,13 @@
  *
  * **A disabled Graph connector is reported as deliberately off.** It is not a
  * degraded source and must never appear as one. Microsoft Graph is retained in
- * the product definition and off by default; the Entra authentication this shell
- * uses for identity is a separate concern from Graph connector activation.
+ * the product definition and off by default. Browser Entra/MSAL sign-in is
+ * retired; Graph connector activation remains a separate concern.
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { requirePrincipal } from "@/lib/api/guard";
-import { msalSeamConfig } from "@/lib/auth/msal.config";
-import { backendDisclosure, callGateway, transportLimitations } from "@/lib/api/gateway";
+import { backendDisclosure, invokeGateway, transportLimitations } from "@/lib/api/gateway";
+import type { CapabilitiesGetResult } from "@/lib/api/decode/capabilities/capabilities.get";
 import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
 
@@ -39,7 +39,8 @@ const GRAPH_CONNECTOR = {
   detail:
     "Microsoft Graph is retained in the product definition and is not the active " +
     "personal-data ingestion path. It is deliberately off — not a degraded or failing " +
-    "source. Entra authentication for identity is a separate concern from Graph activation.",
+    "source. Browser Entra/MSAL is retired; Graph connector activation remains a " +
+    "separate concern.",
 } as const;
 
 const SOURCES_UNKNOWN =
@@ -56,7 +57,8 @@ export async function GET(request: NextRequest) {
   const identity = {
     identityProvider:
       guard.principal.authenticationProvider ?? (guard.principal.synthetic ? "synthetic" : "entra"),
-    entraConfigured: msalSeamConfig().enabled,
+    // Browser Entra/MSAL is retired; this field stays false and is not a live seam.
+    entraConfigured: false,
     graphConnector: GRAPH_CONNECTOR,
     principal: {
       // Disclosure of the caller's own identity back to the caller only.
@@ -75,23 +77,17 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const outcome = await callGateway<{
-    manifest: unknown;
-    readiness: unknown;
-    worker_planes: unknown;
-  }>(
-    guard.principal,
-    "capabilities.get",
-  );
+  const outcome = await invokeGateway(guard.principal, "capabilities.get");
   if (!outcome.ok) return gatewayRefusal(SCOPE, outcome.status, outcome.error);
+  const result = outcome.result as CapabilitiesGetResult;
 
   return NextResponse.json({
     ...identity,
     dataProvider: "backend",
     backend: {
-      manifest: outcome.result.manifest,
-      readiness: outcome.result.readiness,
-      workerPlanes: outcome.result.worker_planes,
+      manifest: result.manifest,
+      readiness: result.readiness,
+      workerPlanes: result.worker_planes,
     },
     connectedSources: null,
     disclosure: backendDisclosure(SCOPE, outcome.disclosure, [

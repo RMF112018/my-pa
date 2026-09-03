@@ -198,6 +198,7 @@ dependencies = [
   "uvicorn>=0.31.1,<1",
   "mcp>=2.0,<3",
   "pypdfium2>=5.0,<6",
+  "webauthn>=2.8,<3",
 ]
 
 [project.optional-dependencies]

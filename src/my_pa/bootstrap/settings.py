@@ -64,6 +64,11 @@ from my_pa.contracts.v1.base import StrictModel
 from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.domain.extraction.text import MAX_EXTRACTED_CHARACTERS
 from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID, capture_principal_id
+from my_pa.domain.identity.webauthn_relying_party import (
+    WebAuthnRelyingParty,
+    WebAuthnRelyingPartyError,
+    parse_allowed_origins,
+)
 from my_pa.domain.source.enrollment import MAX_ENROLLMENT_DEPTH
 
 __all__ = [
@@ -545,6 +550,14 @@ class Settings(StrictModel):
     gateway_bind_mode: GatewayBindMode = GatewayBindMode.LOOPBACK
     remote_ingress_enabled: bool = False
     apple_ingress_enabled: bool = False
+    #: WebAuthn relying party. Empty rp_id disables ceremony routes (fail closed
+    #: at the handler) so an unconfigured process still serves the rest of the
+    #: gateway. Origins are exact, comma- or space-separated; wildcards refused.
+    webauthn_rp_id: str = ""
+    webauthn_rp_name: str = "my-pa"
+    webauthn_allowed_origins: str = ""
+    webauthn_bff_secret: str = Field(default="", repr=False)
+    session_service_secret: str = Field(default="", repr=False)
     redaction_enabled: bool = True
     contract_strict_mode: bool = True
     max_page_size: int = Field(default=200, gt=0, le=1000)
@@ -819,6 +832,19 @@ class Settings(StrictModel):
         if self.auth_mode is not AuthMode.LOCAL_OPERATOR:
             return None
         return capture_principal_id(LOCAL_OPERATOR_UUID)
+
+    def webauthn_relying_party(self) -> WebAuthnRelyingParty | None:
+        """Configured RP, or `None` when ceremony is not enabled."""
+        if not self.webauthn_rp_id.strip():
+            return None
+        try:
+            return WebAuthnRelyingParty(
+                rp_id=self.webauthn_rp_id,
+                rp_name=self.webauthn_rp_name,
+                allowed_origins=parse_allowed_origins(self.webauthn_allowed_origins),
+            )
+        except WebAuthnRelyingPartyError as error:
+            raise SettingsError(str(error)) from error
 
     def parsed_database_url(self) -> URL:
         """`database_url` as validation read it, for `create_database_engine`.

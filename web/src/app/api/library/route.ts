@@ -35,7 +35,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { requirePrincipal } from "@/lib/api/guard";
 import {
   backendDisclosure,
-  callGateway,
+  invokeGateway,
   transportLimitations,
   type GatewayCapability,
 } from "@/lib/api/gateway";
@@ -113,7 +113,7 @@ export async function GET(request: NextRequest) {
     payload = { page_size: pageSize };
   }
 
-  const outcome = await callGateway(guard.principal, capability, payload);
+  const outcome = await invokeGateway(guard.principal, capability, payload);
   if (!outcome.ok) return gatewayRefusal(`${SCOPE}:${capability}`, outcome.status, outcome.error);
 
   const disclosure = backendDisclosure(

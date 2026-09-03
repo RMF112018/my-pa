@@ -55,20 +55,25 @@ export const DEAD_GATEWAY_URL = `http://localhost:${DEAD_GATEWAY_PORT}`;
 const GATEWAY_URL = process.env.MYPA_E2E_GATEWAY_URL ?? "http://127.0.0.1:9099";
 
 /**
- * A signing key for the browser suite's own sessions.
+ * Dummy BFF→Python session-service HMAC for the browser suite.
  *
- * Synthetic, generated for this harness, and a credential for nothing: it signs
- * cookies minted by the synthetic development provider against a disposable
- * database. It is written down here rather than left to a default because
- * `lib/auth/session.ts` has no default and must not acquire one.
+ * Synthetic, generated for this harness, and a credential for nothing: it
+ * authenticates the BFF to session-service against a disposable database.
+ * Distinct from the WebAuthn BFF secret. Written down rather than left to a
+ * default because `lib/auth/session-service.ts` has no default and must not
+ * acquire one.
  */
-const SESSION_SECRET =
-  process.env.MYPA_SESSION_SECRET ?? "synthetic-e2e-signing-key-000000000000000000";
+const SESSION_SERVICE_SECRET =
+  process.env.MYPA_SESSION_SERVICE_SECRET ?? "synthetic-e2e-session-service-secret-00";
+const WEBAUTHN_BFF_SECRET =
+  process.env.MYPA_WEBAUTHN_BFF_SECRET ?? "synthetic-e2e-webauthn-bff-secret-0000";
 
 const baseEnv = {
-  MYPA_SESSION_SECRET: SESSION_SECRET,
+  MYPA_SESSION_SERVICE_SECRET: SESSION_SERVICE_SECRET,
+  MYPA_WEBAUTHN_BFF_SECRET: WEBAUTHN_BFF_SECRET,
   MYPA_AUTH_MODE: "synthetic",
   MYPA_GATEWAY_AUTH_MODE: "local_operator",
+  MYPA_CANONICAL_ORIGIN: LIVE_URL,
   // Deliberately absent: MYPA_DATA_PROVIDER. The suite runs a default build,
   // which serves the backend or states that it cannot, and never fixtures.
 };

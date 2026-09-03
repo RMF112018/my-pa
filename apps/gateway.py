@@ -176,6 +176,7 @@ def _run(args: argparse.Namespace) -> int:
             remote_client=runtime.remote_client,
             apple_authenticate=runtime.apple_authenticate,
             apple_control=runtime.apple_control,
+            webauthn=runtime.webauthn,
         )
         if runtime.authenticate is None
         else create_http_app(
@@ -184,6 +185,7 @@ def _run(args: argparse.Namespace) -> int:
             remote_client=runtime.remote_client,
             apple_authenticate=runtime.apple_authenticate,
             apple_control=runtime.apple_control,
+            webauthn=runtime.webauthn,
         )
     )
     server = uvicorn.Server(

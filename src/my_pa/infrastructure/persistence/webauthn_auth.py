@@ -560,6 +560,23 @@ class RecoveryCodeStore:
         ).one_or_none()
         return None if row is None else _recovery_code(row)
 
+    def active_sets_for(self, principal_id: UUID) -> tuple[RecoveryCodeSet, ...]:
+        rows = self._connection.execute(
+            select(*recovery_code_sets.c)
+            .where(
+                recovery_code_sets.c.principal_id == principal_id,
+                recovery_code_sets.c.revoked_at.is_(None),
+            )
+            .order_by(recovery_code_sets.c.generation)
+        )
+        return tuple(_recovery_set(row) for row in rows)
+
+    def principal_for_set(self, set_id: UUID) -> UUID | None:
+        value = self._connection.execute(
+            select(recovery_code_sets.c.principal_id).where(recovery_code_sets.c.id == set_id)
+        ).scalar_one_or_none()
+        return None if value is None else UUID(str(value))
+
     def revoke_set(self, set_id: UUID, *, now: datetime) -> RecoveryCodeSet | None:
         instant = ensure_utc(now)
         row = self._connection.execute(

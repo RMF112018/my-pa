@@ -23,34 +23,26 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { requirePrincipal } from "@/lib/api/guard";
-import { backendDisclosure, callGateway, transportLimitations } from "@/lib/api/gateway";
+import { backendDisclosure, invokeGateway, transportLimitations } from "@/lib/api/gateway";
 import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
 import { syntheticReviewCases } from "@/lib/fixtures/review";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
+import type { ReviewCase } from "@/lib/api/decode/capabilities/review.list";
 import type { BackendReviewCase } from "@/contracts/views";
 
 const SCOPE = "review";
 
-interface PythonReviewCase {
-  readonly review_case_id: string;
-  readonly proposal_id: string;
-  readonly capture_id: string;
-  readonly version_id: string;
-  readonly proposal_type: string;
-  readonly proposal_state: string;
-  readonly risk_class: string;
-  readonly opened_at: string;
-  readonly review_version: number;
-  readonly latest_disposition: string | null;
-}
-
-function toBackendCase(row: PythonReviewCase): BackendReviewCase {
+function toBackendCase(row: ReviewCase): BackendReviewCase {
+  const captureId = row.subject_kind === "capture_proposal" ? row.capture_id : row.review_case_id;
+  const versionId = row.subject_kind === "capture_proposal" ? row.version_id : row.proposal_id;
+  const proposalType =
+    row.subject_kind === "capture_proposal" ? row.proposal_type : row.subject_kind;
   return {
     reviewCaseId: row.review_case_id,
     proposalId: row.proposal_id,
-    captureId: row.capture_id,
-    versionId: row.version_id,
-    proposalType: row.proposal_type,
+    captureId,
+    versionId,
+    proposalType,
     proposalState: row.proposal_state,
     riskClass: row.risk_class,
     openedAt: row.opened_at,
@@ -74,15 +66,13 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const outcome = await callGateway<{ review_cases?: readonly PythonReviewCase[] }>(
-    guard.principal,
-    "review.list",
-  );
+  const outcome = await invokeGateway(guard.principal, "review.list");
   if (!outcome.ok) return gatewayRefusal(SCOPE, outcome.status, outcome.error);
+  const result = outcome.result as { review_cases: readonly ReviewCase[] };
 
   return NextResponse.json({
     shape: "backend",
-    cases: (outcome.result.review_cases ?? []).map(toBackendCase),
+    cases: result.review_cases.map(toBackendCase),
     disclosure: backendDisclosure(SCOPE, outcome.disclosure, transportLimitations()),
   });
 }

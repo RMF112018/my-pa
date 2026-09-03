@@ -6,6 +6,7 @@ import { POST as preview } from "@/app/api/tasks/bulk/preview/route";
 import { POST as confirm } from "@/app/api/tasks/bulk/confirm/route";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resetSessionRegistry } from "@/lib/auth/session-registry";
+import { withSessionServiceFetch } from "@/lib/auth/session-service-fetch-stub";
 
 const ORIGIN = "http://localhost:3000";
 let sent: Array<{ url: string; body: Record<string, unknown> }> = [];
@@ -28,7 +29,7 @@ beforeEach(() => {
   resetSessionRegistry(); sent = [];
   vi.stubEnv("MYPA_GATEWAY_URL", "http://127.0.0.1:8000");
   vi.stubEnv("MYPA_GATEWAY_AUTH_MODE", "local_operator");
-  vi.stubGlobal("fetch", vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+  vi.stubGlobal("fetch", withSessionServiceFetch(async (url: string | URL | Request, init?: RequestInit) => {
     sent.push({ url: String(url), body: JSON.parse(String(init?.body)) });
     return new Response(JSON.stringify({ result: { bulk_operation_id: "bulk_aaaaaaaa11111111", expires_at: "2099-08-21T12:15:00Z", affected: 1, no_op: 0, rejected: 0, history_ids: [], replayed: false }, disclosure: { coverage: { state: "not_enrolled" }, freshness: { observed_at: "2026-08-21T12:00:00Z", state: "current_for_observed_version" }, trust: { level: "source_original", basis: ["user_authored_record"] }, truncation: { is_truncated: false }, limitations: [], partial_result: false } }), { status: 200, headers: { "content-type": "application/json" } });
   }));

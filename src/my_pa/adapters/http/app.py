@@ -171,6 +171,7 @@ __all__ = [
     "PATH_TEMPLATE",
     "REMOTE_CAPTURE_CAPABILITY",
     "REMOTE_CAPTURE_PATH",
+    "WEBAUTHN_PATH",
     "create_http_app",
 ]
 
@@ -201,6 +202,7 @@ REMOTE_CAPTURE_CAPABILITY: Final = "capture.create"
 
 APPLE_POLL_PATH: Final = "/apple/v1/grant.poll"
 APPLE_ADMIT_PATH: Final = "/apple/v1/envelope.admit"
+WEBAUTHN_PATH: Final = "/webauthn/v1/{action:path}"
 
 #: The one media type this transport reads and writes.
 _JSON: Final = "application/json"
@@ -482,6 +484,7 @@ def create_http_app(
     remote_client: Callable[[str | None], Principal] | None = None,
     apple_authenticate: Callable[[str | None], AppleBridgeIdentity] | None = None,
     apple_control: AppleMachineControl | None = None,
+    webauthn: Callable[[Request, Mapping[str, Any]], Response] | None = None,
 ) -> Starlette:
     """The ASGI application serving `service`, in exactly one of two modes.
 
@@ -706,6 +709,23 @@ def create_http_app(
             media_type=_JSON,
         )
 
+    def webauthn_request(request: Request) -> Response:
+        """Ceremony routes: same body bounds as invoke, then the WebAuthn handler."""
+        if webauthn is None:
+            problem = problem_detail(
+                InvalidRequestError(), correlation_id=issue_identifier(IdKind.CORRELATION)
+            )
+            return Response(problem.to_canonical_json(), status_code=503, media_type=_JSON)
+        try:
+            document = read_document(request)
+        except (ClientDisconnect, TimeoutError):
+            return _problem_response(InvalidRequestError())
+        except ApplicationError as refusal:
+            return _problem_response(refusal)
+        except Exception:
+            return _problem_response(InternalError())
+        return webauthn(request, document)
+
     def not_a_request(request: Request, exception: Exception) -> Response:
         """A URL that addresses no capability, answered in the same vocabulary.
 
@@ -731,6 +751,7 @@ def create_http_app(
             Route(REMOTE_CAPTURE_PATH, submit, methods=["POST"]),
             Route(APPLE_POLL_PATH, apple_request, methods=["POST"]),
             Route(APPLE_ADMIT_PATH, apple_request, methods=["POST"]),
+            Route(WEBAUTHN_PATH, webauthn_request, methods=["POST"]),
             Route(PATH_TEMPLATE, invoke, methods=["POST"]),
         ],
         exception_handlers={HTTPException: not_a_request},

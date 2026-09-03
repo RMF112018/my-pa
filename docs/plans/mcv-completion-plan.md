@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-Three hundred and eleven Python modules under `src/my_pa` and four hundred and forty-four test modules —
+Three hundred and seventeen Python modules under `src/my_pa` and four hundred and forty-nine test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale three times: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
@@ -125,7 +125,7 @@ no source module: `bb3bf22` added
 `tests/unit/test_entity_search_reaches_context.py` and
 `tests/database/test_entity_search_reaches_context.py`, and `5700c37` added
 `tests/contract/test_entity_search_disambiguators.py` and
-`tests/unit/test_entity_search_disambiguators.py`. 
+`tests/unit/test_entity_search_disambiguators.py`.
 Corrected again on
 2026-09-02 to three hundred and eleven and four hundred and thirty-five, when
 UI-IMP-WP02 added five source modules and three test modules:
@@ -137,7 +137,7 @@ UI-IMP-WP02 added five source modules and three test modules:
 `tests/database/test_webauthn_auth_persistence.py`,
 `tests/schema/test_webauthn_auth_persistence_migration.py`, and
 `tests/unit/test_webauthn_auth_persistence.py`. 
-Corrected again on 2026-09-02 to **three hundred and eleven and four hundred and forty-one**, when `ri-ent/wp09-resolution` and `origin/main` were merged and NEITHER side's pair was true of the result: this branch had corrected the pair to 306/438 for RI-ENT-WP-09's six test modules, `origin/main` had corrected the same pair to 311/435 for UI-IMP-WP02's five source and three test modules, and both corrections were made from the same baseline. The merged tree carries both sets of modules, so the true pair is neither. **Re-measured on the merged tree by running the two commands above -- never by summing the two deltas**, which is the trap an independent reviewer named when it found this exact conflict before the merge was attempted. `95b16cf` and `34367b4` changed the contents of the WP-08 files without adding a module on either side, so neither moves either figure. The pair standing before this correction, three hundred and
+Corrected again on 2026-09-02 to **three hundred and eleven and four hundred and forty-one**, when `ri-ent/wp09-resolution` and `origin/main` were merged and NEITHER side's pair was true of the result: this branch had corrected the pair to 306/438 for RI-ENT-WP-09's six test modules, `origin/main` had corrected the same pair to 311/435 for UI-IMP-WP02's five source and three test modules, and both corrections were made from the same baseline. The merged tree carries both sets of modules, so the true pair is neither. **Re-measured on the merged tree by running the two commands above -- never by summing the two deltas**, which is the trap an independent reviewer named when it found this exact conflict before the merge was attempted. `95b16cf` and `34367b4` changed the contents of the WP-08 files without adding a module on either side, so neither moves either figure. **Moved on 2026-09-03 by integrating `origin/main` at `1055e5bc`** (UI-IMP-WP03 through WP-06, five bases' worth of frontend and auth work). `origin/main` recorded the pair as three hundred and seventeen and four hundred and forty-six, true of *its* tree; this branch recorded three hundred and eleven and four hundred and forty-four, true of *its*. Re-measured on the merged tree with every conflict marker gone: **three hundred and seventeen and four hundred and forty-nine** — RI-ENT-WP-13 adds no source module and three test modules that `origin/main` does not carry. Neither side's pair was true of the result, which is now the sixth consecutive integration in this campaign where that held. **`origin/main` also still carries the FINDING-M3 prose corruption at this paragraph** — "The source-module ffive and four hundred and twenty-nine", eleven words fused by a programmatic splice in the controlling context's own conflict resolution at `9943aa11`. This branch's repaired text is what survives the merge, and this integration is how the repair reaches `main`. The pair standing before this correction, three hundred and
 five and four hundred and twenty-nine, was true at `f4eaa4f`; the chain above
 therefore skips from four hundred and twenty-six to four hundred and
 twenty-nine, because `f4eaa4f` moved the sentence without extending this note,

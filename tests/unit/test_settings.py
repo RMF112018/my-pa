@@ -336,7 +336,13 @@ def test_only_explicitly_admitted_settings_may_be_credential_bearing() -> None:
     other field must stay plainly non-secret.
     """
     tokens = ("password", "secret", "token", "key", "credential", "dsn", "url", "path")
-    admitted = {"database_url", "oauth_operator_secret", "gsqs_remote_eval_oauth_operator_secret"}
+    admitted = {
+        "database_url",
+        "oauth_operator_secret",
+        "gsqs_remote_eval_oauth_operator_secret",
+        "webauthn_bff_secret",
+        "session_service_secret",
+    }
     for name in Settings.model_fields:
         if name in admitted:
             continue
@@ -344,6 +350,8 @@ def test_only_explicitly_admitted_settings_may_be_credential_bearing() -> None:
             assert token not in name, f"settings field {name!r} looks secret-bearing"
     assert Settings.model_fields["oauth_operator_secret"].repr is False
     assert Settings.model_fields["gsqs_remote_eval_oauth_operator_secret"].repr is False
+    assert Settings.model_fields["webauthn_bff_secret"].repr is False
+    assert Settings.model_fields["session_service_secret"].repr is False
 
 
 def test_an_absent_database_url_is_refused_rather_than_defaulted() -> None:

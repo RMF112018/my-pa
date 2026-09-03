@@ -133,17 +133,58 @@ Historical evidence is preserved; supersession does not erase the original crite
 
 ## UI-IMP-WP02 persistence overrides
 
-These overrides record only the persistence substrate WP02 actually proved. They do **not** mark user-facing WebAuthn, production sign-in, or browser-cookie criteria `PASS_VERIFIED`. Remaining ceremony and cookie work stays with WP03/WP04. Controlling text remains Drive `08_ACCEPTANCE_AND_TEST_MATRIX`.
+These overrides record only the persistence substrate WP02 actually proved. They do **not** mark user-facing WebAuthn, production sign-in, or browser-cookie criteria `PASS_VERIFIED`. WP03/WP04 notes below record later ceremony and cookie wiring on this branch without production activation. Controlling text remains Drive `08_ACCEPTANCE_AND_TEST_MATRIX`.
 
 | ID | Criterion (controlling text) | Override |
 |---|---|---|
-| PFE-AC-094 | Authentication challenges are random, one-time, and expiry-bounded | `implementation_disposition = VALIDATION_REQUIRED`; `owning_UI_IMP_WP = UI-IMP-WP02` (store) + `UI-IMP-WP03` (ceremony); `implementation_evidence = identity.webauthn_challenges atomic consume`; `test_evidence = tests/database/test_webauthn_auth_persistence.py` concurrent consume/replay/expiry/purpose/principal; `notes = Production registration/authentication options endpoints are not implemented. WP04 cookie is not wired.` |
-| PFE-AC-096 | Credential revocation is supported | `implementation_disposition = VALIDATION_REQUIRED`; `owning_UI_IMP_WP = UI-IMP-WP02` (store) + `UI-IMP-WP03` (admin UX); `implementation_evidence = identity.webauthn_credentials.revoked_at kept; active lookup excludes revoked`; `test_evidence = credential revoke persisted and excluded from active lookup`; `notes = No passkey UI or administration ceremony.` |
-| PFE-AC-097 | At least two recovery mechanisms are documented, including offline recovery codes or operator-local recovery | `implementation_disposition = IMPLEMENTATION_REQUIRED`; `owning_UI_IMP_WP = UI-IMP-WP02` (hashed recovery store) + `UI-IMP-WP03`/`UI-IMP-WP04` (second mechanism and UX); `notes = Hashed one-time recovery *persistence* exists. Operator-local recovery ceremony and any second live mechanism are not implemented. Not PASS_VERIFIED.` |
-| PFE-AC-098 | Recovery codes are stored hashed and are one-time use | `implementation_disposition = VALIDATION_REQUIRED`; `owning_UI_IMP_WP = UI-IMP-WP02` (store) + `UI-IMP-WP03` (issue/consume UX); `implementation_evidence = identity.recovery_codes.code_hash SHA-256 hex; plaintext never persisted`; `test_evidence = plaintext absent from DB; consume-once; concurrent == 1; revoked set fails`; `notes = Recovery UX is WP03. Production cookie/session is still legacy.` |
-| PFE-AC-101 | Application session cookie is HttpOnly, Secure in production, and revocable server-side | `implementation_disposition = VALIDATION_REQUIRED`; `owning_UI_IMP_WP = UI-IMP-WP02` (server session store) + `UI-IMP-WP04` (cookie cutover); `implementation_evidence = identity.auth_sessions token_hash, idle+absolute expiry, rotate, revoke, revoke-all`; `test_evidence = session create/resolve/touch-cap/rotate/concurrent rotate/second-instance`; `notes = Live cookie remains Principal-bearing HMAC; process-local registry remains runtime truth. WP04 must wire the opaque SID. Not PASS_VERIFIED.` |
+| PFE-AC-094 | Authentication challenges are random, one-time, and expiry-bounded | `implementation_disposition = VALIDATION_REQUIRED`; `owning_UI_IMP_WP = UI-IMP-WP02` (store) + `UI-IMP-WP03` (ceremony); `implementation_evidence = identity.webauthn_challenges atomic consume`; `test_evidence = tests/database/test_webauthn_auth_persistence.py` concurrent consume/replay/expiry/purpose/principal; `notes = Ceremony options/verify exist on this branch. Production activation is not claimed.` |
+| PFE-AC-096 | Credential revocation is supported | `implementation_disposition = VALIDATION_REQUIRED`; `owning_UI_IMP_WP = UI-IMP-WP02` (store) + `UI-IMP-WP03` (admin UX); `implementation_evidence = identity.webauthn_credentials.revoked_at kept; active lookup excludes revoked`; `test_evidence = credential revoke persisted and excluded from active lookup`; `notes = Passkey UI exists on this branch. Production activation is not claimed.` |
+| PFE-AC-097 | At least two recovery mechanisms are documented, including offline recovery codes or operator-local recovery | `implementation_disposition = IMPLEMENTATION_REQUIRED`; `owning_UI_IMP_WP = UI-IMP-WP02` (hashed recovery store) + `UI-IMP-WP03`/`UI-IMP-WP04` (second mechanism and UX); `notes = Hashed one-time recovery *persistence* exists and hashed recovery is live. Operator-local recovery ceremony and any second live mechanism are not implemented. Not PASS_VERIFIED. Do not invent operator-local recovery.` |
+| PFE-AC-098 | Recovery codes are stored hashed and are one-time use | `implementation_disposition = VALIDATION_REQUIRED`; `owning_UI_IMP_WP = UI-IMP-WP02` (store) + `UI-IMP-WP03` (issue/consume UX); `implementation_evidence = identity.recovery_codes.code_hash SHA-256 hex; plaintext never persisted`; `test_evidence = plaintext absent from DB; consume-once; concurrent == 1; revoked set fails`; `notes = Recovery UX is WP03. WP04 cookie cutover does not satisfy a second recovery mechanism.` |
+| PFE-AC-101 | Application session cookie is HttpOnly, Secure in production, and revocable server-side | `implementation_disposition = VALIDATION_REQUIRED`; `owning_UI_IMP_WP = UI-IMP-WP02` (server session store) + `UI-IMP-WP04` (cookie cutover); `implementation_evidence = identity.auth_sessions token_hash, idle+absolute expiry, rotate, revoke, revoke-all; this PR wires HttpOnly mypa_session to the raw AuthSessionStore SID`; `test_evidence = session create/resolve/touch-cap/rotate/concurrent rotate/second-instance; web/e2e/webauthn.spec.ts desktop proves HttpOnly 64-hex cookie and sign-out replay refusal`; `notes = This PR wires the opaque SID cookie to AuthSessionStore. Remaining runtime evidence is required. Production cutover/activation is not claimed. Not PASS_VERIFIED.` |
 
 Unchanged and still not claimed by WP02: PFE-AC-091, 092, 093, 095, 099, 100, 102, 103, 104, 105, and user-facing WebAuthn/sign-in criteria. PFE-AC-136 security tests remain later-package evidence.
+
+## UI-IMP-WP03 ceremony notes
+
+Ceremony options/verify, recovery issue/consume, step-up grants, and passkey UX exist on this package. Conservative dispositions:
+
+- PFE-AC-094/096/098 remain `VALIDATION_REQUIRED` (now with ceremony tests in addition to stores).
+- PFE-AC-097 remains `IMPLEMENTATION_REQUIRED` (hashed recovery is live; operator-local recovery is not).
+- PFE-AC-101 is no longer blocked on HMAC cookie minting. WP03 creates `identity.auth_sessions` rows; WP04 (this branch) sets `mypa_session` to the raw opaque SID rather than a Principal-bearing HMAC token.
+- PFE-AC-091/092/093/095/099/100: `VALIDATION_REQUIRED` for ceremony/CI, not `PASS_VERIFIED` for production cutover.
+
+## UI-IMP-WP04 cookie-cutover notes
+
+Conservative dispositions for the opaque-SID cutover on this PR. Production Entra retirement is **not** recorded as a completed production deployment.
+
+- **PFE-AC-097** remains `IMPLEMENTATION_REQUIRED`. Hashed recovery is live. Operator-local recovery is not implemented. Not `PASS_VERIFIED`.
+- **PFE-AC-101** remains not `PASS_VERIFIED`. `implementation_disposition = VALIDATION_REQUIRED`. This PR wires HttpOnly `mypa_session` to the raw `AuthSessionStore` SID (64 hex), Next BFF talks to the Python session-service (`x-my-pa-session-service`), and desktop `web/e2e/webauthn.spec.ts` proves sign-out replay refusal. Production cutover/activation is not claimed; remaining runtime evidence is required.
+- Browser Entra/MSAL and browser `local_operator` are retired as *web* `MYPA_AUTH_MODE` values (`passkey` | `synthetic` only). Python `MY_PA_AUTH_MODE` / `MYPA_GATEWAY_AUTH_MODE` are unchanged. That is a repository web-mode cutover, not a production Entra retirement or production activation.
+- No Redis, no Next→PostgreSQL, no WP-05 mutation admission, no deploy.
+
+## UI-IMP-WP05 central mutation admission notes
+
+Conservative dispositions for central mutation admission and browser security on this PR. Production activation is **not** claimed.
+
+- **PFE-AC-097** remains `IMPLEMENTATION_REQUIRED`. Hashed recovery is live. Operator-local recovery is not implemented. Not `PASS_VERIFIED`.
+- **PFE-AC-101** remains not `PASS_VERIFIED`. `implementation_disposition = VALIDATION_REQUIRED`.
+- **PFE-AC-136** is not passed from this package. Security tests remain later-package evidence.
+- PFE-AC-023..029 (safe rich content / WP-07) are not passed because of `safeHref`. This package added a central fail-closed `safeHref` used by current RichContent without expanding WP-07.
+- Residuals: NAS secrets cleanup is not this package; GET idle-touch Origin gating is not this package; production activation is not claimed.
+- `frontend / security` now also runs the WP-05 vitest corpus; `frontend / e2e-critical` now also runs `web/e2e/browser-security.spec.ts` alongside `web/e2e/webauthn.spec.ts`. Later CI gates remain `NOT_YET_INTRODUCED`.
+
+## UI-IMP-WP06 typed BFF contract notes
+
+Conservative dispositions for typed BFF success, error, receipt, and degraded contracts on this PR. Production activation, whole-frontend `PASS_VERIFIED`, and Wave 1 closure are **not** claimed. Wave 1 security/shared-contract foundation is not declared complete in this ledger entry (post-merge).
+
+- **PFE-AC-097** remains `IMPLEMENTATION_REQUIRED`. Hashed recovery is live. Operator-local recovery is not implemented. Not `PASS_VERIFIED`.
+- **PFE-AC-101** remains not `PASS_VERIFIED`. `implementation_disposition = VALIDATION_REQUIRED`.
+- **PFE-AC-005 / 006**: Drive criterion wording is not in the repository. Remain `UNRECONCILED`; not `PASS_VERIFIED`. WP08-owned band; this package supplies substrate only.
+- **PFE-AC-126 / 131**: Remain `UNRECONCILED` (`PFE-AC-123..139` mapping discrepancy). Contract negatives and a promoting frontend contract job are substrate, not Drive `PASS_VERIFIED`.
+- **PFE-AC-136** is not passed from this package.
+- Capture/review/work receipt bands: named runtime decode now exists for the corresponding GatewayCapability keys. Lifecycle UX remains `UI-IMP-WP09` / `UI-IMP-WP10`. At most `VALIDATION_REQUIRED` notes; never `PASS_VERIFIED`.
+- Twenty-nine `APPLICATION_GATEWAY_CAPABILITY` keys now have named runtime decoders; omitted arrays fail closed; `review.decide` no longer synthesizes version/disposition; `rate_limited` is HTTP 429; malformed success is `upstream_contract_invalid` / 503.
 
 ## Known evidence limitations / record overrides
 

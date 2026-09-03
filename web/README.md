@@ -7,9 +7,9 @@ gateway; it is not a second source of domain truth.
 ## Current implementation
 
 The normal application path is backend-served. Server routes resolve a
-Principal from the signed application session, call the loopback Python gateway,
-and pass through the gateway's disclosure and refusal semantics. The browser
-cannot submit a Principal or a gateway bearer.
+Principal from the opaque SID cookie via the Python session-service, call the
+loopback Python gateway, and pass through the gateway's disclosure and refusal
+semantics. The browser cannot submit a Principal or a gateway bearer.
 
 An explicitly enabled synthetic provider remains available for development and
 is refused when `NODE_ENV=production`. It does not silently replace an
@@ -53,6 +53,7 @@ All application pages require a verified session. `/sign-in` is public.
 | `POST /api/commitments/:commitmentId/close` | `commitments.close` | Closes a Commitment explicitly with validated closure evidence |
 | `/system`, `GET /api/system` | `capabilities.get` | Reports the runtime manifest, readiness, and worker planes; connected-source enumeration remains unknown because no v1 capability provides it |
 | `POST /api/session` | none | Synthetic development sign-in only; refused in passkey mode and in production |
+| `POST /api/webauthn` | none | Passkey ceremony BFF; Python issues the opaque SID cookie after authentication or recovery |
 
 The relationship timeline is therefore implemented, but it is not a separate
 public capability. It is a projection of `relationship_events` already returned
@@ -77,8 +78,9 @@ the gateway, it renders the refusal rather than an empty healthy state.
 `MYPA_AUTH_MODE` is required and has exactly two web values:
 
 - `synthetic` exposes fixed development principals. It is refused in production.
-- `passkey` is production web authentication. Sessions are issued by Python after
-  WebAuthn or recovery; `POST /api/session` does not mint a synthetic identity.
+- `passkey` is production web authentication. Sessions are an opaque SID issued
+  by Python after WebAuthn or recovery; `POST /api/session` does not mint a
+  synthetic identity.
 
 Browser Entra/MSAL and browser local-operator sign-in are retired. There is no
 `/auth/sign-in` route and no MSAL package on this tier.

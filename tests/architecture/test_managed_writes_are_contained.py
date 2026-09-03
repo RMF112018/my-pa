@@ -199,6 +199,12 @@ REGISTERED_WRITERS: Final[dict[str, str]] = {
         "synthetic campaign/capture artifacts under MY_PA_GSQS_B0_WORKFLOW_ROOT; "
         "it never writes gold, real handwriting, or managed-document bytes."
     ),
+    "src/my_pa/bootstrap/gateway.py": (
+        "the detector matches AuthSessionStore.touch (session last-seen / idle TTL "
+        "on a PostgreSQL row), not a filesystem write. Path(...) here only "
+        "constructs the managed-store root argument; this module adds no "
+        "filesystem write path and writes no user or managed-document bytes."
+    ),
 }
 
 #: Attribute names that are a filesystem write whatever they are called on,

@@ -124,12 +124,13 @@ RI-ENT-WP-10 added one test module and no source module:
 2026-09-01 to three hundred and seven and four hundred and forty, when
 RI-ENT-WP-11 added one source module and one test module:
 `src/my_pa/application/entity_family_writes.py`, the record families' ledger
-bridge, and `tests/database/test_entity_family_write_ledger.py`, which is
-committed and unexecuted, and corrected again on 2026-09-02 to three hundred
-and seven and four hundred and forty-one, when `bcd2048` added
+bridge, and `tests/database/test_entity_family_write_ledger.py`, which was
+committed unexecuted and has since passed in the green database tier, and
+corrected again on 2026-09-02 to three hundred and seven and four hundred and
+forty-one, when `bcd2048` added
 `tests/database/test_ri_ent_wp_10_11_vocabulary_migration.py` -- the
 database-tier binding for the phase's migration `16f05c46b8c3`, also committed
-and unexecuted -- and no source module. Both figures were recomputed by running the two
+unexecuted and since executed and green in the same tier -- and no source module. Both figures were recomputed by running the two
 commands above against this tree rather than by adding an assumed delta. That work package's five
 `entities.` record-family reads were added to `application/service.py`,
 `application/commands.py`, `adapters/normalization.py`, `contracts/ports.py`,

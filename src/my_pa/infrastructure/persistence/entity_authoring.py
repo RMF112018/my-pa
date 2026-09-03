@@ -1203,14 +1203,18 @@ def _record_mutation(
     the fifteen RI-ENT-WP-11 record-family writes do not reach this function
     at all -- they land through `my_pa.application.entity_record_families`.
     Whether those fifteen satisfy both halves is a question about their own
-    write path, not about this one, and **it is unverified**: no test asserts
-    it. Writing "thirty-eight" here would have asserted a coverage property
-    nothing has checked, which is why the number was removed rather than
-    corrected. A count is not derivable at this site in any case -- this
-    module has no class whose writes could be enumerated -- so stating one
-    would mean maintaining a figure by hand that nothing binds, which is the
-    defect `test_entity_plane_prose_matches_the_capability_sets.py` exists to
-    prevent.
+    write path, not about this one, and the two halves stand differently: the
+    ledger-row half is asserted by
+    `tests/database/test_entity_family_write_ledger.py`, and the `receipt_id`
+    half is not -- that module does not read the column, and the statement that
+    the family writes leave it null rests on `EntityFamilyWriteService`'s own
+    docstring rather than on a test. Writing "thirty-eight" here would have
+    asserted a property this module cannot see and one test only half checks,
+    which is why the number was removed rather than corrected. A count is not
+    derivable at this site in any case -- this module has no class whose writes
+    could be enumerated -- so stating one would mean maintaining a figure by
+    hand that nothing binds, which is the defect
+    `test_entity_plane_prose_matches_the_capability_sets.py` exists to prevent.
     """
     try:
         connection.execute(

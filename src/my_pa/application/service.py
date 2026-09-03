@@ -2512,15 +2512,23 @@ _ENTITY_TRUST_BASIS: Final = ("principal_partition",)
 #: they had read, and answered. Not `user_authored`: an entity is not an ADR-003
 #: append-only record, and saying so would claim the wrong custody.
 #:
-#: **Sixteen of the eighteen writes disclose this and two do not**, and the
-#: split is a property of the ledger rather than a preference. The ten identity,
-#: identifier and alias writes and the six directed writes each record
-#: `user_confirmed_assertion` as a constant, so their receipts can name it.
-#: `entities.observe` records whichever of three authorities its own
-#: `authority` field implies — a source observation is `system_deterministic` —
-#: and `entities.unresolved_mentions.resolve` records `review_accepted` when a
+#: **This describes the eighteen Phase A writes, and only them.** Sixteen of
+#: those disclose this and two do not, and the split is a property of the
+#: ledger rather than a preference. The ten identity, identifier and alias
+#: writes and the six directed writes each record `user_confirmed_assertion` as
+#: a constant, so their receipts can name it. `entities.observe` records
+#: whichever of three authorities its own `authority` field implies — a source
+#: observation is `system_deterministic` — and
+#: `entities.unresolved_mentions.resolve` records `review_accepted` when a
 #: review promotion decided it. Neither can claim a constant it does not always
 #: write, so both stay on `_ENTITY_TRUST_BASIS` and disclose only the partition.
+#:
+#: The fifteen RI-ENT-WP-11 record-family writes are not in that eighteen and
+#: do not pass through `_ENTITY_TRUST_BASIS` at all: they answer through
+#: `_directed_receipt`, which discloses this authoring basis, and what their
+#: ledger rows record is `EntityFamilyWriteService`'s statement to make, not
+#: this comment's. Their disclosure is not characterised here. The
+#: identity-correction writes are not characterised here either.
 _ENTITY_AUTHORING_TRUST_BASIS: Final = ("principal_partition", "user_confirmed_assertion")
 
 
@@ -5570,10 +5578,27 @@ class ApplicationService:
                 "recorded_at": format_rfc3339(admission.recorded_at),
                 "idempotency_key": admission.idempotency_key,
                 "created": admission.created,
-                # The ledger row, which is what a receipt is on this plane. Every
-                # one of the eighteen writes returns one under this key and every
-                # one of them stores `receipt_id` null, so the field means the
-                # same thing across the family.
+                # The ledger row, which is what a receipt is on this plane.
+                #
+                # **No count is stated here, and the omission is deliberate.**
+                # This comment once counted the writes -- "every one of the
+                # eighteen" -- from Phase A, when eighteen was the whole entity
+                # write surface; the plane has grown since, and the writes it
+                # grew by do not all share the shape the sentence claimed. What is stated instead is
+                # what each append path says of itself. The ten identity,
+                # identifier and alias writes append through
+                # `entity_authoring._record_mutation`, the six directed writes
+                # through `SqlEntityRepository._append_mutation`, and the fifteen
+                # RI-ENT-WP-11 record-family writes through
+                # `EntityFamilyWriteService` into `record_mutation_event`; each of
+                # those three hands back the row's own `event_id` under this key
+                # and leaves the `receipt_id` column null, and each says so in
+                # its own docstring. This handler and
+                # `entities.unresolved_mentions.resolve` return the row's
+                # `event_id` here too. The identity-correction writes
+                # (`entities.merge`, `entities.split` and their previews) answer
+                # with an `IdentityOperation`'s own `receipt_id`, which is a
+                # different shape and is not characterised by this comment.
                 "receipt_id": admission.mutation_event_id,
                 "audit_id": authorization.audit_id,
             },

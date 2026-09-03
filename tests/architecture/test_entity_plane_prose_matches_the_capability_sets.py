@@ -41,7 +41,8 @@ from typing import Final
 import pytest
 
 from my_pa.application.service import _ENTITY_CAPABILITIES, _ENTITY_WRITE_CAPABILITIES
-from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.operation import Capability, permitted_purposes
+from my_pa.domain.identity.purpose import Purpose
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 
@@ -247,6 +248,55 @@ _THIS_MODULE: Final = "tests/architecture/test_entity_plane_prose_matches_the_ca
 _NUM: Final = r"(\d{1,3}|[A-Za-z]+(?:-[a-z]+)?)"
 _DET: Final = r"(?:[Tt]he|[Aa]ll|[Ii]ts|[Ee]very one of the)\s+"
 
+
+def _either_case(word: str) -> str:
+    return f"[{word[0].upper()}{word[0]}]{word[1:]}"
+
+
+#: A spelled or digit number of at least two, built from the same vocabulary
+#: `_parse` reads. "Sixteen of the eighteen writes" partitions a family and so
+#: asserts its size; "one of the four writes" points at a member and asserts
+#: nothing about the total, and `tests/database/test_entity_repository.py` says
+#: exactly that of the four identifier and alias writes it covers. Two is the
+#: smallest share that partitions.
+_PLURAL: Final = (
+    r"(?:[2-9]|\d{2,3}|"
+    + "|".join(_either_case(word) for word in _UNITS[2:])
+    + "|(?:"
+    + "|".join(_either_case(word) for word in _TENS)
+    + r")(?:-(?:"
+    + "|".join(_UNITS[1:10])
+    + r"))?)"
+)
+
+#: **A bare `N writes` is read only where the sentence around it can only mean
+#: the whole family.** `src/my_pa/domain/identity/operation.py` said "holding
+#: the eighteen writes above" of a write set that held thirty-eight, and none
+#: of the plane-scoped patterns below read it: the noun is bare, and the
+#: totalising is carried by "above", not by an adjective. Two more of the same
+#: shape sat in `application/service.py` -- "Every one of the eighteen writes
+#: returns" and "Sixteen of the eighteen writes disclose" -- and survived a
+#: review that had this module in front of it. So three cues are read here, each
+#: measured against the corpus before it was admitted: `every one of the N
+#: writes`, `<share> of the N writes` where the share is a plural number, and
+#: `N writes above`. A determiner alone is not a cue -- `the N writes` reads 103
+#: sentences in this corpus, nearly all of them ordinary prose about a local
+#: pair or a local six -- and `reads` takes only the share form, because "every
+#: one of the five reads the entity first" is a verb and "the four reads above"
+#: is the task plane's own true subset.
+#:
+#: **What is exempt is scoped in its own words, and the exemption is in the
+#: pattern rather than in `_EXCUSED`.** A number that names a subset says so
+#: between itself and the noun -- "eighteen keyed writes (Phase A)" in
+#: `adapters/remote_request.py`, "the thirty-three keyed writes" in its test,
+#: "the eighteen Phase A writes" in `application/service.py` -- and an
+#: adjective there is what these patterns require to be absent; a trailing
+#: `(Phase A)` is refused explicitly for the same reason. A sentence that wants
+#: to be exempt therefore has to say which subset it means, in the words
+#: themselves, which is the correction this module asks for in its failure
+#: message.
+_BARE_WRITES: Final = r"writes\b(?!\s*\(Phase A\))"
+
 _CORPUS: Final[tuple[tuple[str, str], ...]] = (
     ("capabilities", rf"{_DET}(\d{{1,3}})\s+capabilities\b"),
     ("entity names", rf"{_NUM}\s+`entities\.`\s+names\b"),
@@ -263,6 +313,11 @@ _CORPUS: Final[tuple[tuple[str, str], ...]] = (
     ("entity writes", rf"Write capabilities \| {_NUM}\b"),
     ("entity reads", rf"{_DET}{_NUM}\s+(?:`entities\.`|entity)\s+reads\b"),
     ("entity reads", rf"Read capabilities \| {_NUM}\b"),
+    # The bare-noun arm; see `_BARE_WRITES` for what it reads and what it leaves.
+    ("entity writes", rf"[Ee]very one of the\s+{_NUM}\s+{_BARE_WRITES}"),
+    ("entity writes", rf"{_PLURAL}\s+of the\s+{_NUM}\s+{_BARE_WRITES}"),
+    ("entity writes", rf"{_NUM}\s+writes above\b"),
+    ("entity reads", rf"{_PLURAL}\s+of the\s+{_NUM}\s+reads\b"),
 )
 
 #: `(path, fragment, reason)`. A shrinking allowlist in the `D-81` shape: a stale
@@ -278,15 +333,12 @@ _EXCUSED: Final[tuple[tuple[str, str, str], ...]] = (
     (
         "src/my_pa/infrastructure/persistence/entity_authoring.py",
         "eighteen writes on this plane",
-        "**Unresolved, and excused as unresolved rather than corrected.** The "
-        "claim is that every write on the plane carries a durable ledger row and "
-        "a `receipt_id`. Whether `RI-ENT-WP-11`'s fifteen record-family writes -- "
-        "which land through `application/entity_record_families.py`, not this "
-        "module -- satisfy both halves is a question about behaviour, not a "
-        "count, and this module holds no class whose write methods could be "
-        "counted. Changing eighteen to thirty-eight here would assert coverage "
-        "nothing has verified, which is the defect this file exists to prevent, "
-        "pointed the other way.",
+        "a quotation of the superseded string inside `_record_mutation`'s record "
+        "of its own correction (`f126b4fe`), which states no count and says why: "
+        "the fifteen record-family writes land through "
+        "`application/entity_record_families.py`, not this module, and this module "
+        "holds no class whose writes could be enumerated. Not a claim that the "
+        "set holds eighteen.",
     ),
     (
         "docs/campaign/ROBUST-ENTITY-DATA-MODEL-20260830.md",
@@ -384,4 +436,29 @@ def test_the_corpus_arm_reads_something() -> None:
         "figure this low means a pattern stopped matching rather than that the "
         "corpus stopped claiming"
     )
-    assert quantities["entity writes"] == 38 or quantities["entity writes"] > 0
+    # The write quantity every finding above is measured against, bound to a
+    # second source: the purpose map. `_ENTITY_WRITE_CAPABILITIES` is written
+    # out in `application.service` as a decision, and
+    # `tests/contract/test_entity_write_gate.py` derives the same set from the
+    # purposes that mean "this changes something". This is that derivation,
+    # counted, so the figure the corpus is held to is not the transcription it
+    # was read from. The first draft here compared the quantity to itself.
+    write_purposes = frozenset(
+        {
+            Purpose.ENTITY_AUTHORING,
+            Purpose.ENTITY_OBSERVATION_INGEST,
+            Purpose.ENTITY_PROPOSAL,
+            Purpose.ENTITY_IDENTITY_CORRECTION,
+        }
+    )
+    derived = sum(
+        1
+        for capability in Capability
+        if capability.value.startswith("entities.")
+        and permitted_purposes(capability) & write_purposes
+    )
+    assert quantities["entity writes"] == derived, (
+        f"the write set holds {quantities['entity writes']} names and the purpose "
+        f"map derives {derived}; the two statements of the plane's write surface "
+        "disagree, so nothing measured above is against a settled figure"
+    )

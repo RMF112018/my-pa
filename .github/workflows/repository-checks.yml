@@ -18,11 +18,13 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     # 30, raised from 20 on 2026-09-03. The FAST selection this job runs grew to
-    # 16,380 tests and its wall-clock sat within twenty seconds of the limit for
-    # a week (19m10s, 19m42s, 19m36s) before crossing it (20m2s, 20m18s) on two
-    # consecutive runs with zero test failures. A timeout that fires on a green
-    # suite reports a red job for a reason no test names; the value is sized to
-    # the measured duration, not to a guess.
+    # 16,380 tests. Across six runs in under twenty hours (2026-09-02 20:38 to
+    # 2026-09-03 15:58) this job's wall clock measured 19m43s, 19m42s and 19m36s
+    # (1687b634, 5cc645d8, 251a495c), then timed out at 20m02s and 20m18s
+    # (9c1e463b, 53797f5b), then ran 14m45s at 8f981f1c while the dependency-floor
+    # job took 20m39s. A timeout that fires on a green suite reports a red job for
+    # a reason no test names; the value is sized to the measured duration, not to
+    # a guess.
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -242,9 +244,11 @@ jobs:
     # reason, and this job is what keeps that reason true.
     runs-on: ubuntu-latest
     # 30, raised from 20 on 2026-09-03. The FAST selection this job runs grew to
-    # 16,380 tests and its wall-clock sat within twenty seconds of the limit for
-    # a week (19m10s, 19m42s, 19m36s) before crossing it (20m2s, 20m18s) on two
-    # consecutive runs with zero test failures. A timeout that fires on a green
+    # 16,380 tests. Across six runs in under twenty hours (2026-09-02 20:38 to
+    # 2026-09-03 15:58) this job's wall clock measured 19m49s, 19m10s and 19m41s
+    # (1687b634, 5cc645d8, 251a495c), then timed out at 20m15s and 20m17s
+    # (9c1e463b, 53797f5b), then ran 20m39s at 8f981f1c, the run that made 30 the
+    # value for this job as well as for validate. A timeout that fires on a green
     # suite reports a red job for a reason no test names; the value is sized to
     # the measured duration, not to a guess.
     timeout-minutes: 30

@@ -22,23 +22,27 @@ holds only what neither of those can decide -- the properties that exist because
   leave no ledger row behind, because a ledger row for a change that did not
   happen is worse than no ledger at all.
 
-**THESE TESTS ARE WRITTEN AND HAVE NEVER BEEN EXECUTED.** `RI-ENT-WP-11` ran
-under an absolute prohibition on running anything marked `database`, because
-another work package's database measurement was in flight machine-wide. They are
-committed as written-and-unexecuted and are reported that way, by filename and
-test name, rather than described as passing.
+**This module was authored unexecuted, and has since been executed.**
+`RI-ENT-WP-11` ran under an absolute prohibition on running anything marked
+`database`, because another work package's database measurement was in flight
+machine-wide, so these tests were committed as written-and-unexecuted and were
+reported that way, by filename and test name, rather than described as passing.
 
-**AND THEY ARE EXPECTED TO FAIL UNTIL THE PHASE'S MIGRATION LANDS.** No revision
-in this branch widens `a_mutated_record_family_is_known` to admit `name`,
-`address`, `communication_method`, `project_participation` or
-`person_organization_affiliation`, and none widens
-`knowledge.audit_events.capability_is_known` to admit the capability values these
-tests invoke. A single dedicated owner writes one revision for the whole phase.
-Until it does, every test below is expected to fail on its first INSERT with a
-CHECK violation, and that failure is the migration being absent rather than this
-module being wrong. In this campaign eleven database tests were committed
-statically verified and errored on first execution against an enum member that
-never existed; nothing here claims to have escaped that class.
+**The phase's migration has since landed.** Revision `16f05c46b8c3`
+(`migrations/versions/20260902_16f05c46b8c3_admit_the_ri_ent_wp_10_11_entity_.py`)
+widens `entity_mutation_events.a_mutated_record_family_is_known` "six values to
+eleven", admitting `address`, `communication_method`, `name`,
+`person_organization_affiliation` and `project_participation`, and widens
+`audit_events.capability_is_known` "one hundred and fifteen values to one
+hundred and thirty-five", admitting `RI-ENT-WP-11`'s fifteen writes over those
+families -- the capability values these tests invoke. Before it landed, every
+test below was expected to fail on its first INSERT with a CHECK violation; that
+expectation is now history. This module has been executed and passed in the
+green database tier: 2,081 passed at `9c1e463b`, and the CI database-tier run at
+head `8f981f1c` was in progress when this paragraph was written. In this campaign
+eleven database tests were once committed statically verified and errored on
+first execution against an enum member that never existed; the execution above
+is what this module has instead of that claim.
 
 Every identity is synthetic and every value is `example.invalid`-shaped.
 """

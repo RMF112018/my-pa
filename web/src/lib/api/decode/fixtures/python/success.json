@@ -955,5 +955,95 @@
       "updated_at": "2026-01-01T00:00:00.000Z",
       "version": 1
     }
+  },
+  "reports.read": {
+    "report_id": "rpt_aaaaaaaa11111111",
+    "report_run_id": "rrun_aaaaaaaa11111111",
+    "cycle_run_id": "micr_aaaaaaaa11111111",
+    "focus_area_id": "communications",
+    "stage": "collector",
+    "artifact_kind": "collector_candidates",
+    "source_lane": null,
+    "report_date": "2026-08-20",
+    "title": "E2E morning brief collector",
+    "artifact_state": "final",
+    "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "content_bytes": 48,
+    "committed_at": "2026-08-09T12:00:00.000Z",
+    "version": 1,
+    "supersedes_report_id": null,
+    "dependency_report_ids": [],
+    "provenance": [
+      {
+        "source_system": "synthetic",
+        "source_ref": "src_aaaaaaaa11111111",
+        "relation": "supports",
+        "source_url": null
+      }
+    ],
+    "body_markdown": "# Morning Brief\n\n- scraped item one",
+    "structured_content": {
+      "lane": "persisted",
+      "marker": "not-from-markdown"
+    }
+  },
+  "reports.latest": {
+    "report_id": "rpt_aaaaaaaa11111111",
+    "cycle_run_id": "micr_aaaaaaaa11111111",
+    "stage": "collector",
+    "artifact_kind": "collector_candidates",
+    "focus_area_id": "communications",
+    "source_lane": null,
+    "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "artifact_state": "final"
+  },
+  "reports.list": {
+    "items": [
+      {
+        "report_id": "rpt_aaaaaaaa11111111",
+        "cycle_run_id": "micr_aaaaaaaa11111111",
+        "stage": "collector",
+        "artifact_kind": "collector_candidates",
+        "focus_area_id": "communications",
+        "source_lane": null,
+        "title": "E2E morning brief collector",
+        "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "artifact_state": "final"
+      }
+    ],
+    "next_cursor": null
+  },
+  "reports.search": {
+    "items": [
+      {
+        "report_id": "rpt_aaaaaaaa11111111",
+        "title": "E2E morning brief collector",
+        "snippet": "morning brief",
+        "cycle_run_id": "micr_aaaaaaaa11111111",
+        "stage": "collector",
+        "artifact_kind": "collector_candidates"
+      }
+    ]
+  },
+  "reports.resolve_set": {
+    "cycle_run_id": "micr_aaaaaaaa11111111",
+    "cycle_id": "morning_intelligence",
+    "business_date": "2026-08-20",
+    "set_id": "morning_brief_inputs",
+    "aggregate": "BLOCKED",
+    "members": [
+      {
+        "member_id": "communications",
+        "focus_area_id": "communications",
+        "source_lane": null,
+        "readiness": "MISSING",
+        "required": true,
+        "artifact_id": null,
+        "producer_run_id": null,
+        "content_sha256": null,
+        "committed_at": null,
+        "readiness_reason": "missing"
+      }
+    ]
   }
 }

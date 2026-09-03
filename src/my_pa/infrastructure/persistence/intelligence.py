@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime
 from typing import Any, cast
 
-from sqlalchemy import Connection, desc, func, literal_column, select, update
+from sqlalchemy import Connection, and_, desc, func, literal_column, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.sql.elements import ColumnElement
@@ -357,6 +357,8 @@ class SqlIntelligenceStore:
         report_date: date | None,
         include_superseded: bool,
         limit: int,
+        after_committed_at: datetime | None = None,
+        after_artifact_id: str | None = None,
     ) -> tuple[IntelligenceArtifact, ...]:
         filters: list[ColumnElement[bool]] = []
         if cycle_run_id is not None:
@@ -375,6 +377,16 @@ class SqlIntelligenceStore:
             filters.append(intelligence_artifacts.c.is_current.is_(True))
             filters.append(
                 intelligence_artifacts.c.artifact_state != ArtifactState.SUPERSEDED.value
+            )
+        if after_committed_at is not None and after_artifact_id is not None:
+            filters.append(
+                or_(
+                    intelligence_artifacts.c.committed_at < after_committed_at,
+                    and_(
+                        intelligence_artifacts.c.committed_at == after_committed_at,
+                        intelligence_artifacts.c.artifact_id < after_artifact_id,
+                    ),
+                )
             )
         query = select(intelligence_artifacts)
         if filters:

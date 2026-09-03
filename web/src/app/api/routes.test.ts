@@ -104,7 +104,7 @@ function get(cookie: string, path: string): NextRequest {
 function post(cookie: string, path: string, body: unknown): NextRequest {
   const request = new NextRequest(`${ORIGIN}${path}`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", origin: ORIGIN },
     body: JSON.stringify(body),
   });
   request.cookies.set(SESSION_COOKIE_NAME, cookie);
@@ -507,6 +507,7 @@ describe("the capture receipt is the backend's own", () => {
       method: "POST",
       headers: {
         "content-type": "application/json",
+        origin: ORIGIN,
         "x-my-pa-replay-binding": authority.replayBinding,
       },
       body: "synthetic plaintext that is deliberately not parsed as JSON",
@@ -752,5 +753,81 @@ describe("an unauthenticated caller reaches nothing", () => {
     const response = await reviewList(new NextRequest(`${ORIGIN}/api/review`));
     expect(response.status).toBe(401);
     expect(sent).toEqual([]);
+  });
+});
+
+describe("mutating capture, review, and reveal refuse cross-site callers", () => {
+  function mutatingPost(
+    cookie: string,
+    path: string,
+    body: unknown,
+    origin: string | null,
+  ): NextRequest {
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (origin !== null) headers.origin = origin;
+    const request = new NextRequest(`${ORIGIN}${path}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+    request.cookies.set(SESSION_COOKIE_NAME, cookie);
+    return request;
+  }
+
+  it.each([
+    { name: "foreign Origin", origin: "https://attacker.example" },
+    { name: "missing Origin", origin: null },
+  ])("refuses Capture with $name before the gateway", async ({ origin }) => {
+    const cookie = await signIn();
+    stubGateway({});
+    const response = await capture(
+      mutatingPost(cookie, "/api/capture", { text: "a note", idempotencyKey: "k-cross" }, origin),
+    );
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({
+      error: { errorClass: "authorization", code: "cross_site_request" },
+    });
+    expect(sent).toEqual([]);
+    expect(JSON.stringify(sent)).not.toContain("capture.create");
+  });
+
+  it.each([
+    { name: "foreign Origin", origin: "https://attacker.example" },
+    { name: "missing Origin", origin: null },
+  ])("refuses Review decide with $name before the gateway", async ({ origin }) => {
+    const cookie = await signIn();
+    stubGateway({});
+    const response = await reviewDecide(
+      mutatingPost(
+        cookie,
+        "/api/review/rvw_aaaaaaaa11111111/decide",
+        { disposition: "accept", expectedReviewVersion: 0 },
+        origin,
+      ),
+      { params: Promise.resolve({ id: "rvw_aaaaaaaa11111111" }) },
+    );
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({
+      error: { errorClass: "authorization", code: "cross_site_request" },
+    });
+    expect(sent).toEqual([]);
+    expect(JSON.stringify(sent)).not.toContain("review.decide");
+  });
+
+  it.each([
+    { name: "foreign Origin", origin: "https://attacker.example" },
+    { name: "missing Origin", origin: null },
+  ])("refuses Reveal with $name before the gateway", async ({ origin }) => {
+    const cookie = await signIn();
+    stubGateway({});
+    const response = await reveal(
+      mutatingPost(cookie, "/api/reveal", { subjectId: "cap_aaaaaaaa11111111" }, origin),
+    );
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({
+      error: { errorClass: "authorization", code: "cross_site_request" },
+    });
+    expect(sent).toEqual([]);
+    expect(JSON.stringify(sent)).not.toContain("knowledge.reveal");
   });
 });

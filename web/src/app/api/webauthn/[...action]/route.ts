@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { rejectCallerSuppliedPrincipal, TokenClaimsError } from "@/lib/auth/claims";
 import { requirePrincipal } from "@/lib/api/guard";
-import { isSameOrigin } from "@/lib/http/origin";
+import { admitBrowserMutation } from "@/lib/http/mutation-admission";
 import { callWebAuthnGateway } from "@/lib/auth/webauthn-server";
 import {
   isOpaqueSessionSid,
@@ -79,7 +79,7 @@ export async function POST(
   request: NextRequest,
   context: { params: Promise<{ action: string[] }> },
 ): Promise<Response> {
-  const blocked = isSameOrigin(request) ? null : refuse("cross_site_request", 403);
+  const blocked = admitBrowserMutation(request);
   if (blocked) return blocked;
   const { action } = await context.params;
   const joined = action.join("/");

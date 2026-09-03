@@ -52,15 +52,16 @@ describe("Work BFF request normalization", () => {
     expect(gateway).not.toHaveBeenCalled();
   });
 
-  it.each(["same-origin", "none"])("accepts browser-vouched %s Work mutations without Origin", async (site) => {
-    const gateway = stubWorkGateway(async () => new Response(JSON.stringify({ result: { task: { task_id: "tsk_aaaaaaaa11111111" } }, disclosure: DISCLOSURE }), { status: 200, headers: { "content-type": "application/json" } }));
+  it.each(["same-origin", "none"])("refuses browser-vouched %s Work mutations without Origin", async (site) => {
+    const gateway = stubWorkGateway();
     const response = await patchTask(request(await cookie(), "/api/tasks/tsk_aaaaaaaa11111111", {
       method: "PATCH",
       headers: { "sec-fetch-site": site },
       body: JSON.stringify({ title: "Accepted", expectedVersion: 8, idempotencyKey: `attempt-${site}` }),
     }), { params: Promise.resolve({ taskId: "tsk_aaaaaaaa11111111" }) });
-    expect(response.status).toBe(200);
-    expect(gateway).toHaveBeenCalledOnce();
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: { errorClass: "authorization", code: "cross_site_request" } });
+    expect(gateway).not.toHaveBeenCalled();
   });
 
   it("accepts same-origin JSON without relying on the Content-Type header", async () => {
@@ -70,6 +71,15 @@ describe("Work BFF request normalization", () => {
       body: JSON.stringify({ title: "Accepted", expectedVersion: 8, idempotencyKey: "attempt-no-content-type" }),
     }), { params: Promise.resolve({ taskId: "tsk_aaaaaaaa11111111" }) });
     expect(response.status).toBe(200);
+  });
+
+  it("accepts a Work GET without Origin", async () => {
+    const gateway = stubWorkGateway(async () => new Response(JSON.stringify({ result: { tasks: [] }, disclosure: DISCLOSURE }), { status: 200, headers: { "content-type": "application/json" } }));
+    const value = new NextRequest(`${ORIGIN}/api/tasks?pageSize=25`);
+    value.cookies.set(SESSION_COOKIE_NAME, await cookie());
+    const response = await listTasks(value);
+    expect(response.status).toBe(200);
+    expect(gateway).toHaveBeenCalledOnce();
   });
 
   it("sends integer and exact archive query values under gateway snake-case names", async () => {

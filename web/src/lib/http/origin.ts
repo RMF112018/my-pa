@@ -10,14 +10,17 @@
  * Two signals, and the stricter one wins:
  *
  * * `Sec-Fetch-Site` is the browser's own statement about the relationship
- *   between the initiator and the target. `same-origin` and `none` (a user
- *   typing the URL, or a bookmark) are accepted; `same-site` and `cross-site`
- *   are not — `same-site` covers a sibling subdomain, which is not this origin.
- * * `Origin` is compared to the configured canonical origin. Host and forwarding
- *   headers, and therefore `request.url`, never establish this trust boundary.
+ *   between the initiator and the target. `same-site` and `cross-site` are
+ *   refused — `same-site` covers a sibling subdomain, which is not this origin.
+ *   `same-origin` and `none` may still reject; they never voucher a request
+ *   that omitted `Origin`.
+ * * `Origin` is compared to the trusted origin. Production uses
+ *   `canonicalOrigin()` (`MYPA_CANONICAL_ORIGIN`); Host and `X-Forwarded-Host`
+ *   never establish this trust boundary. Outside production the trusted origin
+ *   is `new URL(request.url).origin`.
  *
- * A request carrying neither is refused. That is the fail-closed direction and
- * it costs nothing real: every browser that can run this application sends
+ * A request that omits `Origin` is refused. That is the fail-closed direction
+ * and it costs nothing real: every browser that can run this application sends
  * `Origin` on a same-origin `fetch` with a method other than GET, and the app's
  * own sign-in page uses `fetch`. A non-browser client that wants this route can
  * send an `Origin` header, which is a deliberate act rather than an accident.
@@ -40,7 +43,5 @@ export function isSameOrigin(request: Request): boolean {
       return false;
     }
   }
-  // No `Origin`. Accept only when the browser itself vouched for the
-  // relationship; otherwise there is no evidence and the answer is no.
-  return fetchSite === "same-origin" || fetchSite === "none";
+  return false;
 }

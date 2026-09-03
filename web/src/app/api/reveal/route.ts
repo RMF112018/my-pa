@@ -35,6 +35,7 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { requirePrincipal, readCleanBody } from "@/lib/api/guard";
+import { admitBrowserMutation } from "@/lib/http/mutation-admission";
 import { backendDisclosure, callGateway, transportLimitations } from "@/lib/api/gateway";
 import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
@@ -62,6 +63,9 @@ interface RevealResult {
 }
 
 export async function POST(request: NextRequest) {
+  const blocked = admitBrowserMutation(request);
+  if (blocked) return blocked;
+
   const guard = await requirePrincipal(request);
   if (!guard.ok) return guard.response;
 

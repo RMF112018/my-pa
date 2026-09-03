@@ -48,6 +48,7 @@ import { backendDisclosure, callGateway, transportLimitations } from "@/lib/api/
 import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
 import { SESSION_COOKIE_NAME, sessionReplayBinding } from "@/lib/auth/session";
+import { admitBrowserMutation } from "@/lib/http/mutation-admission";
 
 const SCOPE = "capture";
 
@@ -68,6 +69,9 @@ interface PythonReceipt {
 }
 
 export async function POST(request: NextRequest) {
+  const blocked = admitBrowserMutation(request);
+  if (blocked) return blocked;
+
   const guard = await requirePrincipal(request);
   if (!guard.ok) return guard.response;
 

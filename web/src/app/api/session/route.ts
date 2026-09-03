@@ -6,7 +6,7 @@
  *
  * 1. **Cross-site.** `POST` and `DELETE` change state and the cookie is
  *    `sameSite: "lax"`, so a request that did not come from this origin is
- *    refused before anything else happens (`lib/http/origin.ts`).
+ *    refused before anything else happens (`admitBrowserMutation`).
  * 2. **Mode.** `MYPA_AUTH_MODE` decides whether a synthetic sign-in exists at
  *    all. Unset is a refusal, not a default, and `synthetic` in a production
  *    build is a refusal too. `passkey` is the production web mode; this route
@@ -51,7 +51,7 @@ import {
   SessionServiceUnavailableError,
 } from "@/lib/auth/session-service";
 import { requirePrincipal } from "@/lib/api/guard";
-import { isSameOrigin } from "@/lib/http/origin";
+import { admitBrowserMutation } from "@/lib/http/mutation-admission";
 
 function refuse(code: string, message: string, status: number): NextResponse {
   return NextResponse.json({ error: { code, message } }, { status });
@@ -96,13 +96,6 @@ async function revokePriorSid(
   }
 }
 
-/** The cross-site gate both mutating methods share. */
-function crossSite(request: NextRequest): NextResponse | null {
-  return isSameOrigin(request)
-    ? null
-    : refuse("cross_site_request", "this endpoint refuses cross-site requests", 403);
-}
-
 /** Current authenticated replay authority, derived from this request's cookie SID. */
 export async function GET(request: NextRequest) {
   const guard = await requirePrincipal(request);
@@ -137,7 +130,7 @@ function configuredMode(): { mode: AuthMode } | { failure: NextResponse } {
 }
 
 export async function POST(request: NextRequest) {
-  const blocked = crossSite(request);
+  const blocked = admitBrowserMutation(request);
   if (blocked) return blocked;
 
   const configured = configuredMode();
@@ -208,7 +201,7 @@ export async function POST(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
-  const blocked = crossSite(request);
+  const blocked = admitBrowserMutation(request);
   if (blocked) return blocked;
 
   const sid = parseOpaqueSessionSid(request.cookies.get(SESSION_COOKIE_NAME)?.value);

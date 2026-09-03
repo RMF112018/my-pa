@@ -2,18 +2,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { requirePrincipal } from "@/lib/api/guard";
 import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
-import { backendDisclosure, callGateway, transportLimitations } from "@/lib/api/gateway";
+import { backendDisclosure, invokeGateway, transportLimitations } from "@/lib/api/gateway";
 import { acceptedTimeline, syntheticPersonId } from "@/lib/fixtures/situation";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
-
-interface PythonRelationshipEvent {
-  readonly event_id: string;
-  readonly person_id: string;
-  readonly event_type: string;
-  readonly occurred_at: string;
-  readonly context: string | null;
-  readonly source_ref: string | null;
-}
+import type { ContinuitySituationsResult } from "@/lib/api/decode/capabilities/continuity.situations";
 
 export async function GET(
   request: NextRequest,
@@ -28,11 +20,17 @@ export async function GET(
   const serving = resolveServing();
   if (serving.kind === "refused") return serving.response;
   if (serving.kind === "backend") {
-    const outcome = await callGateway<{
-      relationship_events?: readonly PythonRelationshipEvent[];
-    }>(guard.principal, "continuity.situations");
+    const outcome = await invokeGateway(guard.principal, "continuity.situations");
     if (!outcome.ok) return gatewayRefusal(scope, outcome.status, outcome.error);
-    const events = (outcome.result.relationship_events ?? [])
+    const result = outcome.result as ContinuitySituationsResult;
+    if (result.relationship_events === undefined) {
+      return gatewayRefusal(scope, 503, {
+        errorClass: "unavailable",
+        code: "upstream_contract_invalid",
+        message: "the gateway result did not match the capability contract",
+      });
+    }
+    const events = result.relationship_events
       .filter((event) => event.person_id === personId)
       .map((event) => ({
         eventId: event.event_id,

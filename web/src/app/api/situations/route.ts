@@ -18,26 +18,16 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { requirePrincipal } from "@/lib/api/guard";
-import { backendDisclosure, callGateway, transportLimitations } from "@/lib/api/gateway";
+import { backendDisclosure, invokeGateway, transportLimitations } from "@/lib/api/gateway";
 import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
 import { syntheticSituations } from "@/lib/fixtures/situation";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
+import type { SituationRow } from "@/lib/api/decode/capabilities/continuity.situations";
 import type { BackendSituation, SituationState } from "@/contracts/views";
 
 const SCOPE = "situations";
 
-interface PythonSituation {
-  readonly situation_id: string;
-  readonly title: string;
-  readonly state: string;
-  readonly description: string | null;
-  readonly object_refs: readonly string[];
-  readonly opened_at: string;
-  readonly closed_at: string | null;
-  readonly outcome: string | null;
-}
-
-function toBackendSituation(row: PythonSituation): BackendSituation {
+function toBackendSituation(row: SituationRow): BackendSituation {
   return {
     situationId: row.situation_id,
     title: row.title,
@@ -65,15 +55,13 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const outcome = await callGateway<{ situations?: readonly PythonSituation[] }>(
-    guard.principal,
-    "continuity.situations",
-  );
+  const outcome = await invokeGateway(guard.principal, "continuity.situations");
   if (!outcome.ok) return gatewayRefusal(SCOPE, outcome.status, outcome.error);
+  const result = outcome.result as { situations: readonly SituationRow[] };
 
   return NextResponse.json({
     shape: "backend",
-    situations: (outcome.result.situations ?? []).map(toBackendSituation),
+    situations: result.situations.map(toBackendSituation),
     disclosure: backendDisclosure(SCOPE, outcome.disclosure, transportLimitations()),
   });
 }

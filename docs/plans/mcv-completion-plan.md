@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-Three hundred and eighteen Python modules under `src/my_pa` and four hundred and forty-nine test modules —
+Three hundred and eighteen Python modules under `src/my_pa` and four hundred and fifty test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale three times: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
@@ -214,8 +214,7 @@ RI-ENT-WP-10/11's modules and the entity-plane prose guard. Re-measured on the
 merged tree with every conflict marker gone -- **for the fourth consecutive
 integration neither side's pair was true of the result**, which is now less a
 caution than a description of what merging two active branches does to a
-derived count. The pair standing before this
-correction, three hundred and
+derived count. **Moved again on 2026-09-03 by the UI-IMP-WP05/WP-06 integration** (`origin/main` at `1055e5bc`), which added one test module — `tests/contract/test_bff_success_decoder_parity.py` — and no source module. `origin/main` recorded the resulting pair as three hundred and seventeen and four hundred and forty-six, true of *its* tree and not of this one, which also carries RI-ENT-WP-10/11's source and test modules and the entity-plane prose guard. Re-measured on the merged tree with every conflict marker gone: **three hundred and eighteen and four hundred and fifty**. **For the fifth consecutive integration neither side's pair was true of the result** — ours read 318/449 and `origin/main`'s 317/446, and the truth is neither. Note the shape this time: the source figure happens to equal ours because this base adds no source module, and the test figure happens to equal ours plus one. Both coincidences were measured rather than relied on; an identity that holds by luck on one integration is not a method. The pair standing before this correction, three hundred and
 five and four hundred and twenty-nine, was true at `f4eaa4f`; the chain above
 therefore skips from four hundred and twenty-six to four hundred and
 twenty-nine, because `f4eaa4f` moved the sentence without extending this note,

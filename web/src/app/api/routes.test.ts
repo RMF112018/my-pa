@@ -63,18 +63,153 @@ const DISCLOSURE = {
   partial_result: false,
 };
 
+/** Python-shaped `capabilities.get` success; empty `manifest`/`readiness` fail closed. */
+const CAPABILITIES_GET = {
+  manifest: {
+    contract_version: "v1",
+    contract_family: "my-pa-public-capabilities",
+    capabilities: [
+      {
+        name: "capabilities.get",
+        version: "v1",
+        availability: "available",
+        operator_only: false,
+      },
+    ],
+    content_types: [{ media_type: "text/plain", availability: "available" }],
+    limits: {
+      max_page_size: 50,
+      default_page_size: 20,
+      max_fetch_bytes: 1_048_576,
+      max_enrollment_depth: 8,
+    },
+  },
+  readiness: {
+    state: "ready",
+    contract_version: "v1",
+    implemented_capabilities: 24,
+    total_capabilities: 26,
+    limitations: ["Worker-plane health is unavailable."],
+  },
+  worker_planes: [
+    {
+      plane: "capture",
+      state: "unavailable",
+      backlog: null,
+      dead_lettered: null,
+      last_heartbeat_at: null,
+    },
+  ],
+};
+
+const KNOWLEDGE_READ = {
+  knowledge_id: "knw_aaaa0001aaaa0001aaaa0001",
+  label: "text/plain",
+  media_type: "text/plain",
+  character_count: 12,
+  metadata_only: false,
+  is_truncated: false,
+  provenance: {
+    source_id: "src_aaaa0001aaaa0001aaaa0001",
+    source_object_id: "sobj_aaaa0001aaaa0001aaaa0001",
+    version_id: "ver_aaaa0001aaaa0001aaaa0001",
+    extractor: "plain_text",
+    extractor_version: "1",
+    trust_level: "source_original",
+    observed_at: "2026-01-01T00:00:00Z",
+    processed_at: "2026-01-01T00:00:00Z",
+  },
+  text: "hello world",
+};
+
+const REVEAL_UNAVAILABLE = {
+  subject_id: "cap_aaaaaaaa11111111",
+  state: "unavailable",
+  gap: "derivation_has_not_completed_for_every_version",
+  subject_kind: "capture",
+  capture_id: "cap_aaaaaaaa11111111",
+  versions: [],
+  spans: [],
+  proposed: [],
+  accepted: [],
+  versions_with_completed_derivation: 0,
+};
+
+const CAPTURE_RECEIPT = {
+  receipt_id: "rcpt_aaaaaaaa11111111",
+  principal_id: "prn_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  capture_id: "cap_aaaaaaaa11111111",
+  version_id: "capver_aaaaaaaa11111111",
+  version_number: 1,
+  idempotency_key: "k1",
+  content_sha256: "0".repeat(64),
+  issued_at: "2026-08-09T12:00:00Z",
+  created: true,
+};
+
+/** Situations listing plus the full continuity workspace group (empty arrays). */
+const SITUATIONS_WITH_WORKSPACE = {
+  situations: [],
+  frames: [],
+  traces: [],
+  commitments: [],
+  decisions: [],
+  tasks: [],
+  relationship_events: [],
+};
+
+const CAPABILITY_RESULTS: Record<string, unknown> = {
+  "capabilities.get": CAPABILITIES_GET,
+  "capture.list": { captures: [] },
+  "capture.search": { matches: [], searchable_versions: 0, stored_versions: 0 },
+  "capture.create": CAPTURE_RECEIPT,
+  "knowledge.search": { matches: [] },
+  "knowledge.read": KNOWLEDGE_READ,
+  "knowledge.reveal": REVEAL_UNAVAILABLE,
+  "review.list": { review_cases: [] },
+  "continuity.pulse": { pulse_items: [] },
+  "continuity.situations": SITUATIONS_WITH_WORKSPACE,
+  "continuity.projects": { projects: [] },
+};
+
 /** Every document the stubbed gateway was sent, so a test can inspect the wire. */
 let sent: Array<{ url: string; body: Record<string, unknown> }> = [];
 
+function capabilityFromUrl(url: string): string {
+  const match = url.match(/\/v1\/([^/?#]+)/);
+  return match?.[1] ?? "";
+}
+
+function gatewayResponse(result: unknown): Response {
+  return new Response(JSON.stringify({ result, disclosure: DISCLOSURE }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/** Override: every capability URL returns the same result. */
 function stubGateway(result: unknown = {}) {
   vi.stubGlobal(
     "fetch",
     withSessionServiceFetch(async (url: string | URL | Request, init?: RequestInit) => {
       sent.push({ url: String(url), body: JSON.parse(String(init?.body ?? "{}")) });
-      return new Response(JSON.stringify({ result, disclosure: DISCLOSURE }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      return gatewayResponse(result);
+    }),
+  );
+}
+
+/** Dispatch on `/v1/{capability}` with Python-shaped successes; `map` overrides named keys. */
+function stubGatewayByCapability(map: Record<string, unknown> = {}) {
+  const results = { ...CAPABILITY_RESULTS, ...map };
+  vi.stubGlobal(
+    "fetch",
+    withSessionServiceFetch(async (url: string | URL | Request, init?: RequestInit) => {
+      sent.push({ url: String(url), body: JSON.parse(String(init?.body ?? "{}")) });
+      const capability = capabilityFromUrl(String(url));
+      const result = Object.prototype.hasOwnProperty.call(results, capability)
+        ? results[capability]
+        : {};
+      return gatewayResponse(result);
     }),
   );
 }
@@ -104,7 +239,7 @@ function get(cookie: string, path: string): NextRequest {
 function post(cookie: string, path: string, body: unknown): NextRequest {
   const request = new NextRequest(`${ORIGIN}${path}`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", origin: ORIGIN },
     body: JSON.stringify(body),
   });
   request.cookies.set(SESSION_COOKIE_NAME, cookie);
@@ -158,16 +293,7 @@ describe("a default build produces no fixture data at all", () => {
 
   it("serves the backend, not fixtures, on every route that has a capability", async () => {
     const cookie = await signIn();
-    stubGateway({
-      manifest: {},
-      readiness: {},
-      review_cases: [],
-      captures: [],
-      pulse_items: [],
-      situations: [],
-      projects: [],
-      relationship_events: [],
-    });
+    stubGatewayByCapability();
     const responses = [
       await system(get(cookie, "/api/system")),
       await library(get(cookie, "/api/library")),
@@ -279,17 +405,7 @@ describe("Library distinguishes an unavailable scope from an empty one", () => {
 
 describe("Reveal carries the backend's own outcome, and does not recompute one", () => {
   /** An unavailable reveal: no rows, and a state that is not "found nothing". */
-  const UNAVAILABLE = {
-    state: "unavailable",
-    gap: "derivation_has_not_completed_for_every_version",
-    subject_kind: "capture",
-    capture_id: "cap_aaaaaaaa11111111",
-    versions: [],
-    spans: [],
-    proposed: [],
-    accepted: [],
-    versions_with_completed_derivation: 0,
-  };
+  const UNAVAILABLE = REVEAL_UNAVAILABLE;
 
   it("passes an unavailable state through rather than deriving one from empty arrays", async () => {
     const cookie = await signIn();
@@ -507,6 +623,7 @@ describe("the capture receipt is the backend's own", () => {
       method: "POST",
       headers: {
         "content-type": "application/json",
+        origin: ORIGIN,
         "x-my-pa-replay-binding": authority.replayBinding,
       },
       body: "synthetic plaintext that is deliberately not parsed as JSON",
@@ -647,7 +764,7 @@ describe("the review decision is the backend's own", () => {
 describe("System reports what is off as off", () => {
   it("names Graph as deliberately off and never as a degraded source", async () => {
     const cookie = await signIn();
-    stubGateway({ manifest: {}, readiness: {} });
+    stubGateway(CAPABILITIES_GET);
     const body = await (await system(get(cookie, "/api/system"))).json();
     expect(body.graphConnector.state).toBe("off_by_default");
     expect(body.graphConnector.detail).toMatch(/deliberately off/);
@@ -661,7 +778,7 @@ describe("System reports what is off as off", () => {
 
   it("reports connected sources as unknown rather than asserting there are none", async () => {
     const cookie = await signIn();
-    stubGateway({ manifest: {}, readiness: {} });
+    stubGateway(CAPABILITIES_GET);
     const body = await (await system(get(cookie, "/api/system"))).json();
     expect(body.connectedSources).toBeNull();
     expect(body.disclosure.limitations.join(" ")).toMatch(/cannot be enumerated/);
@@ -669,7 +786,7 @@ describe("System reports what is off as off", () => {
 
   it("no longer restates a schema head the web tier cannot check", async () => {
     const cookie = await signIn();
-    stubGateway({ manifest: {}, readiness: {} });
+    stubGateway(CAPABILITIES_GET);
     const raw = await (await system(get(cookie, "/api/system"))).text();
     expect(raw).not.toContain("schemaHead");
   });
@@ -687,7 +804,7 @@ describe("Today is a derivation, not a feed", () => {
       basis_refs: ["cmt_overdue0001overdue001", "cap_origin0001origin0001"],
       consequence: "A counterparty is still entitled to expect this.",
       next_step: "Close it with the evidence that discharged it.",
-      priority: 9,
+      attention_rank: 9,
       generated_at: "2026-08-10T12:00:00Z",
     },
     {
@@ -699,7 +816,7 @@ describe("Today is a derivation, not a feed", () => {
       basis_refs: ["cmt_soon00001soon00001aa"],
       consequence: "Leaving it later removes the option of re-agreeing the moment.",
       next_step: "Confirm it will be met, or say now that it will not.",
-      priority: 4,
+      attention_rank: 4,
       generated_at: "2026-08-10T12:00:00Z",
     },
   ];
@@ -752,5 +869,81 @@ describe("an unauthenticated caller reaches nothing", () => {
     const response = await reviewList(new NextRequest(`${ORIGIN}/api/review`));
     expect(response.status).toBe(401);
     expect(sent).toEqual([]);
+  });
+});
+
+describe("mutating capture, review, and reveal refuse cross-site callers", () => {
+  function mutatingPost(
+    cookie: string,
+    path: string,
+    body: unknown,
+    origin: string | null,
+  ): NextRequest {
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (origin !== null) headers.origin = origin;
+    const request = new NextRequest(`${ORIGIN}${path}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+    request.cookies.set(SESSION_COOKIE_NAME, cookie);
+    return request;
+  }
+
+  it.each([
+    { name: "foreign Origin", origin: "https://attacker.example" },
+    { name: "missing Origin", origin: null },
+  ])("refuses Capture with $name before the gateway", async ({ origin }) => {
+    const cookie = await signIn();
+    stubGateway({});
+    const response = await capture(
+      mutatingPost(cookie, "/api/capture", { text: "a note", idempotencyKey: "k-cross" }, origin),
+    );
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({
+      error: { errorClass: "authorization", code: "cross_site_request" },
+    });
+    expect(sent).toEqual([]);
+    expect(JSON.stringify(sent)).not.toContain("capture.create");
+  });
+
+  it.each([
+    { name: "foreign Origin", origin: "https://attacker.example" },
+    { name: "missing Origin", origin: null },
+  ])("refuses Review decide with $name before the gateway", async ({ origin }) => {
+    const cookie = await signIn();
+    stubGateway({});
+    const response = await reviewDecide(
+      mutatingPost(
+        cookie,
+        "/api/review/rvw_aaaaaaaa11111111/decide",
+        { disposition: "accept", expectedReviewVersion: 0 },
+        origin,
+      ),
+      { params: Promise.resolve({ id: "rvw_aaaaaaaa11111111" }) },
+    );
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({
+      error: { errorClass: "authorization", code: "cross_site_request" },
+    });
+    expect(sent).toEqual([]);
+    expect(JSON.stringify(sent)).not.toContain("review.decide");
+  });
+
+  it.each([
+    { name: "foreign Origin", origin: "https://attacker.example" },
+    { name: "missing Origin", origin: null },
+  ])("refuses Reveal with $name before the gateway", async ({ origin }) => {
+    const cookie = await signIn();
+    stubGateway({});
+    const response = await reveal(
+      mutatingPost(cookie, "/api/reveal", { subjectId: "cap_aaaaaaaa11111111" }, origin),
+    );
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({
+      error: { errorClass: "authorization", code: "cross_site_request" },
+    });
+    expect(sent).toEqual([]);
+    expect(JSON.stringify(sent)).not.toContain("knowledge.reveal");
   });
 });

@@ -42,6 +42,14 @@
  */
 import contract from "@/contracts/gateway.json";
 import { rejectCallerSuppliedPrincipal } from "@/lib/auth/claims";
+import { DECODERS } from "@/lib/api/decode";
+import type { DecodedDisclosure } from "@/lib/api/decode/disclosure";
+import { decodeEnvelope } from "@/lib/api/decode/envelope";
+import {
+  httpStatusForProblem,
+  PROBLEM_ERROR_CLASS,
+  type DecodedProblem,
+} from "@/lib/api/decode/problem";
 import { gatewayAuthMode, gatewayBaseUrl } from "@/lib/api/gateway-config";
 import type { DisclosureEnvelope, ErrorEnvelope } from "@/contracts/envelope";
 import type { PrincipalSession } from "@/contracts/identity";
@@ -49,15 +57,8 @@ import type { PrincipalSession } from "@/contracts/identity";
 /** A capability name this BFF is allowed to address. */
 export type GatewayCapability = keyof typeof contract.capabilities;
 
-/** The disclosure the Python contract emits, in the shape it emits it. */
-export interface PythonDisclosure {
-  readonly coverage: { readonly state: string };
-  readonly freshness: { readonly observed_at: string; readonly state: string };
-  readonly trust: { readonly level: string; readonly basis: readonly string[] };
-  readonly truncation: { readonly is_truncated: boolean; readonly next_cursor?: string | null };
-  readonly limitations: readonly string[];
-  readonly partial_result: boolean;
-}
+/** The disclosure the Python contract emits, after runtime decode. */
+export type PythonDisclosure = DecodedDisclosure;
 
 export type GatewayOutcome<T> =
   | { readonly ok: true; readonly result: T; readonly disclosure: PythonDisclosure }
@@ -99,19 +100,7 @@ export class GatewayIsServerOnlyError extends Error {
 }
 
 /** The eleven Python error codes, mapped onto the web tier's error vocabulary. */
-const ERROR_CLASS: Record<string, ErrorEnvelope["errorClass"]> = {
-  invalid_request: "validation",
-  ambiguous_request: "validation",
-  denied: "authorization",
-  quarantined: "policy_denied",
-  not_found: "not_found",
-  conflict: "conflict",
-  cancelled: "conflict",
-  rate_limited: "unavailable",
-  unsupported: "unavailable",
-  unavailable: "unavailable",
-  internal_error: "internal",
-};
+const ERROR_CLASS = PROBLEM_ERROR_CLASS;
 
 /** The HTTP status each error class is answered with by this tier. */
 const ERROR_STATUS: Record<ErrorEnvelope["errorClass"], number> = {
@@ -212,44 +201,48 @@ function requestHeaders():
   };
 }
 
-function problemToError(problem: unknown, fallbackStatus: number): {
+function problemToError(problem: DecodedProblem, fallbackStatus: number): {
   status: number;
   error: ErrorEnvelope;
 } {
-  const detail = problem as {
-    code?: unknown;
-    message?: unknown;
-    correlation_id?: unknown;
-  } | null;
-  const code = typeof detail?.code === "string" ? detail.code : "unavailable";
-  const errorClass = ERROR_CLASS[code] ?? "unavailable";
+  const errorClass = ERROR_CLASS[problem.code] ?? "unavailable";
   return {
-    status: ERROR_STATUS[errorClass] ?? fallbackStatus,
+    status: httpStatusForProblem(problem.code) ?? ERROR_STATUS[errorClass] ?? fallbackStatus,
     error: {
       errorClass,
-      code,
-      message:
-        typeof detail?.message === "string" ? detail.message : "the gateway refused the request",
-      ...(typeof detail?.correlation_id === "string"
-        ? { correlationId: detail.correlation_id }
-        : {}),
+      code: problem.code,
+      message: problem.message,
+      ...(problem.correlationId ? { correlationId: problem.correlationId } : {}),
     },
   };
 }
 
+function logDecodeFailure(
+  capability: GatewayCapability,
+  code: string,
+  correlationId?: string,
+): void {
+  console.error({ capability, code, ...(correlationId ? { correlationId } : {}) });
+}
+
 /**
- * Call one capability on the Python gateway.
+ * Transport to the Python gateway: config, fetch, JSON parse, envelope XOR
+ * problem. Not generic. Not the authority path for routes or RSC.
+ *
+ * WP05 mutation admission order lives in routes, not here:
+ * Origin → Principal → body. Side effects happen in routes. Decoding happens
+ * AFTER upstream returns.
  *
  * Every refusal on the way — a misconfigured deployment, a missing credential, a
  * gateway that did not answer, an answer that was not the contract's shape — is
  * returned as a typed error rather than thrown, so a route handler cannot
  * accidentally turn one into an empty success.
  */
-export async function callGateway<T = Record<string, unknown>>(
+export async function callGateway(
   principal: PrincipalSession,
   capability: GatewayCapability,
   payload: Record<string, unknown> = {},
-): Promise<GatewayOutcome<T>> {
+): Promise<GatewayOutcome<unknown>> {
   assertServerContext();
 
   let base: string;
@@ -312,36 +305,50 @@ export async function callGateway<T = Record<string, unknown>>(
     };
   }
 
-  const envelope = body as {
-    result?: unknown;
-    disclosure?: unknown;
-    error?: unknown;
-    code?: unknown;
-  } | null;
-
-  // A `ProblemDetail` alone: the request never became one the application could
-  // answer, so there is no envelope around it. The Python transport documents
-  // this as its second response shape.
-  if (envelope && envelope.error === undefined && typeof envelope.code === "string") {
-    return { ok: false, ...problemToError(envelope, response.status) };
+  const decoded = decodeEnvelope(body);
+  if (!decoded.ok) {
+    return { ok: false, ...unavailable(decoded.code, decoded.message) };
   }
-  if (envelope?.error) {
-    return { ok: false, ...problemToError(envelope.error, response.status) };
-  }
-  if (!envelope || envelope.disclosure === undefined || envelope.disclosure === null) {
-    return {
-      ok: false,
-      ...unavailable(
-        "gateway_response_uncontracted",
-        "the gateway answered without the mandatory disclosure envelope",
-      ),
-    };
+  if (decoded.value.kind === "problem") {
+    return { ok: false, ...problemToError(decoded.value.problem, response.status) };
   }
   return {
     ok: true,
-    result: (envelope.result ?? {}) as T,
-    disclosure: envelope.disclosure as PythonDisclosure,
+    result: decoded.value.result,
+    disclosure: decoded.value.disclosure,
   };
+}
+
+/**
+ * The only authority path for routes and RSC. Transport plus the capability
+ * decoder selected from `DECODERS`. Capability stubs fail closed until C/D
+ * replace them.
+ *
+ * WP05 mutation admission order lives in routes, not here:
+ * Origin → Principal → body. Side effects happen in routes. Decoding happens
+ * AFTER upstream returns.
+ */
+export async function invokeGateway(
+  principal: PrincipalSession,
+  capability: GatewayCapability,
+  payload: Record<string, unknown> = {},
+): Promise<GatewayOutcome<unknown>> {
+  const outcome = await callGateway(principal, capability, payload);
+  if (!outcome.ok) return outcome;
+  const decoded = DECODERS[capability](outcome.result);
+  if (!decoded.ok) {
+    logDecodeFailure(capability, "upstream_contract_invalid");
+    return {
+      ok: false,
+      status: 503,
+      error: {
+        errorClass: "unavailable",
+        code: "upstream_contract_invalid",
+        message: "the gateway result did not match the capability contract",
+      },
+    };
+  }
+  return { ok: true, result: decoded.value, disclosure: outcome.disclosure };
 }
 
 /** Coverage states the Python contract treats as a genuinely partial answer. */
@@ -354,17 +361,19 @@ const PARTIAL_COVERAGE = new Set([
 ]);
 
 /** Trust levels, mapped onto the authority the web disclosure publishes. */
-const AUTHORITY: Record<string, DisclosureEnvelope["authority"]> = {
+const AUTHORITY = {
   source_original: "accepted",
   source_bound_derived: "derived",
   model_proposed: "proposed",
-};
+} as const satisfies Record<PythonDisclosure["trust"]["level"], DisclosureEnvelope["authority"]>;
 
 /**
  * The web disclosure for a real backend answer.
  *
- * Every field is read off what the gateway actually disclosed. Nothing here can
- * produce `coverage: "synthetic"` or `authority: "synthetic_fixture"` — those two
+ * Every field is read off what the gateway actually disclosed. Required fields
+ * are present after decode; missing coverage or trust cannot reach here and
+ * cannot be defaulted to complete or `"derived"`. Nothing here can produce
+ * `coverage: "synthetic"` or `authority: "synthetic_fixture"` — those two
  * values belong to `lib/fixtures` and are unreachable from this module, which is
  * what makes "a backend-served route never carries a synthetic disclosure" a
  * structural property rather than a convention.
@@ -374,22 +383,22 @@ export function backendDisclosure(
   disclosure: PythonDisclosure,
   extraLimitations: readonly string[] = [],
 ): DisclosureEnvelope {
-  const state = disclosure.coverage?.state ?? "unknown";
-  const truncated = disclosure.truncation?.is_truncated === true;
+  const state = disclosure.coverage.state;
+  const truncated = disclosure.truncation.is_truncated;
   const coverage: DisclosureEnvelope["coverage"] =
     state === "unavailable"
       ? "unavailable"
-      : disclosure.partial_result === true || PARTIAL_COVERAGE.has(state) || truncated
+      : disclosure.partial_result || PARTIAL_COVERAGE.has(state) || truncated
         ? "partial"
         : "complete";
   return {
     scope,
     coverage,
-    freshnessAt: disclosure.freshness?.observed_at ?? null,
-    authority: AUTHORITY[disclosure.trust?.level ?? ""] ?? "derived",
-    limitations: [...(disclosure.limitations ?? []), ...extraLimitations],
+    freshnessAt: disclosure.freshness.observed_at,
+    authority: AUTHORITY[disclosure.trust.level],
+    limitations: [...disclosure.limitations, ...extraLimitations],
     truncated,
-    ...(typeof disclosure.truncation?.next_cursor === "string"
+    ...(typeof disclosure.truncation.next_cursor === "string"
       ? { nextCursor: disclosure.truncation.next_cursor }
       : {}),
   };

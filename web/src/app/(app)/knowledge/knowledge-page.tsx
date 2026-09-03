@@ -37,11 +37,16 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resolveSessionPrincipal } from "@/lib/auth/principal";
-import { callGateway } from "@/lib/api/gateway";
+import { invokeGateway, type GatewayOutcome } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
 import { CaptureListing, CaptureMatches } from "@/components/library/library-records";
+import type { CaptureListEntry, CaptureListResult } from "@/lib/api/decode/capabilities/capture.list";
+import type {
+  CaptureSearchMatch,
+  CaptureSearchResult,
+} from "@/lib/api/decode/capabilities/capture.search";
 import type { BackendCaptureEntry, BackendCaptureMatch } from "@/contracts/views";
 
 /** The listing this page renders is a read of the moment, never a cached one. */
@@ -52,25 +57,7 @@ const BLURB =
   "capture of yours, read from the record itself — nothing here is a summary, a sample, or a " +
   "placeholder.";
 
-interface PythonCaptureEntry {
-  readonly capture_id: string;
-  readonly owner_principal_id: string;
-  readonly created_at: string;
-  readonly version_count: number;
-  readonly latest_version_id: string;
-  readonly latest_version_number: number;
-  readonly latest_recorded_at: string;
-}
-
-interface PythonCaptureMatch {
-  readonly capture_id: string;
-  readonly version_id: string;
-  readonly version_number: number;
-  readonly character_count: number;
-  readonly recorded_at: string;
-}
-
-function toEntry(row: PythonCaptureEntry): BackendCaptureEntry {
+function toEntry(row: CaptureListEntry): BackendCaptureEntry {
   return {
     captureId: row.capture_id,
     ownerPrincipalId: row.owner_principal_id,
@@ -82,7 +69,7 @@ function toEntry(row: PythonCaptureEntry): BackendCaptureEntry {
   };
 }
 
-function toMatch(row: PythonCaptureMatch): BackendCaptureMatch {
+function toMatch(row: CaptureSearchMatch): BackendCaptureMatch {
   return {
     captureId: row.capture_id,
     versionId: row.version_id,
@@ -176,10 +163,10 @@ export async function KnowledgePage({
   if (query) {
     const answer = surfaceAnswer(
       `${SCOPE}:capture.search`,
-      await callGateway<{ matches?: readonly PythonCaptureMatch[] }>(principal, "capture.search", {
+      (await invokeGateway(principal, "capture.search", {
         query,
-      }),
-      (result) => (result.matches ?? []).length,
+      })) as GatewayOutcome<CaptureSearchResult>,
+      (result) => result.matches.length,
     );
 
     return frame(
@@ -219,11 +206,11 @@ export async function KnowledgePage({
                 testId="library-search-degraded-empty"
               />
             ) : (
-              <CaptureMatches matches={(answer.result.matches ?? []).map(toMatch)} />
+              <CaptureMatches matches={answer.result.matches.map(toMatch)} />
             )}
           </>
         ) : (
-          <CaptureMatches matches={(answer.result.matches ?? []).map(toMatch)} />
+          <CaptureMatches matches={answer.result.matches.map(toMatch)} />
         )}
       </>,
     );
@@ -231,8 +218,8 @@ export async function KnowledgePage({
 
   const answer = surfaceAnswer(
     `${SCOPE}:capture.list`,
-    await callGateway<{ captures?: readonly PythonCaptureEntry[] }>(principal, "capture.list"),
-    (result) => (result.captures ?? []).length,
+    (await invokeGateway(principal, "capture.list")) as GatewayOutcome<CaptureListResult>,
+    (result) => result.captures.length,
   );
 
   return frame(
@@ -275,11 +262,11 @@ export async function KnowledgePage({
               testId="library-degraded-empty"
             />
           ) : (
-            <CaptureListing entries={(answer.result.captures ?? []).map(toEntry)} />
+            <CaptureListing entries={answer.result.captures.map(toEntry)} />
           )}
         </>
       ) : (
-        <CaptureListing entries={(answer.result.captures ?? []).map(toEntry)} />
+        <CaptureListing entries={answer.result.captures.map(toEntry)} />
       )}
     </>,
   );

@@ -27,27 +27,15 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { requirePrincipal } from "@/lib/api/guard";
-import { backendDisclosure, callGateway, transportLimitations } from "@/lib/api/gateway";
+import { backendDisclosure, invokeGateway, transportLimitations } from "@/lib/api/gateway";
 import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
 import { syntheticPulse, syntheticDisclosure } from "@/lib/fixtures/pulse";
+import type { PulseItem } from "@/lib/api/decode/capabilities/continuity.pulse";
 import type { BackendPulseItem } from "@/contracts/views";
 
 const SCOPE = "pulse";
 
-interface PythonPulseItem {
-  readonly pulse_id: string;
-  readonly item_type: string;
-  readonly item_ref: string;
-  readonly reason_code: string;
-  readonly reason: string;
-  readonly basis_refs: readonly string[];
-  readonly consequence: string | null;
-  readonly next_step: string | null;
-  readonly priority: number;
-  readonly generated_at: string;
-}
-
-function toBackendItem(row: PythonPulseItem): BackendPulseItem {
+function toBackendItem(row: PulseItem): BackendPulseItem {
   return {
     pulseId: row.pulse_id,
     itemType: row.item_type,
@@ -57,7 +45,7 @@ function toBackendItem(row: PythonPulseItem): BackendPulseItem {
     basisRefs: row.basis_refs,
     consequence: row.consequence,
     nextStep: row.next_step,
-    priority: row.priority,
+    priority: row.attention_rank,
     generatedAt: row.generated_at,
   };
 }
@@ -77,15 +65,13 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const outcome = await callGateway<{ pulse_items?: readonly PythonPulseItem[] }>(
-    guard.principal,
-    "continuity.pulse",
-  );
+  const outcome = await invokeGateway(guard.principal, "continuity.pulse");
   if (!outcome.ok) return gatewayRefusal(SCOPE, outcome.status, outcome.error);
+  const result = outcome.result as { pulse_items: readonly PulseItem[] };
 
   return NextResponse.json({
     shape: "backend",
-    items: (outcome.result.pulse_items ?? []).map(toBackendItem),
+    items: result.pulse_items.map(toBackendItem),
     disclosure: backendDisclosure(SCOPE, outcome.disclosure, transportLimitations()),
   });
 }

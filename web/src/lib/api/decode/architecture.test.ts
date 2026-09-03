@@ -20,14 +20,8 @@ function sources(directory: string): string[] {
 }
 
 describe("decoder architecture", () => {
-  it("production web/src has no generic callGateway<T definition", () => {
-    // Route/RSC call sites may still pass type arguments (`callGateway<{…}>`)
-    // until Workers C/D migrate them. The generic *definition* `callGateway<T`
-    // is the verified defect and must not remain in production sources.
-    const offenders = sources(SRC).filter((path) => {
-      const text = readFileSync(path, "utf8");
-      return /callGateway<T\b/.test(text) || /function callGateway\s*</.test(text);
-    });
+  it("production web/src files contain no callGateway<", () => {
+    const offenders = sources(SRC).filter((path) => /callGateway</.test(readFileSync(path, "utf8")));
     expect(offenders).toEqual([]);
   });
 
@@ -36,12 +30,6 @@ describe("decoder architecture", () => {
     expect(text).not.toMatch(/callGateway\s*</);
     expect(text).not.toMatch(/envelope\.result \?\? \{\}[\s\S]*as T/);
     expect(text).not.toMatch(/as T\b/);
-  });
-
-  it("owned decode and gateway production files contain no callGateway<", () => {
-    const owned = [join(SRC, "lib/api/gateway.ts"), ...sources(join(SRC, "lib/api/decode"))];
-    const offenders = owned.filter((path) => /callGateway</.test(readFileSync(path, "utf8")));
-    expect(offenders).toEqual([]);
   });
 
   it("Object.keys(gateway.json.capabilities) sorted equals Object.keys(DECODERS) sorted", () => {

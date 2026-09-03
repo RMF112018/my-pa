@@ -61,6 +61,13 @@ vi.mock("next/headers", () => ({
 vi.mock("@/lib/auth/principal", () => ({
   resolveSessionPrincipal: async () => PRINCIPAL,
 }));
+vi.mock("next/navigation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/navigation")>();
+  return {
+    ...actual,
+    useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+  };
+});
 
 import LibraryPage from "@/app/(app)/library/page";
 import PeoplePage from "@/app/(app)/people/page";
@@ -103,6 +110,20 @@ function answerWith(result: unknown, disclosure: unknown) {
           headers: { "content-type": "application/json" },
         }),
     ),
+  );
+}
+
+function answerByCapability(map: Record<string, unknown>, disclosure: unknown = whole()) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: unknown) => {
+      const capability = String(url).match(/\/v1\/([^/?#]+)/)?.[1] ?? "";
+      const result = Object.prototype.hasOwnProperty.call(map, capability) ? map[capability] : {};
+      return new Response(JSON.stringify({ result, disclosure }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }),
   );
 }
 
@@ -433,6 +454,69 @@ describe("System reports what it was told, and says so when it was told nothing"
     ],
   };
 
+  const REPORTS_LIST = {
+    items: [
+      {
+        report_id: "rpt_aaaaaaaa11111111",
+        cycle_run_id: "micr_aaaaaaaa11111111",
+        stage: "collector",
+        artifact_kind: "collector_candidates",
+        focus_area_id: "communications",
+        source_lane: null,
+        title: "E2E morning brief collector",
+        content_sha256: "a".repeat(64),
+        artifact_state: "final",
+      },
+    ],
+    next_cursor: null,
+  };
+
+  const RESOLVE_SET = {
+    cycle_run_id: "micr_aaaaaaaa11111111",
+    cycle_id: "morning_intelligence",
+    business_date: "2026-08-20",
+    set_id: "morning_brief_inputs",
+    aggregate: "BLOCKED",
+    members: [
+      {
+        member_id: "communications",
+        focus_area_id: "communications",
+        source_lane: null,
+        readiness: "READY",
+        required: true,
+        artifact_id: "rpt_aaaaaaaa11111111",
+        producer_run_id: "prun_aaaaaaaa11111111",
+        content_sha256: "a".repeat(64),
+        committed_at: "2026-08-20T12:00:00Z",
+        readiness_reason: "present",
+      },
+      {
+        member_id: "people",
+        focus_area_id: "people",
+        source_lane: null,
+        readiness: "MISSING",
+        required: true,
+        artifact_id: null,
+        producer_run_id: null,
+        content_sha256: null,
+        committed_at: null,
+        readiness_reason: "missing",
+      },
+    ],
+  };
+
+  function answerSystem(overrides: {
+    capabilities?: unknown;
+    list?: unknown;
+    resolve?: unknown;
+  } = {}) {
+    answerByCapability({
+      "capabilities.get": overrides.capabilities ?? CAPABILITIES_GET,
+      "reports.list": overrides.list ?? REPORTS_LIST,
+      "reports.resolve_set": overrides.resolve ?? RESOLVE_SET,
+    });
+  }
+
   it("prints the readiness count the application actually returned", async () => {
     answerWith(CAPABILITIES_GET, whole());
     await renderServerPage(() => SystemPage());
@@ -467,6 +551,61 @@ describe("System reports what it was told, and says so when it was told nothing"
     await renderServerPage(() => SystemPage());
     expect(screen.getByTestId("system-local-operator").textContent).toMatch(/one fixed principal/);
     expect(screen.queryByTestId("system-auth-mode-misconfigured")).toBeNull();
+  });
+
+  it("renders an absent worker heartbeat as unknown, never healthy", async () => {
+    answerSystem();
+    await renderServerPage(() => SystemPage());
+    expect(screen.getByTestId("system-worker-heartbeat-unknown").textContent).toMatch(
+      /last heartbeat unknown/,
+    );
+    expect(screen.queryByTestId("system-worker-heartbeat")).toBeNull();
+    expect(screen.getByTestId("system-worker-planes").textContent).not.toMatch(/\bhealthy\b/);
+  });
+
+  it("keeps worker_absent visibly not-healthy", async () => {
+    answerSystem({
+      capabilities: {
+        ...CAPABILITIES_GET,
+        worker_planes: [
+          {
+            plane: "capture",
+            state: "worker_absent",
+            backlog: 1,
+            dead_lettered: 0,
+            last_heartbeat_at: null,
+          },
+        ],
+      },
+    });
+    await renderServerPage(() => SystemPage());
+    expect(screen.getByTestId("system-worker-not-healthy").textContent).toMatch(/not healthy/);
+    expect(screen.getByTestId("system-worker-planes").textContent).toMatch(/worker_absent/);
+  });
+
+  it("shows Intelligence aggregate and members without flattening READY to system health", async () => {
+    answerSystem();
+    await renderServerPage(() => SystemPage());
+    expect(screen.getByTestId("system-intelligence-aggregate").textContent).toBe("BLOCKED");
+    const members = screen.getAllByTestId("system-intelligence-member");
+    expect(members).toHaveLength(2);
+    const states = screen.getAllByTestId("system-intelligence-member-readiness").map((el) => el.textContent);
+    expect(states).toEqual(["READY", "MISSING"]);
+    expect(states).not.toEqual(["BLOCKED"]);
+    expect(screen.getByTestId("system-intelligence-not-system-health").textContent).toMatch(
+      /not a claim that the system is healthy/,
+    );
+    expect(screen.getByTestId("system-pwa-pending").textContent).toMatch(/PWA_FIELDS_PENDING_WP26/);
+    expect(screen.getByTestId("system-sources-unknown").textContent).toMatch(/cannot list/);
+    expect(screen.getByTestId("system-refresh")).toBeTruthy();
+  });
+
+  it("does not invent a cycle when reports.list is empty", async () => {
+    answerSystem({ list: { items: [], next_cursor: null } });
+    await renderServerPage(() => SystemPage());
+    expect(screen.getByTestId("system-intelligence-no-cycle").textContent).toMatch(/cycle_run_id is unknown/);
+    expect(screen.queryByTestId("system-intelligence-members")).toBeNull();
+    expect(screen.queryByTestId("system-intelligence-aggregate")).toBeNull();
   });
 });
 

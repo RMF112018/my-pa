@@ -26,7 +26,7 @@ The controlling post-audit sequence is `UI-IMP-WP01..WP30`. Older `WP-FE-*` orde
 
 `UI-IMP-WP06` typed BFF success, error, receipt, and degraded contracts are implemented on this PR. That is not production activation, not `PASS_VERIFIED` of the whole frontend, and not Wave 1 closure until post-merge audit.
 
-`NEXT_EXECUTABLE_PACKAGE: UI-IMP-WP13 — Canonical Entity / People BFF Read Plane (Wave 3). UI-IMP-WP11 Reports BFF is on this PR and is not WP12 Morning UI.`
+`NEXT_EXECUTABLE_PACKAGE: UI-IMP-WP13 — Canonical Entity / People BFF Read Plane (Wave 3). UI-IMP-WP25 System / Health Runtime Truth is this package and is not Wave 3 completion. Wave 4 is not next.`
 
 ## Evidence limitations
 

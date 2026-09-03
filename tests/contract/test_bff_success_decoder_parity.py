@@ -359,8 +359,292 @@ def _reports_resolve_set() -> dict[str, Any]:
     }
 
 
+def _stamp() -> str:
+    return format_rfc3339(AT)
+
+
+def _entity_id() -> str:
+    return "ent_aaaaaaaa11111111"
+
+
+def _entity_view_payload() -> dict[str, Any]:
+    stamped = _stamp()
+    return {
+        "entity_id": _entity_id(),
+        "entity_type": "person",
+        "canonical_name": "pat synthetic",
+        "display_name": "Pat Synthetic",
+        "status": "active",
+        "created_at": stamped,
+        "updated_at": stamped,
+        "version": 1,
+        "superseded_by_entity_id": None,
+    }
+
+
+def _entity_summary_payload() -> dict[str, Any]:
+    return {
+        "entity_id": _entity_id(),
+        "entity_type": "person",
+        "canonical_name": "pat synthetic",
+        "display_name": "Pat Synthetic",
+        "status": "active",
+        "affiliated_organizations": ["Acme Synthetic"],
+        "project_roles": ["architect"],
+    }
+
+
+def _lifecycle_identifier_payload() -> dict[str, Any]:
+    return {
+        "identifier_id": "xid_aaaaaaaa11111111",
+        "namespace": "email",
+        "display_value": "pat.synthetic@example.test",
+        "verified": False,
+        "effective_from": None,
+        "effective_to": None,
+        "state": "active",
+        "version": 1,
+        "retired_at": None,
+        "updated_at": _stamp(),
+        "superseded_by_identifier_id": None,
+    }
+
+
+def _lifecycle_alias_payload() -> dict[str, Any]:
+    return {
+        "alias_id": "eals_aaaaaaaa11111111",
+        "alias_type": "full_name",
+        "display_value": "Patricia Synthetic",
+        "effective_from": None,
+        "effective_to": None,
+        "state": "active",
+        "version": 1,
+        "retired_at": None,
+        "updated_at": _stamp(),
+        "superseded_by_alias_id": None,
+    }
+
+
+def _assignment_payload() -> dict[str, Any]:
+    return {
+        "assignment_id": "asn_aaaaaaaa11111111",
+        "entity_id": _entity_id(),
+        "assignment_type": "employment",
+        "scope_entity_id": "ent_bbbbbbbb22222222",
+        "role": "architect",
+        "discipline": None,
+        "responsibility_class": None,
+        "status": "active",
+        "is_current": True,
+        "effective_from": None,
+        "effective_to": None,
+        "version": 1,
+    }
+
+
+def _relationship_payload() -> dict[str, Any]:
+    return {
+        "relationship_id": "erel_aaaaaaaa11111111",
+        "is_current": True,
+        "from_entity_id": _entity_id(),
+        "relationship_type": "works_for",
+        "to_entity_id": "ent_bbbbbbbb22222222",
+        "scope_entity_id": None,
+        "state": "active",
+        "effective_from": None,
+        "effective_to": None,
+        "version": 1,
+    }
+
+
+def _unresolved_mention_payload() -> dict[str, Any]:
+    stamped = _stamp()
+    return {
+        "observation_id": "eobs_aaaaaaaa11111111",
+        "kind": "document_mention",
+        "mention_display_name": "Pat",
+        "source_id": "src_aaaaaaaa11111111",
+        "source_object_id": "obj_aaaaaaaa11111111",
+        "source_version_id": "ver_aaaaaaaa11111111",
+        "observed_at": stamped,
+        "recorded_at": stamped,
+    }
+
+
+def _recorded_observation_payload() -> dict[str, Any]:
+    stamped = _stamp()
+    return {
+        "observation_id": "eobs_aaaaaaaa11111111",
+        "kind": "contact_record",
+        "authority": "source_observation",
+        "origin": "configured_source",
+        "state": "current",
+        "state_reason": None,
+        "mention_display_name": "Pat",
+        "source_id": "src_aaaaaaaa11111111",
+        "source_object_id": "obj_aaaaaaaa11111111",
+        "source_version_id": "ver_aaaaaaaa11111111",
+        "entity_id": _entity_id(),
+        "superseded_by_observation_id": None,
+        "resolution_version": 0,
+        "observed_at": stamped,
+        "recorded_at": stamped,
+    }
+
+
+def _entity_name_payload() -> dict[str, Any]:
+    return {
+        "entity_name_id": "enam_aaaaaaaa11111111",
+        "entity_id": _entity_id(),
+        "name_type_code": "display",
+        "display_value": "Pat Synthetic",
+        "normalized_value": "pat synthetic",
+        "is_preferred": True,
+        "effective_from": None,
+        "effective_to": None,
+        "state": "active",
+        "version": 1,
+        "updated_at": _stamp(),
+        "retired_at": None,
+        "superseded_by_entity_name_id": None,
+    }
+
+
+def _entity_address_payload() -> dict[str, Any]:
+    return {
+        "entity_address_id": "eadr_aaaaaaaa11111111",
+        "entity_id": _entity_id(),
+        "address_type_code": "office",
+        "raw_value": "1 Synthetic Way",
+        "normalized_address_value": "1 synthetic way",
+        "line1": "1 Synthetic Way",
+        "line2": None,
+        "city": None,
+        "region": None,
+        "postal_code": None,
+        "country": None,
+        "label": None,
+        "is_preferred": False,
+        "effective_from": None,
+        "effective_to": None,
+        "state": "active",
+        "version": 1,
+        "updated_at": _stamp(),
+        "retired_at": None,
+        "superseded_by_entity_address_id": None,
+    }
+
+
+def _communication_method_payload() -> dict[str, Any]:
+    return {
+        "communication_method_id": "ecmm_aaaaaaaa11111111",
+        "entity_id": _entity_id(),
+        "method_type_code": "email",
+        "usage_context_code": "corporate",
+        "display_value": "pat.synthetic@example.test",
+        "normalized_value": "pat.synthetic@example.test",
+        "verification_status_code": "unresolved",
+        "is_preferred": True,
+        "effective_from": None,
+        "effective_to": None,
+        "state": "active",
+        "version": 1,
+        "updated_at": _stamp(),
+        "retired_at": None,
+        "superseded_by_communication_method_id": None,
+        "linked_external_identifier_id": None,
+    }
+
+
+def _participation_payload() -> dict[str, Any]:
+    return {
+        "participation_id": "eppt_aaaaaaaa11111111",
+        "project_entity_id": "ent_cccccccccccccccc33333333",
+        "participant_entity_id": _entity_id(),
+        "project_display_name": "North Pour",
+        "role_basis_code": "unresolved",
+        "stakeholder_side_code": "design",
+        "stakeholder_class_code": "unresolved",
+        "relationship_status_code": "active",
+        "role_code": None,
+        "role_text": "architect",
+        "discipline_code": None,
+        "discipline_text": None,
+        "scope_text": None,
+        "effective_from": None,
+        "effective_to": None,
+        "state": "active",
+        "version": 1,
+        "updated_at": _stamp(),
+        "retired_at": None,
+        "superseded_by_participation_id": None,
+    }
+
+
+def _identity_history_entry_payload() -> dict[str, Any]:
+    return {
+        "history_id": "emut_aaaaaaaa11111111",
+        "occurred_at": _stamp(),
+        "source": "direct_mutation",
+        "operation": "entities.create",
+        "involved_entity_ids": [_entity_id()],
+        "changes": [
+            {
+                "family": "entity",
+                "record_id": _entity_id(),
+                "effect_kind": "create",
+                "before_state": None,
+                "after_state": {"display_name": "Pat Synthetic"},
+            }
+        ],
+        "actor_class": "user",
+        "actor_id": "prn_aaaaaaaa11111111",
+        "authority": None,
+        "correlation_id": None,
+        "audit_id": "audit_aaaaaaaa11111111",
+        "reason": None,
+        "source_identity_operation_id": None,
+        "receipt_id": None,
+    }
+
+
+def _entity_profile_payload() -> dict[str, Any]:
+    return {
+        "entity": _entity_view_payload(),
+        "assembled_at": _stamp(),
+        "limitations": [],
+        "is_complete": True,
+        "organization_profile": None,
+        "names": [_entity_name_payload()],
+        "addresses": [],
+        "communication_methods": [],
+        "participations_as_project": [],
+        "participations_as_participant": [],
+        "affiliations_as_person": [],
+        "affiliations_as_organization": [],
+    }
+
+
+def _entity_context_card_payload() -> dict[str, Any]:
+    return {
+        "entity": _entity_view_payload(),
+        "assembled_at": _stamp(),
+        "coverage": [],
+        "most_recent_observation_at": None,
+        "limitations": ["no_source_has_been_observed", "the_memory_plane_is_unavailable"],
+        "is_complete": True,
+        "aliases": [],
+        "identifiers": [],
+        "assignments": [],
+        "relationships": [],
+        "observations": [],
+        "memories": [],
+    }
+
+
 def python_success_payloads() -> dict[str, dict[str, Any]]:
     """Capability name → gateway `result` dict the matching Vitest decoder must accept."""
+    entity_id = _entity_id()
     return {
         "capture.create": _capture_create(),
         "tasks.read": {"task": _task_view()},
@@ -377,6 +661,56 @@ def python_success_payloads() -> dict[str, dict[str, Any]]:
         "reports.list": _reports_list(),
         "reports.search": _reports_search(),
         "reports.resolve_set": _reports_resolve_set(),
+        "entities.search": {"entities": [_entity_summary_payload()]},
+        "entities.get": {"entity": _entity_view_payload()},
+        "entities.resolve": {
+            "resolution": {
+                "outcome": "ambiguous",
+                "entity_id": None,
+                "candidates": [
+                    {
+                        "entity_id": entity_id,
+                        "entity_type": "person",
+                        "display_name": "Alex Chen",
+                        "status": "active",
+                        "superseded_by_entity_id": None,
+                        "matched_on": ["canonical_name"],
+                        "signals": [],
+                    }
+                ],
+                "warnings": ["several_entities_share_this_name"],
+                "candidates_were_truncated": False,
+            }
+        },
+        "entities.context": {"context_card": _entity_context_card_payload()},
+        "entities.relationships": {"relationships": [_relationship_payload()]},
+        "entities.unresolved_mentions": {"mentions": [_unresolved_mention_payload()]},
+        "entities.identifiers.list": {
+            "entity_id": entity_id,
+            "identifiers": [_lifecycle_identifier_payload()],
+        },
+        "entities.aliases.list": {"entity_id": entity_id, "aliases": [_lifecycle_alias_payload()]},
+        "entities.assignments.list": {"assignments": [_assignment_payload()]},
+        "entities.observations.list": {"observations": [_recorded_observation_payload()]},
+        "entities.identity_history": {
+            "entity_id": entity_id,
+            "entries": [_identity_history_entry_payload()],
+            "is_truncated": False,
+            "next_cursor": None,
+            "audit_id": "audit_aaaaaaaa11111111",
+        },
+        "entities.profile": {"profile": _entity_profile_payload()},
+        "entities.names.list": {"entity_id": entity_id, "names": [_entity_name_payload()]},
+        "entities.addresses.list": {"entity_id": entity_id, "addresses": [_entity_address_payload()]},
+        "entities.communication.list": {
+            "entity_id": entity_id,
+            "communication_methods": [_communication_method_payload()],
+        },
+        "entities.participations.list": {
+            "entity_id": entity_id,
+            "perspective": "participant",
+            "participations": [_participation_payload()],
+        },
     }
 
 

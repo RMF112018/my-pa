@@ -63,6 +63,7 @@ vi.mock("@/lib/auth/principal", () => ({
 }));
 
 import LibraryPage from "@/app/(app)/library/page";
+import PeoplePage from "@/app/(app)/people/page";
 import ReviewPage from "@/app/(app)/review/page";
 import TodayPage from "@/app/(app)/today/page";
 import SituationsPage from "@/app/(app)/situations/page";
@@ -510,5 +511,128 @@ describe("no surface accepts an identity from anything but the session", () => {
     expect(wire).not.toContain(foreign);
     // And what was sent is the derivation of the session's own claims.
     expect(seen[0]["principal_id"]).toMatch(/^prn_[0-9a-f]{32}$/);
+  });
+});
+
+const ENTITY_SUMMARY = {
+  entity_id: "ent_aaaaaaaa11111111",
+  entity_type: "person",
+  canonical_name: "pat synthetic",
+  display_name: "Pat Synthetic",
+  status: "active",
+  affiliated_organizations: ["Acme Synthetic"],
+  project_roles: ["architect"],
+};
+
+const ENTITY_VIEW = {
+  entity_id: "ent_aaaaaaaa11111111",
+  entity_type: "person",
+  canonical_name: "pat synthetic",
+  display_name: "Pat Synthetic",
+  status: "active",
+  created_at: "2026-08-09T12:00:00.000Z",
+  updated_at: "2026-08-09T12:00:00.000Z",
+  version: 1,
+  superseded_by_entity_id: null,
+};
+
+const PROFILE = {
+  entity: ENTITY_VIEW,
+  assembled_at: "2026-08-09T12:00:00.000Z",
+  limitations: [],
+  is_complete: true,
+  organization_profile: null,
+  names: [
+    {
+      entity_name_id: "enam_aaaaaaaa11111111",
+      entity_id: ENTITY_VIEW.entity_id,
+      name_type_code: "display",
+      display_value: "Pat Synthetic",
+      normalized_value: "pat synthetic",
+      is_preferred: true,
+      effective_from: null,
+      effective_to: null,
+      state: "active",
+      version: 1,
+      updated_at: "2026-08-09T12:00:00.000Z",
+      retired_at: null,
+      superseded_by_entity_name_id: null,
+    },
+  ],
+  addresses: [],
+  communication_methods: [],
+  participations_as_project: [],
+  participations_as_participant: [],
+  affiliations_as_person: [],
+  affiliations_as_organization: [],
+};
+
+const RESOLUTION = {
+  outcome: "ambiguous",
+  entity_id: null,
+  candidates: [
+    {
+      entity_id: ENTITY_VIEW.entity_id,
+      entity_type: "person",
+      display_name: "Alex Chen",
+      status: "active",
+      superseded_by_entity_id: null,
+      matched_on: ["canonical_name"],
+      signals: [],
+    },
+  ],
+  warnings: ["several_entities_share_this_name"],
+  candidates_were_truncated: false,
+};
+
+describe("People reaches search, resolve, and profile instead of a directory", () => {
+  it("does not list everyone when nothing was asked", async () => {
+    socketFails();
+    await renderServerPage(() => PeoplePage({ searchParams: NO_PARAMS }));
+    expect(screen.getByTestId("people-idle")).toHaveAttribute("data-state", "empty");
+    expect(screen.getByRole("searchbox", { name: "Search people" })).toBeTruthy();
+    expect(screen.queryByText(/no admitted same-origin BFF exposure/i)).toBeNull();
+  });
+
+  it("renders the entities a successful search returned", async () => {
+    answerWith({ entities: [ENTITY_SUMMARY] }, whole());
+    await renderServerPage(() =>
+      PeoplePage({ searchParams: Promise.resolve({ q: "Pat Synthetic" }) }),
+    );
+    expect(screen.getByTestId("people-search-hits")).toBeTruthy();
+    expect(screen.getByText("Pat Synthetic")).toBeTruthy();
+    expect(screen.queryByTestId("people-search-empty")).toBeNull();
+  });
+
+  it("says empty only when search actually matched none", async () => {
+    answerWith({ entities: [] }, whole());
+    await renderServerPage(() => PeoplePage({ searchParams: Promise.resolve({ q: "nobody" }) }));
+    const empty = screen.getByTestId("people-search-empty");
+    expect(empty).toHaveAttribute("data-state", "empty");
+  });
+
+  it("does NOT say empty when the backend answered that it did not search", async () => {
+    answerWith({ entities: [] }, notSearched());
+    await renderServerPage(() => PeoplePage({ searchParams: Promise.resolve({ q: "nobody" }) }));
+    expect(screen.getByTestId("people-search-unavailable")).toHaveAttribute("data-state", "unavailable");
+    expect(screen.queryByTestId("people-search-empty")).toBeNull();
+  });
+
+  it("keeps an ambiguous resolve outcome visible", async () => {
+    answerWith({ resolution: RESOLUTION }, whole());
+    await renderServerPage(() =>
+      PeoplePage({ searchParams: Promise.resolve({ reference: "Alex Chen" }) }),
+    );
+    expect(screen.getByTestId("people-resolve-outcome").textContent).toMatch(/ambiguous/i);
+    expect(screen.queryByRole("button", { name: /merge/i })).toBeNull();
+  });
+
+  it("reads a profile from entities.profile", async () => {
+    answerWith({ profile: PROFILE }, whole());
+    await renderServerPage(() =>
+      PeoplePage({ searchParams: Promise.resolve({ entityId: ENTITY_VIEW.entity_id }) }),
+    );
+    expect(screen.getByTestId("people-profile")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Pat Synthetic", level: 2 })).toBeTruthy();
   });
 });

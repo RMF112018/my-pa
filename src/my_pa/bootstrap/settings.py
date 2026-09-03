@@ -403,8 +403,8 @@ class Settings(StrictModel):
     goodnotes_tbr_bridge_enabled: bool = False
     #: Process-local gate for the relationship-intelligence entity plane
     #: (WP-RI-05, widened through Phase A). Default off. True composes all
-    #: thirty-four `entities.` names over the acting Principal's own entities
-    #: and publishes the eleven that read; the twenty-three that write need the switch
+    #: fifty-four `entities.` names over the acting Principal's own entities
+    #: and publishes the sixteen that read; the thirty-eight that write need the switch
     #: below as well, so this flag on its own serves a read-only plane. It
     #: enables no source traversal, because none exists. Off by default because
     #: the remote MCP profile is derived from the capability set with no
@@ -424,8 +424,8 @@ class Settings(StrictModel):
     #:
     #: A switch of its own rather than a reuse of the plane flag, on the argument
     #: `relationship_memory_enabled` makes beside it: the two admit different
-    #: things. The plane flag publishes eleven reads over the acting Principal's own
-    #: entities. This one is a prerequisite for all twenty-three writes that decide
+    #: things. The plane flag publishes sixteen reads over the acting Principal's own
+    #: entities. This one is a prerequisite for all thirty-eight writes that decide
     #: who a person is, which external addresses resolve to them, who they report
     #: to, what a source said about them, or stage and apply Phase B governance.
     #: The merge and split preview/apply pairs additionally require the
@@ -447,7 +447,7 @@ class Settings(StrictModel):
     #: plane that owns their subjects would be serving writes it cannot validate.
     #:
     #: A switch of its own rather than a reuse of the entity flag, because the
-    #: two admit different things. The entity flag publishes eleven *read*
+    #: two admit different things. The entity flag publishes sixteen *read*
     #: capabilities over identity. This one publishes four reads and five
     #: **writes** over the most private records this product holds, and the
     #: remote MCP profile is derived from the capability set with no
@@ -462,7 +462,7 @@ class Settings(StrictModel):
     #: write switch does.
     #:
     #: A third switch rather than a reuse of the write switch, because the two
-    #: admit different things. The write switch gates all twenty-three Entity
+    #: admit different things. The write switch gates all thirty-eight Entity
     #: writes; the eighteen Phase A writes each change one record of one entity
     #: and are reversible by their own inverse. This additionally publishes
     #: merge and split preview/apply pairs: merge collapses up to eleven identities
@@ -643,7 +643,7 @@ class Settings(StrictModel):
         ):
             # Fail closed, and closed in the direction that says what was meant.
             # The alternatives were to serve the writes anyway — which would put
-            # eighteen identity writes on a process whose operator turned the
+            # thirty-eight identity writes on a process whose operator turned the
             # plane off — or to ignore the variable, which is the shape where an
             # operator sets a switch, sees no error, and believes a surface is
             # gated when it is not. Neither is better than refusing to start.

@@ -104,14 +104,24 @@ from my_pa.domain.relationship.entity import (
     MAX_DIRECTED_EVIDENCE_REFS,
     MAX_DIRECTED_REASON_CHARACTERS,
     MAX_DIRECTED_TEXT_CHARACTERS,
+    AddressTypeCode,
+    AffiliationTypeCode,
     AliasState,
     AliasType,
     AssignmentType,
+    CommunicationMethodTypeCode,
+    CommunicationUsageContextCode,
+    CommunicationVerificationStatusCode,
     EntityRelationshipType,
     EntityStatus,
     EntityType,
     ExternalIdentifierNamespace,
     IdentifierState,
+    NameTypeCode,
+    ParticipationStatusCode,
+    RoleBasisCode,
+    StakeholderClassCode,
+    StakeholderSideCode,
 )
 from my_pa.domain.relationship.event import RelationshipEventType
 from my_pa.domain.relationship.governance import (
@@ -196,8 +206,12 @@ __all__ = [
     "LinkSituationToProjectCommand",
     "ListCaptures",
     "ListCommitments",
+    "ListEntityAddresses",
     "ListEntityAliases",
+    "ListEntityCommunicationMethods",
     "ListEntityIdentifiers",
+    "ListEntityNames",
+    "ListEntityParticipations",
     "ListIntelligenceArtifacts",
     "ListManagedDocuments",
     "ListManagedDocumentsCommand",
@@ -4616,6 +4630,227 @@ _ENTITY_FIELD_DOCS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
         "alias_types": {"description": "Optional filter to these alias types."},
         "page_size": {"description": "How many results to return in this page."},
         "after": {"description": "Opaque cursor from a previous page's next_cursor."},
+        "perspective": {
+            "description": (
+                "Which end of the participation to list from: project, for the "
+                "participants of this project, or participant, for the projects "
+                "this entity takes part in. Required; there is no default, because "
+                "the two answer different questions."
+            )
+        },
+        # `RI-ENT-WP-11`'s record-family write fields.
+        "entity_name_id": {
+            "description": (
+                "Opaque identifier of the recorded name form, as returned by "
+                "entities.names.list or entities.profile. Never the name itself."
+            )
+        },
+        "name_type_code": {
+            "description": (
+                "What form of name this is, from the closed name-type vocabulary. "
+                "Required: an absent type is refused rather than defaulted, because "
+                "a name filed under the wrong form is a name a later read cannot "
+                "find."
+            )
+        },
+        "is_preferred": {
+            "description": (
+                "Whether this is the form to show for its type. At most one "
+                "recorded name per entity and type may hold the slot; a new "
+                "preferred form takes it from whichever held it before."
+            )
+        },
+        "entity_address_id": {
+            "description": (
+                "Opaque identifier of the recorded address, as returned by "
+                "entities.addresses.list or entities.profile."
+            )
+        },
+        "address_type_code": {
+            "description": (
+                "What role this address plays, from the closed address-type "
+                "vocabulary. An entity may hold several simultaneously active "
+                "addresses of different types; a headquarters and a project "
+                "address are not competing facts."
+            )
+        },
+        "raw_value": {
+            "description": (
+                "The address exactly as a source wrote it, kept verbatim. The "
+                "server derives the normalized form it matches on; you never "
+                "send that."
+            )
+        },
+        "line1": {
+            "description": (
+                "Optional first structured line. Supply the structured fields "
+                "only where you already know that structure: nothing here "
+                "splits raw_value to invent one."
+            )
+        },
+        "line2": {"description": "Optional second structured line."},
+        "city": {"description": "Optional city or locality, where it is known."},
+        "region": {"description": "Optional state, province or region, where it is known."},
+        "postal_code": {"description": "Optional postal or ZIP code, where it is known."},
+        "country": {"description": "Optional country, where it is known."},
+        "label": {
+            "description": (
+                "Optional short label a person would use for this address. A "
+                "name for the record, not part of the address itself."
+            )
+        },
+        "communication_method_id": {
+            "description": (
+                "Opaque identifier of the recorded contact channel, as returned "
+                "by entities.communication.list or entities.profile."
+            )
+        },
+        "method_type_code": {
+            "description": (
+                "Which kind of channel this is, from the closed method-type "
+                "vocabulary: email, phone, domain or website. The value is "
+                "normalized for the type you state; nothing here reads a "
+                "string's shape and concludes what kind of channel it is."
+            )
+        },
+        "usage_context_code": {
+            "description": (
+                "What this channel is used for, from the closed usage-context "
+                "vocabulary. An entity may hold several simultaneously active "
+                "channels of one type in different contexts; a corporate "
+                "address and a personal one are not competing facts."
+            )
+        },
+        "verification_status_code": {
+            "description": (
+                "How well established this channel is, from the closed "
+                "verification vocabulary. Absent means unresolved -- the "
+                "vocabulary's own name for not yet known -- and never an "
+                "affirmative status you did not state."
+            )
+        },
+        "linked_external_identifier_id": {
+            "description": (
+                "Optional external identifier this channel is the same fact as, "
+                "where one is already bound to the entity. Supply it only when "
+                "you know the two are one; nothing here matches values to find "
+                "a link."
+            )
+        },
+        "participation_id": {
+            "description": (
+                "Opaque identifier of the recorded participation, as returned by "
+                "entities.participations.list or entities.profile."
+            )
+        },
+        "project_entity_id": {
+            "description": (
+                "The project entity this participation is on. A project cannot "
+                "participate in itself, so it must differ from "
+                "participant_entity_id."
+            )
+        },
+        "participant_entity_id": {
+            "description": (
+                "Who or what participates: a person or an organization entity, "
+                "already resolved. Never a name."
+            )
+        },
+        "project_display_name": {
+            "description": (
+                "What this participant is called on THIS project, which may "
+                "differ from the entity's own display name -- a joint-venture "
+                "trading name, or a person credited under a title. It is "
+                "project-scoped fact and is never copied into the entity's own "
+                "identity."
+            )
+        },
+        "role_basis_code": {
+            "description": (
+                "On what footing this participation is asserted, from the closed "
+                "role-basis vocabulary: contractual, source_verified, "
+                "project_observed, inferred or unresolved. A named basis, not a "
+                "graded one."
+            )
+        },
+        "stakeholder_side_code": {
+            "description": (
+                "Which side of the project this participant sits on, from the "
+                "closed stakeholder-side vocabulary."
+            )
+        },
+        "stakeholder_class_code": {
+            "description": (
+                "How this participant relates to the project's own narrative, "
+                "from the closed stakeholder-class vocabulary: core, adjacent, "
+                "transactional or unresolved."
+            )
+        },
+        "relationship_status_code": {
+            "description": (
+                "Where the participation stands, from the closed participation-"
+                "status vocabulary: active, completed, terminated, on_hold or "
+                "unresolved."
+            )
+        },
+        "role_code": {
+            "description": (
+                "Optional taxonomy code for the role, where you have one. It is "
+                "independent of role_text: nothing here derives one from the "
+                "other in either direction."
+            )
+        },
+        "role_text": {
+            "description": (
+                "Optional role in the words a source used. Supply this when you "
+                "have the words and not a code."
+            )
+        },
+        "discipline_code": {
+            "description": (
+                "Optional taxonomy code for the discipline, where you have one. "
+                "Independent of discipline_text, exactly as role_code is of "
+                "role_text."
+            )
+        },
+        "discipline_text": {"description": "Optional discipline in the words a source used."},
+        "scope_text": {
+            "description": (
+                "Optional description of what this participant does on the "
+                "project, in the words a source used."
+            )
+        },
+        "affiliation_id": {
+            "description": (
+                "Opaque identifier of the recorded affiliation, as returned by entities.profile."
+            )
+        },
+        "person_entity_id": {
+            "description": "The person this affiliation belongs to, already resolved."
+        },
+        "affiliation_type_code": {
+            "description": (
+                "What kind of affiliation this is, from the closed "
+                "affiliation-type vocabulary: employment, principal_ownership, "
+                "independent_consultant, contractor, board_member, advisor or "
+                "other."
+            )
+        },
+        "organization_entity_id": {
+            "description": (
+                "Optional organization the person is affiliated with. Absence is "
+                "a complete answer -- an independent consultant needs no "
+                "placeholder organization -- and nothing here creates, selects "
+                "or substitutes an organization to fill it. On a revision it is "
+                "required rather than optional, so omitting it cannot be read "
+                "as either unchanged or cleared."
+            )
+        },
+        "job_title": {
+            "description": (
+                "Optional job title, in the words a source used. A title, not a ranking."
+            )
+        },
     }
 )
 
@@ -4631,6 +4866,55 @@ def _entity_name(value: object, detail: SafeDetail) -> str:
     if not name.strip():
         raise InvalidRequestError(detail)
     return name
+
+
+def _record_text(value: object, detail: SafeDetail) -> str:
+    """One required record-family text field: a string, and not blank.
+
+    `value` is `object` on `_idempotency_key`'s terms. Blank is refused here as
+    well as in the domain record, because the two refuse it at different
+    distances from the caller: the record raises `ValueError`, which reaches a
+    caller as `internal_error`, and this reaches them as `invalid_request`
+    naming the field they can correct.
+
+    **No length bound.** The column's own limit and the domain record's are the
+    two that decide, and a third copy here could only disagree with them. That
+    is the same division `_text` states for a capture's content.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise InvalidRequestError(detail)
+    return value
+
+
+def _optional_record_text(value: object, detail: SafeDetail) -> str | None:
+    """The same field where absence is a complete answer.
+
+    `None` is passed through untouched and a blank string is refused rather than
+    read as absence -- exactly what `EntityAddress.__post_init__` means by "not
+    blank when present", stated at the boundary where the field name is still
+    known.
+    """
+    if value is None:
+        return None
+    return _record_text(value, detail)
+
+
+def _flag(value: object, detail: SafeDetail) -> bool:
+    """One caller-supplied boolean, reporting the field rather than the value.
+
+    `value` is `object` for the reason `_idempotency_key` states: the field *is*
+    annotated `bool`, so annotating it here too makes the `isinstance` check
+    unreachable to a type checker and it reads as dead code to delete. What
+    arrives from a transport is whatever the caller sent.
+
+    Written out rather than left as an inline `isinstance` at each call site,
+    because `RI-ENT-WP-11` added eight boolean fields across five families and
+    eight copies of one check is eight places it can be forgotten -- which is
+    the shape `_idempotency_key`'s own docstring records having been caught by.
+    """
+    if not isinstance(value, bool):
+        raise InvalidRequestError(detail)
+    return value
 
 
 def _entity_reason(value: object, *, required: bool = True) -> str | None:
@@ -4814,6 +5098,1070 @@ class ListEntityAliases:
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
         if self.after is not None:
             _identifier(self.after, IdKind.ENTITY_ALIAS, SafeDetail.CURSOR)
+
+
+# --- RI-ENT-WP-10: the record families' read surface -------------------------
+#
+# One composite and four pages, and the division is the one `entities.context`
+# and `entities.aliases.list` already draw on this plane: a card that says what
+# is recorded, bounded and complete-or-disclosed, and a paged reader for each
+# collection that might overflow the card's ceiling.
+#
+# **None of these carries a filter.** `ListEntityIdentifiers` and
+# `ListEntityAliases` publish `states`/`namespaces`/`alias_types` because a
+# caller driving a lifecycle write needs to select the row it is about to
+# supersede. These four answer a caller reading a record, and every row of a
+# temporal family -- retired and superseded included -- is part of that record.
+# Adding a filter later is additive; publishing one now that a caller must pass
+# to see everything is not.
+
+
+@dataclass(frozen=True, slots=True)
+class GetEntityProfile:
+    """Everything recorded about one entity across the six entity-bound record families.
+
+    Typed names, the organization profile, addresses, communication methods,
+    project participations from both ends, and person/organization affiliations
+    from both ends — assembled into one bounded answer.
+
+    Distinct from `entities.context`, which summarises *who this is* out of
+    aliases, identifiers, assignments, edges, observations and memories. This
+    returns *what is on file*, and the two read different tables.
+
+    Every collection is bounded and the answer says whether it hit that bound.
+    When one did, the four `entities.*.list` capabilities page the family that
+    overflowed; this one issues no cursor, deliberately, because a cursor into
+    an assembly of seven collections would have to mean seven different
+    positions at once.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_PROFILE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs("entity_id")
+
+    entity_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class ListEntityNames:
+    """List the typed name forms recorded for one entity, oldest first.
+
+    The paged reader for the collection `entities.profile` bounds. Every state
+    is returned — a retired or superseded name form is a fact about this entity
+    that a reader of its record has to be able to see.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_NAMES_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id", "page_size", "after"
+    )
+
+    entity_id: str
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            # Validated as this family's own identifier rather than accepted as
+            # an opaque string, for the reason `GetEntityRelationships` states
+            # about its own cursor: the repository compares it against the
+            # column the order is taken on, so an arbitrary string would order
+            # somewhere in the middle of the key space and skip rows rather
+            # than continue past them.
+            _identifier(self.after, IdKind.ENTITY_NAME, SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ListEntityAddresses:
+    """List the addresses recorded for one entity, oldest first.
+
+    `ListEntityNames`' contract over the address family.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_ADDRESSES_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id", "page_size", "after"
+    )
+
+    entity_id: str
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.ENTITY_ADDRESS, SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ListEntityCommunicationMethods:
+    """List the communication methods recorded for one entity, oldest first.
+
+    `ListEntityNames`' contract over the communication family.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_COMMUNICATION_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id", "page_size", "after"
+    )
+
+    entity_id: str
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.ENTITY_COMMUNICATION_METHOD, SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ListEntityParticipations:
+    """List one entity's project participations from one end, oldest first.
+
+    `perspective` says which end and has no default: `project` lists who takes
+    part in this project, `participant` lists the projects this entity takes
+    part in. A caller silently handed the other end would read one entity's
+    answer as another's, which is why an unrecognised value is refused rather
+    than corrected — the same reason `entities.relationships` refuses a
+    `direction` it does not know.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_PARTICIPATIONS_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id", "perspective", "page_size", "after"
+    )
+
+    entity_id: str
+    perspective: str
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+        if self.perspective not in ("project", "participant"):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.ENTITY_PROJECT_PARTICIPATION, SafeDetail.CURSOR)
+
+
+# --- RI-ENT-WP-11: the record families' writes ------------------------------
+#
+# Three verbs per family, one command per capability, and every field declared
+# by name. **No command here takes a field map, a `values` mapping, a `fields`
+# dict or `**kwargs`, and none ever will.** The published MCP schema is
+# generated from these dataclasses with `"additionalProperties": false`, so a
+# payload key nothing here declares is refused by the schema before the
+# constructor sees it -- which is what makes "the caller cannot name a
+# server-owned field" a property of the transport rather than a rule somebody
+# remembers to apply.
+#
+# **What is absent is the mechanism.** No command carries `principal_id`,
+# `authority`, `actor_class`, `state`, `version`, `recorded_at`, `updated_at`,
+# `retired_at` or `superseded_by_*`. The server supplies every one of them from
+# the `Authorization`, and there is nothing here that reads such a field and
+# decides to ignore it, because a field that can be sent is a field a later
+# change can start honouring. `application.entity_family_writes` states the
+# same rule from the other side.
+#
+# **`supersede` and `revise` name a supersession, not an edit.** Both reach the
+# family's `correct_*` verb: a successor row is minted and written, and the
+# predecessor is marked SUPERSEDED under the `expected_version` the caller
+# asserted. Nothing is updated in place and no row is destroyed. Each command's
+# own docstring says so, because the two words invite the opposite reading.
+#
+# **The caller-supplied assertion is deliberately not exposed.** WP-08's
+# `StatedAssertion`/`StatedEvidence` structure would have to arrive as a nested
+# object, and the schema builder describes no nested dataclass -- the only shape
+# that would publish is `dict[str, object]`, which is the free-form payload the
+# paragraph above forbids. It is omitted rather than half-exposed, and every
+# command below writes a fact with no assertion attached.
+
+
+@dataclass(frozen=True, slots=True)
+class AddEntityName:
+    """`entities.names.add`: record one typed name form for an entity.
+
+    Names an entity you have already resolved. The recorded name families are
+    separate from `entities.aliases.*`: an alias is a name resolution matches
+    on, and this is the entity's own record of what it is called in a stated
+    form, with its own lifecycle and its own version.
+
+    `name_type_code` is required. An absent type is refused rather than
+    defaulted, because a name filed under the wrong form is one a later read
+    cannot find. The server derives the normalized form the name is compared in;
+    you never send it.
+
+    Retrying with the same `idempotency_key` and the same payload returns the
+    original receipt and writes nothing.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_NAMES_ADD
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id",
+        "name_type_code",
+        "display_value",
+        "idempotency_key",
+        "is_preferred",
+        "effective_from",
+        "effective_to",
+    )
+
+    entity_id: str
+    name_type_code: NameTypeCode
+    display_value: str = field(repr=False)
+    idempotency_key: str
+    is_preferred: bool = False
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _entity_vocabulary(self.name_type_code, NameTypeCode, SafeDetail.NAME_TYPE_CODE)
+        _entity_name(self.display_value, SafeDetail.DISPLAY_VALUE)
+        _idempotency_key(self.idempotency_key)
+        _flag(self.is_preferred, SafeDetail.IS_PREFERRED)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+
+
+@dataclass(frozen=True, slots=True)
+class SupersedeEntityName:
+    """`entities.names.supersede`: replace one recorded name form with a corrected one.
+
+    **A supersession, not an update.** A new name row is written and the one
+    named by `entity_name_id` is marked superseded, pointing at its successor.
+    Nothing is edited in place and nothing is deleted, so what was recorded and
+    what replaced it are both still readable.
+
+    The successor's content is stated in full rather than read off the
+    predecessor: a field you do not restate is not carried forward, because this
+    write performs no read and would otherwise have to guess. `expected_version`
+    is the version a recent `entities.names.list` returned; the write is refused
+    and nothing is written if the row moved since.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_NAMES_SUPERSEDE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_name_id",
+        "expected_version",
+        "entity_id",
+        "name_type_code",
+        "display_value",
+        "idempotency_key",
+        "is_preferred",
+        "effective_from",
+        "effective_to",
+    )
+
+    entity_name_id: str
+    expected_version: int
+    entity_id: str
+    name_type_code: NameTypeCode
+    display_value: str = field(repr=False)
+    idempotency_key: str
+    is_preferred: bool = False
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_name_id, IdKind.ENTITY_NAME, SafeDetail.ENTITY_NAME_ID)
+        _expected_version(self.expected_version)
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _entity_vocabulary(self.name_type_code, NameTypeCode, SafeDetail.NAME_TYPE_CODE)
+        _entity_name(self.display_value, SafeDetail.DISPLAY_VALUE)
+        _idempotency_key(self.idempotency_key)
+        _flag(self.is_preferred, SafeDetail.IS_PREFERRED)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+
+
+@dataclass(frozen=True, slots=True)
+class RetireEntityName:
+    """`entities.names.retire`: withdraw one recorded name form from service.
+
+    The row is kept and its history with it; there is no capability that
+    destroys a recorded name. Retiring releases the preferred slot the form
+    held, if it held one.
+
+    `expected_version` is the version a recent read returned. Use this when the
+    name stopped applying and nothing replaces it; use `entities.names.supersede`
+    when something does.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_NAMES_RETIRE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_name_id", "expected_version", "idempotency_key"
+    )
+
+    entity_name_id: str
+    expected_version: int
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_name_id, IdKind.ENTITY_NAME, SafeDetail.ENTITY_NAME_ID)
+        _expected_version(self.expected_version)
+        _idempotency_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class AddEntityAddress:
+    """`entities.addresses.add`: record one typed address for an entity.
+
+    `raw_value` is the address exactly as a source wrote it and is always
+    required. The structured fields are for what you already know: nothing here
+    splits `raw_value` to invent a structure, and the server derives the
+    normalized form the address is compared in from exactly the fields present.
+
+    An entity may hold several simultaneously active addresses of different
+    types -- a headquarters and a project address are not competing facts --
+    and more than one of the same type only when they are not identical.
+
+    Retrying with the same `idempotency_key` and the same payload returns the
+    original receipt and writes nothing.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_ADDRESSES_ADD
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id",
+        "address_type_code",
+        "raw_value",
+        "idempotency_key",
+        "line1",
+        "line2",
+        "city",
+        "region",
+        "postal_code",
+        "country",
+        "label",
+        "is_preferred",
+        "effective_from",
+        "effective_to",
+    )
+
+    entity_id: str
+    address_type_code: AddressTypeCode
+    raw_value: str = field(repr=False)
+    idempotency_key: str
+    line1: str | None = field(default=None, repr=False)
+    line2: str | None = field(default=None, repr=False)
+    city: str | None = field(default=None, repr=False)
+    region: str | None = field(default=None, repr=False)
+    postal_code: str | None = field(default=None, repr=False)
+    country: str | None = None
+    label: str | None = None
+    is_preferred: bool = False
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _entity_vocabulary(self.address_type_code, AddressTypeCode, SafeDetail.ADDRESS_TYPE_CODE)
+        _record_text(self.raw_value, SafeDetail.RAW_VALUE)
+        _idempotency_key(self.idempotency_key)
+        # Each structured part named at its own call site rather than routed
+        # through one helper taking `self`. A helper that took the command
+        # would type-check every field and be invisible to
+        # `test_commands_check_the_type_before_the_content`, which measures
+        # type-checking per named field -- the exact extraction that module
+        # records having been made green by once before.
+        _optional_record_text(self.line1, SafeDetail.LINE1)
+        _optional_record_text(self.line2, SafeDetail.LINE2)
+        _optional_record_text(self.city, SafeDetail.CITY)
+        _optional_record_text(self.region, SafeDetail.REGION)
+        _optional_record_text(self.postal_code, SafeDetail.POSTAL_CODE)
+        _optional_record_text(self.country, SafeDetail.COUNTRY)
+        _optional_record_text(self.label, SafeDetail.LABEL)
+        _flag(self.is_preferred, SafeDetail.IS_PREFERRED)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+
+
+@dataclass(frozen=True, slots=True)
+class ReviseEntityAddress:
+    """`entities.addresses.revise`: replace one recorded address with a corrected one.
+
+    **A supersession, not an update**, exactly as `entities.names.supersede` is:
+    a new address row is written and the one named by `entity_address_id` is
+    marked superseded, pointing at its successor. Nothing is edited in place and
+    nothing is deleted. The word is `revise` here and `supersede` for names
+    because the source audit fixed both names; the act is the same one.
+
+    The successor's content is stated in full rather than read off the
+    predecessor: a field you do not restate is not carried forward, because this
+    write performs no read. `expected_version` is the version a recent
+    `entities.addresses.list` returned.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_ADDRESSES_REVISE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_address_id",
+        "expected_version",
+        "entity_id",
+        "address_type_code",
+        "raw_value",
+        "idempotency_key",
+        "line1",
+        "line2",
+        "city",
+        "region",
+        "postal_code",
+        "country",
+        "label",
+        "is_preferred",
+        "effective_from",
+        "effective_to",
+    )
+
+    entity_address_id: str
+    expected_version: int
+    entity_id: str
+    address_type_code: AddressTypeCode
+    raw_value: str = field(repr=False)
+    idempotency_key: str
+    line1: str | None = field(default=None, repr=False)
+    line2: str | None = field(default=None, repr=False)
+    city: str | None = field(default=None, repr=False)
+    region: str | None = field(default=None, repr=False)
+    postal_code: str | None = field(default=None, repr=False)
+    country: str | None = None
+    label: str | None = None
+    is_preferred: bool = False
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_address_id, IdKind.ENTITY_ADDRESS, SafeDetail.ENTITY_ADDRESS_ID)
+        _expected_version(self.expected_version)
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _entity_vocabulary(self.address_type_code, AddressTypeCode, SafeDetail.ADDRESS_TYPE_CODE)
+        _record_text(self.raw_value, SafeDetail.RAW_VALUE)
+        _idempotency_key(self.idempotency_key)
+        # Each structured part named at its own call site rather than routed
+        # through one helper taking `self`. A helper that took the command
+        # would type-check every field and be invisible to
+        # `test_commands_check_the_type_before_the_content`, which measures
+        # type-checking per named field -- the exact extraction that module
+        # records having been made green by once before.
+        _optional_record_text(self.line1, SafeDetail.LINE1)
+        _optional_record_text(self.line2, SafeDetail.LINE2)
+        _optional_record_text(self.city, SafeDetail.CITY)
+        _optional_record_text(self.region, SafeDetail.REGION)
+        _optional_record_text(self.postal_code, SafeDetail.POSTAL_CODE)
+        _optional_record_text(self.country, SafeDetail.COUNTRY)
+        _optional_record_text(self.label, SafeDetail.LABEL)
+        _flag(self.is_preferred, SafeDetail.IS_PREFERRED)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+
+
+@dataclass(frozen=True, slots=True)
+class RetireEntityAddress:
+    """`entities.addresses.retire`: withdraw one recorded address from service.
+
+    The row is kept and its history with it; there is no capability that
+    destroys a recorded address. Retiring releases the preferred slot the
+    address held, if it held one.
+
+    Use this when the address stopped applying and nothing replaces it; use
+    `entities.addresses.revise` when something does.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_ADDRESSES_RETIRE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_address_id", "expected_version", "idempotency_key"
+    )
+
+    entity_address_id: str
+    expected_version: int
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_address_id, IdKind.ENTITY_ADDRESS, SafeDetail.ENTITY_ADDRESS_ID)
+        _expected_version(self.expected_version)
+        _idempotency_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class AddEntityCommunicationMethod:
+    """`entities.communication.add`: record one contact channel for an entity.
+
+    `method_type_code` says which kind of channel this is and the value is then
+    normalized *for* that stated type. Nothing here reads a string's shape and
+    concludes it is an email or a phone number, so a phone number filed as an
+    email is recorded as the caller filed it rather than silently reclassified.
+
+    `verification_status_code` is left at the vocabulary's own `unresolved`
+    member when you do not state one. That is what "not yet known" is called
+    here, and it is never promoted to an affirmative status by this write.
+
+    An entity may hold several simultaneously active channels of one type in
+    different usage contexts -- a corporate address and a personal one are not
+    competing facts.
+
+    Retrying with the same `idempotency_key` and the same payload returns the
+    original receipt and writes nothing.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_COMMUNICATION_ADD
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id",
+        "method_type_code",
+        "usage_context_code",
+        "display_value",
+        "idempotency_key",
+        "verification_status_code",
+        "linked_external_identifier_id",
+        "is_preferred",
+        "effective_from",
+        "effective_to",
+    )
+
+    entity_id: str
+    method_type_code: CommunicationMethodTypeCode
+    usage_context_code: CommunicationUsageContextCode
+    display_value: str = field(repr=False)
+    idempotency_key: str
+    verification_status_code: CommunicationVerificationStatusCode = (
+        CommunicationVerificationStatusCode.UNRESOLVED
+    )
+    linked_external_identifier_id: str | None = None
+    is_preferred: bool = False
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _entity_vocabulary(
+            self.method_type_code, CommunicationMethodTypeCode, SafeDetail.METHOD_TYPE_CODE
+        )
+        _entity_vocabulary(
+            self.usage_context_code, CommunicationUsageContextCode, SafeDetail.USAGE_CONTEXT_CODE
+        )
+        _record_text(self.display_value, SafeDetail.DISPLAY_VALUE)
+        _idempotency_key(self.idempotency_key)
+        _entity_vocabulary(
+            self.verification_status_code,
+            CommunicationVerificationStatusCode,
+            SafeDetail.VERIFICATION_STATUS_CODE,
+        )
+        if self.linked_external_identifier_id is not None:
+            _identifier(
+                self.linked_external_identifier_id,
+                IdKind.EXTERNAL_IDENTIFIER,
+                SafeDetail.LINKED_EXTERNAL_IDENTIFIER_ID,
+            )
+        _flag(self.is_preferred, SafeDetail.IS_PREFERRED)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+
+
+@dataclass(frozen=True, slots=True)
+class ReviseEntityCommunicationMethod:
+    """`entities.communication.revise`: replace one contact channel with a corrected one.
+
+    **A supersession, not an update**, exactly as `entities.names.supersede` is:
+    a new channel row is written and the one named by `communication_method_id`
+    is marked superseded, pointing at its successor. Nothing is edited in place
+    and nothing is deleted. The word is `revise` here and `supersede` for names
+    because the source audit fixed both names; the act is the same one.
+
+    The successor's content is stated in full rather than read off the
+    predecessor: a field you do not restate is not carried forward, because this
+    write performs no read. In particular `verification_status_code` is written
+    as stated and unpromoted, so a correction that omits it records
+    `unresolved` rather than inheriting whatever the predecessor claimed.
+    `expected_version` is the version a recent `entities.communication.list`
+    returned.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_COMMUNICATION_REVISE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "communication_method_id",
+        "expected_version",
+        "entity_id",
+        "method_type_code",
+        "usage_context_code",
+        "display_value",
+        "idempotency_key",
+        "verification_status_code",
+        "linked_external_identifier_id",
+        "is_preferred",
+        "effective_from",
+        "effective_to",
+    )
+
+    communication_method_id: str
+    expected_version: int
+    entity_id: str
+    method_type_code: CommunicationMethodTypeCode
+    usage_context_code: CommunicationUsageContextCode
+    display_value: str = field(repr=False)
+    idempotency_key: str
+    verification_status_code: CommunicationVerificationStatusCode = (
+        CommunicationVerificationStatusCode.UNRESOLVED
+    )
+    linked_external_identifier_id: str | None = None
+    is_preferred: bool = False
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(
+            self.communication_method_id,
+            IdKind.ENTITY_COMMUNICATION_METHOD,
+            SafeDetail.COMMUNICATION_METHOD_ID,
+        )
+        _expected_version(self.expected_version)
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _entity_vocabulary(
+            self.method_type_code, CommunicationMethodTypeCode, SafeDetail.METHOD_TYPE_CODE
+        )
+        _entity_vocabulary(
+            self.usage_context_code, CommunicationUsageContextCode, SafeDetail.USAGE_CONTEXT_CODE
+        )
+        _record_text(self.display_value, SafeDetail.DISPLAY_VALUE)
+        _idempotency_key(self.idempotency_key)
+        _entity_vocabulary(
+            self.verification_status_code,
+            CommunicationVerificationStatusCode,
+            SafeDetail.VERIFICATION_STATUS_CODE,
+        )
+        if self.linked_external_identifier_id is not None:
+            _identifier(
+                self.linked_external_identifier_id,
+                IdKind.EXTERNAL_IDENTIFIER,
+                SafeDetail.LINKED_EXTERNAL_IDENTIFIER_ID,
+            )
+        _flag(self.is_preferred, SafeDetail.IS_PREFERRED)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+
+
+@dataclass(frozen=True, slots=True)
+class RetireEntityCommunicationMethod:
+    """`entities.communication.retire`: withdraw one contact channel from service.
+
+    The row is kept and its history with it; there is no capability that
+    destroys a recorded channel. Retiring releases the preferred slot the
+    channel held, if it held one.
+
+    Use this when the channel stopped working and nothing replaces it; use
+    `entities.communication.revise` when something does.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_COMMUNICATION_RETIRE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "communication_method_id", "expected_version", "idempotency_key"
+    )
+
+    communication_method_id: str
+    expected_version: int
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _identifier(
+            self.communication_method_id,
+            IdKind.ENTITY_COMMUNICATION_METHOD,
+            SafeDetail.COMMUNICATION_METHOD_ID,
+        )
+        _expected_version(self.expected_version)
+        _idempotency_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class CreateEntityParticipation:
+    """`entities.participations.create`: record one participation on one project.
+
+    `project_entity_id` is the project and `participant_entity_id` is who or
+    what participates in it. Both are entities you have already resolved, and
+    they must differ: a project cannot meaningfully participate in itself.
+
+    **`project_display_name` is project-scoped fact and never global identity.**
+    It is what this participant is called on *this* project, which may differ
+    from the entity's own display name. Nothing copies it into the entity's
+    identity, and nothing reads the entity's identity into it.
+
+    `role_code` and `role_text` are independent, and so are `discipline_code`
+    and `discipline_text`: a caller that knows only the words a source used
+    supplies the text and leaves the code absent, and nothing here maps one onto
+    the other in either direction.
+
+    Retrying with the same `idempotency_key` and the same payload returns the
+    original receipt and writes nothing.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_PARTICIPATIONS_CREATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "project_entity_id",
+        "participant_entity_id",
+        "project_display_name",
+        "role_basis_code",
+        "stakeholder_side_code",
+        "stakeholder_class_code",
+        "relationship_status_code",
+        "idempotency_key",
+        "role_code",
+        "role_text",
+        "discipline_code",
+        "discipline_text",
+        "scope_text",
+        "effective_from",
+        "effective_to",
+    )
+
+    project_entity_id: str
+    participant_entity_id: str
+    project_display_name: str = field(repr=False)
+    role_basis_code: RoleBasisCode
+    stakeholder_side_code: StakeholderSideCode
+    stakeholder_class_code: StakeholderClassCode
+    relationship_status_code: ParticipationStatusCode
+    idempotency_key: str
+    role_code: str | None = None
+    role_text: str | None = field(default=None, repr=False)
+    discipline_code: str | None = None
+    discipline_text: str | None = field(default=None, repr=False)
+    scope_text: str | None = field(default=None, repr=False)
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.project_entity_id, IdKind.ENTITY, SafeDetail.PROJECT_ENTITY_ID)
+        _identifier(self.participant_entity_id, IdKind.ENTITY, SafeDetail.PARTICIPANT_ENTITY_ID)
+        _record_text(self.project_display_name, SafeDetail.PROJECT_DISPLAY_NAME)
+        _entity_vocabulary(self.role_basis_code, RoleBasisCode, SafeDetail.ROLE_BASIS_CODE)
+        _entity_vocabulary(
+            self.stakeholder_side_code, StakeholderSideCode, SafeDetail.STAKEHOLDER_SIDE_CODE
+        )
+        _entity_vocabulary(
+            self.stakeholder_class_code, StakeholderClassCode, SafeDetail.STAKEHOLDER_CLASS_CODE
+        )
+        _entity_vocabulary(
+            self.relationship_status_code,
+            ParticipationStatusCode,
+            SafeDetail.RELATIONSHIP_STATUS_CODE,
+        )
+        _idempotency_key(self.idempotency_key)
+        # Each optional part named at its own call site rather than routed
+        # through one helper taking `self`, for the reason the address family
+        # states: a helper that took the command would type-check every field
+        # and be invisible to `test_commands_check_the_type_before_the_content`.
+        _optional_record_text(self.role_code, SafeDetail.ROLE_CODE)
+        _optional_record_text(self.role_text, SafeDetail.ROLE_TEXT)
+        _optional_record_text(self.discipline_code, SafeDetail.DISCIPLINE_CODE)
+        _optional_record_text(self.discipline_text, SafeDetail.DISCIPLINE_TEXT)
+        _optional_record_text(self.scope_text, SafeDetail.SCOPE_TEXT)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+
+
+@dataclass(frozen=True, slots=True)
+class ReviseEntityParticipation:
+    """`entities.participations.revise`: replace one participation with a corrected one.
+
+    **A supersession, not an update**, exactly as `entities.names.supersede` is:
+    a new participation row is written and the one named by `participation_id`
+    is marked superseded, pointing at its successor. Nothing is edited in place
+    and nothing is deleted. The word is `revise` here and `supersede` for names
+    because the source audit fixed both names; the act is the same one.
+
+    The successor's content is stated in full rather than read off the
+    predecessor: a field you do not restate is not carried forward, because this
+    write performs no read. `expected_version` is the version a recent
+    `entities.participations.list` returned.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_PARTICIPATIONS_REVISE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "participation_id",
+        "expected_version",
+        "project_entity_id",
+        "participant_entity_id",
+        "project_display_name",
+        "role_basis_code",
+        "stakeholder_side_code",
+        "stakeholder_class_code",
+        "relationship_status_code",
+        "idempotency_key",
+        "role_code",
+        "role_text",
+        "discipline_code",
+        "discipline_text",
+        "scope_text",
+        "effective_from",
+        "effective_to",
+    )
+
+    participation_id: str
+    expected_version: int
+    project_entity_id: str
+    participant_entity_id: str
+    project_display_name: str = field(repr=False)
+    role_basis_code: RoleBasisCode
+    stakeholder_side_code: StakeholderSideCode
+    stakeholder_class_code: StakeholderClassCode
+    relationship_status_code: ParticipationStatusCode
+    idempotency_key: str
+    role_code: str | None = None
+    role_text: str | None = field(default=None, repr=False)
+    discipline_code: str | None = None
+    discipline_text: str | None = field(default=None, repr=False)
+    scope_text: str | None = field(default=None, repr=False)
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(
+            self.participation_id,
+            IdKind.ENTITY_PROJECT_PARTICIPATION,
+            SafeDetail.PARTICIPATION_ID,
+        )
+        _expected_version(self.expected_version)
+        _identifier(self.project_entity_id, IdKind.ENTITY, SafeDetail.PROJECT_ENTITY_ID)
+        _identifier(self.participant_entity_id, IdKind.ENTITY, SafeDetail.PARTICIPANT_ENTITY_ID)
+        _record_text(self.project_display_name, SafeDetail.PROJECT_DISPLAY_NAME)
+        _entity_vocabulary(self.role_basis_code, RoleBasisCode, SafeDetail.ROLE_BASIS_CODE)
+        _entity_vocabulary(
+            self.stakeholder_side_code, StakeholderSideCode, SafeDetail.STAKEHOLDER_SIDE_CODE
+        )
+        _entity_vocabulary(
+            self.stakeholder_class_code, StakeholderClassCode, SafeDetail.STAKEHOLDER_CLASS_CODE
+        )
+        _entity_vocabulary(
+            self.relationship_status_code,
+            ParticipationStatusCode,
+            SafeDetail.RELATIONSHIP_STATUS_CODE,
+        )
+        _idempotency_key(self.idempotency_key)
+        # Each optional part named at its own call site rather than routed
+        # through one helper taking `self`, for the reason the address family
+        # states: a helper that took the command would type-check every field
+        # and be invisible to `test_commands_check_the_type_before_the_content`.
+        _optional_record_text(self.role_code, SafeDetail.ROLE_CODE)
+        _optional_record_text(self.role_text, SafeDetail.ROLE_TEXT)
+        _optional_record_text(self.discipline_code, SafeDetail.DISCIPLINE_CODE)
+        _optional_record_text(self.discipline_text, SafeDetail.DISCIPLINE_TEXT)
+        _optional_record_text(self.scope_text, SafeDetail.SCOPE_TEXT)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+
+
+@dataclass(frozen=True, slots=True)
+class EndEntityParticipation:
+    """`entities.participations.end`: withdraw one participation from service.
+
+    The row is kept and its history with it; there is no capability that
+    destroys a recorded participation. The word is `end` here and `retire` for
+    names, addresses and communication methods because the source audit fixed
+    both spellings; the act is the same one.
+
+    Use this when the participation stopped and nothing replaces it; use
+    `entities.participations.revise` when something does.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_PARTICIPATIONS_END
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "participation_id", "expected_version", "idempotency_key"
+    )
+
+    participation_id: str
+    expected_version: int
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _identifier(
+            self.participation_id,
+            IdKind.ENTITY_PROJECT_PARTICIPATION,
+            SafeDetail.PARTICIPATION_ID,
+        )
+        _expected_version(self.expected_version)
+        _idempotency_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class CreateEntityAffiliation:
+    """`entities.affiliations.create`: record one person's affiliation.
+
+    `organization_entity_id` is genuinely optional and absence is a complete
+    answer: an independent consultant needs no placeholder organization, and
+    nothing here creates, selects or substitutes one to fill it.
+
+    A person holds at most one open-ended active affiliation at a time -- one
+    whose `effective_to` is absent -- so a second open-ended one is refused
+    rather than silently ending the first. Close the first with
+    `entities.affiliations.end` if that is what you meant.
+
+    Retrying with the same `idempotency_key` and the same payload returns the
+    original receipt and writes nothing.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_AFFILIATIONS_CREATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "person_entity_id",
+        "affiliation_type_code",
+        "idempotency_key",
+        "organization_entity_id",
+        "job_title",
+        "effective_from",
+        "effective_to",
+    )
+
+    person_entity_id: str
+    affiliation_type_code: AffiliationTypeCode
+    idempotency_key: str
+    organization_entity_id: str | None = None
+    job_title: str | None = field(default=None, repr=False)
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.person_entity_id, IdKind.ENTITY, SafeDetail.PERSON_ENTITY_ID)
+        _entity_vocabulary(
+            self.affiliation_type_code, AffiliationTypeCode, SafeDetail.AFFILIATION_TYPE_CODE
+        )
+        _idempotency_key(self.idempotency_key)
+        if self.organization_entity_id is not None:
+            _identifier(
+                self.organization_entity_id, IdKind.ENTITY, SafeDetail.ORGANIZATION_ENTITY_ID
+            )
+        _optional_record_text(self.job_title, SafeDetail.JOB_TITLE)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+
+
+@dataclass(frozen=True, slots=True)
+class ReviseEntityAffiliation:
+    """`entities.affiliations.revise`: replace one affiliation with a corrected one.
+
+    **A supersession, not an update**, exactly as `entities.names.supersede` is:
+    a new affiliation row is written and the one named by `affiliation_id` is
+    marked superseded, pointing at its successor. Nothing is edited in place and
+    nothing is deleted.
+
+    **`organization_entity_id` is required here and optional on the create**, and
+    the asymmetry is deliberate: a correction states what the affiliation now
+    says, and a correction that could omit the organization would leave you
+    unable to tell "unchanged" from "cleared" when this write performs no read.
+    Send `null` to clear it and the entity to keep it.
+
+    `expected_version` is the version a recent `entities.profile` returned.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_AFFILIATIONS_REVISE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "affiliation_id",
+        "expected_version",
+        "person_entity_id",
+        "affiliation_type_code",
+        "organization_entity_id",
+        "idempotency_key",
+        "job_title",
+        "effective_from",
+        "effective_to",
+    )
+
+    affiliation_id: str
+    expected_version: int
+    person_entity_id: str
+    affiliation_type_code: AffiliationTypeCode
+    organization_entity_id: str | None
+    idempotency_key: str
+    job_title: str | None = field(default=None, repr=False)
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(
+            self.affiliation_id,
+            IdKind.PERSON_ORGANIZATION_AFFILIATION,
+            SafeDetail.AFFILIATION_ID,
+        )
+        _expected_version(self.expected_version)
+        _identifier(self.person_entity_id, IdKind.ENTITY, SafeDetail.PERSON_ENTITY_ID)
+        _entity_vocabulary(
+            self.affiliation_type_code, AffiliationTypeCode, SafeDetail.AFFILIATION_TYPE_CODE
+        )
+        if self.organization_entity_id is not None:
+            _identifier(
+                self.organization_entity_id, IdKind.ENTITY, SafeDetail.ORGANIZATION_ENTITY_ID
+            )
+        _idempotency_key(self.idempotency_key)
+        _optional_record_text(self.job_title, SafeDetail.JOB_TITLE)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+
+
+@dataclass(frozen=True, slots=True)
+class EndEntityAffiliation:
+    """`entities.affiliations.end`: withdraw one affiliation from service.
+
+    The row is kept and its history with it; there is no capability that
+    destroys a recorded affiliation. The word is `end` here and `retire` for
+    names, addresses and communication methods because the source audit fixed
+    both spellings; the act is the same one.
+
+    `effective_to` is written only when you supply it. Ending already releases
+    the open-ended slot the affiliation held; *when* it ended is a separate fact
+    you state or leave unstated, and this write will not invent a date for it.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_AFFILIATIONS_END
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "affiliation_id", "expected_version", "idempotency_key", "effective_to"
+    )
+
+    affiliation_id: str
+    expected_version: int
+    idempotency_key: str
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(
+            self.affiliation_id,
+            IdKind.PERSON_ORGANIZATION_AFFILIATION,
+            SafeDetail.AFFILIATION_ID,
+        )
+        _expected_version(self.expected_version)
+        _idempotency_key(self.idempotency_key)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
 
 
 @dataclass(frozen=True, slots=True)
@@ -5941,6 +7289,26 @@ type Command = (
     | ListUnresolvedMentions
     | ListEntityIdentifiers
     | ListEntityAliases
+    | GetEntityProfile
+    | ListEntityNames
+    | ListEntityAddresses
+    | ListEntityCommunicationMethods
+    | ListEntityParticipations
+    | AddEntityName
+    | SupersedeEntityName
+    | RetireEntityName
+    | AddEntityAddress
+    | ReviseEntityAddress
+    | RetireEntityAddress
+    | AddEntityCommunicationMethod
+    | ReviseEntityCommunicationMethod
+    | RetireEntityCommunicationMethod
+    | CreateEntityParticipation
+    | ReviseEntityParticipation
+    | EndEntityParticipation
+    | CreateEntityAffiliation
+    | ReviseEntityAffiliation
+    | EndEntityAffiliation
     | CreateEntity
     | UpdateEntity
     | ArchiveEntity

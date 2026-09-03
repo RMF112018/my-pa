@@ -30,7 +30,15 @@ MIGRATION: Final = ROOT / (
     "migrations/versions/20260901_2c00c9ac64bc_add_webauthn_auth_persistence.py"
 )
 PRIOR_REVISION: Final = "c99cd8ed8d1c"
-HEAD_REVISION: Final = "2c00c9ac64bc"
+#: This module's subject revision: UI-IMP-WP02's auth-persistence revision.
+REVISION: Final = "2c00c9ac64bc"
+#: The chain's current head. `2c00c9ac64bc` was head on `origin/main`; merging
+#: RI-ENT-WP-10/11 into it re-parented `16f05c46b8c3` -- which had also been
+#: written against `c99cd8ed8d1c` -- onto `REVISION` (RULING-M11), so the head
+#: this suite must see is that one and `REVISION` is the link directly beneath
+#: it. Written out rather than derived so chain drift fails here rather than
+#: passing.
+HEAD_REVISION: Final = "16f05c46b8c3"
 NEW_TABLES: Final = frozenset(
     {
         "webauthn_credentials",
@@ -98,11 +106,12 @@ def test_tables_share_the_canonical_identity_metadata() -> None:
     assert NEW_TABLES.issubset({table.name for table in IDENTITY_METADATA.tables.values()})
 
 
-def test_the_chain_has_one_head_and_this_revision_is_it() -> None:
+def test_the_chain_has_one_head_and_this_revision_is_directly_beneath_it() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD_REVISION]
-    assert script.get_revision(HEAD_REVISION).down_revision == PRIOR_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 87
+    assert script.get_revision(HEAD_REVISION).down_revision == REVISION
+    assert script.get_revision(REVISION).down_revision == PRIOR_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 88
 
 
 @pytest.mark.database
@@ -143,7 +152,7 @@ def test_prior_head_to_new_head_adds_only_these_tables(disposable_database: str)
                     )
                 ).scalars()
             )
-        command.upgrade(_config(), HEAD_REVISION)
+        command.upgrade(_config(), REVISION)
         with engine.connect() as connection:
             after = set(
                 connection.execute(

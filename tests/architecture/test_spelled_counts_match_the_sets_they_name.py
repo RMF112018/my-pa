@@ -375,6 +375,37 @@ _ORDINAL_UNITS = (
     "hundred-third",
     "hundred-fourth",
     "hundred-fifth",
+    # `RI-ENT-WP-10` took the capability set to a hundred and nine, so
+    # `a hundred-tenth capability` became the ordinal a correct claim would use
+    # and the green-half plant indexes one past the set. The boundary announced
+    # itself exactly as every one above it did -- `IndexError` in the plant
+    # rather than a false pass -- which is the property the density of this
+    # tuple buys.
+    "hundred-sixth",
+    "hundred-seventh",
+    "hundred-eighth",
+    "hundred-ninth",
+    "hundred-tenth",
+    # `RI-ENT-WP-11`'s first record family took the public set past a hundred and
+    # ten, and the green-half plant indexes one past the set. The boundary
+    # announced itself exactly as every one above it did -- `IndexError` in the
+    # plant rather than a false pass -- which is the property the density of this
+    # tuple buys, and extending it is what this note has always asked for.
+    "hundred-eleventh",
+    "hundred-twelfth",
+    "hundred-thirteenth",
+    "hundred-fourteenth",
+    "hundred-fifteenth",
+    "hundred-sixteenth",
+    "hundred-seventeenth",
+    "hundred-eighteenth",
+    "hundred-nineteenth",
+    "hundred-twentieth",
+    "hundred-twenty-first",
+    "hundred-twenty-second",
+    "hundred-twenty-third",
+    "hundred-twenty-fourth",
+    "hundred-twenty-fifth",
 )
 
 
@@ -884,9 +915,9 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "**fifty-five**",
         "A default process publishes",
         "the count a default composition publishes — `Capability` less the six "
-        "`documents.`, thirty-four `entities.` and nine `relationship_memory.` names it "
+        "`documents.`, fifty-four `entities.` and nine `relationship_memory.` names it "
         "withholds — not the size of `Capability`, which the same block states "
-        "correctly as one hundred four",
+        "correctly as 124",
     ),
     (
         "ops/runbooks/mcp-and-cli-operations.md",
@@ -901,7 +932,7 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "the same default-publication count, in the bullet describing the MCP "
         "adapter; the tool list is derived from `available_capabilities`, not "
         "from `Capability`, which the same bullet states correctly as "
-        "one hundred four",
+        "one hundred and twenty-four",
     ),
     # --- the Intelligence Artifact plane, newly swept --------------------------
     #

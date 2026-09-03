@@ -565,7 +565,7 @@ def test_a_child_with_a_managed_root_publishes_every_capability(tmp_path: Path) 
         MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED="true",
         # Every relationship switch, because each narrows the surface and "every
         # capability" is the claim this test makes. The write switch withholds
-        # the twenty-one `entities.` writes on its own, the memory plane needs
+        # the thirty-eight `entities.` writes on its own, the memory plane needs
         # the entity plane under it, and the identity-correction switch is a
         # third narrowing *inside* the write half that withholds the governed
         # merge's two halves; narrowing the claim to what a partly composed build

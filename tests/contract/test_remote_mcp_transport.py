@@ -342,6 +342,24 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.ENTITIES_MERGE,
         Capability.ENTITIES_SPLIT_PREVIEW,
         Capability.ENTITIES_SPLIT,
+        # `RI-ENT-WP-11`'s record-family writes. Every one of them inserts,
+        # supersedes or retires a row and appends the mutation-ledger row that
+        # accounts for it, so none is read-only.
+        Capability.ENTITIES_NAMES_ADD,
+        Capability.ENTITIES_NAMES_SUPERSEDE,
+        Capability.ENTITIES_NAMES_RETIRE,
+        Capability.ENTITIES_ADDRESSES_ADD,
+        Capability.ENTITIES_ADDRESSES_REVISE,
+        Capability.ENTITIES_ADDRESSES_RETIRE,
+        Capability.ENTITIES_COMMUNICATION_ADD,
+        Capability.ENTITIES_COMMUNICATION_REVISE,
+        Capability.ENTITIES_COMMUNICATION_RETIRE,
+        Capability.ENTITIES_PARTICIPATIONS_CREATE,
+        Capability.ENTITIES_PARTICIPATIONS_REVISE,
+        Capability.ENTITIES_PARTICIPATIONS_END,
+        Capability.ENTITIES_AFFILIATIONS_CREATE,
+        Capability.ENTITIES_AFFILIATIONS_REVISE,
+        Capability.ENTITIES_AFFILIATIONS_END,
     }
     destructive_writes = {
         Capability.CAPTURE_REVISE,
@@ -378,6 +396,22 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         # dependent proposals.
         Capability.ENTITIES_MERGE,
         Capability.ENTITIES_SPLIT,
+        # Two of `RI-ENT-WP-11`'s three per family. A supersession mints a
+        # successor *and* marks its predecessor SUPERSEDED, and a retirement
+        # moves a live row to RETIRED and releases whatever slot it held; both
+        # change a record that already existed. The `add`/`create` verbs insert
+        # and reach nothing, which is why they are absent here and present in
+        # `_ADDITIVE_WRITE_CAPABILITIES`.
+        Capability.ENTITIES_NAMES_SUPERSEDE,
+        Capability.ENTITIES_NAMES_RETIRE,
+        Capability.ENTITIES_ADDRESSES_REVISE,
+        Capability.ENTITIES_ADDRESSES_RETIRE,
+        Capability.ENTITIES_COMMUNICATION_REVISE,
+        Capability.ENTITIES_COMMUNICATION_RETIRE,
+        Capability.ENTITIES_PARTICIPATIONS_REVISE,
+        Capability.ENTITIES_PARTICIPATIONS_END,
+        Capability.ENTITIES_AFFILIATIONS_REVISE,
+        Capability.ENTITIES_AFFILIATIONS_END,
     }
     for capability in Capability:
         tool = tools.get(capability.value)

@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes one hundred and four capability names and none of them
+  ends: the transport routes one hundred and twenty-four capability names and none of them
   mutates a source, and every capability driven over the wire is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -102,15 +102,32 @@ from my_pa.domain.intelligence.catalog import (
 )
 from my_pa.domain.policy.decision import DenialReason
 from my_pa.domain.relationship.entity import (
+    AddressTypeCode,
+    AffiliationTypeCode,
     AliasType,
+    CommunicationMethodTypeCode,
+    CommunicationUsageContextCode,
     Entity,
+    EntityAddress,
     EntityAlias,
+    EntityCommunicationMethod,
+    EntityName,
+    EntityProjectParticipation,
     EntityRelationshipType,
     EntityStatus,
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
+    NameTypeCode,
+    ParticipationStatusCode,
+    PersonOrganizationAffiliation,
+    RoleBasisCode,
+    StakeholderClassCode,
+    StakeholderSideCode,
+    normalize_address,
+    normalize_communication_value,
 )
+from my_pa.domain.relationship.normalization import normalize_name
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.bulk import TaskBulkOperation
 
@@ -351,6 +368,7 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
     report_id = collector_admission.artifact.artifact_id
     person, organization = staged_entities(marked)
     subjects = staged_write_subjects(marked)
+    families = staged_record_family_rows(marked, person, organization)
     # Four memories rather than one, because the sweeps below drive this whole
     # table in one pass over one scene: a revise, an archive and a restore that
     # all named the memory the reads name would meet it at version two and
@@ -640,10 +658,137 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         # The subject is the staged `person`, so a permitted request reaches a
         # real entity rather than a `not_found` that would prove nothing about
         # the authority path. `expected_version` is 1, which is what a freshly
-        # staged entity holds; the child identifiers are minted, because these
-        # tests never reach the handler that would look one up.
+        # staged entity holds; the identifier and alias ids below are minted,
+        # because the authority path refuses them before anything looks one up.
+        # **That is true here and is false one table down**: every
+        # `RI-ENT-WP-11` correction and retirement reads its predecessor, so
+        # those name a row `staged_record_family_rows` actually created.
         Capability.ENTITIES_IDENTIFIERS_LIST: {"entity_id": person.entity_id},
         Capability.ENTITIES_ALIASES_LIST: {"entity_id": person.entity_id},
+        # `RI-ENT-WP-10`'s five record-family reads, over the same staged
+        # subject. `perspective` is spelled because the command has no default.
+        Capability.ENTITIES_PROFILE: {"entity_id": person.entity_id},
+        Capability.ENTITIES_NAMES_LIST: {"entity_id": person.entity_id},
+        Capability.ENTITIES_ADDRESSES_LIST: {"entity_id": person.entity_id},
+        Capability.ENTITIES_COMMUNICATION_LIST: {"entity_id": person.entity_id},
+        Capability.ENTITIES_PARTICIPATIONS_LIST: {
+            "entity_id": person.entity_id,
+            "perspective": "participant",
+        },
+        # `RI-ENT-WP-11`'s record-family writes, over the same staged subject.
+        # Every verb that names an existing child record names a real one, from
+        # `staged_record_family_rows`: a correction reads its predecessor before
+        # it writes and a retirement transitions a row it must first find, so a
+        # minted identifier answered `404` here rather than the `200` this file
+        # asserts. `add`/`create` mint nothing and read nothing, and stayed
+        # green throughout, which is what made the failure legible.
+        Capability.ENTITIES_NAMES_ADD: {
+            "entity_id": person.entity_id,
+            "name_type_code": "legal",
+            "display_value": "Wire Name",
+            "idempotency_key": "wire-entity-names-add-0001",
+        },
+        Capability.ENTITIES_NAMES_SUPERSEDE: {
+            "entity_name_id": families["name-supersede"],
+            "expected_version": 1,
+            "entity_id": person.entity_id,
+            "name_type_code": "operating",
+            "display_value": "Wire Name Corrected",
+            "idempotency_key": "wire-entity-names-supersede-0001",
+        },
+        Capability.ENTITIES_NAMES_RETIRE: {
+            "entity_name_id": families["name-retire"],
+            "expected_version": 1,
+            "idempotency_key": "wire-entity-names-retire-0001",
+        },
+        Capability.ENTITIES_ADDRESSES_ADD: {
+            "entity_id": person.entity_id,
+            "address_type_code": "business",
+            "raw_value": "1 Wire Way",
+            "idempotency_key": "wire-entity-addresses-add-0001",
+        },
+        Capability.ENTITIES_ADDRESSES_REVISE: {
+            "entity_address_id": families["address-revise"],
+            "expected_version": 1,
+            "entity_id": person.entity_id,
+            "address_type_code": "business",
+            "raw_value": "2 Wire Way",
+            "idempotency_key": "wire-entity-addresses-revise-0001",
+        },
+        Capability.ENTITIES_ADDRESSES_RETIRE: {
+            "entity_address_id": families["address-retire"],
+            "expected_version": 1,
+            "idempotency_key": "wire-entity-addresses-retire-0001",
+        },
+        Capability.ENTITIES_COMMUNICATION_ADD: {
+            "entity_id": person.entity_id,
+            "method_type_code": "email",
+            "usage_context_code": "corporate",
+            "display_value": "wire.corporate@example.test",
+            "idempotency_key": "wire-entity-communication-add-0001",
+        },
+        Capability.ENTITIES_COMMUNICATION_REVISE: {
+            "communication_method_id": families["communication-revise"],
+            "expected_version": 1,
+            "entity_id": person.entity_id,
+            "method_type_code": "email",
+            "usage_context_code": "corporate",
+            "display_value": "wire.corrected@example.test",
+            "idempotency_key": "wire-entity-communication-revise-0001",
+        },
+        Capability.ENTITIES_COMMUNICATION_RETIRE: {
+            "communication_method_id": families["communication-retire"],
+            "expected_version": 1,
+            "idempotency_key": "wire-entity-communication-retire-0001",
+        },
+        Capability.ENTITIES_PARTICIPATIONS_CREATE: {
+            "project_entity_id": organization.entity_id,
+            "participant_entity_id": person.entity_id,
+            "project_display_name": "Wire Person on Wire Works",
+            "role_basis_code": "source_verified",
+            "stakeholder_side_code": "design",
+            "stakeholder_class_code": "core",
+            "relationship_status_code": "active",
+            "idempotency_key": "wire-entity-participations-create-0001",
+        },
+        Capability.ENTITIES_PARTICIPATIONS_REVISE: {
+            "participation_id": families["participation-revise"],
+            "expected_version": 1,
+            "project_entity_id": organization.entity_id,
+            "participant_entity_id": person.entity_id,
+            "project_display_name": "Wire Person, corrected",
+            "role_basis_code": "contractual",
+            "stakeholder_side_code": "consultant",
+            "stakeholder_class_code": "core",
+            "relationship_status_code": "active",
+            "idempotency_key": "wire-entity-participations-revise-0001",
+        },
+        Capability.ENTITIES_PARTICIPATIONS_END: {
+            "participation_id": families["participation-end"],
+            "expected_version": 1,
+            "idempotency_key": "wire-entity-participations-end-0001",
+        },
+        Capability.ENTITIES_AFFILIATIONS_CREATE: {
+            "person_entity_id": person.entity_id,
+            "affiliation_type_code": "employment",
+            "idempotency_key": "wire-entity-affiliations-create-0001",
+            "organization_entity_id": organization.entity_id,
+            "job_title": "Wire Engineer",
+        },
+        Capability.ENTITIES_AFFILIATIONS_REVISE: {
+            "affiliation_id": families["affiliation-revise"],
+            "expected_version": 1,
+            "person_entity_id": person.entity_id,
+            "affiliation_type_code": "employment",
+            "organization_entity_id": organization.entity_id,
+            "idempotency_key": "wire-entity-affiliations-revise-0001",
+            "job_title": "Wire Principal, corrected",
+        },
+        Capability.ENTITIES_AFFILIATIONS_END: {
+            "affiliation_id": families["affiliation-end"],
+            "expected_version": 1,
+            "idempotency_key": "wire-entity-affiliations-end-0001",
+        },
         # A name no staged entity carries, so duplicate resolution admits it.
         Capability.ENTITIES_CREATE: {
             "entity_type": "person",
@@ -999,6 +1144,197 @@ def staged_write_subjects(marked: Scene) -> dict[str, tuple[str, str, str]]:
     return staged
 
 
+#: One staged child record per `RI-ENT-WP-11` verb that operates on an existing
+#: one, keyed by the verb that names it.
+#:
+#: **10 of the 15 `RI-ENT-WP-11` capabilities answered `404`, because nothing
+#: staged a row for them to name.** The payload table minted these identifiers
+#: on the assumption written
+#: beside them, that "these tests never reach the handler that would look one
+#: up". That is true of the identifier and alias verbs the sentence was written
+#: for, whose payloads carry an id the authority path rejects before any read,
+#: and it is false of every verb `RI-ENT-WP-11` added: a correction routes
+#: through `EntityRecordFamilyService.correct_*`, which reads the predecessor
+#: before it writes, and a retirement transitions a row it must first find. A
+#: minted identifier names no row, the repository refused the scope, and the
+#: wire answered `404` where this file asserts `200`. The status vector said so
+#: precisely -- `404, 404, 200` five times over, one triple per family, with the
+#: `add`/`create` verb passing because it alone reads nothing.
+#:
+#: **One row per verb, not one per family**, for the reason `_WRITE_SUBJECTS`
+#: gives above and the four staged memories and two staged edges give below: a
+#: correction takes its row to version two, so a correction and a retirement
+#: naming one row would leave whichever the sweep sent second meeting a stale
+#: expectation and answering `409`. A row apiece keeps each request independent
+#: of the order the payload table happens to be in.
+#:
+#: Values carry no marker and no `parity` token, on the same argument the write
+#: subjects above are named that way: `entities.search` queries that word, and a
+#: staged row that matched would put this staging into an answer nobody asked it
+#: about.
+_FAMILY_ROWS: Final[tuple[str, ...]] = (
+    "name-supersede",
+    "name-retire",
+    "address-revise",
+    "address-retire",
+    "communication-revise",
+    "communication-retire",
+    "participation-revise",
+    "participation-end",
+    "affiliation-revise",
+    "affiliation-end",
+)
+
+
+def staged_record_family_rows(
+    marked: Scene, person: Entity, organization: Entity
+) -> dict[str, str]:
+    """One active child record per correction and retirement verb, at version 1.
+
+    Returns the id of each, keyed by `_FAMILY_ROWS`. Every row is left
+    `is_preferred=False`: a preferred row is correctable and this file is not
+    the place to prove that, and leaving the slot empty keeps the staging out of
+    an argument it has no stake in.
+
+    Normalized values come from the production normalizers rather than from a
+    `casefold()` here. Each of the three families validates its own stored form
+    in `__post_init__` -- a communication value against
+    `is_normalized_communication_value`, an address against a recomputation of
+    `normalize_address` -- and a hand-rolled value that happened to satisfy one
+    of them would not survive the next rule change. The first draft of this
+    helper used `casefold()` and every phone number in it was refused.
+    """
+    principal_id = marked.principal.principal_id
+    entities = FakeUnitOfWork(marked.world).entities
+    staged: dict[str, str] = {}
+
+    def _mint(key: str, kind: IdKind) -> str:
+        staged[key] = issue_identifier(kind)
+        return staged[key]
+
+    # Typed names. The superseded row is `operating` rather than `legal` so that
+    # it does not stand as a second active legal name beside the one
+    # `entities.names.add` records in the same sweep; the payload's successor
+    # names the same type, which is what a correction of a name ordinarily does.
+    entities.record_entity_name(
+        principal_id,
+        EntityName(
+            entity_name_id=_mint("name-supersede", IdKind.ENTITY_NAME),
+            entity_id=person.entity_id,
+            principal_id=principal_id,
+            name_type_code=NameTypeCode.OPERATING,
+            display_value="Wire Operating Name",
+            normalized_value=normalize_name("Wire Operating Name"),
+            updated_at=_WHEN,
+        ),
+    )
+    entities.record_entity_name(
+        principal_id,
+        EntityName(
+            entity_name_id=_mint("name-retire", IdKind.ENTITY_NAME),
+            entity_id=person.entity_id,
+            principal_id=principal_id,
+            name_type_code=NameTypeCode.BRAND,
+            display_value="Wire Brand Name",
+            normalized_value=normalize_name("Wire Brand Name"),
+            updated_at=_WHEN,
+        ),
+    )
+
+    for key, type_code, raw in (
+        ("address-revise", AddressTypeCode.BUSINESS, "3 Wire Way"),
+        ("address-retire", AddressTypeCode.MAILING, "4 Wire Way"),
+    ):
+        entities.record_entity_address(
+            principal_id,
+            EntityAddress(
+                entity_address_id=_mint(key, IdKind.ENTITY_ADDRESS),
+                entity_id=person.entity_id,
+                principal_id=principal_id,
+                address_type_code=type_code,
+                raw_value=raw,
+                normalized_address_value=normalize_address(
+                    line1=None,
+                    line2=None,
+                    city=None,
+                    region=None,
+                    postal_code=None,
+                    country=None,
+                    raw_value=raw,
+                ),
+                updated_at=_WHEN,
+            ),
+        )
+
+    for key, method, usage, value in (
+        (
+            "communication-revise",
+            CommunicationMethodTypeCode.EMAIL,
+            CommunicationUsageContextCode.CORPORATE,
+            "wire.staged@example.test",
+        ),
+        (
+            "communication-retire",
+            CommunicationMethodTypeCode.PHONE,
+            CommunicationUsageContextCode.OFFICE,
+            "+15550000001",
+        ),
+    ):
+        entities.record_communication_method(
+            principal_id,
+            EntityCommunicationMethod(
+                communication_method_id=_mint(key, IdKind.ENTITY_COMMUNICATION_METHOD),
+                entity_id=person.entity_id,
+                principal_id=principal_id,
+                method_type_code=method,
+                usage_context_code=usage,
+                normalized_value=normalize_communication_value(method, value),
+                display_value=value,
+                updated_at=_WHEN,
+            ),
+        )
+
+    for key, name in (
+        ("participation-revise", "Wire Person on Wire Works, staged"),
+        ("participation-end", "Wire Person on Wire Works, ending"),
+    ):
+        entities.record_project_participation(
+            principal_id,
+            EntityProjectParticipation(
+                participation_id=_mint(key, IdKind.ENTITY_PROJECT_PARTICIPATION),
+                principal_id=principal_id,
+                project_entity_id=organization.entity_id,
+                participant_entity_id=person.entity_id,
+                project_display_name=name,
+                role_basis_code=RoleBasisCode.SOURCE_VERIFIED,
+                stakeholder_side_code=StakeholderSideCode.DESIGN,
+                stakeholder_class_code=StakeholderClassCode.CORE,
+                relationship_status_code=ParticipationStatusCode.ACTIVE,
+                updated_at=_WHEN,
+            ),
+        )
+
+    for key, title in (
+        ("affiliation-revise", "Wire Engineer, staged"),
+        ("affiliation-end", "Wire Engineer, ending"),
+    ):
+        entities.record_person_organization_affiliation(
+            principal_id,
+            PersonOrganizationAffiliation(
+                affiliation_id=_mint(key, IdKind.PERSON_ORGANIZATION_AFFILIATION),
+                principal_id=principal_id,
+                person_entity_id=person.entity_id,
+                affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+                organization_entity_id=organization.entity_id,
+                job_title=title,
+                updated_at=_WHEN,
+            ),
+        )
+
+    assert set(staged) == set(_FAMILY_ROWS)
+    return staged
+
+
 def staged_record(marked: Scene) -> KnowledgeRecord:
     record = KnowledgeRecord(
         knowledge_id=issue_identifier(IdKind.KNOWLEDGE),
@@ -1198,6 +1534,33 @@ SCOPED_CAPABILITIES = [
         # `domain.policy.decision._SCOPELESS`.
         Capability.ENTITIES_IDENTIFIERS_LIST,
         Capability.ENTITIES_ALIASES_LIST,
+        # `RI-ENT-WP-10`'s five record-family reads join them: a typed name, an
+        # address, a communication method, a participation and an affiliation
+        # belong to no `src_…` and no `enr_…` either. All five sit in
+        # `domain.policy.decision._SCOPELESS`.
+        Capability.ENTITIES_PROFILE,
+        Capability.ENTITIES_NAMES_LIST,
+        Capability.ENTITIES_ADDRESSES_LIST,
+        Capability.ENTITIES_COMMUNICATION_LIST,
+        Capability.ENTITIES_PARTICIPATIONS_LIST,
+        # `RI-ENT-WP-11`'s record-family writes join them on the identical
+        # argument, unchanged by the fact that they write: the row a recorded
+        # name is written into belongs to no `src_…` and no `enr_…` either.
+        Capability.ENTITIES_NAMES_ADD,
+        Capability.ENTITIES_NAMES_SUPERSEDE,
+        Capability.ENTITIES_NAMES_RETIRE,
+        Capability.ENTITIES_ADDRESSES_ADD,
+        Capability.ENTITIES_ADDRESSES_REVISE,
+        Capability.ENTITIES_ADDRESSES_RETIRE,
+        Capability.ENTITIES_COMMUNICATION_ADD,
+        Capability.ENTITIES_COMMUNICATION_REVISE,
+        Capability.ENTITIES_COMMUNICATION_RETIRE,
+        Capability.ENTITIES_PARTICIPATIONS_CREATE,
+        Capability.ENTITIES_PARTICIPATIONS_REVISE,
+        Capability.ENTITIES_PARTICIPATIONS_END,
+        Capability.ENTITIES_AFFILIATIONS_CREATE,
+        Capability.ENTITIES_AFFILIATIONS_REVISE,
+        Capability.ENTITIES_AFFILIATIONS_END,
         Capability.ENTITIES_CREATE,
         Capability.ENTITIES_UPDATE,
         Capability.ENTITIES_ARCHIVE,
@@ -1467,6 +1830,31 @@ ENTITY_DIRECTED_EXEMPTION = frozenset(
 #: here.
 PHASE_B_PROPOSAL_EXEMPTION = frozenset({Capability.ENTITIES_PROPOSALS_CREATE})
 
+#: The record-family exemption (`RI-ENT-WP-11`), and it is deliberately the pair
+#: of `create` names, the way `ENTITY_DIRECTED_EXEMPTION` is.
+#: `entities.participations.create` and `entities.affiliations.create` are the
+#: only two of `RI-ENT-WP-11`'s fifteen record-family names the substring proxy
+#: refuses, and they are refused for the reason `capture.create`,
+#: `documents.create`, `relationship_memory.create` and the two directed
+#: `create` names are: a project participation and a person-organization
+#: affiliation are *product-owned* records under `ADR-003` -- the Principal's
+#: own statement about the Principal's own entities -- and writing one mutates
+#: no source. Their rows carry no `source_id`, and the plane reaches no
+#: `SourceProvider` at all.
+#:
+#: An extension of the registry the rule reads and not a relaxation of the rule.
+#: The other thirteen record-family names -- every `add`, `revise`, `retire` and
+#: `end` -- pass the name check unaided, which is the check working rather than
+#: an omission, and a future `entities.participations.delete` is still caught
+#: here. The property the proxy stands for is carried behaviourally for this
+#: plane by the recording-provider sweep, exactly as it is for `capture.*`.
+ENTITY_RECORD_FAMILY_EXEMPTION = frozenset(
+    {
+        Capability.ENTITIES_PARTICIPATIONS_CREATE,
+        Capability.ENTITIES_AFFILIATIONS_CREATE,
+    }
+)
+
 
 def test_the_transport_routes_no_mutating_capability() -> None:
     """One route, one method, and no name that mutates a *source*.
@@ -1508,6 +1896,7 @@ def test_the_transport_routes_no_mutating_capability() -> None:
         | ENTITY_AUTHORING_EXEMPTION
         | ENTITY_DIRECTED_EXEMPTION
         | PHASE_B_PROPOSAL_EXEMPTION
+        | ENTITY_RECORD_FAMILY_EXEMPTION
     )
     checked = [c for c in _BUILDERS if c not in exempt]
     assert len(checked) == len(Capability) - len(exempt)

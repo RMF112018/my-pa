@@ -29,23 +29,35 @@ import pytest
 from tests.conftest import FakeUnitOfWork, Scene, build_service, metadata_for
 
 from my_pa.application.commands import (
+    AddEntityAddress,
     AddEntityAlias,
+    AddEntityCommunicationMethod,
+    AddEntityName,
     ArchiveEntity,
     BindEntityIdentifier,
     CreateEntity,
+    CreateEntityAffiliation,
     CreateEntityAssignment,
+    CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
+    EndEntityAffiliation,
     EndEntityAssignment,
+    EndEntityParticipation,
     EndEntityRelationship,
     GetEntity,
     GetEntityContext,
     GetEntityIdentityHistory,
+    GetEntityProfile,
     GetEntityRelationships,
+    ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
+    ListEntityCommunicationMethods,
     ListEntityIdentifiers,
+    ListEntityNames,
     ListEntityObservations,
+    ListEntityParticipations,
     ListUnresolvedMentions,
     MergeEntities,
     ObserveEntityMention,
@@ -54,14 +66,22 @@ from my_pa.application.commands import (
     ResolveEntity,
     ResolveUnresolvedMention,
     RestoreEntity,
+    RetireEntityAddress,
     RetireEntityAlias,
+    RetireEntityCommunicationMethod,
     RetireEntityIdentifier,
+    RetireEntityName,
+    ReviseEntityAddress,
+    ReviseEntityAffiliation,
     ReviseEntityAssignment,
+    ReviseEntityCommunicationMethod,
+    ReviseEntityParticipation,
     ReviseEntityRelationship,
     SearchEntities,
     SplitEntity,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
+    SupersedeEntityName,
     UpdateEntity,
 )
 from my_pa.application.errors import SafeDetail
@@ -78,9 +98,13 @@ from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.relationship.authoring import CallerNamespace
 from my_pa.domain.relationship.entity import (
+    AddressTypeCode,
+    AffiliationTypeCode,
     AliasType,
     Assignment,
     AssignmentType,
+    CommunicationMethodTypeCode,
+    CommunicationUsageContextCode,
     Entity,
     EntityAlias,
     EntityRelationship,
@@ -89,6 +113,11 @@ from my_pa.domain.relationship.entity import (
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
+    NameTypeCode,
+    ParticipationStatusCode,
+    RoleBasisCode,
+    StakeholderClassCode,
+    StakeholderSideCode,
 )
 from my_pa.domain.relationship.governance import (
     EntityMergeRecord,
@@ -126,6 +155,14 @@ FOREIGN_IDENTIFIER: Final = "xid_foreign01foreign1"
 #: proves less than a refusal for something that exists in another partition.
 FOREIGN_ASSIGNMENT: Final = "asn_foreign01foreign1"
 FOREIGN_RELATIONSHIP: Final = "erel_foreign1foreign1"
+#: `RI-ENT-WP-11`'s record-family rows in the other Principal's partition. Named
+#: here for the reason the two above are: a refusal for something absent proves
+#: less than a refusal for a row that exists and is not mine.
+FOREIGN_ENTITY_NAME: Final = "enam_foreign1foreign1"
+FOREIGN_ENTITY_ADDRESS: Final = "eadr_foreign1foreign1"
+FOREIGN_COMMUNICATION_METHOD: Final = "ecmm_foreign1foreign"
+FOREIGN_PARTICIPATION: Final = "eppt_foreign1foreign"
+FOREIGN_AFFILIATION: Final = "poaf_foreign1foreign"
 OWN_ENTITY: Final = "ent_mine0002mine00002"
 #: A second entity of my own, so a write of mine that has to name two of them
 #: does not have to borrow one of theirs.
@@ -311,6 +348,178 @@ _EVERY_CAPABILITY: Final = (
     # trying to rename it.
     (Capability.ENTITIES_IDENTIFIERS_LIST, ListEntityIdentifiers(entity_id=FOREIGN_ENTITY)),
     (Capability.ENTITIES_ALIASES_LIST, ListEntityAliases(entity_id=FOREIGN_ENTITY)),
+    # `RI-ENT-WP-10`'s five record-family reads, aimed at the other Principal's
+    # entity like every entry here. These are the sharpest reads on the plane
+    # for this claim: a typed name, an address and a communication method are
+    # exactly the contact details a caller must not be able to confirm about a
+    # stranger by naming their identifier.
+    (Capability.ENTITIES_PROFILE, GetEntityProfile(entity_id=FOREIGN_ENTITY)),
+    (Capability.ENTITIES_NAMES_LIST, ListEntityNames(entity_id=FOREIGN_ENTITY)),
+    (Capability.ENTITIES_ADDRESSES_LIST, ListEntityAddresses(entity_id=FOREIGN_ENTITY)),
+    (
+        Capability.ENTITIES_COMMUNICATION_LIST,
+        ListEntityCommunicationMethods(entity_id=FOREIGN_ENTITY),
+    ),
+    (
+        Capability.ENTITIES_PARTICIPATIONS_LIST,
+        ListEntityParticipations(entity_id=FOREIGN_ENTITY, perspective="participant"),
+    ),
+    # `RI-ENT-WP-11`'s record-family writes, aimed at the other Principal's
+    # entity and at a name row in their partition. Sharper than the reads above
+    # for exactly the reason the authoring half is sharper than the read half: a
+    # plane that refused a foreign recorded name with anything but the answer an
+    # absent one gets would let a caller confirm a stranger's contact record by
+    # trying to correct it.
+    (
+        Capability.ENTITIES_NAMES_ADD,
+        AddEntityName(
+            entity_id=FOREIGN_ENTITY,
+            name_type_code=NameTypeCode.LEGAL,
+            display_value="Confidential Counterparty",
+            idempotency_key="privacy-entity-names-add",
+        ),
+    ),
+    (
+        Capability.ENTITIES_NAMES_SUPERSEDE,
+        SupersedeEntityName(
+            entity_name_id=FOREIGN_ENTITY_NAME,
+            expected_version=1,
+            entity_id=FOREIGN_ENTITY,
+            name_type_code=NameTypeCode.LEGAL,
+            display_value="Confidential Counterparty",
+            idempotency_key="privacy-entity-names-supersede",
+        ),
+    ),
+    (
+        Capability.ENTITIES_NAMES_RETIRE,
+        RetireEntityName(
+            entity_name_id=FOREIGN_ENTITY_NAME,
+            expected_version=1,
+            idempotency_key="privacy-entity-names-retire",
+        ),
+    ),
+    (
+        Capability.ENTITIES_ADDRESSES_ADD,
+        AddEntityAddress(
+            entity_id=FOREIGN_ENTITY,
+            address_type_code=AddressTypeCode.BUSINESS,
+            raw_value="1 Confidential Way",
+            idempotency_key="privacy-entity-addresses-add",
+        ),
+    ),
+    (
+        Capability.ENTITIES_ADDRESSES_REVISE,
+        ReviseEntityAddress(
+            entity_address_id=FOREIGN_ENTITY_ADDRESS,
+            expected_version=1,
+            entity_id=FOREIGN_ENTITY,
+            address_type_code=AddressTypeCode.BUSINESS,
+            raw_value="2 Confidential Way",
+            idempotency_key="privacy-entity-addresses-revise",
+        ),
+    ),
+    (
+        Capability.ENTITIES_ADDRESSES_RETIRE,
+        RetireEntityAddress(
+            entity_address_id=FOREIGN_ENTITY_ADDRESS,
+            expected_version=1,
+            idempotency_key="privacy-entity-addresses-retire",
+        ),
+    ),
+    (
+        Capability.ENTITIES_COMMUNICATION_ADD,
+        AddEntityCommunicationMethod(
+            entity_id=FOREIGN_ENTITY,
+            method_type_code=CommunicationMethodTypeCode.EMAIL,
+            usage_context_code=CommunicationUsageContextCode.CORPORATE,
+            display_value="confidential@example.test",
+            idempotency_key="privacy-entity-communication-add",
+        ),
+    ),
+    (
+        Capability.ENTITIES_COMMUNICATION_REVISE,
+        ReviseEntityCommunicationMethod(
+            communication_method_id=FOREIGN_COMMUNICATION_METHOD,
+            expected_version=1,
+            entity_id=FOREIGN_ENTITY,
+            method_type_code=CommunicationMethodTypeCode.EMAIL,
+            usage_context_code=CommunicationUsageContextCode.CORPORATE,
+            display_value="confidential.corrected@example.test",
+            idempotency_key="privacy-entity-communication-revise",
+        ),
+    ),
+    (
+        Capability.ENTITIES_COMMUNICATION_RETIRE,
+        RetireEntityCommunicationMethod(
+            communication_method_id=FOREIGN_COMMUNICATION_METHOD,
+            expected_version=1,
+            idempotency_key="privacy-entity-communication-retire",
+        ),
+    ),
+    (
+        Capability.ENTITIES_PARTICIPATIONS_CREATE,
+        CreateEntityParticipation(
+            project_entity_id=FOREIGN_ENTITY,
+            participant_entity_id=FOREIGN_SCOPE,
+            project_display_name="Confidential Participant",
+            role_basis_code=RoleBasisCode.CONTRACTUAL,
+            stakeholder_side_code=StakeholderSideCode.DESIGN,
+            stakeholder_class_code=StakeholderClassCode.CORE,
+            relationship_status_code=ParticipationStatusCode.ACTIVE,
+            idempotency_key="privacy-entity-participations-create",
+        ),
+    ),
+    (
+        Capability.ENTITIES_PARTICIPATIONS_REVISE,
+        ReviseEntityParticipation(
+            participation_id=FOREIGN_PARTICIPATION,
+            expected_version=1,
+            project_entity_id=FOREIGN_ENTITY,
+            participant_entity_id=FOREIGN_SCOPE,
+            project_display_name="Confidential Participant, corrected",
+            role_basis_code=RoleBasisCode.CONTRACTUAL,
+            stakeholder_side_code=StakeholderSideCode.DESIGN,
+            stakeholder_class_code=StakeholderClassCode.CORE,
+            relationship_status_code=ParticipationStatusCode.ACTIVE,
+            idempotency_key="privacy-entity-participations-revise",
+        ),
+    ),
+    (
+        Capability.ENTITIES_PARTICIPATIONS_END,
+        EndEntityParticipation(
+            participation_id=FOREIGN_PARTICIPATION,
+            expected_version=1,
+            idempotency_key="privacy-entity-participations-end",
+        ),
+    ),
+    (
+        Capability.ENTITIES_AFFILIATIONS_CREATE,
+        CreateEntityAffiliation(
+            person_entity_id=FOREIGN_ENTITY,
+            affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+            idempotency_key="privacy-entity-affiliations-create",
+            organization_entity_id=FOREIGN_SCOPE,
+        ),
+    ),
+    (
+        Capability.ENTITIES_AFFILIATIONS_REVISE,
+        ReviseEntityAffiliation(
+            affiliation_id=FOREIGN_AFFILIATION,
+            expected_version=1,
+            person_entity_id=FOREIGN_ENTITY,
+            affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+            organization_entity_id=FOREIGN_SCOPE,
+            idempotency_key="privacy-entity-affiliations-revise",
+        ),
+    ),
+    (
+        Capability.ENTITIES_AFFILIATIONS_END,
+        EndEntityAffiliation(
+            affiliation_id=FOREIGN_AFFILIATION,
+            expected_version=1,
+            idempotency_key="privacy-entity-affiliations-end",
+        ),
+    ),
     (
         Capability.ENTITIES_CREATE,
         CreateEntity(
@@ -589,10 +798,10 @@ def test_this_file_exercises_every_capability_on_the_plane() -> None:
     """
     served = {capability for capability in Capability if capability.value.startswith("entities.")}
     assert {capability for capability, _ in _EVERY_CAPABILITY} == served
-    # Thirty-four after RI final completion. The count is asserted as
-    # well as the set, because a prefix scan that stopped matching would satisfy
-    # the equality against an equally empty tuple.
-    assert len(served) == 34
+    # Fifty-four after `RI-ENT-WP-11`'s five record families. The count
+    # is asserted as well as the set, because a prefix scan that stopped matching
+    # would satisfy the equality against an equally empty tuple.
+    assert len(served) == 54
 
 
 # --- the partition, under every capability ---------------------------------

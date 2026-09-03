@@ -58,7 +58,10 @@ from types import MappingProxyType
 from typing import Any, Final
 
 from my_pa.application.commands import (
+    AddEntityAddress,
     AddEntityAlias,
+    AddEntityCommunicationMethod,
+    AddEntityName,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
@@ -72,7 +75,9 @@ from my_pa.application.commands import (
     CreateCapture,
     CreateCommitment,
     CreateEntity,
+    CreateEntityAffiliation,
     CreateEntityAssignment,
+    CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
     CreateManagedDocument,
@@ -81,7 +86,9 @@ from my_pa.application.commands import (
     CreateSituation,
     CreateTask,
     DecideReviewCase,
+    EndEntityAffiliation,
     EndEntityAssignment,
+    EndEntityParticipation,
     EndEntityRelationship,
     EnrollSource,
     FetchSource,
@@ -91,6 +98,7 @@ from my_pa.application.commands import (
     GetEntity,
     GetEntityContext,
     GetEntityIdentityHistory,
+    GetEntityProfile,
     GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
@@ -104,10 +112,14 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
+    ListEntityCommunicationMethods,
     ListEntityIdentifiers,
+    ListEntityNames,
     ListEntityObservations,
+    ListEntityParticipations,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
@@ -139,11 +151,18 @@ from my_pa.application.commands import (
     RestoreEntity,
     RestoreManagedDocument,
     RestoreRelationshipMemory,
+    RetireEntityAddress,
     RetireEntityAlias,
+    RetireEntityCommunicationMethod,
     RetireEntityIdentifier,
+    RetireEntityName,
     RevealSubject,
     ReviseCapture,
+    ReviseEntityAddress,
+    ReviseEntityAffiliation,
     ReviseEntityAssignment,
+    ReviseEntityCommunicationMethod,
+    ReviseEntityParticipation,
     ReviseEntityRelationship,
     ReviseManagedDocument,
     ReviseRelationshipMemory,
@@ -159,6 +178,7 @@ from my_pa.application.commands import (
     SubmitGoodNotesProposal,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
+    SupersedeEntityName,
     TransitionTask,
     UpdateCommitment,
     UpdateEntity,
@@ -189,14 +209,24 @@ from my_pa.domain.intelligence.catalog import (
 )
 from my_pa.domain.relationship.authoring import CallerNamespace
 from my_pa.domain.relationship.entity import (
+    AddressTypeCode,
+    AffiliationTypeCode,
     AliasState,
     AliasType,
     AssignmentType,
+    CommunicationMethodTypeCode,
+    CommunicationUsageContextCode,
+    CommunicationVerificationStatusCode,
     EntityRelationshipType,
     EntityStatus,
     EntityType,
     ExternalIdentifierNamespace,
     IdentifierState,
+    NameTypeCode,
+    ParticipationStatusCode,
+    RoleBasisCode,
+    StakeholderClassCode,
+    StakeholderSideCode,
 )
 from my_pa.domain.relationship.governance import (
     ObservationAuthority,
@@ -1167,6 +1197,160 @@ def _list_entity_aliases(payload: Mapping[str, Any]) -> Command:
     return ListEntityAliases(**_entity_vocabulary(dict(payload), AliasState))
 
 
+# RI-ENT-WP-10's five reads take no closed-vocabulary field and no moment, so
+# each is the plain constructor: there is no shape JSON cannot carry in any of
+# them. `perspective` arrives as the string it is and the command refuses a
+# spelling it does not know, rather than this module converting it -- which is
+# the rule stated above `_entity_vocabulary`: conversion happens here, and
+# *validation* stays where the command states it once.
+
+
+def _get_entity_profile(payload: Mapping[str, Any]) -> Command:
+    return GetEntityProfile(**payload)
+
+
+def _list_entity_names(payload: Mapping[str, Any]) -> Command:
+    return ListEntityNames(**payload)
+
+
+def _list_entity_addresses(payload: Mapping[str, Any]) -> Command:
+    return ListEntityAddresses(**payload)
+
+
+def _list_entity_communication_methods(payload: Mapping[str, Any]) -> Command:
+    return ListEntityCommunicationMethods(**payload)
+
+
+def _list_entity_participations(payload: Mapping[str, Any]) -> Command:
+    return ListEntityParticipations(**payload)
+
+
+#: The record-family times a caller may supply (`RI-ENT-WP-11`). Separate from
+#: `_DIRECTED_MOMENTS` for the reason that mapping is separate from
+#: `_CAPTURE_MOMENTS`: the planes carry different fields, and one shared mapping
+#: would convert a key on a command that has no such field.
+_RECORD_FAMILY_MOMENTS: Mapping[str, SafeDetail] = MappingProxyType(
+    {
+        "effective_from": SafeDetail.EFFECTIVE_FROM,
+        "effective_to": SafeDetail.EFFECTIVE_TO,
+    }
+)
+
+#: Which closed vocabulary each record-family field is written in, by field
+#: name. One mapping across all five families rather than one per family,
+#: because every field name here is unique to its family -- `name_type_code`
+#: belongs to names and to nothing else -- so a shared table cannot convert a
+#: key on a command that does not declare it.
+_RECORD_FAMILY_VOCABULARIES: Mapping[str, type[StrEnum]] = MappingProxyType(
+    {
+        "name_type_code": NameTypeCode,
+        "address_type_code": AddressTypeCode,
+        "method_type_code": CommunicationMethodTypeCode,
+        "usage_context_code": CommunicationUsageContextCode,
+        "verification_status_code": CommunicationVerificationStatusCode,
+        "role_basis_code": RoleBasisCode,
+        "stakeholder_side_code": StakeholderSideCode,
+        "stakeholder_class_code": StakeholderClassCode,
+        "relationship_status_code": ParticipationStatusCode,
+        "affiliation_type_code": AffiliationTypeCode,
+    }
+)
+
+
+def _record_family_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """One record-family write payload, in the shapes the command declares.
+
+    Shape conversion only, on `_directed_payload`'s terms: JSON has no datetime
+    and no enum. A value outside a closed vocabulary is left exactly as it
+    arrived so the command reports it under its own field name, which is the
+    rule `_memory_vocabulary` states and for the same reason -- refusing here
+    would report the wrong field for a payload that got two things wrong.
+    """
+    converted = dict(payload)
+    for name, detail in _RECORD_FAMILY_MOMENTS.items():
+        supplied = converted.get(name)
+        if supplied is None:
+            continue
+        if not isinstance(supplied, str):
+            raise InvalidRequestError(detail)
+        try:
+            converted[name] = datetime.fromisoformat(supplied)
+        except ValueError:
+            pass
+        else:
+            continue
+        # Outside the handler: the original renders the rejected value.
+        raise InvalidRequestError(detail)
+    for name, vocabulary in _RECORD_FAMILY_VOCABULARIES.items():
+        value = converted.get(name)
+        if isinstance(value, str):
+            try:
+                converted[name] = vocabulary(value)
+            except ValueError:
+                continue
+    return converted
+
+
+def _add_entity_name(payload: Mapping[str, Any]) -> Command:
+    return AddEntityName(**_record_family_payload(payload))
+
+
+def _supersede_entity_name(payload: Mapping[str, Any]) -> Command:
+    return SupersedeEntityName(**_record_family_payload(payload))
+
+
+def _retire_entity_name(payload: Mapping[str, Any]) -> Command:
+    return RetireEntityName(**_record_family_payload(payload))
+
+
+def _add_entity_address(payload: Mapping[str, Any]) -> Command:
+    return AddEntityAddress(**_record_family_payload(payload))
+
+
+def _revise_entity_address(payload: Mapping[str, Any]) -> Command:
+    return ReviseEntityAddress(**_record_family_payload(payload))
+
+
+def _retire_entity_address(payload: Mapping[str, Any]) -> Command:
+    return RetireEntityAddress(**_record_family_payload(payload))
+
+
+def _add_entity_communication_method(payload: Mapping[str, Any]) -> Command:
+    return AddEntityCommunicationMethod(**_record_family_payload(payload))
+
+
+def _revise_entity_communication_method(payload: Mapping[str, Any]) -> Command:
+    return ReviseEntityCommunicationMethod(**_record_family_payload(payload))
+
+
+def _retire_entity_communication_method(payload: Mapping[str, Any]) -> Command:
+    return RetireEntityCommunicationMethod(**_record_family_payload(payload))
+
+
+def _create_entity_participation(payload: Mapping[str, Any]) -> Command:
+    return CreateEntityParticipation(**_record_family_payload(payload))
+
+
+def _revise_entity_participation(payload: Mapping[str, Any]) -> Command:
+    return ReviseEntityParticipation(**_record_family_payload(payload))
+
+
+def _end_entity_participation(payload: Mapping[str, Any]) -> Command:
+    return EndEntityParticipation(**_record_family_payload(payload))
+
+
+def _create_entity_affiliation(payload: Mapping[str, Any]) -> Command:
+    return CreateEntityAffiliation(**_record_family_payload(payload))
+
+
+def _revise_entity_affiliation(payload: Mapping[str, Any]) -> Command:
+    return ReviseEntityAffiliation(**_record_family_payload(payload))
+
+
+def _end_entity_affiliation(payload: Mapping[str, Any]) -> Command:
+    return EndEntityAffiliation(**_record_family_payload(payload))
+
+
 def _create_entity(payload: Mapping[str, Any]) -> Command:
     return CreateEntity(**_entity_vocabulary(dict(payload)))
 
@@ -1636,6 +1820,26 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.ENTITIES_UNRESOLVED_MENTIONS: _list_unresolved_mentions,
         Capability.ENTITIES_IDENTIFIERS_LIST: _list_entity_identifiers,
         Capability.ENTITIES_ALIASES_LIST: _list_entity_aliases,
+        Capability.ENTITIES_PROFILE: _get_entity_profile,
+        Capability.ENTITIES_NAMES_LIST: _list_entity_names,
+        Capability.ENTITIES_ADDRESSES_LIST: _list_entity_addresses,
+        Capability.ENTITIES_COMMUNICATION_LIST: _list_entity_communication_methods,
+        Capability.ENTITIES_PARTICIPATIONS_LIST: _list_entity_participations,
+        Capability.ENTITIES_NAMES_ADD: _add_entity_name,
+        Capability.ENTITIES_NAMES_SUPERSEDE: _supersede_entity_name,
+        Capability.ENTITIES_NAMES_RETIRE: _retire_entity_name,
+        Capability.ENTITIES_ADDRESSES_ADD: _add_entity_address,
+        Capability.ENTITIES_ADDRESSES_REVISE: _revise_entity_address,
+        Capability.ENTITIES_ADDRESSES_RETIRE: _retire_entity_address,
+        Capability.ENTITIES_COMMUNICATION_ADD: _add_entity_communication_method,
+        Capability.ENTITIES_COMMUNICATION_REVISE: _revise_entity_communication_method,
+        Capability.ENTITIES_COMMUNICATION_RETIRE: _retire_entity_communication_method,
+        Capability.ENTITIES_PARTICIPATIONS_CREATE: _create_entity_participation,
+        Capability.ENTITIES_PARTICIPATIONS_REVISE: _revise_entity_participation,
+        Capability.ENTITIES_PARTICIPATIONS_END: _end_entity_participation,
+        Capability.ENTITIES_AFFILIATIONS_CREATE: _create_entity_affiliation,
+        Capability.ENTITIES_AFFILIATIONS_REVISE: _revise_entity_affiliation,
+        Capability.ENTITIES_AFFILIATIONS_END: _end_entity_affiliation,
         Capability.ENTITIES_CREATE: _create_entity,
         Capability.ENTITIES_UPDATE: _update_entity,
         Capability.ENTITIES_ARCHIVE: _archive_entity,
@@ -1680,7 +1884,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a value outside
-    the 104 canonical names refers to nothing.
+    the 124 canonical names refers to nothing.
     """
     try:
         return Capability(capability)

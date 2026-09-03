@@ -737,8 +737,16 @@ def _declared_frozen(module: ModuleType) -> dict[str, str]:
 def test_the_chain_is_readable_and_non_empty() -> None:
     """Guards every other test here: an empty chain would make them all vacuous."""
     revisions = list(_revisions())
-    assert len(revisions) == 87
-    assert len({revision for revision, _ in revisions}) == 87
+    # Eighty-eight, counted on the merged tree. Both branches corrected this from
+    # eighty-five to eighty-seven from the same baseline -- RI-ENT-WP-10/11 for
+    # `16f05c46b8c3`, which admitted the twenty new `entities.` capability names
+    # and the five new record families, and UI-IMP-WP02 for `2c00c9ac64bc`, which
+    # added the WebAuthn and auth-session tables -- and neither figure is true of
+    # a tree carrying both revisions, so this one is counted rather than picked
+    # (RULING-M2). This is a derived fact about the tree; the deny rule, the
+    # allowlist and the freeze ledger are untouched.
+    assert len(revisions) == 88
+    assert len({revision for revision, _ in revisions}) == 88
     assert {
         "9c6b4a18ed72",
         "1a4c9e77b2d5",

@@ -121,6 +121,15 @@ def test_the_names_this_file_is_about_are_the_family() -> None:
         "entities.resolve",
         "entities.search",
         "entities.unresolved_mentions",
+        # `RI-ENT-WP-10`'s five. They read the six entity-bound record
+        # families and write none of them, so all five carry `entity_read`
+        # alone and land in this half. A sixth appearing in the write set
+        # below is what a purpose mis-mapping would look like from here.
+        "entities.profile",
+        "entities.names.list",
+        "entities.addresses.list",
+        "entities.communication.list",
+        "entities.participations.list",
     }
     assert set(ENTITY_WRITES) == {
         "entities.aliases.add",
@@ -149,6 +158,24 @@ def test_the_names_this_file_is_about_are_the_family() -> None:
         "entities.merge",
         "entities.split.preview",
         "entities.split",
+        # `RI-ENT-WP-11`'s record-family writes. Each carries `entity_authoring`
+        # alone, so all of them land in this half; one appearing in the read set
+        # above is what a purpose mis-mapping would look like from here.
+        "entities.names.add",
+        "entities.names.supersede",
+        "entities.names.retire",
+        "entities.addresses.add",
+        "entities.addresses.revise",
+        "entities.addresses.retire",
+        "entities.communication.add",
+        "entities.communication.revise",
+        "entities.communication.retire",
+        "entities.participations.create",
+        "entities.participations.revise",
+        "entities.participations.end",
+        "entities.affiliations.create",
+        "entities.affiliations.revise",
+        "entities.affiliations.end",
     }
     assert ENTITY_READS | ENTITY_WRITES == ENTITY_CAPABILITIES
 
@@ -207,7 +234,7 @@ def test_a_build_with_the_plane_withholds_every_write_until_writes_are_enabled()
 
     A remote client with `remote_writes_enabled` off can read who a person is
     and cannot decide it. The gate is the purpose mapping rather than a name
-    list, so this fails the moment one of the twenty-three is mapped to `entity_read`.
+    list, so this fails the moment one of the thirty-eight is mapped to `entity_read`.
     """
     withheld = remote_tool_names(_service(enabled=True), writes_enabled=False)
     assert withheld & ENTITY_WRITES == frozenset()

@@ -49,6 +49,7 @@ from my_pa.domain.relationship.entity import (
     AliasType,
     Assignment,
     Entity,
+    EntityAddress,
     EntityAlias,
     EntityCommunicationMethod,
     EntityCommunicationMethodState,
@@ -960,6 +961,52 @@ class _CorpusRepository(EntitiesRepository):
         after_alias_id: str | None = None,
     ) -> EntityChildPage[EntityAlias]:
         raise NotImplementedError("resolution reads aliases whole")
+
+    # RI-ENT-WP-10's four paged record-family reads. Resolution pages none of
+    # them -- it reads the collections it corroborates against whole, for the
+    # reason stated above `names` -- so each refuses on this class's own terms.
+    # Declared rather than inherited because the port makes them abstract.
+
+    def name_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        limit: int,
+        after_entity_name_id: str | None = None,
+    ) -> EntityChildPage[EntityName]:
+        raise NotImplementedError("resolution pages no name form")
+
+    def address_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        limit: int,
+        after_entity_address_id: str | None = None,
+    ) -> EntityChildPage[EntityAddress]:
+        raise NotImplementedError("resolution pages no address")
+
+    def communication_method_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        limit: int,
+        after_communication_method_id: str | None = None,
+    ) -> EntityChildPage[EntityCommunicationMethod]:
+        raise NotImplementedError("resolution pages no communication method")
+
+    def participation_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        perspective: str,
+        limit: int,
+        after_participation_id: str | None = None,
+    ) -> EntityChildPage[EntityProjectParticipation]:
+        raise NotImplementedError("resolution pages no project participation")
 
 
 def build_repository() -> EntitiesRepository:

@@ -310,6 +310,35 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     102: "One hundred two",
     103: "One hundred three",
     104: "One hundred and four",
+    # Extended at `RI-ENT-WP-10`, when the entity plane's five record-family
+    # reads took the public set past a hundred and four. The map is extended
+    # rather than the assertion relaxed, for the reason stated at the eighties:
+    # a figure this test cannot spell is a figure it cannot check.
+    105: "One hundred five",
+    106: "One hundred six",
+    107: "One hundred seven",
+    108: "One hundred eight",
+    109: "One hundred and nine",
+    # Extended at `RI-ENT-WP-11`, when the entity plane's record-family writes
+    # took the public set past a hundred and nine. Extended rather than the
+    # assertion relaxed, for the reason stated at the eighties and repeated at
+    # `RI-ENT-WP-10`: a figure this test cannot spell is a figure it cannot
+    # check.
+    110: "One hundred and ten",
+    111: "One hundred and eleven",
+    112: "One hundred and twelve",
+    113: "One hundred and thirteen",
+    114: "One hundred and fourteen",
+    115: "One hundred and fifteen",
+    116: "One hundred and sixteen",
+    117: "One hundred and seventeen",
+    118: "One hundred and eighteen",
+    119: "One hundred and nineteen",
+    120: "One hundred and twenty",
+    121: "One hundred and twenty-one",
+    122: "One hundred and twenty-two",
+    123: "One hundred and twenty-three",
+    124: "One hundred and twenty-four",
 }
 
 
@@ -432,20 +461,22 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
-    # composed by default. The combined surface therefore exposes fifty-five
-    # and withholds the same forty-six feature-gated names.
-    assert default == 55 and total == 104 and withheld == 49
+    # composed by default, and `RI-ENT-WP-10`'s five record-family reads arrived
+    # on the withheld side too, as do `RI-ENT-WP-11`'s record-family writes. The
+    # combined surface therefore still exposes fifty-five and withholds three
+    # more feature-gated names than after `RI-ENT-WP-10`.
+    assert default == 55 and total == 124 and withheld == 69
 
     readme = README.read_text(encoding="utf-8")
     assert f"{default} of the {total} capabilities are `available`" in readme
     assert f"`{withheld} of {total} capabilities are unwired.`" in readme
 
     system_context = SYSTEM_CONTEXT.read_text(encoding="utf-8").lower()
-    assert "one hundred and four capabilities" in system_context
+    assert "one hundred and twenty-four capabilities" in system_context
     assert "exposes fifty-five of them" in system_context
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
-    assert "one hundred and four capabilities" in module_boundaries
+    assert "one hundred and twenty-four capabilities" in module_boundaries
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:

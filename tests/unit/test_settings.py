@@ -646,7 +646,7 @@ def test_the_entity_plane_and_its_write_half_are_both_off_by_default() -> None:
 def test_the_write_switch_without_the_plane_refuses_to_start() -> None:
     """Fail closed, and closed in the direction that says what was meant.
 
-    The two alternatives were serving the writes anyway — eighteen identity
+    The two alternatives were serving the writes anyway — thirty-eight identity
     writes on a process whose operator turned the plane off — or ignoring the
     variable, which is the shape where an operator sets a switch, sees no error,
     and believes a surface is gated when it is not. The message names both

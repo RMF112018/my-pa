@@ -574,6 +574,126 @@
         },
         {
           "availability": "available",
+          "name": "entities.profile",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.names.list",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.addresses.list",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.communication.list",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.participations.list",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.names.add",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.names.supersede",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.names.retire",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.addresses.add",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.addresses.revise",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.addresses.retire",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.communication.add",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.communication.revise",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.communication.retire",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.participations.create",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.participations.revise",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.participations.end",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.affiliations.create",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.affiliations.revise",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.affiliations.end",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
           "name": "relationship_memory.create",
           "operator_only": false,
           "version": "v1"
@@ -652,15 +772,15 @@
     },
     "readiness": {
       "contract_version": "v1",
-      "implemented_capabilities": 104,
+      "implemented_capabilities": 124,
       "limitations": [
         "Content types awaiting an operator decision: application/pdf. They are reported rather than silently skipped.",
-        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, entities.aliases.list, entities.assignments.list, entities.identifiers.list, entities.identity_history, entities.observations.list, entities.relationships, entities.search, entities.unresolved_mentions, knowledge.search, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
+        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, knowledge.search, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
         "Model proposals and semantic retrieval are disabled; deterministic lexical retrieval remains active.",
         "Worker-plane health is unavailable, stale, absent for queued work, or reports dead-lettered work; inspect worker_planes."
       ],
       "state": "degraded",
-      "total_capabilities": 104
+      "total_capabilities": 124
     },
     "worker_planes": [
       {

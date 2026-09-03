@@ -44,10 +44,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { requirePrincipal, readCleanBody } from "@/lib/api/guard";
 import { captureAdmissions } from "@/lib/capture/idempotency";
-import { backendDisclosure, callGateway, transportLimitations } from "@/lib/api/gateway";
+import { backendDisclosure, invokeGateway, transportLimitations } from "@/lib/api/gateway";
 import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
 import { SESSION_COOKIE_NAME, sessionReplayBinding } from "@/lib/auth/session";
+import type { CaptureCreateResult } from "@/lib/api/decode/capabilities/capture.create";
 import { admitBrowserMutation } from "@/lib/http/mutation-admission";
 
 const SCOPE = "capture";
@@ -56,17 +57,6 @@ const SCOPE = "capture";
 const CAPTURE_KINDS = ["quick_note", "conversation_log"] as const;
 type CaptureKind = (typeof CAPTURE_KINDS)[number];
 const DEFAULT_CAPTURE_KIND: CaptureKind = "quick_note";
-
-interface PythonReceipt {
-  readonly receipt_id: string;
-  readonly capture_id: string;
-  readonly version_id: string;
-  readonly version_number: number;
-  readonly idempotency_key: string;
-  readonly content_sha256: string;
-  readonly issued_at: string;
-  readonly created: boolean;
-}
 
 export async function POST(request: NextRequest) {
   const blocked = admitBrowserMutation(request);
@@ -174,29 +164,30 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  const outcome = await callGateway<PythonReceipt>(guard.principal, "capture.create", {
+  const outcome = await invokeGateway(guard.principal, "capture.create", {
     text: text.trim(),
     idempotency_key: idempotencyKey.trim(),
     capture_kind: captureKind,
   });
   if (!outcome.ok) return gatewayRefusal(SCOPE, outcome.status, outcome.error);
+  const receipt = outcome.result as CaptureCreateResult;
   return NextResponse.json({
     shape: "backend",
     status: "persisted",
     captureKind,
     receipt: {
-      receiptId: outcome.result.receipt_id,
-      captureId: outcome.result.capture_id,
-      versionId: outcome.result.version_id,
-      versionNumber: outcome.result.version_number,
-      idempotencyKey: outcome.result.idempotency_key,
-      contentSha256: outcome.result.content_sha256,
+      receiptId: receipt.receipt_id,
+      captureId: receipt.capture_id,
+      versionId: receipt.version_id,
+      versionNumber: receipt.version_number,
+      idempotencyKey: receipt.idempotency_key,
+      contentSha256: receipt.content_sha256,
       // This value is derived from the same authenticated guard that authorized
       // the gateway call. It is never echoed from queue metadata or request JSON.
       principalId: guard.principal.principalId,
-      issuedAt: outcome.result.issued_at,
+      issuedAt: receipt.issued_at,
     },
-    created: outcome.result.created,
+    created: receipt.created,
     disclosure: backendDisclosure(SCOPE, outcome.disclosure, transportLimitations()),
   });
 }

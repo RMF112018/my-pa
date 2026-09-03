@@ -19,12 +19,13 @@ import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resolveSessionPrincipal } from "@/lib/auth/principal";
 import { syntheticPulse } from "@/lib/fixtures/pulse";
-import { callGateway } from "@/lib/api/gateway";
+import { invokeGateway, type GatewayOutcome } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { PulseList } from "@/components/pulse/pulse-list";
 import { BackendPulseList } from "@/components/pulse/backend-pulse-list";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
+import type { ContinuityPulseResult, PulseItem } from "@/lib/api/decode/capabilities/continuity.pulse";
 import type { BackendPulseItem } from "@/contracts/views";
 
 export const metadata = { title: "Today — my-pa" };
@@ -32,20 +33,7 @@ export const metadata = { title: "Today — my-pa" };
 /** Today is a statement about now, so it is read at request time. */
 export const dynamic = "force-dynamic";
 
-interface PythonPulseItem {
-  readonly pulse_id: string;
-  readonly item_type: string;
-  readonly item_ref: string;
-  readonly reason_code: string;
-  readonly reason: string;
-  readonly basis_refs: readonly string[];
-  readonly consequence: string | null;
-  readonly next_step: string | null;
-  readonly priority: number;
-  readonly generated_at: string;
-}
-
-function toItem(row: PythonPulseItem): BackendPulseItem {
+function toItem(row: PulseItem): BackendPulseItem {
   return {
     pulseId: row.pulse_id,
     itemType: row.item_type,
@@ -55,7 +43,7 @@ function toItem(row: PythonPulseItem): BackendPulseItem {
     basisRefs: row.basis_refs,
     consequence: row.consequence,
     nextStep: row.next_step,
-    priority: row.priority,
+    priority: row.attention_rank,
     generatedAt: row.generated_at,
   };
 }
@@ -90,8 +78,8 @@ export default async function TodayPage() {
 
   const answer = surfaceAnswer(
     "today:continuity.pulse",
-    await callGateway<{ pulse_items?: readonly PythonPulseItem[] }>(principal, "continuity.pulse"),
-    (result) => (result.pulse_items ?? []).length,
+    (await invokeGateway(principal, "continuity.pulse")) as GatewayOutcome<ContinuityPulseResult>,
+    (result) => result.pulse_items.length,
   );
 
   return (
@@ -135,11 +123,11 @@ export default async function TodayPage() {
             />
           ) : (
             // The gateway's order, untouched. See `BackendPulseList`.
-            <BackendPulseList items={(answer.result.pulse_items ?? []).map(toItem)} />
+            <BackendPulseList items={answer.result.pulse_items.map(toItem)} />
           )}
         </>
       ) : (
-        <BackendPulseList items={(answer.result.pulse_items ?? []).map(toItem)} />
+        <BackendPulseList items={answer.result.pulse_items.map(toItem)} />
       )}
     </section>
   );

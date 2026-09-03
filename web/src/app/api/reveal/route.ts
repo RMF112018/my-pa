@@ -36,31 +36,15 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { requirePrincipal, readCleanBody } from "@/lib/api/guard";
 import { admitBrowserMutation } from "@/lib/http/mutation-admission";
-import { backendDisclosure, callGateway, transportLimitations } from "@/lib/api/gateway";
+import { backendDisclosure, invokeGateway, transportLimitations } from "@/lib/api/gateway";
 import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
+import type { KnowledgeRevealResult } from "@/lib/api/decode/capabilities/knowledge.reveal";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
 
 const SCOPE = "reveal";
 
 /** The opaque-identifier shape the Python domain enforces, restated for early refusal. */
 const IDENTIFIER = /^[a-z]+_[A-Za-z0-9]{8,64}$/;
-
-/**
- * The reveal document, in the shape the Python `RevealView` publishes.
- *
- * `proposed` and `accepted` are two arrays rather than one with a state field,
- * because that is how the backend publishes them and because a renderer that had
- * to consult a field to tell a candidate from a promoted fact is a renderer that
- * can fail to.
- */
-interface RevealResult {
-  readonly state: "evidence" | "no_evidence" | "unavailable";
-  readonly gap: string | null;
-  readonly subject_kind: string | null;
-  readonly spans: readonly unknown[];
-  readonly proposed: readonly unknown[];
-  readonly accepted: readonly unknown[];
-}
 
 export async function POST(request: NextRequest) {
   const blocked = admitBrowserMutation(request);
@@ -106,16 +90,17 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const outcome = await callGateway<RevealResult>(guard.principal, "knowledge.reveal", {
+  const outcome = await invokeGateway(guard.principal, "knowledge.reveal", {
     subject_id: subjectId,
   });
   if (!outcome.ok) return gatewayRefusal(`${SCOPE}:knowledge.reveal`, outcome.status, outcome.error);
+  const revealed = outcome.result as KnowledgeRevealResult;
 
   return NextResponse.json({
     shape: "backend",
     // Passed through, never recomputed. See the module docstring.
-    state: outcome.result.state,
-    result: outcome.result,
+    state: revealed.state,
+    result: revealed,
     disclosure: backendDisclosure(
       `${SCOPE}:knowledge.reveal`,
       outcome.disclosure,

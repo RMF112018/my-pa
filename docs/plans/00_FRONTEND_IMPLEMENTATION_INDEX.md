@@ -22,9 +22,11 @@ The controlling post-audit sequence is `UI-IMP-WP01..WP30`. Older `WP-FE-*` orde
 
 `UI-IMP-WP03` ceremony and `UI-IMP-WP04` opaque-SID cookie cutover are implemented on this PR branch. The live cookie is the raw `AuthSessionStore` SID. That is not a production activation, production Entra retirement, or `PASS_VERIFIED` claim.
 
-`UI-IMP-WP05` central mutation admission and browser security are implemented on this PR. That is not a production activation or `PASS_VERIFIED` claim.
+`UI-IMP-WP05` central mutation admission and browser security are on `main`. That is not a production activation or `PASS_VERIFIED` claim.
 
-`NEXT_EXECUTABLE_PACKAGE: UI-IMP-WP06 — Typed BFF Success, Error, Receipt, and Degraded Contracts`
+`UI-IMP-WP06` typed BFF success, error, receipt, and degraded contracts are implemented on this PR. That is not production activation, not `PASS_VERIFIED` of the whole frontend, and not Wave 1 closure until post-merge audit.
+
+`NEXT_EXECUTABLE_PACKAGE: UI-IMP-WP07 — Shared Rich Content, Overlay, Form, and Status Primitives`
 
 ## Evidence limitations
 

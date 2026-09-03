@@ -48,9 +48,9 @@ WP02 persistence substrate exists (`identity.webauthn_credentials`, `identity.we
 
 The next executable package is:
 
-`UI-IMP-WP03 — WebAuthn Authentication and Credential Lifecycle`
+`UI-IMP-WP07 — Shared Rich Content, Overlay, Form, and Status Primitives`
 
-WP03 must not infer that opaque-cookie cutover or Entra/`local_operator` retirement was completed by WP02.
+WP07 must not infer production activation, whole-frontend `PASS_VERIFIED`, or Wave 1 closure. UI-IMP-WP06 typed BFF contracts on this PR are implementation substrate, not a post-merge audit.
 
 ## 2. Authentication/session authority
 

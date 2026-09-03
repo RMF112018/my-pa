@@ -174,6 +174,18 @@ Conservative dispositions for central mutation admission and browser security on
 - Residuals: NAS secrets cleanup is not this package; GET idle-touch Origin gating is not this package; production activation is not claimed.
 - `frontend / security` now also runs the WP-05 vitest corpus; `frontend / e2e-critical` now also runs `web/e2e/browser-security.spec.ts` alongside `web/e2e/webauthn.spec.ts`. Later CI gates remain `NOT_YET_INTRODUCED`.
 
+## UI-IMP-WP06 typed BFF contract notes
+
+Conservative dispositions for typed BFF success, error, receipt, and degraded contracts on this PR. Production activation, whole-frontend `PASS_VERIFIED`, and Wave 1 closure are **not** claimed. Wave 1 security/shared-contract foundation is not declared complete in this ledger entry (post-merge).
+
+- **PFE-AC-097** remains `IMPLEMENTATION_REQUIRED`. Hashed recovery is live. Operator-local recovery is not implemented. Not `PASS_VERIFIED`.
+- **PFE-AC-101** remains not `PASS_VERIFIED`. `implementation_disposition = VALIDATION_REQUIRED`.
+- **PFE-AC-005 / 006**: Drive criterion wording is not in the repository. Remain `UNRECONCILED`; not `PASS_VERIFIED`. WP08-owned band; this package supplies substrate only.
+- **PFE-AC-126 / 131**: Remain `UNRECONCILED` (`PFE-AC-123..139` mapping discrepancy). Contract negatives and a promoting frontend contract job are substrate, not Drive `PASS_VERIFIED`.
+- **PFE-AC-136** is not passed from this package.
+- Capture/review/work receipt bands: named runtime decode now exists for the corresponding GatewayCapability keys. Lifecycle UX remains `UI-IMP-WP09` / `UI-IMP-WP10`. At most `VALIDATION_REQUIRED` notes; never `PASS_VERIFIED`.
+- Twenty-nine `APPLICATION_GATEWAY_CAPABILITY` keys now have named runtime decoders; omitted arrays fail closed; `review.decide` no longer synthesizes version/disposition; `rate_limited` is HTTP 429; malformed success is `upstream_contract_invalid` / 503.
+
 ## Known evidence limitations / record overrides
 
 These limitations are additive to the default `FINAL_WP02_RECONCILIATION_MISSING` status and do not create a pass:

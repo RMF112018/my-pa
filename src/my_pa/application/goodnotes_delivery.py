@@ -17,7 +17,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Protocol
 
-from my_pa.domain.common.identifiers import IdKind, validate_identifier
+from my_pa.domain.common.identifiers import IdKind, parse_identifier, validate_identifier
 from my_pa.domain.common.time import utc_now
 from my_pa.domain.goodnotes.models import (
     NOTE_UNIT_SCHEMA_V2,
@@ -28,6 +28,9 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesEntityDirectoryRecord,
     GoodNotesEntityKind,
     GoodNotesEntityResolution,
+    GoodNotesIdentityCandidate,
+    GoodNotesIdentityDirectoryRecord,
+    GoodNotesIdentityResolutionResult,
     GoodNotesIdentityStatus,
     GoodNotesIngestionRun,
     GoodNotesNoteChangeState,
@@ -131,6 +134,37 @@ class GoodNotesDeliveryRepository(Protocol):
 
 def normalize_entity_name(value: str) -> str:
     return " ".join(value.casefold().split())
+
+
+def resolve_typed_identity_candidate(
+    candidate: GoodNotesIdentityCandidate,
+    directory: Sequence[GoodNotesIdentityDirectoryRecord],
+) -> GoodNotesIdentityResolutionResult:
+    """Resolve one explicitly typed R7 candidate by exact ID or unique normalized name."""
+    eligible = tuple(item for item in directory if item.target_kind is candidate.target_kind)
+    identifier_hits = tuple(item for item in eligible if item.target_id == candidate.literal)
+    if identifier_hits:
+        resolved_id = identifier_hits[0].target_id if len(identifier_hits) == 1 else None
+    else:
+        try:
+            literal_kind, _ = parse_identifier(candidate.literal)
+        except ValueError:
+            literal_kind = None
+        if literal_kind in (IdKind.ENTITY, IdKind.PROJECT):
+            resolved_id = None
+        else:
+            wanted = normalize_entity_name(candidate.literal)
+            name_hits = tuple(item for item in eligible if item.normalized_name == wanted)
+            resolved_id = name_hits[0].target_id if len(name_hits) == 1 else None
+    return GoodNotesIdentityResolutionResult(
+        candidate=candidate,
+        resolution=(
+            GoodNotesEntityResolution.ASSOCIATED
+            if resolved_id is not None
+            else GoodNotesEntityResolution.UNRESOLVED
+        ),
+        resolved_id=resolved_id,
+    )
 
 
 def resolve_entity_candidate(

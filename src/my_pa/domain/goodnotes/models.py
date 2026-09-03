@@ -13,6 +13,7 @@ from my_pa.domain.capture.proposal import ProposalState, RiskClass
 from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
+from my_pa.domain.relationship.entity import EntityType
 
 _ID_PREFIXES = frozenset(
     {
@@ -175,6 +176,14 @@ class GoodNotesEntityKind(StrEnum):
     NOTE = "NOTE"
     MEETING = "MEETING"
     AGENDA = "AGENDA"
+
+
+class GoodNotesIdentityTargetKind(StrEnum):
+    """Operator-bound R7 association targets; not the persisted legacy kind column."""
+
+    PERSON = "PERSON"
+    ORGANIZATION = "ORGANIZATION"
+    PROJECT = "PROJECT"
 
 
 class GoodNotesDeliveryAttemptState(StrEnum):
@@ -1087,6 +1096,79 @@ class GoodNotesEntityDirectoryRecord:
     entity_id: str
     kind: GoodNotesEntityKind
     normalized_name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesIdentityCandidate:
+    """Typed analyzer candidate that remains a reviewable proposal, never an identity write."""
+
+    literal: str
+    target_kind: GoodNotesIdentityTargetKind
+    confidence: float | None = None
+    evidence_refs: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _bounded_text(self.literal, what="identity candidate", maximum=_CANDIDATE_MAX)
+        if not isinstance(self.target_kind, GoodNotesIdentityTargetKind):
+            raise TypeError("target_kind must be a GoodNotesIdentityTargetKind")
+        if self.confidence is not None:
+            if isinstance(self.confidence, bool) or not isinstance(self.confidence, int | float):
+                raise TypeError("confidence must be a number")
+            if not 0.0 <= float(self.confidence) <= 1.0:
+                raise ValueError("confidence must be between zero and one")
+        if len(set(self.evidence_refs)) != len(self.evidence_refs):
+            raise ValueError("evidence references must be unique")
+        for evidence_ref in self.evidence_refs:
+            _bounded_text(evidence_ref, what="evidence reference", maximum=_TARGET_KEY_MAX)
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesIdentityDirectoryRecord:
+    """Read-only R7 target: generalized Entity for identity, continuity Project for context."""
+
+    target_id: str
+    target_kind: GoodNotesIdentityTargetKind
+    normalized_name: str
+    entity_type: EntityType | None = None
+
+    def __post_init__(self) -> None:
+        _bounded_text(self.normalized_name, what="normalized identity name", maximum=_CANDIDATE_MAX)
+        canonical_name = " ".join(self.normalized_name.casefold().split())
+        if self.normalized_name != canonical_name:
+            raise ValueError("normalized identity name must be canonical")
+        if not isinstance(self.target_kind, GoodNotesIdentityTargetKind):
+            raise TypeError("target_kind must be a GoodNotesIdentityTargetKind")
+        if self.target_kind is GoodNotesIdentityTargetKind.PROJECT:
+            if self.entity_type is not None:
+                raise ValueError("continuity Project targets do not carry an EntityType")
+            validate_identifier(self.target_id, IdKind.PROJECT)
+            return
+        expected_type = (
+            EntityType.PERSON
+            if self.target_kind is GoodNotesIdentityTargetKind.PERSON
+            else EntityType.ORGANIZATION
+        )
+        if self.entity_type is not expected_type:
+            raise ValueError("generalized entity type must agree with the candidate target")
+        validate_identifier(self.target_id, IdKind.ENTITY)
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesIdentityResolutionResult:
+    """Resolution outcome retaining the literal, confidence, and evidence for review."""
+
+    candidate: GoodNotesIdentityCandidate
+    resolution: GoodNotesEntityResolution
+    resolved_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.candidate, GoodNotesIdentityCandidate):
+            raise TypeError("candidate must be a GoodNotesIdentityCandidate")
+        if not isinstance(self.resolution, GoodNotesEntityResolution):
+            raise TypeError("resolution must be a GoodNotesEntityResolution")
+        associated = self.resolution is GoodNotesEntityResolution.ASSOCIATED
+        if associated != (self.resolved_id is not None):
+            raise ValueError("resolved identity is required exactly when associated")
 
 
 @dataclass(frozen=True, slots=True)

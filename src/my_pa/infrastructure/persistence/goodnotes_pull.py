@@ -47,9 +47,18 @@ from my_pa.contracts.ports import (
 from my_pa.contracts.ports import (
     GoodNotesSemanticReviewDecisionRecord as SemanticReviewDecision,
 )
-from my_pa.domain.capture.review import Disposition
+from my_pa.contracts.ports import ReviewDecisionRequest
+from my_pa.domain.capture.proposal import ProposalState
+from my_pa.domain.capture.review import (
+    Disposition,
+    ReviewConflictError,
+    ReviewDecision,
+    ReviewNotFoundError,
+    ReviewUnsupportedError,
+)
+from my_pa.domain.common.identifiers import IdKind, make_identifier
 from my_pa.domain.common.time import utc_now
-from my_pa.domain.goodnotes.models import GoodNotesPageWork
+from my_pa.domain.goodnotes.models import GoodNotesPageWork, GoodNotesSemanticReviewCase
 from my_pa.infrastructure.persistence.tables import (
     goodnotes_ingestion_run_stages,
     goodnotes_ingestion_runs,
@@ -81,6 +90,21 @@ def _semantic_proposal_sha256(
     payload: dict[str, object],
 ) -> str:
     return _digest([page_version_id, schema_version, analyzer_name, analyzer_version, payload])
+
+
+def _semantic_review_case_id(principal_id: str, proposal_id: str) -> str:
+    return f"rvw_{_digest([principal_id, proposal_id])[:24]}"
+
+
+def _semantic_state(disposition: Disposition | None) -> ProposalState:
+    if disposition is None:
+        return ProposalState.NEEDS_REVIEW
+    return {
+        Disposition.ACCEPT: ProposalState.ACCEPTED,
+        Disposition.REJECT: ProposalState.REJECTED,
+        Disposition.DEFER: ProposalState.DEFERRED,
+        Disposition.MARK_UNRESOLVED: ProposalState.UNRESOLVED,
+    }[disposition]
 
 
 def _work_key(work: GoodNotesPageWork) -> tuple[str, str, str]:
@@ -459,6 +483,141 @@ class SqlGoodNotesPullRepository:
             assigned=sum(not state.completed and 0 < state.attempts < maximum for state in states),
             completed=sum(state.completed for state in states),
             exhausted=sum(not state.completed and state.attempts >= maximum for state in states),
+        )
+
+    def semantic_review_cases(
+        self,
+        principal_id: str,
+        *,
+        limit: int,
+        state: ProposalState | None = None,
+        after_opened_at: datetime | None = None,
+        after_review_case_id: str | None = None,
+    ) -> tuple[GoodNotesSemanticReviewCase, ...]:
+        if (after_opened_at is None) != (after_review_case_id is None):
+            raise SemanticReviewConflictError
+        rows = self._connection.execute(
+            select(goodnotes_semantic_proposals)
+            .where(goodnotes_semantic_proposals.c.principal_id == principal_id)
+            .order_by(
+                goodnotes_semantic_proposals.c.created_at,
+                goodnotes_semantic_proposals.c.proposal_id,
+            )
+        ).all()
+        cases: list[GoodNotesSemanticReviewCase] = []
+        for row in rows:
+            decisions = self._connection.execute(
+                select(
+                    goodnotes_semantic_review_decisions.c.sequence,
+                    goodnotes_semantic_review_decisions.c.action,
+                )
+                .where(
+                    goodnotes_semantic_review_decisions.c.principal_id == principal_id,
+                    goodnotes_semantic_review_decisions.c.proposal_id == row.proposal_id,
+                )
+                .order_by(goodnotes_semantic_review_decisions.c.sequence)
+            ).all()
+            latest = None if not decisions else Disposition(str(decisions[-1].action))
+            case = GoodNotesSemanticReviewCase(
+                review_case_id=_semantic_review_case_id(principal_id, str(row.proposal_id)),
+                proposal_id=str(row.proposal_id),
+                run_id=str(row.run_id),
+                page_version_id=str(row.page_version_id),
+                principal_id=principal_id,
+                opened_at=row.created_at,
+                proposal_state=_semantic_state(latest),
+                review_version=0 if not decisions else int(decisions[-1].sequence),
+                latest_disposition=latest,
+            )
+            if state is not None and case.proposal_state is not state:
+                continue
+            if after_opened_at is not None and (case.opened_at, case.review_case_id) <= (
+                after_opened_at,
+                after_review_case_id,
+            ):
+                continue
+            cases.append(case)
+            if len(cases) == limit:
+                break
+        return tuple(cases)
+
+    def semantic_review_case(
+        self, principal_id: str, review_case_id: str
+    ) -> GoodNotesSemanticReviewCase | None:
+        return next(
+            (
+                case
+                for case in self.semantic_review_cases(principal_id, limit=10_000)
+                if case.review_case_id == review_case_id
+            ),
+            None,
+        )
+
+    def decide_semantic_review(self, request: ReviewDecisionRequest) -> ReviewDecision:
+        allowed = frozenset(
+            {
+                Disposition.ACCEPT,
+                Disposition.REJECT,
+                Disposition.DEFER,
+                Disposition.MARK_UNRESOLVED,
+            }
+        )
+        if request.disposition not in allowed:
+            raise ReviewUnsupportedError("the semantic review disposition is not implemented")
+        case = self.semantic_review_case(request.principal_id, request.review_case_id)
+        if case is None:
+            raise ReviewNotFoundError("the request names no stored review case")
+        if case.review_version != request.expected_review_version:
+            raise ReviewConflictError("the expected review version is stale")
+        proposal = self._connection.execute(
+            select(goodnotes_semantic_proposals).where(
+                goodnotes_semantic_proposals.c.principal_id == request.principal_id,
+                goodnotes_semantic_proposals.c.proposal_id == case.proposal_id,
+            )
+        ).one()
+        proposal_sha256 = _semantic_proposal_sha256(
+            str(proposal.page_version_id),
+            str(proposal.schema_version),
+            str(proposal.analyzer_name),
+            str(proposal.analyzer_version),
+            dict(proposal.payload),
+        )
+        request_fingerprint = _digest(
+            [
+                request.principal_id,
+                request.review_case_id,
+                request.expected_review_version,
+                request.disposition.value,
+                request.reason,
+            ]
+        )
+        try:
+            recorded = self.record_semantic_review(
+                SemanticReviewDecision(
+                    decision_id=make_identifier(IdKind.REVIEW_DECISION, request_fingerprint[:32]),
+                    principal_id=request.principal_id,
+                    run_id=case.run_id,
+                    proposal_id=case.proposal_id,
+                    proposal_sha256=proposal_sha256,
+                    action=request.disposition.value,
+                    request_fingerprint=request_fingerprint,
+                    decided_at=request.decided_at,
+                )
+            )
+        except SemanticReviewConflictError:
+            raise ReviewConflictError("the semantic review changed concurrently") from None
+        if recorded.sequence is None:
+            raise SemanticReviewConflictError
+        return ReviewDecision(
+            decision_id=recorded.decision_id,
+            review_case_id=request.review_case_id,
+            sequence=recorded.sequence,
+            disposition=request.disposition,
+            principal_id=request.principal_id,
+            correlation_id=request.correlation_id,
+            audit_id=request.audit_id,
+            decided_at=request.decided_at,
+            proposal_state=_semantic_state(request.disposition),
         )
 
     def record_semantic_review(self, decision: SemanticReviewDecision) -> SemanticReviewDecision:

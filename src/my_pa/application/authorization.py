@@ -45,7 +45,7 @@ reading the audit can see why, and a caller probing for the difference between
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from my_pa.application.commands import (
@@ -63,6 +63,7 @@ from my_pa.application.commands import (
     CloseCommitment,
     Command,
     CommitIntelligenceArtifact,
+    CompleteGoodNotesPull,
     CreateCapture,
     CreateCommitment,
     CreateEntity,
@@ -92,6 +93,7 @@ from my_pa.application.commands import (
     GetEntityProfile,
     GetEntityRelationships,
     GetGoodNotesContent,
+    GetGoodNotesPullStatus,
     GetGoodNotesWork,
     GetGsqsB0Status,
     GetLatestIntelligenceArtifact,
@@ -126,6 +128,7 @@ from my_pa.application.commands import (
     PreviewEntityMerge,
     PreviewEntitySplit,
     ProposeRelationshipMemory,
+    PullGoodNotesWork,
     ReadCapture,
     ReadCommitment,
     ReadIntelligenceArtifact,
@@ -249,6 +252,9 @@ class Authorization:
     #: whose underlying read capability is in this set; ungranted planes are
     #: omitted entirely rather than reported as denied.
     capability_grants: frozenset[tuple[Capability, Purpose | None]] | None = None
+    #: Authenticated OAuth client identity stamped by remote composition.
+    #: It is handler provenance only: `evaluate` never receives or reads it.
+    authenticated_client_id: str | None = field(default=None, repr=False)
 
     @property
     def allowed(self) -> bool:
@@ -354,6 +360,9 @@ def _requested_scope(
             | GetGoodNotesWork()
             | GetGoodNotesContent()
             | SubmitGoodNotesProposal()
+            | PullGoodNotesWork()
+            | CompleteGoodNotesPull()
+            | GetGoodNotesPullStatus()
             | StartGsqsB0()
             | GetGsqsB0Status()
             | BeginIntelligenceCycle()
@@ -553,6 +562,7 @@ def authorize(
     classification: Classification = Classification.PRIVATE_LOCAL,
     transport: CaptureTransport = CaptureTransport.LOCAL,
     capability_grants: frozenset[tuple[Capability, Purpose | None]] | None = None,
+    authenticated_client_id: str | None = None,
 ) -> Authorization:
     """Decide one request, record the decision, and return what was decided.
 
@@ -628,4 +638,5 @@ def authorize(
         enrollments=enrollments,
         transport=transport,
         capability_grants=capability_grants,
+        authenticated_client_id=authenticated_client_id,
     )

@@ -885,6 +885,27 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("values", "principal_id"),
         ("values", "principal_id"),
     ),
+    # GoodNotes pull work and semantic decisions are not public payloads: the
+    # service resolves the authenticated Principal/client context, and the
+    # repository constructs or reloads these records inside that partition.
+    # The request reads belong to the authenticated unified Review capability;
+    # the decision/work/row/value reads recheck server-composed or persisted
+    # records before admitting a claim, replay, or review-ledger write.
+    "infrastructure/persistence/goodnotes_pull.py": (
+        ("decision", "principal_id"),
+        ("decision", "principal_id"),
+        ("decision", "principal_id"),
+        ("decision", "principal_id"),
+        ("decision", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("row", "principal_id"),
+        ("value", "principal_id"),
+        ("work", "principal_id"),
+    ),
     # The request Principal is produced by the authenticated Review capability;
     # every dispatch probe and the selected repository reapply the partition.
     # Two reads, one per probe: the canonical Review surface now routes three
@@ -892,6 +913,7 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # theirs *within this Principal's partition* — which is also what makes a
     # foreign case answer "no such case" rather than "not yours".
     "infrastructure/persistence/unit_of_work.py": (
+        ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
     ),

@@ -111,7 +111,7 @@ from my_pa.domain.capture.version import CaptureVersion
 from my_pa.domain.extraction.corpus import CorpusCoverage
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
-from my_pa.domain.goodnotes.models import GoodNotesReviewCase
+from my_pa.domain.goodnotes.models import GoodNotesReviewCase, GoodNotesSemanticReviewCase
 from my_pa.domain.relationship.memory import RelationshipMemoryReviewCase
 from my_pa.domain.search.query import SearchRequest
 from my_pa.domain.source.enrollment import Enrollment, EnrollmentRequest
@@ -503,7 +503,11 @@ class _Captures(CaptureRepository):
 #: remembered. `WP-RI-B-05` adding `EntityProposalReviewCase` changed this one
 #: line and nothing else about the shape, which is what the alias was for.
 type _ReviewCaseVariant = (
-    ReviewCase | GoodNotesReviewCase | RelationshipMemoryReviewCase | EntityProposalReviewCase
+    ReviewCase
+    | GoodNotesReviewCase
+    | GoodNotesSemanticReviewCase
+    | RelationshipMemoryReviewCase
+    | EntityProposalReviewCase
 )
 
 
@@ -534,10 +538,12 @@ class _Reviews(ReviewRepository):
         *,
         relationship_memory_enabled: bool,
         relationship_intelligence_enabled: bool = False,
+        goodnotes_pull_enabled: bool = False,
     ) -> None:
         self._connection = connection
         self._relationship_memory_enabled = relationship_memory_enabled
         self._relationship_intelligence_enabled = relationship_intelligence_enabled
+        self._goodnotes_pull_enabled = goodnotes_pull_enabled
 
     def _asked(self, subject_kind: ReviewSubjectKind | None) -> frozenset[ReviewSubjectKind]:
         """Which planes this page will query at all.
@@ -548,6 +554,8 @@ class _Reviews(ReviewRepository):
         caller able to learn, by filtering, whether a plane exists.
         """
         composed = {ReviewSubjectKind.CAPTURE_PROPOSAL, ReviewSubjectKind.GOODNOTES_REGION}
+        if self._goodnotes_pull_enabled:
+            composed.add(ReviewSubjectKind.GOODNOTES_SEMANTIC)
         if self._relationship_memory_enabled:
             composed.add(ReviewSubjectKind.RELATIONSHIP_MEMORY)
         if self._relationship_intelligence_enabled:
@@ -621,6 +629,16 @@ class _Reviews(ReviewRepository):
                         after_review_case_id=after_review_case_id,
                     )
                 )
+            if entity_id is None and ReviewSubjectKind.GOODNOTES_SEMANTIC in asked:
+                found.extend(
+                    SqlGoodNotesPullRepository(self._connection).semantic_review_cases(
+                        principal_id,
+                        limit=limit,
+                        state=state,
+                        after_opened_at=after_opened_at,
+                        after_review_case_id=after_review_case_id,
+                    )
+                )
             if ReviewSubjectKind.RELATIONSHIP_MEMORY in asked:
                 found.extend(
                     case
@@ -668,6 +686,15 @@ class _Reviews(ReviewRepository):
         """
 
         def statement() -> ReviewDecision | None:
+            semantic = (
+                SqlGoodNotesPullRepository(self._connection).semantic_review_case(
+                    request.principal_id, request.review_case_id
+                )
+                if self._goodnotes_pull_enabled
+                else None
+            )
+            if semantic is not None:
+                return SqlGoodNotesPullRepository(self._connection).decide_semantic_review(request)
             if is_goodnotes_review_case(
                 self._connection,
                 review_case_id=request.review_case_id,
@@ -933,6 +960,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         audit: AuditSink,
         relationship_memory_enabled: bool = False,
         relationship_intelligence_enabled: bool = False,
+        goodnotes_pull_enabled: bool = False,
     ) -> None:
         """Take the engine, the audit sink, and which optional planes are composed.
 
@@ -970,6 +998,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self._audit = audit
         self._relationship_memory_enabled = relationship_memory_enabled
         self._relationship_intelligence_enabled = relationship_intelligence_enabled
+        self._goodnotes_pull_enabled = goodnotes_pull_enabled
         self._context: AbstractContextManager[Connection] | None = None
         self._connection: Connection | None = None
 
@@ -1068,6 +1097,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
             self._open,
             relationship_memory_enabled=self._relationship_memory_enabled,
             relationship_intelligence_enabled=self._relationship_intelligence_enabled,
+            goodnotes_pull_enabled=self._goodnotes_pull_enabled,
         )
 
     @property

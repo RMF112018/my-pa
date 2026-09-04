@@ -298,6 +298,7 @@ def _mcp_remote(args: argparse.Namespace) -> int:
         compact = settings.compact_publication_for_client(authenticated.client_id)
         return RemoteAccessContext(
             principal=authenticated.principal,
+            authenticated_client_id=authenticated.client_id,
             allowed_capabilities=capabilities,
             capability_purposes=authenticated.capability_purposes,
             relationship_grant_profile=_remote_relationship_grant_profile(

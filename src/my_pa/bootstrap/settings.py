@@ -481,6 +481,8 @@ class Settings(StrictModel):
     #: *second* of two independent gates rather than the only one.
     relationship_identity_correction_enabled: bool = False
     goodnotes_self_improving_optimizer_enabled: bool = False
+    goodnotes_pull_enabled: bool = False
+    goodnotes_pull_cursor_signing_key: str = Field(default="", repr=False)
     goodnotes_rollout_stage: GoodNotesRolloutStage = GoodNotesRolloutStage.OBSERVE_ONLY
     remote_mcp_public_host: str = ""
     #: Isolated GSQS ChatLLM remote-eval MCP process. Not production MCP.
@@ -600,6 +602,12 @@ class Settings(StrictModel):
     @model_validator(mode="after")
     def _check(self) -> Settings:
         self._parsed_database_url = _parse_database_url(self.database_url)
+        if self.goodnotes_pull_enabled:
+            key_bytes = self.goodnotes_pull_cursor_signing_key.encode("utf-8")
+            if not 32 <= len(key_bytes) <= 128:
+                raise SettingsError(
+                    "enabled GoodNotes pull requires a cursor signing key of 32 to 128 UTF-8 bytes"
+                )
         self._check_auth_mode()
         if self.remote_mcp_enabled and not all(
             (

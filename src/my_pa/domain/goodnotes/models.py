@@ -472,6 +472,34 @@ class GoodNotesReviewCase:
 
 
 @dataclass(frozen=True, slots=True)
+class GoodNotesSemanticReviewCase:
+    """One content-free semantic proposal on the canonical Review surface."""
+
+    review_case_id: str
+    proposal_id: str
+    run_id: str
+    page_version_id: str
+    principal_id: str
+    opened_at: datetime
+    proposal_state: ProposalState = ProposalState.NEEDS_REVIEW
+    risk_class: RiskClass = RiskClass.MODERATE
+    review_version: int = 0
+    latest_disposition: Disposition | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.review_case_id, IdKind.REVIEW_CASE)
+        _goodnotes_id(self.proposal_id, "gnprp")
+        _goodnotes_id(self.run_id, "gnrun")
+        _goodnotes_id(self.page_version_id, "gnver")
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        ensure_utc(self.opened_at)
+        if self.review_version < 0:
+            raise ValueError("a review version is not negative")
+        if (self.review_version == 0) is not (self.latest_disposition is None):
+            raise ValueError("an undecided case has version zero and no disposition")
+
+
+@dataclass(frozen=True, slots=True)
 class GoodNotesNotebook:
     """Stable notebook identity. Path is not a field: it is history elsewhere."""
 

@@ -959,6 +959,7 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
             # end to end through `build_gateway_runtime` instead of by reading
             # this line.
             relationship_intelligence_enabled=settings.relationship_intelligence_enabled,
+            goodnotes_pull_enabled=settings.goodnotes_pull_enabled,
         )
 
     def task_management_unit_of_work() -> SqlAlchemyTaskManagementUnitOfWork:
@@ -1010,6 +1011,12 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
                 and settings.relationship_intelligence_writes_enabled
             ),
             producer_origins=producer_origins,
+            goodnotes_pull_enabled=settings.goodnotes_pull_enabled,
+            goodnotes_pull_cursor_signing_key=(
+                settings.goodnotes_pull_cursor_signing_key.encode("utf-8")
+                if settings.goodnotes_pull_enabled
+                else None
+            ),
         ),
         principal=principal,
         authenticate=entra_authenticator(settings, work_engine) if entra else None,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Final, Literal
 
 from mcp.server.context import ServerRequestContext
@@ -95,6 +95,7 @@ class RemoteAccessContext:
     capability_purposes: frozenset[tuple[Capability, Purpose | None]] | None = None
     relationship_grant_profile: Literal["remote.operator"] | None = None
     compact_publication: bool = False
+    authenticated_client_id: str | None = field(default=None, repr=False)
 
 
 RemoteAccessResolver = Callable[[str | None], RemoteAccessContext | None]
@@ -214,7 +215,7 @@ def remote_tool_names(
     """Deterministically classify the canonical, composed capability set."""
 
     names: set[str] = set()
-    composed = {tool.name for tool in published_tools(service)}
+    composed = {tool.name for tool in published_tools(service, authenticated_client_present=True)}
     for capability in Capability:
         if capability.value not in composed:
             continue
@@ -291,6 +292,7 @@ def create_remote_mcp_app(
             transport=CaptureTransport.REMOTE_CLIENT,
             compact_publication=compact,
             allowed_canonical_targets=canonical,
+            authenticated_client_id=resolved.authenticated_client_id,
         )
 
     server = create_mcp_server(

@@ -133,6 +133,10 @@ class GoodNotesSemanticPromotionEvidence:
         if not isinstance(self.disposition, Disposition):
             raise TypeError("promotion evidence requires a review disposition")
 
+    def is_bound_to(self, principal_id: str, run_id: str) -> bool:
+        """Return whether server-held evidence belongs to this exact run context."""
+        return self.principal_id == principal_id and self.run_id == run_id
+
 
 def semantic_proposal_sha256(
     page_version_id: str,
@@ -693,7 +697,7 @@ def _reviewed_proposals(
 ) -> tuple[tuple[str, str, str, str, dict[str, object]], ...]:
     decisions: dict[str, Disposition] = {}
     for item in evidence:
-        if item.principal_id != principal_id or item.run_id != run_id:
+        if not item.is_bound_to(principal_id, run_id):
             raise ValueError("semantic promotion evidence crossed its run context")
         if item.proposal_sha256 in decisions:
             raise ValueError("semantic promotion evidence is duplicated")

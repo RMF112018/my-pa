@@ -153,6 +153,7 @@ class ReviewSubjectKind(StrEnum):
 
     CAPTURE_PROPOSAL = "capture_proposal"
     GOODNOTES_REGION = "goodnotes_region"
+    GOODNOTES_SEMANTIC = "goodnotes_semantic"
     RELATIONSHIP_MEMORY = "relationship_memory"
     ENTITY_PROPOSAL = "entity_proposal"
 

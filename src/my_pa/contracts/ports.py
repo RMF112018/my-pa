@@ -92,6 +92,7 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesPageWork,
     GoodNotesReviewCase,
     GoodNotesSemanticProposal,
+    GoodNotesSemanticReviewCase,
 )
 from my_pa.domain.policy.decision import validate_policy_version
 from my_pa.domain.relationship.authoring import (
@@ -3912,7 +3913,11 @@ class ReviewRepository(ABC):
         after_opened_at: datetime | None = None,
         after_review_case_id: str | None = None,
     ) -> tuple[
-        ReviewCase | GoodNotesReviewCase | RelationshipMemoryReviewCase | EntityProposalReviewCase,
+        ReviewCase
+        | GoodNotesReviewCase
+        | GoodNotesSemanticReviewCase
+        | RelationshipMemoryReviewCase
+        | EntityProposalReviewCase,
         ...,
     ]:
         """One bounded page for this Principal, oldest case first.

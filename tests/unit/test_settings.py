@@ -342,6 +342,7 @@ def test_only_explicitly_admitted_settings_may_be_credential_bearing() -> None:
         "gsqs_remote_eval_oauth_operator_secret",
         "webauthn_bff_secret",
         "session_service_secret",
+        "goodnotes_pull_cursor_signing_key",
     }
     for name in Settings.model_fields:
         if name in admitted:
@@ -352,6 +353,40 @@ def test_only_explicitly_admitted_settings_may_be_credential_bearing() -> None:
     assert Settings.model_fields["gsqs_remote_eval_oauth_operator_secret"].repr is False
     assert Settings.model_fields["webauthn_bff_secret"].repr is False
     assert Settings.model_fields["session_service_secret"].repr is False
+    assert Settings.model_fields["goodnotes_pull_cursor_signing_key"].repr is False
+
+
+@pytest.mark.parametrize("size", [32, 128])
+def test_goodnotes_pull_accepts_bounded_utf8_signing_key(size: int) -> None:
+    settings = load_settings(
+        {
+            DATABASE_URL: _A_URL,
+            f"{ENV_PREFIX}GOODNOTES_PULL_ENABLED": "true",
+            f"{ENV_PREFIX}GOODNOTES_PULL_CURSOR_SIGNING_KEY": "k" * size,
+        }
+    )
+    assert settings.goodnotes_pull_enabled is True
+
+
+@pytest.mark.parametrize("value", ["", "k" * 31, "k" * 129, "🔒" * 7 + "a"])
+def test_goodnotes_pull_rejects_unbounded_utf8_signing_key(value: str) -> None:
+    with pytest.raises(SettingsError) as caught:
+        load_settings(
+            {
+                DATABASE_URL: _A_URL,
+                f"{ENV_PREFIX}GOODNOTES_PULL_ENABLED": "true",
+                f"{ENV_PREFIX}GOODNOTES_PULL_CURSOR_SIGNING_KEY": value,
+            }
+        )
+    if value:
+        assert value not in str(caught.value)
+
+
+def test_goodnotes_pull_key_is_optional_while_disabled_and_hidden() -> None:
+    settings = load_settings({DATABASE_URL: _A_URL})
+    assert settings.goodnotes_pull_enabled is False
+    assert settings.goodnotes_pull_cursor_signing_key == ""
+    assert "goodnotes_pull_cursor_signing_key" not in repr(settings)
 
 
 def test_an_absent_database_url_is_refused_rather_than_defaulted() -> None:

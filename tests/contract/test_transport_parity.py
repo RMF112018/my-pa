@@ -1751,8 +1751,8 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    # The one hundred and twenty-four commands and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 125, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    # The one hundred and twenty-seven commands and `RequestMetadata` beside them.
+    assert len(REQUEST_VALUES) == 128, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))

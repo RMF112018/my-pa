@@ -1,320 +1,168 @@
-# GoodNotes completion interim implementation ledger
+# GoodNotes completion implementation ledger
 
-Status: `GOODNOTES_IMPLEMENTATION_IN_PROGRESS_SHARED_AND_OPERATOR_GATES_PENDING`
+Status: `GOODNOTES_IMPLEMENTATION_CODE_COMPLETE_OTHER_ACTIVE_OWNER_GATE_PENDING`
 
-This is the interim ledger for
-`REQ-MYPA-GOODNOTES-COMPLETION-IMPLEMENTATION-20260831-002`. It preserves the
-historical corrective sequence and records the current post-UI synchronization
-state. It does not claim request completion, an applicable PR-tier pass, release
-readiness, PR eligibility, merge eligibility, or a current-head independent
-review verdict.
+Request: `REQ-MYPA-GOODNOTES-COMPLETION-IMPLEMENTATION-20260831-002`
 
-## Authority and scope
+This ledger binds the repository-native, non-AEOS GoodNotes/GSQS completion
+campaign to its current implementation evidence. It does not authorize or
+claim deployment, live data or source access, production activation, a live
+ChatLLM schedule, B0 execution, R11/R12 decisions, private-gold access, risk
+acceptance, merge eligibility, or final repository completion. PR #186 owns
+overlapping shared test infrastructure and must clear before final
+reconciliation, exact-head review, and merge.
 
-The canonical plan is 67,663 raw bytes with SHA-256
-`a3fa8c926aab74823c86a637f696c07f8fbc3fd0bc110e51c1d5138f7f6da7d1`.
-The authorized tranche is repository-only GoodNotes implementation and
-synthetic verification. It does not authorize deployment, a live schedule,
-production or personal data, credentials, source mutation, B0 execution,
-private-gold access, or the R11/R12 operator decisions. Candidate PR #160 was
-evidence only and was not transplanted.
+## Authority and repository identity
 
-## Current repository and concurrent-work register
+- The authenticated governing Drive plan is raw Markdown, 67,663 bytes,
+  SHA-256
+  `a3fa8c926aab74823c86a637f696c07f8fbc3fd0bc110e51c1d5138f7f6da7d1`.
+- The current authenticated base is `origin/main` commit
+  `25301329e9172014b58f555ee99575fc24244fb1`, tree
+  `7ca6398ca4f03fcbec9b1500a44f91ce034a6d9d`.
+- The current implementation code head before this ledger-only update is
+  `9dc1acca9875153fb7687b80f372b8465a578009`, tree
+  `342aac877e263680125b518cb46c3a8a25402849`.
+- The isolated branch is `bf/goodnotes-post-ui-safe-sync-20260903` in
+  `/private/tmp/my-pa-goodnotes-post-ui-safe-sync-20260903`.
+- The primary checkout remains detached at its pre-existing commit and was not
+  used for source work. Its unrelated untracked evidence was not read, staged,
+  changed, or incorporated.
 
-| Item | Exact state | Treatment |
-| --- | --- | --- |
-| Current `origin/main` | commit `25301329e9172014b58f555ee99575fc24244fb1`; tree `7ca6398ca4f03fcbec9b1500a44f91ce034a6d9d` | Exact merge-base after the nonconflicting PR #184/#185 synchronization. |
-| Current GoodNotes corrected code head | commit `11f77f4770af8c335e9590bd5db4a2925cdc0196`; tree `bad9b8042ddf37f360140c40211d04885439806d` | Contains the bounded R7 identity-target seam and the validator-driven code correction described below. |
-| Current corrective integration head | commit `019a5e1ff0d393ebdff2e3bc50d33ccbac9c1333`; tree `3a69772475c61efef610489f9ad4ca5413d12374` | Clean source/test head before this ledger update. It includes the R4/R8 fail-closed seams and R7 date contract on current main. |
-| Frozen pre-WP08 GoodNotes branch | commit `50f29a042da716e75820bf150d606b67aa99718e`; tree `2c68219fb3db82a6b071a84f8d18a402ff6adda3` | Preserved without mutation as historical evidence. |
-| Current main Alembic graph | sole head `16f05c46b8c3` | The GoodNotes tranche adds no migration. |
-| RI WP12 | local branch `fc8911b2241654f03210d77bfe22894dd2d41ddd`; tree `1ba3ae769d3594516b684c6bbe9e69f8860c3950` | Historical/local concurrent evidence. Its proposed successor migration is not in current `main`; no GoodNotes migration or shared-path edit is made in this tranche. |
-| RI WP13 | remote head `903b8b15a9e1d1d3f0ef97b85ab6bb9cb636f393`; tree `b65b801bb768aca9b3246ffeddb5de751f52a163`; PR #181 open | Owns its ten PR paths, including shared RI/MCV/architecture/operations documentation. Its local worktree also contains unrelated staged UI/report changes and is treated as contaminated and wholly no-touch. It adds no migration. |
+Candidate PR #160 remains historical evidence only. Its stale migration
+`d8f3a1c6e942` was neither copied nor transplanted.
 
-The GoodNotes delta from current `origin/main` contains 27 paths. It does not
-edit either shared plan, `src/my_pa/application/service.py`,
-`src/my_pa/contracts/ports.py`, a migration, or an RI semantic implementation
-path. Its mechanical changed-path intersection with the current WP12 commit and
-the current WP13 staged merge is empty. That path isolation does not dissolve
-the semantic, migration-ancestry, count-attestation, or shared-composition
-dependencies recorded below.
+## Concurrency and migration serialization
 
-## Synchronization and corrective chronology
+The active-concurrent-work register was created before source mutation and was
+refreshed before synchronization, migration work, each implementation phase,
+and this ledger update.
 
-The earlier post-WP08 branch replayed 18 GoodNotes commits from the frozen
-branch in original chronological order. It deliberately omitted
-`09bc954a193d37a7ef17d8f025b1d5ffe3a13ec7` and
-`3e97cb65f32a3f08f150859b842584939b6751d5`, which changed RI- and MCV-owned
-count attestations. The frozen branch at `50f29a0` remains intact.
+- RI PR #181 (`ri-ent/wp13-fixture`) remains separately owned. Its PR paths and
+  worktree were no-touch; it adds no migration. Important staged RI/UI source
+  blobs observed during preflight were identical to current `main`.
+- Closed PR #170 was rediscovered as merged. Its migration
+  `9a3f6c1e8d24` is in the authenticated ancestry, and current `main` has the
+  sole head `16f05c46b8c3`.
+- The GoodNotes migration
+  `migrations/versions/20260904_6a2f9d1c4b80_add_goodnotes_pull_and_review_ledgers.py`
+  was created only after RI migration ownership cleared. It is additive,
+  descends directly from `16f05c46b8c3`, and produces sole head
+  `6a2f9d1c4b80`.
+- PR #186 (`bf/db-test-ci-consolidation-20260903`) appeared after Phase-B
+  authoring and most recently advanced to
+  `649ee06c6cbc4e43b58eb0ceb947bcc0be336a90`. It is an
+  `OTHER_ACTIVE_OWNER` for broad database/schema test provisioning,
+  `tests/conftest.py`, `pyproject.toml`, workflow, and shared plan files.
+  GoodNotes made no further edits to its paths. Already committed mechanical
+  migration-head/count test overlap must be reconciled after #186 lands or its
+  ownership otherwise clears.
 
-The current isolated branch then synchronized the same bounded GoodNotes delta
-onto then-current `origin/main` `8f0e4779`. The synchronized history through
-`5121cfd5fac6891db413ece620b61fa8ef0b51a1`, tree
-`772c0de84c2f7f6b0fa30f8b13e4aab3cfc8ebb6`, preserved the 20-path boundary.
-Two source corrections followed:
+No RI branch, worktree, migration, asset, or owned source was mutated. The
+campaign assertion is
+`RELATIONSHIP_INTELLIGENCE_CONCURRENT_WORK_PRESERVED`.
 
-- `9ef152758f263170701ad9251e051b70e446dd74`, tree
-  `715695b6ca038f52450bd71738552a02ac3dbce1`, validates terminal pull-completion
-  receipts rather than trusting malformed or context-inconsistent receipt state;
-- `da3f3969e07bec1deb213446f9b0ecc74d4a8106`, tree
-  `24e57c06a4b6598e3abf3157f9940f8b65afd9f6`, rejects invalid optimizer state
-  runtime types instead of admitting bool or other non-contract state values.
+## Implementation chronology
 
-Together those corrections modify only the pull/optimizer application modules
-and their two focused unit-test files relative to `5121cfd5`.
-
-Two ledger-only commits, `326a5488d179df3b490da0b6726cf604f77919ce` and
-`077ad00d99809500c9ce5ede0352972fb04a1922`, then corrected current-state and
-validation attribution without changing runtime behavior. After the operator
-selected R7 Option 2, commit
-`1ceb5b1b8e882748db0437d4cd82b4fea0696dd6`, tree
-`3da1ac856d2329988873674d1ae67de3d0539fe7`, added the bounded typed
-identity-target seam. Person and organization candidates target generalized
-Entity identity (`ent_`); project context targets the existing continuity
-Project identity (`prj_`).
-
-The independent validation of ledger head
-`a6ac0d45d32b8111ac0f2e60757af41d692935ec`, tree
-`19b12784314ec790600d8bcc4d6168d9859c6811`, returned `FAIL`. Its major finding
-showed that a successfully parsed identifier outside the two intended planes,
-including legacy `per_` or source `src_` identifiers, could still fall back to
-normalized-name matching. Its minor finding showed that callers could directly
-construct an associated resolution result with an ID from the wrong plane.
-Commit `11f77f4770af8c335e9590bd5db4a2925cdc0196`, tree
-`bad9b8042ddf37f360140c40211d04885439806d`, corrects both issues: every
-successfully parsed identifier is exact-ID-only, and associated result objects
-enforce `ent_` for person or organization targets and `prj_` for project
-targets.
-
-Independent validation then passed at exact ledger head
-`191ae002d522ac16538276cbf6f1b32d5b4687e3`, tree
-`d67c07fba61cedab5ff719c02b1443d7e636efa6`, confirming that the prior major
-and minor were closed. That result is validation evidence, not the independent
-exact-head review required for PR or merge eligibility. This reconciliation
-commit will itself require a fresh exact-head review.
-
-After PR #183 merged, nonconflicting merge commit
-`a4a104f5068c0621855338b015326f70c977452c`, tree
-`89321159d12fc99376e2a541d56d7cb772e0a092`, synchronized the unchanged
-GoodNotes history with new `origin/main`
-`1bb7c3cf397b6d86887439a1590a19186f2183bf`, tree
-`b4c8839c40b7d1c3631bb6e05d14c9b8f8336f74`. The merge-base is that exact main
-commit, the main drift had zero changed-path intersection with the GoodNotes
-delta, and the GoodNotes commit identities were preserved. Independent
-post-sync validation found the code checks green but returned `FAIL` because
-the ledger still identified the prior base and integration head. This document
-corrects only that evidence identity; its resulting commit requires fresh
-validation and review.
-
-After PRs #184 and #185 merged, the concurrency register was refreshed again.
-Their two-commit delta had no changed-path intersection with the 22-path
-GoodNotes delta. Merge commit
-`b273298cdb1b3f34adc998264eabda3774fc27b6`, tree
-`fa6bd4d911fbe28d7eef724aa3b4c6ce0d9ba1c4`, synchronized the GoodNotes branch
-to exact current `origin/main`
-`25301329e9172014b58f555ee99575fc24244fb1` without modifying a GoodNotes
-source path or migration.
-
-Three bounded corrective commits followed. Ledger-only `8e7ca8e8` rebound the
-current-main evidence. `672a9b1626123cec0bb0116c0f77b5bd3fa1f623`
-separated page, event, and body date evidence with explicit absent, resolved,
-and ambiguous page-date states. `019a5e1ff0d393ebdff2e3bc50d33ccbac9c1333`
-made fresh exact-bound source liveness a precondition of the actual ingestion
-path and required exact Principal/run/proposal-bound accepted review evidence
-before occurrence reconciliation may promote semantic evidence.
-
-During synchronization, a worker mistakenly operated in the primary checkout.
-The tracked checkout was restored to its pre-incident detached commit
-`e004942b076bbfe26cfd836bd448350236f326cb`, tree
-`93525e7dc0e2494f2abc9667fa417a12a30163d7`; GoodNotes work continued only in
-the isolated worktree. Pre-existing untracked primary-checkout material was not
-read, changed, staged, or incorporated.
+- `b273298cdb1b3f34adc998264eabda3774fc27b6` synchronized the preserved
+  GoodNotes history with authenticated current `main` after a zero-overlap
+  path check.
+- `672a9b1626123cec0bb0116c0f77b5bd3fa1f623` separated page-date evidence
+  from event/body dates with explicit absent/resolved/ambiguous semantics.
+- `019a5e1ff0d393ebdff2e3bc50d33ccbac9c1333` made exact fresh source
+  liveness mandatory on the ingestion path and made semantic promotion depend
+  on exact Principal/run/proposal-bound accepted review evidence.
+- `706bcf05eb0d592bf6512c5138ead06a906991d6` removed the supported
+  production RouteLLM inference edge and implemented distinct capability-state
+  projections.
+- `e561d65bc88a248335563c3b263fca69225d8db2` defined the authenticated
+  Principal/client pull, completion, and safe-status public contracts and
+  policy boundaries.
+- `eb92f2b24c514c77b54c0641cdab9380ac64373d` added the single serialized
+  migration and durable Principal-scoped pull/review ledgers.
+- `553d79f8f98e4787561aeed013b1ca74e52e46f6` exposed the persistence seam
+  through the unit of work and restricted completion material to the exact
+  Principal/client/assignment partition.
+- `9dc1acca9875153fb7687b80f372b8465a578009` wired the disabled-by-default
+  authenticated control plane, MCP publication/authorization, durable Review
+  bridge, server-only completion, and content-free status.
 
 ## Work-package status
 
-| Work package | Status | Interim result or remaining gate |
+| Work package | Repository status | Evidence or residual gate |
 | --- | --- | --- |
-| GN-WP-R0 | `PASS_WITH_SERIALIZATION` | Candidate behavior and conflicting paths were mapped without copying PR #160 architecture or stale migration ancestry. Current WP12/WP13 ownership remains explicit. |
-| GN-WP-R1 | `NO_MIGRATION_IN_CURRENT_TRANCHE; FUTURE_DDL_REQUIRES_REFRESH` | Current changes reuse the landed schema and leave sole main head `16f05c46b8c3` unchanged. Any future GoodNotes DDL must start from the then-current authenticated head after a fresh ownership preflight. |
-| GN-WP-R2 | `INCOMPLETE_SHARED_WIRING` | Production composition still exposes the RouteLLM poster through shared bootstrap/service paths. Isolation requires the settled shared composition contract and synthetic production-path proof. |
-| GN-WP-R3 | `INCOMPLETE_SHARED_WIRING` | Principal-bound workflow context, stale-context validation, bounded continuation, and public command/service/policy/persistence wiring remain. |
-| GN-WP-R4 | `APPLICATION_ENFORCEMENT_INTEGRATED; DATABASE_PROOF_PENDING` | The actual orchestration path now requires fresh `AVAILABLE` liveness bound to the exact root, path, and content digest before store access. Missing, stale, reappeared, expired, or mismatched evidence fails closed. |
-| GN-WP-R5 | `INCOMPLETE_SHARED_WIRING` | A distinct GoodNotes/GSQS production composition gate remains across settings, bootstrap, service, authorization, MCP publication, and operational documentation. |
-| GN-WP-R6 | `INDEPENDENT_SLICE_INTEGRATED` | Page-version render identity is append-only; only absent render metadata may be backfilled. |
-| GN-WP-R7 | `BOUNDED_TYPED_AND_DATE_SEAMS_INTEGRATED; PUBLIC_AND_PERSISTENCE_WIRING_INCOMPLETE` | Person/organization candidates use generalized Entity identity (`ent_`), project context uses continuity Project identity (`prj_`), and exact-ID/plane/ambiguity rules fail closed. Page-date evidence is separate from event/body dates and retains literal, evidence, and confidence. These seams are not yet reachable through the public proposal contract or persistence adapter. |
-| GN-WP-R8 | `APPLICATION_PROMOTION_GATE_INTEGRATED; PERSISTENT_REVIEW_WIRING_INCOMPLETE` | Occurrence reconciliation now requires exact Principal/run/proposal-digest review evidence and admits only `ACCEPT` or `CORRECT_AND_ACCEPT`; absent, rejected, deferred, invalidated, reprocessed, mismatched, duplicate, or extra evidence refuses atomically. Durable semantic-review decision storage and public wiring remain. |
-| GN-WP-R9 | `APPLICATION_CORE_INTEGRATED; SHARED_WIRING_INCOMPLETE` | Authenticated HMAC-bound cursors, client/context-bound assignments, bounded retry, resume, receipt validation, and idempotent completion exist. Public authorization, persistence, gateway, MCP, and schedule wiring remain absent. |
-| GN-WP-R10 | `INDEPENDENT_SLICE_INTEGRATED_AND_CORRECTED` | The optimizer remains production-inert. Hard gates, `plateau_limit`, and optimizer state types fail closed on values outside their exact contracts without changing evaluator identity. |
-| GN-WP-R11 / GN-WP-R12 | `OPERATOR_DECISION_REQUIRED` | No decision, private-gold access, or implementation is claimed. |
-| OP-GN-01 | `OPERATOR_RUNTIME_ACTION_REQUIRED` | No production worker, dead-letter operation, deployment, or live-source action was performed. |
+| GN-WP-R0 | `PASS` | Current base, PRs/worktrees, Alembic graph, ownership, collision plan, and requirement seams were authenticated and registered before writes. |
+| GN-WP-R1 | `IMPLEMENTED; FINAL_RECONCILIATION_PENDING_PR186` | One additive migration descends from the correct post-RI head; candidate #160 migration was excluded. Empty-to-head and predecessor/current-head proof must be repeated after #186 reconciliation. |
+| GN-WP-R2 | `IMPLEMENTED` | Supported production composition has no RouteLLM/ChatLLM/provider inference edge; the historical workflow remains uncomposed and fail-closed. |
+| GN-WP-R3 | `IMPLEMENTED` | Server-resolved Principal/client context, deterministic create/reuse/resume, bounded continuation, server-owned submission identity, atomic persistence, replay, stale/wrong-context refusal, and content-free status are wired. |
+| GN-WP-R4 | `IMPLEMENTED` | Local read-only observation, stable-read mutation checks, liveness/disappearance/reappearance, mapping, bounded OCR, transaction/replay, and provenance are covered; the actual run path requires fresh exact `AVAILABLE` evidence. |
+| GN-WP-R5 | `IMPLEMENTED` | Source-defined, composed, runtime-published, and grant-visible states are distinct; feature/client/grant/operator filtering and cross-Principal refusal are enforced. |
+| GN-WP-R6 | `IMPLEMENTED` | Logical page/note-unit/occurrence identity, raw/render separation, reorder/re-export/append behavior, server-grounded crop identity, append-only lineage, ambiguity, replay, and Principal isolation are implemented. |
+| GN-WP-R7 | `IMPLEMENTED` | Semantic/date/classification/entity-association contracts preserve evidence/confidence, use merged Entity/Project identity, fail closed on ambiguity, and add no server inference. |
+| GN-WP-R8 | `IMPLEMENTED` | Unified durable semantic Review supports bounded dispositions, exact Principal/run/proposal binding, immutable replay/correction provenance, and exclusion of rejected/superseded evidence. Delivery ledgers do not authorize send. |
+| GN-WP-R9 | `IMPLEMENTED; LIVE_SCHEDULE_PROHIBITED` | Authenticated bounded pull, deterministic resume, idempotent completion, bounded retries, and no-source-mutation/no-model-call composition are wired but disabled by default. |
+| GN-WP-R10 | `IMPLEMENTED_NON_PRODUCTION` | Immutable benchmark/evaluator/config identity, hard gates, bounded state/history, recovery/plateau behavior, and production-inert optimizer constraints are implemented. |
+| GN-WP-R11 / R12 | `OPERATOR_DECISION_REQUIRED` | Intentionally unperformed; no private-gold or runtime decision is inferred. |
+| OP-GN-01 | `REPOSITORY_PREREQUISITES_VERIFIED; OPERATOR_RUNTIME_ACTION_REQUIRED` | Repository health/dead-letter prerequisites are present; no live worker, source, or dead-letter operation was performed. |
 
-R2, R3, R5, and R9 remain incomplete on shared composition and publication
-surfaces. Those paths require a fresh ownership refresh before assignment; the
-current open RI PR owns only its recorded paths and adds no migration. R7 public
-schema/persistence/composition and R8 durable semantic-review storage remain
-incomplete. This ledger changes none of those shared paths.
+R0-R10 are code-complete on the current branch. They are not merge-complete
+until #186 ownership clears, its overlap is reconciled on then-current main,
+applicable validation passes, and a fresh non-author exact-head reviewer returns
+PASS.
 
-## Verification evidence
+## Validation evidence
 
-Evidence is head-qualified so a result is not silently promoted across later
-commits:
+Head-qualified results include:
 
-- on synchronized head `5121cfd5`, the applicable FAST selection completed
-  with `16,485 passed, 5 failed`; all five failures were stale count claims in
-  the RI/MCV-owned plans, not GoodNotes behavior failures;
-- on `5121cfd5`, focused GoodNotes, dependency, and Principal-bound coverage
-  completed with `3,085 passed`;
-- correction worker head `9ef15275` completed its focused pull-orchestration
-  selection with `28 passed`;
-- correction worker head `4b7b1086` completed its focused optimizer selection
-  with `50 passed`;
-- on integrated head `da3f3969`, the orchestrator's combined post-integration
-  R9/R10 selection completed with `78 passed`; and
-- the independent reviewer later ran a changed-GoodNotes unit selection on
-  `da3f3969` with `189 passed`;
-- on `da3f3969`, the three count-governance files completed with `48 passed,
-  5 failed in 143.22s`: the RI plan claims FAST `16,380` where the tree collects
-  `16,512`, database/recovery/e2e `2,081` where the tree collects `2,082`, mypy
-  `449` files where mypy reports `452`, and architecture `4,932` where the tree
-  collects `4,971`; the MCV plan claims 318 source modules where the tree holds
-  321;
-- the two corrected source modules and their two focused test files pass Ruff
-  (`All checks passed`), Ruff format (`4 files already formatted`), and targeted
-  mypy (`2 source files`, no issues);
-- on exact R7 code head `1ceb5b1b`, the focused R7 identity selection completed
-  with `34 passed`, the broader GoodNotes unit selection completed with
-  `211 passed`, and the dependency-architecture selection completed with
-  `1,520 passed`; targeted mypy covered the two changed source files with no
-  issues, and Ruff check, Ruff format check, and `git diff --check` passed;
-- on exact corrected code head `11f77f47`, the correction author completed the
-  focused R7 identity selection with `39 passed`, the broader GoodNotes unit
-  selection with `216 passed`, and the dependency-architecture selection with
-  `1,520 passed`; Ruff check, Ruff format check, targeted mypy over the two
-  changed source files, and `git diff --check` also passed. Those author results
-  did not themselves substitute for later independent validation or exact-head
-  review;
-- on exact ledger head `191ae002`, independent validation confirmed the prior
-  major and minor closed: the focused R7 identity selection completed with
-  `39 passed`, the broader GoodNotes unit selection with `216 passed`, and the
-  dependency-architecture selection with `1,520 passed`; Ruff check and format
-  check covered 20 files, targeted mypy covered the two changed source files,
-  and `git diff --check` passed. This was validation, not independent exact-head
-  review or an applicable PR-tier result;
-- on exact post-sync head `a4a104f5`, the focused R7 selection completed with
-  `39 passed`, the broader GoodNotes unit selection with `216 passed`, the
-  GoodNotes-filtered application-capability selection with
-  `3 passed, 42 deselected`, and the dependency-architecture selection with
-  `1,520 passed`;
-  Ruff check and format check, targeted mypy over the two changed source files,
-  and `git diff --check` passed. Independent validation nevertheless returned
-  `FAIL` because the ledger identities were stale, not because these code
-  checks failed;
-- the count guards rerun at `a4a104f5` completed with `48 passed, 5 failed`.
-  Current exact mismatches are: the RI plan claims FAST `16,382` while
-  collection reports `16,529`; database/recovery/e2e claims `2,081` while
-  collection reports `2,082`; mypy claims 449 sources while mypy reports 452;
-  architecture claims
-  `4,932` while collection reports `4,971`; and the MCV plan claims 318 source
-  modules while the repository holds 321. These authoritative claims remain
-  owned by their active shared plans;
-- on exact current-main integration head `b273298c`, Ruff check passed over all
-  22 changed paths, Ruff format check reported 20 files already formatted,
-  targeted mypy reported no issues in four source files, and the eight changed
-  GoodNotes unit modules completed with `204 passed`;
-- R7 date-contract worker head `672a9b16` completed its focused date and
-  semantic-command selection with `27 passed`; Ruff check/format, targeted
-  mypy, and `git diff --check` passed;
-- R4/R8 corrective head `019a5e1f` completed its focused GoodNotes unit
-  selection with `90 passed`; Ruff check/format, targeted mypy over three
-  source files, and `git diff --check` passed;
-- the isolated database campaign partially executed `1,462 passed, 0 failed`
-  in `56:03`; 620 tests in the named database/recovery/e2e selection were not
-  executed, so this is not a completed database tier or an applicable PR-tier
-  pass; and
-- post-run inspection found zero disposable-database residue, and the temporary
-  database container was removed.
+- R7 date semantics: 27 passed; Ruff, format, mypy, and diff checks passed.
+- R4/R8 liveness/promotion: 90 passed; Ruff, format, mypy, and diff checks
+  passed.
+- R2/R5 production composition/capability state: 47 passed plus 15 passed with
+  141 deselected; Ruff and targeted mypy passed.
+- R3/R9 contract phase: 258 passed, 4,861 passed, and 10 passed; Ruff and mypy
+  passed.
+- Phase-B static/schema/persistence selections: 64 passed with 3 skipped,
+  67 passed, 33 passed, and 48 passed with 3 skipped.
+- Phase-B dependency/unit selection: 1,563 passed.
+- Phase-B isolated PostgreSQL repository test: 3 passed against the fixed
+  disposable database `my_pa_goodnotes_pull_repository_test`; post-cleanup
+  database count was zero. Only the repository-declared local development
+  placeholder configuration was used; no shared or production database was
+  queried.
+- Phase C focused settings/gateway/capability/remote-MCP/policy/security: 573
+  passed.
+- Phase C Principal scanner plus R8 promotion: 657 passed. R8 uses a structural
+  binding method; only exact documented server-composed/persisted record reads
+  were registered.
+- Phase C thin-adapter, transport-behavior, dependency-direction, and
+  single-service-entry contracts: 1,679 passed.
+- Phase C targeted mypy over 12 changed source/composition files passed; Ruff
+  check/format over 17 paths and `git diff --check` passed.
 
-Earlier post-WP08 evidence remains historical: the lineage fixture collision
-was corrected using synthetic-only data and its full file then passed 11 tests
-with zero disposable-database residue. It is not restated as current-head full
-database validation.
+An HTTP/transport attempt produced 170 passes before the sandbox denied local
+`127.0.0.1:0` binds, causing 282 failures and 300 setup errors. This is an
+environment gate, not a claimed pass. A broad architecture run was stopped at
+61% after it exposed only pre-existing/out-of-scope count/prose drift in the
+RI plans and shared README/CLI. The applicable full tier has therefore not
+passed, and no contrary claim is made.
 
-No live database, personal data, external model, source mutation, deployment,
-or live network action supplied this evidence.
+## Review, runtime, and closure gates
 
-## Independent review history and current disposition
+Historical exact-head reviews were invalidated by later synchronization and
+implementation commits. A fresh reviewer who authored none of this change must
+review the final reconciled head and has authority to block. Any later commit,
+including #186 reconciliation, invalidates that verdict.
 
-The review chronology is preserved rather than overwritten:
+P2-W12's six blockers and four majors were mapped as challenge evidence. They
+are not self-closed by this campaign and require their own governing authority.
 
-- `FAIL` at `c094b27e102ae43112eba7017362a7e4e51a1be5`, tree
-  `78518b91f81c025155986ee53b9729ce5cc9200b`, reported two blockers and one
-  major; later historical corrections closed cursor integrity, client binding,
-  architecture boundary, and delivery replay issues;
-- `FAIL` at `6b3871272a3abd2e824b29450602df8db4a71f75`, tree
-  `26a7743a3f4af8657eb5df3635094e9844ce7c89`, confirmed the R8/R9 corrections
-  and identified the optimizer plateau-limit major plus stale plan wording;
-- `PASS` at the safe post-WP08 head
-  `aad35a6ec69d1adda0b0be144346dcc4402e9bbc`, tree
-  `d0821e5dba699add3a76e00f8c9582ea19e87ffa`, applied only to that exact head;
-  later synchronization and commits invalidated it for merge purposes; and
-- the independent review of `da3f3969`, tree `24e57c06`, passed both
-  source corrections and reported one ledger-only major: this document still
-  described WP09 and `c99cd8ed8d1c` as current and denied a current review. The
-  subsequent ledger-only corrections addressed that documentary finding; and
-- the fresh independent review of `077ad00d`, tree
-  `f9fa226ce71f252ed6ab54037942c481d8d047a1`, reported `PASS` with zero
-  blocker, major, or minor findings for that bounded code-and-evidence head. It
-  did not establish an applicable PR-tier pass, PR eligibility, merge
-  eligibility, or objective completion. The later R7 commit `1ceb5b1b`
-  invalidated that exact-head verdict for merge purposes;
-- independent validation of `a6ac0d45`, tree `19b12784`, returned `FAIL` with
-  the legacy/other-identifier normalized-name fallback major and the direct
-  wrong-plane result-construction minor described above; and
-- correction `11f77f47`, tree `bad9b804`, addresses those findings, but neither
-  it nor the then-current ledger had an independent review verdict; and
-- independent validation of `191ae002`, tree `d67c07fb`, returned `PASS` and
-  confirmed the prior major and minor closed. This is not an independent
-  exact-head review, does not establish PR eligibility, and will not apply to
-  later commits; and
-- independent post-sync validation of `a4a104f5`, tree `89321159`, found the
-  GoodNotes code checks green but returned `FAIL` because the ledger still
-  carried the prior base and integration identities. This one-file correction
-  addresses that evidence-only mismatch, but has no validation or independent
-  exact-head review verdict yet.
+Remaining operator-only/runtime actions are R11/R12, data-eligibility/private-
+gold decisions, B0 or real-handwriting execution, live schedule creation, live
+source/worker/dead-letter operations, production activation/deployment,
+credentials, source mutation, and material risk acceptance.
 
-No historical verdict authorizes the current or eventual head. Required count
-guards remain red because their authoritative claims are in shared plans, the
-database tier is incomplete, and this ledger correction changes the reviewed
-head. No PR has been opened for this tranche, and neither PR nor merge
-eligibility is established.
-
-## Remaining gates
-
-The objective remains incomplete pending:
-
-- a fresh current-head/ownership preflight if further GoodNotes DDL is actually
-  required;
-- R2 production-model isolation through settled shared composition paths;
-- R3 authenticated workflow context, bounded continuation, public contracts,
-  policy, persistence, and runtime wiring;
-- R5 capability/grant/composition/publication gates and operational proof;
-- R7 commands and public proposal schema, a generalized-Entity directory
-  adapter, `ORGANIZATION` association migration/persistence and isolated
-  database tests, and service/bootstrap/gateway/MCP wiring, all after fresh
-  ownership and current-head reauthentication;
-- R8 durable semantic-review decision persistence and public/server wiring;
-- R9 authorization, durable pull state where required, gateway/MCP publication,
-  schedule wiring, and synthetic production-path proof;
-- correction of the five authoritative count claims by their owning campaign,
-  followed by a complete applicable PR tier;
-- completion of the 620 unexecuted database/recovery/e2e tests if that tier is
-  required for the final changed surface;
-- operator decisions for R11, R12, and OP-GN-01; and
-- a fresh independent review bound to the final exact head, followed by the
-  applicable PR and merge decisions. Historical validation does not supply
-  review authority for the current corrective head.
-
-No blocker was bypassed. This ledger records the bounded R7 Option 2 decision,
-but no R7 completion, request completion, applicable PR-tier pass, PR or merge
-eligibility, release, deployment, private-data use, R11/R12 decision, terminal
-evidence publication, or Drive publication.
+Durable Drive evidence must include the request, preflight/register, this
+ledger, worker handoffs/manifest, migration and test evidence, independent
+review, final response, source/evidence manifest, and binding roundtrip receipt.
+Publication requires the exact owning Drive folder identity and byte-exact
+readback; preparing local evidence does not constitute publication.

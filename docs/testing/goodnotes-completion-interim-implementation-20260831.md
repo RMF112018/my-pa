@@ -21,8 +21,8 @@ reconciliation, exact-head review, and merge.
   `25301329e9172014b58f555ee99575fc24244fb1`, tree
   `7ca6398ca4f03fcbec9b1500a44f91ce034a6d9d`.
 - The current corrected implementation head before this ledger-only update is
-  `17760373b71e59533f9c4adf3cd0af9468bd7d89`, tree
-  `c02af7f3e073888563b75eb5a86760200f58d615`.
+  `e5281bf92368ae349d8347ea4716ae00e4e246d5`, tree
+  `256574e707a90b5ff57622ef1e780eb09e764b62`.
 - The isolated branch is `bf/goodnotes-post-ui-safe-sync-20260903` in
   `/private/tmp/my-pa-goodnotes-post-ui-safe-sync-20260903`.
 - The primary checkout remains detached at its pre-existing commit and was not
@@ -97,6 +97,14 @@ campaign assertion is
   the corrected body and its canonical result digest are stored in the same
   serialized Review ledger, promoted from defensive copies, and admitted only
   after the canonical proposal validator accepts the bounded field patch.
+- A second fresh independent review returned `FAIL` at `c31cad3c`, tree
+  `c2240094`: all five new tables admitted only a legacy 24-hex Principal while
+  the deterministic authenticated local Principal has a 32-character suffix.
+  PostgreSQL reproduced check violation `23514` on the real service path.
+- `e5281bf92368ae349d8347ea4716ae00e4e246d5` replaces those five checks with
+  the repository's canonical `prn_[A-Za-z0-9]{8,64}` convention and binds a
+  regression to the real deterministic `local_principal()` value. The existing
+  revision and parent remain unchanged.
 
 ## Work-package status
 
@@ -156,6 +164,8 @@ Head-qualified results include:
 - The amended migration and corrected SQL repository passed all 3 focused
   tests against `my_pa_goodnotes_pull_repository_test`; post-run database
   existence count was zero.
+- Canonical Principal corrective selection: 7 passed; Ruff check/format,
+  targeted mypy, Alembic-head, and diff checks passed.
 
 An HTTP/transport attempt produced 170 passes before the sandbox denied local
 `127.0.0.1:0` binds, causing 282 failures and 300 setup errors. This is an
@@ -166,12 +176,16 @@ passed, and no contrary claim is made.
 
 ## Review, runtime, and closure gates
 
-The fresh non-author reviewer returned `FAIL` at exact head
+The first fresh non-author reviewer returned `FAIL` at exact head
 `ba54cc098de71dc4ea3439264e9893af8ceed915`, tree
 `2ac1d62fdbeeb2c07723aef145b2a47cd31de55c`, with the two P1 findings described
-above. Commit `17760373` invalidates that verdict after correcting both
-findings. A different fresh reviewer who authored none of this change must now
-review the corrected exact head and has authority to block. Any later commit,
+above. Commit `17760373` invalidated that verdict after correcting both
+findings. The second fresh reviewer returned `FAIL` at exact head
+`c31cad3c624ebe25f3ead3baaa940d5baac9b373`, tree
+`c2240094b7a859e7adaa8fda41cc3dcda2e51c10`, for the canonical Principal
+constraint mismatch. Commit `e5281bf9` corrects that finding and invalidates
+the second verdict. Another fresh reviewer who authored none of this change
+must review the new exact head and has authority to block. Any later commit,
 including #186 reconciliation, invalidates that verdict.
 
 P2-W12's six blockers and four majors were mapped as challenge evidence. They

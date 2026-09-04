@@ -196,6 +196,17 @@ Conservative dispositions for the Reports read-plane BFF. This is not WP12 Morni
 - **PFE-AC-052:** unchanged; Create-Task from a Brief item is out of this package.
 - Five `reports.*` read capabilities are in `gateway.json`. `reports.begin_cycle`, `reports.commit`, and `reports.record_run_state` are not browser-admitted. `frontend / contract` and `frontend / e2e-critical` (`reports-contract.spec.ts`) protect the admitted shapes.
 
+## UI-IMP-WP12 Morning Brief and Specialist Intelligence UI notes
+
+Conservative dispositions for the Intelligence working surface on the WP11 reports plane. This is not a canonical Brief item schema, not Task-from-Brief, not production activation, and not `PASS_VERIFIED` for `PFE-AC-048..057`.
+
+- **PFE-AC-048 / 053 / 054 / 055 / 056:** `implementation_disposition = VALIDATION_REQUIRED`. `/intelligence` shows `reports.resolve_set` (`set_id` `morning_brief_inputs`) aggregate and members with backend vocabulary. READY is not mapped to system health. Partial/non-READY required members stay visible. History is `/intelligence/history` by `cycle_run_id` / `business_date` from resolve_set when present. Business date is never the browser clock. `frontend / e2e-critical` includes `intelligence-journey.spec.ts`.
+- **PFE-AC-049:** remains `IMPLEMENTATION_REQUIRED`. `structured_content` is disclosed as opaque persisted keys. Markdown is secondary RichContent only. No BriefSection/BriefItem model, no scraped item IDs.
+- **PFE-AC-050 / 051:** remain `IMPLEMENTATION_REQUIRED` for item-level links and item evidence. Report-level provenance is in-page disclosure and is not claimed as item-level proof.
+- **PFE-AC-052:** remains `IMPLEMENTATION_REQUIRED`. No Task-from-Brief control; no fabricated origin evidence.
+- **PFE-AC-057:** specialist artifacts are consumed through `reports.read` / list / resolve_set. No browser scraping of source files.
+- Today shows a compact Morning Intelligence pulse. Partial/unavailable Brief coverage is not “all clear”.
+
 ## UI-IMP-WP13 Canonical Entity / People BFF notes
 
 Conservative dispositions for the entity read-plane BFF. This is not WP14 Directory UI, not merge/split, and not `PASS_VERIFIED` for `PFE-AC-071..076`.
@@ -214,6 +225,14 @@ Conservative dispositions for the People working surface on the WP13 entity read
 - **PFE-AC-074:** remains true by omission. No frontend merge/split/observe/author control.
 - **PFE-AC-076:** related Tasks/Commitments/meetings/intelligence are omitted unless a canonical relation is on the payload. No name-scan joining.
 - Legacy `/relationships/[personId]` remains the continuity timeline (continuity `person_id`, not `entity_id`). No blind redirect.
+
+## UI-IMP-WP23 Federated Search BFF notes
+
+This is Search BFF substrate, not Command UX, not `PASS_VERIFIED` of `PFE-AC-083..085`, and not a claim against the full 250-criterion ledger.
+
+- **PFE-AC-083:** at most `VALIDATION_REQUIRED` for typed federated hits and per-domain coverage. `GET /api/search?q=` fans out to admitted `*.search` capabilities; report hits remain `ReportSearchMatch`; entity hits remain `EntitySummary` without `entities.resolve` / `entities.list`. Coverage never reports a silently omitted domain as searched with `hitCount` 0.
+- **PFE-AC-084 / 085:** remain `IMPLEMENTATION_REQUIRED` (WP24 Command / Cmd+K).
+- **UI-IMP-WP22 remains `PROVISIONAL_NOT_ACTIVATED`** (same as WP21; no `goodnotes.*` in `gateway.json`; federated coverage omits GoodNotes as not activated). Correct non-activation does not block Wave 4.
 
 ## UI-IMP-WP21 disposition (docs only; recorded with WP25)
 

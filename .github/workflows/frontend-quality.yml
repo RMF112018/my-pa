@@ -203,7 +203,7 @@ jobs:
           # so resolve the setup-python interpreter rather than the bare name.
           python_bin="$(command -v python)"
           test -x "${python_bin}"
-          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/webauthn.spec.ts e2e/browser-security.spec.ts e2e/work-mutations.spec.ts e2e/review-decisions.spec.ts e2e/journeys.spec.ts e2e/reports-contract.spec.ts e2e/people-contract.spec.ts --project=desktop
+          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/webauthn.spec.ts e2e/browser-security.spec.ts e2e/work-mutations.spec.ts e2e/review-decisions.spec.ts e2e/journeys.spec.ts e2e/reports-contract.spec.ts e2e/people-contract.spec.ts e2e/intelligence-journey.spec.ts e2e/search-contract.spec.ts --project=desktop
 
   accessibility:
     name: frontend / accessibility
@@ -303,7 +303,7 @@ jobs:
           set -euo pipefail
           python_bin="$(command -v python)"
           test -x "${python_bin}"
-          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/work-acceptance.spec.ts e2e/journeys.spec.ts --project=desktop --project=tablet
+          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/work-acceptance.spec.ts e2e/journeys.spec.ts e2e/intelligence-journey.spec.ts --project=desktop --project=tablet
 
   required:
     name: frontend / required

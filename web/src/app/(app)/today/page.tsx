@@ -25,6 +25,7 @@ import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { PulseList } from "@/components/pulse/pulse-list";
 import { BackendPulseList } from "@/components/pulse/backend-pulse-list";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
+import { IntelligencePulse } from "./intelligence-pulse";
 import type { ContinuityPulseResult, PulseItem } from "@/lib/api/decode/capabilities/continuity.pulse";
 import type { BackendPulseItem } from "@/contracts/views";
 
@@ -81,6 +82,7 @@ export default async function TodayPage() {
     (await invokeGateway(principal, "continuity.pulse")) as GatewayOutcome<ContinuityPulseResult>,
     (result) => result.pulse_items.length,
   );
+  const intelligencePulse = await IntelligencePulse({ principal });
 
   return (
     <section aria-labelledby="today-heading" className="mx-auto max-w-2xl">
@@ -129,6 +131,7 @@ export default async function TodayPage() {
       ) : (
         <BackendPulseList items={answer.result.pulse_items.map(toItem)} />
       )}
+      {intelligencePulse}
     </section>
   );
 }

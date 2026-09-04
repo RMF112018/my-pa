@@ -11,12 +11,14 @@ reused optimistically.
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Protocol
 
+from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import utc_now
 from my_pa.domain.goodnotes.models import (
@@ -49,6 +51,7 @@ _ACTIVE_PRIOR = frozenset({GoodNotesIdentityStatus.ACTIVE, GoodNotesIdentityStat
 _IOU_THRESHOLD = 0.85
 _UNVERIFIED_REASON = "UNVERIFIED_VISUAL"
 _UNREADABLE_REASON = "UNREADABLE_TRANSCRIPTION"
+_PROMOTING_DISPOSITIONS = frozenset({Disposition.ACCEPT, Disposition.CORRECT_AND_ACCEPT})
 
 
 class OccurrenceReconcileBusyError(ValueError):
@@ -108,6 +111,44 @@ class OccurrenceReconcileResult:
     principal_id: str
     replayed: bool
     changes: tuple[GoodNotesRunNoteChange, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesSemanticPromotionEvidence:
+    """Server-held review result bound to one exact semantic proposal payload."""
+
+    principal_id: str
+    run_id: str
+    proposal_sha256: str
+    disposition: Disposition
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        if not self.run_id.startswith("gnrun_") or len(self.run_id) != 30:
+            raise ValueError("promotion evidence requires a GoodNotes run identity")
+        if len(self.proposal_sha256) != 64 or any(
+            character not in "0123456789abcdef" for character in self.proposal_sha256
+        ):
+            raise ValueError("promotion evidence requires a proposal digest")
+        if not isinstance(self.disposition, Disposition):
+            raise TypeError("promotion evidence requires a review disposition")
+
+
+def semantic_proposal_sha256(
+    page_version_id: str,
+    schema_version: str,
+    analyzer_name: str,
+    analyzer_version: str,
+    payload: dict[str, object],
+) -> str:
+    """Digest every persisted semantic-proposal field consumed by reconciliation."""
+    encoded = json.dumps(
+        [page_version_id, schema_version, analyzer_name, analyzer_version, payload],
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(encoded.encode()).hexdigest()
 
 
 class GoodNotesOccurrenceRepository(Protocol):
@@ -644,6 +685,35 @@ def _ground_crop(
     return crop_normalized_png(png_bytes, x_min, y_min, width, height)
 
 
+def _reviewed_proposals(
+    principal_id: str,
+    run_id: str,
+    proposals: Sequence[tuple[str, str, str, str, dict[str, object]]],
+    evidence: Sequence[GoodNotesSemanticPromotionEvidence],
+) -> tuple[tuple[str, str, str, str, dict[str, object]], ...]:
+    decisions: dict[str, Disposition] = {}
+    for item in evidence:
+        if item.principal_id != principal_id or item.run_id != run_id:
+            raise ValueError("semantic promotion evidence crossed its run context")
+        if item.proposal_sha256 in decisions:
+            raise ValueError("semantic promotion evidence is duplicated")
+        decisions[item.proposal_sha256] = item.disposition
+    reviewed: list[tuple[str, str, str, str, dict[str, object]]] = []
+    consumed: set[str] = set()
+    for proposal in proposals:
+        digest = semantic_proposal_sha256(*proposal)
+        disposition = decisions.get(digest)
+        if disposition is None:
+            raise ValueError("semantic proposal lacks server review evidence")
+        if disposition not in _PROMOTING_DISPOSITIONS:
+            raise ValueError("semantic proposal is not eligible for promotion")
+        consumed.add(digest)
+        reviewed.append(proposal)
+    if consumed != set(decisions):
+        raise ValueError("semantic promotion evidence does not match this run")
+    return tuple(reviewed)
+
+
 class GoodNotesOccurrenceReconciler:
     def reconcile(
         self,
@@ -653,6 +723,7 @@ class GoodNotesOccurrenceReconciler:
         repository: GoodNotesOccurrenceRepository,
         clock: Callable[[], datetime] = utc_now,
         lease_owner: str = _LEASE_OWNER_DEFAULT,
+        promotion_evidence: Sequence[GoodNotesSemanticPromotionEvidence] = (),
     ) -> OccurrenceReconcileResult:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         run = repository.run(principal_id, run_id)
@@ -684,8 +755,15 @@ class GoodNotesOccurrenceReconciler:
                 if position.page_version_id is not None:
                     snapshot_by_page[position.page_version_id] = snapshot.snapshot_id
         proposals = repository.semantic_proposals_for_run(principal_id, run_id)
+        reviewed = _reviewed_proposals(
+            principal_id,
+            run_id,
+            proposals,
+            promotion_evidence,
+        )
         current: list[CurrentOccurrence] = []
-        for page_version_id, schema_version, analyzer_name, analyzer_version, payload in proposals:
+        for proposal in reviewed:
+            page_version_id, schema_version, analyzer_name, analyzer_version, payload = proposal
             version = repository.page_version(principal_id, page_version_id)
             if version is None:
                 raise ValueError("a GoodNotes proposal is missing required geometry")

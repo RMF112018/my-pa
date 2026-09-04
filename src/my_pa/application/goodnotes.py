@@ -6,6 +6,7 @@ import hashlib
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol
 
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
@@ -62,6 +63,30 @@ class GoodNotesRepository(Protocol):
         versions: tuple[GoodNotesPageVersion, ...],
         regions: tuple[GoodNotesRegionProposal, ...],
     ) -> ReconciliationReceipt: ...
+
+
+def require_available_liveness(
+    receipt: GoodNotesSourceLivenessReceipt,
+    *,
+    source_root_id: str,
+    relative_path: str,
+    content_sha256: str,
+    at: datetime,
+) -> None:
+    """Bind settled bytes to an AVAILABLE server observation before ingestion."""
+    if not isinstance(receipt, GoodNotesSourceLivenessReceipt):
+        raise TypeError("a server-generated GoodNotes liveness receipt is required")
+    if not receipt.safe_to_ingest:
+        raise ValueError("the GoodNotes source is not available for ingestion")
+    if (
+        receipt.source_root_id != source_root_id
+        or receipt.relative_path != relative_path
+        or receipt.current_sha256 != content_sha256
+    ):
+        raise ValueError("the GoodNotes liveness receipt does not match the settled source")
+    age = (at - receipt.checked_at).total_seconds()
+    if age < 0 or age > receipt.maximum_staleness_seconds:
+        raise ValueError("the GoodNotes liveness receipt is stale")
 
 
 class ReconciliationConflictError(ValueError):

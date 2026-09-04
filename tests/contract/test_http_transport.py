@@ -98,6 +98,7 @@ from my_pa.application.commands import (
     CloseCommitment,
     Command,
     CommitIntelligenceArtifact,
+    CompleteGoodNotesPull,
     CreateCapture,
     CreateCommitment,
     CreateEntity,
@@ -127,6 +128,7 @@ from my_pa.application.commands import (
     GetEntityProfile,
     GetEntityRelationships,
     GetGoodNotesContent,
+    GetGoodNotesPullStatus,
     GetGoodNotesWork,
     GetGsqsB0Status,
     GetLatestIntelligenceArtifact,
@@ -161,6 +163,7 @@ from my_pa.application.commands import (
     PreviewEntityMerge,
     PreviewEntitySplit,
     ProposeRelationshipMemory,
+    PullGoodNotesWork,
     ReadCapture,
     ReadCommitment,
     ReadIntelligenceArtifact,
@@ -322,6 +325,13 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
         Capability.ENTITIES_MERGE,
         Capability.ENTITIES_SPLIT_PREVIEW,
         Capability.ENTITIES_SPLIT,
+        # The pull plane is independently disabled by default. This in-memory
+        # transport fixture has neither its repository nor an authenticated
+        # remote client, so the three names are reachable but unavailable at
+        # the composition floor.
+        Capability.GOODNOTES_PULL,
+        Capability.GOODNOTES_COMPLETE,
+        Capability.GOODNOTES_STATUS,
     }
 )
 
@@ -644,6 +654,9 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
                 }
             ],
         },
+        Capability.GOODNOTES_PULL: {"batch_size": 1},
+        Capability.GOODNOTES_COMPLETE: {"assignment_ids": ["a" * 64]},
+        Capability.GOODNOTES_STATUS: {},
         Capability.GSQS_START: {
             "authorization_id": "synthetic-b0-commissioning",
             "campaign_class": "SYNTHETIC",
@@ -1414,6 +1427,9 @@ def commands_for(
                 },
             ),
         ),
+        Capability.GOODNOTES_PULL: PullGoodNotesWork(batch_size=1),
+        Capability.GOODNOTES_COMPLETE: CompleteGoodNotesPull(assignment_ids=("a" * 64,)),
+        Capability.GOODNOTES_STATUS: GetGoodNotesPullStatus(),
         Capability.GSQS_START: StartGsqsB0(
             authorization_id="synthetic-b0-commissioning",
             campaign_class="SYNTHETIC",

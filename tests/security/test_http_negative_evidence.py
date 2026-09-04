@@ -568,6 +568,9 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
                 }
             ],
         },
+        Capability.GOODNOTES_PULL: {"batch_size": 1},
+        Capability.GOODNOTES_COMPLETE: {"assignment_ids": ["a" * 64]},
+        Capability.GOODNOTES_STATUS: {},
         Capability.GSQS_START: {
             "authorization_id": "synthetic-b0-commissioning",
             "campaign_class": "SYNTHETIC",
@@ -1506,6 +1509,9 @@ SCOPED_CAPABILITIES = [
         Capability.GOODNOTES_WORK,
         Capability.GOODNOTES_CONTENT,
         Capability.GOODNOTES_PROPOSE,
+        Capability.GOODNOTES_PULL,
+        Capability.GOODNOTES_COMPLETE,
+        Capability.GOODNOTES_STATUS,
         Capability.GSQS_START,
         Capability.GSQS_STATUS,
         Capability.REPORTS_BEGIN_CYCLE,

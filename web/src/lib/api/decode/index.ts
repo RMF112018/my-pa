@@ -38,6 +38,22 @@ import { decodeReportsLatest } from "./capabilities/reports.latest";
 import { decodeReportsList } from "./capabilities/reports.list";
 import { decodeReportsSearch } from "./capabilities/reports.search";
 import { decodeReportsResolveSet } from "./capabilities/reports.resolve_set";
+import { decodeEntitiesSearch } from "./capabilities/entities.search";
+import { decodeEntitiesGet } from "./capabilities/entities.get";
+import { decodeEntitiesResolve } from "./capabilities/entities.resolve";
+import { decodeEntitiesContext } from "./capabilities/entities.context";
+import { decodeEntitiesRelationships } from "./capabilities/entities.relationships";
+import { decodeEntitiesUnresolvedMentions } from "./capabilities/entities.unresolved_mentions";
+import { decodeEntitiesIdentifiersList } from "./capabilities/entities.identifiers.list";
+import { decodeEntitiesAliasesList } from "./capabilities/entities.aliases.list";
+import { decodeEntitiesAssignmentsList } from "./capabilities/entities.assignments.list";
+import { decodeEntitiesObservationsList } from "./capabilities/entities.observations.list";
+import { decodeEntitiesIdentityHistory } from "./capabilities/entities.identity_history";
+import { decodeEntitiesProfile } from "./capabilities/entities.profile";
+import { decodeEntitiesNamesList } from "./capabilities/entities.names.list";
+import { decodeEntitiesAddressesList } from "./capabilities/entities.addresses.list";
+import { decodeEntitiesCommunicationList } from "./capabilities/entities.communication.list";
+import { decodeEntitiesParticipationsList } from "./capabilities/entities.participations.list";
 import type { Decoder, GatewayCapability } from "./types";
 
 export type { CapabilityResults, DecodeResult, Decoder } from "./types";
@@ -81,4 +97,20 @@ export const DECODERS = {
   "reports.list": decodeReportsList,
   "reports.search": decodeReportsSearch,
   "reports.resolve_set": decodeReportsResolveSet,
+  "entities.search": decodeEntitiesSearch,
+  "entities.get": decodeEntitiesGet,
+  "entities.resolve": decodeEntitiesResolve,
+  "entities.context": decodeEntitiesContext,
+  "entities.relationships": decodeEntitiesRelationships,
+  "entities.unresolved_mentions": decodeEntitiesUnresolvedMentions,
+  "entities.identifiers.list": decodeEntitiesIdentifiersList,
+  "entities.aliases.list": decodeEntitiesAliasesList,
+  "entities.assignments.list": decodeEntitiesAssignmentsList,
+  "entities.observations.list": decodeEntitiesObservationsList,
+  "entities.identity_history": decodeEntitiesIdentityHistory,
+  "entities.profile": decodeEntitiesProfile,
+  "entities.names.list": decodeEntitiesNamesList,
+  "entities.addresses.list": decodeEntitiesAddressesList,
+  "entities.communication.list": decodeEntitiesCommunicationList,
+  "entities.participations.list": decodeEntitiesParticipationsList,
 } satisfies Record<GatewayCapability, Decoder<unknown>>;

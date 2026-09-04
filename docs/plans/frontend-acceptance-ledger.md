@@ -196,6 +196,15 @@ Conservative dispositions for the Reports read-plane BFF. This is not WP12 Morni
 - **PFE-AC-052:** unchanged; Create-Task from a Brief item is out of this package.
 - Five `reports.*` read capabilities are in `gateway.json`. `reports.begin_cycle`, `reports.commit`, and `reports.record_run_state` are not browser-admitted. `frontend / contract` and `frontend / e2e-critical` (`reports-contract.spec.ts`) protect the admitted shapes.
 
+## UI-IMP-WP13 Canonical Entity / People BFF notes
+
+Conservative dispositions for the entity read-plane BFF. This is not WP14 Directory UI, not merge/split, and not `PASS_VERIFIED` for `PFE-AC-071..076`.
+
+- **PFE-AC-071 / 072 / 073 / 075 / 076:** `implementation_disposition = VALIDATION_REQUIRED` for contract substrate. Sixteen `entity_read` capabilities are admitted with fail-closed decoders. People is search, resolve, and profile — not a directory. Ambiguous `entities.resolve` keeps `outcome` visible. Record families are read through `entities.profile`; `entities.context` stays the frozen card.
+- **PFE-AC-074:** remains true by omission. There is no frontend merge control.
+- Unresolved mentions and observations refuse `observed_value`. A foreign `entity_id` is `not_found` with no existence leak.
+- Entity writes (`entities.merge`, `entities.split`, observe, authoring) are not browser-admitted. Grant/OAuth profiles are not mutated. `frontend / contract` and `frontend / e2e-critical` (`people-contract.spec.ts`) protect the admitted shapes.
+
 ## Known evidence limitations / record overrides
 
 These limitations are additive to the default `FINAL_WP02_RECONCILIATION_MISSING` status and do not create a pass:

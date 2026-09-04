@@ -1,3 +1,4 @@
-import { FeatureRouteState } from "@/components/shell/feature-route-state";
+import { PeoplePage } from "@/app/(app)/people/people-page";
 export const metadata = { title: "People — my-pa" };
-export default function PeoplePage() { return <FeatureRouteState title="People" description="Read-only relationship context and entity intelligence." state="degraded" detail="The entity plane exists, but this frontend has no admitted same-origin BFF exposure for its six read capabilities. No browser-to-gateway bypass is added." />; }
+export const dynamic = "force-dynamic";
+export default PeoplePage;

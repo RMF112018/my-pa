@@ -72,18 +72,25 @@ SCHEMA: Final = "knowledge"
 #: run beside them without one dropping what another is mid-transaction against.
 DISPOSABLE_DATABASE: Final = "my_pa_ri_ent_wp_10_11_vocabulary_test"
 
-#: The current head -- this revision -- and the edge this suite removes. Written
-#: out rather than imported so current chain drift and historical identity are
-#: checked independently.
-HEAD_REVISION: Final = "16f05c46b8c3"
-#: What was head until `HEAD_REVISION` stacked on it, and therefore the revision
+#: This revision -- the edge this suite removes. Written out rather than
+#: imported so current chain drift and historical identity are checked
+#: independently.
+REVISION: Final = "16f05c46b8c3"
+#: The chain's current head: `b8e4d1a6c073` (RI-ENT-WP-12, backfilling one
+#: `display`-typed `entity_names` row per active `entities` row), which was
+#: written against `c99cd8ed8d1c` and re-parented onto `REVISION` once this
+#: revision merged (RULING-M11), so the head this suite sees is that one and
+#: `REVISION` is the link directly beneath it. Written out rather than derived
+#: so chain drift fails here rather than passing.
+HEAD_REVISION: Final = "b8e4d1a6c073"
+#: What was head until `REVISION` stacked on it, and therefore the revision
 #: this module downgrades to. This revision was written against `c99cd8ed8d1c`
 #: and re-parented onto `UI-IMP-WP02`'s `2c00c9ac64bc` when `origin/main` merged
 #: (RULING-M11): both had been written against `c99cd8ed8d1c`, so the pair would
 #: otherwise have stood as two heads. `2c00c9ac64bc` adds WebAuthn credential,
 #: challenge, recovery-code and opaque session tables in the `identity` schema
 #: and widens none of the three `knowledge`-schema CHECKs this module exercises,
-#: so downgrading to it leaves exactly the pre-`HEAD_REVISION` vocabularies the
+#: so downgrading to it leaves exactly the pre-`REVISION` vocabularies the
 #: assertions below expect.
 PREVIOUS_REVISION: Final = "2c00c9ac64bc"
 #: What was head until `PREVIOUS_REVISION` stacked on it (`RI-ENT-WP-08`'s
@@ -324,7 +331,8 @@ def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> N
     script = ScriptDirectory.from_config(_config())
     heads = list(script.get_heads())
     assert heads == [HEAD_REVISION], f"expected exactly {HEAD_REVISION}, found {heads}"
-    assert script.get_revision(HEAD_REVISION).down_revision == PREVIOUS_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == REVISION
+    assert script.get_revision(REVISION).down_revision == PREVIOUS_REVISION
     assert script.get_revision(PREVIOUS_REVISION).down_revision == SECOND_TO_PREVIOUS_REVISION
     assert (
         script.get_revision(SECOND_TO_PREVIOUS_REVISION).down_revision == THIRD_TO_PREVIOUS_REVISION

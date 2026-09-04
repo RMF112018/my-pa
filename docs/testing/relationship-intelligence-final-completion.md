@@ -226,7 +226,19 @@ independent review:
    `b727e870d45e` being additive on `8e1c4a7b2d90`. Superseded again 2026-08-30:
    the chain is now 79 revisions at single head `7e114f822af2`, additive on
    `b727e870d45e` and adding the `entity_names`/`entity_organization_profiles`
-   tables (RI-ENT-WP-02, outside this completion campaign). The capability
+   tables (RI-ENT-WP-02, outside this completion campaign). Superseded a third
+   time 2026-09-02, at RI-ENT-WP-13 closeout: the chain is 87 revisions at
+   single head `2c00c9ac64bc`, measured by `ls migrations/versions/*.py` and
+   `ScriptDirectory.get_heads()`. Superseded a fourth time 2026-09-04, at
+   RI-ENT-WP-12 closeout after merging `origin/main` `455a3671` (PR #181):
+   the chain is 89 revisions at single head `b8e4d1a6c073`, measured the same
+   way; `origin/main` held 88 at `16f05c46b8c3` and WP-13 added no revision.
+   The ten revisions above `7e114f822af2`
+   carry RI-ENT-WP-03 through RI-ENT-WP-12 and UI-IMP-WP02, all outside this
+   completion campaign. This entry is appended rather than rewritten, and the
+   supersession is recorded here only because the sentence above it reads in
+   the present tense and had become false; nothing this campaign actually
+   reconciled is restated or revised. The capability
    figure (104) and the default MCP tool figure (55) are unchanged. The
    2026-08-28 figures are kept as the record of what was reconciled then.
 5. The entity privacy sweep derives all 34 entity capabilities and now collects

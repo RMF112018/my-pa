@@ -130,7 +130,7 @@ Preserved from the source audit; status reflects this increment only.
 | `COMPAT-001` | High | Additive-vs-breaking policy needed for generated strict schemas | Addressed procedurally in RI-ENT-WP-01 (below); no generated schema exists yet to apply it to |
 | `MIGRATION-001` | Critical | Legacy `relationship_people`/`relationship_organizations` coexist; must not infer legal identity from names | Honored: migration `7e114f822af2` is purely additive, backfills nothing, infers nothing |
 | `SECURITY-001` | High | New families must preserve Principal partitioning, composite keys, append-only ledgers, operator-only merge/split | Partitioning and composite keys: proven by `tests/schema/test_entity_names_and_organization_profile_migration.py`. `entity_project_participations` is Principal-partitioned the same way; `entity_role_types`/`entity_discipline_types` are deliberately **not** Principal-partitioned (global reference vocabularies — see `tests/architecture/test_user_owned_tables_are_partitioned.py`'s `UNPARTITIONED_USER_OWNED` entry for both). Merge/split: **fully wired as of RI-ENT-WP-06b** for all six Entity-bound families (deferred, not silently, through RI-ENT-WP-05) — see "Merge/split disposition" below |
-| `TEST-001` | High | No TBR completeness fixture exists | Not in scope (`RI-ENT-WP-13`); this increment adds a synthetic single-case fixture (GS4 Studios) proving the pattern, not the full register |
+| `TEST-001` | High | No TBR completeness fixture exists | **Closed for the record families this base carries, by RI-ENT-WP-13** — `tests/database/test_tbr_completeness_fixture.py` seeds one coherent synthetic register reproducing all twelve of the audit's section K difficult-record structures and proves each has a typed, queryable home, with the "no opaque JSON catch-all" criterion asserted against `information_schema` rather than in prose, through shared `tests.db.fixtures.migrated_engine`. The earlier single-case fixture proving the pattern remains. `RI-ENT-WP-09` through `RI-ENT-WP-11` and `RI-ENT-WP-13` are on `origin/main` as of `455a3671`; `RI-ENT-WP-12` is delivered on this branch. See the RI-ENT-WP-13 scope boundary below for what that package itself deferred and why |
 
 ## The 13 work packages (source audit ordering, section P)
 
@@ -147,8 +147,8 @@ Preserved from the source audit; status reflects this increment only.
 | WP-09 | Entity resolution/search vNext | **Delivered (partial)** — resolution now reads typed names, communication values, affiliations and project participations; `entities.search` matches five further paths and carries two disambiguators (`RI-AC-038`). Not delivered: no supporting index (no migration in scope), no effective dating on search, no MCP capability change (`WP-10`/`WP-11`), and the **two** committed database-tier modules, unexecuted during authoring, were executed afterwards and found two defects -- a `NameTypeCode` member that never existed (all eleven tests of that module had errored at setup) and a load-bearing search filter held by nothing -- both since corrected; see below |
 | WP-10 | MCP rich read contracts | **Delivered** — `entities.profile` plus four keyset `.list` reads over the record families, all under `Purpose.ENTITY_READ` and in no write register; four `*_page` port methods beside `identifier_page`/`alias_page`; `entities.context` unchanged and held so by `RULING-M7`'s exhaustive key-set assertions. Not delivered: no cursor on the profile, and the four SQL page bodies are unexecuted — see below |
 | WP-11 | MCP mutation contracts | **Delivered** — fifteen mutation contracts across all five Entity-bound record families, every one an explicitly-fielded command with an `idempotency_key`, every write accounted for by an `entity_mutation_events` row written through the new `application/entity_family_writes.py`; `MutationRecordFamily` widened from six to eleven. Not delivered, and disclosed rather than implied: the family write and its ledger row are two statements and not one, `RI-ENT-WP-08`'s `StatedAssertion`/`StatedEvidence` is not exposed, and a three-way correction collision still answers `internal_error`. Every database-tier test written for it was committed unexecuted; `9cd10a1c` ran them and found 32 failures on two invented identifier prefixes, and they are green at the closeout head — see below |
-| WP-12 | Legacy migration/backfill and compatibility adapters | Deferred |
-| WP-13 | TBR completeness fixture, security, compatibility and documentation | Deferred |
+| WP-12 | Legacy migration/backfill and compatibility adapters | **Delivered** — migration `b8e4d1a6c073` carries `entities.display_name`/`canonical_name` into one `display`-typed `entity_names` row per active entity (never a `legal` name), and writes **zero** `entity_project_participations` rows because, per `RULING-M10`, rule 3 correctly applied returns the empty set: no legacy row is directly representable. `entity_aliases`, `entity_assignments` and `entity_external_identifiers` are untouched. Written against `c99cd8ed8d1c` and re-parented onto `16f05c46b8c3` once RI-ENT-WP-10/11 merged first (`RULING-M11`), making the chain eighty-nine revisions long with one head. Upgrade/downgrade evidence is **executed and mutation-proved**: `tests/database/test_legacy_entity_backfill_migration.py` is 14 passed, run twice at `a235a67a` — once by the Manager and once independently — and mutating the migration's frozen `_NAME_TYPE_CODE` from `display` to `legal` fails three of those tests, including `test_nothing_the_backfill_writes_is_a_legal_name` with `assert 2 == 0`. See "RI-ENT-WP-12 — legacy backfill" below |
+| WP-13 | TBR completeness fixture, security, compatibility and documentation | **Delivered (partial)** — the synthetic completeness fixture over all twelve section K structures, the structural half of the audit's section N security matrix, and this record. MCP-facing security (`RI-ENT-WP-10`/`RI-ENT-WP-11`), the RULING-M7 compatibility snapshots (`RI-ENT-WP-10`), and resolution/search behaviour over the fixture (`RI-ENT-WP-09`) are on `origin/main` as of `455a3671` (PR #181, which already carried PRs #177 and #175). The backfill projection (`RI-ENT-WP-12`) is delivered on this branch rather than deferred. Four open items WP-13 found and reported rather than closed remain on that record — see below |
 
 ## RI-ENT-WP-01 — architecture/taxonomy freeze
 
@@ -2551,6 +2551,200 @@ marked `database`, `recovery` or `e2e` was run at any point by any WP-09
 package. The controlling context ran the database tier afterwards; see the
 executed-and-corrected note above. This paragraph describes who ran what during
 authoring, not the evidence standing at this head.
+## RI-ENT-WP-13 — TBR completeness fixture, security matrix, documentation
+
+**Objective** (source audit, sections K, N and O): a synthetic completeness
+fixture reproducing the audit's twelve difficult-record structures; the
+security matrix asserted rather than assumed; compatibility and documentation.
+**Delivered in part this increment, and the part not delivered is named below
+rather than implied.**
+
+### Scope boundary — what this increment deliberately does NOT do
+
+The audit lists WP-13 as depending on all prior work packages. When this
+increment was authored, `RI-ENT-WP-09` through `RI-ENT-WP-12` were **not
+merged**: WP-09 was in review, WP-10/WP-11 and WP-12 were being authored
+concurrently. (Corrected 2026-09-03 at the base integration of `origin/main`
+at `8f0e4779` and then `1bb7c3cf`: WP-09 has since merged as PR #175 at `6db2a203`, and WP-10/WP-11
+as PR #177 at `e004942b`; WP-12 remains unmerged. The scope boundary below is
+stated as it bound the increment when it was written, and is unchanged by
+those merges.) This increment is therefore bounded to
+what depends only on `RI-ENT-WP-01` through `RI-ENT-WP-08`, which is what its
+base carries. Deferred, with the work package that owns each:
+
+- resolution/search vNext behaviour over the fixture (`RI-ENT-WP-09`);
+- every MCP-facing item of the audit's security matrix — strict schemas with
+  no extra properties, purpose/capability authorization for the record
+  families, and whitelisted mutation fields (RULING 5) — because no
+  `entities.profile` capability, no record-family mutation capability and no
+  transport for these families exists on this base (`RI-ENT-WP-10`,
+  `RI-ENT-WP-11`). **No test asserting such a capability exists was written**:
+  on this base such a test would either pass vacuously or fail spuriously
+  depending only on how it was phrased, and either outcome is worse than the
+  honest absence recorded here;
+- compatibility snapshot tests for the existing `entities.*` tools under
+  RULING-M7, which are about capabilities `RI-ENT-WP-10` owns;
+- legacy backfill and its compatibility projection (`RI-ENT-WP-12`).
+
+### The completeness fixture
+
+`tests/database/test_tbr_completeness_fixture.py` seeds **one coherent
+synthetic register** into its own disposable database and proves, structure by
+structure, that each of the audit's twelve difficult records has a typed,
+queryable home. It is bound by RULING-M6: every organization, person, project,
+address, domain and identifier in it is invented, mailboxes and domains are
+`example.invalid`, and no real register content is imported, transcribed or
+paraphrased. Importing the real register is `AGENTS.md` section 8.2
+operator-reserved and was not attempted.
+
+The structures, and where each one lives:
+
+| Audit section K structure | Where it is stored | Test |
+|---|---|---|
+| Operating/brand identity vs owning legal entity; project address vs legal principal address | `entity_names` rows of different `name_type_code` on different entities, `operates_as`/`brand_of` edges, `entity_addresses` rows typed `project` and `legal_principal` | `test_an_operating_identity_and_its_owning_legal_entity_are_separate_typed_rows` |
+| A separate single-purpose vehicle, not an alias of its parent | its own `entities` row with `organization_kind_code = 'llc_or_spv'`, its own participation, a `subsidiary_of` edge — and no `alias` name row standing in for it | `test_a_single_purpose_vehicle_is_its_own_entity_not_an_alias_of_its_parent` |
+| Project-facing display, typed operating/brand name, current legal entity, historical juristic entity by lineage | separate `entities` rows joined by `historical_identity_of`; the predecessor's `legal` name sits on its own `entity_id` | `test_a_current_legal_identity_and_its_historical_predecessors_are_separate_entities` |
+| Legal identity that stays unresolved, with no fabricated legal-name string | `legal_identity_status_code = 'unresolved'` with zero `legal` name rows, the open question carried as an `entity_assertions` row | `test_an_unresolved_legal_identity_records_no_fabricated_legal_name` |
+| A contradicted-and-superseded assertion, not an alias treated as true; plus a project-scoped technical-review edge | two `entity_assertions` rows linked by `supersedes_assertion_id`; an `entity_relationships` row of type `technical_reviewer_of` carrying `scope_entity_id` | `test_a_contradicted_theory_is_superseded_rather_than_stored_as_an_alias` |
+| Two connected practices with a lineage edge and time-bounded acquisition | `practice_of`/`parent_of` edges plus an `acquired_by` edge carrying `effective_from`/`effective_to` | `test_two_connected_practices_carry_a_time_bounded_acquisition` |
+| Project-facing brand distinct from legal identity, participation carrying scope | separate typed `entity_names` rows; `entity_project_participations.scope_text` | `test_a_project_facing_brand_and_its_legal_name_are_separate_typed_rows` |
+| A contracting-affiliate relationship that stays unresolved, with no guessed affiliate | `legal_identity_status_code = 'awaiting_confirmation'`, a matching assertion, and **no** `contracting_entity_for` edge | `test_an_unresolved_contracting_affiliate_is_recorded_without_a_guessed_edge` |
+| Minimally canonical records under a hold, legal identity and discipline unresolved rather than guessed | `relationship_status_code = 'on_hold'`, `discipline_code` and `discipline_text` both null, the question carried as an assertion | `test_a_held_participation_does_not_overload_the_entity_status` |
+| A person with direct project participation, no organization foreign key, no placeholder company | an `entity_project_participations` row naming the person, and an affiliation row whose `organization_entity_id` is null | `test_a_person_participates_directly_without_a_placeholder_organization` |
+| A current operating identity that stays active while historical lineage exists as separate entities and edges | the survivor's `entities.status` stays `active`; predecessors are their own `historical` rows; the edges carry effective dates | `test_a_current_identity_stays_active_while_its_lineage_is_historical` |
+| A settled corporate identity alongside an unsettled project participation | `legal_identity_status_code` on the organization profile and `assertion_status` on the participation's assertion — two columns on two rows, and per RULING-M3 neither is a confidence | `test_a_settled_legal_identity_coexists_with_an_open_participation_question` |
+
+**The acceptance criterion is proven, not asserted.**
+`test_no_record_family_this_campaign_added_carries_an_opaque_json_column` reads
+`information_schema` on a live migrated database and proves that not one of the
+eleven tables this campaign created carries a `json` or `jsonb` column, and
+that the register wrote nothing into the two pre-existing `jsonb`-bearing
+ledgers. `test_every_material_element_of_the_register_has_a_structured_retrieval_path`
+states the exact row counts the register produces in every family it
+exercises, grouped by the closed vocabulary each family keys on, so a dropped
+row reddens rather than passing quietly. The same absence is proven
+structurally, without a database, by
+`test_no_new_campaign_table_carries_an_opaque_json_catch_all`.
+
+### The security matrix (audit section N)
+
+`tests/unit/test_entity_record_family_security_matrix.py` adds the structural
+assertions nothing previously made. Where an item was already proven, it is
+cited rather than duplicated, and every citation below was verified by reading
+the test body rather than trusting its name.
+
+| Audit section N item | State | Proof |
+|---|---|---|
+| Principal-scoped composite FK/unique discipline | Proven | `tests/schema/test_entity_names_and_organization_profile_migration.py::test_an_entity_name_cannot_bind_an_entity_of_a_different_principal` and its siblings in the address, participation and affiliation migration suites; reads by `tests/database/test_ri_ent_wp06b_merge_split.py::test_reads_of_the_six_new_families_are_partitioned_by_principal`; structurally by `test_only_the_global_seeded_vocabularies_stand_outside_the_partition` |
+| Server-issued canonical IDs | Proven, gap closed this increment | `tests/unit/test_entity_authoring.py::test_a_create_mints_the_identifier_the_version_and_the_status` covered `entity_id` only; `test_no_record_command_lets_a_caller_choose_the_identifier_of_a_new_row` and `test_each_family_mints_its_new_identifier_under_its_own_registered_kind` now cover the record families |
+| Append-only evidence/mutation/identity ledgers | Proven for the three ledgers that carry the trigger — `entity_mutation_events`, `entity_resolution_decisions`, `entity_identity_effects`; **open for BOTH `entity_assertions` and `entity_assertion_evidence`**, neither of which carries a trigger, and the evidence child of which is additionally `ON DELETE CASCADE` | `tests/schema/test_entity_lifecycle_migration.py::test_a_mutation_event_cannot_be_rewritten`, `tests/database/test_identity_correction_ledger.py::test_an_effect_row_cannot_be_updated`. See open item `RI-ENT-WP13-OPEN-1`. Corrected 2026-09-02 at closeout: this cell named only `entity_assertion_evidence` and so understated the gap, which the open item itself has always stated correctly as covering both tables |
+| Archive/end/supersede instead of delete | Proven behaviourally, and now structurally | `tests/database/test_entity_record_family_write_path.py::test_a_supersession_is_non_destructive`; `test_the_published_command_surface_declares_no_way_to_delete_a_record` and `test_no_repository_method_for_these_families_declares_a_delete_path` now prove no delete path is even declared |
+| Operator-only merge/split preview and apply | Proven | `tests/database/test_identity_correction_merge.py::test_a_caller_who_is_not_the_operator_is_denied_both_halves`; `tests/contract/test_capabilities_and_readiness.py::test_the_operator_only_set_is_enrollment_and_governed_identity_correction`; narrowed to the entity plane by `test_merge_and_split_stay_reserved_to_the_operator` |
+| Project-scoped records carry a project entity ID; no cross-project contamination | Proven | `tests/database/test_project_entity_participation_isolation.py::test_inserting_a_participation_never_touches_the_entitys_global_identity` and `tests/schema/test_entity_project_participations_migration.py::test_a_participation_cannot_bind_a_project_of_a_different_principal` |
+| Optimistic versions protecting concurrent reconciliation | Proven | `tests/database/test_entity_record_family_write_path.py::test_a_stale_expected_version_is_refused_and_writes_nothing`; `tests/database/test_entity_record_family_service_write_path.py::test_a_second_correction_built_from_the_same_read_is_refused`; the surface is closed by `test_every_transition_on_these_families_is_guarded_by_an_expected_version` |
+| Active typed name/channel uniqueness that does not equate shared names | Proven | `tests/schema/test_entity_names_and_organization_profile_migration.py::test_two_different_entities_may_share_an_active_name`, with `test_two_active_names_of_one_type_with_the_same_value_collide` as the anti-vacuity half, and the address and channel equivalents |
+| Bounded free text never interpreted as trusted SQL or HTML | **Partly proven** | Parameterization is proven for the search plane by `tests/security/test_query_is_data_not_sql.py::test_no_payload_reaches_the_statement_text`; non-blank bounds and "free text never becomes a taxonomy code" are proven by `tests/database/test_entity_record_family_write_path.py::test_a_participation_keeps_free_text_role_without_inventing_a_code`. The assertion plane's character ceiling is asserted by `test_the_assertion_planes_free_text_carries_an_explicit_character_ceiling`. **No upper length bound exists on the record-family free-text columns** — see `RI-ENT-WP13-OPEN-2` |
+| Merge preview enumerates downstream effects on every new table before apply | Proven for the six Entity-bound families; the assertion plane is a recorded exclusion | `tests/database/test_identity_correction_merge.py::test_a_preview_answers_for_every_family_the_contract_names`; `test_merge_and_split_enumerate_every_entity_bound_record_family` and `test_the_assertion_plane_is_a_recorded_exclusion_from_the_merge_surface`, the latter written so that adding an assertion family to the merge surface reddens and forces this record to be updated with it |
+| Split/undo extended to every new family before it becomes merge-reachable | Proven | the six `*_split_inverts` cases in `tests/database/test_ri_ent_wp06b_merge_split.py`, plus `test_a_name_created_after_the_merge_is_discovered_as_ambiguity` for the post-merge hazard |
+| Strict MCP schemas, purpose/capability authorization, whitelisted mutation fields (RULING 5) | **Deferred, not asserted** | No capability, tool or route exists for these families on this base. `RI-ENT-WP-10`/`RI-ENT-WP-11` own it; RULING 5 remains binding when they land |
+| A project-scoped name is never a global identity, and the reverse | Proven syntactically this increment; the residual is named, not implied | `tests/architecture/test_a_project_name_is_never_a_global_identity.py`. Added at closeout — see below |
+
+### The `project_display_name` boundary, made mechanical this increment
+
+RI-ENT-WP-04 wrote a prohibition into the DDL text of the column itself —
+nothing may write `entity_project_participations.project_display_name` into
+`entities.display_name` or `entities.canonical_name`, and nothing may read
+either of those into it — and called it "the single most important semantic
+boundary in this work package". It was restated in `persistence.tables`, in
+`EntityProjectParticipation`'s docstring, and in the revision's module
+docstring. **All four statements were prose.** Nothing reddened if production
+code violated the rule in either direction. That is `D-81`, the same defect
+class `test_no_revision_derives_a_closed_set_from_an_enum.py` exists because of.
+
+RI-ENT-WP-12's Orchestrator found this and deliberately declined to author the
+guard, on the ground that **a guard written by the context that wants the rule
+relaxed is not evidence**. That reasoning is correct and is preserved here: it
+disqualifies WP-12 and its successors, not the rule. WP-13 owns the security
+matrix, has no backfill in scope, and has no interest in the rule being
+relaxed, so the guard is authored here.
+
+`tests/architecture/test_a_project_name_is_never_a_global_identity.py` states
+three rules at expression and statement granularity — module granularity is
+useless, because `infrastructure/persistence/entity.py` names a global identity
+column thirty-eight times while legitimately owning both participation write
+sites — plus an anti-vacuity rule stated as **equalities** over the write-site
+and read-site populations, so a fourth site cannot be added silently. Each rule
+is paired with a plant that asserts it fires and a negative control that asserts
+it does not fire on the constructs the live surface really uses. Two false
+positives are registered by name and measured rather than matched around: the
+legacy ported `core.daily_brief_change_events.project_display_name`, and the
+CHECK constraint the boundary revision names after the column it constrains.
+
+**This does not close the whole class, and the module says so in its own
+docstring rather than leaving it to be discovered.** It is a syntactic rule: a
+value laundered through a local variable, a `**kwargs` splat, a mapping built
+by a helper, or SQL assembled at runtime from non-constant parts all pass it.
+Closing those needs a reaching-definitions analysis this repository does not
+have. What it does close is the surface as written today, in both directions,
+including the executed-SQL direction an expression rule structurally cannot see
+— which is the direction a bulk backfill would take.
+
+Two corrections to the record this work produced, both worth keeping:
+the prohibition names `entities.display_name` and `entities.canonical_name`,
+**not** the legacy `entity_assignments` table, which carries no name-bearing
+column at all and against which a rule would have quantified over nothing; and
+the persistence write site does not pass `project_display_name` to `values()`
+directly but to a `_bound(...)` helper inside it, so a rule shaped around the
+two constructs the prose names would have walked straight past the real site.
+
+### Open items this increment found and deliberately did not close
+
+- **`RI-ENT-WP13-OPEN-1`** — `entity_assertions` and `entity_assertion_evidence`
+  carry no append-only trigger. Migration `1cda4d536268` installs none, and the
+  evidence child is `ON DELETE CASCADE`. The service does not destroy evidence
+  (`tests/database/test_entity_assertion_provenance.py::test_superseding_an_assertion_leaves_the_old_row_and_its_evidence_intact`),
+  but that is application discipline, not a server refusal, and the audit's
+  matrix asks for the server refusal. Closing it needs a migration.
+- **`RI-ENT-WP13-OPEN-2`** — `entity_project_participations.role_text`,
+  `.discipline_text`, `.scope_text` and `.project_display_name`,
+  `entity_names.display_value`, `entity_communication_methods.display_value`
+  and `entity_addresses.raw_value` are declared `text` with only a non-blank
+  CHECK. No upper character bound exists at the server or in
+  `EntityRecordFamilyService`. Only the assertion plane has a ceiling. Closing
+  it needs a migration and a command-side refusal.
+- **`RI-ENT-WP13-OPEN-3`** — `ENTITY-STATE-001`'s canonicalization /
+  import-readiness state has no column anywhere on this schema, so the audit's
+  "held" record has no entity-level home. The fixture does not invent one, stub
+  one, or smuggle it into a text or JSON field: it records the hold where the
+  schema admits it, on the project participation, and
+  `test_a_held_participation_does_not_overload_the_entity_status` asserts the
+  design rule `RI-ENT-WP-01` actually recorded — that the hold is not
+  overloaded onto `entities.status`. This is the one audit element the schema
+  genuinely cannot yet represent, and it is reported rather than papered over.
+- **`RI-ENT-WP13-OPEN-4`** — a naming observation, for the campaign owner
+  rather than for this increment to act on.
+  `tests/database/test_entity_names_tbr_gs4_studios_fixture.py` names a real
+  firm and its real brand in its filename, its docstring and two comments, and
+  `src/my_pa/domain/relationship/entity.py` repeats the pair in a docstring.
+  The stored fixture data is genuinely invented and no register content is
+  present, so nothing is disclosed by the rows; but RULING-M6's discipline is
+  that register subjects are not transcribed, and a real firm's identity in a
+  test filename and a production docstring sits against it. Renaming is outside
+  this increment's owned paths and is not attempted here.
+
+### Compatibility
+
+`COMPAT-001` is satisfied trivially: this increment adds **no migration, no
+table, no column, no constraint, no enum member and no source module**. It adds
+three test modules and documentation -- two when this sentence was first
+written (`tests/database/test_tbr_completeness_fixture.py` and
+`tests/unit/test_entity_record_family_security_matrix.py`), and a third at
+closeout, `tests/architecture/test_a_project_name_is_never_a_global_identity.py`
+(corrected 2026-09-03; the closeout extended the increment without extending
+this sentence). Nothing it contains can break a consumer,
+and the compatibility obligation RULING-M7 states — a snapshot test per
+existing `entities.*` tool — belongs to `RI-ENT-WP-10`, which owns the
+capabilities those snapshots would bind.
 
 ## RI-ENT-WP-10 — MCP rich read contracts
 
@@ -3272,6 +3466,216 @@ the later head. `tests/architecture` was re-run green at that head.
 Nothing else in the gate moved: no source module, no test module count beyond
 those two tests, no migration, and one Alembic head throughout.
 
+## RI-ENT-WP-12 — legacy backfill: display names carried, participation correctly empty
+
+RI-ENT-WP-12 (legacy migration/backfill and compatibility adapters, source
+audit section J) is bound by `RULING-M5`'s five conservative rules and by
+`RULING-M10`, which resolved the one of them that could not be executed as
+written. Migration `b8e4d1a6c073` is the single revision this work package
+adds. It runs against disposable test databases only; mutating the persistent
+`my_pa` database remains `AGENTS.md` 8.2 operator-reserved.
+
+**Chain position (`RULING-M11`).** `b8e4d1a6c073` was written against
+`c99cd8ed8d1c`, as RI-ENT-WP-10/11's `16f05c46b8c3` was; merged as written the
+two would have stood as two Alembic heads. The Manager sequenced RI-ENT-WP-10/11
+first and RI-ENT-WP-12 re-parented afterwards: `down_revision` moved from
+`c99cd8ed8d1c` to `16f05c46b8c3` in one line, and `alembic heads` then shows
+exactly `b8e4d1a6c073` on a linear history through `c99cd8ed8d1c` ->
+`2c00c9ac64bc` -> `16f05c46b8c3` -> `b8e4d1a6c073`. `16f05c46b8c3` widens three
+closed-set CHECKs and creates and alters no table, so nothing the backfill reads
+or writes differs between the two parents. The chain length was then
+**re-measured, not derived**: `migrations/versions/*.py` numbers eighty-nine on
+the merged tree, one more than the eighty-eight `origin/main` held at
+`16f05c46b8c3` and two more than the eighty-seven this branch had measured
+against `c99cd8ed8d1c`. Every constant that had spelled the old figure or the
+old parent was swept for the value and the concept rather than for one constant
+name (`FINDING-M2`): nineteen `== 88` assertions in eighteen modules across
+`tests/schema` and `tests/architecture`, `REVISION_FILE_COUNT` and `PREVIOUS_REVISION` in
+`tests/database/test_legacy_entity_backfill_migration.py`, the
+`HEAD`/`HEAD_REVISION` constants in thirteen further schema and database
+modules, the SECOND-through-FIFTH ladder in
+`tests/database/test_phase_b_audit_vocabulary_migration.py` (every rung shifted
+by one and a sixth rung added so the chain covers exactly the links it covered
+before), and the spelled figure in the README, the system context, both
+runbooks and both plans.
+
+### Rule 1 — the display name, carried and never promoted
+
+`b8e4d1a6c073` inserts exactly one `entity_names` row per **active** `entities`
+row: `name_type_code = 'display'`, `display_value` from
+`entities.display_name`, `normalized_value` from `entities.canonical_name`.
+
+**Neither becomes a `legal` name.** There is no evidence in a display name
+about what an entity is legally called, and `ENTITY-SCHEMA-001` — this
+campaign's founding finding — exists precisely because that conflation was the
+defect. The migration writes the literal `'display'`, frozen in a module
+constant and not derived from `NameTypeCode` (`D-69`).
+
+Three narrowings are deliberate and each is a refusal to assert more than the
+legacy row carries:
+
+- **`is_preferred` is `false`.** Preference among display names is not a fact
+  the legacy schema records. `false` is both the column default and the
+  strictly conservative choice.
+- **`effective_from`/`effective_to` are NULL.** The legacy row carries no
+  dating for the name.
+- **Only `status = 'active'` entities are backfilled.** The other four statuses
+  are `archived`, `historical`, `inactive` and `merged_redirect`. A name row
+  with `state = 'active'` asserts the name is *currently in service*, and that
+  assertion is not supported for an entity that has been archived, retired, or
+  merged away — writing one would resurrect a retired name into RI-ENT-WP-09's
+  typed-name search, which is a behaviour change rather than a copy.
+
+### Rule 3 — applied, not withdrawn, and it returns zero rows
+
+`RULING-M10` is explicit that this is rule 3 *being applied correctly*, not
+overridden. Audit section J authorizes backfilling participation **"only for
+directly representable"** role/discipline/responsibility values.
+`entity_project_participations.project_display_name` is `text NOT NULL` with a
+non-blank CHECK and no default; legacy `knowledge.entity_assignments` carries
+no name-bearing column at all (only `role`, `discipline`,
+`responsibility_class`); and reading `entities.display_name` or
+`entities.canonical_name` into that column is forbidden by the column's own
+DDL comment in
+`migrations/versions/20260830_f5b06925857e_add_entity_project_participations_and_.py`,
+which RI-ENT-WP-04 called "the single most important semantic boundary in this
+work package".
+
+No legacy row is therefore directly representable, and **the correct output of
+rule 3 on this tree is the empty set**. That is a real answer, not a gap.
+
+`RULING-M10` refused the two alternatives on the record. Making
+`project_display_name` nullable would relax an accepted `NOT NULL` that exists
+precisely to stop a fabricated project name entering the record, in order to
+make a migration easier — reopening RI-ENT-WP-04's central semantic decision to
+serve convenience, and needing operator authorization under 8.2 that it does
+not have. Withdrawing rule 3 would lose the finding.
+
+The finding is held by a test rather than by this paragraph:
+`tests/database/test_legacy_entity_backfill_migration.py` asserts the migration
+creates **zero** `entity_project_participations` rows even against a fixture
+staging legacy `entity_assignments` rows that a careless backfill would have
+consumed. It fails if a future increment quietly starts fabricating project
+names.
+
+### Rules 2, 4 and 5 — carried by writing nothing
+
+- **Rule 2.** `entity_aliases` is not read, not written, not migrated. It keeps
+  its existing semantics; `entity_names` is an ADDITIONAL family, and whether
+  to consolidate the two is a later decision nobody has made (`RULING 3`).
+- **Rule 4.** No address or channel TYPE is ever inferred from string position.
+  The migration writes zero `entity_addresses` and zero
+  `entity_communication_methods` rows; unknown stays unresolved and untyped.
+- **Rule 5.** `entity_id` is preserved and nothing is renumbered. Legacy
+  relationship person/organization IDs remain bindings through the existing
+  namespaces of `entity_external_identifiers`, which the migration does not
+  touch.
+
+### Abort on ambiguity, and an exact downgrade
+
+The migration refuses rather than guesses. Three fail-closed guards run
+**before any write**, so it cannot half-apply: an entity that already carries
+an active `display` name row (the migration cannot decide whether the existing
+row or the legacy value is the truth), a derived identity that already exists,
+and a source value that is blank after trimming. Each raises naming the count
+and a bounded sample of `entity_id`s — identifiers only, never a name or any
+other free text, per `AGENTS.md` section 5.
+
+`entity_name_id` is derived deterministically as
+`'enam_' || md5('ri-ent-wp-12:display:' || entity_id)`, the same
+derive-an-opaque-id-in-SQL pattern
+`migrations/versions/20260825_3d07af4dc513_complete_relationship_intelligence_.py`
+already uses for `'rcpt_' || md5(...)`. Determinism is what makes `downgrade()`
+exact: it deletes only rows whose identifier equals that derived value, and a
+row written by any other writer carries a server-issued random identifier and
+cannot match. **That last claim is verified, not assumed**: the only production
+minter of an `enam_` identifier is `issue_identifier(IdKind.ENTITY_NAME)`
+(`src/my_pa/application/entity_record_families.py`), which returns
+`secrets.token_hex(...)` and whose docstring records that it takes no subject
+argument precisely so that "a function that cannot see the subject cannot
+encode it" (`src/my_pa/domain/source/registry.py`). No application-written row
+can therefore collide with a derived identifier, and guard B refuses the
+upgrade outright if one somehow does. The downgrade aborts first if any
+backfilled row has been superseded or is referenced as a successor, rather than
+destroying a later writer's data or dangling a foreign key.
+
+Every statement is set-based SQL or a `DO` block, so the revision renders
+identically in offline (`--sql`) mode and needs no online/offline branch.
+
+### Compatibility
+
+`tests/contract/test_entity_read_shape_compatibility.py` is the compatibility
+projection pin required by both the WP-12 brief and `RULING-M7`
+("compatibility is a test obligation, not an assertion"). It asserts the
+**exhaustive** response key sets of `entities.get`, `entities.search` and
+`entities.context` — the top-level `result` keys, the entity and entity-summary
+objects, the context card, and every nested collection element type — plus the
+generated MCP request-payload schemas and their `additionalProperties: false`.
+Before it, no exhaustive key-set assertion existed for any of the three: the
+existing tests check that individual keys are *present*, and no response JSON
+schema exists anywhere in `schemas/` to catch drift. Each of those response
+shapes is defined solely by the view builders in
+`src/my_pa/application/service.py`, so a pin over their output is the only
+thing that can catch a compatibility break.
+
+The backfill cannot move those shapes: not one of those read paths reads
+`entity_names` or any other new record family. `RULING-M10` kept the pin as a
+new file rather than an extension of `tests/contract/test_entity_capabilities.py`,
+because RI-ENT-WP-10/WP-11 is concurrently editing that file and the
+obligation is met either way.
+
+### One thing deliberately not done
+
+The prohibition on deriving `project_display_name` from `entities.display_name`
+or `entities.canonical_name` is **normative prose, not a mechanical guard**. No
+test fails if a writer violates it. The two tests that look like they enforce
+it do not: `test_entity_project_participation_carries_no_global_identity_field`
+(`tests/unit/test_project_entity_participation_domain.py`) is a reflection test
+over dataclass *field names*, and
+`tests/database/test_project_entity_participation_isolation.py` proves that
+writing a participation does not *mutate* the entity row. Neither tests
+derivation of the value.
+
+That guard was **not** authored here. `RULING-M10` adopted the reasoning: a
+guard written by the context that wanted the rule relaxed is not evidence. It
+belongs to RI-ENT-WP-13 or a later increment, and is recorded as owed rather
+than quietly left out.
+
+### Database evidence — executed, and mutation-proved
+
+`tests/database/test_legacy_entity_backfill_migration.py` is no longer written
+but unrun. It was executed against a disposable PostgreSQL database at head
+`a235a67a`, **14 passed**, twice and independently — once by the Manager and once
+by this work package — with the worktree verified clean and the migration
+byte-identical before and after each run.
+
+Execution alone is the weaker claim, so the central property is **mutation-proved**
+rather than merely observed green. Changing the migration's frozen
+`_NAME_TYPE_CODE` from `"display"` to `"legal"` — a single line — fails three
+tests: `test_nothing_the_backfill_writes_is_a_legal_name` with `assert 2 == 0`,
+`test_every_active_entity_gets_one_display_name_carrying_both_legacy_values`,
+and `test_guard_a_refuses_when_an_in_scope_entity_already_has_an_active_display_name`
+with `DID NOT RAISE`. `ENTITY-SCHEMA-001` — the campaign's founding finding — is
+therefore held by an assertion that demonstrably bites, not by a row count that
+would pass on a backfill writing the wrong name type. The mutation was reverted
+from a byte-exact backup and the restored file's SHA-256 re-checked.
+
+**A known limitation, recorded rather than repaired.**
+`test_no_address_or_communication_method_is_inferred` is weaker than the other
+thirteen. It stages a deliberately tempting `email`-namespaced external
+identifier, asserts `entity_addresses` and `entity_communication_methods` are
+both empty, and anchors that with `entity_external_identifiers == 1` — but that
+anchor would hold even if the upgrade had written nothing at all, because it
+only proves the identifier was not consumed, not that the migration ran. It is
+therefore a **forward-regression guard rather than a proof**, unlike
+`test_no_project_participation_row_is_fabricated_from_a_legacy_assignment`,
+which anchors its zero on `entity_names == 3` and so cannot pass vacuously. The
+property it half-covers — that the migration actually executed and wrote only
+what rule 1 allows — is genuinely covered by
+`test_every_active_entity_gets_one_display_name_carrying_both_legacy_values`.
+It is left as it stands deliberately: a test rewritten during closeout is one
+more thing the independent reviewer must re-verify, for a property already
+proved elsewhere. Recorded as a known limitation, not as an omission.
 
 ## Test evidence
 
@@ -3298,6 +3702,8 @@ against its own disposable database, never the configured one):
 - `.venv/bin/python -m pytest tests/unit tests/relationship tests/evaluation -q` (RI-ENT-WP-08 — the two `EntitiesRepository` doubles the port additions obliged)
 - `.venv/bin/python -m mypy src` (RI-ENT-WP-08)
 - `.venv/bin/python -m ruff check .` / `.venv/bin/python -m ruff format --check .` (RI-ENT-WP-08)
+- `.venv/bin/python -m pytest tests/unit/test_entity_record_family_security_matrix.py -q` (RI-ENT-WP-13)
+- `.venv/bin/python -m pytest tests/database/test_tbr_completeness_fixture.py -q` (RI-ENT-WP-13; database tier, strictly serial across this campaign — **written and committed, then EXECUTED: 14 passed**. Superseded 2026-09-02: this entry read "written and committed, NOT executed at this head", which was true when written and is no longer. The controlling context executed the module once the serialization gate cleared and reported 14 passed, and then did the thing that makes a green fixture worth something — it **mutation-proved** it: removing one seeded name row fails `test_every_material_element_of_the_register_has_a_structured_retrieval_path` on an exact per-vocabulary count mismatch, so the fixture is discriminating and not merely green. The original caveat is preserved because it records a real constraint that governed authoring: three sibling work packages were active concurrently and the disposable-database names this tier uses are fixed and machine-wide, so at authoring time the gate had not cleared and the module was statically cross-checked instead — every table, column and closed-vocabulary literal it writes verified against the migration that admits it, and collection run — with this campaign's own `NameTypeCode.TRADING` episode the reason "statically verified" was recorded then as *not* verified. **This execution was performed by the controlling context, not by the RI-ENT-WP-13 closeout, which held no database gate at any point**)
 - `.venv/bin/python -m pytest tests/relationship/test_relationship_domain.py -q`
 - `.venv/bin/python -m pytest tests/architecture/test_relationship_scoring_surface_is_denied.py -q`
 - `.venv/bin/python -m pytest tests/architecture/ -q`
@@ -3322,3 +3728,4 @@ restated here, so this document cannot drift ahead of what actually ran.
 - `migrations/versions/20260831_8dc3619891bb_add_entity_relationship_types.py` (RI-ENT-WP-06a).
 - `migrations/versions/20260831_1cda4d536268_add_entity_assertions_and_evidence.py` (RI-ENT-WP-07).
 - `migrations/versions/20260831_c99cd8ed8d1c_rename_design_coordinates_with.py` (the WP-08 blocker-clearing rename of the seeded `design_coordinates_with` row to `design_coordination_with`; `down_revision = 1cda4d536268`).
+- `migrations/versions/20260902_b8e4d1a6c073_backfill_legacy_entity_display_names.py` (RI-ENT-WP-12's legacy backfill: one `display`-typed `entity_names` row per active `entities` row, zero `entity_project_participations`/`entity_addresses`/`entity_communication_methods` rows; `down_revision = 16f05c46b8c3`, re-parented from `c99cd8ed8d1c` under `RULING-M11` once RI-ENT-WP-10/11 merged first).

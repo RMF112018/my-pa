@@ -29,13 +29,17 @@ MIGRATION: Final = ROOT / (
 PRIOR_REVISION: Final = "c99cd8ed8d1c"
 #: This module's subject revision: UI-IMP-WP02's auth-persistence revision.
 REVISION: Final = "2c00c9ac64bc"
-#: The chain's current head. `2c00c9ac64bc` was head on `origin/main`; merging
-#: RI-ENT-WP-10/11 into it re-parented `16f05c46b8c3` -- which had also been
-#: written against `c99cd8ed8d1c` -- onto `REVISION` (RULING-M11), so the head
-#: this suite must see is that one and `REVISION` is the link directly beneath
-#: it. Written out rather than derived so chain drift fails here rather than
-#: passing.
-HEAD_REVISION: Final = "16f05c46b8c3"
+#: The link directly above `REVISION`. `2c00c9ac64bc` was head on `origin/main`;
+#: merging RI-ENT-WP-10/11 into it re-parented `16f05c46b8c3` -- which had also
+#: been written against `c99cd8ed8d1c` -- onto `REVISION` (RULING-M11).
+NEXT_REVISION: Final = "16f05c46b8c3"
+#: The chain's current head: `b8e4d1a6c073` (RI-ENT-WP-12, backfilling one
+#: `display`-typed `entity_names` row per active `entities` row), likewise
+#: written against `c99cd8ed8d1c` and re-parented onto `NEXT_REVISION` once
+#: RI-ENT-WP-10/11 merged, so the head this suite must see is that one and
+#: `REVISION` is two links beneath it. Written out rather than derived so chain
+#: drift fails here rather than passing.
+HEAD_REVISION: Final = "b8e4d1a6c073"
 NEW_TABLES: Final = frozenset(
     {
         "webauthn_credentials",
@@ -86,12 +90,15 @@ def test_tables_share_the_canonical_identity_metadata() -> None:
     assert NEW_TABLES.issubset({table.name for table in IDENTITY_METADATA.tables.values()})
 
 
-def test_the_chain_has_one_head_and_this_revision_is_directly_beneath_it() -> None:
+def test_the_chain_has_one_head_and_this_revision_is_two_links_beneath_it() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD_REVISION]
-    assert script.get_revision(HEAD_REVISION).down_revision == REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == NEXT_REVISION
+    assert script.get_revision(NEXT_REVISION).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PRIOR_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 88
+    # 89 on the merged tree: 88 at `16f05c46b8c3` plus `b8e4d1a6c073`, counted
+    # rather than derived (RULING-M2).
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 89
 
 
 @pytest.mark.database

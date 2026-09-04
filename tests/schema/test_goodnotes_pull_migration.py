@@ -17,7 +17,7 @@ from my_pa.bootstrap.gateway import local_principal
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "6a2f9d1c4b80"
-PREVIOUS: Final = "16f05c46b8c3"
+PREVIOUS: Final = "b8e4d1a6c073"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260904_6a2f9d1c4b80_add_goodnotes_pull_and_review_ledgers.py"
 )

@@ -1,7 +1,7 @@
 """Add durable GoodNotes pull and semantic-review ledgers.
 
 Revision ID: 6a2f9d1c4b80
-Revises: 16f05c46b8c3
+Revises: b8e4d1a6c073
 Create Date: 2026-09-04
 
 The five tables are additive, Principal-partitioned, content-free orchestration
@@ -17,7 +17,7 @@ from typing import Final
 from alembic import op
 
 revision: str = "6a2f9d1c4b80"
-down_revision: str | None = "16f05c46b8c3"
+down_revision: str | None = "b8e4d1a6c073"
 branch_labels: str | None = None
 depends_on: str | None = None
 

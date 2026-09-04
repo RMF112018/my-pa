@@ -40,20 +40,25 @@ PHASE_B = "b64e29a0f7c1"
 PHASE_B_HEAD = "3d07af4dc513"
 GSQS_REVISION = "c4b0a1d9e827"
 PHASE_B_START = "c7a1f04b9e63"
-#: The chain's current head: `16f05c46b8c3` (RI-ENT-WP-10/11), which widens three closed-set
-#: CHECKs -- `audit_events.capability_is_known` (115 -> 135),
+#: The chain's current head is `6a2f9d1c4b80` (GoodNotes pull/review), serialized
+#: as the direct child of `b8e4d1a6c073`. That RI-ENT-WP-12 parent backfills one
+#: `display`-typed `entity_names` row per active `entities` row -- `display_value`
+#: from `entities.display_name`, `normalized_value` from `entities.canonical_name`,
+#: never a `legal` name -- and writes no `entity_project_participations` row
+#: (RULING-M10). It was written against `c99cd8ed8d1c` and re-parented onto
+#: `16f05c46b8c3` once RI-ENT-WP-10/11 merged (RULING-M11), so the pair stand as one
+#: chain rather than two heads. `16f05c46b8c3` (RI-ENT-WP-10/11) widens three
+#: closed-set CHECKs -- `audit_events.capability_is_known` (115 -> 135),
 #: `entity_mutation_events.a_mutated_record_family_is_known` (6 -> 11) and
 #: `entity_proposals.an_accepted_proposal_record_family_is_known` (6 -> 11) -- to admit
-#: RI-ENT-WP-10's five entity reads and RI-ENT-WP-11's fifteen entity mutation contracts. It
-#: creates and alters no table. It was written against `c99cd8ed8d1c` and re-parented onto
-#: `2c00c9ac64bc` (UI-IMP-WP02 auth persistence) when that merged, because both had been
-#: written against `c99cd8ed8d1c` and the pair would otherwise stand as two heads
-#: (RULING-M11). `2c00c9ac64bc` adds WebAuthn credential, challenge, recovery-code and
-#: opaque session tables, and is itself additive on `c99cd8ed8d1c` (RI-ENT-WP-08's
-#: blocker-clearing pass), which renames the seeded `entity_relationship_types` row
-#: `design_coordinates_with` to `design_coordination_with`; that in turn stacked on
-#: `1cda4d536268` (RI-ENT-WP-07). Written out rather than derived so chain drift fails here
-#: rather than passing.
+#: RI-ENT-WP-10's five entity reads and RI-ENT-WP-11's fifteen entity mutation contracts,
+#: creating and altering no table; it was itself re-parented from `c99cd8ed8d1c` onto
+#: `2c00c9ac64bc` (UI-IMP-WP02 auth persistence) for the same reason. `2c00c9ac64bc`
+#: adds WebAuthn credential, challenge, recovery-code and opaque session tables, and is
+#: itself additive on `c99cd8ed8d1c` (RI-ENT-WP-08's blocker-clearing pass), which
+#: renames the seeded `entity_relationship_types` row `design_coordinates_with` to
+#: `design_coordination_with`; that in turn stacked on `1cda4d536268` (RI-ENT-WP-07).
+#: Written out rather than derived so chain drift fails here rather than passing.
 HEAD = "6a2f9d1c4b80"
 REVISION_PATH = (
     ROOT

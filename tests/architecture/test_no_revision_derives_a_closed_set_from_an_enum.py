@@ -737,16 +737,22 @@ def _declared_frozen(module: ModuleType) -> dict[str, str]:
 def test_the_chain_is_readable_and_non_empty() -> None:
     """Guards every other test here: an empty chain would make them all vacuous."""
     revisions = list(_revisions())
-    # Eighty-nine, counted on the merged tree. Both branches corrected this from
-    # eighty-five to eighty-seven from the same baseline -- RI-ENT-WP-10/11 for
-    # `16f05c46b8c3`, which admitted the twenty new `entities.` capability names
-    # and the five new record families, and UI-IMP-WP02 for `2c00c9ac64bc`, which
-    # added the WebAuthn and auth-session tables -- and neither figure is true of
-    # a tree carrying both revisions, so this one is counted rather than picked
+    # Ninety, counted on the reconciled GoodNotes tree. The merged main chain
+    # contributes the eighty-nine revisions described below, and GoodNotes
+    # contributes `6a2f9d1c4b80` as the direct child of `b8e4d1a6c073`.
+    # Two earlier branches had corrected this
+    # from eighty-five to eighty-seven from the same baseline -- RI-ENT-WP-10/11
+    # for `16f05c46b8c3`, which admitted the twenty new `entities.` capability
+    # names and the five new record families, and UI-IMP-WP02 for
+    # `2c00c9ac64bc`, which added the WebAuthn and auth-session tables -- and the
+    # base merge counted eighty-eight because neither figure was true of a tree
+    # carrying both. RI-ENT-WP-12's `b8e4d1a6c073` (backfilling legacy display
+    # names into `entity_names`, re-parented onto `16f05c46b8c3` under
+    # RULING-M11) is the eighty-ninth, again counted rather than picked
     # (RULING-M2). This is a derived fact about the tree; the deny rule, the
     # allowlist and the freeze ledger are untouched.
-    assert len(revisions) == 89
-    assert len({revision for revision, _ in revisions}) == 89
+    assert len(revisions) == 90
+    assert len({revision for revision, _ in revisions}) == 90
     assert {
         "9c6b4a18ed72",
         "1a4c9e77b2d5",

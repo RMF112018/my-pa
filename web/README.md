@@ -70,7 +70,7 @@ All application pages require a verified session. `/sign-in` is public.
 | `PATCH /api/commitments/:commitmentId` | `commitments.update` | Applies one expected-version bounded Commitment update |
 | `GET /api/commitments/:commitmentId/history` | `commitments.history` | Reads the Commitment's append-only history |
 | `POST /api/commitments/:commitmentId/close` | `commitments.close` | Closes a Commitment explicitly with validated closure evidence |
-| `/system`, `GET /api/system` | `capabilities.get` | Reports the runtime manifest, readiness, and worker planes; connected-source enumeration remains unknown because no v1 capability provides it |
+| `/system`, `GET /api/system` | `capabilities.get`, `reports.list`, `reports.resolve_set` | Reports the runtime manifest, readiness, and worker planes; Morning Intelligence is resolver aggregate and members (READY is not system health); PWA fields are `PWA_FIELDS_PENDING_WP26`; connected sources remain unknown |
 | `POST /api/session` | none | Synthetic development sign-in only; refused in passkey mode and in production |
 | `POST /api/webauthn` | none | Passkey ceremony BFF; Python issues the opaque SID cookie after authentication or recovery |
 
@@ -89,8 +89,12 @@ known.
 The gateway degrades readiness when worker health is unavailable, when queued
 work has an absent or stale worker, or when a plane has dead-lettered work. An
 absent worker with no backlog is reported as `idle_or_not_required`; the web tier
-does not reinterpret that as a running worker. If the System route cannot reach
-the gateway, it renders the refusal rather than an empty healthy state.
+does not reinterpret that as a running worker. Worker `last_heartbeat_at` is
+rendered or explicitly unknown — never implied healthy. Morning Intelligence on
+this route is `reports.resolve_set` for `morning_brief_inputs` after discovering
+`cycle_run_id` from `reports.list`; READY is not mapped to a healthy system. If
+the System route cannot reach the gateway, it renders the refusal rather than an
+empty healthy state.
 
 ## Authentication and gateway identity
 

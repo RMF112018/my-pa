@@ -205,6 +205,25 @@ Conservative dispositions for the entity read-plane BFF. This is not WP14 Direct
 - Unresolved mentions and observations refuse `observed_value`. A foreign `entity_id` is `not_found` with no existence leak.
 - Entity writes (`entities.merge`, `entities.split`, observe, authoring) are not browser-admitted. Grant/OAuth profiles are not mutated. `frontend / contract` and `frontend / e2e-critical` (`people-contract.spec.ts`) protect the admitted shapes.
 
+## UI-IMP-WP21 disposition (docs only; recorded with WP25)
+
+`UI-IMP-WP21 PROVISIONAL_NOT_ACTIVATED`
+
+Authority: [`frontend-implementation-authority.md`](frontend-implementation-authority.md) (dedicated WP-14 audit missing); ledger flag `WP14_KNOWLEDGE_LIBRARY_GOODNOTES_AUDIT_MISSING`.
+
+This PR does not add `goodnotes.*` or `gsqs.*` to `gateway.json` and does not add WP21 UI. Correct non-activation does not block Wave 3.
+
+## UI-IMP-WP25 System / Health Runtime Truth notes
+
+Conservative dispositions for extending `/system` and `GET /api/system`. This package does not introduce `GET /api/health`, source enumeration, git SHA, or PWA implementation. Production activation is not claimed. Never `PASS_VERIFIED`.
+
+- **PFE-AC-123..139:** Remain `UNRECONCILED` (`UNRECONCILED_ACCEPTANCE_MAPPING_123_139`). Do not renumber, delete, or weaken. Visible-only System refresh is substrate for **PFE-AC-125** at most `VALIDATION_REQUIRED` in notes; never Drive `PASS_VERIFIED`. WP28–WP30 own route/bundle budgets, CI gates, and deployment identity.
+- Morning Intelligence is shown as `reports.resolve_set` (`set_id` `morning_brief_inputs`) aggregate **and** members. READY is not mapped to system health. BLOCKED/DEGRADED/MISSING stay visible.
+- Worker `last_heartbeat_at` is rendered or explicitly unknown. `worker_absent` remains not-healthy.
+- PWA fields are labelled `PWA_FIELDS_PENDING_WP26`. Cache identity, update channel, and offline/sync status are not invented.
+- Connected sources remain unknown (FBCG-007 residual). No source enumeration.
+- Runtime git SHA / deployed artifact identity remain unreported (WP29 residual).
+
 ## Known evidence limitations / record overrides
 
 These limitations are additive to the default `FINAL_WP02_RECONCILIATION_MISSING` status and do not create a pass:

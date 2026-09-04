@@ -27,23 +27,38 @@
  *
  * **The schema head is not restated here and must not be.** A migration revision
  * copied into the web tier is a claim nothing on this side can check, and it was
- * already stale by eight revisions the last time someone tried.
+ * already stale by eight revisions the last time someone tried. Git SHA and
+ * deployed artifact identity are likewise unreported (WP29).
+ *
+ * **Morning Intelligence is `reports.resolve_set` for `morning_brief_inputs`.**
+ * `cycle_run_id` is taken from the first `reports.list` item, the same discovery
+ * WP11 uses. Aggregate and per-member states stay visible. READY is not "the
+ * system is healthy". A missing worker heartbeat is unknown, never healthy.
+ * PWA fields are labelled `PWA_FIELDS_PENDING_WP26`.
  */
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resolveSessionPrincipal } from "@/lib/auth/principal";
-import { invokeGateway } from "@/lib/api/gateway";
+import { invokeGateway, type GatewayOutcome } from "@/lib/api/gateway";
 import { syntheticDataEnabled, gatewayAuthMode } from "@/lib/api/gateway-config";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { SurfaceState } from "@/components/ui/surface-state";
 import type { CapabilitiesGetResult } from "@/lib/api/decode/capabilities/capabilities.get";
+import type { ReportsListResult } from "@/lib/api/decode/capabilities/reports.list";
+import type { ReportsResolveSetResult } from "@/lib/api/decode/capabilities/reports.resolve_set";
+import type { PrincipalSession } from "@/contracts/identity";
+import { SystemRefresh } from "./system-refresh";
 
 export const metadata = { title: "System — my-pa" };
 
 /** What this page reports is what is true now, so it is never cached. */
 export const dynamic = "force-dynamic";
+
+const MORNING_BRIEF_SET_ID = "morning_brief_inputs";
+
+const NOT_HEALTHY_PLANE_STATES = new Set(["worker_absent", "worker_stale", "unavailable"]);
 
 const READINESS_TONE: Record<string, "green" | "gold" | "coral" | "neutral"> = {
   ready: "green",
@@ -51,6 +66,60 @@ const READINESS_TONE: Record<string, "green" | "gold" | "coral" | "neutral"> = {
   contracts_only: "coral",
   not_implemented: "coral",
 };
+
+const AGGREGATE_TONE: Record<string, "green" | "gold" | "coral" | "neutral"> = {
+  READY: "green",
+  DEGRADED: "gold",
+  BLOCKED: "coral",
+};
+
+const MEMBER_TONE: Record<string, "green" | "gold" | "coral" | "neutral"> = {
+  READY: "green",
+  MISSING: "coral",
+  FAILED: "coral",
+  PARTIAL: "gold",
+  STALE: "gold",
+  SUPERSEDED: "gold",
+  NOT_EXPECTED: "neutral",
+};
+
+type IntelligenceTruth =
+  | { state: "resolved"; result: ReportsResolveSetResult }
+  | { state: "no_cycle"; detail: string }
+  | { state: "unavailable"; detail: string };
+
+/**
+ * Discover `cycle_run_id` from `reports.list` (first listed item), then resolve
+ * `morning_brief_inputs`. Same capabilities WP11 E2E uses; no new reports surface.
+ */
+async function loadMorningBriefIntelligence(
+  principal: PrincipalSession,
+): Promise<IntelligenceTruth> {
+  const listed = (await invokeGateway(
+    principal,
+    "reports.list",
+  )) as GatewayOutcome<ReportsListResult>;
+  if (!listed.ok) {
+    return { state: "unavailable", detail: listed.error.message };
+  }
+  const cycleRunId = listed.result.items[0]?.cycle_run_id;
+  if (typeof cycleRunId !== "string") {
+    return {
+      state: "no_cycle",
+      detail:
+        "reports.list returned no artifact, so cycle_run_id is unknown and " +
+        "morning_brief_inputs was not resolved.",
+    };
+  }
+  const resolved = (await invokeGateway(principal, "reports.resolve_set", {
+    cycle_run_id: cycleRunId,
+    set_id: MORNING_BRIEF_SET_ID,
+  })) as GatewayOutcome<ReportsResolveSetResult>;
+  if (!resolved.ok) {
+    return { state: "unavailable", detail: resolved.error.message };
+  }
+  return { state: "resolved", result: resolved.result };
+}
 
 export default async function SystemPage() {
   const cookieStore = await cookies();
@@ -75,6 +144,7 @@ export default async function SystemPage() {
   const outcome = synthetic
     ? null
     : await invokeGateway(principal, "capabilities.get");
+  const intelligence = synthetic ? null : await loadMorningBriefIntelligence(principal);
 
   const result = outcome?.ok ? (outcome.result as CapabilitiesGetResult) : undefined;
   const manifest = result?.manifest;
@@ -89,9 +159,12 @@ export default async function SystemPage() {
 
   return (
     <section aria-labelledby="system-heading" className="mx-auto flex max-w-2xl flex-col gap-3">
-      <h1 id="system-heading" className="mb-1 text-xl font-semibold text-moss-slate">
-        System
-      </h1>
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+        <h1 id="system-heading" className="text-xl font-semibold text-moss-slate">
+          System
+        </h1>
+        <SystemRefresh />
+      </div>
 
       <Card>
         <CardTitle>Who you are to this system</CardTitle>
@@ -162,6 +235,20 @@ export default async function SystemPage() {
             children, the other requires a named subject — so the honest answer is that the list is
             unknown. It is not reported as <em>none</em>, because &ldquo;none&rdquo; is a claim
             nothing here can check.
+          </p>
+        </CardBody>
+      </Card>
+
+      <Card>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle>Progressive web app</CardTitle>
+          <Badge tone="gold">PWA_FIELDS_PENDING_WP26</Badge>
+        </div>
+        <CardBody>
+          <p data-testid="system-pwa-pending">
+            PWA fields are <strong>PWA_FIELDS_PENDING_WP26</strong>. Service-worker cache identity,
+            update channel, and offline/sync status are not reported here. They belong to WP26 and
+            are not invented.
           </p>
         </CardBody>
       </Card>
@@ -256,22 +343,40 @@ export default async function SystemPage() {
           <Card>
             <CardTitle>Background workers</CardTitle>
             <CardBody>
-              {workerPlanes ? (
+              {workerPlanes === undefined ? (
+                <p role="alert" data-testid="system-worker-planes-unknown">
+                  Worker-plane health is unavailable. This is not reported as healthy.
+                </p>
+              ) : workerPlanes.length === 0 ? (
+                <p role="alert" data-testid="system-worker-planes-unknown">
+                  No worker planes were reported. That is not a healthy claim.
+                </p>
+              ) : (
                 <ul className="space-y-2" data-testid="system-worker-planes">
                   {workerPlanes.map((plane) => (
-                    <li key={plane.plane}>
+                    <li key={plane.plane} data-testid="system-worker-plane" data-plane={plane.plane}>
                       <strong>{plane.plane}</strong>: {plane.state}
                       {typeof plane.backlog === "number" ? ` — ${plane.backlog} queued/running` : ""}
                       {typeof plane.dead_lettered === "number"
                         ? `, ${plane.dead_lettered} dead-lettered`
                         : ""}
+                      {plane.last_heartbeat_at ? (
+                        <span data-testid="system-worker-heartbeat">
+                          {" "}
+                          — last heartbeat {plane.last_heartbeat_at}
+                        </span>
+                      ) : (
+                        <span data-testid="system-worker-heartbeat-unknown">
+                          {" "}
+                          — last heartbeat unknown
+                        </span>
+                      )}
+                      {NOT_HEALTHY_PLANE_STATES.has(plane.state) ? (
+                        <span data-testid="system-worker-not-healthy"> — not healthy</span>
+                      ) : null}
                     </li>
                   ))}
                 </ul>
-              ) : (
-                <p role="alert" data-testid="system-worker-planes-unknown">
-                  Worker-plane health is unavailable. This is not reported as healthy.
-                </p>
               )}
             </CardBody>
           </Card>
@@ -296,6 +401,53 @@ export default async function SystemPage() {
         </>
       )}
 
+      {intelligence ? (
+        <Card>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <CardTitle>Morning Intelligence readiness</CardTitle>
+            {intelligence.state === "resolved" ? (
+              <Badge tone={AGGREGATE_TONE[intelligence.result.aggregate] ?? "neutral"}>
+                <span data-testid="system-intelligence-aggregate">{intelligence.result.aggregate}</span>
+              </Badge>
+            ) : (
+              <Badge tone="gold">unknown</Badge>
+            )}
+          </div>
+          <CardBody>
+            <p data-testid="system-intelligence-not-system-health">
+              This is the <code>{MORNING_BRIEF_SET_ID}</code> resolver aggregate, not a claim that
+              the system is healthy. BLOCKED, DEGRADED, and MISSING members stay visible.
+            </p>
+            {intelligence.state === "unavailable" ? (
+              <p className="mt-2" role="alert" data-testid="system-intelligence-unavailable">
+                Morning Intelligence readiness could not be resolved. {intelligence.detail}
+              </p>
+            ) : intelligence.state === "no_cycle" ? (
+              <p className="mt-2" role="alert" data-testid="system-intelligence-no-cycle">
+                {intelligence.detail}
+              </p>
+            ) : (
+              <ul className="mt-2 space-y-1" data-testid="system-intelligence-members">
+                {intelligence.result.members.map((member) => (
+                  <li
+                    key={member.member_id}
+                    data-testid="system-intelligence-member"
+                    data-member-id={member.member_id}
+                  >
+                    <Badge tone={MEMBER_TONE[member.readiness] ?? "neutral"}>
+                      <span data-testid="system-intelligence-member-readiness">{member.readiness}</span>
+                    </Badge>{" "}
+                    <span data-testid="system-intelligence-member-id">{member.member_id}</span>
+                    {member.required ? " (required)" : ""}
+                    {member.readiness_reason ? ` — ${member.readiness_reason}` : ""}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardBody>
+        </Card>
+      ) : null}
+
       <Card>
         <CardTitle>What is still true regardless</CardTitle>
         <CardBody>
@@ -313,6 +465,10 @@ export default async function SystemPage() {
             <li>
               No page here restates the database schema version. That claim belongs to the
               migration history, which this tier cannot read.
+            </li>
+            <li>
+              No page here restates a git revision or deployed artifact identity. That claim
+              belongs to WP29, which this tier cannot check.
             </li>
           </ul>
         </CardBody>

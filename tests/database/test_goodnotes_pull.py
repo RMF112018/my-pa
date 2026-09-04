@@ -107,7 +107,7 @@ def test_session_identity_and_retry_policy_fail_closed(engine: Engine) -> None:
             repository.claim_batch(PRINCIPAL, "scheduler-a", "ctx-stable-a", (), (), max_attempts=4)
 
 
-def test_semantic_review_exact_replay_conflict_and_projection(
+def test_semantic_review_exact_replay_conflict_projection_and_client_status_isolation(
     engine: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run_id = "gnrun_0123456789abcdef01234567"
@@ -418,6 +418,27 @@ def test_semantic_review_exact_replay_conflict_and_projection(
             )
         )
         assert accepted.sequence == 3
+        scheduler_a = repository.status(PRINCIPAL, "scheduler-a")
+        scheduler_b = repository.status(PRINCIPAL, "scheduler-b")
+        assert (
+            scheduler_a.pending,
+            scheduler_a.assigned,
+            scheduler_a.completed,
+            scheduler_a.exhausted,
+        ) == (0, 1, 0, 0)
+        assert (
+            scheduler_b.pending,
+            scheduler_b.assigned,
+            scheduler_b.completed,
+            scheduler_b.exhausted,
+        ) == (1, 0, 0, 0)
+        with pytest.raises(PullRepositoryConflictError):
+            repository.complete_batch(
+                PRINCIPAL,
+                "scheduler-b",
+                "ctx-stable-b",
+                (admission,),
+            )
 
     completed = service.invoke(
         RequestMetadata(
@@ -452,6 +473,20 @@ def test_semantic_review_exact_replay_conflict_and_projection(
 
     with engine.begin() as connection:
         repository = SqlGoodNotesPullRepository(connection)
+        scheduler_a = repository.status(PRINCIPAL, "scheduler-a")
+        scheduler_b = repository.status(PRINCIPAL, "scheduler-b")
+        assert (
+            scheduler_a.pending,
+            scheduler_a.assigned,
+            scheduler_a.completed,
+            scheduler_a.exhausted,
+        ) == (0, 0, 1, 0)
+        assert (
+            scheduler_b.pending,
+            scheduler_b.assigned,
+            scheduler_b.completed,
+            scheduler_b.exhausted,
+        ) == (1, 0, 0, 0)
         with pytest.raises(SemanticReviewConflictError):
             repository.record_semantic_review(
                 SemanticReviewDecision(

@@ -185,6 +185,11 @@ class SqlGoodNotesPullRepository:
         self._clock = clock
 
     def work_states(self, principal_id: str) -> tuple[PullWorkState, ...]:
+        return self._work_states(principal_id)
+
+    def _work_states(
+        self, principal_id: str, *, client_id: str | None = None
+    ) -> tuple[PullWorkState, ...]:
         eligible = (
             select(
                 goodnotes_ingestion_runs.c.run_id,
@@ -260,6 +265,11 @@ class SqlGoodNotesPullRepository:
             )
             for row in self._connection.execute(eligible)
         )
+        assignment_partition = [_mine(goodnotes_pull_assignments, principal_id)]
+        completion_partition = [_mine(goodnotes_pull_completions, principal_id)]
+        if client_id is not None:
+            assignment_partition.append(goodnotes_pull_assignments.c.client_id == client_id)
+            completion_partition.append(goodnotes_pull_completions.c.client_id == client_id)
         attempt_rows = self._connection.execute(
             select(
                 goodnotes_pull_assignments.c.run_id,
@@ -267,7 +277,7 @@ class SqlGoodNotesPullRepository:
                 goodnotes_pull_assignments.c.content_sha256,
                 func.max(goodnotes_pull_assignments.c.attempt).label("attempts"),
             )
-            .where(_mine(goodnotes_pull_assignments, principal_id))
+            .where(*assignment_partition)
             .group_by(
                 goodnotes_pull_assignments.c.run_id,
                 goodnotes_pull_assignments.c.page_version_id,
@@ -281,9 +291,7 @@ class SqlGoodNotesPullRepository:
         completed = {
             str(value)
             for value in self._connection.scalars(
-                select(goodnotes_pull_completions.c.assignment_id).where(
-                    _mine(goodnotes_pull_completions, principal_id)
-                )
+                select(goodnotes_pull_completions.c.assignment_id).where(*completion_partition)
             )
         }
         completed_work = {
@@ -294,7 +302,7 @@ class SqlGoodNotesPullRepository:
                     goodnotes_pull_assignments.c.page_version_id,
                     goodnotes_pull_assignments.c.content_sha256,
                 ).where(
-                    _mine(goodnotes_pull_assignments, principal_id),
+                    *assignment_partition,
                     goodnotes_pull_assignments.c.assignment_id.in_(completed),
                 )
             )
@@ -621,7 +629,7 @@ class SqlGoodNotesPullRepository:
                 goodnotes_pull_sessions.c.client_id == client_id,
             )
         ).one_or_none()
-        states = self.work_states(principal_id)
+        states = self._work_states(principal_id, client_id=client_id)
         maximum = 10 if session is None else int(session.max_attempts)
         return GoodNotesPullStatus(
             pending=sum(not state.completed and state.attempts == 0 for state in states),

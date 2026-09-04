@@ -1,6 +1,6 @@
 # GoodNotes completion implementation ledger
 
-Status: `GOODNOTES_IMPLEMENTATION_REVIEW_CORRECTED_EXACT_HEAD_FAST_AND_REVIEW_PENDING`
+Status: `GOODNOTES_IMPLEMENTATION_FAST_PASS_REVIEW_BLOCKED_CORRECTION_PENDING_REREVIEW`
 
 Request: `REQ-MYPA-GOODNOTES-COMPLETION-IMPLEMENTATION-20260831-002`
 
@@ -9,10 +9,11 @@ campaign to its current implementation evidence. It does not authorize or
 claim deployment, live data or source access, production activation, a live
 ChatLLM schedule, B0 execution, R11/R12 decisions, private-gold access, risk
 acceptance, merge eligibility, or final repository completion. PR #186 and
-the admitted RI work are merged, and their migration and database-test
-infrastructure have been reconciled into this branch. A fresh non-author
-review of the post-ledger exact head and a full exact-head FAST result are still
-required.
+the admitted RI work, including PR #192's `entities.graph`, are merged, and
+their migration and database-test infrastructure have been reconciled into
+this branch. The exact integrated head passed FAST and then received a fresh
+non-author `BLOCK`; this correction invalidates that verdict, so a fresh
+exact-head review is required.
 
 ## Authority and repository identity
 
@@ -20,12 +21,12 @@ required.
   SHA-256
   `a3fa8c926aab74823c86a637f696c07f8fbc3fd0bc110e51c1d5138f7f6da7d1`.
 - The current authenticated `origin/main` is commit
-  `67ad226210c27119a7ea91b992872d8daaee3d56`, tree
-  `c9018d681b340e14706cf500d01d2a4eec7d9d55`.
-- The clean pre-ledger integration basis, carrying the post-RI reconciliation
-  and all subsequent GoodNotes corrections described below, is commit
-  `7cec3ebda7843f64a673e00f0ec0ddb59d9f9136`, tree
-  `b19a444e068ed022d0c96e7c0ed240e7e30cd2ae`. The ledger/count-only commit created
+  `6033b8d1cfbb3e326c846b5ffec3e8fe980f99ff`, tree
+  `5bea9c02278cb701474b5c0299a86ae67ddd66b1`.
+- The clean pre-correction basis, carrying the post-PR192 reconciliation and
+  all subsequent GoodNotes corrections described below, is commit
+  `21974cce2f9f4021f6c584516df035d7f02da9a2`, tree
+  `38626f42c5c65f79071b9f4daef243c1545ea85b`. The corrective commit created
   after this refresh is reported in its handoff rather than guessed here.
 - The isolated branch is `bf/goodnotes-post-ui-safe-sync-20260903` in
   `/private/tmp/my-pa-goodnotes-post-ui-safe-sync-20260903`.
@@ -53,11 +54,12 @@ and this ledger update.
 - Closed PR #170 was rediscovered as merged. Its migration
   `9a3f6c1e8d24` is in the authenticated ancestry; at that historical
   synchronization point, `main` had sole head `16f05c46b8c3`.
-- Post-RI `main` introduced migration `b8e4d1a6c073`. The GoodNotes migration
+- Post-RI `main` introduced migration `b8e4d1a6c073`, and PR #192 added
+  `c3f8a1d07e94` directly above it. The GoodNotes migration
   `migrations/versions/20260904_6a2f9d1c4b80_add_goodnotes_pull_and_review_ledgers.py`
   was created only after RI migration ownership cleared and was mechanically
-  reparented after that accepted migration landed. It is additive, descends
-  directly from `b8e4d1a6c073`, and produces sole head `6a2f9d1c4b80`.
+  reparented after those accepted migrations landed. It is additive, descends
+  directly from `c3f8a1d07e94`, and produces sole head `6a2f9d1c4b80`.
 - PR #186 (`bf/db-test-ci-consolidation-20260903`) merged from feature commit
   `04bd3852b14beb15ad7ec122c23634c3fa319272` as `origin/main`
   `37f767b85fbc0cd1e84fd0c8acd831b0c47142b2`. Merge commit
@@ -204,21 +206,35 @@ semantic or prose changes. The campaign assertion is
   in-transaction disposition/result validation; and named lookup has no
   arbitrary collection cutoff. Its new six-test module moves the derived FAST
   and test-module counts to 17,079 and 469 respectively.
+- `b71d59aed56238b8ff9b9cb22a0557db1a251943` merges current `main`
+  `6033b8d1cfbb3e326c846b5ffec3e8fe980f99ff` after PR #192, preserving
+  `entities.graph` and serializing the migration chain as
+  `b8e4d1a6c073 -> c3f8a1d07e94 -> 6a2f9d1c4b80`.
+- `d6849ae2bb34cd02bdd686b60511b00fc3d82337` reconciles the derived
+  ninety-one-revision invariant, and
+  `21974cce2f9f4021f6c584516df035d7f02da9a2` mechanically wraps the
+  resulting explanatory comments without changing behavior.
+- A fresh independent review of exact head `21974cce`, tree `38626f42`,
+  returned `BLOCK`: GoodNotes status aggregated assignment/completion
+  counters across authenticated clients within one Principal, and this ledger
+  still described the pre-PR192 basis. The bounded correction partitions
+  status by exact Principal/client and reconciles only current-state evidence;
+  a fresh review of its resulting exact head remains required.
 
 ## Work-package status
 
 | Work package | Repository status | Evidence or residual gate |
 | --- | --- | --- |
 | GN-WP-R0 | `PASS` | Current main, PR/worktree ownership, the post-RI Alembic graph, collision handling, and requirement seams were authenticated and registered before writes. PR #160 is closed unmerged; PR #152 is abandoned historical evidence, its branch remained untouched, and only four released shared-plan counts were refreshed. |
-| GN-WP-R1 | `IMPLEMENTED` | One additive migration descends from the correct post-RI head; candidate #160 migration was excluded. PR #186 is merged and its provisioning contract is reconciled. The sole Alembic head is `6a2f9d1c4b80`, whose direct parent is `b8e4d1a6c073`. |
+| GN-WP-R1 | `IMPLEMENTED` | One additive migration descends from the correct post-PR192 head; candidate #160 migration was excluded. PR #186 is merged and its provisioning contract is reconciled. The sole Alembic head is `6a2f9d1c4b80`, whose direct parent is `c3f8a1d07e94`, itself directly on `b8e4d1a6c073`. |
 | GN-WP-R2 | `IMPLEMENTED` | Supported production composition has no RouteLLM/ChatLLM/provider inference edge; the historical workflow remains uncomposed and fail-closed. |
-| GN-WP-R3 | `IMPLEMENTED` | Server-resolved Principal/client context, deterministic create/reuse/resume, bounded continuation, server-owned submission identity, atomic persistence, replay, stale/wrong-context refusal, and content-free status are wired. |
+| GN-WP-R3 | `IMPLEMENTED` | Server-resolved Principal/client context, deterministic create/reuse/resume, bounded continuation, server-owned submission identity, atomic persistence, replay, stale/wrong-context refusal, and exact Principal/client-partitioned content-free status are wired. |
 | GN-WP-R4 | `IMPLEMENTED` | Local read-only observation, stable-read mutation checks, liveness/disappearance/reappearance, mapping, bounded OCR, transaction/replay, and provenance are covered; the actual run path requires fresh exact `AVAILABLE` evidence. |
 | GN-WP-R5 | `IMPLEMENTED` | Source-defined, composed, runtime-published, and grant-visible states are distinct; feature/client/grant/operator filtering and cross-Principal refusal are enforced. |
 | GN-WP-R6 | `IMPLEMENTED` | Logical page/note-unit/occurrence identity, raw/render separation, reorder/re-export/append behavior, server-grounded crop identity, append-only lineage, ambiguity, replay, and Principal isolation are implemented. |
 | GN-WP-R7 | `IMPLEMENTED` | Semantic/date/classification/entity-association contracts preserve evidence/confidence, use merged Entity/Project identity, fail closed on ambiguity, and add no server inference. |
 | GN-WP-R8 | `IMPLEMENTED` | Unified durable semantic Review supports bounded dispositions, exact Principal/run/proposal binding, immutable replay/correction provenance, and exclusion of rejected/superseded evidence. Delivery ledgers do not authorize send. |
-| GN-WP-R9 | `IMPLEMENTED; LIVE_SCHEDULE_PROHIBITED` | Authenticated bounded pull, deterministic resume, idempotent completion, bounded retries, and no-source-mutation/no-model-call composition are wired but disabled by default. |
+| GN-WP-R9 | `IMPLEMENTED; LIVE_SCHEDULE_PROHIBITED` | Authenticated bounded pull, deterministic resume, idempotent completion, bounded retries, exact client-isolated status counters, and no-source-mutation/no-model-call composition are wired but disabled by default. |
 | GN-WP-R10 | `IMPLEMENTED_NON_PRODUCTION` | Immutable benchmark/evaluator/config identity, hard gates, bounded state/history, recovery/plateau behavior, and production-inert optimizer constraints are implemented. |
 | GN-WP-R11 / R12 | `OPERATOR_DECISION_REQUIRED` | Intentionally unperformed; no private-gold or runtime decision is inferred. |
 | OP-GN-01 | `REPOSITORY_PREREQUISITES_VERIFIED; OPERATOR_RUNTIME_ACTION_REQUIRED` | Repository health/dead-letter prerequisites are present; no live worker, source, or dead-letter operation was performed. |
@@ -232,6 +248,18 @@ returns `PASS` against that same head, and PR CI passes against the same head.
 
 Head-qualified results include:
 
+- Exact integrated head `21974cce2f9f4021f6c584516df035d7f02da9a2`,
+  tree `38626f42c5c65f79071b9f4daef243c1545ea85b`, passed the loopback-enabled
+  FAST selection: 19,270 collected, 17,137 selected and passed, 2,133
+  deselected in 733.81 seconds. A subsequent fresh review returned `BLOCK`
+  for the status-partition and current-state-evidence findings corrected here;
+  FAST success did not override that verdict.
+- The status-isolation correction's canonical disposable-PostgreSQL
+  `tests/database/test_goodnotes_pull.py` module passed all 3 tests against
+  the documented passwordless localhost service; the provisioner created only
+  protected-prefix `my_pa_p_*` catalogs. The relevant unit/public-contract
+  selection passed 58 tests. Ruff, format, targeted mypy, and diff checks
+  passed.
 - R7 date semantics: 27 passed; Ruff, format, mypy, and diff checks passed.
 - R4/R8 liveness/promotion: 90 passed; Ruff, format, mypy, and diff checks
   passed.
@@ -378,9 +406,16 @@ above; commit `7cec3ebd` invalidates that verdict. A new fresh reviewer who
 authored none of these changes must
 review the post-ledger exact head and has authority to block. PR #187 must then
 pass CI against that same reviewed head before it is merge-eligible. The
-current state is `FAST_AND_REVIEW_PENDING`, not `PASS`; no PR merge, deployment,
-or final repository completion is claimed. Any later commit invalidates that
-future exact-head verdict.
+state at `7cec3ebd` was `FAST_AND_REVIEW_PENDING`, not `PASS`; no PR merge,
+deployment, or final repository completion was claimed. A later commit would
+invalidate that future exact-head verdict.
+
+After the post-PR192 integration, exact head `21974cce`, tree `38626f42`,
+passed FAST and then received a fresh independent `BLOCK` for the
+cross-client status aggregation and stale current-state evidence recorded
+above. This correction invalidates that exact-head verdict. The current state
+is `FAST_PASS_REVIEW_BLOCKED_CORRECTION_PENDING_REREVIEW`, not `PASS`; a
+fresh non-author review must bind to the resulting corrective head.
 
 P2-W12's six blockers and four majors were mapped as challenge evidence. They
 are not self-closed by this campaign and require their own governing authority.

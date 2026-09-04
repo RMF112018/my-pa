@@ -14,10 +14,9 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, text
-from sqlalchemy.engine import Connection, make_url
+from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
 from my_pa.domain.relationship.normalization import normalize_name
 from my_pa.infrastructure.database.engine import create_database_engine
@@ -43,34 +42,6 @@ CORRECTED: Final = "C" * 300
 
 def _config() -> Config:
     return Config(str(ROOT / "alembic.ini"))
-
-
-@pytest.fixture
-def predecessor(monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DATABASE}" WITH (FORCE)')
-
-    def administer(*statements: object) -> None:
-        with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            for statement in statements:
-                connection.execute(statement)  # type: ignore[call-overload]
-
-    engine: Engine | None = None
-    try:
-        administer(drop, text(f'CREATE DATABASE "{DATABASE}"'))
-        url = configured.set(database=DATABASE).render_as_string(hide_password=False)
-        monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", url)
-        engine = create_database_engine(url)
-        command.upgrade(_config(), "b64e29a0f7c1")
-        yield engine
-    finally:
-        if engine is not None:
-            engine.dispose()
-        administer(drop)
-        maintenance.dispose()
 
 
 def _proposal_values(
@@ -433,3 +404,13 @@ def test_upgrade_reconciles_version_drift_duplicates_without_deleting_history(
                     "at": LATER,
                 },
             )
+
+
+@pytest.fixture
+def predecessor(empty_database_url: str) -> Iterator[Engine]:
+    engine = create_database_engine(empty_database_url)
+    try:
+        command.upgrade(_config(), "b64e29a0f7c1")
+        yield engine
+    finally:
+        engine.dispose()

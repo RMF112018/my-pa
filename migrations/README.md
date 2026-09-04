@@ -35,3 +35,5 @@ Usage, the connection contract, and the round-trip requirement are documented in
 [`docs/migration/PHASE-01-FOUNDATION.md`](/docs/migration/PHASE-01-FOUNDATION.md).
 
 New implementation must use the neutral `my_pa` / `MY_PA_` namespace. Legacy identities may appear only in explicit compatibility or evidence records.
+
+Routine current-schema tests clone a worker-level template that has already been upgraded to head. Empty-to-head, revision-edge, and loader tests keep their own Alembic-driven fixtures. Historical migration compatibility is not part of the ordinary database job; adding a scheduled or release job for `migration_historical` is a bounded follow-up. Do not squash or rewrite this chain as a test-provisioning shortcut.

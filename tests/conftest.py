@@ -341,6 +341,8 @@ from my_pa.domain.task.role import TaskRole
 from my_pa.domain.task.task import Task as TaskV2
 from my_pa.infrastructure.providers.fixture import FixtureSourceProvider
 
+pytest_plugins = ("tests.db.fixtures",)
+
 # Operational scripts execute with this directory on sys.path. Architecture
 # tests import them by file path and reproduce that same import environment.
 OPS_NAS = str(Path(__file__).resolve().parents[1] / "ops/nas")

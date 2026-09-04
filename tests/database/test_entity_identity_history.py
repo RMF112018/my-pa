@@ -13,13 +13,11 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.dialects import postgresql
-from sqlalchemy.engine import Connection, make_url
+from sqlalchemy.engine import Connection
 
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.domain.relationship.identity_correction import (
     IDENTITY_PREVIEW_LIFETIME,
     state_digest,
@@ -94,30 +92,6 @@ OTHER_DIGEST: Final = "1" * 64
 
 def _config() -> Config:
     return Config(str(ROOT / "alembic.ini"))
-
-
-@pytest.fixture
-def disposable_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """Create an empty database, point the settings at it, drop it afterwards."""
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-
-    def _administer(*statements: object) -> None:
-        with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            for statement in statements:
-                connection.execute(statement)  # type: ignore[arg-type]
-
-    try:
-        _administer(drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", url)
-        yield url
-    finally:
-        _administer(drop)
-        maintenance.dispose()
 
 
 def _seed_entities(connection: Connection) -> None:
@@ -311,7 +285,6 @@ def seeded_engine(disposable_database: str) -> Iterator[Engine]:
     """One entity's whole history: a direct mutation, a merge, its split, a legacy merge."""
     engine = create_database_engine(disposable_database)
     try:
-        command.upgrade(_config(), "head")
         with engine.begin() as connection:
             _seed_entities(connection)
             _seed_direct_mutation(connection)

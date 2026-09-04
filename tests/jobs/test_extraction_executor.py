@@ -32,7 +32,6 @@ worker leaves behind cannot be made about a function that returns — and becaus
 
 from __future__ import annotations
 
-import io
 import os
 import signal
 import subprocess
@@ -44,13 +43,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import make_url
+from tests.db.provisioning import DISPOSABLE_NAME_PREFIX, PROTECTED_CATALOGS
 
 from my_pa.bootstrap.gateway import local_principal
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
+from my_pa.bootstrap.settings import ENV_PREFIX
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.extraction.coverage import CoverageCounts, CoverageState
@@ -74,9 +72,6 @@ from my_pa.infrastructure.providers.identity import RegistryIdentity
 import threading  # isort: skip
 
 ROOT = Path(__file__).resolve().parents[2]
-
-#: Fixed name so a run interrupted before teardown is cleaned up by the next one.
-DISPOSABLE_DATABASE = "my_pa_extraction_executor_test"
 
 WHEN = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
 
@@ -103,31 +98,6 @@ def _administer(maintenance: Engine, *statements: object) -> None:
 #: invented identifier. Using the same derivation here is what keeps the
 #: in-process runs and the child process looking at one queue.
 WORKER_PRINCIPAL = local_principal().principal_id
-
-
-@pytest.fixture(scope="module")
-def disposable_database() -> Iterator[str]:
-    """An empty database at head, dropped when the module finishes."""
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-    variable = f"{ENV_PREFIX}DATABASE_URL"
-    previous = os.environ.get(variable)
-    try:
-        _administer(maintenance, drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        os.environ[variable] = url
-        command.upgrade(Config(str(ROOT / "alembic.ini"), output_buffer=io.StringIO()), "head")
-        yield url
-    finally:
-        if previous is None:
-            os.environ.pop(variable, None)
-        else:
-            os.environ[variable] = previous
-        _administer(maintenance, drop)
-        maintenance.dispose()
 
 
 @pytest.fixture
@@ -295,7 +265,6 @@ FOUR_FILES: tuple[tuple[str, bytes], ...] = (
     ("handbook.pdf", b"%PDF-1.7\nnot a library this repository depends on\n"),
     ("opaque.bin", bytes(range(32))),
 )
-
 
 # ---- what one pass records ----------------------------------------------------
 
@@ -825,15 +794,15 @@ def test_a_worker_process_killed_mid_extraction_leaves_its_lease_and_loses_nothi
     Both waits below are bounded, and each fails **loud** naming itself. Neither
     is a property: no assertion here says anything happened within a time.
     """
-    # Belt and braces before a *process* is pointed at a database. The module
-    # fixture has already repointed `MY_PA_DATABASE_URL` to the disposable
-    # database, so `load_settings()` reports that one and comparing against it
+    # Belt and braces before a *process* is pointed at a database. The clone
+    # fixture has already repointed `MY_PA_DATABASE_URL` to a unique disposable
+    # catalog, so `load_settings()` reports that one and comparing against it
     # would compare a value with itself; the canonical name is what must be
     # excluded, and it is excluded by name.
     target = make_url(disposable_database).database
     assert target is not None, disposable_database
-    assert target == DISPOSABLE_DATABASE, target
-    assert target.startswith("my_pa_"), target
+    assert target.startswith(DISPOSABLE_NAME_PREFIX), target
+    assert target not in PROTECTED_CATALOGS, target
     assert target != "my_pa", "the child was about to be pointed at the canonical corpus"
 
     corpus = _corpus(

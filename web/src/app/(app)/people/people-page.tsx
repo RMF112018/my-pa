@@ -5,9 +5,8 @@
  * searches (`entities.search`) or resolves a reference (`entities.resolve`).
  * Ambiguity from resolve stays visible as `outcome`; this page offers no merge.
  *
- * **`entities.profile` is the record-family card**, not `entities.context`.
- * Context remains the frozen wire shape for callers that ask for it through
- * the BFF; this page does not widen it.
+ * Canonical profile addresses are `/people/{entityId}`. A leftover
+ * `?entityId=` query is redirected there so old deep links keep working.
  *
  * The page reaches the gateway directly rather than through its own BFF route,
  * matching Knowledge: a server component calling its own API would be a second
@@ -21,82 +20,30 @@ import { invokeGateway, type GatewayOutcome } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
+import { PeopleSearchForm, PeopleResolveForm } from "@/components/people/people-forms";
+import { SearchHits } from "@/components/people/search-hits";
+import { ResolvePanel } from "@/components/people/resolve-panel";
+import { UnresolvedMentionsPanel } from "@/components/people/unresolved-mentions";
+import { peopleEntity } from "@/lib/routes/people";
 import type { EntitySearchResult } from "@/lib/api/decode/capabilities/entities.search";
 import type { EntityResolveResult } from "@/lib/api/decode/capabilities/entities.resolve";
-import type { EntityProfileResult } from "@/lib/api/decode/capabilities/entities.profile";
+import type { EntitiesUnresolvedMentionsResult } from "@/lib/api/decode/capabilities/entities.unresolved_mentions";
+import type { PrincipalSession } from "@/contracts/identity";
 
 const SCOPE = "people";
 
 const BLURB =
-  "People is a read of entities you already hold. Search finds names; resolve " +
-  "says whether a reference names one person, several, or none. It does not " +
-  "list everyone, and it does not merge anyone.";
-
-function SearchForm({ query }: { query: string }) {
-  return (
-    <form method="get" role="search" className="mb-4 flex flex-wrap items-end gap-2">
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <label htmlFor="people-q" className="text-sm font-medium text-moss-slate">
-          Search people
-        </label>
-        <input
-          id="people-q"
-          name="q"
-          type="search"
-          defaultValue={query}
-          className="min-h-11 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm"
-          aria-describedby="people-q-hint"
-        />
-        <p id="people-q-hint" className="text-xs text-muted">
-          A name match over your own entities. This is browse, not identity.
-        </p>
-      </div>
-      <button
-        type="submit"
-        className="inline-flex min-h-11 items-center rounded-md bg-moss-green px-4 py-2 text-sm font-medium text-on-interactive hover:bg-moss-everglade"
-      >
-        Search
-      </button>
-    </form>
-  );
-}
-
-function ResolveForm({ reference }: { reference: string }) {
-  return (
-    <form method="get" className="mb-6 flex flex-wrap items-end gap-2">
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <label htmlFor="people-reference" className="text-sm font-medium text-moss-slate">
-          Resolve a reference
-        </label>
-        <input
-          id="people-reference"
-          name="reference"
-          type="text"
-          defaultValue={reference}
-          className="min-h-11 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm"
-          aria-describedby="people-reference-hint"
-        />
-        <p id="people-reference-hint" className="text-xs text-muted">
-          Asks who this names. An ambiguous answer stays ambiguous; nothing here merges.
-        </p>
-      </div>
-      <button
-        type="submit"
-        className="inline-flex min-h-11 items-center rounded-md border border-border bg-surface px-4 py-2 text-sm font-medium text-moss-slate"
-      >
-        Resolve
-      </button>
-    </form>
-  );
-}
+  "People is search, resolve, and a profile of one entity you already hold. " +
+  "Search finds names; resolve says whether a reference names one person, several, or none. " +
+  "It does not list everyone, and it does not merge anyone.";
 
 function frame(children: React.ReactNode) {
   return (
-    <section aria-labelledby="people-heading" className="mx-auto max-w-2xl">
-      <h1 id="people-heading" className="mb-1 text-xl font-semibold text-moss-slate">
+    <section aria-labelledby="people-heading" className="mx-auto max-w-3xl">
+      <h1 id="people-heading" className="mb-1 text-2xl font-semibold tracking-tight text-moss-slate">
         People
       </h1>
-      <p className="mb-4 text-sm text-muted">{BLURB}</p>
+      <p className="mb-6 max-w-3xl text-sm text-muted">{BLURB}</p>
       {children}
     </section>
   );
@@ -108,6 +55,19 @@ function oneParam(
 ): string {
   const raw = params[name];
   return (Array.isArray(raw) ? raw[0] : raw)?.trim() ?? "";
+}
+
+async function unresolvedPanel(principal: PrincipalSession, after: string) {
+  const outcome = (await invokeGateway(principal, "entities.unresolved_mentions", {
+    ...(after ? { after } : {}),
+  })) as GatewayOutcome<EntitiesUnresolvedMentionsResult>;
+  const answer = surfaceAnswer(`${SCOPE}:entities.unresolved_mentions`, outcome, (result) =>
+    result.mentions.length,
+  );
+  if (answer.kind === "unavailable" || answer.kind === "empty") return null;
+  return (
+    <UnresolvedMentionsPanel mentions={answer.result.mentions} disclosure={answer.disclosure} />
+  );
 }
 
 export async function PeoplePage({
@@ -123,6 +83,7 @@ export async function PeoplePage({
   const query = oneParam(params, "q");
   const reference = oneParam(params, "reference");
   const entityId = oneParam(params, "entityId");
+  const mentionsAfter = oneParam(params, "mentionsAfter");
 
   if (syntheticDataEnabled()) {
     return frame(
@@ -135,63 +96,35 @@ export async function PeoplePage({
     );
   }
 
+  if (entityId) {
+    redirect(peopleEntity(entityId));
+  }
+
   const forms = (
     <>
-      <SearchForm query={query} />
-      <ResolveForm reference={reference} />
+      <PeopleSearchForm query={query} />
+      <PeopleResolveForm reference={reference} />
     </>
   );
 
-  if (entityId) {
-    const answer = surfaceAnswer(
-      `${SCOPE}:entities.profile`,
-      (await invokeGateway(principal, "entities.profile", {
-        entity_id: entityId,
-      })) as GatewayOutcome<EntityProfileResult>,
-      () => 1,
-    );
-    return frame(
-      <>
-        {forms}
-        {answer.kind === "unavailable" ? (
-          <SurfaceState
-            kind="unavailable"
-            title="That profile could not be read"
-            detail={answer.error.message}
-            limitations={answer.disclosure.limitations}
-            testId="people-profile-unavailable"
-          />
-        ) : answer.kind === "empty" ? (
-          <SurfaceState
-            kind="unavailable"
-            title="That profile could not be read"
-            detail="The read succeeded without a profile, which is not a complete answer."
-            testId="people-profile-unavailable"
-          />
-        ) : (
-          <>
-            {answer.kind === "degraded" ? (
-              <DegradedBanner
-                scope="this profile"
-                limitations={answer.disclosure.limitations}
-                truncated={answer.disclosure.truncated}
-              />
-            ) : null}
-            <ProfileCard profile={answer.result.profile} />
-          </>
-        )}
-      </>,
-    );
-  }
-
   if (reference) {
-    const answer = surfaceAnswer(
-      `${SCOPE}:entities.resolve`,
-      (await invokeGateway(principal, "entities.resolve", {
-        reference,
-      })) as GatewayOutcome<EntityResolveResult>,
-      () => 1,
-    );
+    const outcome = (await invokeGateway(principal, "entities.resolve", {
+      reference,
+    })) as GatewayOutcome<EntityResolveResult>;
+    if (!outcome.ok && outcome.error.errorClass === "validation") {
+      return frame(
+        <>
+          {forms}
+          <SurfaceState
+            kind="unavailable"
+            title="That reference was not a valid resolve query"
+            detail={outcome.error.message}
+            testId="people-resolve-invalid"
+          />
+        </>,
+      );
+    }
+    const answer = surfaceAnswer(`${SCOPE}:entities.resolve`, outcome, () => 1);
     return frame(
       <>
         {forms}
@@ -219,7 +152,7 @@ export async function PeoplePage({
                 truncated={answer.disclosure.truncated}
               />
             ) : null}
-            <ResolutionCard resolution={answer.result.resolution} />
+            <ResolvePanel resolution={answer.result.resolution} />
           </>
         )}
       </>,
@@ -227,11 +160,25 @@ export async function PeoplePage({
   }
 
   if (query) {
+    const outcome = (await invokeGateway(principal, "entities.search", {
+      query,
+    })) as GatewayOutcome<EntitySearchResult>;
+    if (!outcome.ok && outcome.error.errorClass === "validation") {
+      return frame(
+        <>
+          {forms}
+          <SurfaceState
+            kind="unavailable"
+            title="That search was not a valid query"
+            detail={outcome.error.message}
+            testId="people-search-invalid"
+          />
+        </>,
+      );
+    }
     const answer = surfaceAnswer(
       `${SCOPE}:entities.search`,
-      (await invokeGateway(principal, "entities.search", {
-        query,
-      })) as GatewayOutcome<EntitySearchResult>,
+      outcome,
       (result) => result.entities.length,
     );
     return frame(
@@ -278,6 +225,8 @@ export async function PeoplePage({
     );
   }
 
+  const mentions = await unresolvedPanel(principal, mentionsAfter);
+
   return frame(
     <>
       {forms}
@@ -287,104 +236,7 @@ export async function PeoplePage({
         detail="This is not a directory of everyone. Search a name, or resolve a reference. Ambiguous answers stay visible; nothing here merges two people."
         testId="people-idle"
       />
+      {mentions}
     </>,
-  );
-}
-
-function SearchHits({
-  entities,
-}: {
-  entities: EntitySearchResult["entities"];
-}) {
-  return (
-    <ul data-testid="people-search-hits" className="space-y-2">
-      {entities.map((row) => (
-        <li key={row.entity_id} className="rounded-md border border-border bg-surface p-3">
-          <a
-            href={`/people?entityId=${encodeURIComponent(row.entity_id)}`}
-            className="font-medium text-moss-slate underline"
-          >
-            {row.display_name}
-          </a>
-          <p className="mt-1 text-xs text-muted">{row.entity_id}</p>
-          {row.affiliated_organizations.length > 0 ? (
-            <p className="mt-1 text-sm text-muted">
-              {row.affiliated_organizations.join(", ")}
-            </p>
-          ) : null}
-          {row.project_roles.length > 0 ? (
-            <p className="text-sm text-muted">{row.project_roles.join(", ")}</p>
-          ) : null}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function ResolutionCard({
-  resolution,
-}: {
-  resolution: EntityResolveResult["resolution"];
-}) {
-  return (
-    <div data-testid="people-resolve-result" className="rounded-md border border-border bg-surface p-4">
-      <p data-testid="people-resolve-outcome" className="text-sm font-medium text-moss-slate">
-        Outcome: {resolution.outcome}
-      </p>
-      {resolution.entity_id ? (
-        <p className="mt-2">
-          <a
-            href={`/people?entityId=${encodeURIComponent(resolution.entity_id)}`}
-            className="underline"
-          >
-            Open profile
-          </a>
-        </p>
-      ) : null}
-      {resolution.candidates.length > 0 ? (
-        <ul data-testid="people-resolve-candidates" className="mt-3 space-y-2">
-          {resolution.candidates.map((candidate) => (
-            <li key={candidate.entity_id}>
-              <a
-                href={`/people?entityId=${encodeURIComponent(candidate.entity_id)}`}
-                className="underline"
-              >
-                {candidate.display_name}
-              </a>
-              <span className="ml-2 text-xs text-muted">{candidate.entity_id}</span>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-    </div>
-  );
-}
-
-function ProfileCard({
-  profile,
-}: {
-  profile: EntityProfileResult["profile"];
-}) {
-  return (
-    <article data-testid="people-profile" className="rounded-md border border-border bg-surface p-4">
-      <h2 className="text-lg font-semibold text-moss-slate">{profile.entity.display_name}</h2>
-      <p className="text-xs text-muted">{profile.entity.entity_id}</p>
-      <section className="mt-4" aria-labelledby="people-profile-names">
-        <h3 id="people-profile-names" className="text-sm font-medium text-moss-slate">
-          Names
-        </h3>
-        {profile.names.length === 0 ? (
-          <p className="text-sm text-muted">No typed names on file.</p>
-        ) : (
-          <ul>
-            {profile.names.map((name) => (
-              <li key={name.entity_name_id} className="text-sm">
-                {name.display_value}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-    </article>
   );
 }

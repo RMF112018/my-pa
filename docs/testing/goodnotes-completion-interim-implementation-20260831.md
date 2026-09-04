@@ -1,6 +1,6 @@
 # GoodNotes completion implementation ledger
 
-Status: `GOODNOTES_IMPLEMENTATION_CODE_COMPLETE_EXACT_HEAD_FAST_RERUN_AND_REVIEW_PENDING`
+Status: `GOODNOTES_IMPLEMENTATION_REVIEW_CORRECTED_EXACT_HEAD_FAST_AND_REVIEW_PENDING`
 
 Request: `REQ-MYPA-GOODNOTES-COMPLETION-IMPLEMENTATION-20260831-002`
 
@@ -24,8 +24,8 @@ required.
   `c9018d681b340e14706cf500d01d2a4eec7d9d55`.
 - The clean pre-ledger integration basis, carrying the post-RI reconciliation
   and all subsequent GoodNotes corrections described below, is commit
-  `565506c54b3bb8aaef586876194ac55d2840be20`, tree
-  `13ddb706847e46e591747eb36030848fee83715a`. The ledger-only commit created
+  `7cec3ebda7843f64a673e00f0ec0ddb59d9f9136`, tree
+  `b19a444e068ed022d0c96e7c0ed240e7e30cd2ae`. The ledger/count-only commit created
   after this refresh is reported in its handoff rather than guessed here.
 - The isolated branch is `bf/goodnotes-post-ui-safe-sync-20260903` in
   `/private/tmp/my-pa-goodnotes-post-ui-safe-sync-20260903`.
@@ -194,6 +194,16 @@ semantic or prose changes. The campaign assertion is
   correctly classified the disabled-by-default GoodNotes pull plane as
   uncomposed in the HTTP negative-evidence harness. No production behavior or
   security assertion was weakened.
+- A fresh independent review returned `FAIL` at exact head `a253d745`, tree
+  `811b1919`, for three findings: the real CLI reconciliation path bypassed the
+  liveness gate; completion did not revalidate the latest promoting Review in
+  its locked write; and exact named Review lookup stopped after 10,000 cases.
+- `7cec3ebda7843f64a673e00f0ec0ddb59d9f9136` closes those findings: the composed
+  CLI/runtime mints and revalidates exact current `AVAILABLE` liveness receipts;
+  completion and Review mutation serialize on the same proposal-row lock with
+  in-transaction disposition/result validation; and named lookup has no
+  arbitrary collection cutoff. Its new six-test module moves the derived FAST
+  and test-module counts to 17,079 and 469 respectively.
 
 ## Work-package status
 
@@ -316,8 +326,16 @@ incorrectly expected the default-off, authenticated-client-bound GoodNotes pull
 plane to be positively composed in that harness. The exact three corrected
 modules then passed all 169 tests in 32.21 seconds; Ruff check, Ruff format
 check, and `git diff --check` passed. Commit `565506c5` contains only those test
-corrections. A full FAST rerun against the resulting post-ledger exact head
-remains required and is not pre-claimed.
+corrections. The subsequent exact head `a253d745` passed the full FAST selection:
+17,073 passed and 2,128 deselected in 772.38 seconds. The review-driven
+correction then passed the Orchestrator's integrated CLI, database, liveness,
+orchestration, and public-contract selection (100 passed in 9.88 seconds)
+against the canonical disposable PostgreSQL service; Ruff, format, targeted
+mypy, and diff checks passed. Its specialist proofs additionally passed 137
+liveness/CLI tests, three database tests, 58 focused unit/contract tests, and
+991 Principal-partition guards. The new six-test module changes the FAST
+collection; a full rerun on the final post-ledger head remains required and is
+not pre-claimed.
 
 An earlier HTTP/transport attempt produced 170 passes before the sandbox denied
 local `127.0.0.1:0` binds, causing 282 failures and 300 setup errors. The later
@@ -354,15 +372,13 @@ correct them and invalidate each preceding exact-head verdict.
 
 PR #186 and the admitted post-RI dependencies are merged and reconciliation is
 complete; PR #160 is closed unmerged, PR #152 is abandoned historical evidence,
-and there is no active owner blocker. No reviewer coverage extends past commit
-`7a60a4215c685dda3650a4223bd15677a1fd535e`, tree
-`7095721ebde705f4724e6e0be4d1e54eab579c18`; therefore none of the later
-post-RI synchronization, ledger, or corrective commits is covered by a current
-exact-head verdict. A fresh reviewer who authored none of these changes must
+and there is no active owner blocker. The fresh reviewer of `a253d745`, tree
+`811b1919`, returned `FAIL` with the three findings and corrections recorded
+above; commit `7cec3ebd` invalidates that verdict. A new fresh reviewer who
+authored none of these changes must
 review the post-ledger exact head and has authority to block. PR #187 must then
 pass CI against that same reviewed head before it is merge-eligible. The
-current state is `FAST_RERUN_AND_REVIEW_PENDING`, not `PASS`; no PR merge,
-deployment,
+current state is `FAST_AND_REVIEW_PENDING`, not `PASS`; no PR merge, deployment,
 or final repository completion is claimed. Any later commit invalidates that
 future exact-head verdict.
 

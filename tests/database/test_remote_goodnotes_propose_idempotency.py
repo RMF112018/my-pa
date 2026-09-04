@@ -9,8 +9,6 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import Engine, text
-from sqlalchemy.engine import make_url
-from sqlalchemy.sql import Executable
 
 from my_pa.adapters.normalization import normalize
 from my_pa.adapters.remote_request import compose_remote_arguments
@@ -21,7 +19,6 @@ from my_pa.application.goodnotes_orchestrator import (
     GoodNotesDurableNoteOrchestrator,
 )
 from my_pa.application.service import ApplicationService
-from my_pa.bootstrap.settings import load_settings
 from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.domain.capture.submission import CaptureTransport
@@ -46,7 +43,6 @@ from tests.unit.vector_pdf import Rect, vector_pdf
 
 pytestmark = pytest.mark.database
 ROOT = Path(__file__).resolve().parents[2]
-DATABASE = "my_pa_remote_goodnotes_propose_idempotency_test"
 WHEN = datetime(2026, 8, 17, 23, 30, tzinfo=UTC)
 A = "prn_aaaaaaaaaaaaaaaaaaaaaaaa"
 SOURCE_ROOT = "synthetic-connected-validation-root"
@@ -58,12 +54,6 @@ LIMITS = EffectiveLimits(
 )
 COVER = (Rect(72, 400, 220, 220, 0.15),)
 SEMANTIC = "semantic-proposals-without-canonical-note-writes"
-
-
-def administer(engine: Engine, *statements: Executable) -> None:
-    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-        for statement in statements:
-            connection.execute(statement)
 
 
 def _sha(payload: bytes) -> str:
@@ -148,9 +138,7 @@ class _Runtime:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
         self.audit_engine = create_database_engine(
-            make_url(load_settings().database_url)
-            .set(database=DATABASE)
-            .render_as_string(hide_password=False)
+            engine.url.render_as_string(hide_password=False)
         )
         audit = SqlAlchemyAuditSink(self.audit_engine)
 

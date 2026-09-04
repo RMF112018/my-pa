@@ -33,7 +33,6 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Final
 
 import pytest
@@ -42,10 +41,7 @@ from sqlalchemy import Engine, text
 from my_pa.domain.relationship.identity_correction import IDENTITY_PREVIEW_LIFETIME
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 
-ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
-
-DISPOSABLE_DATABASE: Final = "my_pa_merge_race_test"
 
 PRINCIPAL: Final = "prn_aaaa0001aaaa0001aaaa0001"
 SURVIVOR: Final = "ent_aaaa0001aaaa0001"
@@ -69,10 +65,12 @@ JOIN_TIMEOUT_SECONDS: Final = 60.0
 pytestmark = pytest.mark.database
 
 
-def _administer(maintenance: Engine, *statements: object) -> None:
-    with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-        for statement in statements:
-            connection.execute(statement)  # type: ignore[arg-type]
+@pytest.fixture
+def migrated_engine(db_engine: Engine) -> Engine:
+    """Current-head clone with the two synthetic entities and one preview."""
+
+    _stage(db_engine)
+    return db_engine
 
 
 def _stage(engine: Engine) -> None:

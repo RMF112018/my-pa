@@ -24,11 +24,9 @@ states about what may go in `before_state` and `after_state`.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Final
 
 import pytest
-from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
@@ -41,17 +39,11 @@ from my_pa.domain.relationship.identity_correction import (
     IdentityEffectKind,
     state_digest,
 )
+from my_pa.domain.relationship.normalization import normalize_name
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 
 pytestmark = pytest.mark.database
-
-ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
-
-#: A name distinct from every other database-tier fixture's disposable database,
-#: so this suite can run alongside them without one dropping the database another
-#: is mid-transaction against.
-DISPOSABLE_DATABASE: Final = "my_pa_identity_correction_test"
 
 PRINCIPAL_A: Final = "prn_aaaa0001aaaa0001aaaa0001"
 PRINCIPAL_B: Final = "prn_bbbb0002bbbb0002bbbb0002"
@@ -71,8 +63,35 @@ DIGEST: Final = "0" * 64
 OTHER_DIGEST: Final = "1" * 64
 
 
-def _config() -> Config:
-    return Config(str(ROOT / "alembic.ini"))
+@pytest.fixture
+def migrated_engine(db_engine: Engine) -> Engine:
+    """Current-head clone seeded with the three synthetic entities this ledger cites."""
+
+    with db_engine.begin() as connection:
+        for entity_id, principal_id in (
+            (SURVIVOR, PRINCIPAL_A),
+            (MERGED, PRINCIPAL_A),
+            (FOREIGN, PRINCIPAL_B),
+        ):
+            display_name = f"Synthetic {entity_id}"
+            connection.execute(
+                text(
+                    f"INSERT INTO {SCHEMA}.entities "  # noqa: S608
+                    "(entity_id, principal_id, entity_type, canonical_name, display_name, "
+                    " status, created_at, updated_at, version) "
+                    "VALUES (:entity_id, :principal_id, 'person', :canonical_name, "
+                    ":display_name, "
+                    " 'active', :when, :when, 1)"
+                ),
+                {
+                    "entity_id": entity_id,
+                    "principal_id": principal_id,
+                    "canonical_name": normalize_name(display_name),
+                    "display_name": display_name,
+                    "when": WHEN,
+                },
+            )
+    return db_engine
 
 
 def _insert_preview(engine: Engine, **overrides: object) -> None:

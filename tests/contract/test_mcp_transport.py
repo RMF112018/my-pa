@@ -544,7 +544,9 @@ def test_a_real_child_process_publishes_only_what_it_was_composed_with() -> None
 
 
 @pytest.mark.database
-def test_a_child_with_a_managed_root_publishes_every_capability(tmp_path: Path) -> None:
+def test_a_child_with_a_managed_root_publishes_every_capability(
+    tmp_path: Path, cloned_database_url: str
+) -> None:
     """The other half: composed for the managed plane, the child publishes all of it.
 
     Marked `database` because composing the byte store reads the configured
@@ -560,7 +562,7 @@ def test_a_child_with_a_managed_root_publishes_every_capability(tmp_path: Path) 
     root = tmp_path / "managed"
     root.mkdir()
     composed, _errors = _child_tool_list(
-        MY_PA_DATABASE_URL=os.environ["MY_PA_DATABASE_URL"],
+        MY_PA_DATABASE_URL=cloned_database_url,
         MY_PA_MANAGED_DOCUMENT_ROOT=str(root),
         MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED="true",
         # Every relationship switch, because each narrows the surface and "every

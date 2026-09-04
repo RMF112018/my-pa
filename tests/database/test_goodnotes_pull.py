@@ -4,17 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import os
-from collections.abc import Iterator
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Final
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import Engine, select, text
-from sqlalchemy.engine import make_url
 
 from my_pa.application.commands import CompleteGoodNotesPull
 from my_pa.application.goodnotes_occurrences import _reviewed_proposals, semantic_proposal_sha256
@@ -29,7 +23,6 @@ from my_pa.bootstrap.gateway import local_principal
 from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
-from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.goodnotes_pull import (
     SqlGoodNotesPullRepository,
@@ -52,51 +45,25 @@ from tests.conftest import DEFAULT_LIMITS
 
 pytestmark = pytest.mark.database
 
-ROOT: Final = Path(__file__).resolve().parents[2]
-DATABASE: Final = "my_pa_goodnotes_pull_repository_test"
 PRINCIPAL: Final = local_principal().principal_id
 WHEN: Final = datetime(2026, 9, 4, 5, 0, tzinfo=UTC)
 
 
-def _administer(engine: Engine, statement: object) -> None:
-    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-        connection.execute(statement)  # type: ignore[arg-type]
-
-
 @pytest.fixture
-def isolated_engine(monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
-    raw = os.environ.get("MY_PA_DATABASE_URL")
-    if raw is None:
-        pytest.skip("MY_PA_DATABASE_URL is not configured for an isolated database test")
-    configured = make_url(raw)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DATABASE}" WITH (FORCE)')
-    _administer(maintenance, drop)
-    _administer(maintenance, text(f'CREATE DATABASE "{DATABASE}"'))
-    url = configured.set(database=DATABASE).render_as_string(hide_password=False)
-    monkeypatch.setenv("MY_PA_DATABASE_URL", url)
-    engine = create_database_engine(url)
-    try:
-        command.upgrade(Config(str(ROOT / "alembic.ini")), "head")
-        yield engine
-    finally:
-        engine.dispose()
-        _administer(maintenance, drop)
-        maintenance.dispose()
+def engine(db_engine: Engine) -> Engine:
+    return db_engine
 
 
 def test_empty_claim_replays_after_restart_and_status_is_content_free(
-    isolated_engine: Engine,
+    engine: Engine,
 ) -> None:
-    with isolated_engine.begin() as connection:
+    with engine.begin() as connection:
         repository = SqlGoodNotesPullRepository(connection)
         assert (
             repository.claim_batch(PRINCIPAL, "scheduler-a", "ctx-stable-a", (), (), max_attempts=3)
             == ()
         )
-    with isolated_engine.begin() as connection:
+    with engine.begin() as connection:
         restarted = SqlGoodNotesPullRepository(connection)
         assert (
             restarted.claim_batch(PRINCIPAL, "scheduler-a", "ctx-stable-a", (), (), max_attempts=3)
@@ -120,8 +87,8 @@ def test_empty_claim_replays_after_restart_and_status_is_content_free(
         assert len(row.request_fingerprint) == 64
 
 
-def test_session_identity_and_retry_policy_fail_closed(isolated_engine: Engine) -> None:
-    with isolated_engine.begin() as connection:
+def test_session_identity_and_retry_policy_fail_closed(engine: Engine) -> None:
+    with engine.begin() as connection:
         repository = SqlGoodNotesPullRepository(connection)
         repository.claim_batch(PRINCIPAL, "scheduler-a", "ctx-stable-a", (), (), max_attempts=3)
         with pytest.raises(PullRepositoryConflictError):
@@ -130,7 +97,7 @@ def test_session_identity_and_retry_policy_fail_closed(isolated_engine: Engine) 
             repository.claim_batch(PRINCIPAL, "scheduler-a", "ctx-stable-a", (), (), max_attempts=4)
 
 
-def test_semantic_review_exact_replay_conflict_and_projection(isolated_engine: Engine) -> None:
+def test_semantic_review_exact_replay_conflict_and_projection(engine: Engine) -> None:
     run_id = "gnrun_0123456789abcdef01234567"
     proposal_id = "gnprp_0123456789abcdef01234567"
     notebook_id = "gnnb_0123456789abcdef01234567"
@@ -164,7 +131,7 @@ def test_semantic_review_exact_replay_conflict_and_projection(isolated_engine: E
         corrected_payload=corrected_payload,
         corrected_result_sha256=corrected_result_sha256,
     )
-    with isolated_engine.begin() as connection:
+    with engine.begin() as connection:
         connection.execute(
             goodnotes_notebooks.insert().values(
                 principal_id=PRINCIPAL,
@@ -348,8 +315,8 @@ def test_semantic_review_exact_replay_conflict_and_projection(isolated_engine: E
         assert stored_payload == payload
     service = ApplicationService(
         unit_of_work=lambda: SqlAlchemyUnitOfWork(
-            isolated_engine,
-            audit=SqlAlchemyAuditSink(isolated_engine),
+            engine,
+            audit=SqlAlchemyAuditSink(engine),
             goodnotes_pull_enabled=True,
         ),
         limits=DEFAULT_LIMITS,
@@ -388,7 +355,7 @@ def test_semantic_review_exact_replay_conflict_and_projection(isolated_engine: E
     assert replayed.result is not None
     assert replayed.result["completions"][0]["replayed"] is True  # type: ignore[index]
 
-    with isolated_engine.begin() as connection:
+    with engine.begin() as connection:
         repository = SqlGoodNotesPullRepository(connection)
         with pytest.raises(SemanticReviewConflictError):
             repository.record_semantic_review(
@@ -434,7 +401,7 @@ def test_semantic_review_exact_replay_conflict_and_projection(isolated_engine: E
     assert refused.error is not None
     assert refused.error.code.value == "conflict"
 
-    with isolated_engine.begin() as connection:
+    with engine.begin() as connection:
         repository = SqlGoodNotesPullRepository(connection)
         connection.execute(
             goodnotes_semantic_proposals.insert().values(

@@ -282,6 +282,7 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.ENTITIES_RESOLVE, Purpose.ENTITY_READ),
         (Capability.ENTITIES_CONTEXT, Purpose.ENTITY_READ),
         (Capability.ENTITIES_RELATIONSHIPS, Purpose.ENTITY_READ),
+        (Capability.ENTITIES_GRAPH, Purpose.ENTITY_READ),
         (Capability.ENTITIES_UNRESOLVED_MENTIONS, Purpose.ENTITY_READ),
         (Capability.ENTITIES_IDENTIFIERS_LIST, Purpose.ENTITY_READ),
         (Capability.ENTITIES_ALIASES_LIST, Purpose.ENTITY_READ),
@@ -407,9 +408,11 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # the `entity_authoring` the plane's other writes already use, so it
     # contributes one pair per capability rather than the thirty-four a cross
     # product would give.
-    # Unioned: 124 capabilities, 34 purposes, 126 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 126
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 126 == 4090
+    # `UI-IMP-WP15` adds `entities.graph` under the `entity_read` the plane's
+    # other reads already use, so it contributes one pair.
+    # Unioned: 125 capabilities, 34 purposes, 127 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 127
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 127 == 4123
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

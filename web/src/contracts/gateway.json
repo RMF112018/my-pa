@@ -237,6 +237,19 @@
       "payloadFields": ["entity_id", "direction", "page_size", "after"],
       "probe": { "entity_id": "ent_aaaaaaaa11111111" }
     },
+    "entities.graph": {
+      "purpose": "entity_read",
+      "payloadFields": [
+        "focus_entity_id",
+        "scope_entity_id",
+        "hops",
+        "relationship_types",
+        "as_of",
+        "page_size",
+        "after"
+      ],
+      "probe": { "focus_entity_id": "ent_aaaaaaaa11111111" }
+    },
     "entities.unresolved_mentions": {
       "purpose": "entity_read",
       "payloadFields": ["page_size", "after"],

@@ -1,1322 +1,966 @@
 {
-  "capabilities.get": {
-    "manifest": {
-      "capabilities": [
-        {
-          "availability": "available",
-          "name": "capabilities.get",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "sources.list",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "sources.metadata",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "sources.fetch",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "sources.status",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "sources.enroll",
-          "operator_only": true,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "knowledge.search",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "knowledge.read",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "knowledge.reveal",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "capture.create",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "capture.revise",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "capture.read",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "capture.list",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "capture.search",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "review.list",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "review.decide",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "continuity.pulse",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "continuity.situations",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "continuity.projects",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "continuity.projects.create",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "continuity.situations.create",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "continuity.tasks.create",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "knowledge.coverage",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "documents.create",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "documents.revise",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "documents.read",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "documents.list",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "documents.archive",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "documents.restore",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "tasks.read",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "tasks.list",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "tasks.search",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "tasks.history",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "tasks.create",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "tasks.update",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "tasks.transition",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "tasks.bulk_preview",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "tasks.bulk_confirm",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "commitments.read",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "commitments.list",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "commitments.search",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "commitments.history",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "commitments.waiting_on",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "commitments.create",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "commitments.update",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "commitments.close",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "context.prepare",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "context.feedback",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "goodnotes.work",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "goodnotes.propose",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "goodnotes.content",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "gsqs.start",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "gsqs.status",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "reports.begin_cycle",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "reports.commit",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "reports.record_run_state",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "reports.read",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "reports.latest",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "reports.list",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "reports.search",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "reports.resolve_set",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.search",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.get",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.resolve",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.context",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.relationships",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.unresolved_mentions",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.identifiers.list",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.aliases.list",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.create",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.update",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.archive",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.restore",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.identifiers.bind",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.identifiers.retire",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.identifiers.supersede",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.aliases.add",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.aliases.retire",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.aliases.supersede",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.assignments.list",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.assignments.create",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.assignments.revise",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.assignments.end",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.relationships.create",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.relationships.revise",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.relationships.end",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.observations.list",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.observe",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.unresolved_mentions.resolve",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.proposals.create",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.merge.preview",
-          "operator_only": true,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.merge",
-          "operator_only": true,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.identity_history",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.split.preview",
-          "operator_only": true,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.split",
-          "operator_only": true,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.profile",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.names.list",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.addresses.list",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.communication.list",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.participations.list",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.names.add",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.names.supersede",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.names.retire",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.addresses.add",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.addresses.revise",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.addresses.retire",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.communication.add",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.communication.revise",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.communication.retire",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.participations.create",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.participations.revise",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.participations.end",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.affiliations.create",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.affiliations.revise",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "entities.affiliations.end",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "relationship_memory.create",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "relationship_memory.get",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "relationship_memory.list",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "relationship_memory.search",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "relationship_memory.history",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "relationship_memory.revise",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "relationship_memory.archive",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "relationship_memory.restore",
-          "operator_only": false,
-          "version": "v1"
-        },
-        {
-          "availability": "available",
-          "name": "relationship_memory.propose",
-          "operator_only": false,
-          "version": "v1"
-        }
-      ],
-      "content_types": [
-        {
-          "availability": "available",
-          "media_type": "text/markdown"
-        },
-        {
-          "availability": "available",
-          "media_type": "text/plain"
-        },
-        {
-          "availability": "decision_gated",
-          "media_type": "application/pdf"
-        }
-      ],
-      "contract_family": "my-pa-public-capabilities",
-      "contract_version": "v1",
-      "limits": {
-        "default_page_size": 50,
-        "max_enrollment_depth": 0,
-        "max_fetch_bytes": 8388608,
-        "max_page_size": 200
-      }
-    },
-    "readiness": {
-      "contract_version": "v1",
-      "implemented_capabilities": 124,
-      "limitations": [
-        "Content types awaiting an operator decision: application/pdf. They are reported rather than silently skipped.",
-        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, knowledge.search, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
-        "Model proposals and semantic retrieval are disabled; deterministic lexical retrieval remains active.",
-        "Worker-plane health is unavailable, stale, absent for queued work, or reports dead-lettered work; inspect worker_planes."
-      ],
-      "state": "degraded",
-      "total_capabilities": 124
-    },
-    "worker_planes": [
+  "capture.create": {
+    "receipt_id": "rcpt_aaaaaaaa11111111",
+    "capture_id": "cap_aaaaaaaa11111111",
+    "version_id": "capver_aaaaaaaa11111111",
+    "version_number": 1,
+    "idempotency_key": "idem-1",
+    "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "issued_at": "2026-08-09T12:00:00.000Z",
+    "created": true
+  },
+  "tasks.read": {
+    "task": {
+      "task_id": "tsk_aaaa0001aaaa0001aaaa0001",
+      "title": "Check the pour",
+      "description": null,
+      "lifecycle_state": "open",
+      "evidence_state": "accepted",
+      "origin_evidence_ref": "asr_aaaa0001aaaa0001aaaa0001",
+      "closure_evidence_ref": null,
+      "accepted_by_review_decision_id": null,
+      "acceptance_kind": "direct_principal",
+      "closure_history_id": null,
+      "version": 1,
+      "priority": "p2",
+      "due_at": "2026-01-02T00:00:00.000Z",
+      "scheduled_at": null,
+      "deferred_until": null,
+      "archived_at": null,
+      "project_id": null,
+      "situation_id": null,
+      "recurrence_id": null,
+      "opened_at": "2026-01-01T00:00:00.000Z",
+      "closed_at": null,
+      "created_at": "2026-01-01T00:00:00.000Z",
+      "updated_at": "2026-01-01T00:00:00.000Z",
+      "commitment_id": null,
+      "role": null
+    }
+  },
+  "tasks.list": {
+    "tasks": [
       {
-        "backlog": null,
-        "dead_lettered": null,
-        "last_heartbeat_at": null,
-        "plane": "capture",
-        "state": "unavailable"
-      },
-      {
-        "backlog": null,
-        "dead_lettered": null,
-        "last_heartbeat_at": null,
-        "plane": "enrollment",
-        "state": "unavailable"
+        "task_id": "tsk_aaaa0001aaaa0001aaaa0001",
+        "title": "Check the pour",
+        "lifecycle_state": "open",
+        "priority": "p2",
+        "due_at": "2026-01-02T00:00:00.000Z",
+        "scheduled_at": null,
+        "deferred_until": null,
+        "archived_at": null,
+        "created_at": "2026-01-01T00:00:00.000Z",
+        "updated_at": "2026-01-01T00:00:00.000Z",
+        "version": 1
       }
     ]
   },
-  "capture.create": {
-    "capture_id": "cap_aaaaaaaa11111111",
-    "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "created": true,
-    "idempotency_key": "idem-1",
-    "issued_at": "2026-08-09T12:00:00.000Z",
-    "receipt_id": "rcpt_aaaaaaaa11111111",
-    "version_id": "capver_aaaaaaaa11111111",
-    "version_number": 1
-  },
-  "commitments.read": {
-    "commitment": {
-      "accepted_by_review_decision_id": null,
-      "closed_at": null,
-      "closure_evidence_ref": null,
-      "commitment_id": "cmt_aaaa0001aaaa0001aaaa0001",
-      "counterparty": {
-        "display_name": "Synthetic B",
-        "person_id": "per_aaaa0001aaaa0001aaaa0001"
-      },
-      "counterparty_person_id": "per_aaaa0001aaaa0001aaaa0001",
-      "created_at": "2026-01-01T00:00:00+00:00",
-      "description": null,
-      "direction": "owed_to_principal",
-      "due_date": "2026-01-02T00:00:00+00:00",
-      "evidence_state": "accepted",
-      "origin_evidence_ref": "asr_aaaa0001aaaa0001aaaa0001",
-      "state": "open",
-      "title": "Send the drawing",
-      "updated_at": "2026-01-01T00:00:00+00:00",
-      "version": 1
-    },
-    "counterparty_options": [
+  "tasks.history": {
+    "history": [
       {
-        "display_name": "Synthetic B",
-        "person_id": "per_aaaa0001aaaa0001aaaa0001"
+        "history_id": "thst_aaaa0001aaaa0001aaaa0001",
+        "task_id": "tsk_aaaa0001aaaa0001aaaa0001",
+        "action": "create",
+        "actor": "principal",
+        "outcome": "applied",
+        "before_version": 0,
+        "after_version": 1,
+        "occurred_at": "2026-01-01T00:00:00.000Z",
+        "recorded_at": "2026-01-01T00:00:00.000Z"
       }
-    ],
-    "counterparty_options_truncated": false,
-    "follow_up_task": null
+    ]
+  },
+  "knowledge.reveal": {
+    "subject_id": "cap_aaaaaaaa11111111",
+    "subject_kind": null,
+    "state": "unavailable",
+    "gap": "subject_kind_is_outside_the_evidence_model",
+    "capture_id": null,
+    "versions": [],
+    "spans": [],
+    "proposed": [],
+    "accepted": [],
+    "versions_with_completed_derivation": 0
   },
   "continuity.pulse": {
     "pulse_items": [
       {
-        "attention_rank": 1,
+        "pulse_id": "puls_aaaaaaaa11111111",
+        "item_type": "commitment",
+        "item_ref": "cmt_aaaa0001aaaa0001aaaa0001",
+        "reason_code": "commitment_overdue",
+        "reason": "two days past its agreed moment",
         "basis_refs": [
           "asr_aaaa0001aaaa0001aaaa0001"
         ],
         "consequence": null,
-        "generated_at": "2026-08-09T12:00:00.000Z",
-        "item_ref": "cmt_aaaa0001aaaa0001aaaa0001",
-        "item_type": "commitment",
         "next_step": null,
-        "pulse_id": "puls_aaaaaaaa11111111",
-        "reason": "two days past its agreed moment",
-        "reason_code": "commitment_overdue"
+        "attention_rank": 1,
+        "generated_at": "2026-08-09T12:00:00.000Z"
       }
     ]
   },
   "continuity.situations": {
     "situations": [
       {
-        "closed_at": null,
+        "situation_id": "sit_aaaa0001aaaa0001aaaa0001",
+        "title": "North pour",
+        "state": "open",
         "description": null,
         "object_refs": [
           "cmt_aaaa0001aaaa0001aaaa0001"
         ],
         "opened_at": "2026-01-01T00:00:00.000Z",
-        "outcome": null,
-        "situation_id": "sit_aaaa0001aaaa0001aaaa0001",
-        "state": "open",
-        "title": "North pour"
+        "closed_at": null,
+        "outcome": null
       }
     ]
-  },
-  "entities.addresses.list": {
-    "addresses": [
-      {
-        "address_type_code": "office",
-        "city": null,
-        "country": null,
-        "effective_from": null,
-        "effective_to": null,
-        "entity_address_id": "eadr_aaaaaaaa11111111",
-        "entity_id": "ent_aaaaaaaa11111111",
-        "is_preferred": false,
-        "label": null,
-        "line1": "1 Synthetic Way",
-        "line2": null,
-        "normalized_address_value": "1 synthetic way",
-        "postal_code": null,
-        "raw_value": "1 Synthetic Way",
-        "region": null,
-        "retired_at": null,
-        "state": "active",
-        "superseded_by_entity_address_id": null,
-        "updated_at": "2026-08-09T12:00:00.000Z",
-        "version": 1
-      }
-    ],
-    "entity_id": "ent_aaaaaaaa11111111"
-  },
-  "entities.aliases.list": {
-    "aliases": [
-      {
-        "alias_id": "eals_aaaaaaaa11111111",
-        "alias_type": "full_name",
-        "display_value": "Patricia Synthetic",
-        "effective_from": null,
-        "effective_to": null,
-        "retired_at": null,
-        "state": "active",
-        "superseded_by_alias_id": null,
-        "updated_at": "2026-08-09T12:00:00.000Z",
-        "version": 1
-      }
-    ],
-    "entity_id": "ent_aaaaaaaa11111111"
-  },
-  "entities.assignments.list": {
-    "assignments": [
-      {
-        "assignment_id": "asn_aaaaaaaa11111111",
-        "assignment_type": "employment",
-        "discipline": null,
-        "effective_from": null,
-        "effective_to": null,
-        "entity_id": "ent_aaaaaaaa11111111",
-        "is_current": true,
-        "responsibility_class": null,
-        "role": "architect",
-        "scope_entity_id": "ent_bbbbbbbb22222222",
-        "status": "active",
-        "version": 1
-      }
-    ]
-  },
-  "entities.communication.list": {
-    "communication_methods": [
-      {
-        "communication_method_id": "ecmm_aaaaaaaa11111111",
-        "display_value": "pat.synthetic@example.test",
-        "effective_from": null,
-        "effective_to": null,
-        "entity_id": "ent_aaaaaaaa11111111",
-        "is_preferred": true,
-        "linked_external_identifier_id": null,
-        "method_type_code": "email",
-        "normalized_value": "pat.synthetic@example.test",
-        "retired_at": null,
-        "state": "active",
-        "superseded_by_communication_method_id": null,
-        "updated_at": "2026-08-09T12:00:00.000Z",
-        "usage_context_code": "corporate",
-        "verification_status_code": "unresolved",
-        "version": 1
-      }
-    ],
-    "entity_id": "ent_aaaaaaaa11111111"
-  },
-  "entities.context": {
-    "context_card": {
-      "aliases": [],
-      "assembled_at": "2026-08-09T12:00:00.000Z",
-      "assignments": [],
-      "coverage": [],
-      "entity": {
-        "canonical_name": "pat synthetic",
-        "created_at": "2026-08-09T12:00:00.000Z",
-        "display_name": "Pat Synthetic",
-        "entity_id": "ent_aaaaaaaa11111111",
-        "entity_type": "person",
-        "status": "active",
-        "superseded_by_entity_id": null,
-        "updated_at": "2026-08-09T12:00:00.000Z",
-        "version": 1
-      },
-      "identifiers": [],
-      "is_complete": true,
-      "limitations": [
-        "no_source_has_been_observed",
-        "the_memory_plane_is_unavailable"
-      ],
-      "memories": [],
-      "most_recent_observation_at": null,
-      "observations": [],
-      "relationships": []
-    }
-  },
-  "entities.get": {
-    "entity": {
-      "canonical_name": "pat synthetic",
-      "created_at": "2026-08-09T12:00:00.000Z",
-      "display_name": "Pat Synthetic",
-      "entity_id": "ent_aaaaaaaa11111111",
-      "entity_type": "person",
-      "status": "active",
-      "superseded_by_entity_id": null,
-      "updated_at": "2026-08-09T12:00:00.000Z",
-      "version": 1
-    }
-  },
-  "entities.identifiers.list": {
-    "entity_id": "ent_aaaaaaaa11111111",
-    "identifiers": [
-      {
-        "display_value": "pat.synthetic@example.test",
-        "effective_from": null,
-        "effective_to": null,
-        "identifier_id": "xid_aaaaaaaa11111111",
-        "namespace": "email",
-        "retired_at": null,
-        "state": "active",
-        "superseded_by_identifier_id": null,
-        "updated_at": "2026-08-09T12:00:00.000Z",
-        "verified": false,
-        "version": 1
-      }
-    ]
-  },
-  "entities.identity_history": {
-    "audit_id": "audit_aaaaaaaa11111111",
-    "entity_id": "ent_aaaaaaaa11111111",
-    "entries": [
-      {
-        "actor_class": "user",
-        "actor_id": "prn_aaaaaaaa11111111",
-        "audit_id": "audit_aaaaaaaa11111111",
-        "authority": null,
-        "changes": [
-          {
-            "after_state": {
-              "display_name": "Pat Synthetic"
-            },
-            "before_state": null,
-            "effect_kind": "create",
-            "family": "entity",
-            "record_id": "ent_aaaaaaaa11111111"
-          }
-        ],
-        "correlation_id": null,
-        "history_id": "emut_aaaaaaaa11111111",
-        "involved_entity_ids": [
-          "ent_aaaaaaaa11111111"
-        ],
-        "occurred_at": "2026-08-09T12:00:00.000Z",
-        "operation": "entities.create",
-        "reason": null,
-        "receipt_id": null,
-        "source": "direct_mutation",
-        "source_identity_operation_id": null
-      }
-    ],
-    "is_truncated": false,
-    "next_cursor": null
-  },
-  "entities.names.list": {
-    "entity_id": "ent_aaaaaaaa11111111",
-    "names": [
-      {
-        "display_value": "Pat Synthetic",
-        "effective_from": null,
-        "effective_to": null,
-        "entity_id": "ent_aaaaaaaa11111111",
-        "entity_name_id": "enam_aaaaaaaa11111111",
-        "is_preferred": true,
-        "name_type_code": "display",
-        "normalized_value": "pat synthetic",
-        "retired_at": null,
-        "state": "active",
-        "superseded_by_entity_name_id": null,
-        "updated_at": "2026-08-09T12:00:00.000Z",
-        "version": 1
-      }
-    ]
-  },
-  "entities.observations.list": {
-    "observations": [
-      {
-        "authority": "source_observation",
-        "entity_id": "ent_aaaaaaaa11111111",
-        "kind": "contact_record",
-        "mention_display_name": "Pat",
-        "observation_id": "eobs_aaaaaaaa11111111",
-        "observed_at": "2026-08-09T12:00:00.000Z",
-        "origin": "configured_source",
-        "recorded_at": "2026-08-09T12:00:00.000Z",
-        "resolution_version": 0,
-        "source_id": "src_aaaaaaaa11111111",
-        "source_object_id": "obj_aaaaaaaa11111111",
-        "source_version_id": "ver_aaaaaaaa11111111",
-        "state": "current",
-        "state_reason": null,
-        "superseded_by_observation_id": null
-      }
-    ]
-  },
-  "entities.participations.list": {
-    "entity_id": "ent_aaaaaaaa11111111",
-    "participations": [
-      {
-        "discipline_code": null,
-        "discipline_text": null,
-        "effective_from": null,
-        "effective_to": null,
-        "participant_entity_id": "ent_aaaaaaaa11111111",
-        "participation_id": "eppt_aaaaaaaa11111111",
-        "project_display_name": "North Pour",
-        "project_entity_id": "ent_cccccccccccccccc33333333",
-        "relationship_status_code": "active",
-        "retired_at": null,
-        "role_basis_code": "unresolved",
-        "role_code": null,
-        "role_text": "architect",
-        "scope_text": null,
-        "stakeholder_class_code": "unresolved",
-        "stakeholder_side_code": "design",
-        "state": "active",
-        "superseded_by_participation_id": null,
-        "updated_at": "2026-08-09T12:00:00.000Z",
-        "version": 1
-      }
-    ],
-    "perspective": "participant"
-  },
-  "entities.profile": {
-    "profile": {
-      "addresses": [],
-      "affiliations_as_organization": [],
-      "affiliations_as_person": [],
-      "assembled_at": "2026-08-09T12:00:00.000Z",
-      "communication_methods": [],
-      "entity": {
-        "canonical_name": "pat synthetic",
-        "created_at": "2026-08-09T12:00:00.000Z",
-        "display_name": "Pat Synthetic",
-        "entity_id": "ent_aaaaaaaa11111111",
-        "entity_type": "person",
-        "status": "active",
-        "superseded_by_entity_id": null,
-        "updated_at": "2026-08-09T12:00:00.000Z",
-        "version": 1
-      },
-      "is_complete": true,
-      "limitations": [],
-      "names": [
-        {
-          "display_value": "Pat Synthetic",
-          "effective_from": null,
-          "effective_to": null,
-          "entity_id": "ent_aaaaaaaa11111111",
-          "entity_name_id": "enam_aaaaaaaa11111111",
-          "is_preferred": true,
-          "name_type_code": "display",
-          "normalized_value": "pat synthetic",
-          "retired_at": null,
-          "state": "active",
-          "superseded_by_entity_name_id": null,
-          "updated_at": "2026-08-09T12:00:00.000Z",
-          "version": 1
-        }
-      ],
-      "organization_profile": null,
-      "participations_as_participant": [],
-      "participations_as_project": []
-    }
-  },
-  "entities.relationships": {
-    "relationships": [
-      {
-        "effective_from": null,
-        "effective_to": null,
-        "from_entity_id": "ent_aaaaaaaa11111111",
-        "is_current": true,
-        "relationship_id": "erel_aaaaaaaa11111111",
-        "relationship_type": "works_for",
-        "scope_entity_id": null,
-        "state": "active",
-        "to_entity_id": "ent_bbbbbbbb22222222",
-        "version": 1
-      }
-    ]
-  },
-  "entities.resolve": {
-    "resolution": {
-      "candidates": [
-        {
-          "display_name": "Alex Chen",
-          "entity_id": "ent_aaaaaaaa11111111",
-          "entity_type": "person",
-          "matched_on": [
-            "canonical_name"
-          ],
-          "signals": [],
-          "status": "active",
-          "superseded_by_entity_id": null
-        }
-      ],
-      "candidates_were_truncated": false,
-      "entity_id": null,
-      "outcome": "ambiguous",
-      "warnings": [
-        "several_entities_share_this_name"
-      ]
-    }
-  },
-  "entities.search": {
-    "entities": [
-      {
-        "affiliated_organizations": [
-          "Acme Synthetic"
-        ],
-        "canonical_name": "pat synthetic",
-        "display_name": "Pat Synthetic",
-        "entity_id": "ent_aaaaaaaa11111111",
-        "entity_type": "person",
-        "project_roles": [
-          "architect"
-        ],
-        "status": "active"
-      }
-    ]
-  },
-  "entities.unresolved_mentions": {
-    "mentions": [
-      {
-        "kind": "document_mention",
-        "mention_display_name": "Pat",
-        "observation_id": "eobs_aaaaaaaa11111111",
-        "observed_at": "2026-08-09T12:00:00.000Z",
-        "recorded_at": "2026-08-09T12:00:00.000Z",
-        "source_id": "src_aaaaaaaa11111111",
-        "source_object_id": "obj_aaaaaaaa11111111",
-        "source_version_id": "ver_aaaaaaaa11111111"
-      }
-    ]
-  },
-  "knowledge.reveal": {
-    "accepted": [],
-    "capture_id": null,
-    "gap": "subject_kind_is_outside_the_evidence_model",
-    "proposed": [],
-    "spans": [],
-    "state": "unavailable",
-    "subject_id": "cap_aaaaaaaa11111111",
-    "subject_kind": null,
-    "versions": [],
-    "versions_with_completed_derivation": 0
   },
   "review.decide": {
-    "assertion_id": "asrt_aaaaaaaa11111111",
+    "review_case_id": "rvw_aaaaaaaa11111111",
     "decision_id": "rdec_aaaaaaaa11111111",
+    "review_version": 1,
     "disposition": "correct_and_accept",
     "proposal_state": "corrected_accepted",
-    "receipt_id": "rcpt_bbbbbbbb22222222",
-    "review_case_id": "rvw_aaaaaaaa11111111",
-    "review_version": 1
+    "assertion_id": "asrt_aaaaaaaa11111111",
+    "receipt_id": "rcpt_bbbbbbbb22222222"
   },
-  "tasks.history": {
-    "history": [
+  "capabilities.get": {
+    "manifest": {
+      "contract_version": "v1",
+      "contract_family": "my-pa-public-capabilities",
+      "capabilities": [
+        {
+          "name": "capabilities.get",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "sources.list",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "sources.metadata",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "sources.fetch",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "sources.status",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "sources.enroll",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": true
+        },
+        {
+          "name": "knowledge.search",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "knowledge.read",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "knowledge.reveal",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "capture.create",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "capture.revise",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "capture.read",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "capture.list",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "capture.search",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "review.list",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "review.decide",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "continuity.pulse",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "continuity.situations",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "continuity.projects",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "continuity.projects.create",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "continuity.situations.create",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "continuity.tasks.create",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "knowledge.coverage",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "documents.create",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "documents.revise",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "documents.read",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "documents.list",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "documents.archive",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "documents.restore",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "tasks.read",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "tasks.list",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "tasks.search",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "tasks.history",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "tasks.create",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "tasks.update",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "tasks.transition",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "tasks.bulk_preview",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "tasks.bulk_confirm",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "commitments.read",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "commitments.list",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "commitments.search",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "commitments.history",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "commitments.waiting_on",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "commitments.create",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "commitments.update",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "commitments.close",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "context.prepare",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "context.feedback",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "goodnotes.work",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "goodnotes.propose",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "goodnotes.content",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "gsqs.start",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "gsqs.status",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "reports.begin_cycle",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "reports.commit",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "reports.record_run_state",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "reports.read",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "reports.latest",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "reports.list",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "reports.search",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "reports.resolve_set",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.search",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.get",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.resolve",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.context",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.relationships",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.unresolved_mentions",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.identifiers.list",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.aliases.list",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.create",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.update",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.archive",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.restore",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.identifiers.bind",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.identifiers.retire",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.identifiers.supersede",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.aliases.add",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.aliases.retire",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.aliases.supersede",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.assignments.list",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.assignments.create",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.assignments.revise",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.assignments.end",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.relationships.create",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.relationships.revise",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.relationships.end",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.observations.list",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.observe",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.unresolved_mentions.resolve",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.proposals.create",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.merge.preview",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": true
+        },
+        {
+          "name": "entities.merge",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": true
+        },
+        {
+          "name": "entities.identity_history",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.split.preview",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": true
+        },
+        {
+          "name": "entities.split",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": true
+        },
+        {
+          "name": "entities.profile",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.names.list",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.addresses.list",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.communication.list",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.participations.list",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.graph",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.names.add",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.names.supersede",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.names.retire",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.addresses.add",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.addresses.revise",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.addresses.retire",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.communication.add",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.communication.revise",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.communication.retire",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.participations.create",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.participations.revise",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.participations.end",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.affiliations.create",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.affiliations.revise",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "entities.affiliations.end",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "relationship_memory.create",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "relationship_memory.get",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "relationship_memory.list",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "relationship_memory.search",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "relationship_memory.history",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "relationship_memory.revise",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "relationship_memory.archive",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "relationship_memory.restore",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "relationship_memory.propose",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        }
+      ],
+      "content_types": [
+        {
+          "media_type": "text/markdown",
+          "availability": "available"
+        },
+        {
+          "media_type": "text/plain",
+          "availability": "available"
+        },
+        {
+          "media_type": "application/pdf",
+          "availability": "decision_gated"
+        }
+      ],
+      "limits": {
+        "max_page_size": 200,
+        "default_page_size": 50,
+        "max_fetch_bytes": 8388608,
+        "max_enrollment_depth": 0
+      }
+    },
+    "readiness": {
+      "state": "degraded",
+      "contract_version": "v1",
+      "implemented_capabilities": 125,
+      "total_capabilities": 125,
+      "limitations": [
+        "Content types awaiting an operator decision: application/pdf. They are reported rather than silently skipped.",
+        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.graph, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, knowledge.search, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
+        "Model proposals and semantic retrieval are disabled; deterministic lexical retrieval remains active.",
+        "Worker-plane health is unavailable, stale, absent for queued work, or reports dead-lettered work; inspect worker_planes."
+      ]
+    },
+    "worker_planes": [
       {
-        "action": "create",
-        "actor": "principal",
-        "after_version": 1,
-        "before_version": 0,
-        "history_id": "thst_aaaa0001aaaa0001aaaa0001",
-        "occurred_at": "2026-01-01T00:00:00.000Z",
-        "outcome": "applied",
-        "recorded_at": "2026-01-01T00:00:00.000Z",
-        "task_id": "tsk_aaaa0001aaaa0001aaaa0001"
+        "plane": "capture",
+        "state": "unavailable",
+        "backlog": null,
+        "dead_lettered": null,
+        "last_heartbeat_at": null
+      },
+      {
+        "plane": "enrollment",
+        "state": "unavailable",
+        "backlog": null,
+        "dead_lettered": null,
+        "last_heartbeat_at": null
       }
     ]
   },
-  "tasks.list": {
-    "tasks": [
-      {
-        "archived_at": null,
-        "created_at": "2026-01-01T00:00:00.000Z",
-        "deferred_until": null,
-        "due_at": "2026-01-02T00:00:00.000Z",
-        "lifecycle_state": "open",
-        "priority": "p2",
-        "scheduled_at": null,
-        "task_id": "tsk_aaaa0001aaaa0001aaaa0001",
-        "title": "Check the pour",
-        "updated_at": "2026-01-01T00:00:00.000Z",
-        "version": 1
-      }
-    ]
-  },
-  "tasks.read": {
-    "task": {
-      "acceptance_kind": "direct_principal",
-      "accepted_by_review_decision_id": null,
-      "archived_at": null,
-      "closed_at": null,
-      "closure_evidence_ref": null,
-      "closure_history_id": null,
-      "commitment_id": null,
-      "created_at": "2026-01-01T00:00:00.000Z",
-      "deferred_until": null,
+  "commitments.read": {
+    "commitment": {
+      "commitment_id": "cmt_aaaa0001aaaa0001aaaa0001",
+      "direction": "owed_to_principal",
+      "state": "open",
+      "counterparty_person_id": "per_aaaa0001aaaa0001aaaa0001",
+      "title": "Send the drawing",
       "description": null,
-      "due_at": "2026-01-02T00:00:00.000Z",
+      "due_date": "2026-01-02T00:00:00+00:00",
+      "created_at": "2026-01-01T00:00:00+00:00",
+      "updated_at": "2026-01-01T00:00:00+00:00",
+      "version": 1,
       "evidence_state": "accepted",
-      "lifecycle_state": "open",
-      "opened_at": "2026-01-01T00:00:00.000Z",
       "origin_evidence_ref": "asr_aaaa0001aaaa0001aaaa0001",
-      "priority": "p2",
-      "project_id": null,
-      "recurrence_id": null,
-      "role": null,
-      "scheduled_at": null,
-      "situation_id": null,
-      "task_id": "tsk_aaaa0001aaaa0001aaaa0001",
-      "title": "Check the pour",
-      "updated_at": "2026-01-01T00:00:00.000Z",
-      "version": 1
-    }
+      "closure_evidence_ref": null,
+      "accepted_by_review_decision_id": null,
+      "closed_at": null,
+      "counterparty": {
+        "person_id": "per_aaaa0001aaaa0001aaaa0001",
+        "display_name": "Synthetic B"
+      }
+    },
+    "follow_up_task": null,
+    "counterparty_options": [
+      {
+        "person_id": "per_aaaa0001aaaa0001aaaa0001",
+        "display_name": "Synthetic B"
+      }
+    ],
+    "counterparty_options_truncated": false
   },
   "reports.read": {
     "report_id": "rpt_aaaaaaaa11111111",
@@ -1405,6 +1049,396 @@
         "content_sha256": null,
         "committed_at": null,
         "readiness_reason": "missing"
+      }
+    ]
+  },
+  "entities.search": {
+    "entities": [
+      {
+        "entity_id": "ent_aaaaaaaa11111111",
+        "entity_type": "person",
+        "canonical_name": "pat synthetic",
+        "display_name": "Pat Synthetic",
+        "status": "active",
+        "affiliated_organizations": [
+          "Acme Synthetic"
+        ],
+        "project_roles": [
+          "architect"
+        ]
+      }
+    ]
+  },
+  "entities.get": {
+    "entity": {
+      "entity_id": "ent_aaaaaaaa11111111",
+      "entity_type": "person",
+      "canonical_name": "pat synthetic",
+      "display_name": "Pat Synthetic",
+      "status": "active",
+      "created_at": "2026-08-09T12:00:00.000Z",
+      "updated_at": "2026-08-09T12:00:00.000Z",
+      "version": 1,
+      "superseded_by_entity_id": null
+    }
+  },
+  "entities.resolve": {
+    "resolution": {
+      "outcome": "ambiguous",
+      "entity_id": null,
+      "candidates": [
+        {
+          "entity_id": "ent_aaaaaaaa11111111",
+          "entity_type": "person",
+          "display_name": "Alex Chen",
+          "status": "active",
+          "superseded_by_entity_id": null,
+          "matched_on": [
+            "canonical_name"
+          ],
+          "signals": []
+        }
+      ],
+      "warnings": [
+        "several_entities_share_this_name"
+      ],
+      "candidates_were_truncated": false
+    }
+  },
+  "entities.context": {
+    "context_card": {
+      "entity": {
+        "entity_id": "ent_aaaaaaaa11111111",
+        "entity_type": "person",
+        "canonical_name": "pat synthetic",
+        "display_name": "Pat Synthetic",
+        "status": "active",
+        "created_at": "2026-08-09T12:00:00.000Z",
+        "updated_at": "2026-08-09T12:00:00.000Z",
+        "version": 1,
+        "superseded_by_entity_id": null
+      },
+      "assembled_at": "2026-08-09T12:00:00.000Z",
+      "coverage": [],
+      "most_recent_observation_at": null,
+      "limitations": [
+        "no_source_has_been_observed",
+        "the_memory_plane_is_unavailable"
+      ],
+      "is_complete": true,
+      "aliases": [],
+      "identifiers": [],
+      "assignments": [],
+      "relationships": [],
+      "observations": [],
+      "memories": []
+    }
+  },
+  "entities.relationships": {
+    "relationships": [
+      {
+        "relationship_id": "erel_aaaaaaaa11111111",
+        "is_current": true,
+        "from_entity_id": "ent_aaaaaaaa11111111",
+        "relationship_type": "works_for",
+        "to_entity_id": "ent_bbbbbbbb22222222",
+        "scope_entity_id": null,
+        "state": "active",
+        "effective_from": null,
+        "effective_to": null,
+        "version": 1
+      }
+    ]
+  },
+  "entities.graph": {
+    "nodes": [
+      {
+        "entity_id": "ent_aaaaaaaa11111111",
+        "projection_id": "gprj_ent_aaaaaaaa11111111",
+        "entity_type": "person",
+        "display_label": "Pat Synthetic",
+        "status": "active",
+        "superseded_by_entity_id": null
+      }
+    ],
+    "edges": [
+      {
+        "edge_kind": "relationship",
+        "edge_id": "erel_aaaaaaaa11111111",
+        "type": "works_for",
+        "from_entity_id": "ent_aaaaaaaa11111111",
+        "to_entity_id": "ent_bbbbbbbb22222222",
+        "from_projection_id": "gprj_ent_aaaaaaaa11111111",
+        "to_projection_id": "gprj_ent_bbbbbbbb22222222",
+        "scope_entity_id": null,
+        "is_current": null,
+        "state": "active",
+        "version": 1
+      }
+    ],
+    "next_cursor": null
+  },
+  "entities.unresolved_mentions": {
+    "mentions": [
+      {
+        "observation_id": "eobs_aaaaaaaa11111111",
+        "kind": "document_mention",
+        "mention_display_name": "Pat",
+        "source_id": "src_aaaaaaaa11111111",
+        "source_object_id": "obj_aaaaaaaa11111111",
+        "source_version_id": "ver_aaaaaaaa11111111",
+        "observed_at": "2026-08-09T12:00:00.000Z",
+        "recorded_at": "2026-08-09T12:00:00.000Z"
+      }
+    ]
+  },
+  "entities.identifiers.list": {
+    "entity_id": "ent_aaaaaaaa11111111",
+    "identifiers": [
+      {
+        "identifier_id": "xid_aaaaaaaa11111111",
+        "namespace": "email",
+        "display_value": "pat.synthetic@example.test",
+        "verified": false,
+        "effective_from": null,
+        "effective_to": null,
+        "state": "active",
+        "version": 1,
+        "retired_at": null,
+        "updated_at": "2026-08-09T12:00:00.000Z",
+        "superseded_by_identifier_id": null
+      }
+    ]
+  },
+  "entities.aliases.list": {
+    "entity_id": "ent_aaaaaaaa11111111",
+    "aliases": [
+      {
+        "alias_id": "eals_aaaaaaaa11111111",
+        "alias_type": "full_name",
+        "display_value": "Patricia Synthetic",
+        "effective_from": null,
+        "effective_to": null,
+        "state": "active",
+        "version": 1,
+        "retired_at": null,
+        "updated_at": "2026-08-09T12:00:00.000Z",
+        "superseded_by_alias_id": null
+      }
+    ]
+  },
+  "entities.assignments.list": {
+    "assignments": [
+      {
+        "assignment_id": "asn_aaaaaaaa11111111",
+        "entity_id": "ent_aaaaaaaa11111111",
+        "assignment_type": "employment",
+        "scope_entity_id": "ent_bbbbbbbb22222222",
+        "role": "architect",
+        "discipline": null,
+        "responsibility_class": null,
+        "status": "active",
+        "is_current": true,
+        "effective_from": null,
+        "effective_to": null,
+        "version": 1
+      }
+    ]
+  },
+  "entities.observations.list": {
+    "observations": [
+      {
+        "observation_id": "eobs_aaaaaaaa11111111",
+        "kind": "contact_record",
+        "authority": "source_observation",
+        "origin": "configured_source",
+        "state": "current",
+        "state_reason": null,
+        "mention_display_name": "Pat",
+        "source_id": "src_aaaaaaaa11111111",
+        "source_object_id": "obj_aaaaaaaa11111111",
+        "source_version_id": "ver_aaaaaaaa11111111",
+        "entity_id": "ent_aaaaaaaa11111111",
+        "superseded_by_observation_id": null,
+        "resolution_version": 0,
+        "observed_at": "2026-08-09T12:00:00.000Z",
+        "recorded_at": "2026-08-09T12:00:00.000Z"
+      }
+    ]
+  },
+  "entities.identity_history": {
+    "entity_id": "ent_aaaaaaaa11111111",
+    "entries": [
+      {
+        "history_id": "emut_aaaaaaaa11111111",
+        "occurred_at": "2026-08-09T12:00:00.000Z",
+        "source": "direct_mutation",
+        "operation": "entities.create",
+        "involved_entity_ids": [
+          "ent_aaaaaaaa11111111"
+        ],
+        "changes": [
+          {
+            "family": "entity",
+            "record_id": "ent_aaaaaaaa11111111",
+            "effect_kind": "create",
+            "before_state": null,
+            "after_state": {
+              "display_name": "Pat Synthetic"
+            }
+          }
+        ],
+        "actor_class": "user",
+        "actor_id": "prn_aaaaaaaa11111111",
+        "authority": null,
+        "correlation_id": null,
+        "audit_id": "audit_aaaaaaaa11111111",
+        "reason": null,
+        "source_identity_operation_id": null,
+        "receipt_id": null
+      }
+    ],
+    "is_truncated": false,
+    "next_cursor": null,
+    "audit_id": "audit_aaaaaaaa11111111"
+  },
+  "entities.profile": {
+    "profile": {
+      "entity": {
+        "entity_id": "ent_aaaaaaaa11111111",
+        "entity_type": "person",
+        "canonical_name": "pat synthetic",
+        "display_name": "Pat Synthetic",
+        "status": "active",
+        "created_at": "2026-08-09T12:00:00.000Z",
+        "updated_at": "2026-08-09T12:00:00.000Z",
+        "version": 1,
+        "superseded_by_entity_id": null
+      },
+      "assembled_at": "2026-08-09T12:00:00.000Z",
+      "limitations": [],
+      "is_complete": true,
+      "organization_profile": null,
+      "names": [
+        {
+          "entity_name_id": "enam_aaaaaaaa11111111",
+          "entity_id": "ent_aaaaaaaa11111111",
+          "name_type_code": "display",
+          "display_value": "Pat Synthetic",
+          "normalized_value": "pat synthetic",
+          "is_preferred": true,
+          "effective_from": null,
+          "effective_to": null,
+          "state": "active",
+          "version": 1,
+          "updated_at": "2026-08-09T12:00:00.000Z",
+          "retired_at": null,
+          "superseded_by_entity_name_id": null
+        }
+      ],
+      "addresses": [],
+      "communication_methods": [],
+      "participations_as_project": [],
+      "participations_as_participant": [],
+      "affiliations_as_person": [],
+      "affiliations_as_organization": []
+    }
+  },
+  "entities.names.list": {
+    "entity_id": "ent_aaaaaaaa11111111",
+    "names": [
+      {
+        "entity_name_id": "enam_aaaaaaaa11111111",
+        "entity_id": "ent_aaaaaaaa11111111",
+        "name_type_code": "display",
+        "display_value": "Pat Synthetic",
+        "normalized_value": "pat synthetic",
+        "is_preferred": true,
+        "effective_from": null,
+        "effective_to": null,
+        "state": "active",
+        "version": 1,
+        "updated_at": "2026-08-09T12:00:00.000Z",
+        "retired_at": null,
+        "superseded_by_entity_name_id": null
+      }
+    ]
+  },
+  "entities.addresses.list": {
+    "entity_id": "ent_aaaaaaaa11111111",
+    "addresses": [
+      {
+        "entity_address_id": "eadr_aaaaaaaa11111111",
+        "entity_id": "ent_aaaaaaaa11111111",
+        "address_type_code": "office",
+        "raw_value": "1 Synthetic Way",
+        "normalized_address_value": "1 synthetic way",
+        "line1": "1 Synthetic Way",
+        "line2": null,
+        "city": null,
+        "region": null,
+        "postal_code": null,
+        "country": null,
+        "label": null,
+        "is_preferred": false,
+        "effective_from": null,
+        "effective_to": null,
+        "state": "active",
+        "version": 1,
+        "updated_at": "2026-08-09T12:00:00.000Z",
+        "retired_at": null,
+        "superseded_by_entity_address_id": null
+      }
+    ]
+  },
+  "entities.communication.list": {
+    "entity_id": "ent_aaaaaaaa11111111",
+    "communication_methods": [
+      {
+        "communication_method_id": "ecmm_aaaaaaaa11111111",
+        "entity_id": "ent_aaaaaaaa11111111",
+        "method_type_code": "email",
+        "usage_context_code": "corporate",
+        "display_value": "pat.synthetic@example.test",
+        "normalized_value": "pat.synthetic@example.test",
+        "verification_status_code": "unresolved",
+        "is_preferred": true,
+        "effective_from": null,
+        "effective_to": null,
+        "state": "active",
+        "version": 1,
+        "updated_at": "2026-08-09T12:00:00.000Z",
+        "retired_at": null,
+        "superseded_by_communication_method_id": null,
+        "linked_external_identifier_id": null
+      }
+    ]
+  },
+  "entities.participations.list": {
+    "entity_id": "ent_aaaaaaaa11111111",
+    "perspective": "participant",
+    "participations": [
+      {
+        "participation_id": "eppt_aaaaaaaa11111111",
+        "project_entity_id": "ent_cccccccccccccccc33333333",
+        "participant_entity_id": "ent_aaaaaaaa11111111",
+        "project_display_name": "North Pour",
+        "role_basis_code": "unresolved",
+        "stakeholder_side_code": "design",
+        "stakeholder_class_code": "unresolved",
+        "relationship_status_code": "active",
+        "role_code": null,
+        "role_text": "architect",
+        "discipline_code": null,
+        "discipline_text": null,
+        "scope_text": null,
+        "effective_from": null,
+        "effective_to": null,
+        "state": "active",
+        "version": 1,
+        "updated_at": "2026-08-09T12:00:00.000Z",
+        "retired_at": null,
+        "superseded_by_participation_id": null
       }
     ]
   }

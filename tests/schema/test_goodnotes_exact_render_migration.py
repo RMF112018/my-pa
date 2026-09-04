@@ -74,7 +74,7 @@ GSQS_REVISION: Final = "c4b0a1d9e827"
 #: renames the seeded `entity_relationship_types` row `design_coordinates_with` to
 #: `design_coordination_with`; that in turn stacked on `1cda4d536268` (RI-ENT-WP-07).
 #: Written out rather than derived so chain drift fails here rather than passing.
-HEAD_REVISION: Final = "b8e4d1a6c073"
+HEAD_REVISION: Final = "c3f8a1d07e94"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_c3e9a7f1b204_add_goodnotes_exact_render_digest.py"
 )
@@ -134,7 +134,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     # wrote 87 here from a shared baseline of 86, the base merge counted 88,
     # and RI-ENT-WP-12's integration counted 89 from the merged tree rather
     # than adding one to either side (RULING-M2).
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 89
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 90
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

@@ -2,10 +2,10 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the one hundred and twenty-four capabilities is addressable
+**Reachability.** Every one of the one hundred and twenty-five capabilities is addressable
 over HTTP and answers. Parametrised over `Capability` rather than over a list
-written here, so a one-hundred-twenty-fifth capability added to the domain arrives as
-a failing row instead of as an untested one. Thirteen of the one hundred and twenty-four answer a
+written here, so a one-hundred-twenty-sixth capability added to the domain arrives as
+a failing row instead of as an untested one. Thirteen of the one hundred and twenty-five answer a
 well-formed `501 unsupported` rather than a result — `_UNCOMPOSED_CAPABILITIES`,
 the plane this harness does not switch on — and one, `tasks.bulk_confirm`,
 answers a well-formed `404 not_found`, because a confirm names a preview this

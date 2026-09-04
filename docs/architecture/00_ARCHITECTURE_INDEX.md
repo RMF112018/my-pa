@@ -35,12 +35,12 @@ See [`../decisions/00_ADR_INDEX.md`](../decisions/00_ADR_INDEX.md) and the unres
 ## Implementation boundary
 
 This index records architecture direction and current composition. The `my_pa`
-package defines one hundred and twenty-four capabilities and exposes them through the HTTP,
+package defines one hundred and twenty-five capabilities and exposes them through the HTTP,
 MCP, and operator-CLI adapters; a default composition serves fifty-five of
 them, because the `documents.`, `entities.` and `relationship_memory.` families
 each require an environment variable that has no default. The gateway and worker
 composition roots use the same PostgreSQL-backed policy and application seams.
-Alembic owns eighty-nine revisions at head `b8e4d1a6c073`; the chain admits GSQS at `c4b0a1d9e827` immediately before Phase B continues at `c7a1f04b9e63`, `b727e870d45e` is additive on `8e1c4a7b2d90`, `7e114f822af2` is additive on `b727e870d45e`, adding the `entity_names`/`entity_organization_profiles` tables (RI-ENT-WP-02), `16f05c46b8c3` admits the RI-ENT-WP-10/11 capability names, and `b8e4d1a6c073` (RI-ENT-WP-12) is additive on `16f05c46b8c3` and backfills one `display`-typed `entity_names` row per active entity. Re-measured 2026-09-04 after merging `origin/main` `455a3671`: 89 files, single head `b8e4d1a6c073` (`ls migrations/versions/*.py` and `ScriptDirectory.get_heads()`); `origin/main` held eighty-eight at `16f05c46b8c3`. The current candidate
+Alembic owns ninety revisions at head `c3f8a1d07e94`; `c3f8a1d07e94` admits `entities.graph` and is additive on `b8e4d1a6c073`; the chain admits GSQS at `c4b0a1d9e827` immediately before Phase B continues at `c7a1f04b9e63`, `b727e870d45e` is additive on `8e1c4a7b2d90`, `7e114f822af2` is additive on `b727e870d45e`, adding the `entity_names`/`entity_organization_profiles` tables (RI-ENT-WP-02), `16f05c46b8c3` admits the RI-ENT-WP-10/11 capability names, and `b8e4d1a6c073` (RI-ENT-WP-12) is additive on `16f05c46b8c3` and backfills one `display`-typed `entity_names` row per active entity. Re-measured 2026-09-04 after merging `origin/main` `455a3671`: 89 files, single head `b8e4d1a6c073` (`ls migrations/versions/*.py` and `ScriptDirectory.get_heads()`); `origin/main` held eighty-eight at `16f05c46b8c3`. The current candidate
 also includes the MossAIc web BFF/PWA, managed documents, GoodNotes, the bounded
 model gate, Frontier MCP, and the Apple source host. These documents describe the
 resulting implementation and the accepted, inactive NAS target. They do not

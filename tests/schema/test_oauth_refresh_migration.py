@@ -97,7 +97,7 @@ PHASE_B_START = "c7a1f04b9e63"
 #: renames the seeded `entity_relationship_types` row `design_coordinates_with` to
 #: `design_coordination_with`; that in turn stacked on `1cda4d536268` (RI-ENT-WP-07).
 #: Written out rather than derived so chain drift fails here rather than passing.
-HEAD_REVISION = "b8e4d1a6c073"
+HEAD_REVISION = "c3f8a1d07e94"
 WHEN = datetime(2026, 8, 16, 12, tzinfo=UTC)
 ISSUER = "https://mcp.example.invalid"
 RESOURCE = f"{ISSUER}/mcp"
@@ -194,7 +194,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     # wrote 87 here from a shared baseline of 86, the base merge counted 88,
     # and RI-ENT-WP-12's integration counted 89 from the merged tree rather
     # than adding one to either side (RULING-M2).
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 89
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 90
 
 
 @pytest.mark.database

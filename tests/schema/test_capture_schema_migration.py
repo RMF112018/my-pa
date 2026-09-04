@@ -248,6 +248,7 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         # WP-RI-05. `c1a7e4b93d58` is the forward `ALTER` that admits the five.
         "entities.search",
         "entities.get",
+        "entities.graph",
         "entities.resolve",
         "entities.context",
         "entities.relationships",

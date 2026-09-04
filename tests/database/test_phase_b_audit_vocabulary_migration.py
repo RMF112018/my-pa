@@ -58,7 +58,7 @@ DISPOSABLE_DATABASE: Final = "my_pa_phase_b_vocabulary_test"
 #: The current head and the Phase B vocabulary edge this suite removes. Written
 #: out rather than imported so current chain drift and historical identity are
 #: checked independently.
-HEAD_REVISION: Final = "b8e4d1a6c073"
+HEAD_REVISION: Final = "c3f8a1d07e94"
 #: What was head until `HEAD_REVISION` stacked on it (RI-ENT-WP-10/11, widening
 #: three closed-set CHECKs to admit that phase's capability names and record
 #: families, creating and altering no table).
@@ -226,7 +226,8 @@ def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> N
     # additive on `b727e870d45e`, which is additive on
     # `IDENTITY_HISTORY_REVISION` -- three more links than this chain had before
     # `c99cd8ed8d1c` landed, and one more than it had before `b8e4d1a6c073` did.
-    assert script.get_revision(HEAD_REVISION).down_revision == SECOND_TO_HEAD_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == "b8e4d1a6c073"
+    assert script.get_revision("b8e4d1a6c073").down_revision == SECOND_TO_HEAD_REVISION
     assert script.get_revision(SECOND_TO_HEAD_REVISION).down_revision == THIRD_TO_HEAD_REVISION
     assert script.get_revision(THIRD_TO_HEAD_REVISION).down_revision == FOURTH_TO_HEAD_REVISION
     assert script.get_revision(FOURTH_TO_HEAD_REVISION).down_revision == FIFTH_TO_HEAD_REVISION

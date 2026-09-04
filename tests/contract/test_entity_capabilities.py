@@ -37,6 +37,7 @@ from my_pa.application.commands import (
     EndEntityRelationship,
     GetEntity,
     GetEntityContext,
+    GetEntityGraph,
     GetEntityIdentityHistory,
     GetEntityProfile,
     GetEntityRelationships,
@@ -790,6 +791,7 @@ _OFF_SWITCH_COMMANDS: dict[Capability, object] = {
     Capability.ENTITIES_RESOLVE: ResolveEntity(reference="Alice Chen"),
     Capability.ENTITIES_CONTEXT: GetEntityContext(entity_id=ALICE),
     Capability.ENTITIES_RELATIONSHIPS: GetEntityRelationships(entity_id=ALICE),
+    Capability.ENTITIES_GRAPH: GetEntityGraph(focus_entity_id=ALICE),
     Capability.ENTITIES_UNRESOLVED_MENTIONS: ListUnresolvedMentions(),
     # The authoring half (`WP-RI-A-02`). Every subject is `ALICE` and every
     # child identifier is minted: this sweep never reaches a handler, so what
@@ -1090,11 +1092,11 @@ def test_the_off_switch_sweep_covers_every_capability_on_the_plane() -> None:
     """
     served = {capability for capability in Capability if capability.value.startswith("entities.")}
     assert set(_OFF_SWITCH_COMMANDS) == served
-    # Fifty-four after `RI-ENT-WP-11`'s five record families: the
-    # thirty-nine `RI-ENT-WP-10` left plus three write verbs per family. The count is
-    # asserted rather than derived for the reason it always was -- it is what
-    # tells a reader the prefix scan found the plane and not a substring of it.
-    assert len(served) == 54
+    # Fifty-five after `UI-IMP-WP15` added `entities.graph` to the
+    # fifty-four `RI-ENT-WP-11` left. The count is asserted rather than derived
+    # for the reason it always was -- it is what tells a reader the prefix scan
+    # found the plane and not a substring of it.
+    assert len(served) == 55
 
 
 @pytest.mark.parametrize(

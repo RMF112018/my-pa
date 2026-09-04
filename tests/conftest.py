@@ -84,6 +84,7 @@ from my_pa.contracts.ports import (
     EnrollmentRepository,
     EntitiesRepository,
     EntityChildPage,
+    EntityGraphPage,
     EntityMutationAdmission,
     EntityMutationReceipt,
     EntitySummary,
@@ -5778,6 +5779,109 @@ class _Entities(EntitiesRepository):
         )
         return found[:limit]
 
+    def graph_neighborhood(
+        self,
+        principal_id: str,
+        seed_entity_ids: frozenset[str],
+        *,
+        hops: int,
+        relationship_types: frozenset[str] | None,
+        limit: int,
+        after_edge_id: str | None = None,
+    ) -> EntityGraphPage:
+        self._world.fail("entities.graph_neighborhood")
+        if hops not in (1, 2):
+            raise ValueError("a graph walk is one hop or two")
+        if not seed_entity_ids:
+            raise ValueError("a graph neighborhood names at least one seed")
+        _refuse_empty_limit(limit)
+        if after_edge_id is not None:
+            assignment_cursor = any(
+                held.principal_id == principal_id and held.assignment_id == after_edge_id
+                for held in self._world.entity_assignments
+            )
+            relationship_cursor = any(
+                held.principal_id == principal_id and held.relationship_id == after_edge_id
+                for held in self._world.entity_relationships
+            )
+            if not assignment_cursor and not relationship_cursor:
+                raise UnknownScopeError("a graph cursor names an edge in this scope")
+        seeds = frozenset(seed_entity_ids)
+        frontier = set(seeds)
+        if hops == 2:
+            for edge in self._world.entity_relationships:
+                if edge.principal_id != principal_id:
+                    continue
+                if (
+                    relationship_types is not None
+                    and edge.relationship_type.value not in relationship_types
+                ):
+                    continue
+                if edge.from_entity_id in seeds:
+                    frontier.add(edge.to_entity_id)
+                if edge.to_entity_id in seeds:
+                    frontier.add(edge.from_entity_id)
+            for assignment in self._world.entity_assignments:
+                if assignment.principal_id != principal_id:
+                    continue
+                if assignment.entity_id in seeds and assignment.scope_entity_id is not None:
+                    frontier.add(assignment.scope_entity_id)
+                if assignment.scope_entity_id in seeds:
+                    frontier.add(assignment.entity_id)
+        edges: list[tuple[str, Assignment | EntityRelationship]] = []
+        for assignment in self._world.entity_assignments:
+            if assignment.principal_id != principal_id:
+                continue
+            if assignment.entity_id in frontier or assignment.scope_entity_id in frontier:
+                if assignment.scope_entity_id is None:
+                    continue
+                if after_edge_id is None or assignment.assignment_id > after_edge_id:
+                    edges.append((assignment.assignment_id, assignment))
+        for edge in self._world.entity_relationships:
+            if edge.principal_id != principal_id:
+                continue
+            if (
+                relationship_types is not None
+                and edge.relationship_type.value not in relationship_types
+            ):
+                continue
+            if edge.from_entity_id in frontier or edge.to_entity_id in frontier:
+                if after_edge_id is None or edge.relationship_id > after_edge_id:
+                    edges.append((edge.relationship_id, edge))
+        edges.sort(key=lambda item: item[0])
+        page = edges[:limit]
+        assignments = tuple(
+            item for _, item in page if isinstance(item, Assignment)
+        )
+        relationships = tuple(
+            item for _, item in page if isinstance(item, EntityRelationship)
+        )
+        needed = set(seeds)
+        for assignment in assignments:
+            needed.add(assignment.entity_id)
+            if assignment.scope_entity_id is not None:
+                needed.add(assignment.scope_entity_id)
+        for edge in relationships:
+            needed.add(edge.from_entity_id)
+            needed.add(edge.to_entity_id)
+            if edge.scope_entity_id is not None:
+                needed.add(edge.scope_entity_id)
+        found_entities = tuple(
+            sorted(
+                (
+                    entity
+                    for entity in self._world.entities
+                    if entity.principal_id == principal_id and entity.entity_id in needed
+                ),
+                key=lambda entity: entity.entity_id,
+            )
+        )
+        return EntityGraphPage(
+            entities=found_entities,
+            assignments=assignments,
+            relationships=relationships,
+        )
+
     def directed_replay(
         self,
         capability: str,
@@ -7427,7 +7531,7 @@ def build_service(
         # names its own service refuses.
         task_management_unit_of_work=lambda: FakeTaskManagementUnitOfWork(world),
         commitment_management_unit_of_work=lambda: FakeCommitmentManagementUnitOfWork(world),
-        # Enabled by the same default reasoning: the fifty-four `entities.` names are
+        # Enabled by the same default reasoning: the fifty-five `entities.` names are
         # withheld from a build that has not turned the plane on, and a suite
         # that quantifies over `Capability` would be quantifying over names its
         # own service refuses. A test about the *withheld* build passes `False`

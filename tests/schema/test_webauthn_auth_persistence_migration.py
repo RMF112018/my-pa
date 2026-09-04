@@ -39,7 +39,7 @@ NEXT_REVISION: Final = "16f05c46b8c3"
 #: RI-ENT-WP-10/11 merged, so the head this suite must see is that one and
 #: `REVISION` is two links beneath it. Written out rather than derived so chain
 #: drift fails here rather than passing.
-HEAD_REVISION: Final = "b8e4d1a6c073"
+HEAD_REVISION: Final = "c3f8a1d07e94"
 NEW_TABLES: Final = frozenset(
     {
         "webauthn_credentials",
@@ -93,12 +93,12 @@ def test_tables_share_the_canonical_identity_metadata() -> None:
 def test_the_chain_has_one_head_and_this_revision_is_two_links_beneath_it() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD_REVISION]
-    assert script.get_revision(HEAD_REVISION).down_revision == NEXT_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == "b8e4d1a6c073"
     assert script.get_revision(NEXT_REVISION).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PRIOR_REVISION
     # 89 on the merged tree: 88 at `16f05c46b8c3` plus `b8e4d1a6c073`, counted
     # rather than derived (RULING-M2).
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 89
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 90
 
 
 @pytest.mark.database

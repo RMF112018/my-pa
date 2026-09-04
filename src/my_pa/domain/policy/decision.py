@@ -366,6 +366,7 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.ENTITIES_ADDRESSES_LIST,
         Capability.ENTITIES_COMMUNICATION_LIST,
         Capability.ENTITIES_PARTICIPATIONS_LIST,
+        Capability.ENTITIES_GRAPH,
         # `RI-ENT-WP-11`'s record-family writes, scopeless on the identical
         # argument, and the argument does not change because these write. A
         # typed name, an address, a communication method, a participation and an

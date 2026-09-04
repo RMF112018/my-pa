@@ -406,6 +406,12 @@ _ORDINAL_UNITS = (
     "hundred-twenty-third",
     "hundred-twenty-fourth",
     "hundred-twenty-fifth",
+    # `UI-IMP-WP15` took the public set to a hundred and twenty-five, so
+    # `a hundred-twenty-sixth capability` became the ordinal a correct claim
+    # would use and the green-half plant indexes one past the set.
+    "hundred-twenty-sixth",
+    "hundred-twenty-seventh",
+    "hundred-twenty-eighth",
 )
 
 
@@ -915,9 +921,9 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "**fifty-five**",
         "A default process publishes",
         "the count a default composition publishes — `Capability` less the six "
-        "`documents.`, fifty-four `entities.` and nine `relationship_memory.` names it "
+        "`documents.`, fifty-five `entities.` and nine `relationship_memory.` names it "
         "withholds — not the size of `Capability`, which the same block states "
-        "correctly as 124",
+        "correctly as 125",
     ),
     (
         "ops/runbooks/mcp-and-cli-operations.md",
@@ -932,7 +938,7 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "the same default-publication count, in the bullet describing the MCP "
         "adapter; the tool list is derived from `available_capabilities`, not "
         "from `Capability`, which the same bullet states correctly as "
-        "one hundred and twenty-four",
+        "one hundred and twenty-five",
     ),
     # --- the Intelligence Artifact plane, newly swept --------------------------
     #

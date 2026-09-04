@@ -43,6 +43,7 @@ import { decodeEntitiesGet } from "./capabilities/entities.get";
 import { decodeEntitiesResolve } from "./capabilities/entities.resolve";
 import { decodeEntitiesContext } from "./capabilities/entities.context";
 import { decodeEntitiesRelationships } from "./capabilities/entities.relationships";
+import { decodeEntitiesGraph } from "./capabilities/entities.graph";
 import { decodeEntitiesUnresolvedMentions } from "./capabilities/entities.unresolved_mentions";
 import { decodeEntitiesIdentifiersList } from "./capabilities/entities.identifiers.list";
 import { decodeEntitiesAliasesList } from "./capabilities/entities.aliases.list";
@@ -102,6 +103,7 @@ export const DECODERS = {
   "entities.resolve": decodeEntitiesResolve,
   "entities.context": decodeEntitiesContext,
   "entities.relationships": decodeEntitiesRelationships,
+  "entities.graph": decodeEntitiesGraph,
   "entities.unresolved_mentions": decodeEntitiesUnresolvedMentions,
   "entities.identifiers.list": decodeEntitiesIdentifiersList,
   "entities.aliases.list": decodeEntitiesAliasesList,

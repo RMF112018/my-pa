@@ -684,6 +684,34 @@ def python_success_payloads() -> dict[str, dict[str, Any]]:
         },
         "entities.context": {"context_card": _entity_context_card_payload()},
         "entities.relationships": {"relationships": [_relationship_payload()]},
+        "entities.graph": {
+            "nodes": [
+                {
+                    "entity_id": entity_id,
+                    "projection_id": f"gprj_{entity_id}",
+                    "entity_type": "person",
+                    "display_label": "Pat Synthetic",
+                    "status": "active",
+                    "superseded_by_entity_id": None,
+                }
+            ],
+            "edges": [
+                {
+                    "edge_kind": "relationship",
+                    "edge_id": "erel_aaaaaaaa11111111",
+                    "type": "works_for",
+                    "from_entity_id": entity_id,
+                    "to_entity_id": "ent_bbbbbbbb22222222",
+                    "from_projection_id": f"gprj_{entity_id}",
+                    "to_projection_id": "gprj_ent_bbbbbbbb22222222",
+                    "scope_entity_id": None,
+                    "is_current": None,
+                    "state": "active",
+                    "version": 1,
+                }
+            ],
+            "next_cursor": None,
+        },
         "entities.unresolved_mentions": {"mentions": [_unresolved_mention_payload()]},
         "entities.identifiers.list": {
             "entity_id": entity_id,

@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-one hundred and twenty-four capabilities. There are two ways to prove that and only one stays
+one hundred and twenty-five capabilities. There are two ways to prove that and only one stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -28,7 +28,7 @@ command through its fields.
 
 **And the answers, over every fully composed capability and ten refusals.** A
 default composition exposes fifty-five: the six managed-document names, the
-fifty-four `entities.` names and the nine Relationship Memory names are
+fifty-five `entities.` names and the nine Relationship Memory names are
 withheld without their explicit configuration, and this harness sets all of
 them — including `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED`, which is a
 second switch over the `entities.` family and withholds its thirty-eight writes on
@@ -1175,6 +1175,11 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "entity_id": person.entity_id,
             "direction": "any",
         },
+        Capability.ENTITIES_GRAPH: {
+            "focus_entity_id": person.entity_id,
+            "hops": 1,
+            "page_size": 10,
+        },
         # No arguments: the queue is every unplaced mention in the Principal's
         # own partition, so there is nothing to name.
         Capability.ENTITIES_UNRESOLVED_MENTIONS: {},
@@ -1751,8 +1756,8 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    # The one hundred and twenty-four commands and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 125, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    # The one hundred and twenty-five commands and `RequestMetadata` beside them.
+    assert len(REQUEST_VALUES) == 126, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))

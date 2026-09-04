@@ -41,6 +41,7 @@ def _runtime() -> LocalGoodNotesRuntime:
         ocr_root=Path(ocr_root),
         ocr_name=os.environ.get(f"{ENV_PREFIX}GOODNOTES_OCR_NAME", "operator_local_ocr"),
         ocr_version=os.environ.get(f"{ENV_PREFIX}GOODNOTES_OCR_VERSION", "1"),
+        source_root_id=os.environ.get(f"{ENV_PREFIX}GOODNOTES_SOURCE_ROOT_ID", "goodnotes-local"),
     )
 
 
@@ -65,12 +66,17 @@ def _operator_principal_id(supplied: str | None) -> str:
 
 
 def _reconcile(args: argparse.Namespace) -> int:
+    runtime = _runtime()
+    principal_id = _operator_principal_id(args.principal_id)
+    liveness_receipts = runtime.observe_liveness(principal_id=principal_id)
+    runtime.require_current_liveness(principal_id, liveness_receipts)
     engine = _engine()
     try:
-        receipt = _runtime().reconcile(
+        receipt = runtime.reconcile(
             engine=engine,
-            principal_id=_operator_principal_id(args.principal_id),
+            principal_id=principal_id,
             idempotency_key=args.idempotency_key,
+            liveness_receipts=liveness_receipts,
         )
     finally:
         engine.dispose()

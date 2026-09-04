@@ -9,11 +9,14 @@ from typing import Final
 
 import pytest
 from sqlalchemy import Engine, select, text
+from sqlalchemy.exc import DBAPIError
 
 from my_pa.application.commands import CompleteGoodNotesPull
 from my_pa.application.goodnotes_occurrences import _reviewed_proposals, semantic_proposal_sha256
 from my_pa.application.goodnotes_pull_orchestration import (
     PullAssignment,
+    PullCompletion,
+    PullCompletionAdmission,
     PullRepositoryConflictError,
     SemanticReviewConflictError,
     SemanticReviewDecision,
@@ -27,6 +30,7 @@ from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.goodnotes_pull import (
     SqlGoodNotesPullRepository,
     _corrected_result_sha256,
+    _semantic_review_case_id,
 )
 from my_pa.infrastructure.persistence.tables import (
     goodnotes_ingestion_run_stages,
@@ -97,7 +101,9 @@ def test_session_identity_and_retry_policy_fail_closed(engine: Engine) -> None:
             repository.claim_batch(PRINCIPAL, "scheduler-a", "ctx-stable-a", (), (), max_attempts=4)
 
 
-def test_semantic_review_exact_replay_conflict_and_projection(engine: Engine) -> None:
+def test_semantic_review_exact_replay_conflict_and_projection(
+    engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
     run_id = "gnrun_0123456789abcdef01234567"
     proposal_id = "gnprp_0123456789abcdef01234567"
     notebook_id = "gnnb_0123456789abcdef01234567"
@@ -285,6 +291,21 @@ def test_semantic_review_exact_replay_conflict_and_projection(engine: Engine) ->
         assert material.result_sha256 == original_result_sha256
         assert repository.completion_material(PRINCIPAL, "scheduler-b", "3" * 64) is None
         assert repository.completion_material(PRINCIPAL, "scheduler-a", "4" * 64) is None
+        review_case_id = _semantic_review_case_id(PRINCIPAL, proposal_id)
+        monkeypatch.setattr(
+            SqlGoodNotesPullRepository,
+            "semantic_review_cases",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("named lookup must not delegate to the bounded list path")
+            ),
+        )
+        named_case = repository.semantic_review_case(PRINCIPAL, review_case_id)
+        assert named_case is not None
+        assert named_case.proposal_id == proposal_id
+        assert named_case.review_version == 0
+        assert (
+            repository.semantic_review_case("prn_fedcba9876543210fedcba98", review_case_id) is None
+        )
         assert repository.record_semantic_review(decision).replayed is False
         assert repository.record_semantic_review(decision).replayed is True
         corrected_material = repository.completion_material(PRINCIPAL, "scheduler-a", "3" * 64)
@@ -324,6 +345,74 @@ def test_semantic_review_exact_replay_conflict_and_projection(engine: Engine) ->
         goodnotes_pull_enabled=True,
         goodnotes_pull_cursor_signing_key=b"k" * 32,
     )
+    admission = PullCompletionAdmission(
+        completion=PullCompletion(
+            assignment_id=assignment.assignment_id,
+            run_id=run_id,
+            page_version_id=page_version_id,
+            content_sha256="c" * 64,
+            result_sha256=corrected_result_sha256,
+            idempotency_key=assignment.assignment_id,
+        ),
+        request_fingerprint="e" * 64,
+    )
+    blocker = engine.connect()
+    blocker_transaction = blocker.begin()
+    try:
+        blocked_repository = SqlGoodNotesPullRepository(blocker)
+        invalidated = blocked_repository.record_semantic_review(
+            SemanticReviewDecision(
+                decision_id="gnsrd_fedcba9876543210fedcba98",
+                principal_id=PRINCIPAL,
+                run_id=run_id,
+                proposal_id=proposal_id,
+                proposal_sha256=proposal_sha256,
+                action="invalidate",
+                request_fingerprint="f" * 64,
+                decided_at=WHEN,
+            )
+        )
+        assert invalidated.sequence == 2
+        with engine.connect() as contender:
+            contender_transaction = contender.begin()
+            contender.execute(text("SET LOCAL lock_timeout = '250ms'"))
+            with pytest.raises(DBAPIError, match="lock timeout"):
+                SqlGoodNotesPullRepository(contender).complete_batch(
+                    PRINCIPAL,
+                    "scheduler-a",
+                    context_id,
+                    (admission,),
+                )
+            contender_transaction.rollback()
+        blocker_transaction.commit()
+    finally:
+        if blocker_transaction.is_active:
+            blocker_transaction.rollback()
+        blocker.close()
+
+    with engine.begin() as connection:
+        repository = SqlGoodNotesPullRepository(connection)
+        with pytest.raises(PullRepositoryConflictError):
+            repository.complete_batch(
+                PRINCIPAL,
+                "scheduler-a",
+                context_id,
+                (admission,),
+            )
+        accepted = repository.record_semantic_review(
+            SemanticReviewDecision(
+                decision_id="gnsrd_aaaaaaaaaaaaaaaaaaaaaaaa",
+                principal_id=PRINCIPAL,
+                run_id=run_id,
+                proposal_id=proposal_id,
+                proposal_sha256=proposal_sha256,
+                action="accept",
+                request_fingerprint="1" * 64,
+                decided_at=WHEN,
+            )
+        )
+        assert accepted.sequence == 3
+
     completed = service.invoke(
         RequestMetadata(
             request_id="req_0123456789abcdef01234567",
@@ -372,17 +461,17 @@ def test_semantic_review_exact_replay_conflict_and_projection(engine: Engine) ->
             )
         invalidated = repository.record_semantic_review(
             SemanticReviewDecision(
-                decision_id="gnsrd_fedcba9876543210fedcba98",
+                decision_id="gnsrd_bbbbbbbbbbbbbbbbbbbbbbbb",
                 principal_id=PRINCIPAL,
                 run_id=run_id,
                 proposal_id=proposal_id,
                 proposal_sha256=proposal_sha256,
                 action="invalidate",
-                request_fingerprint="f" * 64,
+                request_fingerprint="2" * 64,
                 decided_at=WHEN,
             )
         )
-        assert invalidated.sequence == 2
+        assert invalidated.sequence == 4
         latest = repository.semantic_review_evidence(PRINCIPAL, run_id, (proposal_sha256,))
         assert latest[0].disposition.value == "invalidate"
 

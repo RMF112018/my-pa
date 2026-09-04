@@ -418,25 +418,46 @@ class SqlGoodNotesPullRepository:
     def completion_material(
         self, principal_id: str, client_id: str, assignment_id: str
     ) -> PullCompletionMaterial | None:
+        return self._completion_material(
+            principal_id,
+            client_id,
+            assignment_id,
+            lock_proposal=False,
+            require_promoting_review=False,
+        )
+
+    def _completion_material(
+        self,
+        principal_id: str,
+        client_id: str,
+        assignment_id: str,
+        *,
+        lock_proposal: bool,
+        require_promoting_review: bool,
+    ) -> PullCompletionMaterial | None:
         assignment = self.assignment(principal_id, client_id, assignment_id)
         if assignment is None:
             return None
-        proposals = self._connection.execute(
-            select(
-                goodnotes_semantic_proposals.c.proposal_id,
-                goodnotes_semantic_proposals.c.page_version_id,
-                goodnotes_semantic_proposals.c.schema_version,
-                goodnotes_semantic_proposals.c.analyzer_name,
-                goodnotes_semantic_proposals.c.analyzer_version,
-                goodnotes_semantic_proposals.c.payload,
-                goodnotes_semantic_proposals.c.payload_sha256,
-            ).where(
-                _mine(goodnotes_semantic_proposals, principal_id),
-                goodnotes_semantic_proposals.c.run_id == assignment.work.run_id,
-                goodnotes_semantic_proposals.c.page_version_id == assignment.work.page_version_id,
-                goodnotes_semantic_proposals.c.content_sha256 == assignment.work.content_sha256,
-            )
-        ).all()
+        proposal_query = select(
+            goodnotes_semantic_proposals.c.proposal_id,
+            goodnotes_semantic_proposals.c.page_version_id,
+            goodnotes_semantic_proposals.c.schema_version,
+            goodnotes_semantic_proposals.c.analyzer_name,
+            goodnotes_semantic_proposals.c.analyzer_version,
+            goodnotes_semantic_proposals.c.payload,
+            goodnotes_semantic_proposals.c.payload_sha256,
+        ).where(
+            _mine(goodnotes_semantic_proposals, principal_id),
+            goodnotes_semantic_proposals.c.run_id == assignment.work.run_id,
+            goodnotes_semantic_proposals.c.page_version_id == assignment.work.page_version_id,
+            goodnotes_semantic_proposals.c.content_sha256 == assignment.work.content_sha256,
+        )
+        if lock_proposal:
+            # Review decisions take this same lock. Holding it through the
+            # completion insert makes the latest-decision check and write one
+            # serializable critical section without adding another lock table.
+            proposal_query = proposal_query.with_for_update()
+        proposals = self._connection.execute(proposal_query).all()
         if not proposals:
             return None
         if len(proposals) != 1:
@@ -453,6 +474,8 @@ class SqlGoodNotesPullRepository:
             select(goodnotes_semantic_review_decisions)
             .where(
                 _mine(goodnotes_semantic_review_decisions, principal_id),
+                goodnotes_semantic_review_decisions.c.run_id == assignment.work.run_id,
+                goodnotes_semantic_review_decisions.c.proposal_id == proposal.proposal_id,
                 goodnotes_semantic_review_decisions.c.proposal_sha256 == proposal_sha256,
             )
             .order_by(goodnotes_semantic_review_decisions.c.sequence.desc())
@@ -461,6 +484,22 @@ class SqlGoodNotesPullRepository:
         result_sha256 = str(proposal.payload_sha256)
         if latest is not None and latest.action == Disposition.CORRECT_AND_ACCEPT.value:
             result_sha256 = str(latest.corrected_result_sha256)
+        if require_promoting_review and (
+            latest is None
+            or latest.action not in {Disposition.ACCEPT.value, Disposition.CORRECT_AND_ACCEPT.value}
+            or (
+                latest.action == Disposition.ACCEPT.value
+                and result_sha256 != str(proposal.payload_sha256)
+            )
+            or (
+                latest.action == Disposition.CORRECT_AND_ACCEPT.value
+                and (
+                    latest.corrected_result_sha256 is None
+                    or result_sha256 != str(latest.corrected_result_sha256)
+                )
+            )
+        ):
+            raise PullRepositoryConflictError
         return PullCompletionMaterial(
             assignment_id=assignment.assignment_id,
             proposal_id=str(proposal.proposal_id),
@@ -515,7 +554,13 @@ class SqlGoodNotesPullRepository:
                 or states[_work_key(assignment.work)].attempts != assignment.attempt
             ):
                 raise PullRepositoryConflictError
-            material = self.completion_material(principal_id, client_id, completion.assignment_id)
+            material = self._completion_material(
+                principal_id,
+                client_id,
+                completion.assignment_id,
+                lock_proposal=True,
+                require_promoting_review=True,
+            )
             if material is None or material.result_sha256 != completion.result_sha256:
                 raise PullRepositoryConflictError
             stored = self._completion_for(principal_id, completion.assignment_id)
@@ -644,13 +689,64 @@ class SqlGoodNotesPullRepository:
     def semantic_review_case(
         self, principal_id: str, review_case_id: str
     ) -> GoodNotesSemanticReviewCase | None:
-        return next(
-            (
-                case
-                for case in self.semantic_review_cases(principal_id, limit=10_000)
-                if case.review_case_id == review_case_id
-            ),
-            None,
+        # The public case id is a deterministic name over Principal/proposal,
+        # not a persisted column. Resolve that exact name from the narrow
+        # Principal partition, then issue exact proposal/decision lookups. This
+        # avoids the paginated case-list path and its former arbitrary cutoff.
+        proposal_ids = self._connection.scalars(
+            select(goodnotes_semantic_proposals.c.proposal_id).where(
+                _mine(goodnotes_semantic_proposals, principal_id)
+            )
+        )
+        matches = tuple(
+            str(proposal_id)
+            for proposal_id in proposal_ids
+            if _semantic_review_case_id(principal_id, str(proposal_id)) == review_case_id
+        )
+        if not matches:
+            return None
+        if len(matches) != 1:
+            raise SemanticReviewConflictError
+        proposal = self._connection.execute(
+            select(goodnotes_semantic_proposals).where(
+                _mine(goodnotes_semantic_proposals, principal_id),
+                goodnotes_semantic_proposals.c.proposal_id == matches[0],
+            )
+        ).one_or_none()
+        if proposal is None:
+            return None
+        proposal_sha256 = _semantic_proposal_sha256(
+            str(proposal.page_version_id),
+            str(proposal.schema_version),
+            str(proposal.analyzer_name),
+            str(proposal.analyzer_version),
+            dict(proposal.payload),
+        )
+        latest = self._connection.execute(
+            select(
+                goodnotes_semantic_review_decisions.c.sequence,
+                goodnotes_semantic_review_decisions.c.action,
+            )
+            .where(
+                _mine(goodnotes_semantic_review_decisions, principal_id),
+                goodnotes_semantic_review_decisions.c.run_id == proposal.run_id,
+                goodnotes_semantic_review_decisions.c.proposal_id == proposal.proposal_id,
+                goodnotes_semantic_review_decisions.c.proposal_sha256 == proposal_sha256,
+            )
+            .order_by(goodnotes_semantic_review_decisions.c.sequence.desc())
+            .limit(1)
+        ).one_or_none()
+        disposition = None if latest is None else Disposition(str(latest.action))
+        return GoodNotesSemanticReviewCase(
+            review_case_id=review_case_id,
+            proposal_id=str(proposal.proposal_id),
+            run_id=str(proposal.run_id),
+            page_version_id=str(proposal.page_version_id),
+            principal_id=principal_id,
+            opened_at=proposal.created_at,
+            proposal_state=_semantic_state(disposition),
+            review_version=0 if latest is None else int(latest.sequence),
+            latest_disposition=disposition,
         )
 
     def decide_semantic_review(self, request: ReviewDecisionRequest) -> ReviewDecision:

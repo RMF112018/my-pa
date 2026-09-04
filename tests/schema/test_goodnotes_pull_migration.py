@@ -73,6 +73,8 @@ def test_offline_upgrade_emits_all_ledgers_constraints_and_immutability(
         "one_goodnotes_semantic_review_per_sequence",
         "one_goodnotes_semantic_review_request",
         "goodnotes_semantic_review_proposal_fk",
+        "goodnotes_semantic_review_correction_matches_action",
+        "goodnotes_semantic_review_corrected_digest_shape",
     ):
         assert fragment in sql
 

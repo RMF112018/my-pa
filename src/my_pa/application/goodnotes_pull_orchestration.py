@@ -30,12 +30,13 @@ from my_pa.contracts.ports import (
     GoodNotesPullRepositoryConflictError as PullRepositoryConflictError,
 )
 from my_pa.contracts.ports import (
+    GoodNotesSemanticProposalMaterial,
     GoodNotesSemanticReviewConflictError,
 )
 from my_pa.contracts.ports import (
     GoodNotesSemanticReviewDecisionRecord as SemanticReviewDecision,
 )
-from my_pa.domain.goodnotes.models import GoodNotesPageWork
+from my_pa.domain.goodnotes.models import GoodNotesPageWork, GoodNotesSemanticReviewCase
 from my_pa.domain.identity.principal import Principal
 
 SemanticReviewConflictError = GoodNotesSemanticReviewConflictError
@@ -304,6 +305,14 @@ class GoodNotesPullRepository(Protocol):
         self, principal_id: str, client_id: str, assignment_id: str
     ) -> PullCompletionMaterial | None:
         """Resolve exactly one proposal for an authenticated assignment."""
+
+    def semantic_proposal_material(
+        self, principal_id: str, proposal_id: str
+    ) -> GoodNotesSemanticProposalMaterial | None: ...
+
+    def semantic_review_case(
+        self, principal_id: str, review_case_id: str
+    ) -> GoodNotesSemanticReviewCase | None: ...
 
     def complete_batch(
         self,

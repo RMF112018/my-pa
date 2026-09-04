@@ -225,6 +225,27 @@ def _promotion_evidence(
             run_id=run_id,
             proposal_sha256=semantic_proposal_sha256(*proposal),
             disposition=disposition,
+            corrected_payload=(
+                {
+                    "run_id": run_id,
+                    "page_version_id": proposal[0],
+                    "content_sha256": "0" * 64,
+                    "schema_version": proposal[1],
+                    "analyzer_name": proposal[2],
+                    "analyzer_version": proposal[3],
+                    "candidate_tags": [],
+                    "ranked_candidates": [],
+                    "confidence": None,
+                    **proposal[4],
+                }
+                if disposition is Disposition.CORRECT_AND_ACCEPT
+                else None
+            ),
+            result_sha256=(
+                hashlib.sha256(b"corrected-payload").hexdigest()
+                if disposition is Disposition.CORRECT_AND_ACCEPT
+                else None
+            ),
         )
         for proposal in store.semantic_proposals_for_run(A, run_id)
     )

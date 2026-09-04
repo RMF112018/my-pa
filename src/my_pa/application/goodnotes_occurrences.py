@@ -121,6 +121,8 @@ class GoodNotesSemanticPromotionEvidence:
     run_id: str
     proposal_sha256: str
     disposition: Disposition
+    corrected_payload: dict[str, object] | None = field(default=None, repr=False)
+    result_sha256: str | None = None
 
     def __post_init__(self) -> None:
         validate_identifier(self.principal_id, IdKind.PRINCIPAL)
@@ -132,6 +134,15 @@ class GoodNotesSemanticPromotionEvidence:
             raise ValueError("promotion evidence requires a proposal digest")
         if not isinstance(self.disposition, Disposition):
             raise TypeError("promotion evidence requires a review disposition")
+        if (self.disposition is Disposition.CORRECT_AND_ACCEPT) is not (
+            self.corrected_payload is not None and self.result_sha256 is not None
+        ):
+            raise ValueError("corrected promotion evidence carries its corrected payload")
+        if self.result_sha256 is not None and (
+            len(self.result_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in self.result_sha256)
+        ):
+            raise ValueError("corrected promotion evidence requires a result digest")
 
     def is_bound_to(self, principal_id: str, run_id: str) -> bool:
         """Return whether server-held evidence belongs to this exact run context."""
@@ -695,24 +706,39 @@ def _reviewed_proposals(
     proposals: Sequence[tuple[str, str, str, str, dict[str, object]]],
     evidence: Sequence[GoodNotesSemanticPromotionEvidence],
 ) -> tuple[tuple[str, str, str, str, dict[str, object]], ...]:
-    decisions: dict[str, Disposition] = {}
+    decisions: dict[str, GoodNotesSemanticPromotionEvidence] = {}
     for item in evidence:
         if not item.is_bound_to(principal_id, run_id):
             raise ValueError("semantic promotion evidence crossed its run context")
         if item.proposal_sha256 in decisions:
             raise ValueError("semantic promotion evidence is duplicated")
-        decisions[item.proposal_sha256] = item.disposition
+        decisions[item.proposal_sha256] = item
     reviewed: list[tuple[str, str, str, str, dict[str, object]]] = []
     consumed: set[str] = set()
     for proposal in proposals:
         digest = semantic_proposal_sha256(*proposal)
-        disposition = decisions.get(digest)
-        if disposition is None:
+        evidence_item = decisions.get(digest)
+        if evidence_item is None:
             raise ValueError("semantic proposal lacks server review evidence")
-        if disposition not in _PROMOTING_DISPOSITIONS:
+        if evidence_item.disposition not in _PROMOTING_DISPOSITIONS:
             raise ValueError("semantic proposal is not eligible for promotion")
         consumed.add(digest)
-        reviewed.append(proposal)
+        reviewed.append(
+            proposal
+            if evidence_item.corrected_payload is None
+            else (
+                *proposal[:4],
+                {
+                    key: evidence_item.corrected_payload[key]
+                    for key in (
+                        "segments",
+                        "candidate_tags",
+                        "ranked_candidates",
+                        "confidence",
+                    )
+                },
+            )
+        )
     if consumed != set(decisions):
         raise ValueError("semantic promotion evidence does not match this run")
     return tuple(reviewed)

@@ -342,6 +342,7 @@ from my_pa.application.goodnotes_pull_orchestration import (
     stamp_authenticated_pull_context,
 )
 from my_pa.application.goodnotes_semantics import (
+    fingerprint_proposal,
     lookup_work,
     proposal_payload,
     submit_proposal,
@@ -4101,6 +4102,65 @@ class ApplicationService:
         entity_case: EntityProposalReviewCase | None = None
         with _translated(), _entity_governance_translated():
             try:
+                pull_repository: GoodNotesPullRepository | None = None
+                semantic_case = None
+                if self._goodnotes_pull_enabled:
+                    pull_repository = cast(GoodNotesPullRepository, unit_of_work.goodnotes_pull)
+                    semantic_case = pull_repository.semantic_review_case(
+                        request.principal_id, request.review_case_id
+                    )
+                if (
+                    semantic_case is not None
+                    and request.disposition is Disposition.CORRECT_AND_ACCEPT
+                ):
+                    if request.correction_patch is None or request.corrected_value is not None:
+                        raise ReviewCorrectionError(
+                            "semantic correction is one structured correction patch"
+                        )
+                    repository = cast(GoodNotesPullRepository, pull_repository)
+                    material = repository.semantic_proposal_material(
+                        request.principal_id, semantic_case.proposal_id
+                    )
+                    if material is None:
+                        raise ReviewNotFoundError("the semantic proposal is absent")
+                    patch = request.correction_patch.as_mapping()
+                    allowed_fields = {
+                        "segments",
+                        "candidate_tags",
+                        "ranked_candidates",
+                        "confidence",
+                    }
+                    if not set(patch) <= allowed_fields:
+                        raise ReviewCorrectionError(
+                            "semantic correction names only governed payload fields"
+                        )
+                    corrected = {**material.payload, **patch}
+                    try:
+                        validated = SubmitGoodNotesProposal(
+                            run_id=material.run_id,
+                            page_version_id=material.page_version_id,
+                            content_sha256=material.content_sha256,
+                            schema_version=material.schema_version,
+                            analyzer_name=material.analyzer_name,
+                            analyzer_version=material.analyzer_version,
+                            idempotency_key=material.proposal_id,
+                            segments=tuple(corrected.get("segments", ())),
+                            candidate_tags=tuple(corrected.get("candidate_tags", ())),
+                            ranked_candidates=tuple(corrected.get("ranked_candidates", ())),
+                            confidence=corrected.get("confidence"),
+                        )
+                    except (TypeError, ValueError):
+                        raise ReviewCorrectionError(
+                            "semantic correction satisfies the canonical proposal contract"
+                        ) from None
+                    _fingerprint, corrected_result_sha256, corrected_body = fingerprint_proposal(
+                        validated
+                    )
+                    request = replace(
+                        request,
+                        semantic_corrected_payload=corrected_body,
+                        semantic_corrected_result_sha256=corrected_result_sha256,
+                    )
                 entity_case = unit_of_work.reviews.entity_proposal_case(
                     request.principal_id, request.review_case_id
                 )
@@ -8432,12 +8492,17 @@ class ApplicationService:
                 if material is None:
                     raise GoodNotesPullError("STALE_ASSIGNMENT")
                 evidence = repository.semantic_review_evidence(
-                    principal_id, material.run_id, (material.result_sha256,)
+                    principal_id, material.run_id, (material.proposal_sha256,)
                 )
                 if (
                     len(evidence) != 1
-                    or evidence[0].proposal_sha256 != material.result_sha256
-                    or evidence[0].disposition is not Disposition.ACCEPT
+                    or evidence[0].proposal_sha256 != material.proposal_sha256
+                    or evidence[0].disposition
+                    not in {Disposition.ACCEPT, Disposition.CORRECT_AND_ACCEPT}
+                    or (
+                        evidence[0].disposition is Disposition.CORRECT_AND_ACCEPT
+                        and evidence[0].result_sha256 != material.result_sha256
+                    )
                 ):
                     raise GoodNotesPullError("COMPLETION_CONFLICT")
                 completions.append(

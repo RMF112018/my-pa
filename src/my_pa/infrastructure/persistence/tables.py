@@ -8784,6 +8784,8 @@ goodnotes_semantic_review_decisions = Table(
     Column("sequence", Integer, nullable=False),
     Column("action", String(32), nullable=False),
     Column("request_fingerprint", String(64), nullable=False),
+    Column("corrected_payload", JSONB),
+    Column("corrected_result_sha256", String(64)),
     Column("decided_at", DateTime(timezone=True), nullable=False),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     CheckConstraint(
@@ -8795,6 +8797,15 @@ goodnotes_semantic_review_decisions = Table(
         name="goodnotes_semantic_review_proposal_digest_shape",
     ),
     _one_of("action", Disposition, name="goodnotes_semantic_review_action_is_known"),
+    CheckConstraint(
+        "(action = 'correct_and_accept') = "
+        "(corrected_payload IS NOT NULL AND corrected_result_sha256 IS NOT NULL)",
+        name="goodnotes_semantic_review_correction_matches_action",
+    ),
+    CheckConstraint(
+        "corrected_result_sha256 IS NULL OR corrected_result_sha256 ~ '^[a-f0-9]{64}$'",
+        name="goodnotes_semantic_review_corrected_digest_shape",
+    ),
     CheckConstraint(
         "request_fingerprint ~ '^[a-f0-9]{64}$'",
         name="goodnotes_semantic_review_fingerprint_shape",

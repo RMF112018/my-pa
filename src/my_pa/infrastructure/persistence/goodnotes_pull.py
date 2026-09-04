@@ -41,13 +41,13 @@ from my_pa.contracts.ports import (
 from my_pa.contracts.ports import (
     GoodNotesSemanticPromotionEvidenceRecord as GoodNotesSemanticPromotionEvidence,
 )
+from my_pa.contracts.ports import GoodNotesSemanticProposalMaterial, ReviewDecisionRequest
 from my_pa.contracts.ports import (
     GoodNotesSemanticReviewConflictError as SemanticReviewConflictError,
 )
 from my_pa.contracts.ports import (
     GoodNotesSemanticReviewDecisionRecord as SemanticReviewDecision,
 )
-from my_pa.contracts.ports import ReviewDecisionRequest
 from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.review import (
     Disposition,
@@ -82,6 +82,26 @@ def _digest(value: object) -> str:
     return hashlib.sha256(encoded.encode()).hexdigest()
 
 
+def _canonical_payload(value: object) -> dict[str, object]:
+    try:
+        encoded = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        raise SemanticReviewConflictError from None
+    decoded = json.loads(encoded)
+    if not isinstance(decoded, dict):
+        raise SemanticReviewConflictError
+    return decoded
+
+
+def _corrected_result_sha256(payload: dict[str, object]) -> str:
+    fields = {
+        key: payload[key]
+        for key in ("segments", "candidate_tags", "ranked_candidates", "confidence")
+    }
+    encoded = json.dumps(fields, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
 def _semantic_proposal_sha256(
     page_version_id: str,
     schema_version: str,
@@ -101,9 +121,13 @@ def _semantic_state(disposition: Disposition | None) -> ProposalState:
         return ProposalState.NEEDS_REVIEW
     return {
         Disposition.ACCEPT: ProposalState.ACCEPTED,
+        Disposition.CORRECT_AND_ACCEPT: ProposalState.CORRECTED_ACCEPTED,
         Disposition.REJECT: ProposalState.REJECTED,
         Disposition.DEFER: ProposalState.DEFERRED,
         Disposition.MARK_UNRESOLVED: ProposalState.UNRESOLVED,
+        Disposition.REPROCESS: ProposalState.SUPERSEDED,
+        Disposition.ESCALATE: ProposalState.NEEDS_REVIEW,
+        Disposition.INVALIDATE: ProposalState.INVALIDATED,
     }[disposition]
 
 
@@ -376,6 +400,11 @@ class SqlGoodNotesPullRepository:
         proposals = self._connection.execute(
             select(
                 goodnotes_semantic_proposals.c.proposal_id,
+                goodnotes_semantic_proposals.c.page_version_id,
+                goodnotes_semantic_proposals.c.schema_version,
+                goodnotes_semantic_proposals.c.analyzer_name,
+                goodnotes_semantic_proposals.c.analyzer_version,
+                goodnotes_semantic_proposals.c.payload,
                 goodnotes_semantic_proposals.c.payload_sha256,
             ).where(
                 goodnotes_semantic_proposals.c.principal_id == principal_id,
@@ -389,13 +418,55 @@ class SqlGoodNotesPullRepository:
         if len(proposals) != 1:
             raise PullRepositoryConflictError
         proposal = proposals[0]
+        proposal_sha256 = _semantic_proposal_sha256(
+            str(proposal.page_version_id),
+            str(proposal.schema_version),
+            str(proposal.analyzer_name),
+            str(proposal.analyzer_version),
+            dict(proposal.payload),
+        )
+        latest = self._connection.execute(
+            select(goodnotes_semantic_review_decisions)
+            .where(
+                goodnotes_semantic_review_decisions.c.principal_id == principal_id,
+                goodnotes_semantic_review_decisions.c.proposal_sha256 == proposal_sha256,
+            )
+            .order_by(goodnotes_semantic_review_decisions.c.sequence.desc())
+            .limit(1)
+        ).one_or_none()
+        result_sha256 = str(proposal.payload_sha256)
+        if latest is not None and latest.action == Disposition.CORRECT_AND_ACCEPT.value:
+            result_sha256 = str(latest.corrected_result_sha256)
         return PullCompletionMaterial(
             assignment_id=assignment.assignment_id,
             proposal_id=str(proposal.proposal_id),
             run_id=assignment.work.run_id,
             page_version_id=assignment.work.page_version_id,
             content_sha256=assignment.work.content_sha256,
-            result_sha256=str(proposal.payload_sha256),
+            proposal_sha256=proposal_sha256,
+            result_sha256=result_sha256,
+        )
+
+    def semantic_proposal_material(
+        self, principal_id: str, proposal_id: str
+    ) -> GoodNotesSemanticProposalMaterial | None:
+        row = self._connection.execute(
+            select(goodnotes_semantic_proposals).where(
+                goodnotes_semantic_proposals.c.principal_id == principal_id,
+                goodnotes_semantic_proposals.c.proposal_id == proposal_id,
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        return GoodNotesSemanticProposalMaterial(
+            proposal_id=str(row.proposal_id),
+            run_id=str(row.run_id),
+            page_version_id=str(row.page_version_id),
+            content_sha256=str(row.content_sha256),
+            schema_version=str(row.schema_version),
+            analyzer_name=str(row.analyzer_name),
+            analyzer_version=str(row.analyzer_version),
+            payload=_canonical_payload(row.payload),
         )
 
     def complete_batch(
@@ -554,16 +625,18 @@ class SqlGoodNotesPullRepository:
         )
 
     def decide_semantic_review(self, request: ReviewDecisionRequest) -> ReviewDecision:
-        allowed = frozenset(
-            {
-                Disposition.ACCEPT,
-                Disposition.REJECT,
-                Disposition.DEFER,
-                Disposition.MARK_UNRESOLVED,
-            }
-        )
-        if request.disposition not in allowed:
-            raise ReviewUnsupportedError("the semantic review disposition is not implemented")
+        if request.disposition is Disposition.CORRECT_AND_ACCEPT and (
+            request.semantic_corrected_payload is None
+            or request.semantic_corrected_result_sha256 is None
+        ):
+            raise ReviewUnsupportedError(
+                "semantic correction requires validated structured content"
+            )
+        if request.disposition is not Disposition.CORRECT_AND_ACCEPT and (
+            request.semantic_corrected_payload is not None
+            or request.semantic_corrected_result_sha256 is not None
+        ):
+            raise ReviewUnsupportedError("semantic correction content belongs only to correction")
         case = self.semantic_review_case(request.principal_id, request.review_case_id)
         if case is None:
             raise ReviewNotFoundError("the request names no stored review case")
@@ -588,13 +661,16 @@ class SqlGoodNotesPullRepository:
                 request.review_case_id,
                 request.expected_review_version,
                 request.disposition.value,
+                request.corrected_value,
+                request.semantic_corrected_payload,
+                request.semantic_corrected_result_sha256,
                 request.reason,
             ]
         )
         try:
             recorded = self.record_semantic_review(
                 SemanticReviewDecision(
-                    decision_id=make_identifier(IdKind.REVIEW_DECISION, request_fingerprint[:32]),
+                    decision_id=f"gnsrd_{request_fingerprint[:24]}",
                     principal_id=request.principal_id,
                     run_id=case.run_id,
                     proposal_id=case.proposal_id,
@@ -602,6 +678,12 @@ class SqlGoodNotesPullRepository:
                     action=request.disposition.value,
                     request_fingerprint=request_fingerprint,
                     decided_at=request.decided_at,
+                    corrected_payload=(
+                        None
+                        if request.semantic_corrected_payload is None
+                        else _canonical_payload(request.semantic_corrected_payload)
+                    ),
+                    corrected_result_sha256=request.semantic_corrected_result_sha256,
                 )
             )
         except SemanticReviewConflictError:
@@ -609,7 +691,7 @@ class SqlGoodNotesPullRepository:
         if recorded.sequence is None:
             raise SemanticReviewConflictError
         return ReviewDecision(
-            decision_id=recorded.decision_id,
+            decision_id=make_identifier(IdKind.REVIEW_DECISION, request_fingerprint[:32]),
             review_case_id=request.review_case_id,
             sequence=recorded.sequence,
             disposition=request.disposition,
@@ -627,6 +709,16 @@ class SqlGoodNotesPullRepository:
             action = Disposition(decision.action)
         except ValueError:
             raise SemanticReviewConflictError from None
+        corrected = action is Disposition.CORRECT_AND_ACCEPT
+        if corrected is not (
+            decision.corrected_payload is not None and decision.corrected_result_sha256 is not None
+        ):
+            raise SemanticReviewConflictError
+        if corrected:
+            canonical_correction = _canonical_payload(decision.corrected_payload)
+            if _corrected_result_sha256(canonical_correction) != decision.corrected_result_sha256:
+                raise SemanticReviewConflictError
+            decision = replace(decision, corrected_payload=canonical_correction)
         proposal = self._connection.execute(
             select(goodnotes_semantic_proposals)
             .where(
@@ -664,6 +756,8 @@ class SqlGoodNotesPullRepository:
                     existing.proposal_sha256 != decision.proposal_sha256,
                     existing.action != action.value,
                     existing.request_fingerprint != decision.request_fingerprint,
+                    existing.corrected_payload != decision.corrected_payload,
+                    existing.corrected_result_sha256 != decision.corrected_result_sha256,
                 )
             ):
                 raise SemanticReviewConflictError
@@ -700,6 +794,8 @@ class SqlGoodNotesPullRepository:
                     sequence=sequence,
                     action=action.value,
                     request_fingerprint=decision.request_fingerprint,
+                    corrected_payload=decision.corrected_payload,
+                    corrected_result_sha256=decision.corrected_result_sha256,
                     decided_at=decision.decided_at,
                 )
             )
@@ -727,6 +823,16 @@ class SqlGoodNotesPullRepository:
                 run_id=run_id,
                 proposal_sha256=str(row.proposal_sha256),
                 disposition=Disposition(str(row.action)),
+                corrected_payload=(
+                    None
+                    if row.corrected_payload is None
+                    else _canonical_payload(row.corrected_payload)
+                ),
+                result_sha256=(
+                    str(row.corrected_result_sha256)
+                    if row.corrected_result_sha256 is not None
+                    else None
+                ),
             )
             for row in rows
         }

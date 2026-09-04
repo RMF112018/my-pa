@@ -3794,9 +3794,9 @@ class ReviewDecisionRequest:
     """Everything one review transition needs inside a single transaction.
 
     **Two shapes of correction, and they never travel together.**
-    `corrected_value` is the capture and GoodNotes shape and is unchanged: those
-    subjects have one normalized value, so a correction to one is one bounded
-    string. `correction_patch` is the typed-target shape: Entity and Relationship
+    `corrected_value` is the capture and GoodNotes-region shape: those subjects
+    have one normalized value, so a correction to one is one bounded string.
+    `correction_patch` is the structured-target shape: semantic GoodNotes, Entity, and Relationship
     Memory proposals ask for mutations with *named arguments*, so a correction
     has to say which of them the reviewer changed, and it is routed and validated
     against that target command's schema by the plane that owns the subject before
@@ -3829,6 +3829,8 @@ class ReviewDecisionRequest:
     corrected_value: str | None = field(default=None, repr=False)
     correction_patch: CorrectionPatch | None = field(default=None, repr=False)
     reason: str | None = field(default=None, repr=False)
+    semantic_corrected_payload: dict[str, object] | None = field(default=None, repr=False)
+    semantic_corrected_result_sha256: str | None = field(default=None, repr=False)
 
     #: The dispositions section 13 gives a reason. `accept`,
     #: `correct_and_accept` and `reprocess` are deliberately absent.
@@ -4478,7 +4480,22 @@ class GoodNotesPullCompletionMaterial:
     run_id: str
     page_version_id: str
     content_sha256: str
+    proposal_sha256: str
     result_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesSemanticProposalMaterial:
+    """Server-only immutable semantic proposal content for governed correction."""
+
+    proposal_id: str
+    run_id: str
+    page_version_id: str
+    content_sha256: str
+    schema_version: str
+    analyzer_name: str
+    analyzer_version: str
+    payload: dict[str, object] = field(repr=False)
 
 
 class GoodNotesPullCompletionValue(Protocol):
@@ -4533,6 +4550,8 @@ class GoodNotesSemanticPromotionEvidenceRecord:
     run_id: str
     proposal_sha256: str
     disposition: Disposition
+    corrected_payload: dict[str, object] | None = field(default=None, repr=False)
+    result_sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -4545,6 +4564,8 @@ class GoodNotesSemanticReviewDecisionRecord:
     action: str
     request_fingerprint: str
     decided_at: datetime
+    corrected_payload: dict[str, object] | None = field(default=None, repr=False)
+    corrected_result_sha256: str | None = None
     sequence: int | None = None
     replayed: bool = False
 

@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 
+import pytest
+
 from my_pa.adapters.mcp.server import _answer
 from my_pa.application.commands import CompleteGoodNotesPull, PullGoodNotesWork
 from my_pa.application.goodnotes_pull_orchestration import (
@@ -20,11 +22,13 @@ from my_pa.contracts.ports import (
     GoodNotesSemanticPromotionEvidenceRecord,
 )
 from my_pa.contracts.v1.envelope import RequestMetadata
+from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.review import Disposition
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.goodnotes.models import GoodNotesPageWork, issue_stable_id
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.infrastructure.persistence.goodnotes_pull import _canonical_payload, _semantic_state
 from tests.conftest import DEFAULT_LIMITS, WHEN, FakeUnitOfWork, Scene
 
 
@@ -35,6 +39,20 @@ class _PullRepository:
     assignments: dict[str, PullAssignment] = field(default_factory=dict)
     attempts: int = 0
     completed: bool = False
+    material_proposal_sha256: str | None = None
+
+    @property
+    def proposal_sha256(self) -> str:
+        return hashlib.sha256(b"full-semantic-proposal-identity").hexdigest()
+
+    @property
+    def result_sha256(self) -> str:
+        value = (
+            b"canonical-corrected-semantic-payload"
+            if self.disposition is Disposition.CORRECT_AND_ACCEPT
+            else b"semantic-payload-only"
+        )
+        return hashlib.sha256(value).hexdigest()
 
     def work_states(self, principal_id: str) -> tuple[PullWorkState, ...]:
         if principal_id != self.work.principal_id:
@@ -74,14 +92,14 @@ class _PullRepository:
         held = self.assignment(principal_id, client_id, assignment_id)
         if held is None:
             return None
-        digest = hashlib.sha256(b"reviewed-semantic-result").hexdigest()
         return GoodNotesPullCompletionMaterial(
             assignment_id=assignment_id,
             proposal_id=issue_stable_id("gnprp", assignment_id),
             run_id=held.work.run_id,
             page_version_id=held.work.page_version_id,
             content_sha256=held.work.content_sha256,
-            result_sha256=digest,
+            proposal_sha256=self.material_proposal_sha256 or self.proposal_sha256,
+            result_sha256=self.result_sha256,
         )
 
     def complete_batch(
@@ -129,8 +147,17 @@ class _PullRepository:
                 run_id=run_id,
                 proposal_sha256=digest,
                 disposition=self.disposition,
+                corrected_payload=(
+                    {"segments": []} if self.disposition is Disposition.CORRECT_AND_ACCEPT else None
+                ),
+                result_sha256=(
+                    self.result_sha256
+                    if self.disposition is Disposition.CORRECT_AND_ACCEPT
+                    else None
+                ),
             )
             for digest in proposal_sha256s
+            if digest == self.proposal_sha256
         )
 
 
@@ -175,8 +202,13 @@ def _repository(scene: Scene) -> _PullRepository:
     )
 
 
-def test_pull_complete_and_status_use_authenticated_client_and_review(scene: Scene) -> None:
+@pytest.mark.parametrize("disposition", [Disposition.ACCEPT, Disposition.CORRECT_AND_ACCEPT])
+def test_pull_complete_and_status_use_authenticated_client_and_review(
+    scene: Scene, disposition: Disposition
+) -> None:
     repository = _repository(scene)
+    repository.disposition = disposition
+    assert repository.proposal_sha256 != repository.result_sha256
     service = _service(scene, repository)
     pulled = service.invoke(
         _metadata(Capability.GOODNOTES_PULL, Purpose.GOODNOTES_PULL),
@@ -198,6 +230,57 @@ def test_pull_complete_and_status_use_authenticated_client_and_review(scene: Sce
     assert repository.completed is True
 
 
+@pytest.mark.parametrize(
+    ("disposition", "state"),
+    [
+        (Disposition.ACCEPT, ProposalState.ACCEPTED),
+        (Disposition.CORRECT_AND_ACCEPT, ProposalState.CORRECTED_ACCEPTED),
+        (Disposition.REJECT, ProposalState.REJECTED),
+        (Disposition.DEFER, ProposalState.DEFERRED),
+        (Disposition.MARK_UNRESOLVED, ProposalState.UNRESOLVED),
+        (Disposition.REPROCESS, ProposalState.SUPERSEDED),
+        (Disposition.ESCALATE, ProposalState.NEEDS_REVIEW),
+        (Disposition.INVALIDATE, ProposalState.INVALIDATED),
+    ],
+)
+def test_every_durable_semantic_review_action_projects_to_a_public_state(
+    disposition: Disposition, state: ProposalState
+) -> None:
+    assert _semantic_state(disposition) is state
+
+
+def test_canonical_correction_detaches_from_mutable_request_containers() -> None:
+    supplied: dict[str, object] = {"segments": [{"transcription": "corrected"}]}
+    stored = _canonical_payload(supplied)
+    supplied["segments"] = []
+
+    assert stored == {"segments": [{"transcription": "corrected"}]}
+
+
+def test_completion_refuses_material_not_bound_to_reviewed_proposal(scene: Scene) -> None:
+    repository = _repository(scene)
+    repository.material_proposal_sha256 = "0" * 64
+    service = _service(scene, repository)
+    pulled = service.invoke(
+        _metadata(Capability.GOODNOTES_PULL, Purpose.GOODNOTES_PULL),
+        PullGoodNotesWork(batch_size=1, cursor=None),
+        principal=scene.principal,
+        authenticated_client_id="oauth-client-a",
+    )
+    assignment_id = pulled.result["assignments"][0]["assignment_id"]  # type: ignore[index]
+
+    refused = service.invoke(
+        _metadata(Capability.GOODNOTES_COMPLETE, Purpose.GOODNOTES_PULL),
+        CompleteGoodNotesPull((assignment_id,)),
+        principal=scene.principal,
+        authenticated_client_id="oauth-client-a",
+    )
+
+    assert refused.error is not None
+    assert refused.error.code.value == "conflict"
+    assert repository.completed is False
+
+
 def test_completion_rejects_unreviewed_and_cross_client_handles(scene: Scene) -> None:
     repository = _repository(scene)
     service = _service(scene, repository)
@@ -211,6 +294,8 @@ def test_completion_rejects_unreviewed_and_cross_client_handles(scene: Scene) ->
 
     for client_id, disposition in (
         ("oauth-client-a", Disposition.REJECT),
+        ("oauth-client-a", Disposition.REPROCESS),
+        ("oauth-client-a", Disposition.INVALIDATE),
         ("oauth-client-b", Disposition.ACCEPT),
     ):
         repository.disposition = disposition

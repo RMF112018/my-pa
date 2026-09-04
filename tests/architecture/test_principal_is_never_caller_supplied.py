@@ -524,13 +524,14 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("held", "principal_id"),
     )
     + (("request", "principal_id"),) * 12,
-    # The one read in the application service is the same value on the way back
+    # These reads in the application service are the same value on the way back
     # out: `_review_decide` builds the request from
     # `authorization.principal.principal_id` on the line above and then hands
     # the field to the router that decides which plane owns the case. Reading
     # the request rather than the authorization a second time is what keeps the
-    # routing read and the decision that follows it provably the same Principal.
-    "application/service.py": (("request", "principal_id"),),
+    # routing and semantic proposal reads and the decision that follows them
+    # provably the same Principal.
+    "application/service.py": (("request", "principal_id"),) * 3,
     # `WP-RI-B-05`'s Review SQL for the entity plane. Neither read is a caller's
     # statement: `decision.principal_id` is checked *against* the acting
     # Principal and the write is refused on a mismatch -- the same shape

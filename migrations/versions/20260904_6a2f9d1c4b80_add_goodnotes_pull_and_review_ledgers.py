@@ -306,6 +306,8 @@ def upgrade() -> None:
           sequence integer NOT NULL,
           action varchar(32) NOT NULL,
           request_fingerprint varchar(64) NOT NULL,
+          corrected_payload jsonb,
+          corrected_result_sha256 varchar(64),
           decided_at timestamptz NOT NULL,
           PRIMARY KEY (principal_id, decision_id),
           CONSTRAINT goodnotes_semantic_review_principal_id_shape
@@ -318,6 +320,11 @@ def upgrade() -> None:
           CONSTRAINT goodnotes_semantic_review_action_is_known
             CHECK (action IN ('accept', 'correct_and_accept', 'defer', 'escalate',
                               'invalidate', 'mark_unresolved', 'reject', 'reprocess')),
+          CONSTRAINT goodnotes_semantic_review_correction_matches_action
+            CHECK ((action = 'correct_and_accept') =
+                   (corrected_payload IS NOT NULL AND corrected_result_sha256 IS NOT NULL)),
+          CONSTRAINT goodnotes_semantic_review_corrected_digest_shape
+            CHECK (corrected_result_sha256 IS NULL OR corrected_result_sha256 ~ '^[a-f0-9]{{64}}$'),
           CONSTRAINT goodnotes_semantic_review_fingerprint_shape
             CHECK (request_fingerprint ~ '^[a-f0-9]{{64}}$'),
           CONSTRAINT one_goodnotes_semantic_review_per_sequence

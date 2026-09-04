@@ -8,10 +8,10 @@ This ledger binds the repository-native, non-AEOS GoodNotes/GSQS completion
 campaign to its current implementation evidence. It does not authorize or
 claim deployment, live data or source access, production activation, a live
 ChatLLM schedule, B0 execution, R11/R12 decisions, private-gold access, risk
-acceptance, merge eligibility, or final repository completion. PR #186 has
-merged and its database-test infrastructure has been reconciled into this
-branch. A fresh non-author review of the post-ledger exact head is still
-required.
+acceptance, merge eligibility, or final repository completion. PR #186 and
+the admitted RI work are merged, and their migration and database-test
+infrastructure have been reconciled into this branch. A fresh non-author
+review of the post-ledger exact head is still required.
 
 ## Authority and repository identity
 
@@ -19,21 +19,24 @@ required.
   SHA-256
   `a3fa8c926aab74823c86a637f696c07f8fbc3fd0bc110e51c1d5138f7f6da7d1`.
 - The current authenticated `origin/main` is commit
-  `37f767b85fbc0cd1e84fd0c8acd831b0c47142b2`, tree
-  `4d82591760784dbae58781860fe2cd6dd50b816f`.
-- The implementation through the final database-counterpart correction is
-  commit `6d53aa03c7cf2bed8d5d8569967f4893519da555`, tree
-  `ef48ded16b88676c941837e9dccd6fe0bd6e64ee`. The ledger-only commit created
-  by this update is reported in its handoff rather than guessed in its own
-  contents.
+  `67ad226210c27119a7ea91b992872d8daaee3d56`, tree
+  `c9018d681b340e14706cf500d01d2a4eec7d9d55`.
+- The implementation through the post-RI migration and count reconciliation
+  is commit `20228f6221ddd9b6bb247c704294aebd27c4ad46`, tree
+  `50bb3a27cedd462cc4736f46820099d6f27d5e05`. The ledger-only commit created
+  after this refresh is reported in its handoff rather than guessed here.
 - The isolated branch is `bf/goodnotes-post-ui-safe-sync-20260903` in
   `/private/tmp/my-pa-goodnotes-post-ui-safe-sync-20260903`.
 - The primary checkout remains detached at its pre-existing commit and was not
   used for source work. Its unrelated untracked evidence was not read, staged,
   changed, or incorporated.
 
-Candidate PR #160 remains historical evidence only. Its stale migration
-`d8f3a1c6e942` was neither copied nor transplanted.
+Candidate PR #160 is closed unmerged and remains historical evidence only. Its
+stale migration `d8f3a1c6e942` was neither copied nor transplanted and is not
+in the current migration graph. PR #152 is explicitly abandoned historical
+DSM/RI evidence. Its branch was not changed or harvested; after ownership was
+released, only four mechanically derived test-count literals in the shared
+plan path were refreshed on this branch.
 
 ## Concurrency and migration serialization
 
@@ -41,35 +44,45 @@ The active-concurrent-work register was created before source mutation and was
 refreshed before synchronization, migration work, each implementation phase,
 and this ledger update.
 
-- RI PR #181 (`ri-ent/wp13-fixture`) remained separately owned. Its PR paths
-  and worktree were no-touch; it added no migration. Important staged RI/UI
-  source blobs observed during preflight were identical to then-current
-  `main`.
+- RI PR #181 (`ri-ent/wp13-fixture`) remained separately owned during its
+  active interval. Its PR paths and worktree were no-touch. Its accepted work
+  later entered `main` and was reconciled into this branch through merge commit
+  `29e8c302459ecdf530c730a18b290f4be274ce54`.
 - Closed PR #170 was rediscovered as merged. Its migration
-  `9a3f6c1e8d24` is in the authenticated ancestry, and current `main` has the
-  sole head `16f05c46b8c3`.
-- The GoodNotes migration
+  `9a3f6c1e8d24` is in the authenticated ancestry; at that historical
+  synchronization point, `main` had sole head `16f05c46b8c3`.
+- Post-RI `main` introduced migration `b8e4d1a6c073`. The GoodNotes migration
   `migrations/versions/20260904_6a2f9d1c4b80_add_goodnotes_pull_and_review_ledgers.py`
-  was created only after RI migration ownership cleared. It is additive,
-  descends directly from `16f05c46b8c3`, and produces sole head
-  `6a2f9d1c4b80`.
+  was created only after RI migration ownership cleared and was mechanically
+  reparented after that accepted migration landed. It is additive, descends
+  directly from `b8e4d1a6c073`, and produces sole head `6a2f9d1c4b80`.
 - PR #186 (`bf/db-test-ci-consolidation-20260903`) merged from feature commit
   `04bd3852b14beb15ad7ec122c23634c3fa319272` as `origin/main`
   `37f767b85fbc0cd1e84fd0c8acd831b0c47142b2`. Merge commit
   `2ba5538cf91c7cce8212ac5318d910ab7d2f3db3` reconciled it into the GoodNotes
   branch. GoodNotes then moved its SQL tests to the repository-native shared
   provisioner and supplied the exact promotion evidence required by the
-  production gate. There is no remaining active-owner reconciliation blocker.
+  production gate.
+- Subsequent accepted UI work entered through synchronization merges
+  `1cc0982f9063daf383a512f196a37c28ad2eb9fc` and
+  `95406a24799eacda9a49bb4d071ab296c3f80a8d`. The latter binds this branch to
+  current `origin/main` `67ad2262`; neither merge changed GoodNotes semantics.
+- PR #152's formerly overlapping plan path was released only after that PR was
+  explicitly abandoned as historical evidence. The four derived count
+  literals were then refreshed without changing RI prose or semantics.
 
-No RI branch, worktree, migration, asset, or owned source was mutated. The
-campaign assertion is
+There is no remaining active-owner or migration-serialization blocker.
+
+No RI branch, worktree, migration, asset, or implementation source was mutated.
+Only the four released, mechanically derived plan counts changed, without RI
+semantic or prose changes. The campaign assertion is
 `RELATIONSHIP_INTELLIGENCE_CONCURRENT_WORK_PRESERVED`.
 
 ## Implementation chronology
 
 - `b273298cdb1b3f34adc998264eabda3774fc27b6` synchronized the preserved
-  GoodNotes history with authenticated current `main` after a zero-overlap
-  path check.
+  GoodNotes history with then-authenticated `main` after a zero-overlap path
+  check.
 - `672a9b1626123cec0bb0116c0f77b5bd3fa1f623` separated page-date evidence
   from event/body dates with explicit absent/resolved/ambiguous semantics.
 - `019a5e1ff0d393ebdff2e3bc50d33ccbac9c1333` made exact fresh source
@@ -139,13 +152,23 @@ campaign assertion is
   evidence. `6d53aa03c7cf2bed8d5d8569967f4893519da555` binds every affected call to
   exact Principal/run/full stored proposal digest/`ACCEPT` evidence. The full
   ten-module GoodNotes PostgreSQL selection then passed.
+- `29e8c302459ecdf530c730a18b290f4be274ce54` reconciled the accepted RI work
+  and migration graph; `1cc0982f9063daf383a512f196a37c28ad2eb9fc` and
+  `95406a24799eacda9a49bb4d071ab296c3f80a8d` subsequently synchronized the
+  admitted UI changes through current `main`.
+- `8b304cf6ebbd539867eedad6d5149b8af7054338` reconciled the post-RI migration
+  invariants so `6a2f9d1c4b80` directly follows `b8e4d1a6c073` and remains the
+  sole head.
+- `20228f6221ddd9b6bb247c704294aebd27c4ad46` refreshed only the four stale,
+  mechanically derived RI plan counts after PR #152 ownership was explicitly
+  released; no RI prose or implementation semantics changed.
 
 ## Work-package status
 
 | Work package | Repository status | Evidence or residual gate |
 | --- | --- | --- |
-| GN-WP-R0 | `PASS` | Current base, PRs/worktrees, Alembic graph, ownership, collision plan, and requirement seams were authenticated and registered before writes. |
-| GN-WP-R1 | `IMPLEMENTED` | One additive migration descends from the correct post-RI head; candidate #160 migration was excluded. PR #186 is merged and its provisioning contract is reconciled. The sole Alembic head is `6a2f9d1c4b80`, whose parent is `16f05c46b8c3`. |
+| GN-WP-R0 | `PASS` | Current main, PR/worktree ownership, the post-RI Alembic graph, collision handling, and requirement seams were authenticated and registered before writes. PR #160 is closed unmerged; PR #152 is abandoned historical evidence, its branch remained untouched, and only four released shared-plan counts were refreshed. |
+| GN-WP-R1 | `IMPLEMENTED` | One additive migration descends from the correct post-RI head; candidate #160 migration was excluded. PR #186 is merged and its provisioning contract is reconciled. The sole Alembic head is `6a2f9d1c4b80`, whose direct parent is `b8e4d1a6c073`. |
 | GN-WP-R2 | `IMPLEMENTED` | Supported production composition has no RouteLLM/ChatLLM/provider inference edge; the historical workflow remains uncomposed and fail-closed. |
 | GN-WP-R3 | `IMPLEMENTED` | Server-resolved Principal/client context, deterministic create/reuse/resume, bounded continuation, server-owned submission identity, atomic persistence, replay, stale/wrong-context refusal, and content-free status are wired. |
 | GN-WP-R4 | `IMPLEMENTED` | Local read-only observation, stable-read mutation checks, liveness/disappearance/reappearance, mapping, bounded OCR, transaction/replay, and provenance are covered; the actual run path requires fresh exact `AVAILABLE` evidence. |
@@ -159,8 +182,9 @@ campaign assertion is
 | OP-GN-01 | `REPOSITORY_PREREQUISITES_VERIFIED; OPERATOR_RUNTIME_ACTION_REQUIRED` | Repository health/dead-letter prerequisites are present; no live worker, source, or dead-letter operation was performed. |
 
 R0-R10 are code-complete on the current branch. No active-owner blocker remains.
-They are not merge-complete until the ledger commit is made and a fresh
-non-author reviewer returns `PASS` against that resulting exact head.
+They are not merge-complete until this ledger refresh is committed, a fresh
+non-author reviewer returns `PASS` against that resulting exact head, and PR
+CI passes against the same head.
 
 ## Validation evidence
 
@@ -216,15 +240,24 @@ Head-qualified results include:
   passed 69 tests.
 - Ruff check, Ruff format check, and `git diff --check` passed for each final
   bounded correction.
+- On the current post-RI candidate, the exact migration lane passed 847 tests
+  with 18,360 deselected in 1,750.44 seconds. This proved the sole-head chain
+  `b8e4d1a6c073 -> 6a2f9d1c4b80` through the repository's isolated database
+  provisioner.
+- After the strictly mechanical count refresh at `20228f6221`, the claimed-
+  count guard and related architecture/schema selection passed all 34 tests in
+  82.37 seconds.
 
 An earlier HTTP/transport attempt produced 170 passes before the sandbox denied
 local `127.0.0.1:0` binds, causing 282 failures and 300 setup errors. The later
 terminal transport-inclusive run produced 1,526 passes and 271 failures, with
 the failures again attributable solely to the sandbox's denial of loopback
 `127.0.0.1` binds. These are environment gates, not claimed transport passes.
-A broad architecture run was stopped at 61% after it exposed only
-pre-existing/out-of-scope count/prose drift in the RI plans and shared
-README/CLI. No broad or full local tier pass is claimed.
+A historical broad architecture run was stopped at 61% after it exposed
+then-pre-existing count/prose drift in the RI plans and shared README/CLI. The
+four count literals within the subsequently released PR #152 path have now
+been mechanically reconciled and their 34-test guard passes. No broad or full
+local tier pass is claimed.
 
 ## Review, runtime, and closure gates
 
@@ -248,12 +281,14 @@ remain part of the evidence rather than being rewritten as passes. Commits
 `56bfbc84`, `0df98f1c`, `f159889b`, `40e27ffd`, and `6d53aa03` respectively
 correct them and invalidate each preceding exact-head verdict.
 
-PR #186 is merged and reconciliation is complete; there is no active owner
-blocker. A fresh reviewer who authored none of these changes must review the
-post-ledger exact head and has authority to block. The current state is
-`REVIEW_PENDING`, not `PASS`; no merge, PR, deployment, or final repository
-completion is claimed. Any later commit invalidates that future exact-head
-verdict.
+PR #186 and the admitted post-RI dependencies are merged and reconciliation is
+complete; PR #160 is closed unmerged, PR #152 is abandoned historical evidence,
+and there is no active owner blocker. A fresh reviewer who authored none of
+these changes must review the post-ledger exact head and has authority to block.
+PR #187 must then pass CI against that same reviewed head before it is merge-
+eligible. The current state is `REVIEW_PENDING`, not `PASS`; no PR merge,
+deployment, or final repository completion is claimed. Any later commit
+invalidates that future exact-head verdict.
 
 P2-W12's six blockers and four majors were mapped as challenge evidence. They
 are not self-closed by this campaign and require their own governing authority.

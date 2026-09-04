@@ -22,14 +22,11 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-from alembic import command
 from alembic.config import Config
 from scripts.inspect_entity_plane import report
-from sqlalchemy import Engine, text
-from sqlalchemy.engine import make_url
+from sqlalchemy import Engine
 
 from my_pa.application.entity_governance import EntityGovernanceService
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.relationship.entity import (
     AliasType,
@@ -122,33 +119,9 @@ def _config() -> Config:
 
 
 @pytest.fixture
-def disposable_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-
-    def _administer(*statements: object) -> None:
-        with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            for statement in statements:
-                connection.execute(statement)  # type: ignore[arg-type]
-
-    try:
-        _administer(drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", url)
-        yield url
-    finally:
-        _administer(drop)
-        maintenance.dispose()
-
-
-@pytest.fixture
 def populated(disposable_database: str) -> Iterator[Engine]:
     engine = create_database_engine(disposable_database)
     try:
-        command.upgrade(_config(), "head")
         with engine.begin() as connection:
             repository = SqlEntityRepository(connection)
             for entity_id, principal_id, name, kind in (

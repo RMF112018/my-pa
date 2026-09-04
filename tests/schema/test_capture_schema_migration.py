@@ -59,7 +59,6 @@ synthetic; no path exists and none is opened.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Final
 
@@ -68,9 +67,7 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
-from sqlalchemy.engine import make_url
 
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.audit.events import AuditOutcome
 from my_pa.domain.capture.assertion import AssertionState
@@ -726,31 +723,6 @@ def test_the_schema_ahead_gap_closed_when_wp8_declared_its_three_names() -> None
     assert {c.value for c in Capability} and {p.value for p in Purpose}
 
 
-@pytest.fixture
-def disposable_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """Create an empty database, point the settings at it, drop it afterwards."""
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-
-    def _administer(*statements: object) -> None:
-        # CREATE and DROP DATABASE cannot run inside a transaction block.
-        with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            for statement in statements:
-                connection.execute(statement)  # type: ignore[arg-type]
-
-    try:
-        _administer(drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", url)
-        yield url
-    finally:
-        _administer(drop)
-        maintenance.dispose()
-
-
 def _admitted(engine: Engine, constraint: str, table: str = "audit_events") -> frozenset[str]:
     """The values one closed-set constraint admits.
 
@@ -1166,3 +1138,9 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
         assert routines == set()
     finally:
         engine.dispose()
+
+
+@pytest.fixture
+def disposable_database(empty_database_url: str) -> str:
+    """Empty disposable catalog; migration tests still drive Alembic themselves."""
+    return empty_database_url

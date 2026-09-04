@@ -40,10 +40,8 @@ from pathlib import Path
 from typing import Any, Final
 
 import pytest
-from alembic import command as alembic_command
 from alembic.config import Config
 from sqlalchemy import Engine, insert, select, text
-from sqlalchemy.engine import make_url
 from tests.conftest import (
     FakeProviders,
     FakeUnitOfWork,
@@ -75,7 +73,6 @@ from my_pa.application.commands import (
 from my_pa.application.errors import InvalidRequestError
 from my_pa.application.producer_origin import ProducerOrigin, ProducerOriginRegistry
 from my_pa.application.service import _HANDLERS, ApplicationService
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import ReviewDecisionRequest, UnitOfWork
 from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
@@ -944,30 +941,6 @@ def _config() -> Config:
     return Config(str(ROOT / "alembic.ini"))
 
 
-@pytest.fixture
-def disposable_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """Create an empty database, point the settings at it, drop it afterwards."""
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-
-    def _administer(*statements: object) -> None:
-        with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            for statement in statements:
-                connection.execute(statement)  # type: ignore[arg-type]
-
-    try:
-        _administer(drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", url)
-        yield url
-    finally:
-        _administer(drop)
-        maintenance.dispose()
-
-
 def _an_entity(entity_id: str, display_name: str) -> Entity:
     return Entity(
         entity_id=entity_id,
@@ -1059,7 +1032,6 @@ def assistant(disposable_database: str) -> Iterator[_Assistant]:
     ambiguous between; two hold a verified address, because that is what an
     assistant must have before it may write anything against an identity.
     """
-    alembic_command.upgrade(_config(), "head")
     composed = _Assistant(disposable_database)
     with composed.work_engine.begin() as connection:
         entities = SqlEntityRepository(connection)

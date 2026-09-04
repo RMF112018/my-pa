@@ -1,0 +1,3787 @@
+{
+  "count": 138,
+  "unclassified": 0,
+  "captured_at": "pre-mutation implementation head, WP-DB-01",
+  "note": "Pre-change census. Ordinary CURRENT_HEAD_CLONE modules now consume tests.db.fixtures; migration modules keep empty_database_url aliases. EXCEPTION_EXPLICIT: tests/contract/test_health_probe.py behind_head restore.",
+  "rows": [
+    {
+      "path": "tests/capture/conftest.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "capture_database",
+          "line": 95,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture(scope='package')"
+          ]
+        },
+        {
+          "name": "runtime",
+          "line": 126,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/concurrency/test_gateway_connection_pool.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 140,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "engines",
+          "line": 309,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "shared_engine",
+          "line": 328,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/concurrency/test_two_merges_race_one_preview.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "migrated_engine",
+          "line": 86,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/concurrency/test_worker_lease_loop.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 123,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "engine",
+          "line": 148,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/contract/test_health_probe.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 92,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "at_head",
+          "line": 152,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "behind_head",
+          "line": 160,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "unreachable",
+          "line": 173,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/contract/test_relationship_memory_capabilities.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 948,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "assistant",
+          "line": 1055,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_capture_plane_refuses_what_it_cannot_record.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 93,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "engine",
+          "line": 118,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_continuity_authoring.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 59,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 83,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "runtime",
+          "line": 133,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_continuity_isolation.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 106,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 130,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_corpus_coverage.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 90,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "engine",
+          "line": 115,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_cross_principal_r5_isolation.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 58,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 83,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_entity_addresses_and_communication_tbr_fixture.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 87,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 110,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_entity_assertion_provenance.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 92,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 115,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "staged",
+          "line": 145,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_entity_authoring.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 112,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 136,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_entity_context_memory.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 133,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "staged",
+          "line": 219,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "composed",
+          "line": 358,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "withheld_plane",
+          "line": 368,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_entity_directed_writes.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 113,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 137,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "staged",
+          "line": 162,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "composed",
+          "line": 842,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_entity_family_write_ledger.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 147,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 170,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "staged",
+          "line": 180,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_entity_governance.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 75,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 99,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "two_principals",
+          "line": 143,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_entity_identity_history.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 100,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "seeded_engine",
+          "line": 310,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_entity_names_tbr_gs4_studios_fixture.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 70,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 93,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_entity_observation_ledgers.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 95,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 119,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "staged",
+          "line": 204,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_entity_plane_inspection.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 125,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "populated",
+          "line": 148,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_entity_promotion_execution.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 101,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "staged",
+          "line": 275,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_entity_proposal_review.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 115,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "staged",
+          "line": 168,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_entity_proposal_schema.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 117,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "staged",
+          "line": 170,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_entity_record_family_service_write_path.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 147,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 170,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "staged",
+          "line": 194,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "service",
+          "line": 231,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_entity_record_family_write_path.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 160,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 183,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "staged",
+          "line": 216,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_entity_reenrichment.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 68,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "engine",
+          "line": 91,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_entity_relationship_type_widened_read_path.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 148,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 172,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "seeded_entities",
+          "line": 183,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_entity_relationship_types_tbr_fixture.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 74,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 97,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_entity_repository.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 97,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 121,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "two_principals",
+          "line": 154,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_entity_resolution_value_reads.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 133,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 157,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "staged",
+          "line": 228,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_entity_search_reaches_context.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 130,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 154,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "staged",
+          "line": 278,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_goodnotes_corrections.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "engine",
+          "line": 57,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_goodnotes_delivery.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "engine",
+          "line": 99,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_goodnotes_ingestion.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "engine",
+          "line": 62,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_goodnotes_lineage.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "engine",
+          "line": 70,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_goodnotes_notes.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "engine",
+          "line": 56,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_goodnotes_occurrence_reconciliation.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "engine",
+          "line": 94,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_goodnotes_orchestrator.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "engine",
+          "line": 59,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_goodnotes_semantic_proposals.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "engine",
+          "line": 60,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_identity_correction_ledger.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 85,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 109,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_identity_correction_merge.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 192,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 216,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "staged",
+          "line": 247,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "unequal_staged",
+          "line": 262,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "composed",
+          "line": 3291,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_identity_split_ambiguity.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 137,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 161,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "staged",
+          "line": 203,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_intelligence_artifact_plane.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 67,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 90,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_managed_document_audit.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 122,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "runtime",
+          "line": 233,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_managed_documents.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 108,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 132,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "managed_root",
+          "line": 143,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_person_organization_affiliations_tbr_fixture.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 75,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 98,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_phase_b_audit_vocabulary_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 126,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 150,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/database/test_program_scale_acceptance.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "loaded_database",
+          "line": 70,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_project_entity_participation_isolation.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 66,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 89,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_project_participation_synthetic_multi_project_fixture.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 91,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 114,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_reenrichment_worker.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 83,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "engine",
+          "line": 106,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_relationship_memory_repository.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 187,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 216,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "two_principals",
+          "line": 246,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/database/test_relationship_memory_review.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 217,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 246,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "two_principals",
+          "line": 271,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_remote_goodnotes_propose_idempotency.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "engine",
+          "line": 143,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "runtime",
+          "line": 169,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_reveal_isolation.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 129,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "engine",
+          "line": 161,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "evidence",
+          "line": 276,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_ri_ent_wp06b_merge_split.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 97,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 120,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "staged",
+          "line": 150,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_ri_ent_wp_10_11_vocabulary_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 167,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 191,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/database/test_situation_schema_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 76,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/database/test_task_management_service.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 100,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 124,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_webauthn_auth_persistence.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 53,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "engine",
+          "line": 70,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/database/test_webauthn_ceremony.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 44,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "engine",
+          "line": 61,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/db/_inventory.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/db/fixtures.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": false,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": false,
+      "fixtures": [
+        {
+          "name": "provisioning_worker_id",
+          "line": 90,
+          "scope": "session",
+          "decorators": [
+            "pytest.fixture(scope='session')"
+          ]
+        },
+        {
+          "name": "provisioning_run_id",
+          "line": 100,
+          "scope": "session",
+          "decorators": [
+            "pytest.fixture(scope='session')"
+          ]
+        },
+        {
+          "name": "postgres_admin_url",
+          "line": 105,
+          "scope": "session",
+          "decorators": [
+            "pytest.fixture(scope='session')"
+          ]
+        },
+        {
+          "name": "postgres_admin_engine",
+          "line": 112,
+          "scope": "session",
+          "decorators": [
+            "pytest.fixture(scope='session')"
+          ]
+        },
+        {
+          "name": "provisioning_sequences",
+          "line": 121,
+          "scope": "session",
+          "decorators": [
+            "pytest.fixture(scope='session')"
+          ]
+        },
+        {
+          "name": "worker_head_template",
+          "line": 126,
+          "scope": "session",
+          "decorators": [
+            "pytest.fixture(scope='session')"
+          ]
+        },
+        {
+          "name": "cloned_database_url",
+          "line": 153,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "disposable_database",
+          "line": 184,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "db_engine",
+          "line": 195,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 204,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "empty_database_url",
+          "line": 211,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "worker_transactional_url",
+          "line": 238,
+          "scope": "session",
+          "decorators": [
+            "pytest.fixture(scope='session')"
+          ]
+        },
+        {
+          "name": "transactional_connection",
+          "line": 266,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/db/provisioning.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/end_to_end/test_bff_reaches_postgresql.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "contract",
+          "line": 80,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "disposable_database",
+          "line": 93,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "runtime",
+          "line": 118,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "wire",
+          "line": 150,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/end_to_end/test_vertical_slice.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 143,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "runtime",
+          "line": 174,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/jobs/test_extraction_executor.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 109,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "engine",
+          "line": 134,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/migration/conftest.py",
+      "classification": "MIGRATION_LOADER_SYNTHETIC",
+      "has_upgrade": false,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "loader_database",
+          "line": 207,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "target",
+          "line": 257,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + prepare_target (no upgrade head)"
+    },
+    {
+      "path": "tests/migration/test_control_plane_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": false,
+      "has_drop": false,
+      "fixtures": [],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/migration/test_target_schema_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 143,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/pipeline/conftest.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 84,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "engine",
+          "line": 109,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/provider_conformance/test_fixture_provider.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "corpus",
+          "line": 109,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "sandbox",
+          "line": 114,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "disposable_database",
+          "line": 989,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "registry_engine",
+          "line": 1017,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/recovery/test_identity_correction_recovery.py",
+      "classification": "RECOVERY_CURRENT_HEAD",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 128,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 152,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "staged",
+          "line": 176,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/schema/test_apple_bridge_control_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "native_engine",
+          "line": 35,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_audit_durability.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 121,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "engine",
+          "line": 146,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/schema/test_audit_schema_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 399,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "audit_engine",
+          "line": 424,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_capture_client_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 92,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_capture_immutability.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 93,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "stored",
+          "line": 118,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/schema/test_capture_partition_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 93,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_capture_schema_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 730,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_capture_timestamps.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 86,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "engine",
+          "line": 111,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/schema/test_context_feedback_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 124,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_context_prepare_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 130,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_continuity_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 130,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_corpus_coverage_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 136,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_enrollment_objects_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 363,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "scope_engine",
+          "line": 388,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_entity_addresses_and_communication_methods_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 60,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 84,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_entity_assertion_provenance_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 61,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 85,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_entity_lifecycle_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 100,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "previous_engine",
+          "line": 124,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 139,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_entity_names_and_organization_profile_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 53,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 77,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_entity_project_participations_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 63,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 87,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_entity_relationship_types_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 115,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 139,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_entity_schema_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 122,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 151,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_every_revision_denotes_one_schema.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 209,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_extraction_schema_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 711,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "extraction_engine",
+          "line": 736,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_foundation_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 84,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_goodnotes_delivery_attempt_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 128,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_goodnotes_delivery_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 116,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_goodnotes_entity_kind_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 113,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_goodnotes_exact_render_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 109,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_goodnotes_lineage_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 162,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_goodnotes_note_occurrence_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 136,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_goodnotes_occurrence_grounding_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 111,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_goodnotes_semantic_proposal_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 173,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_head_round_trip.py",
+      "classification": "MIGRATION_EMPTY_TO_HEAD",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 128,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + alembic upgrade head"
+    },
+    {
+      "path": "tests/schema/test_knowledge_schema_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 242,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "knowledge_engine",
+          "line": 267,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_managed_document_capability_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 173,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_native_source_schema_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "native_engine",
+          "line": 196,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_oauth_refresh_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 120,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_persistence_ports.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 87,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "engine",
+          "line": 112,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/schema/test_person_organization_affiliations_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 60,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 84,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_phase_b_memory_dedupe_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "predecessor",
+          "line": 49,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_queue_partition_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 87,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_relationship_schema_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "relationship_engine",
+          "line": 63,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_remote_oauth_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 59,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_review_schema_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 148,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_ri_remediation_predecessor_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable",
+          "line": 239,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_task_read_capability_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 189,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_task_schema_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 74,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_webauthn_auth_persistence_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 65,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_widen_identity_family_vocabulary_migration.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 93,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "migrated_engine",
+          "line": 117,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/schema/test_wp12_slice_c_admission.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "c_engine",
+          "line": 107,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/search_quality/test_lexical_search.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 190,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "engine",
+          "line": 222,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "corpus",
+          "line": 556,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/security/test_audit_redaction.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 90,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "engine",
+          "line": 115,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "planted_root",
+          "line": 134,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "audited",
+          "line": 180,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/security/test_capture_redaction.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 98,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "runtime",
+          "line": 123,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/security/test_cross_principal_capture_isolation.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 88,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "engine",
+          "line": 113,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/security/test_cross_principal_isolation.py",
+      "classification": "MIGRATION_EDGE",
+      "has_upgrade": true,
+      "has_downgrade": true,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 75,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "engine",
+          "line": 99,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "service",
+          "line": 109,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "empty_database_url + revision-specific alembic"
+    },
+    {
+      "path": "tests/security/test_cross_principal_queue_isolation.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 94,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "engine",
+          "line": 119,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/security/test_cross_principal_relationship_isolation.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 125,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "engine",
+          "line": 150,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "seeded",
+          "line": 268,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/security/test_cross_principal_review_isolation.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 79,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "engine",
+          "line": 104,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/security/test_cross_principal_search_isolation.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 83,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "engine",
+          "line": 107,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/security/test_entra_authentication.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "keypair",
+          "line": 86,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "public_jwk",
+          "line": 92,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "disposable_database",
+          "line": 136,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "authenticated_wire",
+          "line": 163,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "verifier",
+          "line": 544,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/security/test_query_is_data_not_sql.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 284,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "corpus",
+          "line": 326,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/security/test_relationship_memory_privacy.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 138,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "runtime",
+          "line": 238,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "planted",
+          "line": 251,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "audited",
+          "line": 361,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "one_memory",
+          "line": 700,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/security/test_remote_capture_redaction.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 95,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "runtime",
+          "line": 120,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        },
+        {
+          "name": "credential",
+          "line": 133,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    },
+    {
+      "path": "tests/security/test_remote_client_credentials.py",
+      "classification": "CURRENT_HEAD_CLONE",
+      "has_upgrade": true,
+      "has_downgrade": false,
+      "has_create": true,
+      "has_drop": true,
+      "fixtures": [
+        {
+          "name": "disposable_database",
+          "line": 99,
+          "scope": "module",
+          "decorators": [
+            "pytest.fixture(scope='module')"
+          ]
+        },
+        {
+          "name": "runtime",
+          "line": 124,
+          "scope": "function",
+          "decorators": [
+            "pytest.fixture"
+          ]
+        }
+      ],
+      "planned_landing": "cloned_database_url / db_engine"
+    }
+  ]
+}

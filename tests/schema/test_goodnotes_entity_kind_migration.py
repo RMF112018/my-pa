@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import ast
 import io
-import os
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Final
 
@@ -14,10 +12,8 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
-from sqlalchemy.engine import make_url
 from sqlalchemy.sql import Executable
 
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.infrastructure.database.engine import create_database_engine
 
 ROOT: Final = Path(__file__).resolve().parents[2]
@@ -107,29 +103,6 @@ def _kind_check(engine: Engine, name: str) -> str | None:
             ),
             {"name": name},
         ).scalar_one_or_none()
-
-
-@pytest.fixture
-def disposable_database() -> Iterator[str]:
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-    variable = f"{ENV_PREFIX}DATABASE_URL"
-    previous = os.environ.get(variable)
-    try:
-        _administer(maintenance, drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        os.environ[variable] = url
-        yield url
-    finally:
-        if previous is None:
-            os.environ.pop(variable, None)
-        else:
-            os.environ[variable] = previous
-        _administer(maintenance, drop)
-        maintenance.dispose()
 
 
 def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
@@ -242,3 +215,9 @@ def test_downgrade_restores_the_prior_kind_check(disposable_database: str) -> No
             assert revision == PRIOR
     finally:
         engine.dispose()
+
+
+@pytest.fixture
+def disposable_database(empty_database_url: str) -> str:
+    """Empty disposable catalog; migration tests still drive Alembic themselves."""
+    return empty_database_url

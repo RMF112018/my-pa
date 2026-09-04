@@ -1,11 +1,13 @@
 /**
- * Intelligence — Principal-scoped report artifacts from the Python plane.
+ * Intelligence — Morning Intelligence working surface on the WP11 reports plane.
  *
- * This page does not scrape markdown into items and does not invent a Morning
- * Brief section schema. It lists handler fields the BFF already decoded:
- * identifier, title, stage, kind, and artifact state. Empty, unavailable, and
- * results stay distinct.
+ * Current cycle is the first listed artifact's cycle_run_id unless
+ * reports.resolve_set later supplies business_date for grouping on History.
+ * reports.list entries do not carry committed_at or report_date. The browser
+ * clock is never a business date. structured_content is opaque; markdown is
+ * not scraped into Brief items.
  */
+import Link from "next/link";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
@@ -15,15 +17,37 @@ import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { FeatureRouteState } from "@/components/shell/feature-route-state";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
-import { Card, CardBody, CardTitle } from "@/components/ui/card";
+import { ReportListing } from "@/components/intelligence/report-card";
+import { ReadinessPanel, type ReadinessAnswer } from "@/components/intelligence/readiness-panel";
+import { readinessAnswerFromOutcome } from "@/components/intelligence/readiness-load";
+import {
+  currentCycleRunId,
+  resolveSetPayload,
+} from "@/components/intelligence/cycle-selection";
+import { intelligenceHistory } from "@/lib/routes/intelligence";
 import type { ReportsListResult } from "@/lib/api/decode/capabilities/reports.list";
+import type { ReportsResolveSetResult } from "@/lib/api/decode/capabilities/reports.resolve_set";
+import type { PrincipalSession } from "@/contracts/identity";
 
 export const metadata = { title: "Intelligence — my-pa" };
 export const dynamic = "force-dynamic";
 
 const SCOPE = "intelligence";
-
 const BLURB = "Evidence-grounded reports and briefs.";
+
+async function loadReadiness(
+  principal: PrincipalSession,
+  cycleRunId: string,
+): Promise<ReadinessAnswer> {
+  return readinessAnswerFromOutcome(
+    `${SCOPE}:reports.resolve_set`,
+    (await invokeGateway(
+      principal,
+      "reports.resolve_set",
+      resolveSetPayload(cycleRunId),
+    )) as GatewayOutcome<ReportsResolveSetResult>,
+  );
+}
 
 export default async function IntelligencePage() {
   const cookieStore = await cookies();
@@ -32,10 +56,20 @@ export default async function IntelligencePage() {
 
   const heading = (
     <>
-      <h1 id="intelligence-heading" className="mb-1 text-xl font-semibold text-moss-slate">
-        Intelligence
-      </h1>
-      <p className="mb-4 text-sm text-muted">{BLURB}</p>
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 id="intelligence-heading" className="mb-1 text-xl font-semibold text-moss-slate">
+            Intelligence
+          </h1>
+          <p className="text-sm text-muted">{BLURB}</p>
+        </div>
+        <Link
+          href={intelligenceHistory()}
+          className="inline-flex min-h-[var(--control-height)] items-center text-sm text-moss-green underline"
+        >
+          History
+        </Link>
+      </div>
     </>
   );
 
@@ -87,28 +121,23 @@ export default async function IntelligencePage() {
   }
 
   const items = answer.result.items;
-  const listing = (
-    <ul className="flex flex-col gap-3" data-testid="intelligence-listing">
-      {items.map((row) => (
-        <li key={row.report_id}>
-          <Card data-testid="intelligence-report" data-report-id={row.report_id}>
-            <CardTitle>{row.title}</CardTitle>
-            <CardBody>
-              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-                <dt>Identifier</dt>
-                <dd data-testid="intelligence-report-id">{row.report_id}</dd>
-                <dt>Stage</dt>
-                <dd data-testid="intelligence-stage">{row.stage}</dd>
-                <dt>Kind</dt>
-                <dd data-testid="intelligence-kind">{row.artifact_kind}</dd>
-                <dt>State</dt>
-                <dd data-testid="intelligence-artifact-state">{row.artifact_state}</dd>
-              </dl>
-            </CardBody>
-          </Card>
-        </li>
-      ))}
-    </ul>
+  const cycleRunId = currentCycleRunId(items);
+  const readiness =
+    cycleRunId === null ? null : await loadReadiness(principal, cycleRunId);
+  const listing = <ReportListing items={items} currentCycle={cycleRunId} />;
+
+  const body = (
+    <>
+      {readiness && cycleRunId ? (
+        <ReadinessPanel answer={readiness} cycleRunId={cycleRunId} />
+      ) : null}
+      <h2 className="mb-2 text-base font-semibold text-moss-slate">Report artifacts</h2>
+      <p className="mb-3 text-sm text-muted">
+        Missing specialists do not hide available reports. A morning_brief row is a Brief artifact,
+        not structured Brief items.
+      </p>
+      {listing}
+    </>
   );
 
   if (answer.kind === "degraded") {
@@ -127,11 +156,11 @@ export default async function IntelligencePage() {
             testId="intelligence-degraded-empty"
           />
         ) : (
-          listing
+          body
         )}
       </>,
     );
   }
 
-  return frame(listing);
+  return frame(body);
 }

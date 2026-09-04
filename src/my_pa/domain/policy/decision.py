@@ -281,6 +281,9 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.GOODNOTES_WORK,
         Capability.GOODNOTES_PROPOSE,
         Capability.GOODNOTES_CONTENT,
+        Capability.GOODNOTES_PULL,
+        Capability.GOODNOTES_COMPLETE,
+        Capability.GOODNOTES_STATUS,
         Capability.GSQS_START,
         Capability.GSQS_STATUS,
         # Intelligence artifacts name a Principal partition and a cycle run, not

@@ -141,6 +141,29 @@ class PullBatch:
 
 
 @dataclass(frozen=True, slots=True)
+class GoodNotesPullAssignment:
+    """Public server-stamped work handle with no Principal/client context."""
+
+    assignment_id: str
+    run_id: str
+    page_version_id: str
+    content_sha256: str
+    attempt: int
+    logical_page_id: str | None = None
+    renderer_name: str | None = None
+    renderer_version: str | None = None
+    render_profile_version: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesPullBatch:
+    """Bounded public pull result; identities originate in server assignment state."""
+
+    assignments: tuple[GoodNotesPullAssignment, ...]
+    next_cursor: str | None = field(default=None, repr=False)
+
+
+@dataclass(frozen=True, slots=True)
 class PullCompletion:
     """Content-free completion identity; semantic payload uses existing proposal flow."""
 
@@ -172,6 +195,72 @@ class PullCompletionReceipt:
     request_fingerprint: str
     result_sha256: str
     replayed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesCompletionReceipt:
+    """Content-free public receipt; hides replay fingerprints and result identity."""
+
+    completion_id: str
+    assignment_id: str
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesPullStatus:
+    """Content-free status for one server-resolved Principal/client context."""
+
+    pending: int
+    assigned: int
+    completed: int
+    exhausted: int
+
+    def __post_init__(self) -> None:
+        values: tuple[object, ...] = (
+            self.pending,
+            self.assigned,
+            self.completed,
+            self.exhausted,
+        )
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in values
+        ):
+            raise GoodNotesPullError(ERROR_REPOSITORY_CONFLICT)
+
+
+def public_pull_batch(batch: PullBatch) -> GoodNotesPullBatch:
+    """Remove Principal/client context from an internal claimed batch."""
+    return GoodNotesPullBatch(
+        assignments=tuple(
+            GoodNotesPullAssignment(
+                assignment_id=assignment.assignment_id,
+                run_id=assignment.work.run_id,
+                page_version_id=assignment.work.page_version_id,
+                content_sha256=assignment.work.content_sha256,
+                attempt=assignment.attempt,
+                logical_page_id=assignment.work.logical_page_id,
+                renderer_name=assignment.work.renderer_name,
+                renderer_version=assignment.work.renderer_version,
+                render_profile_version=assignment.work.render_profile_version,
+            )
+            for assignment in batch.assignments
+        ),
+        next_cursor=batch.next_cursor,
+    )
+
+
+def public_completion_receipts(
+    receipts: Sequence[PullCompletionReceipt],
+) -> tuple[GoodNotesCompletionReceipt, ...]:
+    """Project internal replay records without fingerprints, keys, or result digests."""
+    return tuple(
+        GoodNotesCompletionReceipt(
+            completion_id=receipt.completion_id,
+            assignment_id=receipt.assignment_id,
+            replayed=receipt.replayed,
+        )
+        for receipt in receipts
+    )
 
 
 class PullRepositoryConflictError(Exception):

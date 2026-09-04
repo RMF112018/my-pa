@@ -77,6 +77,32 @@ SERVER_OWNED_REMOTE_FIELDS: Final[frozenset[str]] = frozenset(
 #: inventing `request_id`.
 REMOTE_OWNED_PAYLOAD_FIELDS: Final[frozenset[str]] = frozenset({"idempotency_key"})
 
+# Fields the scheduled GoodNotes client receives only as opaque server results.
+# Refusing them specifically on the control-plane commands preserves the
+# existing `goodnotes.work`/`content`/`propose` handles, where the same names
+# are legitimate references returned by the server in an earlier step.
+_GOODNOTES_PULL_SERVER_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "client_id",
+        "completion_id",
+        "context_id",
+        "principal_id",
+        "run_id",
+        "page_version_id",
+        "content_sha256",
+        "result_sha256",
+        "request_fingerprint",
+        "idempotency_key",
+    }
+)
+_CAPABILITY_OWNED_PAYLOAD_FIELDS: Final[Mapping[Capability, frozenset[str]]] = MappingProxyType(
+    {
+        Capability.GOODNOTES_PULL: _GOODNOTES_PULL_SERVER_FIELDS,
+        Capability.GOODNOTES_COMPLETE: _GOODNOTES_PULL_SERVER_FIELDS,
+        Capability.GOODNOTES_STATUS: _GOODNOTES_PULL_SERVER_FIELDS,
+    }
+)
+
 _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     {
         Capability.CAPTURE_CREATE,
@@ -255,13 +281,17 @@ def compose_remote_arguments(
     """
     if SERVER_OWNED_REMOTE_FIELDS.intersection(arguments):
         raise InvalidRequestError()
-    payload = arguments.get("payload")
-    if isinstance(payload, Mapping) and REMOTE_OWNED_PAYLOAD_FIELDS.intersection(payload):
-        raise InvalidRequestError()
     try:
         capability = Capability(capability_name)
     except ValueError:
         raise InvalidRequestError() from None
+    payload = arguments.get("payload")
+    capability_owned_fields = _CAPABILITY_OWNED_PAYLOAD_FIELDS.get(capability, frozenset())
+    if capability_owned_fields.intersection(arguments):
+        raise InvalidRequestError()
+    forbidden_payload_fields = REMOTE_OWNED_PAYLOAD_FIELDS | capability_owned_fields
+    if isinstance(payload, Mapping) and forbidden_payload_fields.intersection(payload):
+        raise InvalidRequestError()
     purpose = resolve_remote_purpose(capability, grants)
     composed = dict(arguments)
     if capability in _IDEMPOTENT_REMOTE_CAPABILITIES:

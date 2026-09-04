@@ -65,6 +65,7 @@ from my_pa.application.commands import (
     CloseCommitment,
     Command,
     CommitIntelligenceArtifact,
+    CompleteGoodNotesPull,
     CreateCapture,
     CreateCommitment,
     CreateEntity,
@@ -94,6 +95,7 @@ from my_pa.application.commands import (
     GetEntityProfile,
     GetEntityRelationships,
     GetGoodNotesContent,
+    GetGoodNotesPullStatus,
     GetGoodNotesWork,
     GetGsqsB0Status,
     GetLatestIntelligenceArtifact,
@@ -128,6 +130,7 @@ from my_pa.application.commands import (
     PreviewEntityMerge,
     PreviewEntitySplit,
     ProposeRelationshipMemory,
+    PullGoodNotesWork,
     ReadCapture,
     ReadCommitment,
     ReadIntelligenceArtifact,
@@ -426,6 +429,9 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
                 },
             ),
         ),
+        Capability.GOODNOTES_PULL: PullGoodNotesWork(batch_size=1),
+        Capability.GOODNOTES_COMPLETE: CompleteGoodNotesPull(assignment_ids=("a" * 64,)),
+        Capability.GOODNOTES_STATUS: GetGoodNotesPullStatus(),
         Capability.GSQS_START: StartGsqsB0(
             authorization_id="synthetic-b0-commissioning",
             campaign_class="SYNTHETIC",
@@ -894,7 +900,20 @@ def invoke(
     )
 
 
-ALL_CAPABILITIES = list(Capability)
+# Phase A defines these authenticated contracts before phase B supplies the
+# service handlers. They are intentionally absent from an invocation matrix
+# whose premise is that dispatch reaches an implemented handler; the domain
+# policy pair matrix still exercises every one directly.
+CONTRACT_ONLY_CAPABILITIES = frozenset(
+    {
+        Capability.GOODNOTES_PULL,
+        Capability.GOODNOTES_COMPLETE,
+        Capability.GOODNOTES_STATUS,
+    }
+)
+ALL_CAPABILITIES = [
+    capability for capability in Capability if capability not in CONTRACT_ONLY_CAPABILITIES
+]
 
 #: The family whose claim is a zero — a capture reaches no source provider at
 #: all — and which therefore has no non-vacuity control of its own.
@@ -1083,6 +1102,9 @@ SCOPED_CAPABILITIES = [
         Capability.GOODNOTES_WORK,
         Capability.GOODNOTES_CONTENT,
         Capability.GOODNOTES_PROPOSE,
+        Capability.GOODNOTES_PULL,
+        Capability.GOODNOTES_COMPLETE,
+        Capability.GOODNOTES_STATUS,
         Capability.GSQS_START,
         Capability.GSQS_STATUS,
         Capability.REPORTS_BEGIN_CYCLE,
@@ -1290,6 +1312,9 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.GOODNOTES_WORK,
         Capability.GOODNOTES_CONTENT,
         Capability.GOODNOTES_PROPOSE,
+        Capability.GOODNOTES_PULL,
+        Capability.GOODNOTES_COMPLETE,
+        Capability.GOODNOTES_STATUS,
         Capability.GSQS_START,
         Capability.GSQS_STATUS,
         Capability.REPORTS_BEGIN_CYCLE,

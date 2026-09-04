@@ -150,6 +150,11 @@ class Purpose(StrEnum):
     # wide enough to cover both the handle and the handwriting raster is a
     # purpose that grants both.
     GOODNOTES_CONTENT = "goodnotes_content"
+    # Scheduled-client pull and completion share one authority: both advance
+    # the authenticated client's bounded assignment ledger. Observation is
+    # separate so a grant to inspect progress cannot claim or complete work.
+    GOODNOTES_PULL = "goodnotes_pull"
+    GOODNOTES_PULL_OBSERVATION = "goodnotes_pull_observation"
     # Intelligence Artifact / Report plane. Two purposes rather than a reuse of
     # `capture_authoring`, `document_authoring`, or `knowledge_read`. `D-91`'s
     # test: would reuse widen the grant? Yes. Capture authoring writes

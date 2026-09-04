@@ -366,6 +366,13 @@ class Capability(StrEnum):
     # admits the live vocabulary. Not operator-only: it reads the acting
     # Principal's own partition and grants no authority.
     GOODNOTES_CONTENT = "goodnotes.content"
+    # Authenticated scheduled-client control plane. Pull claims or reuses a
+    # bounded assignment, complete advances it, and status discloses only
+    # content-free progress. Principal, client, work, result, and replay
+    # identities are server-owned rather than fields on these public requests.
+    GOODNOTES_PULL = "goodnotes.pull"
+    GOODNOTES_COMPLETE = "goodnotes.complete"
+    GOODNOTES_STATUS = "goodnotes.status"
     # Connected-MCP B0 prediction-acquisition workflow. A pair of names rather than a
     # widening of `goodnotes.work` / `goodnotes.content` (`D-91`): those remain
     # the stdio-isolated analyzer plane. ChatLLM initiates a repetition through
@@ -1006,6 +1013,9 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.GOODNOTES_WORK: frozenset({Purpose.GOODNOTES_WORK}),
         Capability.GOODNOTES_PROPOSE: frozenset({Purpose.GOODNOTES_PROPOSAL}),
         Capability.GOODNOTES_CONTENT: frozenset({Purpose.GOODNOTES_CONTENT}),
+        Capability.GOODNOTES_PULL: frozenset({Purpose.GOODNOTES_PULL}),
+        Capability.GOODNOTES_COMPLETE: frozenset({Purpose.GOODNOTES_PULL}),
+        Capability.GOODNOTES_STATUS: frozenset({Purpose.GOODNOTES_PULL_OBSERVATION}),
         Capability.GSQS_START: frozenset({Purpose.GSQS_B0_EXECUTION}),
         Capability.GSQS_STATUS: frozenset({Purpose.GSQS_B0_OBSERVATION}),
         Capability.REPORTS_BEGIN_CYCLE: frozenset({Purpose.REPORT_AUTHORING}),
@@ -1210,6 +1220,8 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.COMMITMENTS_CLOSE,
         Capability.CONTEXT_FEEDBACK,
         Capability.GOODNOTES_PROPOSE,
+        Capability.GOODNOTES_PULL,
+        Capability.GOODNOTES_COMPLETE,
         Capability.GSQS_START,
         Capability.REPORTS_BEGIN_CYCLE,
         Capability.REPORTS_COMMIT,

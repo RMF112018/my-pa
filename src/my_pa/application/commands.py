@@ -42,6 +42,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from my_pa.application import goodnotes_note_unit_contract as _note_unit
 from my_pa.application.errors import InvalidRequestError, SafeDetail
+from my_pa.application.goodnotes_pull_orchestration import MAX_PULL_BATCH_SIZE
 from my_pa.application.identity_correction import ConflictChoice
 from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS, ProposalState
 from my_pa.domain.capture.review import (
@@ -180,6 +181,7 @@ __all__ = [
     "CloseSituationCommand",
     "Command",
     "CommitIntelligenceArtifact",
+    "CompleteGoodNotesPull",
     "CreateCapture",
     "CreateCommitment",
     "CreateEntity",
@@ -196,6 +198,7 @@ __all__ = [
     "GetCommitmentHistory",
     "GetCorpusCoverage",
     "GetGoodNotesContent",
+    "GetGoodNotesPullStatus",
     "GetGoodNotesWork",
     "GetGsqsB0Status",
     "GetLatestIntelligenceArtifact",
@@ -222,6 +225,7 @@ __all__ = [
     "ListTasks",
     "OpenSituationCommand",
     "PrepareContext",
+    "PullGoodNotesWork",
     "ReadCapture",
     "ReadCommitment",
     "ReadIntelligenceArtifact",
@@ -2437,6 +2441,65 @@ RecordContextFeedback.__doc__ = (
     "idempotency_key is required. alias is a retrieval nickname, repr=False, "
     "and refused by field token rather than echoed."
 )
+
+
+@dataclass(frozen=True, slots=True)
+class PullGoodNotesWork:
+    """`goodnotes.pull`: claim or reuse one bounded page-work batch.
+
+    Only scheduling controls are caller-owned. Authenticated Principal/client
+    context, assignment identity, and every work identity are stamped or
+    resolved by the server-side pull orchestrator.
+    """
+
+    capability: ClassVar[Capability] = Capability.GOODNOTES_PULL
+
+    batch_size: int
+    cursor: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        raw_batch_size: object = self.batch_size
+        if (
+            isinstance(raw_batch_size, bool)
+            or not isinstance(raw_batch_size, int)
+            or not 1 <= self.batch_size <= MAX_PULL_BATCH_SIZE
+        ):
+            raise InvalidRequestError(SafeDetail.PAGE_SIZE)
+        if self.cursor is not None:
+            _bounded_token(self.cursor, SafeDetail.CURSOR, maximum=2048)
+
+
+@dataclass(frozen=True, slots=True)
+class CompleteGoodNotesPull:
+    """`goodnotes.complete`: complete server-resolved assignments atomically.
+
+    The assignment handle is the sole caller-provided reference. Run, page,
+    content, result, context, and replay identities are resolved or derived by
+    the server and cannot be contradicted in this command.
+    """
+
+    capability: ClassVar[Capability] = Capability.GOODNOTES_COMPLETE
+
+    assignment_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.assignment_ids or len(self.assignment_ids) > MAX_PULL_BATCH_SIZE:
+            raise InvalidRequestError(SafeDetail.ASSIGNMENT_ID)
+        if len(set(self.assignment_ids)) != len(self.assignment_ids):
+            raise InvalidRequestError(SafeDetail.ASSIGNMENT_ID)
+        for assignment_id in self.assignment_ids:
+            _sha256_digest(assignment_id, SafeDetail.ASSIGNMENT_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class GetGoodNotesPullStatus:
+    """`goodnotes.status`: content-free status for the authenticated client.
+
+    It names no Principal, client, run, page, content, result, or assignment;
+    the server derives the exact status subject from authenticated context.
+    """
+
+    capability: ClassVar[Capability] = Capability.GOODNOTES_STATUS
 
 
 @dataclass(frozen=True, slots=True)
@@ -7268,6 +7331,9 @@ type Command = (
     | CloseCommitment
     | PrepareContext
     | RecordContextFeedback
+    | PullGoodNotesWork
+    | CompleteGoodNotesPull
+    | GetGoodNotesPullStatus
     | GetGoodNotesWork
     | SubmitGoodNotesProposal
     | GetGoodNotesContent

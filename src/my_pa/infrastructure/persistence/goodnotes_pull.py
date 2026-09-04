@@ -765,8 +765,6 @@ class SqlGoodNotesPullRepository:
         case = self.semantic_review_case(request.principal_id, request.review_case_id)
         if case is None:
             raise ReviewNotFoundError("the request names no stored review case")
-        if case.review_version != request.expected_review_version:
-            raise ReviewConflictError("the expected review version is stale")
         proposal = self._connection.execute(
             select(goodnotes_semantic_proposals).where(
                 _mine(goodnotes_semantic_proposals, request.principal_id),
@@ -809,7 +807,8 @@ class SqlGoodNotesPullRepository:
                         else _canonical_payload(request.semantic_corrected_payload)
                     ),
                     corrected_result_sha256=request.semantic_corrected_result_sha256,
-                )
+                ),
+                expected_review_version=request.expected_review_version,
             )
         except SemanticReviewConflictError:
             raise ReviewConflictError("the semantic review changed concurrently") from None
@@ -827,7 +826,12 @@ class SqlGoodNotesPullRepository:
             proposal_state=_semantic_state(request.disposition),
         )
 
-    def record_semantic_review(self, decision: SemanticReviewDecision) -> SemanticReviewDecision:
+    def record_semantic_review(
+        self,
+        decision: SemanticReviewDecision,
+        *,
+        expected_review_version: int | None = None,
+    ) -> SemanticReviewDecision:
         if decision.sequence is not None:
             raise SemanticReviewConflictError
         try:
@@ -892,13 +896,28 @@ class SqlGoodNotesPullRepository:
                 sequence=int(existing.sequence),
                 replayed=True,
             )
+        review_partition = _mine(goodnotes_semantic_review_decisions, decision.principal_id)
+        current_version = int(
+            self._connection.scalar(
+                select(func.max(goodnotes_semantic_review_decisions.c.sequence)).where(
+                    review_partition,
+                    goodnotes_semantic_review_decisions.c.run_id == decision.run_id,
+                    goodnotes_semantic_review_decisions.c.proposal_id == decision.proposal_id,
+                    goodnotes_semantic_review_decisions.c.proposal_sha256
+                    == decision.proposal_sha256,
+                )
+            )
+            or 0
+        )
+        if expected_review_version is not None and current_version != expected_review_version:
+            raise SemanticReviewConflictError
         sequence = (
             int(
                 self._connection.scalar(
                     select(func.count())
                     .select_from(goodnotes_semantic_review_decisions)
                     .where(
-                        _mine(goodnotes_semantic_review_decisions, decision.principal_id),
+                        review_partition,
                         goodnotes_semantic_review_decisions.c.run_id == decision.run_id,
                         goodnotes_semantic_review_decisions.c.proposal_sha256
                         == decision.proposal_sha256,

@@ -24,7 +24,7 @@ from my_pa.application.goodnotes import (
     require_available_liveness,
 )
 from my_pa.domain.goodnotes.liveness import GoodNotesSourceLivenessReceipt
-from my_pa.domain.goodnotes.models import ReconciliationReceipt
+from my_pa.domain.goodnotes.models import ReconciliationReceipt, SourcePage
 from my_pa.infrastructure.goodnotes.local import (
     BoundedLocalOCRTranscriber,
     LocalGoodNotesObserver,
@@ -46,6 +46,16 @@ class _LocalLivenessSession:
 
     def issued_here(self, receipt: GoodNotesSourceLivenessReceipt) -> bool:
         return self.issued.get(receipt.relative_path) is receipt
+
+
+@dataclass(frozen=True, slots=True)
+class _SettledGoodNotesSource:
+    """Immutable bytes admitted before any database or OCR boundary opens."""
+
+    pages: tuple[SourcePage, ...]
+
+    def inventory(self, _principal_id: str) -> tuple[SourcePage, ...]:
+        return self.pages
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,22 +98,23 @@ class LocalGoodNotesRuntime:
         liveness_receipts: tuple[GoodNotesSourceLivenessReceipt, ...] | None = None,
     ) -> ReconciliationReceipt:
         admitted_manifest_sha256: str | None = None
+        reconciliation_source = self.source
         if self._liveness is not None:
             admitted_manifest_sha256 = self.require_current_liveness(
                 principal_id, liveness_receipts
             )
+            reconciliation_source = _SettledGoodNotesSource(
+                tuple(self.source.inventory(principal_id))
+            )
+            if self._manifest_sha256() != admitted_manifest_sha256:
+                raise ValueError("the GoodNotes manifest changed after liveness admission")
         service = GoodNotesService()
         plan = service.plan(
             principal_id=principal_id,
             idempotency_key=idempotency_key,
-            source=self.source,
+            source=reconciliation_source,
             transcriber=self.transcriber,
         )
-        if (
-            admitted_manifest_sha256 is not None
-            and self._manifest_sha256() != admitted_manifest_sha256
-        ):
-            raise ValueError("the GoodNotes manifest changed after liveness admission")
         # Short admission/receipt connection: exact registry + enrollment
         # identity is proven before OCR/model execution, then closed.
         with engine.connect() as connection:
@@ -127,7 +138,7 @@ class LocalGoodNotesRuntime:
             )
         prepared = service.prepare(
             plan=plan,
-            source=self.source,
+            source=reconciliation_source,
             transcriber=self.transcriber,
         )
         # The durable transaction starts only after OCR and the proposal gate.

@@ -12,7 +12,7 @@ from apps.cli import goodnotes as cli
 
 import my_pa.bootstrap.goodnotes as bootstrap
 from my_pa.domain.goodnotes.liveness import GoodNotesSourceLiveness
-from my_pa.domain.goodnotes.models import ReconciliationReceipt
+from my_pa.domain.goodnotes.models import ReconciliationReceipt, SourcePage, TranscribedRegion
 
 PRINCIPAL = "prn_aaaaaaaaaaaaaaaaaaaaaaaa"
 WHEN = datetime(2026, 8, 31, 12, 0, tzinfo=UTC)
@@ -66,6 +66,20 @@ class Engine:
 
     def dispose(self) -> None:
         return None
+
+
+class RecordingTranscriber:
+    name = "recording-ocr"
+    version = "1"
+
+    def __init__(self) -> None:
+        self.seen: list[bytes] = []
+
+    def transcribe(
+        self, page: SourcePage, *, timeout_seconds: float
+    ) -> tuple[TranscribedRegion, ...]:
+        self.seen.append(page.content)
+        return ()
 
 
 def _source(tmp_path: Path, *, create_page: bool = True) -> Path:
@@ -137,7 +151,8 @@ def test_composed_runtime_refuses_missing_receipts_before_database_or_ocr(tmp_pa
 def test_composed_runtime_refuses_stale_and_reappeared_server_receipts(tmp_path: Path) -> None:
     page = _source(tmp_path)
     clock = Clock()
-    runtime = _runtime(tmp_path, clock)
+    transcriber = RecordingTranscriber()
+    runtime = replace(_runtime(tmp_path, clock), transcriber=transcriber)
     available = runtime.observe_liveness(principal_id=PRINCIPAL)
     page.unlink()
     clock.now += timedelta(seconds=301)
@@ -155,22 +170,26 @@ def test_composed_runtime_refuses_stale_and_reappeared_server_receipts(tmp_path:
     reappeared = runtime.observe_liveness(principal_id=PRINCIPAL, previous=stale)
     assert reappeared[0].state is GoodNotesSourceLiveness.REAPPEARED
     _refused(runtime, reappeared)
+    assert transcriber.seen == []
 
 
 def test_composed_runtime_refuses_forged_mismatched_and_expired_receipts(tmp_path: Path) -> None:
     page = _source(tmp_path)
     clock = Clock()
-    runtime = _runtime(tmp_path, clock)
+    transcriber = RecordingTranscriber()
+    runtime = replace(_runtime(tmp_path, clock), transcriber=transcriber)
     receipts = runtime.observe_liveness(principal_id=PRINCIPAL)
     forged = tuple(replace(receipt) for receipt in receipts)
     _refused(runtime, forged, match="not issued")
 
     page.write_bytes(b"%PDF-1.7\nchanged\n%%EOF\n")
     _refused(runtime, receipts, match="does not match")
+    assert transcriber.seen == []
 
     page.write_bytes(b"%PDF-1.7\nsynthetic\n%%EOF\n")
     clock.now += timedelta(seconds=301)
     _refused(runtime, receipts, match="stale")
+    assert transcriber.seen == []
 
 
 def test_composed_runtime_accepts_current_exact_runtime_issued_receipt(
@@ -190,6 +209,68 @@ def test_composed_runtime_accepts_current_exact_runtime_issued_receipt(
     )
     assert result.principal_id == PRINCIPAL
     assert engine.connections == 2
+
+
+def test_mutation_during_database_admission_cannot_change_bytes_sent_to_ocr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    page = _source(tmp_path)
+    manifest = tmp_path / "goodnotes-manifest.json"
+    original = page.read_bytes()
+    replacement = b"%PDF-1.7\nchanged-during-admission\n%%EOF\n"
+    composed = _runtime(tmp_path, Clock())
+    transcriber = RecordingTranscriber()
+    runtime = replace(composed, transcriber=transcriber)
+    receipts = runtime.observe_liveness(principal_id=PRINCIPAL)
+
+    class MutatingRepository(MemoryRepository):
+        mutated = False
+
+        def require_admitted_sources(self, principal_id: str, bindings: tuple[object, ...]) -> None:
+            super().require_admitted_sources(principal_id, bindings)
+            if not self.mutated:
+                page.write_bytes(replacement)
+                document = json.loads(manifest.read_text())
+                document["pages"][0]["content_sha256"] = hashlib.sha256(replacement).hexdigest()
+                manifest.write_text(json.dumps(document))
+                self.mutated = True
+
+    repository = MutatingRepository()
+    monkeypatch.setattr(bootstrap, "PostgresGoodNotesRepository", lambda connection: repository)
+    result = runtime.reconcile(
+        engine=Engine(),  # type: ignore[arg-type]
+        principal_id=PRINCIPAL,
+        idempotency_key="mutated-during-admission",
+        liveness_receipts=receipts,
+    )
+
+    assert result.principal_id == PRINCIPAL
+    assert transcriber.seen == [original]
+
+
+def test_source_and_manifest_mutation_after_liveness_is_refused_before_database_or_ocr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    page = _source(tmp_path)
+    manifest = tmp_path / "goodnotes-manifest.json"
+    replacement = b"%PDF-1.7\nchanged-before-snapshot\n%%EOF\n"
+    transcriber = RecordingTranscriber()
+    runtime = replace(_runtime(tmp_path, Clock()), transcriber=transcriber)
+    receipts = runtime.observe_liveness(principal_id=PRINCIPAL)
+    original_inventory = bootstrap.ManifestGoodNotesSource.inventory
+
+    def mutate_then_inventory(
+        source: bootstrap.ManifestGoodNotesSource, principal_id: str
+    ) -> tuple[SourcePage, ...]:
+        page.write_bytes(replacement)
+        document = json.loads(manifest.read_text())
+        document["pages"][0]["content_sha256"] = hashlib.sha256(replacement).hexdigest()
+        manifest.write_text(json.dumps(document))
+        return original_inventory(source, principal_id)
+
+    monkeypatch.setattr(bootstrap.ManifestGoodNotesSource, "inventory", mutate_then_inventory)
+    _refused(runtime, receipts, match="manifest changed after liveness")
+    assert transcriber.seen == []
 
 
 def test_real_cli_composition_refuses_a_missing_source_before_engine_creation(

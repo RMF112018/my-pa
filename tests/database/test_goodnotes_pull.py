@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from threading import Barrier
 from typing import Final
 
 import pytest
-from sqlalchemy import Engine, select, text
+from sqlalchemy import Engine, func, select, text
 from sqlalchemy.exc import DBAPIError
 
 from my_pa.application.commands import CompleteGoodNotesPull
@@ -23,7 +25,10 @@ from my_pa.application.goodnotes_pull_orchestration import (
 )
 from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.gateway import local_principal
+from my_pa.contracts.ports import ReviewDecisionRequest
 from my_pa.contracts.v1.envelope import RequestMetadata
+from my_pa.domain.capture.review import Disposition, ReviewConflictError, ReviewDecision
+from my_pa.domain.goodnotes.models import GoodNotesSemanticReviewCase
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
@@ -42,6 +47,7 @@ from my_pa.infrastructure.persistence.tables import (
     goodnotes_page_versions,
     goodnotes_pages,
     goodnotes_semantic_proposals,
+    goodnotes_semantic_review_decisions,
     goodnotes_source_snapshots,
 )
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
@@ -492,10 +498,11 @@ def test_semantic_review_exact_replay_conflict_and_projection(
 
     with engine.begin() as connection:
         repository = SqlGoodNotesPullRepository(connection)
+        concurrent_proposal_id = "gnprp_fedcba9876543210fedcba98"
         connection.execute(
             goodnotes_semantic_proposals.insert().values(
                 principal_id=PRINCIPAL,
-                proposal_id="gnprp_fedcba9876543210fedcba98",
+                proposal_id=concurrent_proposal_id,
                 run_id=run_id,
                 page_version_id=page_version_id,
                 content_sha256="c" * 64,
@@ -513,3 +520,87 @@ def test_semantic_review_exact_replay_conflict_and_projection(
         )
         with pytest.raises(PullRepositoryConflictError):
             repository.completion_material(PRINCIPAL, "scheduler-a", assignment.assignment_id)
+
+    concurrent_case_id = _semantic_review_case_id(PRINCIPAL, concurrent_proposal_id)
+    requests = (
+        ReviewDecisionRequest(
+            review_case_id=concurrent_case_id,
+            expected_review_version=0,
+            disposition=Disposition.ACCEPT,
+            principal_id=PRINCIPAL,
+            correlation_id="corr_goodnotesracea",
+            audit_id="audit_goodnotesracea",
+            policy_version="policy-v1",
+            decided_at=WHEN,
+        ),
+        ReviewDecisionRequest(
+            review_case_id=concurrent_case_id,
+            expected_review_version=0,
+            disposition=Disposition.REJECT,
+            principal_id=PRINCIPAL,
+            correlation_id="corr_goodnotesraceb",
+            audit_id="audit_goodnotesraceb",
+            policy_version="policy-v1",
+            decided_at=WHEN,
+            reason="synthetic stale contender",
+        ),
+    )
+    original_named_lookup = SqlGoodNotesPullRepository.semantic_review_case
+    both_observed_version_zero = Barrier(2)
+
+    def synchronized_named_lookup(
+        repository: SqlGoodNotesPullRepository,
+        principal_id: str,
+        review_case_id: str,
+    ) -> GoodNotesSemanticReviewCase:
+        case = original_named_lookup(repository, principal_id, review_case_id)
+        assert case is not None
+        assert case.review_version == 0
+        both_observed_version_zero.wait(timeout=5)
+        return case
+
+    monkeypatch.setattr(
+        SqlGoodNotesPullRepository,
+        "semantic_review_case",
+        synchronized_named_lookup,
+    )
+
+    def decide(request: ReviewDecisionRequest) -> ReviewDecision:
+        with engine.begin() as connection:
+            return SqlGoodNotesPullRepository(connection).decide_semantic_review(request)
+
+    outcomes: list[ReviewDecision] = []
+    failures: list[Exception] = []
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = tuple(executor.submit(decide, request) for request in requests)
+        for future in futures:
+            try:
+                outcomes.append(future.result(timeout=10))
+            except Exception as error:
+                failures.append(error)
+
+    assert len(outcomes) == 1
+    assert outcomes[0].sequence == 1
+    assert len(failures) == 1
+    assert isinstance(failures[0], ReviewConflictError)
+    monkeypatch.setattr(
+        SqlGoodNotesPullRepository,
+        "semantic_review_case",
+        original_named_lookup,
+    )
+    winner = requests[0] if outcomes[0].disposition is Disposition.ACCEPT else requests[1]
+    with engine.begin() as connection:
+        repository = SqlGoodNotesPullRepository(connection)
+        replayed = repository.decide_semantic_review(winner)
+        assert replayed.sequence == 1
+        assert (
+            connection.scalar(
+                select(func.count())
+                .select_from(goodnotes_semantic_review_decisions)
+                .where(
+                    goodnotes_semantic_review_decisions.c.principal_id == PRINCIPAL,
+                    goodnotes_semantic_review_decisions.c.proposal_id == concurrent_proposal_id,
+                )
+            )
+            == 1
+        )

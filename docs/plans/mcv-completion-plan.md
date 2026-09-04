@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-Three hundred and eighteen Python modules under `src/my_pa` and four hundred and fifty test modules —
+Three hundred and eighteen Python modules under `src/my_pa` and four hundred and fifty-four test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale three times: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
@@ -581,7 +581,7 @@ rediscovered.
   test — open, and narrower than this bullet says.** The bullet reads as though
   index names are unpinned; they are not. Both functional GIN indexes are pinned
   online by `EXPLAIN`-plan assertion —
-  `tests/search_quality/test_lexical_search.py:3727` for `extractions_full_text`
+  `tests/search_quality/test_lexical_search.py:3710` for `extractions_full_text`
   and `tests/search_quality/test_capture_search.py:285` for
   `capture_versions_full_text`, with the index *definition* additionally checked
   at `tests/schema/test_capture_schema_migration.py:781`. The residue is the

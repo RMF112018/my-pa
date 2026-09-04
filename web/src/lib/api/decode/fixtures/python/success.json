@@ -874,6 +874,368 @@
       }
     ]
   },
+  "entities.addresses.list": {
+    "addresses": [
+      {
+        "address_type_code": "office",
+        "city": null,
+        "country": null,
+        "effective_from": null,
+        "effective_to": null,
+        "entity_address_id": "eadr_aaaaaaaa11111111",
+        "entity_id": "ent_aaaaaaaa11111111",
+        "is_preferred": false,
+        "label": null,
+        "line1": "1 Synthetic Way",
+        "line2": null,
+        "normalized_address_value": "1 synthetic way",
+        "postal_code": null,
+        "raw_value": "1 Synthetic Way",
+        "region": null,
+        "retired_at": null,
+        "state": "active",
+        "superseded_by_entity_address_id": null,
+        "updated_at": "2026-08-09T12:00:00.000Z",
+        "version": 1
+      }
+    ],
+    "entity_id": "ent_aaaaaaaa11111111"
+  },
+  "entities.aliases.list": {
+    "aliases": [
+      {
+        "alias_id": "eals_aaaaaaaa11111111",
+        "alias_type": "full_name",
+        "display_value": "Patricia Synthetic",
+        "effective_from": null,
+        "effective_to": null,
+        "retired_at": null,
+        "state": "active",
+        "superseded_by_alias_id": null,
+        "updated_at": "2026-08-09T12:00:00.000Z",
+        "version": 1
+      }
+    ],
+    "entity_id": "ent_aaaaaaaa11111111"
+  },
+  "entities.assignments.list": {
+    "assignments": [
+      {
+        "assignment_id": "asn_aaaaaaaa11111111",
+        "assignment_type": "employment",
+        "discipline": null,
+        "effective_from": null,
+        "effective_to": null,
+        "entity_id": "ent_aaaaaaaa11111111",
+        "is_current": true,
+        "responsibility_class": null,
+        "role": "architect",
+        "scope_entity_id": "ent_bbbbbbbb22222222",
+        "status": "active",
+        "version": 1
+      }
+    ]
+  },
+  "entities.communication.list": {
+    "communication_methods": [
+      {
+        "communication_method_id": "ecmm_aaaaaaaa11111111",
+        "display_value": "pat.synthetic@example.test",
+        "effective_from": null,
+        "effective_to": null,
+        "entity_id": "ent_aaaaaaaa11111111",
+        "is_preferred": true,
+        "linked_external_identifier_id": null,
+        "method_type_code": "email",
+        "normalized_value": "pat.synthetic@example.test",
+        "retired_at": null,
+        "state": "active",
+        "superseded_by_communication_method_id": null,
+        "updated_at": "2026-08-09T12:00:00.000Z",
+        "usage_context_code": "corporate",
+        "verification_status_code": "unresolved",
+        "version": 1
+      }
+    ],
+    "entity_id": "ent_aaaaaaaa11111111"
+  },
+  "entities.context": {
+    "context_card": {
+      "aliases": [],
+      "assembled_at": "2026-08-09T12:00:00.000Z",
+      "assignments": [],
+      "coverage": [],
+      "entity": {
+        "canonical_name": "pat synthetic",
+        "created_at": "2026-08-09T12:00:00.000Z",
+        "display_name": "Pat Synthetic",
+        "entity_id": "ent_aaaaaaaa11111111",
+        "entity_type": "person",
+        "status": "active",
+        "superseded_by_entity_id": null,
+        "updated_at": "2026-08-09T12:00:00.000Z",
+        "version": 1
+      },
+      "identifiers": [],
+      "is_complete": true,
+      "limitations": [
+        "no_source_has_been_observed",
+        "the_memory_plane_is_unavailable"
+      ],
+      "memories": [],
+      "most_recent_observation_at": null,
+      "observations": [],
+      "relationships": []
+    }
+  },
+  "entities.get": {
+    "entity": {
+      "canonical_name": "pat synthetic",
+      "created_at": "2026-08-09T12:00:00.000Z",
+      "display_name": "Pat Synthetic",
+      "entity_id": "ent_aaaaaaaa11111111",
+      "entity_type": "person",
+      "status": "active",
+      "superseded_by_entity_id": null,
+      "updated_at": "2026-08-09T12:00:00.000Z",
+      "version": 1
+    }
+  },
+  "entities.identifiers.list": {
+    "entity_id": "ent_aaaaaaaa11111111",
+    "identifiers": [
+      {
+        "display_value": "pat.synthetic@example.test",
+        "effective_from": null,
+        "effective_to": null,
+        "identifier_id": "xid_aaaaaaaa11111111",
+        "namespace": "email",
+        "retired_at": null,
+        "state": "active",
+        "superseded_by_identifier_id": null,
+        "updated_at": "2026-08-09T12:00:00.000Z",
+        "verified": false,
+        "version": 1
+      }
+    ]
+  },
+  "entities.identity_history": {
+    "audit_id": "audit_aaaaaaaa11111111",
+    "entity_id": "ent_aaaaaaaa11111111",
+    "entries": [
+      {
+        "actor_class": "user",
+        "actor_id": "prn_aaaaaaaa11111111",
+        "audit_id": "audit_aaaaaaaa11111111",
+        "authority": null,
+        "changes": [
+          {
+            "after_state": {
+              "display_name": "Pat Synthetic"
+            },
+            "before_state": null,
+            "effect_kind": "create",
+            "family": "entity",
+            "record_id": "ent_aaaaaaaa11111111"
+          }
+        ],
+        "correlation_id": null,
+        "history_id": "emut_aaaaaaaa11111111",
+        "involved_entity_ids": [
+          "ent_aaaaaaaa11111111"
+        ],
+        "occurred_at": "2026-08-09T12:00:00.000Z",
+        "operation": "entities.create",
+        "reason": null,
+        "receipt_id": null,
+        "source": "direct_mutation",
+        "source_identity_operation_id": null
+      }
+    ],
+    "is_truncated": false,
+    "next_cursor": null
+  },
+  "entities.names.list": {
+    "entity_id": "ent_aaaaaaaa11111111",
+    "names": [
+      {
+        "display_value": "Pat Synthetic",
+        "effective_from": null,
+        "effective_to": null,
+        "entity_id": "ent_aaaaaaaa11111111",
+        "entity_name_id": "enam_aaaaaaaa11111111",
+        "is_preferred": true,
+        "name_type_code": "display",
+        "normalized_value": "pat synthetic",
+        "retired_at": null,
+        "state": "active",
+        "superseded_by_entity_name_id": null,
+        "updated_at": "2026-08-09T12:00:00.000Z",
+        "version": 1
+      }
+    ]
+  },
+  "entities.observations.list": {
+    "observations": [
+      {
+        "authority": "source_observation",
+        "entity_id": "ent_aaaaaaaa11111111",
+        "kind": "contact_record",
+        "mention_display_name": "Pat",
+        "observation_id": "eobs_aaaaaaaa11111111",
+        "observed_at": "2026-08-09T12:00:00.000Z",
+        "origin": "configured_source",
+        "recorded_at": "2026-08-09T12:00:00.000Z",
+        "resolution_version": 0,
+        "source_id": "src_aaaaaaaa11111111",
+        "source_object_id": "obj_aaaaaaaa11111111",
+        "source_version_id": "ver_aaaaaaaa11111111",
+        "state": "current",
+        "state_reason": null,
+        "superseded_by_observation_id": null
+      }
+    ]
+  },
+  "entities.participations.list": {
+    "entity_id": "ent_aaaaaaaa11111111",
+    "participations": [
+      {
+        "discipline_code": null,
+        "discipline_text": null,
+        "effective_from": null,
+        "effective_to": null,
+        "participant_entity_id": "ent_aaaaaaaa11111111",
+        "participation_id": "eppt_aaaaaaaa11111111",
+        "project_display_name": "North Pour",
+        "project_entity_id": "ent_cccccccccccccccc33333333",
+        "relationship_status_code": "active",
+        "retired_at": null,
+        "role_basis_code": "unresolved",
+        "role_code": null,
+        "role_text": "architect",
+        "scope_text": null,
+        "stakeholder_class_code": "unresolved",
+        "stakeholder_side_code": "design",
+        "state": "active",
+        "superseded_by_participation_id": null,
+        "updated_at": "2026-08-09T12:00:00.000Z",
+        "version": 1
+      }
+    ],
+    "perspective": "participant"
+  },
+  "entities.profile": {
+    "profile": {
+      "addresses": [],
+      "affiliations_as_organization": [],
+      "affiliations_as_person": [],
+      "assembled_at": "2026-08-09T12:00:00.000Z",
+      "communication_methods": [],
+      "entity": {
+        "canonical_name": "pat synthetic",
+        "created_at": "2026-08-09T12:00:00.000Z",
+        "display_name": "Pat Synthetic",
+        "entity_id": "ent_aaaaaaaa11111111",
+        "entity_type": "person",
+        "status": "active",
+        "superseded_by_entity_id": null,
+        "updated_at": "2026-08-09T12:00:00.000Z",
+        "version": 1
+      },
+      "is_complete": true,
+      "limitations": [],
+      "names": [
+        {
+          "display_value": "Pat Synthetic",
+          "effective_from": null,
+          "effective_to": null,
+          "entity_id": "ent_aaaaaaaa11111111",
+          "entity_name_id": "enam_aaaaaaaa11111111",
+          "is_preferred": true,
+          "name_type_code": "display",
+          "normalized_value": "pat synthetic",
+          "retired_at": null,
+          "state": "active",
+          "superseded_by_entity_name_id": null,
+          "updated_at": "2026-08-09T12:00:00.000Z",
+          "version": 1
+        }
+      ],
+      "organization_profile": null,
+      "participations_as_participant": [],
+      "participations_as_project": []
+    }
+  },
+  "entities.relationships": {
+    "relationships": [
+      {
+        "effective_from": null,
+        "effective_to": null,
+        "from_entity_id": "ent_aaaaaaaa11111111",
+        "is_current": true,
+        "relationship_id": "erel_aaaaaaaa11111111",
+        "relationship_type": "works_for",
+        "scope_entity_id": null,
+        "state": "active",
+        "to_entity_id": "ent_bbbbbbbb22222222",
+        "version": 1
+      }
+    ]
+  },
+  "entities.resolve": {
+    "resolution": {
+      "candidates": [
+        {
+          "display_name": "Alex Chen",
+          "entity_id": "ent_aaaaaaaa11111111",
+          "entity_type": "person",
+          "matched_on": [
+            "canonical_name"
+          ],
+          "signals": [],
+          "status": "active",
+          "superseded_by_entity_id": null
+        }
+      ],
+      "candidates_were_truncated": false,
+      "entity_id": null,
+      "outcome": "ambiguous",
+      "warnings": [
+        "several_entities_share_this_name"
+      ]
+    }
+  },
+  "entities.search": {
+    "entities": [
+      {
+        "affiliated_organizations": [
+          "Acme Synthetic"
+        ],
+        "canonical_name": "pat synthetic",
+        "display_name": "Pat Synthetic",
+        "entity_id": "ent_aaaaaaaa11111111",
+        "entity_type": "person",
+        "project_roles": [
+          "architect"
+        ],
+        "status": "active"
+      }
+    ]
+  },
+  "entities.unresolved_mentions": {
+    "mentions": [
+      {
+        "kind": "document_mention",
+        "mention_display_name": "Pat",
+        "observation_id": "eobs_aaaaaaaa11111111",
+        "observed_at": "2026-08-09T12:00:00.000Z",
+        "recorded_at": "2026-08-09T12:00:00.000Z",
+        "source_id": "src_aaaaaaaa11111111",
+        "source_object_id": "obj_aaaaaaaa11111111",
+        "source_version_id": "ver_aaaaaaaa11111111"
+      }
+    ]
+  },
   "knowledge.reveal": {
     "accepted": [],
     "capture_id": null,
@@ -955,5 +1317,95 @@
       "updated_at": "2026-01-01T00:00:00.000Z",
       "version": 1
     }
+  },
+  "reports.read": {
+    "report_id": "rpt_aaaaaaaa11111111",
+    "report_run_id": "rrun_aaaaaaaa11111111",
+    "cycle_run_id": "micr_aaaaaaaa11111111",
+    "focus_area_id": "communications",
+    "stage": "collector",
+    "artifact_kind": "collector_candidates",
+    "source_lane": null,
+    "report_date": "2026-08-20",
+    "title": "E2E morning brief collector",
+    "artifact_state": "final",
+    "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "content_bytes": 48,
+    "committed_at": "2026-08-09T12:00:00.000Z",
+    "version": 1,
+    "supersedes_report_id": null,
+    "dependency_report_ids": [],
+    "provenance": [
+      {
+        "source_system": "synthetic",
+        "source_ref": "src_aaaaaaaa11111111",
+        "relation": "supports",
+        "source_url": null
+      }
+    ],
+    "body_markdown": "# Morning Brief\n\n- scraped item one",
+    "structured_content": {
+      "lane": "persisted",
+      "marker": "not-from-markdown"
+    }
+  },
+  "reports.latest": {
+    "report_id": "rpt_aaaaaaaa11111111",
+    "cycle_run_id": "micr_aaaaaaaa11111111",
+    "stage": "collector",
+    "artifact_kind": "collector_candidates",
+    "focus_area_id": "communications",
+    "source_lane": null,
+    "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "artifact_state": "final"
+  },
+  "reports.list": {
+    "items": [
+      {
+        "report_id": "rpt_aaaaaaaa11111111",
+        "cycle_run_id": "micr_aaaaaaaa11111111",
+        "stage": "collector",
+        "artifact_kind": "collector_candidates",
+        "focus_area_id": "communications",
+        "source_lane": null,
+        "title": "E2E morning brief collector",
+        "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "artifact_state": "final"
+      }
+    ],
+    "next_cursor": null
+  },
+  "reports.search": {
+    "items": [
+      {
+        "report_id": "rpt_aaaaaaaa11111111",
+        "title": "E2E morning brief collector",
+        "snippet": "morning brief",
+        "cycle_run_id": "micr_aaaaaaaa11111111",
+        "stage": "collector",
+        "artifact_kind": "collector_candidates"
+      }
+    ]
+  },
+  "reports.resolve_set": {
+    "cycle_run_id": "micr_aaaaaaaa11111111",
+    "cycle_id": "morning_intelligence",
+    "business_date": "2026-08-20",
+    "set_id": "morning_brief_inputs",
+    "aggregate": "BLOCKED",
+    "members": [
+      {
+        "member_id": "communications",
+        "focus_area_id": "communications",
+        "source_lane": null,
+        "readiness": "MISSING",
+        "required": true,
+        "artifact_id": null,
+        "producer_run_id": null,
+        "content_sha256": null,
+        "committed_at": null,
+        "readiness_reason": "missing"
+      }
+    ]
   }
 }

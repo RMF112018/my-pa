@@ -186,6 +186,44 @@ Conservative dispositions for typed BFF success, error, receipt, and degraded co
 - Capture/review/work receipt bands: named runtime decode now exists for the corresponding GatewayCapability keys. Lifecycle UX remains `UI-IMP-WP09` / `UI-IMP-WP10`. At most `VALIDATION_REQUIRED` notes; never `PASS_VERIFIED`.
 - Twenty-nine `APPLICATION_GATEWAY_CAPABILITY` keys now have named runtime decoders; omitted arrays fail closed; `review.decide` no longer synthesizes version/disposition; `rate_limited` is HTTP 429; malformed success is `upstream_contract_invalid` / 503.
 
+## UI-IMP-WP11 Reports / Morning Intelligence BFF notes
+
+Conservative dispositions for the Reports read-plane BFF. This is not WP12 Morning Brief UI, not production activation, and not `PASS_VERIFIED` for `PFE-AC-048..057`.
+
+- **PFE-AC-048 / 053 / 054 / 055 / 056:** `implementation_disposition = VALIDATION_REQUIRED` for contract substrate. `reports.latest`, `reports.list`, `reports.search`, and `reports.resolve_set` are admitted with runtime decoders. Resolver member states are not flattened to a boolean. Scheduler success is not treated as durable readiness. UI landing/history chrome remains `UI-IMP-WP12`.
+- **PFE-AC-049:** opaque persisted `structured_content` is returned on `reports.read` when present; `body_markdown` remains secondary. No `BriefSection`/`BriefItem` canonical model was invented. Structured Brief UI remains WP12.
+- **PFE-AC-050 / 051 / 057:** provenance and dependency identifiers survive the BFF. Item linking, Evidence-from-Brief chrome, and specialist UX remain WP12. Browser scraping is not used.
+- **PFE-AC-052:** unchanged; Create-Task from a Brief item is out of this package.
+- Five `reports.*` read capabilities are in `gateway.json`. `reports.begin_cycle`, `reports.commit`, and `reports.record_run_state` are not browser-admitted. `frontend / contract` and `frontend / e2e-critical` (`reports-contract.spec.ts`) protect the admitted shapes.
+
+## UI-IMP-WP13 Canonical Entity / People BFF notes
+
+Conservative dispositions for the entity read-plane BFF. This is not WP14 Directory UI, not merge/split, and not `PASS_VERIFIED` for `PFE-AC-071..076`.
+
+- **PFE-AC-071 / 072 / 073 / 075 / 076:** `implementation_disposition = VALIDATION_REQUIRED` for contract substrate. Sixteen `entity_read` capabilities are admitted with fail-closed decoders. People is search, resolve, and profile — not a directory. Ambiguous `entities.resolve` keeps `outcome` visible. Record families are read through `entities.profile`; `entities.context` stays the frozen card.
+- **PFE-AC-074:** remains true by omission. There is no frontend merge control.
+- Unresolved mentions and observations refuse `observed_value`. A foreign `entity_id` is `not_found` with no existence leak.
+- Entity writes (`entities.merge`, `entities.split`, observe, authoring) are not browser-admitted. Grant/OAuth profiles are not mutated. `frontend / contract` and `frontend / e2e-critical` (`people-contract.spec.ts`) protect the admitted shapes.
+
+## UI-IMP-WP21 disposition (docs only; recorded with WP25)
+
+`UI-IMP-WP21 PROVISIONAL_NOT_ACTIVATED`
+
+Authority: [`frontend-implementation-authority.md`](frontend-implementation-authority.md) (dedicated WP-14 audit missing); ledger flag `WP14_KNOWLEDGE_LIBRARY_GOODNOTES_AUDIT_MISSING`.
+
+This PR does not add `goodnotes.*` or `gsqs.*` to `gateway.json` and does not add WP21 UI. Correct non-activation does not block Wave 3.
+
+## UI-IMP-WP25 System / Health Runtime Truth notes
+
+Conservative dispositions for extending `/system` and `GET /api/system`. This package does not introduce `GET /api/health`, source enumeration, git SHA, or PWA implementation. Production activation is not claimed. Never `PASS_VERIFIED`.
+
+- **PFE-AC-123..139:** Remain `UNRECONCILED` (`UNRECONCILED_ACCEPTANCE_MAPPING_123_139`). Do not renumber, delete, or weaken. Visible-only System refresh is substrate for **PFE-AC-125** at most `VALIDATION_REQUIRED` in notes; never Drive `PASS_VERIFIED`. WP28–WP30 own route/bundle budgets, CI gates, and deployment identity.
+- Morning Intelligence is shown as `reports.resolve_set` (`set_id` `morning_brief_inputs`) aggregate **and** members. READY is not mapped to system health. BLOCKED/DEGRADED/MISSING stay visible.
+- Worker `last_heartbeat_at` is rendered or explicitly unknown. `worker_absent` remains not-healthy.
+- PWA fields are labelled `PWA_FIELDS_PENDING_WP26`. Cache identity, update channel, and offline/sync status are not invented.
+- Connected sources remain unknown (FBCG-007 residual). No source enumeration.
+- Runtime git SHA / deployed artifact identity remain unreported (WP29 residual).
+
 ## Known evidence limitations / record overrides
 
 These limitations are additive to the default `FINAL_WP02_RECONCILIATION_MISSING` status and do not create a pass:

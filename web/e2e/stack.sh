@@ -82,6 +82,12 @@ echo "e2e: seeding one Principal-scoped synthetic counterparty"
 echo "e2e: seeding two Principal-scoped open review cases"
 ( cd "${REPO_DIR}" && PYTHONPATH="${REPO_DIR}/src" MY_PA_DATABASE_URL="${DATABASE_URL}" "${PYTHON}" tests/end_to_end/seed_review.py )
 
+echo "e2e: seeding one Principal-scoped Intelligence artifact"
+( cd "${REPO_DIR}" && PYTHONPATH="${REPO_DIR}/src" MY_PA_DATABASE_URL="${DATABASE_URL}" "${PYTHON}" tests/end_to_end/seed_reports.py )
+
+echo "e2e: seeding Principal-scoped synthetic people"
+( cd "${REPO_DIR}" && PYTHONPATH="${REPO_DIR}/src" MY_PA_DATABASE_URL="${DATABASE_URL}" "${PYTHON}" tests/end_to_end/seed_entities.py )
+
 echo "e2e: starting the Python gateway on 127.0.0.1:${GATEWAY_PORT}"
 (
   cd "${REPO_DIR}"
@@ -94,6 +100,7 @@ echo "e2e: starting the Python gateway on 127.0.0.1:${GATEWAY_PORT}"
   MY_PA_WEBAUTHN_RP_ID=localhost \
   MY_PA_WEBAUTHN_RP_NAME=my-pa \
   MY_PA_WEBAUTHN_ALLOWED_ORIGINS=http://localhost:3100 \
+  MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED=true \
   "${PYTHON}" apps/gateway.py run --port "${GATEWAY_PORT}"
 ) >"${GATEWAY_LOG}" 2>&1 &
 gateway_pid=$!

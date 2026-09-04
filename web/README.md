@@ -37,6 +37,25 @@ All application pages require a verified session. `/sign-in` is public.
 | `/library`, `GET /api/library` | `knowledge.read`, `knowledge.search`, `capture.search`, or `capture.list` | Chooses one capability from the request shape; no synthetic Library fixture is invented |
 | `POST /api/reveal` | `knowledge.reveal` | Preserves `evidence`, `no_evidence`, and `unavailable` as distinct answers |
 | `/review`, `GET /api/review` | `review.list` | Lists the acting Principal's review cases |
+| `/intelligence`, `GET /api/intelligence` | `reports.list`, `reports.search` | Lists or searches Principal-scoped Intelligence artifacts; `structured_content` is persisted opaque JSON, not scraped from markdown |
+| `GET /api/intelligence/:reportId` | `reports.read` | Reads one same-Principal Intelligence artifact |
+| `GET /api/intelligence/latest` | `reports.latest` | Reads the current-head artifact for a cycle run |
+| `GET /api/intelligence/readiness` | `reports.resolve_set` | Returns aggregate and per-member resolver states; members are not flattened to a boolean |
+| `/people`, `GET /api/people` | `entities.search`, `entities.resolve` | Search or resolve Principal-scoped entities; empty URL is refused rather than listing a directory |
+| `GET /api/people/:entityId` | `entities.get` | Reads one same-Principal entity |
+| `GET /api/people/:entityId/profile` | `entities.profile` | Assembles the record-family profile; this is not merge and not a directory |
+| `GET /api/people/:entityId/context` | `entities.context` | Returns the frozen context card without widening it |
+| `GET /api/people/:entityId/relationships` | `entities.relationships` | Lists same-Principal relationships |
+| `GET /api/people/:entityId/names` | `entities.names.list` | Lists names for one same-Principal entity |
+| `GET /api/people/:entityId/addresses` | `entities.addresses.list` | Lists addresses for one same-Principal entity |
+| `GET /api/people/:entityId/communication` | `entities.communication.list` | Lists communication methods for one same-Principal entity |
+| `GET /api/people/:entityId/participations` | `entities.participations.list` | Lists participations for one same-Principal entity |
+| `GET /api/people/:entityId/identifiers` | `entities.identifiers.list` | Lists identifiers for one same-Principal entity |
+| `GET /api/people/:entityId/aliases` | `entities.aliases.list` | Lists aliases for one same-Principal entity |
+| `GET /api/people/:entityId/assignments` | `entities.assignments.list` | Lists assignments for one same-Principal entity |
+| `GET /api/people/:entityId/observations`, `GET /api/people/observations` | `entities.observations.list` | Lists observations; `observed_value` is refused |
+| `GET /api/people/unresolved` | `entities.unresolved_mentions` | Lists unresolved mentions; `observed_value` is refused |
+| `GET /api/people/:entityId/identity-history` | `entities.identity_history` | Reads Principal-scoped identity history |
 | `POST /api/review/:id/decide` | `review.decide` | Applies an optimistic-concurrency review decision |
 | `POST /api/capture` | `capture.create` | Persists a Quick Capture with backend-owned idempotency and a verifiable receipt |
 | `GET /api/tasks` | `tasks.list`, `tasks.search` | Lists or searches server-owned Tasks with Work-view filters and opaque cursors |
@@ -51,7 +70,7 @@ All application pages require a verified session. `/sign-in` is public.
 | `PATCH /api/commitments/:commitmentId` | `commitments.update` | Applies one expected-version bounded Commitment update |
 | `GET /api/commitments/:commitmentId/history` | `commitments.history` | Reads the Commitment's append-only history |
 | `POST /api/commitments/:commitmentId/close` | `commitments.close` | Closes a Commitment explicitly with validated closure evidence |
-| `/system`, `GET /api/system` | `capabilities.get` | Reports the runtime manifest, readiness, and worker planes; connected-source enumeration remains unknown because no v1 capability provides it |
+| `/system`, `GET /api/system` | `capabilities.get`, `reports.list`, `reports.resolve_set` | Reports the runtime manifest, readiness, and worker planes; Morning Intelligence is resolver aggregate and members (READY is not system health); PWA fields are `PWA_FIELDS_PENDING_WP26`; connected sources remain unknown |
 | `POST /api/session` | none | Synthetic development sign-in only; refused in passkey mode and in production |
 | `POST /api/webauthn` | none | Passkey ceremony BFF; Python issues the opaque SID cookie after authentication or recovery |
 
@@ -70,8 +89,12 @@ known.
 The gateway degrades readiness when worker health is unavailable, when queued
 work has an absent or stale worker, or when a plane has dead-lettered work. An
 absent worker with no backlog is reported as `idle_or_not_required`; the web tier
-does not reinterpret that as a running worker. If the System route cannot reach
-the gateway, it renders the refusal rather than an empty healthy state.
+does not reinterpret that as a running worker. Worker `last_heartbeat_at` is
+rendered or explicitly unknown — never implied healthy. Morning Intelligence on
+this route is `reports.resolve_set` for `morning_brief_inputs` after discovering
+`cycle_run_id` from `reports.list`; READY is not mapped to a healthy system. If
+the System route cannot reach the gateway, it renders the refusal rather than an
+empty healthy state.
 
 ## Authentication and gateway identity
 

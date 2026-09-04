@@ -8975,6 +8975,8 @@ class ApplicationService:
         }
         if command.include_body:
             payload["body_markdown"] = artifact.body_markdown
+        if artifact.structured_content is not None:
+            payload["structured_content"] = artifact.structured_content
         return _Result(payload=payload, disclosure=unenrolled_disclosure(authorization.at))
 
     def _reports_latest(
@@ -9018,6 +9020,19 @@ class ApplicationService:
         command: ListIntelligenceArtifacts,
     ) -> _Result:
         page_size = self._page_size(command.page_size)
+        after_committed_at = None
+        after_artifact_id = None
+        if command.cursor is not None:
+            try:
+                cursor_artifact = read_artifact(
+                    self._intelligence_store(unit_of_work, authorization),  # type: ignore[arg-type]
+                    principal_id=authorization.principal.principal_id,
+                    artifact_id=command.cursor,
+                )
+            except NotFoundError:
+                raise InvalidRequestError(SafeDetail.CURSOR) from None
+            after_committed_at = cursor_artifact.committed_at
+            after_artifact_id = cursor_artifact.artifact_id
         found = list_artifacts(
             self._intelligence_store(unit_of_work, authorization),  # type: ignore[arg-type]
             principal_id=authorization.principal.principal_id,
@@ -9030,8 +9045,12 @@ class ApplicationService:
             if command.report_date is None
             else date.fromisoformat(command.report_date),
             include_superseded=command.include_superseded,
-            page_size=page_size,
+            page_size=page_size + 1,
+            after_committed_at=after_committed_at,
+            after_artifact_id=after_artifact_id,
         )
+        truncated = len(found) > page_size
+        page = found[:page_size]
         return _Result(
             payload={
                 "items": [
@@ -9050,10 +9069,18 @@ class ApplicationService:
                         "content_sha256": artifact.content_sha256,
                         "artifact_state": artifact.artifact_state.value,
                     }
-                    for artifact in found
-                ]
+                    for artifact in page
+                ],
+                "next_cursor": page[-1].artifact_id if truncated and page else None,
             },
-            disclosure=unenrolled_disclosure(authorization.at),
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                truncation=Truncation(
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                    next_cursor=page[-1].artifact_id if truncated and page else None,
+                ),
+            ),
         )
 
     def _reports_search(

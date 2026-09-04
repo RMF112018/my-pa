@@ -25,13 +25,13 @@ evidence only and was not transplanted.
 | --- | --- | --- |
 | Current `origin/main` | commit `25301329e9172014b58f555ee99575fc24244fb1`; tree `7ca6398ca4f03fcbec9b1500a44f91ce034a6d9d` | Exact merge-base after the nonconflicting PR #184/#185 synchronization. |
 | Current GoodNotes corrected code head | commit `11f77f4770af8c335e9590bd5db4a2925cdc0196`; tree `bad9b8042ddf37f360140c40211d04885439806d` | Contains the bounded R7 identity-target seam and the validator-driven code correction described below. |
-| Current post-sync integration head | commit `b273298cdb1b3f34adc998264eabda3774fc27b6`; tree `fa6bd4d911fbe28d7eef724aa3b4c6ce0d9ba1c4` | Clean state before this one-file ledger correction. It merges current main without changing the GoodNotes commits or their 22-path delta. Current-head focused checks pass; this ledger correction rebinds the evidence identity. |
+| Current corrective integration head | commit `019a5e1ff0d393ebdff2e3bc50d33ccbac9c1333`; tree `3a69772475c61efef610489f9ad4ca5413d12374` | Clean source/test head before this ledger update. It includes the R4/R8 fail-closed seams and R7 date contract on current main. |
 | Frozen pre-WP08 GoodNotes branch | commit `50f29a042da716e75820bf150d606b67aa99718e`; tree `2c68219fb3db82a6b071a84f8d18a402ff6adda3` | Preserved without mutation as historical evidence. |
 | Current main Alembic graph | sole head `16f05c46b8c3` | The GoodNotes tranche adds no migration. |
 | RI WP12 | local branch `fc8911b2241654f03210d77bfe22894dd2d41ddd`; tree `1ba3ae769d3594516b684c6bbe9e69f8860c3950` | Historical/local concurrent evidence. Its proposed successor migration is not in current `main`; no GoodNotes migration or shared-path edit is made in this tranche. |
 | RI WP13 | remote head `903b8b15a9e1d1d3f0ef97b85ab6bb9cb636f393`; tree `b65b801bb768aca9b3246ffeddb5de751f52a163`; PR #181 open | Owns its ten PR paths, including shared RI/MCV/architecture/operations documentation. Its local worktree also contains unrelated staged UI/report changes and is treated as contaminated and wholly no-touch. It adds no migration. |
 
-The GoodNotes delta from current `origin/main` contains 22 paths. It does not
+The GoodNotes delta from current `origin/main` contains 27 paths. It does not
 edit either shared plan, `src/my_pa/application/service.py`,
 `src/my_pa/contracts/ports.py`, a migration, or an RI semantic implementation
 path. Its mechanical changed-path intersection with the current WP12 commit and
@@ -115,6 +115,14 @@ to exact current `origin/main`
 `25301329e9172014b58f555ee99575fc24244fb1` without modifying a GoodNotes
 source path or migration.
 
+Three bounded corrective commits followed. Ledger-only `8e7ca8e8` rebound the
+current-main evidence. `672a9b1626123cec0bb0116c0f77b5bd3fa1f623`
+separated page, event, and body date evidence with explicit absent, resolved,
+and ambiguous page-date states. `019a5e1ff0d393ebdff2e3bc50d33ccbac9c1333`
+made fresh exact-bound source liveness a precondition of the actual ingestion
+path and required exact Principal/run/proposal-bound accepted review evidence
+before occurrence reconciliation may promote semantic evidence.
+
 During synchronization, a worker mistakenly operated in the primary checkout.
 The tracked checkout was restored to its pre-incident detached commit
 `e004942b076bbfe26cfd836bd448350236f326cb`, tree
@@ -127,24 +135,24 @@ read, changed, staged, or incorporated.
 | Work package | Status | Interim result or remaining gate |
 | --- | --- | --- |
 | GN-WP-R0 | `PASS_WITH_SERIALIZATION` | Candidate behavior and conflicting paths were mapped without copying PR #160 architecture or stale migration ancestry. Current WP12/WP13 ownership remains explicit. |
-| GN-WP-R1 | `NO_MIGRATION_IN_CURRENT_TRANCHE; FUTURE_WORK_SERIALIZED` | Current changes reuse the landed schema and leave sole main head `16f05c46b8c3` unchanged. Any future GoodNotes DDL must follow WP12 successor `b8e4d1a6c073`, settled WP13 integration, and a fresh then-current-head preflight. |
+| GN-WP-R1 | `NO_MIGRATION_IN_CURRENT_TRANCHE; FUTURE_DDL_REQUIRES_REFRESH` | Current changes reuse the landed schema and leave sole main head `16f05c46b8c3` unchanged. Any future GoodNotes DDL must start from the then-current authenticated head after a fresh ownership preflight. |
 | GN-WP-R2 | `INCOMPLETE_SHARED_WIRING` | Production composition still exposes the RouteLLM poster through shared bootstrap/service paths. Isolation requires the settled shared composition contract and synthetic production-path proof. |
 | GN-WP-R3 | `INCOMPLETE_SHARED_WIRING` | Principal-bound workflow context, stale-context validation, bounded continuation, and public command/service/policy/persistence wiring remain. |
-| GN-WP-R4 | `INDEPENDENT_SLICE_INTEGRATED` | Local-source disappearance, reappearance acknowledgment, bounded staleness, and digest continuity are explicit. |
+| GN-WP-R4 | `APPLICATION_ENFORCEMENT_INTEGRATED; DATABASE_PROOF_PENDING` | The actual orchestration path now requires fresh `AVAILABLE` liveness bound to the exact root, path, and content digest before store access. Missing, stale, reappeared, expired, or mismatched evidence fails closed. |
 | GN-WP-R5 | `INCOMPLETE_SHARED_WIRING` | A distinct GoodNotes/GSQS production composition gate remains across settings, bootstrap, service, authorization, MCP publication, and operational documentation. |
 | GN-WP-R6 | `INDEPENDENT_SLICE_INTEGRATED` | Page-version render identity is append-only; only absent render metadata may be backfilled. |
-| GN-WP-R7 | `BOUNDED_TYPED_IDENTITY_SEAM_CORRECTED; FRESH_REVIEW_REQUIRED; PUBLIC_AND_PERSISTENCE_WIRING_SERIALIZED` | The operator selected Option 2: person and organization candidates use generalized Entity identity (`ent_`), while project context uses continuity Project identity (`prj_`). The current seam carries an explicit target kind plus the original literal, confidence, and evidence references. It resolves only an exact matching ID or a unique normalized name within that target kind. Every syntactically valid identifier is exact-ID-only, including identifiers from other planes, and associated result construction enforces the selected identity plane. Ambiguity, an unknown ID, a mismatched plane, or any case requiring type inference remains unresolved. This seam is not yet reachable through the public proposal contract and is not populated from or written through a persistence adapter. |
-| GN-WP-R8 | `INDEPENDENT_SLICE_INTEGRATED` | Corrections and delivery require current accepted evidence with exact Principal-bound provenance; rejected or superseded evidence is excluded and receipt replay is immutable. |
+| GN-WP-R7 | `BOUNDED_TYPED_AND_DATE_SEAMS_INTEGRATED; PUBLIC_AND_PERSISTENCE_WIRING_INCOMPLETE` | Person/organization candidates use generalized Entity identity (`ent_`), project context uses continuity Project identity (`prj_`), and exact-ID/plane/ambiguity rules fail closed. Page-date evidence is separate from event/body dates and retains literal, evidence, and confidence. These seams are not yet reachable through the public proposal contract or persistence adapter. |
+| GN-WP-R8 | `APPLICATION_PROMOTION_GATE_INTEGRATED; PERSISTENT_REVIEW_WIRING_INCOMPLETE` | Occurrence reconciliation now requires exact Principal/run/proposal-digest review evidence and admits only `ACCEPT` or `CORRECT_AND_ACCEPT`; absent, rejected, deferred, invalidated, reprocessed, mismatched, duplicate, or extra evidence refuses atomically. Durable semantic-review decision storage and public wiring remain. |
 | GN-WP-R9 | `APPLICATION_CORE_INTEGRATED; SHARED_WIRING_INCOMPLETE` | Authenticated HMAC-bound cursors, client/context-bound assignments, bounded retry, resume, receipt validation, and idempotent completion exist. Public authorization, persistence, gateway, MCP, and schedule wiring remain absent. |
 | GN-WP-R10 | `INDEPENDENT_SLICE_INTEGRATED_AND_CORRECTED` | The optimizer remains production-inert. Hard gates, `plateau_limit`, and optimizer state types fail closed on values outside their exact contracts without changing evaluator identity. |
 | GN-WP-R11 / GN-WP-R12 | `OPERATOR_DECISION_REQUIRED` | No decision, private-gold access, or implementation is claimed. |
 | OP-GN-01 | `OPERATOR_RUNTIME_ACTION_REQUIRED` | No production worker, dead-letter operation, deployment, or live-source action was performed. |
 
-R2, R3, R5, and R9 remain serialized behind shared implementation ownership.
-The R7 identity choice is now bound, but its public schema, persistence,
-date-contract, and composition work remains serialized behind WP12, WP13, and
-the active UI owners. R1 remains serialized behind the WP12/WP13 migration
-chain. This ledger changes none of those owned paths.
+R2, R3, R5, and R9 remain incomplete on shared composition and publication
+surfaces. Those paths require a fresh ownership refresh before assignment; the
+current open RI PR owns only its recorded paths and adds no migration. R7 public
+schema/persistence/composition and R8 durable semantic-review storage remain
+incomplete. This ledger changes none of those shared paths.
 
 ## Verification evidence
 
@@ -213,6 +221,12 @@ commits:
   22 changed paths, Ruff format check reported 20 files already formatted,
   targeted mypy reported no issues in four source files, and the eight changed
   GoodNotes unit modules completed with `204 passed`;
+- R7 date-contract worker head `672a9b16` completed its focused date and
+  semantic-command selection with `27 passed`; Ruff check/format, targeted
+  mypy, and `git diff --check` passed;
+- R4/R8 corrective head `019a5e1f` completed its focused GoodNotes unit
+  selection with `90 passed`; Ruff check/format, targeted mypy over three
+  source files, and `git diff --check` passed;
 - the isolated database campaign partially executed `1,462 passed, 0 failed`
   in `56:03`; 620 tests in the named database/recovery/e2e selection were not
   executed, so this is not a completed database tier or an applicable PR-tier
@@ -278,17 +292,17 @@ eligibility is established.
 
 The objective remains incomplete pending:
 
-- R1 rebinding to the settled WP12 successor migration and WP13-integrated
-  current head if further GoodNotes DDL is actually required;
+- a fresh current-head/ownership preflight if further GoodNotes DDL is actually
+  required;
 - R2 production-model isolation through settled shared composition paths;
 - R3 authenticated workflow context, bounded continuation, public contracts,
   policy, persistence, and runtime wiring;
 - R5 capability/grant/composition/publication gates and operational proof;
 - R7 commands and public proposal schema, a generalized-Entity directory
   adapter, `ORGANIZATION` association migration/persistence and isolated
-  database tests, a page-date versus event/body-date contract, and
-  service/bootstrap/gateway/MCP wiring, all after fresh ownership and current
-  head reauthentication;
+  database tests, and service/bootstrap/gateway/MCP wiring, all after fresh
+  ownership and current-head reauthentication;
+- R8 durable semantic-review decision persistence and public/server wiring;
 - R9 authorization, durable pull state where required, gateway/MCP publication,
   schedule wiring, and synthetic production-path proof;
 - correction of the five authoritative count claims by their owning campaign,
@@ -297,10 +311,8 @@ The objective remains incomplete pending:
   required for the final changed surface;
 - operator decisions for R11, R12, and OP-GN-01; and
 - a fresh independent review bound to the final exact head, followed by the
-  applicable PR and merge decisions. Independent validation has confirmed the
-  two R7 code findings closed through `191ae002`; post-sync validation at
-  `a4a104f5` was code-green but failed the stale ledger identity and did not
-  supply that review.
+  applicable PR and merge decisions. Historical validation does not supply
+  review authority for the current corrective head.
 
 No blocker was bypassed. This ledger records the bounded R7 Option 2 decision,
 but no R7 completion, request completion, applicable PR-tier pass, PR or merge

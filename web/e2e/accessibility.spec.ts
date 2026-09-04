@@ -216,3 +216,41 @@ test.describe("Intelligence working surface landmarks", () => {
     await expect(page.getByRole("link", { name: "Current Intelligence" })).toBeVisible();
   });
 });
+
+test.describe("People search, warnings, and profile extras", () => {
+  test.beforeEach(async ({ page }) => {
+    await signIn(page);
+  });
+
+  test("People landing forms are labelled and idle is not a directory", async ({ page }) => {
+    await page.goto("/people");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
+    await expect(page.getByRole("searchbox", { name: "Search people" })).toBeVisible();
+    await expect(page.getByLabel("Resolve a reference")).toBeVisible();
+    await expect(page.getByTestId("people-idle")).toBeVisible();
+    await expect(page.getByTestId("people-search-hits")).toHaveCount(0);
+    expect(await scan(page), "/people idle accessibility violations").toEqual([]);
+  });
+
+  test("ambiguous resolve lists every candidate as a choice", async ({ page }) => {
+    test.setTimeout(180_000);
+    await page.goto("/people");
+    await page.getByLabel("Resolve a reference").fill("Alex Chen");
+    await page.getByRole("button", { name: "Resolve" }).click();
+    await expect(page.getByTestId("people-resolve-result")).toHaveAttribute("role", "alert");
+    await expect(page.getByTestId("people-resolve-candidates")).toBeVisible();
+    expect(await scan(page), "people resolve accessibility violations").toEqual([]);
+  });
+
+  test("/people/ detail keeps one h1 and remains scannable", async ({ page }) => {
+    test.setTimeout(180_000);
+    await page.goto("/people");
+    await page.getByRole("searchbox", { name: "Search people" }).fill("Pat Synthetic");
+    await page.getByRole("button", { name: "Search" }).click();
+    await page.getByRole("link", { name: "Pat Synthetic" }).click();
+    await expect(page).toHaveURL(/\/people\/ent_/);
+    await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
+    await expect(page.getByTestId("people-profile")).toBeVisible();
+    expect(await scan(page), "/people/ detail accessibility violations").toEqual([]);
+  });
+});

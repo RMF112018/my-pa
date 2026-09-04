@@ -317,6 +317,16 @@ _CORPUS: Final[tuple[tuple[str, str], ...]] = (
     ("entity writes", rf"[Ee]very one of the\s+{_NUM}\s+{_BARE_WRITES}"),
     ("entity writes", rf"{_PLURAL}\s+of the\s+{_NUM}\s+{_BARE_WRITES}"),
     ("entity writes", rf"{_NUM}\s+writes above\b"),
+    # `all N writes`: "all" totalises on its own, and the three live sites that
+    # say it -- `bootstrap/settings.py`'s plane-gate docstring, the
+    # implementation plan's remote-exposure row and `mcv-limitations.md` -- each
+    # mean the whole write set. Only the first of them was read before this arm:
+    # `_BOUND` names that sentence, and the other two could drift alone. Measured
+    # before admission: the sweep reads the three, plus one quotation of a
+    # superseded string in `entity_authoring.py` that `_EXCUSED` names, and
+    # nothing else -- "all site writes" and "all that writes" carry no number
+    # and are skipped by `_parse`.
+    ("entity writes", rf"[Aa]ll\s+{_NUM}\s+{_BARE_WRITES}"),
     ("entity reads", rf"{_PLURAL}\s+of the\s+{_NUM}\s+reads\b"),
 )
 
@@ -339,6 +349,13 @@ _EXCUSED: Final[tuple[tuple[str, str, str], ...]] = (
         "`application/entity_record_families.py`, not this module, and this module "
         "holds no class whose writes could be enumerated. Not a claim that the "
         "set holds eighteen.",
+    ),
+    (
+        "src/my_pa/infrastructure/persistence/entity_authoring.py",
+        "all eighteen writes",
+        "the same quotation as the entry above, read by the `all N writes` arm "
+        "rather than the plane-scoped one: `_record_mutation`'s docstring quotes "
+        "the string it replaced and says why no count stands there now.",
     ),
     (
         "docs/campaign/ROBUST-ENTITY-DATA-MODEL-20260830.md",

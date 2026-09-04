@@ -271,7 +271,18 @@ that names it again is refused.
 
 **Current-state correction (2026-08-28):** the tool list is derived from all
 **one hundred and twenty-four** current capabilities, and the schema has
-**eighty-eight** revisions at head `16f05c46b8c3` (counted on the merged tree
+**eighty-nine** revisions at head `b8e4d1a6c073` (corrected 2026-09-03 from
+eighty-eight at `16f05c46b8c3`, on which `b8e4d1a6c073` is additive and
+backfills one `display`-typed `entity_names` row per active `entities` row --
+`display_value` from `entities.display_name`, `normalized_value` from
+`entities.canonical_name`, never a `legal` name -- writing no
+`entity_project_participations`, `entity_addresses` or
+`entity_communication_methods` row and leaving `entity_aliases`,
+`entity_assignments` and `entity_external_identifiers` untouched,
+RI-ENT-WP-12; it was written against `c99cd8ed8d1c` and re-parented onto
+`16f05c46b8c3` once RI-ENT-WP-10/11 merged so the chain holds one head,
+RULING-M11, and eighty-nine was counted on the merged tree rather than derived
+from either side; eighty-eight had been counted on the merged tree
 2026-09-02: UI-IMP-WP02 corrected eighty-six at `c99cd8ed8d1c` to eighty-seven
 at `2c00c9ac64bc` on 2026-09-01, RI-ENT-WP-10/11 corrected that same eighty-six
 to its own eighty-seven at `16f05c46b8c3` on 2026-09-02, and neither figure is

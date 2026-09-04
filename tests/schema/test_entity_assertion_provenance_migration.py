@@ -233,7 +233,20 @@ def test_upgrading_from_the_previous_head_with_seeded_data_preserves_it(
     disposable_database: str,
 ) -> None:
     """`9a3f6c1e8d24` with seeded entities/names/an evidence link, upgraded to
-    head, disturbs neither -- this revision is purely additive."""
+    `REVISION`, disturbs neither -- this revision is purely additive.
+
+    Upgraded to `REVISION` (`1cda4d536268`) rather than to `head` since
+    2026-09-03. The scene seeds an **active `display` name** for an active
+    entity whose value differs from `entities.display_name`, and `head` now
+    carries `b8e4d1a6c073` (RI-ENT-WP-12), whose guard A refuses exactly that
+    database -- it cannot tell whether the typed row or the legacy column is
+    the truth, and refusing is its accepted design
+    (`tests/database/test_legacy_entity_backfill_migration.py::`
+    `test_guard_a_refuses_when_an_in_scope_entity_already_has_an_active_display_name`).
+    "Purely additive" was always a claim about *this* revision; `head` made it
+    a claim about every later revision, which a data backfill is not. The
+    assertion is unchanged.
+    """
     engine = create_database_engine(disposable_database)
     try:
         command.upgrade(_config(), PREVIOUS_REVISION)
@@ -244,7 +257,7 @@ def test_upgrading_from_the_previous_head_with_seeded_data_preserves_it(
                 text(f"SELECT count(*) FROM {SCHEMA}.entity_names")  # noqa: S608
             ).scalar_one()
 
-        command.upgrade(_config(), "head")
+        command.upgrade(_config(), REVISION)
         assert _tables(engine) >= NEW_TABLES
         with engine.connect() as connection:
             after_count = connection.execute(

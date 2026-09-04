@@ -7071,7 +7071,18 @@ class ApplicationService:
         return self._directed_receipt(authorization, receipt)
 
     def _directed_receipt(self, authorization: Authorization, receipt: DirectedReceipt) -> _Result:
-        """The one shape all six directed writes answer with.
+        """The one shape every directed write and every record-family write answers with.
+
+        Both groups return through here: the directed writes --
+        `entities.create` and the assignment and relationship `revise`/`end`
+        handlers -- and the record-family handlers above them. The shape is
+        shared deliberately: both planes answer with the mutation-ledger row
+        they wrote, and a second payload shape for the same fact would be a
+        second thing to keep true. No count of callers is stated. This line
+        once said "all six", which was true of the directed group alone and
+        wrong of the method, because the record-family handlers had joined it
+        without the sentence moving -- the same drift the entity-plane prose
+        guard exists for, one level down from the write set it derives.
 
         Every field the completion contract asks a mutation to return: the
         record it touched, the version it now stands at, the lifecycle state it

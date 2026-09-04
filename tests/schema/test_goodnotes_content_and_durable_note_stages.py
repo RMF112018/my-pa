@@ -62,21 +62,25 @@ PHASE_B_REVISION: Final = "b64e29a0f7c1"
 PHASE_B_HEAD: Final = "3d07af4dc513"
 GSQS_REVISION: Final = "c4b0a1d9e827"
 PHASE_B_START: Final = "c7a1f04b9e63"
-#: The chain's current head: `16f05c46b8c3` (RI-ENT-WP-10/11), which widens three closed-set
-#: CHECKs -- `audit_events.capability_is_known` (115 -> 135),
+#: The chain's current head: `b8e4d1a6c073` (RI-ENT-WP-12), which backfills one
+#: `display`-typed `entity_names` row per active `entities` row -- `display_value`
+#: from `entities.display_name`, `normalized_value` from `entities.canonical_name`,
+#: never a `legal` name -- and writes no `entity_project_participations` row
+#: (RULING-M10). It was written against `c99cd8ed8d1c` and re-parented onto
+#: `16f05c46b8c3` once RI-ENT-WP-10/11 merged (RULING-M11), so the pair stand as one
+#: chain rather than two heads. `16f05c46b8c3` (RI-ENT-WP-10/11) widens three
+#: closed-set CHECKs -- `audit_events.capability_is_known` (115 -> 135),
 #: `entity_mutation_events.a_mutated_record_family_is_known` (6 -> 11) and
 #: `entity_proposals.an_accepted_proposal_record_family_is_known` (6 -> 11) -- to admit
-#: RI-ENT-WP-10's five entity reads and RI-ENT-WP-11's fifteen entity mutation contracts. It
-#: creates and alters no table. It was written against `c99cd8ed8d1c` and re-parented onto
-#: `2c00c9ac64bc` (UI-IMP-WP02 auth persistence) when that merged, because both had been
-#: written against `c99cd8ed8d1c` and the pair would otherwise stand as two heads
-#: (RULING-M11). `2c00c9ac64bc` adds WebAuthn credential, challenge, recovery-code and
-#: opaque session tables, and is itself additive on `c99cd8ed8d1c` (RI-ENT-WP-08's
-#: blocker-clearing pass), which renames the seeded `entity_relationship_types` row
-#: `design_coordinates_with` to `design_coordination_with`; that in turn stacked on
-#: `1cda4d536268` (RI-ENT-WP-07). Written out rather than derived so chain drift fails here
-#: rather than passing.
-HEAD_REVISION: Final = "16f05c46b8c3"
+#: RI-ENT-WP-10's five entity reads and RI-ENT-WP-11's fifteen entity mutation contracts,
+#: creating and altering no table; it was itself re-parented from `c99cd8ed8d1c` onto
+#: `2c00c9ac64bc` (UI-IMP-WP02 auth persistence) for the same reason. `2c00c9ac64bc`
+#: adds WebAuthn credential, challenge, recovery-code and opaque session tables, and is
+#: itself additive on `c99cd8ed8d1c` (RI-ENT-WP-08's blocker-clearing pass), which
+#: renames the seeded `entity_relationship_types` row `design_coordinates_with` to
+#: `design_coordination_with`; that in turn stacked on `1cda4d536268` (RI-ENT-WP-07).
+#: Written out rather than derived so chain drift fails here rather than passing.
+HEAD_REVISION: Final = "b8e4d1a6c073"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_a4d9c2e7b815_admit_goodnotes_content_and_durable_note_stages.py"
 )
@@ -192,7 +196,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(PHASE_B_REVISION).down_revision == "a1f7d3c85e40"
     assert script.get_revision(PHASE_B_HEAD).down_revision == PHASE_B_REVISION
     assert script.get_heads() == [HEAD_REVISION]
-    # 88 migration files: 85 through `1cda4d536268` (RI-ENT-WP-07), plus
+    # 89 migration files: 85 through `1cda4d536268` (RI-ENT-WP-07), plus
     # `c99cd8ed8d1c` (commit `37ead78`, RI-ENT-WP-08's blocker-clearing pass),
     # which renames the seeded entity_relationship_types row
     # `design_coordinates_with` to `design_coordination_with`, plus
@@ -201,10 +205,14 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     # (RI-ENT-WP-10/11), which widens the three closed-set CHECKs on
     # `audit_events`, `entity_mutation_events` and `entity_proposals` for
     # RI-ENT-WP-10's five entity reads and RI-ENT-WP-11's fifteen entity
-    # mutation contracts, creating and altering no table. Both branches wrote
-    # 87 here from a shared baseline of 86 and neither is true of the merged
-    # tree, which carries both revisions; 88 is counted from it (RULING-M2).
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 88
+    # mutation contracts, creating and altering no table, plus `b8e4d1a6c073`
+    # (RI-ENT-WP-12), which backfills one `display`-typed `entity_names` row
+    # per active `entities` row and was re-parented from `c99cd8ed8d1c` onto
+    # `16f05c46b8c3` so the chain keeps one head (RULING-M11). Two branches
+    # wrote 87 here from a shared baseline of 86, the base merge counted 88,
+    # and RI-ENT-WP-12's integration counted 89 from the merged tree rather
+    # than adding one to either side (RULING-M2).
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 89
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

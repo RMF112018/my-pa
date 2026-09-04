@@ -216,6 +216,16 @@ Conservative dispositions for the entity read-plane BFF. This is not WP14 Direct
 - Unresolved mentions and observations refuse `observed_value`. A foreign `entity_id` is `not_found` with no existence leak.
 - Entity writes (`entities.merge`, `entities.split`, observe, authoring) are not browser-admitted. Grant/OAuth profiles are not mutated. `frontend / contract` and `frontend / e2e-critical` (`people-contract.spec.ts`) protect the admitted shapes.
 
+## UI-IMP-WP14 People / Relationship Intelligence UI notes
+
+Conservative dispositions for the People working surface on the WP13 entity read plane. This is not a browse-all directory, not Canvas, not entity writes, and not `PASS_VERIFIED` for `PFE-AC-071..076`.
+
+- **PFE-AC-071 / 073 / 075:** `implementation_disposition = VALIDATION_REQUIRED`. Landing remains search / resolve / idle — not `entities.list`. Ambiguous resolve keeps every candidate visible. `?entityId=` redirects to canonical `/people/[entityId]`.
+- **PFE-AC-072:** `implementation_disposition = VALIDATION_REQUIRED` for UI. Current vs historical assignments use backend `is_current` / status; the browser clock is not consulted.
+- **PFE-AC-074:** remains true by omission. No frontend merge/split/observe/author control.
+- **PFE-AC-076:** related Tasks/Commitments/meetings/intelligence are omitted unless a canonical relation is on the payload. No name-scan joining.
+- Legacy `/relationships/[personId]` remains the continuity timeline (continuity `person_id`, not `entity_id`). No blind redirect.
+
 ## UI-IMP-WP21 disposition (docs only; recorded with WP25)
 
 `UI-IMP-WP21 PROVISIONAL_NOT_ACTIVATED`

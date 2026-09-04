@@ -184,6 +184,57 @@ describe("merged-away entity", () => {
   });
 });
 
+describe("affiliation counterpart links", () => {
+  const affiliation = {
+    affiliation_id: "eaff_aaaaaaaa11111111",
+    person_entity_id: "ent_person0000000001",
+    affiliation_type_code: "employment" as const,
+    organization_entity_id: "ent_org0000000000001",
+    job_title: "Synthetic role",
+    effective_from: null,
+    effective_to: null,
+    state: "active" as const,
+    version: 1,
+    updated_at: null,
+    retired_at: null,
+    superseded_by_affiliation_id: null,
+  };
+
+  it("links the organization from affiliations as person", () => {
+    render(
+      <EntityProfilePanel
+        profile={{ ...PROFILE, affiliations_as_person: [affiliation] } as EntityProfileView}
+      />,
+    );
+    expect(screen.getByRole("link", { name: "Synthetic role" })).toHaveAttribute(
+      "href",
+      peopleEntity("ent_org0000000000001"),
+    );
+  });
+
+  it("links the person from affiliations as organization, not the org itself", () => {
+    render(
+      <EntityProfilePanel
+        profile={
+          {
+            ...PROFILE,
+            entity: { ...PROFILE.entity, entity_id: "ent_org0000000000001", entity_type: "organization" },
+            affiliations_as_organization: [affiliation],
+          } as EntityProfileView
+        }
+      />,
+    );
+    expect(screen.getByRole("link", { name: "Synthetic role" })).toHaveAttribute(
+      "href",
+      peopleEntity("ent_person0000000001"),
+    );
+    expect(screen.getByRole("link", { name: "Synthetic role" })).not.toHaveAttribute(
+      "href",
+      peopleEntity("ent_org0000000000001"),
+    );
+  });
+});
+
 describe("current vs historical assignments", () => {
   it("groups from is_current and status without mocked time", () => {
     const mixed = [

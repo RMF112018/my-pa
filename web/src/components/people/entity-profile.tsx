@@ -169,10 +169,12 @@ function AffiliationGroup({
   title,
   testId,
   rows,
+  asOrganization,
 }: {
   title: string;
   testId: string;
   rows: readonly AffiliationView[];
+  asOrganization: boolean;
 }) {
   if (rows.length === 0) return null;
   const { current, historical } = partitionByCurrency(rows, lifecycleIsCurrent);
@@ -186,7 +188,7 @@ function AffiliationGroup({
           <h4 className="text-xs font-semibold uppercase tracking-wide text-muted">Current</h4>
           <ul className="mt-1 space-y-1">
             {current.map((row) => (
-              <AffiliationItem key={row.affiliation_id} row={row} />
+              <AffiliationItem key={row.affiliation_id} row={row} asOrganization={asOrganization} />
             ))}
           </ul>
         </div>
@@ -196,7 +198,7 @@ function AffiliationGroup({
           <h4 className="text-xs font-semibold uppercase tracking-wide text-muted">Historical</h4>
           <ul className="mt-1 space-y-1">
             {historical.map((row) => (
-              <AffiliationItem key={row.affiliation_id} row={row} />
+              <AffiliationItem key={row.affiliation_id} row={row} asOrganization={asOrganization} />
             ))}
           </ul>
         </div>
@@ -205,12 +207,18 @@ function AffiliationGroup({
   );
 }
 
-function AffiliationItem({ row }: { row: AffiliationView }) {
-  const org = row.organization_entity_id;
+function AffiliationItem({
+  row,
+  asOrganization,
+}: {
+  row: AffiliationView;
+  asOrganization: boolean;
+}) {
+  const counterpartId = asOrganization ? row.person_entity_id : row.organization_entity_id;
   return (
     <li className="text-sm">
-      {org ? (
-        <Link href={peopleEntity(org)} className="underline decoration-moss-green/40">
+      {counterpartId ? (
+        <Link href={peopleEntity(counterpartId)} className="underline decoration-moss-green/40">
           {row.job_title ?? codeLabel(row.affiliation_type_code)}
         </Link>
       ) : (
@@ -356,11 +364,13 @@ export function EntityProfilePanel({
         title="Affiliations as person"
         testId="people-affiliations-person"
         rows={profile.affiliations_as_person}
+        asOrganization={false}
       />
       <AffiliationGroup
         title="Affiliations as organization"
         testId="people-affiliations-organization"
         rows={profile.affiliations_as_organization}
+        asOrganization
       />
 
       <section aria-labelledby="people-profile-provenance" className="text-sm">

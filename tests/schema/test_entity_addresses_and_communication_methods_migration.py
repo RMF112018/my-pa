@@ -318,12 +318,19 @@ def test_upgrading_from_the_previous_head_with_seeded_data_preserves_it(
                 text(f"SELECT entity_id FROM {SCHEMA}.entities WHERE entity_id = :entity_id"),  # noqa: S608
                 {"entity_id": ENTITY_A},
             ).scalar_one()
+            # Read the seeded row by its own identifier, not by entity: `head`
+            # now carries `b8e4d1a6c073` (RI-ENT-WP-12), which backfills one
+            # `display`-typed row per active entity, so `ENTITY_A` holds two
+            # name rows at head and a read by `entity_id` alone answered
+            # `MultipleResultsFound` (found by the database tier on 2026-09-03).
+            # The claim is unchanged: the `legal` row this test seeded survives
+            # every later revision with its value intact.
             preserved_name = connection.execute(
                 text(
                     f"SELECT display_value FROM {SCHEMA}.entity_names "  # noqa: S608
-                    "WHERE entity_id = :entity_id"
+                    "WHERE entity_name_id = :entity_name_id"
                 ),
-                {"entity_id": ENTITY_A},
+                {"entity_name_id": "enam_aaaa0001aaaa0001"},
             ).scalar_one()
         assert preserved_entity == ENTITY_A
         assert preserved_name == "X"

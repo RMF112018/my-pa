@@ -229,8 +229,12 @@ independent review:
    tables (RI-ENT-WP-02, outside this completion campaign). Superseded a third
    time 2026-09-02, at RI-ENT-WP-13 closeout: the chain is 87 revisions at
    single head `2c00c9ac64bc`, measured by `ls migrations/versions/*.py` and
-   `ScriptDirectory.get_heads()`. The eight revisions above `7e114f822af2`
-   carry RI-ENT-WP-03 through RI-ENT-WP-07 and UI-IMP-WP02, all outside this
+   `ScriptDirectory.get_heads()`. Superseded a fourth time 2026-09-04, at
+   RI-ENT-WP-12 closeout after merging `origin/main` `455a3671` (PR #181):
+   the chain is 89 revisions at single head `b8e4d1a6c073`, measured the same
+   way; `origin/main` held 88 at `16f05c46b8c3` and WP-13 added no revision.
+   The ten revisions above `7e114f822af2`
+   carry RI-ENT-WP-03 through RI-ENT-WP-12 and UI-IMP-WP02, all outside this
    completion campaign. This entry is appended rather than rewritten, and the
    supersession is recorded here only because the sentence above it reads in
    the present tense and had become false; nothing this campaign actually

@@ -24,6 +24,11 @@ from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.goodnotes_pull import SqlGoodNotesPullRepository
 from my_pa.infrastructure.persistence.tables import (
     goodnotes_ingestion_runs,
+    goodnotes_page_versions,
+    goodnotes_pages,
+    goodnotes_pull_assignments,
+    goodnotes_pull_claims,
+    goodnotes_pull_sessions,
     goodnotes_semantic_proposals,
 )
 
@@ -153,11 +158,71 @@ def test_semantic_review_exact_replay_conflict_and_projection(isolated_engine: E
                 payload_sha256="e" * 64,
                 payload=payload,
                 created_at=WHEN,
-                correlation_id="cor_0123456789abcdef01234567",
+                correlation_id="corr_0123456789abcdef01234567",
                 request_id="proposal-request-1",
             )
         )
+        connection.execute(
+            goodnotes_pages.insert().values(
+                principal_id=PRINCIPAL,
+                page_id="gnpg_0123456789abcdef01234567",
+                source_id="src_0123456789abcdef01234567",
+                source_object_id="obj_0123456789abcdef01234567",
+                page_number=1,
+            )
+        )
+        connection.execute(
+            goodnotes_page_versions.insert().values(
+                principal_id=PRINCIPAL,
+                page_version_id="gnver_0123456789abcdef01234567",
+                page_id="gnpg_0123456789abcdef01234567",
+                source_version_id="ver_0123456789abcdef01234567",
+                content_sha256="c" * 64,
+                observed_at=WHEN,
+            )
+        )
+        connection.execute(
+            goodnotes_pull_sessions.insert().values(
+                principal_id=PRINCIPAL,
+                context_id="ctx-stable-a",
+                client_id="scheduler-a",
+                max_attempts=3,
+                created_at=WHEN,
+            )
+        )
+        connection.execute(
+            goodnotes_pull_claims.insert().values(
+                principal_id=PRINCIPAL,
+                claim_id="1" * 64,
+                context_id="ctx-stable-a",
+                client_id="scheduler-a",
+                request_fingerprint="2" * 64,
+                assignment_count=1,
+                created_at=WHEN,
+            )
+        )
+        connection.execute(
+            goodnotes_pull_assignments.insert().values(
+                principal_id=PRINCIPAL,
+                assignment_id="3" * 64,
+                claim_id="1" * 64,
+                context_id="ctx-stable-a",
+                client_id="scheduler-a",
+                run_id=run_id,
+                page_version_id="gnver_0123456789abcdef01234567",
+                content_sha256="c" * 64,
+                attempt=1,
+                ordinal=1,
+                created_at=WHEN,
+            )
+        )
         repository = SqlGoodNotesPullRepository(connection)
+        material = repository.completion_material(PRINCIPAL, "scheduler-a", "3" * 64)
+        assert material is not None
+        assert material.proposal_id == proposal_id
+        assert material.result_sha256 == "e" * 64
+        assert repository.completion_material(PRINCIPAL, "scheduler-b", "3" * 64) is None
+        assert repository.completion_material(PRINCIPAL, "scheduler-a", "4" * 64) is None
         assert repository.record_semantic_review(decision).replayed is False
         assert repository.record_semantic_review(decision).replayed is True
         evidence = repository.semantic_review_evidence(PRINCIPAL, run_id, (proposal_sha256,))
@@ -191,3 +256,24 @@ def test_semantic_review_exact_replay_conflict_and_projection(isolated_engine: E
         assert invalidated.sequence == 2
         latest = repository.semantic_review_evidence(PRINCIPAL, run_id, (proposal_sha256,))
         assert latest[0].disposition.value == "invalidate"
+        connection.execute(
+            goodnotes_semantic_proposals.insert().values(
+                principal_id=PRINCIPAL,
+                proposal_id="gnprp_fedcba9876543210fedcba98",
+                run_id=run_id,
+                page_version_id="gnver_0123456789abcdef01234567",
+                content_sha256="c" * 64,
+                schema_version="v1",
+                analyzer_name="test",
+                analyzer_version="2",
+                idempotency_key="proposal-key-2",
+                request_fingerprint="6" * 64,
+                payload_sha256="7" * 64,
+                payload={"notes": ["ambiguous"]},
+                created_at=WHEN,
+                correlation_id="corr_fedcba9876543210fedcba98",
+                request_id="proposal-request-2",
+            )
+        )
+        with pytest.raises(PullRepositoryConflictError):
+            repository.completion_material(PRINCIPAL, "scheduler-a", "3" * 64)

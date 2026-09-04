@@ -4436,6 +4436,114 @@ class ContinuityAuthoringRepository(ABC):
         """Create one accepted Task under a key this transaction already reserved."""
 
 
+class GoodNotesPullRepositoryConflictError(Exception):
+    """A durable claim or completion observed stale/concurrent state."""
+
+
+class GoodNotesPullCompletionConflictError(Exception):
+    """A completion identity was replayed with different result material."""
+
+
+class GoodNotesSemanticReviewConflictError(Exception):
+    """A semantic-review identity was replayed with a different decision."""
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesPullWorkStateRecord:
+    work: GoodNotesPageWork
+    attempts: int = 0
+    completed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesPullAssignmentRecord:
+    assignment_id: str
+    client_id: str
+    context_id: str
+    work: GoodNotesPageWork
+    attempt: int
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesPullCompletionMaterial:
+    """Content-free proposal identity bound to one authenticated assignment."""
+
+    assignment_id: str
+    proposal_id: str
+    run_id: str
+    page_version_id: str
+    content_sha256: str
+    result_sha256: str
+
+
+class GoodNotesPullCompletionValue(Protocol):
+    @property
+    def assignment_id(self) -> str: ...
+
+    @property
+    def run_id(self) -> str: ...
+
+    @property
+    def page_version_id(self) -> str: ...
+
+    @property
+    def content_sha256(self) -> str: ...
+
+    @property
+    def result_sha256(self) -> str: ...
+
+    @property
+    def idempotency_key(self) -> str: ...
+
+
+class GoodNotesPullCompletionAdmissionValue(Protocol):
+    @property
+    def completion(self) -> GoodNotesPullCompletionValue: ...
+
+    @property
+    def request_fingerprint(self) -> str: ...
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesPullCompletionReceiptRecord:
+    completion_id: str
+    assignment_id: str
+    idempotency_key: str
+    request_fingerprint: str
+    result_sha256: str
+    replayed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesPullStatusRecord:
+    pending: int
+    assigned: int
+    completed: int
+    exhausted: int
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesSemanticPromotionEvidenceRecord:
+    principal_id: str
+    run_id: str
+    proposal_sha256: str
+    disposition: Disposition
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesSemanticReviewDecisionRecord:
+    decision_id: str
+    principal_id: str
+    run_id: str
+    proposal_id: str
+    proposal_sha256: str
+    action: str
+    request_fingerprint: str
+    decided_at: datetime
+    sequence: int | None = None
+    replayed: bool = False
+
+
 class UnitOfWork(ABC):
     """One transaction, and the repositories that run inside it.
 
@@ -4710,6 +4818,16 @@ class UnitOfWork(ABC):
         parameter on every method and is the authenticated caller's partition,
         never a caller-supplied field.
         """
+
+    @property
+    def goodnotes_pull(self) -> object:
+        """Optional durable GoodNotes pull ledger inside this transaction.
+
+        The application layer narrows this object to its bounded pull protocol;
+        keeping that protocol inward avoids making contracts depend outward on
+        an application module. Production composition overrides this property.
+        """
+        raise NotImplementedError
 
     def intelligence_for(self, principal_id: str) -> object:
         """Intelligence Artifact store for the authenticated Principal.

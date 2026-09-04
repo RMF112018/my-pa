@@ -14,20 +14,38 @@ from sqlalchemy.engine import Connection, Row
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql import Select
 
-from my_pa.application.goodnotes_occurrences import (
-    GoodNotesSemanticPromotionEvidence,
-    semantic_proposal_sha256,
+from my_pa.contracts.ports import (
+    GoodNotesPullAssignmentRecord as PullAssignment,
 )
-from my_pa.application.goodnotes_pull_orchestration import (
-    GoodNotesPullStatus,
-    PullAssignment,
-    PullCompletionAdmission,
-    PullCompletionConflictError,
-    PullCompletionReceipt,
-    PullRepositoryConflictError,
-    PullWorkState,
-    SemanticReviewConflictError,
-    SemanticReviewDecision,
+from my_pa.contracts.ports import (
+    GoodNotesPullCompletionAdmissionValue as PullCompletionAdmission,
+)
+from my_pa.contracts.ports import (
+    GoodNotesPullCompletionConflictError as PullCompletionConflictError,
+)
+from my_pa.contracts.ports import (
+    GoodNotesPullCompletionMaterial as PullCompletionMaterial,
+)
+from my_pa.contracts.ports import (
+    GoodNotesPullCompletionReceiptRecord as PullCompletionReceipt,
+)
+from my_pa.contracts.ports import (
+    GoodNotesPullRepositoryConflictError as PullRepositoryConflictError,
+)
+from my_pa.contracts.ports import (
+    GoodNotesPullStatusRecord as GoodNotesPullStatus,
+)
+from my_pa.contracts.ports import (
+    GoodNotesPullWorkStateRecord as PullWorkState,
+)
+from my_pa.contracts.ports import (
+    GoodNotesSemanticPromotionEvidenceRecord as GoodNotesSemanticPromotionEvidence,
+)
+from my_pa.contracts.ports import (
+    GoodNotesSemanticReviewConflictError as SemanticReviewConflictError,
+)
+from my_pa.contracts.ports import (
+    GoodNotesSemanticReviewDecisionRecord as SemanticReviewDecision,
 )
 from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.time import utc_now
@@ -53,6 +71,16 @@ __all__ = ["SqlGoodNotesPullRepository"]
 def _digest(value: object) -> str:
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _semantic_proposal_sha256(
+    page_version_id: str,
+    schema_version: str,
+    analyzer_name: str,
+    analyzer_version: str,
+    payload: dict[str, object],
+) -> str:
+    return _digest([page_version_id, schema_version, analyzer_name, analyzer_version, payload])
 
 
 def _work_key(work: GoodNotesPageWork) -> tuple[str, str, str]:
@@ -315,6 +343,37 @@ class SqlGoodNotesPullRepository:
         ).one_or_none()
         return None if row is None else _assignment_from_row(row)
 
+    def completion_material(
+        self, principal_id: str, client_id: str, assignment_id: str
+    ) -> PullCompletionMaterial | None:
+        assignment = self.assignment(principal_id, client_id, assignment_id)
+        if assignment is None:
+            return None
+        proposals = self._connection.execute(
+            select(
+                goodnotes_semantic_proposals.c.proposal_id,
+                goodnotes_semantic_proposals.c.payload_sha256,
+            ).where(
+                goodnotes_semantic_proposals.c.principal_id == principal_id,
+                goodnotes_semantic_proposals.c.run_id == assignment.work.run_id,
+                goodnotes_semantic_proposals.c.page_version_id == assignment.work.page_version_id,
+                goodnotes_semantic_proposals.c.content_sha256 == assignment.work.content_sha256,
+            )
+        ).all()
+        if not proposals:
+            return None
+        if len(proposals) != 1:
+            raise PullRepositoryConflictError
+        proposal = proposals[0]
+        return PullCompletionMaterial(
+            assignment_id=assignment.assignment_id,
+            proposal_id=str(proposal.proposal_id),
+            run_id=assignment.work.run_id,
+            page_version_id=assignment.work.page_version_id,
+            content_sha256=assignment.work.content_sha256,
+            result_sha256=str(proposal.payload_sha256),
+        )
+
     def complete_batch(
         self,
         principal_id: str,
@@ -337,16 +396,8 @@ class SqlGoodNotesPullRepository:
                 or states[_work_key(assignment.work)].attempts != assignment.attempt
             ):
                 raise PullRepositoryConflictError
-            proposal = self._connection.execute(
-                select(goodnotes_semantic_proposals.c.proposal_id).where(
-                    goodnotes_semantic_proposals.c.principal_id == principal_id,
-                    goodnotes_semantic_proposals.c.run_id == completion.run_id,
-                    goodnotes_semantic_proposals.c.page_version_id == completion.page_version_id,
-                    goodnotes_semantic_proposals.c.content_sha256 == completion.content_sha256,
-                    goodnotes_semantic_proposals.c.payload_sha256 == completion.result_sha256,
-                )
-            ).first()
-            if proposal is None:
+            material = self.completion_material(principal_id, client_id, completion.assignment_id)
+            if material is None or material.result_sha256 != completion.result_sha256:
                 raise PullRepositoryConflictError
             stored = self._completion_for(principal_id, completion.assignment_id)
             keyed = self._completion_for_key(principal_id, completion.idempotency_key)
@@ -427,7 +478,7 @@ class SqlGoodNotesPullRepository:
         ).one_or_none()
         if proposal is None or proposal.run_id != decision.run_id:
             raise SemanticReviewConflictError
-        digest = semantic_proposal_sha256(
+        digest = _semantic_proposal_sha256(
             str(proposal.page_version_id),
             str(proposal.schema_version),
             str(proposal.analyzer_name),

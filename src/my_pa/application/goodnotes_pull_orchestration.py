@@ -19,12 +19,26 @@ import hmac
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
-from datetime import datetime
 from typing import Protocol
 
 from my_pa.application.goodnotes_occurrences import GoodNotesSemanticPromotionEvidence
+from my_pa.contracts.ports import (
+    GoodNotesPullCompletionConflictError as PullCompletionConflictError,
+)
+from my_pa.contracts.ports import GoodNotesPullCompletionMaterial as PullCompletionMaterial
+from my_pa.contracts.ports import (
+    GoodNotesPullRepositoryConflictError as PullRepositoryConflictError,
+)
+from my_pa.contracts.ports import (
+    GoodNotesSemanticReviewConflictError,
+)
+from my_pa.contracts.ports import (
+    GoodNotesSemanticReviewDecisionRecord as SemanticReviewDecision,
+)
 from my_pa.domain.goodnotes.models import GoodNotesPageWork
 from my_pa.domain.identity.principal import Principal
+
+SemanticReviewConflictError = GoodNotesSemanticReviewConflictError
 
 MAX_PULL_BATCH_SIZE = 100
 MAX_PULL_RETRIES = 10
@@ -265,34 +279,6 @@ def public_completion_receipts(
     )
 
 
-class PullRepositoryConflictError(Exception):
-    """Atomic claim or completion observed concurrent/stale repository state."""
-
-
-class PullCompletionConflictError(Exception):
-    """An idempotency key or assignment was completed with different content."""
-
-
-class SemanticReviewConflictError(Exception):
-    """One exact semantic proposal already has a different review decision."""
-
-
-@dataclass(frozen=True, slots=True)
-class SemanticReviewDecision:
-    """Append-only review fact for one exact semantic proposal digest."""
-
-    decision_id: str
-    principal_id: str
-    run_id: str
-    proposal_id: str
-    proposal_sha256: str
-    action: str
-    request_fingerprint: str
-    decided_at: datetime
-    sequence: int | None = None
-    replayed: bool = False
-
-
 class GoodNotesPullRepository(Protocol):
     """Principal-partitioned orchestration ledger; never a source-provider port."""
 
@@ -313,6 +299,11 @@ class GoodNotesPullRepository(Protocol):
     def assignment(
         self, principal_id: str, client_id: str, assignment_id: str
     ) -> PullAssignment | None: ...
+
+    def completion_material(
+        self, principal_id: str, client_id: str, assignment_id: str
+    ) -> PullCompletionMaterial | None:
+        """Resolve exactly one proposal for an authenticated assignment."""
 
     def complete_batch(
         self,

@@ -179,7 +179,6 @@ from my_pa.application.entity_reenrichment import (
     ProductionReenrichmentCaller,
     ReenrichmentWork,
 )
-from my_pa.application.goodnotes_gsqs_b0_workflow import WorkflowPorts
 from my_pa.application.native_sources import NativeSourceController
 from my_pa.application.producer_origin import ProducerOrigin, ProducerOriginRegistry
 from my_pa.application.service import ApplicationService
@@ -207,7 +206,6 @@ from my_pa.domain.identity.webauthn_relying_party import (
 from my_pa.domain.policy.decision import POLICY_VERSION
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
-from my_pa.infrastructure.gsqs_routellm_transport import post_chat_completion
 from my_pa.infrastructure.jobs.reenrichment import (
     claim_reenrichment_work,
     settle_reenrichment_work,
@@ -1012,7 +1010,6 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
                 and settings.relationship_intelligence_writes_enabled
             ),
             producer_origins=producer_origins,
-            gsqs_b0_ports=WorkflowPorts(poster=post_chat_completion),
         ),
         principal=principal,
         authenticate=entra_authenticator(settings, work_engine) if entra else None,

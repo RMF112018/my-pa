@@ -18,18 +18,22 @@ composition in `bootstrap.goodnotes` does not read the flag.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Final
 
 from my_pa.application.goodnotes_orchestrator import GoodNotesDurableNoteOrchestrator
 from my_pa.bootstrap.goodnotes_rollout import current_rollout_stage
 from my_pa.bootstrap.settings import Settings
-from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.operation import Capability, permitted_purposes
+from my_pa.domain.identity.purpose import Purpose
 
 __all__ = [
     "ALLOWED_CAPABILITIES",
     "DRAFT_STATUS",
     "TASK_NAME",
+    "GoodNotesCapabilityStates",
     "activated_task_capabilities",
+    "capability_states",
     "compose_durable_note_orchestrator",
     "durable_note_task_is_activated",
     "mcp_profile_refuses",
@@ -45,6 +49,16 @@ ALLOWED_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.GOODNOTES_PROPOSE,
     }
 )
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesCapabilityStates:
+    """The four independent boundaries between a draft profile and a caller."""
+
+    source_defined: frozenset[Capability]
+    composed: frozenset[Capability]
+    runtime_published: frozenset[Capability]
+    grant_visible: frozenset[Capability]
 
 
 def profile_tool_names() -> frozenset[str]:
@@ -66,6 +80,43 @@ def activated_task_capabilities(settings: Settings) -> frozenset[Capability]:
     if not durable_note_task_is_activated(settings):
         return frozenset()
     return ALLOWED_CAPABILITIES
+
+
+def capability_states(
+    settings: Settings,
+    *,
+    runtime_published: frozenset[str],
+    allowed_tools: frozenset[str],
+    grants: frozenset[tuple[Capability, Purpose | None]],
+) -> GoodNotesCapabilityStates:
+    """Resolve the dormant Task's capability state without activating anything.
+
+    Source definition is not composition, and composition is not publication.
+    Publication still grants no caller authority: a name is visible only when
+    the caller's tool ceiling and capability/purpose grant both admit it. This
+    mirrors the MCP boundary while keeping the proposed Task profile local and
+    free of API, model, database, or network I/O.
+    """
+    source_defined = ALLOWED_CAPABILITIES
+    composed = activated_task_capabilities(settings)
+    published = frozenset(
+        capability for capability in composed if capability.value in runtime_published
+    )
+    visible = frozenset(
+        capability
+        for capability in published
+        if capability.value in allowed_tools
+        and (
+            (capability, None) in grants
+            or any((capability, purpose) in grants for purpose in permitted_purposes(capability))
+        )
+    )
+    return GoodNotesCapabilityStates(
+        source_defined=source_defined,
+        composed=composed,
+        runtime_published=published,
+        grant_visible=visible,
+    )
 
 
 def mcp_profile_refuses(tool_name: str, *, published: frozenset[str]) -> bool:

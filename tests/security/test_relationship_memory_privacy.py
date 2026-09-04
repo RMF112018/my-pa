@@ -42,10 +42,8 @@ from pathlib import Path
 from typing import Any, Final
 
 import pytest
-from alembic import command as alembic_command
 from alembic.config import Config
 from sqlalchemy import Engine, text
-from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 
 from my_pa.adapters.mcp.tools import payload_schema_for
@@ -63,7 +61,6 @@ from my_pa.application.commands import (
 )
 from my_pa.application.errors import InvalidRequestError, SafeDetail, problem_detail
 from my_pa.application.service import ApplicationService
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import UnitOfWork
 from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
@@ -132,24 +129,6 @@ def _administer(maintenance: Engine, *statements: object) -> None:
     with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
         for statement in statements:
             connection.execute(statement)  # type: ignore[arg-type]
-
-
-@pytest.fixture
-def disposable_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """Create an empty database, point the settings at it, drop it afterwards."""
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-    try:
-        _administer(maintenance, drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", url)
-        yield url
-    finally:
-        _administer(maintenance, drop)
-        maintenance.dispose()
 
 
 class _Runtime:
@@ -237,7 +216,6 @@ def _an_entity(entity_id: str, display_name: str) -> Entity:
 @pytest.fixture
 def runtime(disposable_database: str) -> Iterator[_Runtime]:
     """A migrated database holding one synthetic person, and the composed service."""
-    alembic_command.upgrade(_config(), "head")
     composed = _Runtime(disposable_database)
     with composed.work_engine.begin() as connection:
         SqlEntityRepository(connection).create(PRINCIPAL, _an_entity(NOOR, NOOR_NAME))

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import io
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Final
 
@@ -12,9 +11,7 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
-from sqlalchemy.engine import make_url
 
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.user_accounts import IDENTITY_METADATA
 from my_pa.infrastructure.persistence.webauthn_auth import (
@@ -63,23 +60,6 @@ def _administer(maintenance: Engine, *statements: object) -> None:
 
 def _config() -> Config:
     return Config(str(ROOT / "alembic.ini"), output_buffer=io.StringIO())
-
-
-@pytest.fixture
-def disposable_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-    try:
-        _administer(maintenance, drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", url)
-        yield url
-    finally:
-        _administer(maintenance, drop)
-        maintenance.dispose()
 
 
 def test_runtime_tables_match_the_frozen_migration() -> None:
@@ -217,3 +197,9 @@ def test_downgrade_round_trip_from_new_head(disposable_database: str) -> None:
             assert leftover == set()
     finally:
         engine.dispose()
+
+
+@pytest.fixture
+def disposable_database(empty_database_url: str) -> str:
+    """Empty disposable catalog; migration tests still drive Alembic themselves."""
+    return empty_database_url

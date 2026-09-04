@@ -28,8 +28,6 @@ synthetic rows in the schema that holds the migrated corpus.
 
 from __future__ import annotations
 
-import io
-import os
 import secrets
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -38,8 +36,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import (
     ColumnElement,
     Connection,
@@ -55,10 +51,9 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects import postgresql
-from sqlalchemy.engine import CursorResult, make_url
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import UnknownScopeError
 from my_pa.contracts.v1.disclosure import CoverageState, FreshnessState
 from my_pa.domain.common.classification import Classification
@@ -187,40 +182,8 @@ def administer(maintenance: Engine, *statements: object) -> None:
 
 
 @pytest.fixture(scope="module")
-def disposable_database() -> Iterator[str]:
-    """An empty database at head, dropped when the module finishes.
-
-    Module-scoped: creating a database and running eight revisions is most of
-    this file's runtime, and every test below either only reads or writes into
-    its own enrollment. `monkeypatch` is function-scoped and cannot be used
-    here, so the one environment variable Alembic needs is set and restored by
-    hand.
-    """
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-    variable = f"{ENV_PREFIX}DATABASE_URL"
-    previous = os.environ.get(variable)
-    try:
-        administer(maintenance, drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        os.environ[variable] = url
-        command.upgrade(Config(str(ROOT / "alembic.ini"), output_buffer=io.StringIO()), "head")
-        yield url
-    finally:
-        if previous is None:
-            os.environ.pop(variable, None)
-        else:
-            os.environ[variable] = previous
-        administer(maintenance, drop)
-        maintenance.dispose()
-
-
-@pytest.fixture(scope="module")
-def engine(disposable_database: str) -> Iterator[Engine]:
-    built = create_database_engine(disposable_database)
+def engine(module_cloned_database_url: str) -> Iterator[Engine]:
+    built = create_database_engine(module_cloned_database_url)
     try:
         yield built
     finally:

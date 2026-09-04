@@ -1,11 +1,32 @@
 # Runbook — PostgreSQL operations for `my_pa`
 
-> **2026-08-12 local-candidate correction.** The repository migration chain now
-> contains 34 revisions at head `b4e8d2c7a613`. Historical transcripts below
-> remain evidence of their named 2026-08-01/03 runs and must not be read as the
-> current candidate state. The remediation candidate executed empty-to-head and
-> a disposable `pg_dump`/`pg_restore` rehearsal; the restored database reported
-> `b4e8d2c7a613` and 89 `knowledge` tables. See the current remediation record.
+> **2026-09-04 current-state correction.** The repository migration chain
+> contains **89 revisions at single head `b8e4d1a6c073`**. Measured, not
+> carried: `ls migrations/versions/*.py | wc -l` and
+> `ScriptDirectory.get_heads()`. `b8e4d1a6c073` is additive on `16f05c46b8c3`
+> (RI-ENT-WP-12). `origin/main` at `455a3671` held 88 revisions at
+> `16f05c46b8c3`; this figure is of the merged tree, not a sum. Everything
+> below this line is older evidence at its own named head and must not be
+> read as the current candidate state.
+>
+> **2026-09-02 current-state correction, superseded and kept.** The repository migration chain
+> contains **87 revisions at single head `2c00c9ac64bc`**. Measured, not
+> carried: `ls migrations/versions/*.py | wc -l` and
+> `ScriptDirectory.get_heads()`. That pair was self-consistent when written;
+> two revisions have landed on top of it since. Everything below this line
+> is older evidence at its own named head and must not be read as the
+> current candidate state.
+>
+> **2026-08-12 local-candidate correction, superseded and kept.** This banner
+> read "The repository migration chain now contains 34 revisions at head
+> `b4e8d2c7a613`". That pair was self-consistent when written and
+> `b4e8d2c7a613` is still in this chain, but 53 revisions have landed on top of
+> it since and nothing updated this banner, so it had been stating a stale head
+> as current for three weeks. Historical transcripts below remain evidence of
+> their named 2026-08-01/03 runs. The remediation candidate executed
+> empty-to-head and a disposable `pg_dump`/`pg_restore` rehearsal; the restored
+> database reported `b4e8d2c7a613` and 89 `knowledge` tables. See the current
+> remediation record.
 
 Day-to-day operation of the canonical `my_pa` database: start, stop, health
 check, connect, back up, restore.

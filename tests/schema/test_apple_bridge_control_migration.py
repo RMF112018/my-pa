@@ -2,20 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import Engine, inspect, text
-from sqlalchemy.engine import make_url
 
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.domain.native_apple import AppleMachineCredentialError
-from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.apple_bridge_credentials import (
     authenticate_apple_bridge_credential,
     register_apple_bridge_credential,
@@ -29,29 +23,6 @@ MIGRATION = (
     / "migrations/versions/20260812_a9e4c7b2d610_add_apple_bridge_credentials.py"
 )
 DATABASE = "my_pa_apple_bridge_test"
-
-
-@pytest.fixture
-def native_engine(monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DATABASE}" WITH (FORCE)')
-    with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-        connection.execute(drop)
-        connection.execute(text(f'CREATE DATABASE "{DATABASE}"'))
-    url = configured.set(database=DATABASE).render_as_string(hide_password=False)
-    monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", url)
-    engine = create_database_engine(url)
-    try:
-        command.upgrade(Config(str(Path(__file__).resolve().parents[2] / "alembic.ini")), "head")
-        yield engine
-    finally:
-        engine.dispose()
-        with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            connection.execute(drop)
-        maintenance.dispose()
 
 
 def test_migration_declares_separate_credential_and_staged_grant_planes() -> None:
@@ -145,3 +116,8 @@ def test_credentials_are_independently_identified_and_rotatable(native_engine: E
         authenticate_apple_bridge_credential(
             native_engine, f"AppleBridgeCredential {first}:first-secret"
         )
+
+
+@pytest.fixture
+def native_engine(db_engine: Engine) -> Engine:
+    return db_engine

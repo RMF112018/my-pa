@@ -271,9 +271,16 @@ markers = [
   "connector: requires a personal-data connector; not part of Phase 01",
   "evaluation: quality evaluation suite; not part of Phase 01",
   # `e2e` and `recovery` said "not part of Phase 01" until WP-4B3, when both
-  # acquired their first tests. Neither is excluded from CI: the database-tier
-  # job selects `database or recovery or e2e` (`D-46`, premise corrected by
-  # `D-53`), and the two FAST jobs still deselect all three.
-  "e2e: end-to-end suite; runs in the database-tier job, not in FAST",
-  "recovery: recovery suite; runs in the database-tier job, not in FAST",
+  # acquired their first tests. Neither is excluded from CI: split database-tier
+  # lanes select them directly (`D-46`, premise corrected by `D-53`), and the
+  # two FAST jobs still deselect all three plus the narrower provisioning
+  # markers that ride those tests.
+  "e2e: end-to-end suite; runs in the database-e2e job, not in FAST",
+  "recovery: recovery suite; runs in the database-recovery job, not in FAST",
+  "database_clone: current-schema test using a hard PostgreSQL clone",
+  "database_transactional: current-schema test using transaction rollback isolation",
+  "migration: migration-contract test; not ordinary current-schema provisioning",
+  "migration_edge: bounded revision upgrade/downgrade or data-contract test",
+  "migration_empty_to_head: empty database upgraded to the current Alembic head",
+  "migration_historical: historical compatibility retained outside the default PR database job",
 ]

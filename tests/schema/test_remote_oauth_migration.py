@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import os
 import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -13,9 +12,8 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import Connection, func, select, text
-from sqlalchemy.engine import Engine, make_url
+from sqlalchemy.engine import Engine
 
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.oauth import OAuthError
 from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID
 from my_pa.infrastructure.database.engine import create_database_engine
@@ -53,29 +51,6 @@ def _administer(maintenance: Engine, *statements: object) -> None:
 
 def _config() -> Config:
     return Config(str(ROOT / "alembic.ini"), output_buffer=io.StringIO())
-
-
-@pytest.fixture
-def disposable_database() -> Iterator[str]:
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-    variable = f"{ENV_PREFIX}DATABASE_URL"
-    previous = os.environ.get(variable)
-    try:
-        _administer(maintenance, drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        os.environ[variable] = url
-        yield url
-    finally:
-        if previous is None:
-            os.environ.pop(variable, None)
-        else:
-            os.environ[variable] = previous
-        _administer(maintenance, drop)
-        maintenance.dispose()
 
 
 def test_runtime_remote_identity_tables_match_the_frozen_migration() -> None:
@@ -266,3 +241,9 @@ def test_postgresql_serializes_independent_dcr_servers_at_the_client_limit(
             )
     finally:
         engine.dispose()
+
+
+@pytest.fixture
+def disposable_database(empty_database_url: str) -> str:
+    """Empty disposable catalog; migration tests still drive Alembic themselves."""
+    return empty_database_url

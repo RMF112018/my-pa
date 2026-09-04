@@ -33,8 +33,6 @@ its fixture, never the configured one, and every value inserted is synthetic.
 
 from __future__ import annotations
 
-import io
-import os
 import secrets
 import traceback
 from collections.abc import Iterator
@@ -42,11 +40,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.dialects import postgresql
-from sqlalchemy.engine import make_url
 from sqlalchemy.exc import (
     DBAPIError,
     DisconnectionError,
@@ -56,7 +51,6 @@ from sqlalchemy.exc import (
 )
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, make_identifier
 from my_pa.domain.extraction.text import extract_text
@@ -281,51 +275,9 @@ def test_a_query_of_only_punctuation_is_a_well_formed_query_here() -> None:
 
 
 @pytest.fixture(scope="module")
-def disposable_database() -> Iterator[str]:
-    """Create an empty database at head, and drop it when the module is done.
-
-    Module-scoped deliberately. Creating a database and running eight
-    revisions costs about two and a half seconds, and doing it once per test
-    across the payload matrix put this file alone over the whole PR tier's
-    budget. Every test below either only reads, or restores what it changed, so
-    sharing the database costs no isolation that matters.
-
-    `monkeypatch` is function-scoped and cannot be used here, so the environment
-    is set and restored by hand. Only Alembic needs it: `create_database_engine`
-    is handed the URL directly.
-    """
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-
-    def administer(*statements: object) -> None:
-        with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            for statement in statements:
-                connection.execute(statement)  # type: ignore[arg-type]
-
-    variable = f"{ENV_PREFIX}DATABASE_URL"
-    previous = os.environ.get(variable)
-    try:
-        administer(drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        os.environ[variable] = url
-        command.upgrade(Config(str(ROOT / "alembic.ini"), output_buffer=io.StringIO()), "head")
-        yield url
-    finally:
-        if previous is None:
-            os.environ.pop(variable, None)
-        else:
-            os.environ[variable] = previous
-        administer(drop)
-        maintenance.dispose()
-
-
-@pytest.fixture(scope="module")
-def corpus(disposable_database: str) -> Iterator[tuple[Engine, str]]:
+def corpus(module_cloned_database_url: str) -> Iterator[tuple[Engine, str]]:
     """A database at head holding one synthetic document, plus the canary."""
-    engine = create_database_engine(disposable_database)
+    engine = create_database_engine(module_cloned_database_url)
     try:
         with engine.begin() as connection:
             source = register_source(

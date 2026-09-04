@@ -33,8 +33,9 @@ What is proved here, in the order the module states it:
 
 Fixture/engine/`Config`/`command.upgrade` idiom is copied from
 `tests/schema/test_entity_relationship_types_migration.py` and
-`tests/database/test_phase_b_audit_vocabulary_migration.py`. The disposable
-database name is unique to this module so it can run beside them.
+`tests/database/test_phase_b_audit_vocabulary_migration.py`. Empty catalogs
+come from `tests.db.fixtures.empty_database_url` (PR #186); this module still
+drives Alembic to `PREVIOUS_REVISION` itself.
 
 Every vocabulary literal below is **restated, not imported** from `NameTypeCode`,
 `EntityNameState` or `EntityStatus` -- the same frozen-literal discipline the
@@ -58,10 +59,8 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
-from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.infrastructure.database.engine import create_database_engine
 
 ROOT: Final = Path(__file__).resolve().parents[2]
@@ -80,10 +79,6 @@ PREVIOUS_REVISION: Final = "16f05c46b8c3"
 #: Counted on the merged tree after the re-parent (RULING-M2): 88 on
 #: `origin/main` at `16f05c46b8c3` plus this revision.
 REVISION_FILE_COUNT: Final = 89
-
-#: Unique to this module, so the database-tier suite can hold several of these
-#: fixtures without one dropping what another is mid-transaction against.
-DISPOSABLE_DATABASE: Final = "my_pa_legacy_entity_backfill_migration_test"
 
 #: The revision's frozen salt, restated. If this and the revision ever disagree
 #: the expectations below stop matching, which is the point of restating it.
@@ -147,27 +142,9 @@ def _derived_entity_name_id(entity_id: str) -> str:
 
 
 @pytest.fixture
-def disposable_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """Create an empty database, point the settings at it, drop it afterwards."""
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-
-    def _administer(*statements: object) -> None:
-        with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            for statement in statements:
-                connection.execute(statement)  # type: ignore[arg-type]
-
-    try:
-        _administer(drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", url)
-        yield url
-    finally:
-        _administer(drop)
-        maintenance.dispose()
+def disposable_database(empty_database_url: str) -> str:
+    """Empty disposable catalog; this module still drives Alembic itself."""
+    return empty_database_url
 
 
 @pytest.fixture

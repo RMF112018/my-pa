@@ -17,16 +17,14 @@ first attempt rather than a replay of one that never happened.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
 import pytest
-from alembic import command
 from alembic.config import Config
 from sqlalchemy import Connection, Engine, text
-from sqlalchemy.engine import make_url
 
 from my_pa.application.identity_correction import (
     IdentityCorrectionService,
@@ -34,7 +32,6 @@ from my_pa.application.identity_correction import (
     MergePreviewCommand,
     MergePreviewReport,
 )
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import EntitiesRepository
 from my_pa.domain.relationship.entity import (
     AliasState,
@@ -50,7 +47,6 @@ from my_pa.domain.relationship.identity_correction import (
     IdentityEffectFamily,
 )
 from my_pa.domain.relationship.normalization import normalize_name
-from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 from my_pa.infrastructure.persistence.relationship_memory import (
     SqlRelationshipMemoryRepository,
@@ -122,40 +118,6 @@ class _FailsPartWayThroughTheRows(SqlEntityRepository):
 
 def _config() -> Config:
     return Config(str(ROOT / "alembic.ini"))
-
-
-@pytest.fixture
-def disposable_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """Create an empty database, point the settings at it, drop it afterwards."""
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-
-    def _administer(*statements: object) -> None:
-        with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            for statement in statements:
-                connection.execute(statement)  # type: ignore[arg-type]
-
-    try:
-        _administer(drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", url)
-        yield url
-    finally:
-        _administer(drop)
-        maintenance.dispose()
-
-
-@pytest.fixture
-def migrated_engine(disposable_database: str) -> Iterator[Engine]:
-    engine = create_database_engine(disposable_database)
-    try:
-        command.upgrade(_config(), "head")
-        yield engine
-    finally:
-        engine.dispose()
 
 
 def _entity(entity_id: str, name: str) -> Entity:

@@ -1216,13 +1216,14 @@ class DecideReviewCase:
 
     **Two correction shapes, and exactly one of them accompanies an acceptance
     that corrects.** `corrected_value` is unchanged and is what a capture or
-    GoodNotes subject takes: one normalized value, one bounded string.
-    `correction_patch` is what an Entity or Relationship Memory proposal takes,
-    because each target has named content fields and a single string cannot say
-    which of them the reviewer changed. The plane that owns the subject routes
-    and validates the patch against that target's own command schema before
-    anything commits; this checks only that a correction was supplied at all,
-    and that it was not supplied twice or to a disposition that corrects nothing.
+    GoodNotes region subject takes: one normalized value, one bounded string.
+    `correction_patch` is what an Entity, Relationship Memory, or GoodNotes
+    semantic proposal takes, because each target has named content fields and a
+    single string cannot say which of them the reviewer changed. The plane that
+    owns the subject routes and validates the patch against that target's own
+    command schema before anything commits; this checks only that a correction
+    was supplied at all, and that it was not supplied twice or to a disposition
+    that corrects nothing.
 
     `reason` is refused on `accept`, `correct_and_accept` and `reprocess`, which
     section 13 gives no reason, and required on `escalate` and `invalidate`,
@@ -1254,7 +1255,9 @@ class DecideReviewCase:
                     "the canonical command for the review subject before anything is "
                     "written. Entity proposals take their mutation fields. Relationship "
                     "Memory proposals take statement, kind, structured_value and/or "
-                    "context_links. Capture and GoodNotes take corrected_value instead."
+                    "context_links. GoodNotes semantic proposals take their governed "
+                    "semantic payload fields. Capture and GoodNotes region reviews take "
+                    "corrected_value instead."
                 ),
             }
         }

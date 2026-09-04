@@ -66,6 +66,8 @@ def test_review_correction_schema_exposes_only_the_typed_client_patch() -> None:
     assert patch["type"] == "object"
     assert "object" in patch["additionalProperties"]["type"]
     assert "array" in patch["additionalProperties"]["type"]
+    assert "GoodNotes semantic proposals" in patch["description"]
+    assert "GoodNotes region reviews" in patch["description"]
     assert "corrected_payload" not in schema["properties"]
 
 

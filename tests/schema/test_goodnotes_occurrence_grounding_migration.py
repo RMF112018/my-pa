@@ -60,7 +60,8 @@ PHASE_B_HEAD: Final = "3d07af4dc513"
 GSQS_REVISION: Final = "c4b0a1d9e827"
 PHASE_B_START: Final = "c7a1f04b9e63"
 #: The chain's current head is `6a2f9d1c4b80` (GoodNotes pull/review), serialized
-#: as the direct child of `c3f8a1d07e94`. That graph-vocabulary parent is additive on `b8e4d1a6c073`, whose RI-ENT-WP-12 migration backfills one
+#: as the direct child of `c3f8a1d07e94`. That graph-vocabulary parent is additive on
+#: `b8e4d1a6c073`, whose RI-ENT-WP-12 migration backfills one
 #: `display`-typed `entity_names` row per active `entities` row -- `display_value`
 #: from `entities.display_name`, `normalized_value` from `entities.canonical_name`,
 #: never a `legal` name -- and writes no `entity_project_participations` row

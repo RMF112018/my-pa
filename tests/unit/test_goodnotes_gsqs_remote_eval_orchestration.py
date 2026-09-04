@@ -59,7 +59,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 GENERATE_PATH = REPO_ROOT / "ops/goodnotes/gsqs/fixtures/remote-eval/generate.py"
 EXPECTED_CASE_IDS = tuple(f"syn-b-{index:03d}" for index in range(1, CASES_PER_REPETITION + 1))
 FORBIDDEN_SPOOL_KEYS = frozenset(MANIFEST_FORBIDDEN_KEYS) | {"gold", "path", "private_label"}
-EVALUATOR_CODE_IDENTITY = "d2bd088a098f99d31637069fd339a67d665b80eb7aa97b403367cce1011a3fb7"
+EVALUATOR_CODE_IDENTITY = "84cf5e631600cf91659b57c8816dc8e0b3fa9aea81726c3ad57f08153af188be"
 ALTERNATE_SEGMENTS: list[dict[str, object]] = [
     {
         "kind": "SOURCE_CONTEXT",

@@ -80,8 +80,8 @@ from my_pa.application.goodnotes_gsqs_routellm_candidate import (
     load_route_llm_candidate,
 )
 
-EVALUATOR_BEHAVIOR_SHA = "d2bd088a098f99d31637069fd339a67d665b80eb7aa97b403367cce1011a3fb7"
-EVALUATOR_IMPLEMENTATION_SHA = "a8f26fb28e2bb4cce1a2a3e6745dd01a2bdf5e2deaff63d9d05977bbfc9815ba"
+EVALUATOR_BEHAVIOR_SHA = "84cf5e631600cf91659b57c8816dc8e0b3fa9aea81726c3ad57f08153af188be"
+EVALUATOR_IMPLEMENTATION_SHA = "7e4eac0b6daeac5f2ea26f9cd95fec39daa07b6d3ef127a66a629d31b52f233e"
 ROOT = repo_root()
 
 

@@ -5,7 +5,12 @@ from __future__ import annotations
 import hashlib
 from datetime import UTC, datetime, timedelta
 
-from my_pa.application.goodnotes_occurrences import GoodNotesOccurrenceReconciler
+from my_pa.application.goodnotes_occurrences import (
+    GoodNotesOccurrenceReconciler,
+    GoodNotesSemanticPromotionEvidence,
+    semantic_proposal_sha256,
+)
+from my_pa.domain.capture.review import Disposition
 from my_pa.domain.goodnotes.models import (
     GoodNotesIdentityStatus,
     GoodNotesIngestionRun,
@@ -275,6 +280,20 @@ def _segment(
     return values
 
 
+def _accepted_evidence(
+    store: MemoryDurableNoteStore, run_id: str
+) -> tuple[GoodNotesSemanticPromotionEvidence, ...]:
+    return tuple(
+        GoodNotesSemanticPromotionEvidence(
+            principal_id=A,
+            run_id=run_id,
+            proposal_sha256=semantic_proposal_sha256(*proposal),
+            disposition=Disposition.ACCEPT,
+        )
+        for proposal in store.semantic_proposals_for_run(A, run_id)
+    )
+
+
 def test_hallucinated_crop_without_raster_is_ambiguous_ledger_not_new() -> None:
     store = MemoryDurableNoteStore()
     run_id, page_id, _, _ = _plant(store, "no-raster", png=None)
@@ -288,7 +307,11 @@ def test_hallucinated_crop_without_raster_is_ambiguous_ledger_not_new() -> None:
         {"segments": [_segment(x_min=0.1, transcription="ghost", crop_sha256=AGENT_CROP)]},
     )
     result = GoodNotesOccurrenceReconciler().reconcile(
-        A, run_id, repository=store, clock=lambda: LATER
+        A,
+        run_id,
+        repository=store,
+        clock=lambda: LATER,
+        promotion_evidence=_accepted_evidence(store, run_id),
     )
     assert [item.change_state for item in result.changes] == [GoodNotesNoteChangeState.AMBIGUOUS]
     assert result.changes[0].note_id is None
@@ -311,7 +334,11 @@ def test_hallucinated_box_on_white_of_inked_page_is_ambiguous_not_new() -> None:
         {"segments": [_segment(x_min=0.6, transcription="ghost on white", crop_sha256=AGENT_CROP)]},
     )
     result = GoodNotesOccurrenceReconciler().reconcile(
-        A, run_id, repository=store, clock=lambda: LATER
+        A,
+        run_id,
+        repository=store,
+        clock=lambda: LATER,
+        promotion_evidence=_accepted_evidence(store, run_id),
     )
     assert [item.change_state for item in result.changes] == [GoodNotesNoteChangeState.AMBIGUOUS]
     assert result.changes[0].note_id is None
@@ -331,7 +358,11 @@ def test_blank_crop_is_ambiguous_not_new() -> None:
         {"segments": [_segment(x_min=0.1, transcription="empty", crop_sha256=AGENT_CROP)]},
     )
     result = GoodNotesOccurrenceReconciler().reconcile(
-        A, run_id, repository=store, clock=lambda: LATER
+        A,
+        run_id,
+        repository=store,
+        clock=lambda: LATER,
+        promotion_evidence=_accepted_evidence(store, run_id),
     )
     assert [item.change_state for item in result.changes] == [GoodNotesNoteChangeState.AMBIGUOUS]
     assert result.changes[0].note_id is None
@@ -352,7 +383,11 @@ def test_agent_crop_is_ignored_when_server_crop_matches() -> None:
         {"segments": [_segment(x_min=0.1, transcription="same ink", crop_sha256=AGENT_CROP)]},
     )
     first = GoodNotesOccurrenceReconciler().reconcile(
-        A, first_run, repository=store, clock=lambda: LATER
+        A,
+        first_run,
+        repository=store,
+        clock=lambda: LATER,
+        promotion_evidence=_accepted_evidence(store, first_run),
     )
     assert [item.change_state for item in first.changes] == [GoodNotesNoteChangeState.NEW]
     server_digest = crop_normalized_png(png, 0.1, 0.2, 0.2, 0.1).digest
@@ -374,7 +409,11 @@ def test_agent_crop_is_ignored_when_server_crop_matches() -> None:
         {"segments": [_segment(x_min=0.1, transcription="same ink", crop_sha256=OTHER_AGENT_CROP)]},
     )
     second = GoodNotesOccurrenceReconciler().reconcile(
-        A, second_run, repository=store, clock=lambda: LATER
+        A,
+        second_run,
+        repository=store,
+        clock=lambda: LATER,
+        promotion_evidence=_accepted_evidence(store, second_run),
     )
     assert GoodNotesNoteChangeState.NEW not in {item.change_state for item in second.changes}
     assert len(store._notes) == 1
@@ -434,7 +473,11 @@ def test_transcription_only_is_unchanged_with_revision() -> None:
         {"segments": [_segment(x_min=0.1, transcription="follow up Thursday")]},
     )
     result = GoodNotesOccurrenceReconciler().reconcile(
-        A, run_id, repository=store, clock=lambda: LATER
+        A,
+        run_id,
+        repository=store,
+        clock=lambda: LATER,
+        promotion_evidence=_accepted_evidence(store, run_id),
     )
     assert [item.change_state for item in result.changes] == [GoodNotesNoteChangeState.UNCHANGED]
     latest = store.latest_revision_for_occurrence(A, occurrence.occurrence_id)
@@ -460,7 +503,11 @@ def test_visual_crop_change_is_revised() -> None:
         {"segments": [_segment(x_min=0.1, transcription="same words")]},
     )
     first = GoodNotesOccurrenceReconciler().reconcile(
-        A, first_run, repository=store, clock=lambda: LATER
+        A,
+        first_run,
+        repository=store,
+        clock=lambda: LATER,
+        promotion_evidence=_accepted_evidence(store, first_run),
     )
     occurrence_id = first.changes[0].occurrence_id
     assert occurrence_id is not None
@@ -482,7 +529,11 @@ def test_visual_crop_change_is_revised() -> None:
         {"segments": [_segment(x_min=0.1, transcription="same words")]},
     )
     second = GoodNotesOccurrenceReconciler().reconcile(
-        A, second_run, repository=store, clock=lambda: LATER
+        A,
+        second_run,
+        repository=store,
+        clock=lambda: LATER,
+        promotion_evidence=_accepted_evidence(store, second_run),
     )
     assert [item.change_state for item in second.changes] == [GoodNotesNoteChangeState.REVISED]
     assert second.changes[0].occurrence_id == occurrence_id
@@ -537,7 +588,11 @@ def test_deleted_logical_page_emits_removed() -> None:
         {"segments": [_segment(x_min=0.1, transcription="cover note")]},
     )
     result = GoodNotesOccurrenceReconciler().reconcile(
-        A, first_run, repository=store, clock=lambda: LATER
+        A,
+        first_run,
+        repository=store,
+        clock=lambda: LATER,
+        promotion_evidence=_accepted_evidence(store, first_run),
     )
     states = {item.change_state: item for item in result.changes}
     assert GoodNotesNoteChangeState.REMOVED_OR_NO_LONGER_PRESENT in states
@@ -568,7 +623,11 @@ def test_unreadable_does_not_mint_fabricated_new_transcription() -> None:
         },
     )
     result = GoodNotesOccurrenceReconciler().reconcile(
-        A, run_id, repository=store, clock=lambda: LATER
+        A,
+        run_id,
+        repository=store,
+        clock=lambda: LATER,
+        promotion_evidence=_accepted_evidence(store, run_id),
     )
     assert [item.change_state for item in result.changes] == [GoodNotesNoteChangeState.AMBIGUOUS]
     assert result.changes[0].note_id is None

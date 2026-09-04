@@ -30,7 +30,7 @@ this module's own fixture and is never the configured one.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
@@ -40,10 +40,8 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Connection, Engine, text
-from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import MemoryPage, MemoryWriteRequest, UnknownScopeError
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
@@ -181,46 +179,6 @@ AFTER_BOTH_WINDOWS_OPENED: Final = datetime(2026, 7, 1, 12, tzinfo=UTC)
 
 def _config() -> Config:
     return Config(str(ROOT / "alembic.ini"))
-
-
-@pytest.fixture
-def disposable_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """Create an empty database, point the settings at it, drop it afterwards.
-
-    Copied rather than shared, as every other database-tier module copies it:
-    the fixture names a database of its own so two suites cannot drop each
-    other's, and the canonical database is never migrated or opened.
-    """
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-
-    def _administer(*statements: object) -> None:
-        with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            for statement in statements:
-                connection.execute(statement)  # type: ignore[arg-type]
-
-    try:
-        _administer(drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", url)
-        yield url
-    finally:
-        _administer(drop)
-        maintenance.dispose()
-
-
-@pytest.fixture
-def migrated_engine(disposable_database: str) -> Iterator[Engine]:
-    """The disposable database, upgraded to head and disposed afterwards."""
-    engine = create_database_engine(disposable_database)
-    try:
-        command.upgrade(_config(), "head")
-        yield engine
-    finally:
-        engine.dispose()
 
 
 def an_entity(
@@ -1792,8 +1750,9 @@ def test_the_revision_is_on_one_unbranched_chain_above_the_one_it_revises() -> N
     assert script.get_revision(MEMORY_REVISION).down_revision == PREVIOUS_REVISION
 
 
+@pytest.mark.migration_edge
 def test_the_plane_migrates_empty_to_head_and_back_to_head_again(
-    disposable_database: str,
+    empty_database_url: str,
 ) -> None:
     """Empty to head, head to the previous revision, and up again.
 
@@ -1803,7 +1762,7 @@ def test_the_plane_migrates_empty_to_head_and_back_to_head_again(
     Asserted by running the upgrade a second time rather than by inspecting what
     the downgrade left.
     """
-    engine = create_database_engine(disposable_database)
+    engine = create_database_engine(empty_database_url)
     try:
         assert _tables(engine).isdisjoint(MEMORY_TABLES), "the database was not empty"
         command.upgrade(_config(), "head")

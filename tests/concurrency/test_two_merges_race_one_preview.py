@@ -31,28 +31,17 @@ synthetic.
 
 from __future__ import annotations
 
-import io
-from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Final
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import Engine, text
-from sqlalchemy.engine import make_url
 
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.domain.relationship.identity_correction import IDENTITY_PREVIEW_LIFETIME
-from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 
-ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
-
-DISPOSABLE_DATABASE: Final = "my_pa_merge_race_test"
 
 PRINCIPAL: Final = "prn_aaaa0001aaaa0001aaaa0001"
 SURVIVOR: Final = "ent_aaaa0001aaaa0001"
@@ -76,34 +65,12 @@ JOIN_TIMEOUT_SECONDS: Final = 60.0
 pytestmark = pytest.mark.database
 
 
-def _administer(maintenance: Engine, *statements: object) -> None:
-    with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-        for statement in statements:
-            connection.execute(statement)  # type: ignore[arg-type]
-
-
 @pytest.fixture
-def migrated_engine(monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
-    """An empty database at head, with two synthetic entities and one preview."""
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-    engine: Engine | None = None
-    try:
-        _administer(maintenance, drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", url)
-        command.upgrade(Config(str(ROOT / "alembic.ini"), output_buffer=io.StringIO()), "head")
-        engine = create_database_engine(url)
-        _stage(engine)
-        yield engine
-    finally:
-        if engine is not None:
-            engine.dispose()
-        _administer(maintenance, drop)
-        maintenance.dispose()
+def migrated_engine(db_engine: Engine) -> Engine:
+    """Current-head clone with the two synthetic entities and one preview."""
+
+    _stage(db_engine)
+    return db_engine
 
 
 def _stage(engine: Engine) -> None:

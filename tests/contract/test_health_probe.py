@@ -26,9 +26,7 @@ in `finally`.
 from __future__ import annotations
 
 import io
-import os
 import re
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Final
 
@@ -37,11 +35,10 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine
 from sqlalchemy.engine import make_url
 
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
-from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.bootstrap.settings import ENV_PREFIX
 
 pytestmark = pytest.mark.database
 
@@ -86,31 +83,6 @@ def _revision_immediately_behind_head() -> str:
         return parent[0]
     assert isinstance(parent, str), f"head {heads[0]} has no parent to stand behind"
     return parent
-
-
-@pytest.fixture(scope="module")
-def disposable_database() -> Iterator[str]:
-    """An empty database at head, repointed to, and dropped when done."""
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-    variable = f"{ENV_PREFIX}DATABASE_URL"
-    previous = os.environ.get(variable)
-    try:
-        _administer(maintenance, drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        os.environ[variable] = url
-        command.upgrade(_config(), "head")
-        yield url
-    finally:
-        if previous is None:
-            os.environ.pop(variable, None)
-        else:
-            os.environ[variable] = previous
-        _administer(maintenance, drop)
-        maintenance.dispose()
 
 
 def _run(capsys: pytest.CaptureFixture[str]) -> tuple[int, str]:

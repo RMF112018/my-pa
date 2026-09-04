@@ -38,10 +38,9 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import CheckConstraint, Connection, Engine, text
-from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
+from my_pa.bootstrap.settings import ENV_PREFIX
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.coverage import CoverageState
 from my_pa.domain.common.identifiers import IdKind
@@ -705,31 +704,6 @@ def test_offline_mode_emits_the_extraction_ddl_without_connecting(
         assert f"CREATE TABLE {EXPECTED_SCHEMA}.{table}" in emitted
     for constraint in EXPECTED_EXTRACTION_CHECKS | EXPECTED_EXTRACTION_UNIQUES:
         assert constraint in emitted
-
-
-@pytest.fixture
-def disposable_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """Create an empty database, point the settings at it, drop it afterwards."""
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-
-    def _administer(*statements: object) -> None:
-        # CREATE and DROP DATABASE cannot run inside a transaction block.
-        with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            for statement in statements:
-                connection.execute(statement)  # type: ignore[arg-type]
-
-    try:
-        _administer(drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", url)
-        yield url
-    finally:
-        _administer(drop)
-        maintenance.dispose()
 
 
 @pytest.fixture
@@ -1614,3 +1588,9 @@ def test_an_outcome_that_cannot_be_attributed_to_its_version_is_quarantined_not_
 
     assert extracted == 0
     assert reasons == ["output_not_attributable_to_version"]
+
+
+@pytest.fixture
+def disposable_database(empty_database_url: str) -> str:
+    """Empty disposable catalog; migration tests still drive Alembic themselves."""
+    return empty_database_url

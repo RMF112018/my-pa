@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
@@ -16,10 +15,9 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, inspect, select, text, update
-from sqlalchemy.engine import Connection, make_url
+from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.domain.native_sources import (
     ContactMembership,
     ExactBucketSelection,
@@ -37,7 +35,6 @@ from my_pa.domain.native_sources import (
     WatcherSimulationState,
 )
 from my_pa.domain.source.provider import ObjectKind
-from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.native_sources import (
     CheckpointConflictError,
     NativePersistenceConflictError,
@@ -190,29 +187,6 @@ def test_declared_tables_match_the_frozen_revision_and_live_activation_is_absent
     assert "CREATE TABLE knowledge.native_activation_receipts" not in migration
     assert "'watching'" not in migration
     assert "'simulation_complete', 'simulation_failed'" in migration
-
-
-@pytest.fixture
-def native_engine(monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DATABASE}" WITH (FORCE)')
-    with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-        connection.execute(drop)
-        connection.execute(text(f'CREATE DATABASE "{DATABASE}"'))
-    url = configured.set(database=DATABASE).render_as_string(hide_password=False)
-    monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", url)
-    engine = create_database_engine(url)
-    try:
-        command.upgrade(_config(), "head")
-        yield engine
-    finally:
-        engine.dispose()
-        with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            connection.execute(drop)
-        maintenance.dispose()
 
 
 @pytest.mark.database
@@ -1207,3 +1181,8 @@ def test_native_partition_fk_refuses_a_cross_principal_bridge_link(
                 ),
                 {"at": WHEN},
             )
+
+
+@pytest.fixture
+def native_engine(db_engine: Engine) -> Engine:
+    return db_engine

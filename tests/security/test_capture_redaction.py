@@ -34,31 +34,25 @@ bound is a loopback one.
 
 from __future__ import annotations
 
-import io
 import json
 import logging
-import os
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import Engine, text
-from sqlalchemy.engine import make_url
 from tests.wire import serve
 
 from my_pa.adapters.http import PATH_TEMPLATE, create_http_app
 from my_pa.application.commands import Command, CreateCapture, ReadCapture
 from my_pa.bootstrap.gateway import GatewayRuntime, build_gateway_runtime
-from my_pa.bootstrap.settings import ENV_PREFIX, Settings, load_settings
+from my_pa.bootstrap.settings import Settings
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
-from my_pa.infrastructure.database.engine import create_database_engine
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 
@@ -92,31 +86,6 @@ def _administer(maintenance: Engine, *statements: object) -> None:
     with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
         for statement in statements:
             connection.execute(statement)  # type: ignore[arg-type]
-
-
-@pytest.fixture(scope="module")
-def disposable_database() -> Iterator[str]:
-    """An empty database at head, dropped when the module finishes."""
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-    variable = f"{ENV_PREFIX}DATABASE_URL"
-    previous = os.environ.get(variable)
-    try:
-        _administer(maintenance, drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        os.environ[variable] = url
-        command.upgrade(Config(str(ROOT / "alembic.ini"), output_buffer=io.StringIO()), "head")
-        yield url
-    finally:
-        if previous is None:
-            os.environ.pop(variable, None)
-        else:
-            os.environ[variable] = previous
-        _administer(maintenance, drop)
-        maintenance.dispose()
 
 
 @pytest.fixture

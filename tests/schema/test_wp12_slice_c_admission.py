@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import replace
@@ -17,7 +16,6 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import CheckConstraint, Engine, func, inspect, select, text
-from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
 from my_pa.application.apple_machine import AppleBridgeIdentity
@@ -33,7 +31,6 @@ from my_pa.application.native_sources import (
     NativeSourceController,
 )
 from my_pa.bootstrap.apple_machine_control import SqlAppleMachineControl
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.v1.base import canonical_json
 from my_pa.contracts.v1.native_sources import (
     NATIVE_SOURCE_PROTOCOL_V1,
@@ -55,7 +52,6 @@ from my_pa.domain.native_sources import (
     NativeAdmissionAuthorityError,
     NativeConfigurationRevision,
 )
-from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.native_sources import (
     NativeBucketBindingRecord,
@@ -101,28 +97,6 @@ def _capability_constraint_values(expression: str) -> frozenset[str]:
 
 def _config() -> Config:
     return Config("alembic.ini")
-
-
-@pytest.fixture
-def c_engine(monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-        connection.execute(text(f'DROP DATABASE IF EXISTS "{DATABASE}" WITH (FORCE)'))
-        connection.execute(text(f'CREATE DATABASE "{DATABASE}"'))
-    url = configured.set(database=DATABASE).render_as_string(hide_password=False)
-    monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", url)
-    engine = create_database_engine(url)
-    try:
-        command.upgrade(_config(), "head")
-        yield engine
-    finally:
-        engine.dispose()
-        with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            connection.execute(text(f'DROP DATABASE IF EXISTS "{DATABASE}" WITH (FORCE)'))
-        maintenance.dispose()
 
 
 def _seed(engine: Engine) -> None:
@@ -696,6 +670,7 @@ def test_current_metadata_capability_vocabulary_matches_alembic_head(c_engine: E
 
 
 @pytest.mark.database
+@pytest.mark.migration_edge
 def test_wp12c_revision_round_trips_to_its_exact_prior_head(c_engine: Engine) -> None:
     expected = {
         "native_admission_authorities",
@@ -1750,6 +1725,7 @@ def test_wp12e_contacts_use_current_inventory_and_admission_records_membership(
 
 
 @pytest.mark.database
+@pytest.mark.migration_edge
 def test_wp12e_revision_upgrades_populated_prior_head_and_round_trips(c_engine: Engine) -> None:
     command.downgrade(_config(), "9d5e2f7b4c61")
     _seed_legacy_wp12c(c_engine)
@@ -2006,3 +1982,8 @@ def test_wp12e_durable_cursor_history_rejects_immediate_and_multinode_cycles_aft
             .order_by(native_checkpoints.c.sequence)
         ).scalars()
         assert tuple(durable) == tuple(next_by_cursor.values())[:expected_pages]
+
+
+@pytest.fixture
+def c_engine(db_engine: Engine) -> Engine:
+    return db_engine

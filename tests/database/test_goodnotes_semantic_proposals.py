@@ -3,22 +3,15 @@
 from __future__ import annotations
 
 import hashlib
-import io
-import os
-from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import Engine, text
-from sqlalchemy.engine import make_url
 from sqlalchemy.sql import Executable
 
 from my_pa.application.commands import SubmitGoodNotesProposal
 from my_pa.application.goodnotes_semantics import fingerprint_proposal
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import GoodNotesProposalAdmission, GoodNotesProposalConflictError
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.goodnotes.models import (
@@ -36,7 +29,6 @@ from my_pa.domain.goodnotes.models import (
     issue_stable_id,
 )
 from my_pa.domain.source.registry import issue_identifier
-from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.goodnotes import PostgresGoodNotesRepository
 from my_pa.infrastructure.persistence.goodnotes_semantics import SqlGoodNotesSemanticRepository
 
@@ -54,32 +46,6 @@ def administer(engine: Engine, *statements: Executable) -> None:
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
         for statement in statements:
             connection.execute(statement)
-
-
-@pytest.fixture(scope="module")
-def engine() -> Iterator[Engine]:
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DATABASE}" WITH (FORCE)')
-    variable = f"{ENV_PREFIX}DATABASE_URL"
-    previous = os.environ.get(variable)
-    try:
-        administer(maintenance, drop, text(f'CREATE DATABASE "{DATABASE}"'))
-        url = configured.set(database=DATABASE).render_as_string(hide_password=False)
-        os.environ[variable] = url
-        command.upgrade(Config(str(ROOT / "alembic.ini"), output_buffer=io.StringIO()), "head")
-        built = create_database_engine(url)
-        yield built
-        built.dispose()
-    finally:
-        if previous is None:
-            os.environ.pop(variable, None)
-        else:
-            os.environ[variable] = previous
-        administer(maintenance, drop)
-        maintenance.dispose()
 
 
 def _notebook(principal_id: str, token: str) -> GoodNotesNotebook:
@@ -279,3 +245,8 @@ def test_cross_principal_isolation_exact_replay_and_no_run_note_changes(engine: 
             )
         assert _changes(connection, A) == before
         assert _changes(connection, B) == 0
+
+
+@pytest.fixture
+def engine(db_engine: Engine) -> Engine:
+    return db_engine

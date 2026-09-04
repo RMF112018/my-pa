@@ -1,6 +1,6 @@
 # GoodNotes completion implementation ledger
 
-Status: `GOODNOTES_IMPLEMENTATION_CODE_COMPLETE_OTHER_ACTIVE_OWNER_GATE_PENDING`
+Status: `GOODNOTES_IMPLEMENTATION_CODE_COMPLETE_EXACT_HEAD_REVIEW_PENDING`
 
 Request: `REQ-MYPA-GOODNOTES-COMPLETION-IMPLEMENTATION-20260831-002`
 
@@ -8,21 +8,24 @@ This ledger binds the repository-native, non-AEOS GoodNotes/GSQS completion
 campaign to its current implementation evidence. It does not authorize or
 claim deployment, live data or source access, production activation, a live
 ChatLLM schedule, B0 execution, R11/R12 decisions, private-gold access, risk
-acceptance, merge eligibility, or final repository completion. PR #186 owns
-overlapping shared test infrastructure and must clear before final
-reconciliation, exact-head review, and merge.
+acceptance, merge eligibility, or final repository completion. PR #186 has
+merged and its database-test infrastructure has been reconciled into this
+branch. A fresh non-author review of the post-ledger exact head is still
+required.
 
 ## Authority and repository identity
 
 - The authenticated governing Drive plan is raw Markdown, 67,663 bytes,
   SHA-256
   `a3fa8c926aab74823c86a637f696c07f8fbc3fd0bc110e51c1d5138f7f6da7d1`.
-- The current authenticated base is `origin/main` commit
-  `25301329e9172014b58f555ee99575fc24244fb1`, tree
-  `7ca6398ca4f03fcbec9b1500a44f91ce034a6d9d`.
-- The current corrected implementation head before this ledger-only update is
-  `e5281bf92368ae349d8347ea4716ae00e4e246d5`, tree
-  `256574e707a90b5ff57622ef1e780eb09e764b62`.
+- The current authenticated `origin/main` is commit
+  `37f767b85fbc0cd1e84fd0c8acd831b0c47142b2`, tree
+  `4d82591760784dbae58781860fe2cd6dd50b816f`.
+- The implementation through the final database-counterpart correction is
+  commit `6d53aa03c7cf2bed8d5d8569967f4893519da555`, tree
+  `ef48ded16b88676c941837e9dccd6fe0bd6e64ee`. The ledger-only commit created
+  by this update is reported in its handoff rather than guessed in its own
+  contents.
 - The isolated branch is `bf/goodnotes-post-ui-safe-sync-20260903` in
   `/private/tmp/my-pa-goodnotes-post-ui-safe-sync-20260903`.
 - The primary checkout remains detached at its pre-existing commit and was not
@@ -38,9 +41,10 @@ The active-concurrent-work register was created before source mutation and was
 refreshed before synchronization, migration work, each implementation phase,
 and this ledger update.
 
-- RI PR #181 (`ri-ent/wp13-fixture`) remains separately owned. Its PR paths and
-  worktree were no-touch; it adds no migration. Important staged RI/UI source
-  blobs observed during preflight were identical to current `main`.
+- RI PR #181 (`ri-ent/wp13-fixture`) remained separately owned. Its PR paths
+  and worktree were no-touch; it added no migration. Important staged RI/UI
+  source blobs observed during preflight were identical to then-current
+  `main`.
 - Closed PR #170 was rediscovered as merged. Its migration
   `9a3f6c1e8d24` is in the authenticated ancestry, and current `main` has the
   sole head `16f05c46b8c3`.
@@ -49,14 +53,13 @@ and this ledger update.
   was created only after RI migration ownership cleared. It is additive,
   descends directly from `16f05c46b8c3`, and produces sole head
   `6a2f9d1c4b80`.
-- PR #186 (`bf/db-test-ci-consolidation-20260903`) appeared after Phase-B
-  authoring and most recently advanced to
-  `649ee06c6cbc4e43b58eb0ceb947bcc0be336a90`. It is an
-  `OTHER_ACTIVE_OWNER` for broad database/schema test provisioning,
-  `tests/conftest.py`, `pyproject.toml`, workflow, and shared plan files.
-  GoodNotes made no further edits to its paths. Already committed mechanical
-  migration-head/count test overlap must be reconciled after #186 lands or its
-  ownership otherwise clears.
+- PR #186 (`bf/db-test-ci-consolidation-20260903`) merged from feature commit
+  `04bd3852b14beb15ad7ec122c23634c3fa319272` as `origin/main`
+  `37f767b85fbc0cd1e84fd0c8acd831b0c47142b2`. Merge commit
+  `2ba5538cf91c7cce8212ac5318d910ab7d2f3db3` reconciled it into the GoodNotes
+  branch. GoodNotes then moved its SQL tests to the repository-native shared
+  provisioner and supplied the exact promotion evidence required by the
+  production gate. There is no remaining active-owner reconciliation blocker.
 
 No RI branch, worktree, migration, asset, or owned source was mutated. The
 campaign assertion is
@@ -105,13 +108,44 @@ campaign assertion is
   the repository's canonical `prn_[A-Za-z0-9]{8,64}` convention and binds a
   regression to the real deterministic `local_principal()` value. The existing
   revision and parent remain unchanged.
+- `f4822089d9ff82dfa66b193d87754b160f9de885` recorded that correction without
+  changing runtime behavior. A third independent review then proved that the
+  SQL adapter returned the contracts-layer promotion-evidence record while the
+  occurrence reconciler required equivalent structural binding behavior; the
+  real SQL-backed promote path therefore failed on `is_bound_to`.
+- `56bfbc84a7a4e4238abe5c86a84c8faf3f5d7d59` gives persisted promotion
+  evidence the same exact Principal/run binding contract as in-memory evidence
+  and adds the SQL-backed propose, correct, promote, pull, and completion proof.
+- A fourth independent review proved that durable completion returned the
+  contracts-layer receipt record while application orchestration required its
+  application-layer concrete type, causing an otherwise valid outer completion
+  to fail closed. `0df98f1c28228a0403fc3638d12d0a771a825f5b` replaces the concrete-type
+  assumption with exact structural field-by-field receipt validation.
+- PR #186 merged at feature commit `04bd3852b14beb15ad7ec122c23634c3fa319272`
+  and new `main` `37f767b85fbc0cd1e84fd0c8acd831b0c47142b2`.
+  `2ba5538cf91c7cce8212ac5318d910ab7d2f3db3` is the collision-resolved
+  reconciliation merge into this branch.
+- A fifth independent review found that five acceptance-corpus cases still
+  invoked occurrence reconciliation without the mandatory exact accepted
+  promotion evidence. `f159889bfc4c74ffda3e025dbac92fefd9730e6b` supplies that evidence and
+  corrects the public Review description to distinguish region
+  `corrected_value` from semantic `correction_patch`.
+- A sixth independent review found that the GoodNotes pull database test still
+  performed its own fixed-name create/drop and Alembic lifecycle after PR #186.
+  `40e27ffd6f720fa7e3cce05542fa7da5eea9dc9a` moves that module to the shared
+  per-test clone provisioner.
+- A seventh independent review expanded the PostgreSQL selection and found 19
+  delivery/occurrence counterpart cases that likewise lacked exact promotion
+  evidence. `6d53aa03c7cf2bed8d5d8569967f4893519da555` binds every affected call to
+  exact Principal/run/full stored proposal digest/`ACCEPT` evidence. The full
+  ten-module GoodNotes PostgreSQL selection then passed.
 
 ## Work-package status
 
 | Work package | Repository status | Evidence or residual gate |
 | --- | --- | --- |
 | GN-WP-R0 | `PASS` | Current base, PRs/worktrees, Alembic graph, ownership, collision plan, and requirement seams were authenticated and registered before writes. |
-| GN-WP-R1 | `IMPLEMENTED; FINAL_RECONCILIATION_PENDING_PR186` | One additive migration descends from the correct post-RI head; candidate #160 migration was excluded. Empty-to-head and predecessor/current-head proof must be repeated after #186 reconciliation. |
+| GN-WP-R1 | `IMPLEMENTED` | One additive migration descends from the correct post-RI head; candidate #160 migration was excluded. PR #186 is merged and its provisioning contract is reconciled. The sole Alembic head is `6a2f9d1c4b80`, whose parent is `16f05c46b8c3`. |
 | GN-WP-R2 | `IMPLEMENTED` | Supported production composition has no RouteLLM/ChatLLM/provider inference edge; the historical workflow remains uncomposed and fail-closed. |
 | GN-WP-R3 | `IMPLEMENTED` | Server-resolved Principal/client context, deterministic create/reuse/resume, bounded continuation, server-owned submission identity, atomic persistence, replay, stale/wrong-context refusal, and content-free status are wired. |
 | GN-WP-R4 | `IMPLEMENTED` | Local read-only observation, stable-read mutation checks, liveness/disappearance/reappearance, mapping, bounded OCR, transaction/replay, and provenance are covered; the actual run path requires fresh exact `AVAILABLE` evidence. |
@@ -124,10 +158,9 @@ campaign assertion is
 | GN-WP-R11 / R12 | `OPERATOR_DECISION_REQUIRED` | Intentionally unperformed; no private-gold or runtime decision is inferred. |
 | OP-GN-01 | `REPOSITORY_PREREQUISITES_VERIFIED; OPERATOR_RUNTIME_ACTION_REQUIRED` | Repository health/dead-letter prerequisites are present; no live worker, source, or dead-letter operation was performed. |
 
-R0-R10 are code-complete on the current branch. They are not merge-complete
-until #186 ownership clears, its overlap is reconciled on then-current main,
-applicable validation passes, and a fresh non-author exact-head reviewer returns
-PASS.
+R0-R10 are code-complete on the current branch. No active-owner blocker remains.
+They are not merge-complete until the ledger commit is made and a fresh
+non-author reviewer returns `PASS` against that resulting exact head.
 
 ## Validation evidence
 
@@ -166,13 +199,32 @@ Head-qualified results include:
   existence count was zero.
 - Canonical Principal corrective selection: 7 passed; Ruff check/format,
   targeted mypy, Alembic-head, and diff checks passed.
+- After PR #186 reconciliation, the Orchestrator's focused
+  unit/contract/policy/architecture/schema selection passed 1,410 tests.
+- The seventh reviewer's focused non-socket selection passed 5,976 tests.
+- The terminal reviewer's focused non-socket
+  unit/contract/policy/architecture selection passed 1,492 tests.
+- The repository-native provisioning guard and fixture suite passed 15 tests
+  with one upgrade-to-head, 5 creates, 5 drops, and 4 clones. The migrated
+  GoodNotes pull module separately passed all 3 tests with one upgrade-to-head,
+  4 creates, 4 drops, and 3 clones.
+- The final ten-module GoodNotes PostgreSQL selection passed all 52 tests with
+  one upgrade-to-head, 53 creates, 53 drops, and 52 clones. A read-only catalog
+  check found zero remaining databases with the provisioner's `my_pa_p_`
+  prefix. The two corrected delivery/occurrence modules passed 23 tests with
+  balanced 24 creates and 24 drops, and the focused fail-closed/unit corpus
+  passed 69 tests.
+- Ruff check, Ruff format check, and `git diff --check` passed for each final
+  bounded correction.
 
-An HTTP/transport attempt produced 170 passes before the sandbox denied local
-`127.0.0.1:0` binds, causing 282 failures and 300 setup errors. This is an
-environment gate, not a claimed pass. A broad architecture run was stopped at
-61% after it exposed only pre-existing/out-of-scope count/prose drift in the
-RI plans and shared README/CLI. The applicable full tier has therefore not
-passed, and no contrary claim is made.
+An earlier HTTP/transport attempt produced 170 passes before the sandbox denied
+local `127.0.0.1:0` binds, causing 282 failures and 300 setup errors. The later
+terminal transport-inclusive run produced 1,526 passes and 271 failures, with
+the failures again attributable solely to the sandbox's denial of loopback
+`127.0.0.1` binds. These are environment gates, not claimed transport passes.
+A broad architecture run was stopped at 61% after it exposed only
+pre-existing/out-of-scope count/prose drift in the RI plans and shared
+README/CLI. No broad or full local tier pass is claimed.
 
 ## Review, runtime, and closure gates
 
@@ -184,9 +236,24 @@ findings. The second fresh reviewer returned `FAIL` at exact head
 `c31cad3c624ebe25f3ead3baaa940d5baac9b373`, tree
 `c2240094b7a859e7adaa8fda41cc3dcda2e51c10`, for the canonical Principal
 constraint mismatch. Commit `e5281bf9` corrects that finding and invalidates
-the second verdict. Another fresh reviewer who authored none of this change
-must review the new exact head and has authority to block. Any later commit,
-including #186 reconciliation, invalidates that verdict.
+the second verdict.
+
+Subsequent independent reviews also returned `FAIL`, each against the then-
+current exact implementation, for: missing structural binding on persisted
+promotion evidence; concrete-type coupling on durable completion receipts;
+missing exact promotion evidence in five acceptance-corpus cases; obsolete
+fixed-name database provisioning after PR #186; and 19 missing-evidence
+counterpart cases in the expanded GoodNotes PostgreSQL suite. Those findings
+remain part of the evidence rather than being rewritten as passes. Commits
+`56bfbc84`, `0df98f1c`, `f159889b`, `40e27ffd`, and `6d53aa03` respectively
+correct them and invalidate each preceding exact-head verdict.
+
+PR #186 is merged and reconciliation is complete; there is no active owner
+blocker. A fresh reviewer who authored none of these changes must review the
+post-ledger exact head and has authority to block. The current state is
+`REVIEW_PENDING`, not `PASS`; no merge, PR, deployment, or final repository
+completion is claimed. Any later commit invalidates that future exact-head
+verdict.
 
 P2-W12's six blockers and four majors were mapped as challenge evidence. They
 are not self-closed by this campaign and require their own governing authority.

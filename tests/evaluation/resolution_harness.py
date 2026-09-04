@@ -37,6 +37,7 @@ from my_pa.contracts.ports import (
     DirectedReceipt,
     EntitiesRepository,
     EntityChildPage,
+    EntityGraphPage,
     EntityMutationAdmission,
     EntityMutationReceipt,
     EntitySummary,
@@ -768,6 +769,18 @@ class _CorpusRepository(EntitiesRepository):
         after_assignment_id: str | None = None,
     ) -> list[Assignment]:
         raise NotImplementedError("resolution reads the assignment collection whole")
+
+    def graph_neighborhood(
+        self,
+        principal_id: str,
+        seed_entity_ids: frozenset[str],
+        *,
+        hops: int,
+        relationship_types: frozenset[str] | None,
+        limit: int,
+        after_edge_id: str | None = None,
+    ) -> EntityGraphPage:
+        raise NotImplementedError("resolution walks no graph")
 
     def directed_replay(
         self,

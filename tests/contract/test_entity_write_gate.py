@@ -24,8 +24,8 @@ these names is in a public enum.
 **Three states, and all three are asserted**, because a gate that refused in
 every state would satisfy a one-sided test:
 
-* plane off — all fifty-four `entities.` names refuse, reads included;
-* plane on, writes off — the sixteen reads answer and the thirty-eight writes refuse;
+* plane off — all fifty-five `entities.` names refuse, reads included;
+* plane on, writes off — the seventeen reads answer and the thirty-eight writes refuse;
 * plane on, writes on — all fifty-four are served.
 
 Every one of those four figures is derived from a live set rather than written

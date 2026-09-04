@@ -58,7 +58,7 @@ PHASE_B_START = "c7a1f04b9e63"
 #: renames the seeded `entity_relationship_types` row `design_coordinates_with` to
 #: `design_coordination_with`; that in turn stacked on `1cda4d536268` (RI-ENT-WP-07).
 #: Written out rather than derived so chain drift fails here rather than passing.
-HEAD = "b8e4d1a6c073"
+HEAD = "c3f8a1d07e94"
 REVISION_PATH = (
     ROOT
     / "migrations"

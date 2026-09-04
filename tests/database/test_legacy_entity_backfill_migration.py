@@ -76,9 +76,9 @@ REVISION: Final = "b8e4d1a6c073"
 PREVIOUS_REVISION: Final = "16f05c46b8c3"
 
 #: Every `migrations/versions/*.py` on the chain, this revision included.
-#: Counted on the merged tree after the re-parent (RULING-M2): 88 on
-#: `origin/main` at `16f05c46b8c3` plus this revision.
-REVISION_FILE_COUNT: Final = 89
+#: Counted on the merged tree after UI-IMP-WP15 stacked `c3f8a1d07e94`:
+#: 89 at `b8e4d1a6c073` plus the graph vocabulary admission.
+REVISION_FILE_COUNT: Final = 90
 
 #: The revision's frozen salt, restated. If this and the revision ever disagree
 #: the expectations below stop matching, which is the point of restating it.
@@ -426,10 +426,16 @@ def _expected_backfilled_row(
 
 
 def test_the_revision_is_the_single_head_and_revises_the_prior_head() -> None:
-    """One head, it is this revision, and it sits directly on `16f05c46b8c3`."""
+    """This revision remains on the linear chain, parented on `16f05c46b8c3`.
+
+    UI-IMP-WP15 stacked `c3f8a1d07e94` on this revision; that file owns the
+    current-head claim. This module still proves the backfill sits where it
+    was written: one parent, and the graph admission as its only child.
+    """
     script = ScriptDirectory.from_config(_config())
-    assert list(script.get_heads()) == [REVISION]
+    assert list(script.get_heads()) == ["c3f8a1d07e94"]
     assert script.get_revision(REVISION).down_revision == PREVIOUS_REVISION
+    assert script.get_revision("c3f8a1d07e94").down_revision == REVISION
 
 
 def test_the_chain_holds_the_revision_files_it_claims() -> None:

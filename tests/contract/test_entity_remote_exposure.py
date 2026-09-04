@@ -118,6 +118,7 @@ def test_the_names_this_file_is_about_are_the_family() -> None:
         "entities.identity_history",
         "entities.observations.list",
         "entities.relationships",
+        "entities.graph",
         "entities.resolve",
         "entities.search",
         "entities.unresolved_mentions",

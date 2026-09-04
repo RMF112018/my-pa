@@ -339,6 +339,7 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     122: "One hundred and twenty-two",
     123: "One hundred and twenty-three",
     124: "One hundred and twenty-four",
+    125: "One hundred and twenty-five",
 }
 
 
@@ -463,20 +464,20 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
     # composed by default, and `RI-ENT-WP-10`'s five record-family reads arrived
     # on the withheld side too, as do `RI-ENT-WP-11`'s record-family writes. The
-    # combined surface therefore still exposes fifty-five and withholds three
-    # more feature-gated names than after `RI-ENT-WP-10`.
-    assert default == 55 and total == 124 and withheld == 69
+    # combined surface therefore still exposes fifty-five and withholds
+    # `UI-IMP-WP15`'s `entities.graph` with the rest of the entity plane.
+    assert default == 55 and total == 125 and withheld == 70
 
     readme = README.read_text(encoding="utf-8")
     assert f"{default} of the {total} capabilities are `available`" in readme
     assert f"`{withheld} of {total} capabilities are unwired.`" in readme
 
     system_context = SYSTEM_CONTEXT.read_text(encoding="utf-8").lower()
-    assert "one hundred and twenty-four capabilities" in system_context
+    assert "one hundred and twenty-five capabilities" in system_context
     assert "exposes fifty-five of them" in system_context
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
-    assert "one hundred and twenty-four capabilities" in module_boundaries
+    assert "one hundred and twenty-five capabilities" in module_boundaries
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:

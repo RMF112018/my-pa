@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes one hundred and twenty-four capability names and none of them
+  ends: the transport routes one hundred and twenty-five capability names and none of them
   mutates a source, and every capability driven over the wire is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -647,6 +647,7 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         },
         Capability.ENTITIES_CONTEXT: {"entity_id": person.entity_id},
         Capability.ENTITIES_RELATIONSHIPS: {"entity_id": person.entity_id, "direction": "any"},
+        Capability.ENTITIES_GRAPH: {"focus_entity_id": person.entity_id},
         Capability.ENTITIES_UNRESOLVED_MENTIONS: {},
         # The entity plane's authoring half (`WP-RI-A-02`), and its payloads carry
         # no marker for the reason the reads above carry none: every field is an
@@ -1526,6 +1527,7 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_RESOLVE,
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
+        Capability.ENTITIES_GRAPH,
         Capability.ENTITIES_UNRESOLVED_MENTIONS,
         # The authoring half (`WP-RI-A-02`) is scopeless more plainly still: it
         # writes the Principal's own record of a person, and the row it writes

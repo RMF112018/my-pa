@@ -3121,6 +3121,102 @@ class GetEntityRelationships:
             _identifier(self.after, IdKind.ENTITY_RELATIONSHIP, SafeDetail.CURSOR)
 
 
+def _graph_cursor(value: str | None) -> str | None:
+    """A continuation naming either an assignment or a relationship edge.
+
+    The graph pages a unified edge stream ordered by `edge_id`. Assignment
+    identifiers (`asn_…`) and relationship identifiers (`erel_…`) do not
+    collide, so one keyset over both families is a total order. The cursor is
+    validated as one of those two kinds rather than accepted as an opaque
+    string, for the reason `GetEntityRelationships.after` states: the
+    repository compares it against the stored identifier directly.
+    """
+    if value is None:
+        return None
+    try:
+        validate_identifier(value, IdKind.ASSIGNMENT)
+    except InvalidIdentifierError:
+        pass
+    else:
+        return value
+    try:
+        validate_identifier(value, IdKind.ENTITY_RELATIONSHIP)
+    except InvalidIdentifierError:
+        pass
+    else:
+        return value
+    raise InvalidRequestError(SafeDetail.CURSOR)
+
+
+def _relationship_type_filter(value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+    """Closed `EntityRelationshipType` codes, or `None` for every type.
+
+    An explicit empty list is refused rather than read as "no filter": the two
+    are different instructions and absence is how a caller asks for the full
+    typed set.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, tuple):
+        raise InvalidRequestError(SafeDetail.RELATIONSHIP_TYPES)
+    if not value:
+        raise InvalidRequestError(SafeDetail.RELATIONSHIP_TYPES)
+    if len(set(value)) != len(value):
+        raise InvalidRequestError(SafeDetail.RELATIONSHIP_TYPES)
+    codes: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise InvalidRequestError(SafeDetail.RELATIONSHIP_TYPES)
+        try:
+            codes.append(EntityRelationshipType(item).value)
+        except ValueError:
+            pass
+        else:
+            continue
+        raise InvalidRequestError(SafeDetail.RELATIONSHIP_TYPES)
+    return tuple(codes)
+
+
+@dataclass(frozen=True, slots=True)
+class GetEntityGraph:
+    """`entities.graph`: one bounded page of a seeded 1-hop or 2-hop neighborhood.
+
+    A seed is required — `focus_entity_id`, or `scope_entity_id` as an
+    assignment-derived org/project/program/team frame, or both. There is no
+    "all entities" read. Depth is 1 (default) or 2; there is no recursive walk.
+
+    `page_size` and `after` bound a dense hub the same way `entities.relationships`
+    does: one row past the page proves truncation, and the cursor continues
+    past the last `edge_id` of this page.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_GRAPH
+
+    focus_entity_id: str | None = None
+    scope_entity_id: str | None = None
+    hops: int = 1
+    relationship_types: tuple[str, ...] | None = None
+    as_of: datetime | None = None
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.focus_entity_id is None and self.scope_entity_id is None:
+            raise InvalidRequestError(SafeDetail.FOCUS_ENTITY_ID)
+        if self.focus_entity_id is not None:
+            _identifier(self.focus_entity_id, IdKind.ENTITY, SafeDetail.FOCUS_ENTITY_ID)
+        if self.scope_entity_id is not None:
+            _identifier(self.scope_entity_id, IdKind.ENTITY, SafeDetail.SCOPE_ENTITY_ID)
+        if self.hops not in (1, 2):
+            raise InvalidRequestError(SafeDetail.HOPS)
+        object.__setattr__(
+            self, "relationship_types", _relationship_type_filter(self.relationship_types)
+        )
+        _moment(self.as_of, SafeDetail.AS_OF)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        object.__setattr__(self, "after", _graph_cursor(self.after))
+
+
 #: The clearable descriptive and effective fields, and the closed vocabulary a
 #: revise names them from. A named list rather than a blank string or a null,
 #: because "leave this alone" and "remove this" are different instructions and a
@@ -4630,6 +4726,42 @@ _ENTITY_FIELD_DOCS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
         "alias_types": {"description": "Optional filter to these alias types."},
         "page_size": {"description": "How many results to return in this page."},
         "after": {"description": "Opaque cursor from a previous page's next_cursor."},
+        "focus_entity_id": {
+            "description": (
+                "Opaque identifier of the entity whose neighborhood to return. "
+                "Required unless scope_entity_id is provided. Never omitted together "
+                "with scope_entity_id: there is no all-entities graph."
+            )
+        },
+        "scope_entity_id": {
+            "description": (
+                "Optional org, project, program or team frame. Alone, it is the "
+                "seed and the graph is the assignment-derived structure of that "
+                "scope. Together with focus_entity_id, both must exist in this "
+                "Principal's partition."
+            )
+        },
+        "hops": {
+            "description": (
+                "Walk depth: 1 (default) or 2. There is no deeper walk. Output is "
+                "still page-bounded; a dense hub is truncated and continued."
+            )
+        },
+        "relationship_types": {
+            "description": (
+                "Optional filter to these EntityRelationshipType codes. Omit for "
+                "every type; an explicit empty list is refused. Omitted types are "
+                "not returned as edges; that is not a claim those entities are absent."
+            )
+        },
+        "as_of": {
+            "description": (
+                "Optional RFC 3339 moment. When present, the server labels each "
+                "edge is_current from the same in-force rule assignments and "
+                "relationships already use. When absent, is_current is null; the "
+                "browser must not derive currency."
+            )
+        },
         "perspective": {
             "description": (
                 "Which end of the participation to list from: project, for the "
@@ -4858,6 +4990,17 @@ _ENTITY_FIELD_DOCS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
 def _entity_docs(*names: str) -> Mapping[str, Mapping[str, str]]:
     """The subset of `_ENTITY_FIELD_DOCS` one command publishes."""
     return MappingProxyType({name: _ENTITY_FIELD_DOCS[name] for name in names})
+
+
+GetEntityGraph.mcp_payload_properties = _entity_docs(  # type: ignore[attr-defined]
+    "focus_entity_id",
+    "scope_entity_id",
+    "hops",
+    "relationship_types",
+    "as_of",
+    "page_size",
+    "after",
+)
 
 
 def _entity_name(value: object, detail: SafeDetail) -> str:
@@ -7286,6 +7429,7 @@ type Command = (
     | ResolveEntity
     | GetEntityContext
     | GetEntityRelationships
+    | GetEntityGraph
     | ListUnresolvedMentions
     | ListEntityIdentifiers
     | ListEntityAliases

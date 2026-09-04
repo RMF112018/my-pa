@@ -2,10 +2,10 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the one hundred and twenty-four capabilities is addressable
+**Reachability.** Every one of the one hundred and twenty-five capabilities is addressable
 over HTTP and answers. Parametrised over `Capability` rather than over a list
-written here, so a one-hundred-twenty-fifth capability added to the domain arrives as
-a failing row instead of as an untested one. Thirteen of the one hundred and twenty-four answer a
+written here, so a one-hundred-twenty-sixth capability added to the domain arrives as
+a failing row instead of as an untested one. Thirteen of the one hundred and twenty-five answer a
 well-formed `501 unsupported` rather than a result — `_UNCOMPOSED_CAPABILITIES`,
 the plane this harness does not switch on — and one, `tasks.bulk_confirm`,
 answers a well-formed `404 not_found`, because a confirm names a preview this
@@ -123,6 +123,7 @@ from my_pa.application.commands import (
     GetCorpusCoverage,
     GetEntity,
     GetEntityContext,
+    GetEntityGraph,
     GetEntityIdentityHistory,
     GetEntityProfile,
     GetEntityRelationships,
@@ -717,6 +718,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "entity_id": person.entity_id,
             "direction": "any",
         },
+        Capability.ENTITIES_GRAPH: {"focus_entity_id": person.entity_id},
         # No arguments: the queue is every unplaced mention in the Principal's
         # own partition, so there is nothing to name.
         Capability.ENTITIES_UNRESOLVED_MENTIONS: {},
@@ -1482,6 +1484,7 @@ def commands_for(
         Capability.ENTITIES_RELATIONSHIPS: GetEntityRelationships(
             entity_id=person.entity_id, direction="any"
         ),
+        Capability.ENTITIES_GRAPH: GetEntityGraph(focus_entity_id=person.entity_id),
         Capability.ENTITIES_UNRESOLVED_MENTIONS: ListUnresolvedMentions(),
         # The entity plane's authoring half, written as the commands the payload
         # table above must normalise to. The vocabulary members and the datetime

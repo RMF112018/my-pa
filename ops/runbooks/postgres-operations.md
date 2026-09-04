@@ -1,9 +1,10 @@
 # Runbook — PostgreSQL operations for `my_pa`
 
 > **2026-09-04 current-state correction.** The repository migration chain
-> contains **89 revisions at single head `b8e4d1a6c073`**. Measured, not
+> contains **90 revisions at single head `c3f8a1d07e94`**. Measured, not
 > carried: `ls migrations/versions/*.py | wc -l` and
-> `ScriptDirectory.get_heads()`. `b8e4d1a6c073` is additive on `16f05c46b8c3`
+> `ScriptDirectory.get_heads()`. `c3f8a1d07e94` is additive on `b8e4d1a6c073`
+> and admits `entities.graph`. `b8e4d1a6c073` is additive on `16f05c46b8c3`
 > (RI-ENT-WP-12). `origin/main` at `455a3671` held 88 revisions at
 > `16f05c46b8c3`; this figure is of the merged tree, not a sum. Everything
 > below this line is older evidence at its own named head and must not be

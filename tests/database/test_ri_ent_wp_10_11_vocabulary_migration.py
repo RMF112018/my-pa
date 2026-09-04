@@ -82,7 +82,7 @@ REVISION: Final = "16f05c46b8c3"
 #: revision merged (RULING-M11), so the head this suite sees is that one and
 #: `REVISION` is the link directly beneath it. Written out rather than derived
 #: so chain drift fails here rather than passing.
-HEAD_REVISION: Final = "b8e4d1a6c073"
+HEAD_REVISION: Final = "c3f8a1d07e94"
 #: What was head until `REVISION` stacked on it, and therefore the revision
 #: this module downgrades to. This revision was written against `c99cd8ed8d1c`
 #: and re-parented onto `UI-IMP-WP02`'s `2c00c9ac64bc` when `origin/main` merged
@@ -331,7 +331,8 @@ def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> N
     script = ScriptDirectory.from_config(_config())
     heads = list(script.get_heads())
     assert heads == [HEAD_REVISION], f"expected exactly {HEAD_REVISION}, found {heads}"
-    assert script.get_revision(HEAD_REVISION).down_revision == REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == "b8e4d1a6c073"
+    assert script.get_revision("b8e4d1a6c073").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS_REVISION
     assert script.get_revision(PREVIOUS_REVISION).down_revision == SECOND_TO_PREVIOUS_REVISION
     assert (
@@ -461,7 +462,7 @@ def test_the_stored_vocabularies_are_missing_nothing_the_domain_declares(
     names are stored and are not in `Capability`, and they predate all of this.
     The direction that breaks a request is a name the domain declares and the
     database has never heard of, and the only way to be sure of it for all one
-    hundred and twenty-four is to try all one hundred and twenty-four.
+    hundred and twenty-five is to try all one hundred and twenty-five.
 
     `Purpose` is driven for the same reason and not because this revision
     touched it: it deliberately does not widen `purpose_is_known`, because

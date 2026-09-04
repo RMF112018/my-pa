@@ -1,5 +1,5 @@
 /**
- * Shared guards for the sixteen `entities.*` read decoders. Not a schema
+ * Shared guards for the seventeen `entities.*` read decoders. Not a schema
  * framework: each capability still names its own result keys and required arrays.
  */
 import { isBoolean, isRecord, ok, type DecodeResult } from "../primitives";

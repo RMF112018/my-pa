@@ -98,11 +98,14 @@ from sqlalchemy import (
     case,
     func,
     insert,
+    literal,
     null,
     or_,
     select,
     true,
     tuple_,
+    union,
+    union_all,
     update,
 )
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -116,6 +119,7 @@ from my_pa.contracts.ports import (
     DirectedReceipt,
     EntitiesRepository,
     EntityChildPage,
+    EntityGraphPage,
     EntityMutationAdmission,
     EntityMutationReceipt,
     EntitySummary,
@@ -127,7 +131,7 @@ from my_pa.contracts.ports import (
     RelationshipWriteRequest,
     UnknownScopeError,
 )
-from my_pa.domain.common.identifiers import IdKind, validate_identifier
+from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, validate_identifier
 from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.relationship.authoring import (
@@ -2986,6 +2990,175 @@ class SqlEntityRepository(EntitiesRepository):
         )
         rows = self._connection.execute(_limited(statement, limit)).all()
         return [_row_to_assignment(row) for row in rows]
+
+    def graph_neighborhood(
+        self,
+        principal_id: str,
+        seed_entity_ids: frozenset[str],
+        *,
+        hops: int,
+        relationship_types: frozenset[str] | None,
+        limit: int,
+        after_edge_id: str | None = None,
+    ) -> EntityGraphPage:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if hops not in (1, 2):
+            raise ValueError("a graph walk is one hop or two")
+        if not seed_entity_ids:
+            raise ValueError("a graph neighborhood names at least one seed")
+        seeds = tuple(sorted(seed_entity_ids))
+        for seed in seeds:
+            validate_identifier(seed, IdKind.ENTITY)
+        _require_row_limit(limit)
+        if after_edge_id is not None:
+            self._require_reachable_graph_cursor(principal_id, after_edge_id)
+        types = tuple(sorted(relationship_types)) if relationship_types is not None else None
+        seed_select = union_all(
+            *(select(literal(seed).label("entity_id")) for seed in seeds)
+        ).subquery("graph_seeds")
+        hop1 = union(
+            select(entity_relationships.c.to_entity_id.label("entity_id")).where(
+                _mine(entity_relationships, principal_id),
+                entity_relationships.c.from_entity_id.in_(select(seed_select.c.entity_id)),
+                _optional(
+                    entity_relationships.c.relationship_type.in_(types)
+                    if types is not None
+                    else None
+                ),
+            ),
+            select(entity_relationships.c.from_entity_id.label("entity_id")).where(
+                _mine(entity_relationships, principal_id),
+                entity_relationships.c.to_entity_id.in_(select(seed_select.c.entity_id)),
+                _optional(
+                    entity_relationships.c.relationship_type.in_(types)
+                    if types is not None
+                    else None
+                ),
+            ),
+            select(entity_assignments.c.scope_entity_id.label("entity_id")).where(
+                _mine(entity_assignments, principal_id),
+                entity_assignments.c.entity_id.in_(select(seed_select.c.entity_id)),
+                entity_assignments.c.scope_entity_id.is_not(None),
+            ),
+            select(entity_assignments.c.entity_id.label("entity_id")).where(
+                _mine(entity_assignments, principal_id),
+                entity_assignments.c.scope_entity_id.in_(select(seed_select.c.entity_id)),
+            ),
+        ).subquery("graph_hop1")
+        frontier = (
+            union(select(seed_select.c.entity_id), select(hop1.c.entity_id)).subquery(
+                "graph_frontier"
+            )
+            if hops == 2
+            else seed_select
+        )
+        edge_ids = union_all(
+            select(entity_assignments.c.assignment_id.label("edge_id")).where(
+                _mine(entity_assignments, principal_id),
+                entity_assignments.c.scope_entity_id.is_not(None),
+                or_(
+                    entity_assignments.c.entity_id.in_(select(frontier.c.entity_id)),
+                    entity_assignments.c.scope_entity_id.in_(select(frontier.c.entity_id)),
+                ),
+                _optional(
+                    entity_assignments.c.assignment_id > after_edge_id
+                    if after_edge_id is not None
+                    else None
+                ),
+            ),
+            select(entity_relationships.c.relationship_id.label("edge_id")).where(
+                _mine(entity_relationships, principal_id),
+                or_(
+                    entity_relationships.c.from_entity_id.in_(select(frontier.c.entity_id)),
+                    entity_relationships.c.to_entity_id.in_(select(frontier.c.entity_id)),
+                ),
+                _optional(
+                    entity_relationships.c.relationship_type.in_(types)
+                    if types is not None
+                    else None
+                ),
+                _optional(
+                    entity_relationships.c.relationship_id > after_edge_id
+                    if after_edge_id is not None
+                    else None
+                ),
+            ),
+        ).subquery("graph_edge_ids")
+        ordered = select(edge_ids.c.edge_id).order_by(edge_ids.c.edge_id).limit(limit)
+        page_ids = [str(row.edge_id) for row in self._connection.execute(ordered).all()]
+        assignment_rows = (
+            self._connection.execute(
+                select(entity_assignments)
+                .where(
+                    _mine(entity_assignments, principal_id),
+                    entity_assignments.c.assignment_id.in_(page_ids),
+                )
+                .order_by(entity_assignments.c.assignment_id)
+            ).all()
+            if page_ids
+            else []
+        )
+        relationship_rows = (
+            self._connection.execute(
+                select(entity_relationships)
+                .where(
+                    _mine(entity_relationships, principal_id),
+                    entity_relationships.c.relationship_id.in_(page_ids),
+                )
+                .order_by(entity_relationships.c.relationship_id)
+            ).all()
+            if page_ids
+            else []
+        )
+        assignments = [_row_to_assignment(row) for row in assignment_rows]
+        relationships = [_row_to_relationship(row) for row in relationship_rows]
+        needed: set[str] = set(seeds)
+        for assignment in assignments:
+            needed.add(assignment.entity_id)
+            if assignment.scope_entity_id is not None:
+                needed.add(assignment.scope_entity_id)
+        for edge in relationships:
+            needed.add(edge.from_entity_id)
+            needed.add(edge.to_entity_id)
+            if edge.scope_entity_id is not None:
+                needed.add(edge.scope_entity_id)
+        entity_rows = self._connection.execute(
+            select(entities)
+            .where(_mine(entities, principal_id), entities.c.entity_id.in_(tuple(sorted(needed))))
+            .order_by(entities.c.entity_id)
+        ).all()
+        return EntityGraphPage(
+            tuple(_row_to_entity(row) for row in entity_rows),
+            tuple(assignments),
+            tuple(relationships),
+        )
+
+    def _require_reachable_graph_cursor(self, principal_id: str, after_edge_id: str) -> None:
+        """Refuse a cursor that is not an edge this Principal can read.
+
+        Same honesty as `relationships` and `assignments_page`: a well-formed
+        identifier naming another partition would otherwise be `>`-true of every
+        row here and answer an empty untruncated page.
+        """
+        try:
+            validate_identifier(after_edge_id, IdKind.ASSIGNMENT)
+        except InvalidIdentifierError:
+            validate_identifier(after_edge_id, IdKind.ENTITY_RELATIONSHIP)
+            reachable = self._connection.execute(
+                select(entity_relationships.c.relationship_id).where(
+                    _mine(entity_relationships, principal_id),
+                    entity_relationships.c.relationship_id == after_edge_id,
+                )
+            ).first()
+        else:
+            reachable = self._connection.execute(
+                select(entity_assignments.c.assignment_id).where(
+                    _mine(entity_assignments, principal_id),
+                    entity_assignments.c.assignment_id == after_edge_id,
+                )
+            ).first()
+        if reachable is None:
+            raise UnknownScopeError("a graph cursor names an edge in this scope")
 
     def directed_replay(
         self,

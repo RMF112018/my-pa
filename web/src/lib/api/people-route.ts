@@ -6,7 +6,7 @@ import type { PrincipalSession } from "@/contracts/identity";
 
 export type PeopleField = {
   readonly gateway: string;
-  readonly type: "string" | "integer" | "boolean";
+  readonly type: "string" | "integer" | "boolean" | "string-list";
 };
 type FieldMap = Readonly<Record<string, PeopleField>>;
 
@@ -47,6 +47,19 @@ function parseField(
       if (Number.isSafeInteger(parsed)) return { ok: true, gateway, value: parsed };
     }
     return { ok: false, response: peopleInvalid(`${browserName} must be an integer`) };
+  }
+  if (type === "string-list") {
+    if (typeof value !== "string") {
+      return { ok: false, response: peopleInvalid(`${browserName} must be a string`) };
+    }
+    return {
+      ok: true,
+      gateway,
+      value: value
+        .split(",")
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0),
+    };
   }
   if (typeof value === "boolean") return { ok: true, gateway, value };
   if (value === "true") return { ok: true, gateway, value: true };

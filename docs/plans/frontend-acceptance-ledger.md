@@ -226,6 +226,14 @@ Conservative dispositions for the People working surface on the WP13 entity read
 - **PFE-AC-076:** related Tasks/Commitments/meetings/intelligence are omitted unless a canonical relation is on the payload. No name-scan joining.
 - Legacy `/relationships/[personId]` remains the continuity timeline (continuity `person_id`, not `entity_id`). No blind redirect.
 
+## UI-IMP-WP15 Canvas graph read notes
+
+Conservative dispositions for the canonical graph **read** substrate. This is not Map UI, not Arrange, not React Flow, not layout persistence, not WP16, and not `PASS_VERIFIED` of the 250-criterion ledger.
+
+- **PFE-AC-140 and the graph-read band of 140..184 / 199..223:** at most `VALIDATION_REQUIRED` for the `entities.graph` capability, fail-closed decoder, and `GET /api/people/graph` BFF. A seed is required; an unknown or foreign identifier is `not_found` naming the field, not an empty graph. `is_current` is server-computed from the same assignment/relationship in-force rule when `as_of` is supplied, otherwise null. Dense hubs disclose truncation and continue through `after`.
+- This package does not claim Map rendering, merge/split, fact mutation, or command-palette work.
+- UI-IMP-WP21 and UI-IMP-WP22 remain `PROVISIONAL_NOT_ACTIVATED`. UI-IMP-WP24 is not this package.
+
 ## UI-IMP-WP23 Federated Search BFF notes
 
 This is Search BFF substrate, not Command UX, not `PASS_VERIFIED` of `PFE-AC-083..085`, and not a claim against the full 250-criterion ledger.

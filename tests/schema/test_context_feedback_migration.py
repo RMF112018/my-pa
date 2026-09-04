@@ -149,7 +149,7 @@ def test_the_chain_has_one_head_and_this_revision_is_in_the_chain() -> None:
     # `entity_names` row per active `entities` row on top of that, re-parented
     # from `c99cd8ed8d1c` onto `16f05c46b8c3` so the chain keeps one head
     # (RULING-M11) -- counted on the merged tree, not derived (RULING-M2).
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 89
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 90
 
 
 def test_the_frozen_literals_are_the_domain_at_head() -> None:

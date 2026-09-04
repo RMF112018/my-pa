@@ -88,6 +88,7 @@ from my_pa.application.commands import (
     GetCorpusCoverage,
     GetEntity,
     GetEntityContext,
+    GetEntityGraph,
     GetEntityIdentityHistory,
     GetEntityProfile,
     GetEntityRelationships,
@@ -371,6 +372,7 @@ def _requested_scope(
             | ResolveEntity()
             | GetEntityContext()
             | GetEntityRelationships()
+            | GetEntityGraph()
             | GetEntityIdentityHistory()
             | ListUnresolvedMentions()
             # The authoring half (`WP-RI-A-02`) makes the same measurement, and

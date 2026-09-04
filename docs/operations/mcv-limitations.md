@@ -361,16 +361,16 @@ email, or calendar data.
 
 **That describes WP-9, and is no longer true of the plane.** Corrected
 2026-08-19 when it acquired public reads, and again after Phase A, which gave it
-writes: the Relationship Intelligence entity plane is fifty-four `entities.`
-names now — sixteen reads and thirty-eight writes over identity, identifiers, aliases,
+writes: the Relationship Intelligence entity plane is fifty-five `entities.`
+names now — seventeen reads and thirty-eight writes over identity, identifiers, aliases,
 assignments, directed edges, observations, mention resolution, proposal staging,
-and governed merge preview/apply. This document,
+governed merge preview/apply, and the seeded `entities.graph` neighborhood. This document,
 whose job is stating what the build does not do, said nothing about them. What
 remains true, and is the limitation:
 
 * **They are off by default, and the writes are off twice.** A process that has
   not set `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` publishes none of the
-  fifty-four and refuses each with `unsupported` on every transport. A process
+  fifty-five and refuses each with `unsupported` on every transport. A process
   that has set it but not
   `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` serves the reads and refuses
   all thirty-eight writes the same way.

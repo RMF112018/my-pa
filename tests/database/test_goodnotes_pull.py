@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -14,17 +16,21 @@ from alembic.config import Config
 from sqlalchemy import Engine, select, text
 from sqlalchemy.engine import make_url
 
+from my_pa.application.commands import CompleteGoodNotesPull
 from my_pa.application.goodnotes_occurrences import _reviewed_proposals, semantic_proposal_sha256
 from my_pa.application.goodnotes_pull_orchestration import (
     PullAssignment,
-    PullCompletion,
-    PullCompletionAdmission,
     PullRepositoryConflictError,
     SemanticReviewConflictError,
     SemanticReviewDecision,
 )
+from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.gateway import local_principal
+from my_pa.contracts.v1.envelope import RequestMetadata
+from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.purpose import Purpose
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.goodnotes_pull import (
     SqlGoodNotesPullRepository,
     _corrected_result_sha256,
@@ -41,6 +47,8 @@ from my_pa.infrastructure.persistence.tables import (
     goodnotes_semantic_proposals,
     goodnotes_source_snapshots,
 )
+from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
+from tests.conftest import DEFAULT_LIMITS
 
 pytestmark = pytest.mark.database
 
@@ -139,6 +147,11 @@ def test_semantic_review_exact_replay_conflict_and_projection(isolated_engine: E
     original_result_sha256 = _corrected_result_sha256(payload)
     corrected_result_sha256 = _corrected_result_sha256(corrected_payload)
     proposal_sha256 = semantic_proposal_sha256(page_version_id, "v1", "test", "1", payload)
+    context_id = hmac.new(
+        b"k" * 32,
+        b"goodnotes-pull-context-v1\0" + PRINCIPAL.encode("utf-8") + b"\0scheduler-a",
+        hashlib.sha256,
+    ).hexdigest()
     decision = SemanticReviewDecision(
         decision_id="gnsrd_0123456789abcdef01234567",
         principal_id=PRINCIPAL,
@@ -287,14 +300,14 @@ def test_semantic_review_exact_replay_conflict_and_projection(isolated_engine: E
         assignment = PullAssignment(
             assignment_id="3" * 64,
             client_id="scheduler-a",
-            context_id="ctx-stable-a",
+            context_id=context_id,
             work=states[0].work,
             attempt=1,
         )
         assert repository.claim_batch(
             PRINCIPAL,
             "scheduler-a",
-            "ctx-stable-a",
+            context_id,
             (assignment,),
             (0,),
             max_attempts=3,
@@ -333,25 +346,50 @@ def test_semantic_review_exact_replay_conflict_and_projection(isolated_engine: E
             )
         )
         assert stored_payload == payload
-        receipts = repository.complete_batch(
-            PRINCIPAL,
-            "scheduler-a",
-            "ctx-stable-a",
-            (
-                PullCompletionAdmission(
-                    completion=PullCompletion(
-                        assignment_id=assignment.assignment_id,
-                        run_id=run_id,
-                        page_version_id=page_version_id,
-                        content_sha256="c" * 64,
-                        result_sha256=corrected_result_sha256,
-                        idempotency_key=assignment.assignment_id,
-                    ),
-                    request_fingerprint="6" * 64,
-                ),
-            ),
-        )
-        assert receipts[0].result_sha256 == corrected_result_sha256
+    service = ApplicationService(
+        unit_of_work=lambda: SqlAlchemyUnitOfWork(
+            isolated_engine,
+            audit=SqlAlchemyAuditSink(isolated_engine),
+            goodnotes_pull_enabled=True,
+        ),
+        limits=DEFAULT_LIMITS,
+        clock=lambda: WHEN,
+        goodnotes_pull_enabled=True,
+        goodnotes_pull_cursor_signing_key=b"k" * 32,
+    )
+    completed = service.invoke(
+        RequestMetadata(
+            request_id="req_0123456789abcdef01234567",
+            principal_id=PRINCIPAL,
+            capability=Capability.GOODNOTES_COMPLETE,
+            purpose=Purpose.GOODNOTES_PULL,
+            requested_at=WHEN,
+        ),
+        CompleteGoodNotesPull((assignment.assignment_id,)),
+        principal=local_principal(),
+        authenticated_client_id="scheduler-a",
+    )
+    assert completed.error is None, completed.error
+    assert completed.result is not None
+    assert completed.result["completions"][0]["replayed"] is False  # type: ignore[index]
+    replayed = service.invoke(
+        RequestMetadata(
+            request_id="req_111111111111111111111111",
+            principal_id=PRINCIPAL,
+            capability=Capability.GOODNOTES_COMPLETE,
+            purpose=Purpose.GOODNOTES_PULL,
+            requested_at=WHEN,
+        ),
+        CompleteGoodNotesPull((assignment.assignment_id,)),
+        principal=local_principal(),
+        authenticated_client_id="scheduler-a",
+    )
+    assert replayed.error is None, replayed.error
+    assert replayed.result is not None
+    assert replayed.result["completions"][0]["replayed"] is True  # type: ignore[index]
+
+    with isolated_engine.begin() as connection:
+        repository = SqlGoodNotesPullRepository(connection)
         with pytest.raises(SemanticReviewConflictError):
             repository.record_semantic_review(
                 SemanticReviewDecision(
@@ -380,12 +418,30 @@ def test_semantic_review_exact_replay_conflict_and_projection(isolated_engine: E
         assert invalidated.sequence == 2
         latest = repository.semantic_review_evidence(PRINCIPAL, run_id, (proposal_sha256,))
         assert latest[0].disposition.value == "invalidate"
+
+    refused = service.invoke(
+        RequestMetadata(
+            request_id="req_fedcba9876543210fedcba98",
+            principal_id=PRINCIPAL,
+            capability=Capability.GOODNOTES_COMPLETE,
+            purpose=Purpose.GOODNOTES_PULL,
+            requested_at=WHEN,
+        ),
+        CompleteGoodNotesPull((assignment.assignment_id,)),
+        principal=local_principal(),
+        authenticated_client_id="scheduler-a",
+    )
+    assert refused.error is not None
+    assert refused.error.code.value == "conflict"
+
+    with isolated_engine.begin() as connection:
+        repository = SqlGoodNotesPullRepository(connection)
         connection.execute(
             goodnotes_semantic_proposals.insert().values(
                 principal_id=PRINCIPAL,
                 proposal_id="gnprp_fedcba9876543210fedcba98",
                 run_id=run_id,
-                page_version_id="gnver_0123456789abcdef01234567",
+                page_version_id=page_version_id,
                 content_sha256="c" * 64,
                 schema_version="v1",
                 analyzer_name="test",
@@ -400,4 +456,4 @@ def test_semantic_review_exact_replay_conflict_and_projection(isolated_engine: E
             )
         )
         with pytest.raises(PullRepositoryConflictError):
-            repository.completion_material(PRINCIPAL, "scheduler-a", "3" * 64)
+            repository.completion_material(PRINCIPAL, "scheduler-a", assignment.assignment_id)

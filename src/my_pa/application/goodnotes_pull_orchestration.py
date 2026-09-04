@@ -27,6 +27,9 @@ from my_pa.contracts.ports import (
 )
 from my_pa.contracts.ports import GoodNotesPullCompletionMaterial as PullCompletionMaterial
 from my_pa.contracts.ports import (
+    GoodNotesPullCompletionReceiptRecord as PullCompletionReceipt,
+)
+from my_pa.contracts.ports import (
     GoodNotesPullRepositoryConflictError as PullRepositoryConflictError,
 )
 from my_pa.contracts.ports import (
@@ -202,16 +205,6 @@ class PullCompletion:
 class PullCompletionAdmission:
     completion: PullCompletion
     request_fingerprint: str
-
-
-@dataclass(frozen=True, slots=True)
-class PullCompletionReceipt:
-    completion_id: str
-    assignment_id: str
-    idempotency_key: str
-    request_fingerprint: str
-    result_sha256: str
-    replayed: bool = False
 
 
 @dataclass(frozen=True, slots=True)

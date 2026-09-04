@@ -32,6 +32,7 @@ from my_pa.application.goodnotes_pull_orchestration import (
     PullWorkState,
     stamp_authenticated_pull_context,
 )
+from my_pa.contracts.ports import GoodNotesPullCompletionReceiptRecord
 from my_pa.domain.goodnotes.models import GoodNotesPageWork, issue_stable_id
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 
@@ -226,6 +227,10 @@ def test_request_cannot_carry_principal_or_authenticated_context() -> None:
             _seal=object(),
         )
     assert raised.value.code == ERROR_WRONG_CONTEXT
+
+
+def test_application_and_durable_completion_use_one_receipt_contract() -> None:
+    assert PullCompletionReceipt is GoodNotesPullCompletionReceiptRecord
 
 
 @pytest.mark.parametrize("batch_size", (0, -1, 101, True))

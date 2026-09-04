@@ -127,6 +127,30 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_RELATIONSHIPS_END,
         Capability.ENTITIES_OBSERVE,
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
+        # `RI-ENT-WP-11`'s record-family writes, here on the identical argument
+        # and with nothing new to say: every one carries an `idempotency_key`
+        # its command validates, and every one is arbitrated against the same
+        # `entity_mutation_events (principal_id, capability, idempotency_key)`
+        # -- reached through `record_mutation_event` rather than
+        # `_append_mutation`, which is a difference in *which* writer touches the
+        # unique and not in what the unique decides. So a remote caller that
+        # never supplies a key still gets a replay rather than a second recorded
+        # name when its response is lost.
+        Capability.ENTITIES_NAMES_ADD,
+        Capability.ENTITIES_NAMES_SUPERSEDE,
+        Capability.ENTITIES_NAMES_RETIRE,
+        Capability.ENTITIES_ADDRESSES_ADD,
+        Capability.ENTITIES_ADDRESSES_REVISE,
+        Capability.ENTITIES_ADDRESSES_RETIRE,
+        Capability.ENTITIES_COMMUNICATION_ADD,
+        Capability.ENTITIES_COMMUNICATION_REVISE,
+        Capability.ENTITIES_COMMUNICATION_RETIRE,
+        Capability.ENTITIES_PARTICIPATIONS_CREATE,
+        Capability.ENTITIES_PARTICIPATIONS_REVISE,
+        Capability.ENTITIES_PARTICIPATIONS_END,
+        Capability.ENTITIES_AFFILIATIONS_CREATE,
+        Capability.ENTITIES_AFFILIATIONS_REVISE,
+        Capability.ENTITIES_AFFILIATIONS_END,
         # **No keyless proposal or identity-correction write is here, and the reason is this set's
         # mechanism rather than a judgement about how replayable they are.**
         # Membership makes `compose_remote_arguments` derive a key and *insert it

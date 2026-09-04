@@ -203,14 +203,45 @@ PARTICIPATION_CHECK_CONSTRAINT: Final = "a_project_participation_display_name_is
 #: `project_display_name`, as an exact set.
 #:
 #: **This is the population rule 1 quantifies over, and it is frozen so that a
-#: fourth write site reddens here rather than arriving unread.** Three sites,
-#: and each is a straight copy of the field it is named after: the use case
-#: copies the command, the writer copies the domain record, the row adapter
-#: copies the column. None of the three has any business reading a global
-#: identity, which is exactly why a fourth needs an argument.
+#: further write site reddens here rather than arriving unread.** Three sites
+#: when this guard was written, and each is a straight copy of the field it is
+#: named after: the use case copies the command, the writer copies the domain
+#: record, the row adapter copies the column. None of the three has any business
+#: reading a global identity, which is exactly why a fourth needs an argument.
+#:
+#: **Five more arrived with RI-ENT-WP-10/11 (`origin/main` at `e004942b`), and
+#: this guard reddened on the base integration of 2026-09-03 — which is the
+#: guard working.** Argued here rather than merged past: the MCP mutation
+#: bridge `application/entity_family_writes.py` copies
+#: `command.project_display_name` from the transport command into the WP-08
+#: `RecordProjectParticipation` and `CorrectProjectParticipation` commands
+#: (two sites), and into the idempotency fingerprint it hashes for replay
+#: detection (one site, a dict entry) — three straight copies of the field the
+#: caller stated, none of which reads `display_name` or `canonical_name`, which
+#: rule 1 verifies over every entry below. `application/service.py`'s
+#: `_participation_view` copies the domain record's own field into the
+#: `entities.participations.list` row it publishes (one site, a dict entry),
+#: the read-side twin of the persistence writer's copy. `application/commands.py`'s
+#: entry is the JSON-schema property description shared by the record and
+#: correct contracts, which restates this boundary to the caller in its own
+#: text ("never copied into the entity's own identity"); it binds a
+#: description, not a value. The guard scans dict keys as bindings on purpose,
+#: so a description is registered as what it is rather than exempted by shape.
 PARTICIPATION_WRITE_SITES: Final = (
+    "src/my_pa/application/commands.py: project_display_name={'description': "
+    '"What this participant is called on THIS project, which may differ from the '
+    "entity's own display name -- a joint-venture trading name, or a person "
+    "credited under a title. It is project-scoped fact and is never copied into "
+    "the entity's own identity.\"}",
+    "src/my_pa/application/entity_family_writes.py: "
+    "project_display_name=command.project_display_name",
+    "src/my_pa/application/entity_family_writes.py: "
+    "project_display_name=command.project_display_name",
+    "src/my_pa/application/entity_family_writes.py: "
+    "project_display_name=command.project_display_name",
     "src/my_pa/application/entity_record_families.py: "
     "project_display_name=command.project_display_name",
+    "src/my_pa/application/service.py: project_display_name=participation.project_display_name",
     "src/my_pa/infrastructure/persistence/entity.py: "
     "project_display_name=participation.project_display_name",
     "src/my_pa/infrastructure/persistence/entity.py: "
@@ -226,8 +257,26 @@ PARTICIPATION_WRITE_SITES: Final = (
 #: name as a parameter; `self.project_display_name` is the domain record's own
 #: blank check. Written as unparsed expressions rather than line numbers, so an
 #: edit elsewhere in a six-thousand-line module does not redden this.
+#:
+#: **Six more readers arrived with RI-ENT-WP-10/11 (`origin/main` at
+#: `e004942b`), registered at the base integration of 2026-09-03 with the
+#: writers above.** `application/commands.py`'s two `self.project_display_name`
+#: reads are the record and correct MCP commands' own blank checks
+#: (`_record_text`), the transport-side twin of the domain record's;
+#: `application/entity_family_writes.py`'s three `command.project_display_name`
+#: reads are the sources of the three copies registered above; and
+#: `application/service.py`'s `participation.project_display_name` is the
+#: source of the `entities.participations.list` row's copy. Every one flows into
+#: a participation command, a participation row, or a blank check — none into
+#: `display_name` or `canonical_name`, which rule 2 reads over the whole tree.
 PARTICIPATION_READ_SITES: Final = (
+    "src/my_pa/application/commands.py: self.project_display_name",
+    "src/my_pa/application/commands.py: self.project_display_name",
+    "src/my_pa/application/entity_family_writes.py: command.project_display_name",
+    "src/my_pa/application/entity_family_writes.py: command.project_display_name",
+    "src/my_pa/application/entity_family_writes.py: command.project_display_name",
     "src/my_pa/application/entity_record_families.py: command.project_display_name",
+    "src/my_pa/application/service.py: participation.project_display_name",
     "src/my_pa/contracts/ports.py: (parameter) project_display_name",
     "src/my_pa/contracts/ports.py: project_display_name",
     "src/my_pa/contracts/ports.py: project_display_name",
@@ -570,19 +619,21 @@ def test_the_vocabularies_are_closed_at_the_sizes_they_declare() -> None:
     """
     assert len(GLOBAL_IDENTITY_COLUMNS) == 2
     assert len(PORTED_LEGACY_PROJECT_NAME_TABLES) == 1
-    assert len(PARTICIPATION_WRITE_SITES) == 3
-    assert len(PARTICIPATION_READ_SITES) == 10
+    assert len(PARTICIPATION_WRITE_SITES) == 8
+    assert len(PARTICIPATION_READ_SITES) == 16
 
 
 def test_the_surface_this_boundary_covers_is_exactly_the_sites_recorded() -> None:
-    """Rule 4. A fourth write site or a fourth reader reddens here.
+    """Rule 4. A write site or a reader beyond the registered ones reddens here.
 
     Stated as equalities over unparsed expressions rather than as floors or line
     numbers: a floor passes when the population grows, and a line number reddens
     when an unrelated edit moves it. The point is that arriving at this boundary
-    is a reviewed act — the three writers each copy the field they are named
-    after, and every reader flows into `EntitySummary.project_roles` or into the
-    domain record's own validation.
+    is a reviewed act — each registered writer copies the field it is named
+    after, and every reader flows into `EntitySummary.project_roles`, into a
+    participation command or published row, or into a blank check. It reddened
+    once already, on the RI-ENT-WP-10/11 base integration, and the sites that
+    arrived were argued into the registries above rather than merged past.
 
     The reverse direction's population is deliberately *not* frozen: it is every
     binding of `display_name` or `canonical_name` in the tree, which grows with

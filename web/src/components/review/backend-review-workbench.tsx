@@ -94,6 +94,10 @@ function moment(value: string): string {
     : `${parsed.toISOString().replace("T", " ").slice(0, 16)} UTC`;
 }
 
+function isTerminalDisposition(value: string | null): boolean {
+  return value === "accept" || value === "correct_and_accept";
+}
+
 export function BackendReviewWorkbench({ cases }: { cases: readonly BackendReviewCase[] }) {
   const [states, setStates] = useState<Record<string, RowState>>({});
   const [corrections, setCorrections] = useState<Record<string, string>>({});
@@ -179,9 +183,11 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
       <ul className="flex flex-col gap-3" data-testid="backend-review-list">
         {cases.map((row) => {
           const state = stateFor(row.reviewCaseId);
+          const terminal =
+            state.phase === "decided" || isTerminalDisposition(row.latestDisposition);
           return (
             <li key={row.reviewCaseId}>
-              <Card data-testid="backend-review-case">
+              <Card data-testid="backend-review-case" data-review-case-id={row.reviewCaseId}>
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <CardTitle>
                     <span className="font-mono text-sm break-all">{row.proposalId}</span>
@@ -266,6 +272,14 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
                     >
                       <strong>Refused, and nothing was stored.</strong> {state.message}
                     </p>
+                  ) : isTerminalDisposition(row.latestDisposition) ? (
+                    <p
+                      role="status"
+                      data-testid="review-already-decided"
+                      className="mt-3 text-sm text-moss-green"
+                    >
+                      This case already has a stored {row.latestDisposition} disposition.
+                    </p>
                   ) : null}
 
                   {state.phase === "correcting" ? (
@@ -285,35 +299,35 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
                     </div>
                   ) : null}
 
-                  {state.phase === "decided" ? null : (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {DISPOSITIONS.map((option) => (
-                        <Button
-                          key={option.value}
-                          variant={option.value === "accept" ? "primary" : "secondary"}
-                          disabled={state.phase === "submitting"}
-                          onClick={() => {
-                            if (option.value === "correct" && state.phase !== "correcting") {
-                              setState(row.reviewCaseId, { phase: "correcting" });
-                              return;
-                            }
-                            void decide(row, option.value);
-                          }}
-                          data-testid={`review-${option.value}`}
-                        >
-                          {option.label}
-                        </Button>
-                      ))}
-                      <Button
-                        variant="ghost"
-                        aria-haspopup="dialog"
-                        onClick={() => setRevealSubject(row.captureId)}
-                        data-testid="review-reveal"
-                      >
-                        Reveal
-                      </Button>
-                    </div>
-                  )}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {terminal
+                      ? null
+                      : DISPOSITIONS.map((option) => (
+                          <Button
+                            key={option.value}
+                            variant={option.value === "accept" ? "primary" : "secondary"}
+                            disabled={state.phase === "submitting"}
+                            onClick={() => {
+                              if (option.value === "correct" && state.phase !== "correcting") {
+                                setState(row.reviewCaseId, { phase: "correcting" });
+                                return;
+                              }
+                              void decide(row, option.value);
+                            }}
+                            data-testid={`review-${option.value}`}
+                          >
+                            {option.label}
+                          </Button>
+                        ))}
+                    <Button
+                      variant="ghost"
+                      aria-haspopup="dialog"
+                      onClick={() => setRevealSubject(row.captureId)}
+                      data-testid="review-reveal"
+                    >
+                      Reveal
+                    </Button>
+                  </div>
                 </CardBody>
               </Card>
             </li>

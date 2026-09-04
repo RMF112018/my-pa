@@ -329,6 +329,30 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.RELATIONSHIP_MEMORY_LIST, Purpose.RELATIONSHIP_MEMORY_READ),
         (Capability.RELATIONSHIP_MEMORY_SEARCH, Purpose.RELATIONSHIP_MEMORY_READ),
         (Capability.RELATIONSHIP_MEMORY_HISTORY, Purpose.RELATIONSHIP_MEMORY_READ),
+        # `RI-ENT-WP-10`'s five record-family reads, all under the read purpose
+        # the plane's other reads already hold and none under a write purpose.
+        (Capability.ENTITIES_PROFILE, Purpose.ENTITY_READ),
+        (Capability.ENTITIES_NAMES_LIST, Purpose.ENTITY_READ),
+        (Capability.ENTITIES_ADDRESSES_LIST, Purpose.ENTITY_READ),
+        (Capability.ENTITIES_COMMUNICATION_LIST, Purpose.ENTITY_READ),
+        (Capability.ENTITIES_PARTICIPATIONS_LIST, Purpose.ENTITY_READ),
+        # `RI-ENT-WP-11`'s record-family writes, each under the `entity_authoring`
+        # the plane's other writes already hold and none under a read purpose.
+        (Capability.ENTITIES_NAMES_ADD, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_NAMES_SUPERSEDE, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_NAMES_RETIRE, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_ADDRESSES_ADD, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_ADDRESSES_REVISE, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_ADDRESSES_RETIRE, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_COMMUNICATION_ADD, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_COMMUNICATION_REVISE, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_COMMUNICATION_RETIRE, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_PARTICIPATIONS_CREATE, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_PARTICIPATIONS_REVISE, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_PARTICIPATIONS_END, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_AFFILIATIONS_CREATE, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_AFFILIATIONS_REVISE, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_AFFILIATIONS_END, Purpose.ENTITY_AUTHORING),
     }
 )
 
@@ -376,10 +400,16 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # purpose per producer and one shared by preview/apply -- so it contributes
     # four pairs rather than the twelve a cross product would give.
     # Final identity recovery adds one read and the operator-only split
-    # preview/apply pair. GSQS B0 adds its start/status pairs. Unioned: 104
-    # capabilities, 34 purposes, 106 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 106
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 106 == 3430
+    # preview/apply pair. GSQS B0 adds its start/status pairs. `RI-ENT-WP-10`
+    # adds five `entities.` reads and no purpose, each under the `entity_read`
+    # the plane's other reads already use, so it contributes five pairs.
+    # `RI-ENT-WP-11` adds the record families' writes and no purpose, each under
+    # the `entity_authoring` the plane's other writes already use, so it
+    # contributes one pair per capability rather than the thirty-four a cross
+    # product would give.
+    # Unioned: 124 capabilities, 34 purposes, 126 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 126
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 126 == 4090
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

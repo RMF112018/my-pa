@@ -120,13 +120,13 @@ Preserved from the source audit; status reflects this increment only.
 | `ENTITY-SCHEMA-002` | High | No normalized entity-address family | **Closed by RI-ENT-WP-03** — `entity_addresses` (9 typed `address_type_code` values, per-(entity, type) uniqueness on `normalized_address_value`) |
 | `ENTITY-SCHEMA-003` | High | No typed phones/domains/websites | **Closed by RI-ENT-WP-03** — `entity_communication_methods` (`method_type_code` email/phone/domain/website, `usage_context_code`, `verification_status_code`) |
 | `ENTITY-REL-001` | Critical | Closed relationship vocabulary (15 of 22 required codes) | **Closed by RI-ENT-WP-06a** — `entity_relationship_types` (global, table-backed taxonomy seeded with the fifteen existing codes plus twenty new ones; `entity_relationships.relationship_type` now a foreign key into it). `EntityRelationshipType` itself was originally left at fifteen codes, disclosed and deliberate; the WP-08 blocker-clearing pass then widened it to thirty-four of the thirty-five, withholding `design_coordinates_with`. **That thirty-four-of-thirty-five state is superseded and is no longer current**: commit `37ead78` renamed the taxonomy entry to `design_coordination_with` (migration `c99cd8ed8d1c`) and closed `EntityRelationshipType` at **thirty-five of thirty-five**, with no withheld code and no change to `tests/architecture/test_relationship_scoring_surface_is_denied.py` — see `EntityRelationshipType`'s docstring and "WP-08 blocker cleared: `EntityRelationshipType` widened to 35 of 35 codes" below |
-| `ENTITY-PROJECT-001` | Critical | Incomplete project participation | **Closed by RI-ENT-WP-04** — `entity_project_participations` (project/participant identity, project-scoped `project_display_name`, `role_code`/`role_text`, `discipline_code`/`discipline_text`, `scope_text`, `role_basis_code`, `stakeholder_side_code`, `stakeholder_class_code`, `relationship_status_code`, temporal state), plus the extensible `entity_role_types`/`entity_discipline_types` taxonomies. **The "no write path exists yet" clause is superseded**: RI-ENT-WP-08 delivered `record_project_participation`/`supersede_project_participation`/`retire_project_participation` on `EntitiesRepository` and `SqlEntityRepository`, and `EntityRecordFamilyService`'s three verbs above them. No MCP capability or tool exists yet (`RI-ENT-WP-10`/`WP-11`) and the service that calls the write path is unwired — see "RI-ENT-WP-08" and "Merge/split disposition" below |
-| `ENTITY-PROVENANCE-001` | High | No fact-level certainty/verification binding | **Closed for schema/domain/persistence by RI-ENT-WP-07** — `entity_assertions`/`entity_assertion_evidence` bind fact-level `assertion_status` (a discrete, unordered epistemic vocabulary, never a confidence score) and evidence to the six WP-02–WP-06 record families that previously had none. **The "repository/service-command wiring (`WP-08`)" clause is now partly closed, not fully**: RI-ENT-WP-08 declared all six assertion methods on the `EntitiesRepository` ABC and implemented them in both test doubles (`a5a939d`, corrected by `7bbc524`), and `EntityRecordFamilyService` records an optional `StatedAssertion` plus one `EntityAssertionEvidence` row per `StatedEvidence` alongside any create or correction of the six families. Still open: MCP exposure (`WP-10`/`WP-11`), which no part of WP-08 delivers, and — inside WP-08's own boundary — mutation-ledger integration, `supersede_assertion`'s collapsed refusal, and the absent retirement verb for `entity_assertions`. See "RI-ENT-WP-07" below and "RI-ENT-WP-08" below for the exact honest boundary of what is and is not delivered |
+| `ENTITY-PROJECT-001` | Critical | Incomplete project participation | **Closed by RI-ENT-WP-04** — `entity_project_participations` (project/participant identity, project-scoped `project_display_name`, `role_code`/`role_text`, `discipline_code`/`discipline_text`, `scope_text`, `role_basis_code`, `stakeholder_side_code`, `stakeholder_class_code`, `relationship_status_code`, temporal state), plus the extensible `entity_role_types`/`entity_discipline_types` taxonomies. **The "no write path exists yet" clause is superseded**: RI-ENT-WP-08 delivered `record_project_participation`/`supersede_project_participation`/`retire_project_participation` on `EntitiesRepository` and `SqlEntityRepository`, and `EntityRecordFamilyService`'s three verbs above them. **The "no MCP capability or tool exists yet" clause is also superseded, and so is the claim beside it that the service is unwired**: `RI-ENT-WP-10` published `entities.participations.list`, a keyset page that makes the caller state which end of the participation it means, and `RI-ENT-WP-11` published `entities.participations.create`, `entities.participations.revise` and `entities.participations.end`, which reach `EntityRecordFamilyService`'s three verbs through `EntityFamilyWriteService`'s ledger bridge. Still open: no participation write carries a `StatedAssertion`. The database-tier tests for all of it were unexecuted when this row was written and have since been run: the full `database or recovery or e2e` selection is 2075 passed, 0 failed at `3dfa74f9` — see "RI-ENT-WP-10", "RI-ENT-WP-11", "RI-ENT-WP-08", "Merge/split disposition" and "The closeout gate" below |
+| `ENTITY-PROVENANCE-001` | High | No fact-level certainty/verification binding | **Closed for schema/domain/persistence by RI-ENT-WP-07** — `entity_assertions`/`entity_assertion_evidence` bind fact-level `assertion_status` (a discrete, unordered epistemic vocabulary, never a confidence score) and evidence to the six WP-02–WP-06 record families that previously had none. **The "repository/service-command wiring (`WP-08`)" clause is now partly closed, not fully**: RI-ENT-WP-08 declared all six assertion methods on the `EntitiesRepository` ABC and implemented them in both test doubles (`a5a939d`, corrected by `7bbc524`), and `EntityRecordFamilyService` records an optional `StatedAssertion` plus one `EntityAssertionEvidence` row per `StatedEvidence` alongside any create or correction of the six families. **The "MCP exposure (`WP-10`/`WP-11`)" clause is now partly closed and must not be read as closed.** The six families' *facts* are reachable over MCP: `RI-ENT-WP-10` publishes five reads over them and `RI-ENT-WP-11` fifteen mutation contracts. **The assertion binding itself is not.** No command published by either package carries a `StatedAssertion` or a `StatedEvidence`, and no response view emits an `entity_assertions` row, so every fact written through the published contracts is written with no assertion attached and no caller can read or state fact-level `assertion_status` over any transport. `RI-ENT-WP-11` omitted it rather than half-exposing it: the schema builder describes no nested dataclass, so the only shape that would publish is the free-form `dict[str, object]` RULING 5 forbids. Also still open, inside WP-08's own boundary: `supersede_assertion`'s collapsed refusal and the absent retirement verb for `entity_assertions`. Mutation-ledger integration is *bridged rather than integrated* — `RI-ENT-WP-11` writes the ledger row from the application tier through the generic `record_mutation_event`, not through `_append_mutation`, with the atomicity consequence recorded under "RI-ENT-WP-11" below. See "RI-ENT-WP-07" below and "RI-ENT-WP-08" below for the exact honest boundary of what is and is not delivered |
 | `ENTITY-PERSON-001` | High | Incomplete person affiliations | **Closed by RI-ENT-WP-05** — `entity_person_organization_affiliations` (nullable `organization_entity_id`, `job_title`, `affiliation_type_code`, temporal `effective_from`/`effective_to` with `state = 'active' AND effective_to IS NULL` denoting "current") |
 | `ENTITY-RESOLUTION-001` | Critical | Resolution cannot follow typed names/identity graph | **Substantially closed, not fully closed** (`RI-ENT-WP-09`) — resolution reads `entity_names` and `entity_communication_methods` by normalized value and corroborates through affiliations and project participations; the three normalized-value indexes that were read by nothing now have their first readers. Two new match reasons and two new contextual signals ship as **unordered categorical** vocabulary per `RULING-M4`, and the domain's "a name alone does not resolve an entity" refusal was decoupled from `_BASIS_ORDER` onto an explicit `_BASES_THAT_NAME_AN_ENTITY`. Remaining: relationship-type and domain-only matching reach search but not resolution; the communication-value read is EMAIL-shaped (see the limitations below); and the database-tier evidence, written unexecuted during authoring, has since been executed by the controlling context -- which found two defects static verification had not; see RI-ENT-WP-09 below |
 | `ENTITY-STATE-001` | High | No canonicalization/review state distinct from lifecycle | Design decision recorded in RI-ENT-WP-01 below (`canonicalization_state_code`, separate 1:1 record, deferred); not implemented this increment |
-| `MCP-CONTRACT-001` | Critical | No rich structured profile read | Not in scope (`RI-ENT-WP-10`) |
-| `MCP-CONTRACT-002` | High | No record-family mutation capabilities for the new families | Not in scope (`RI-ENT-WP-11`); RULING 5 (no mass-assignment endpoint) remains binding when it is |
+| `MCP-CONTRACT-001` | Critical | No rich structured profile read | **Closed by RI-ENT-WP-10** — `entities.profile` publishes one bounded composite over all six Entity-bound record families, and `entities.names.list`, `entities.addresses.list`, `entities.communication.list` and `entities.participations.list` are the keyset pages a caller continues on when a collection overflows the profile's per-collection ceiling. **`entities.context` is unchanged**, because widening the bounded card is classified BREAKING by the audit's own compatibility table and prohibited by `COMPAT-001`; the profile is a new capability beside it, and `RULING-M7`'s three exhaustive key-set assertions now hold "no consumer broke" as a test result rather than as a sentence. Not closed by it: the profile issues no cursor, so an overflowing collection is reported incomplete rather than continued in place, and the four `*_page` SQL bodies have never been executed — see "RI-ENT-WP-10" below |
+| `MCP-CONTRACT-002` | High | No record-family mutation capabilities for the new families | **Closed by RI-ENT-WP-11** — all five Entity-bound record families, three verbs each, every verb an explicit command with named fields and an `idempotency_key`, and every write appending an `entity_mutation_events` row through the new `application/entity_family_writes.py`. RULING 5 holds and is enforced by the generated schema's `"additionalProperties": false` rather than by convention: there is no `entities.profile.save` and there will not be one. **Closed with three disclosures, not silently**: the ledger bridge writes the family row and the ledger row as two statements rather than one, so outside a transaction a family row can be left with no ledger row; `RI-ENT-WP-08`'s caller-supplied `StatedAssertion`/`StatedEvidence` is deliberately not exposed; and every database-tier test proving any of it was committed unexecuted — since run, and green: 2075 passed, 0 failed over the whole selection at `3dfa74f9`. See "RI-ENT-WP-11" and "The closeout gate" below |
 | `COMPAT-001` | High | Additive-vs-breaking policy needed for generated strict schemas | Addressed procedurally in RI-ENT-WP-01 (below); no generated schema exists yet to apply it to |
 | `MIGRATION-001` | Critical | Legacy `relationship_people`/`relationship_organizations` coexist; must not infer legal identity from names | Honored: migration `7e114f822af2` is purely additive, backfills nothing, infers nothing |
 | `SECURITY-001` | High | New families must preserve Principal partitioning, composite keys, append-only ledgers, operator-only merge/split | Partitioning and composite keys: proven by `tests/schema/test_entity_names_and_organization_profile_migration.py`. `entity_project_participations` is Principal-partitioned the same way; `entity_role_types`/`entity_discipline_types` are deliberately **not** Principal-partitioned (global reference vocabularies — see `tests/architecture/test_user_owned_tables_are_partitioned.py`'s `UNPARTITIONED_USER_OWNED` entry for both). Merge/split: **fully wired as of RI-ENT-WP-06b** for all six Entity-bound families (deferred, not silently, through RI-ENT-WP-05) — see "Merge/split disposition" below |
@@ -143,10 +143,10 @@ Preserved from the source audit; status reflects this increment only.
 | WP-05 | Person affiliation integration | **Delivered** — see below |
 | WP-06 | Corporate/entity relationship graph expansion | **Delivered (partial, RI-ENT-WP-06a)** — `entity_relationship_types` taxonomy and the twenty new codes; merge/split coordination for the six WP-02/04/05 record families remains deferred to a separate PR2 |
 | WP-07 | Assertion/confidence/provenance binding | **Delivered (partial)** — `entity_assertions`/`entity_assertion_evidence` (schema, domain, minimal typed persistence helpers, tests); repository/service/command-layer wiring is `WP-08`, MCP exposure is `WP-10`/`WP-11`. No scalar confidence was added under any name (RULING 1) — see below |
-| WP-08 | Repository/domain services and validation | **Delivered (partial)** — seventeen `record_*`/`supersede_*`/`retire_*` methods on `SqlEntityRepository` for the six Entity-bound families, the same seventeen plus RI-ENT-WP-07's six assertion methods declared `@abstractmethod` on `EntitiesRepository`, in-memory equivalents in both test doubles, and the application service `EntityRecordFamilyService` with its own command/receipt DTOs. **The service is deliberately unwired** — no `Capability`, no MCP tool, no HTTP route, no CLI command, and no registration in `ApplicationService`; transport exposure is `WP-10`/`WP-11`. Not delivered — the same list the boundary section below enumerates in full, and it adds nothing to it: mutation-ledger integration, an idempotency key, proposal-validation integration, a retirement verb for `entity_assertions`, a split of `supersede_assertion`'s single refusal, no `correct_*` and no `retire_*` for the singleton `entity_organization_profiles` (which has the in-place `revise_organization_profile` instead — **five** families carry `correct_*`, not six), and no typed refusal for a correction whose successor collides with a *third* active row, which still surfaces the raw `IntegrityError` the plain `record_*` path surfaces. **The correction of a row holding the preferred slot IS delivered**: an earlier revision of this row called it inexpressible as a supersession and refused it outright, which was wrong — see "A preferred row is correctable, and the ordering that reaches it" below |
+| WP-08 | Repository/domain services and validation | **Delivered (partial)** — seventeen `record_*`/`supersede_*`/`retire_*` methods on `SqlEntityRepository` for the six Entity-bound families, the same seventeen plus RI-ENT-WP-07's six assertion methods declared `@abstractmethod` on `EntitiesRepository`, in-memory equivalents in both test doubles, and the application service `EntityRecordFamilyService` with its own command/receipt DTOs. ~~**The service is deliberately unwired** — no `Capability`, no MCP tool, no HTTP route, no CLI command, and no registration in `ApplicationService`; transport exposure is `WP-10`/`WP-11`.~~ **Withdrawn 2026-09-02: that was true when written and is now false.** `RI-ENT-WP-10` and `RI-ENT-WP-11` are the transport exposure it deferred, and they landed: MCP tools, HTTP routes and CLI commands reach the six families under the `entities.` values those two packages added, twenty in all, and `ApplicationService` registers handlers for every one. What remains true of the original claim is only its narrowest reading: no `Capability` names `EntityRecordFamilyService` *directly*, because `RI-ENT-WP-11`'s handlers reach it through `EntityFamilyWriteService`. See "The boundary — what RI-ENT-WP-08 does NOT deliver" below, where the same claim is withdrawn in full. Not delivered — the same list the boundary section below enumerates in full, and it adds nothing to it: mutation-ledger integration, an idempotency key, proposal-validation integration, a retirement verb for `entity_assertions`, a split of `supersede_assertion`'s single refusal, no `correct_*` and no `retire_*` for the singleton `entity_organization_profiles` (which has the in-place `revise_organization_profile` instead — **five** families carry `correct_*`, not six), and no typed refusal for a correction whose successor collides with a *third* active row, which still surfaces the raw `IntegrityError` the plain `record_*` path surfaces. **The correction of a row holding the preferred slot IS delivered**: an earlier revision of this row called it inexpressible as a supersession and refused it outright, which was wrong — see "A preferred row is correctable, and the ordering that reaches it" below |
 | WP-09 | Entity resolution/search vNext | **Delivered (partial)** — resolution now reads typed names, communication values, affiliations and project participations; `entities.search` matches five further paths and carries two disambiguators (`RI-AC-038`). Not delivered: no supporting index (no migration in scope), no effective dating on search, no MCP capability change (`WP-10`/`WP-11`), and the **two** committed database-tier modules, unexecuted during authoring, were executed afterwards and found two defects -- a `NameTypeCode` member that never existed (all eleven tests of that module had errored at setup) and a load-bearing search filter held by nothing -- both since corrected; see below |
-| WP-10 | MCP rich read contracts | Deferred |
-| WP-11 | MCP mutation contracts | Deferred |
+| WP-10 | MCP rich read contracts | **Delivered** — `entities.profile` plus four keyset `.list` reads over the record families, all under `Purpose.ENTITY_READ` and in no write register; four `*_page` port methods beside `identifier_page`/`alias_page`; `entities.context` unchanged and held so by `RULING-M7`'s exhaustive key-set assertions. Not delivered: no cursor on the profile, and the four SQL page bodies are unexecuted — see below |
+| WP-11 | MCP mutation contracts | **Delivered** — fifteen mutation contracts across all five Entity-bound record families, every one an explicitly-fielded command with an `idempotency_key`, every write accounted for by an `entity_mutation_events` row written through the new `application/entity_family_writes.py`; `MutationRecordFamily` widened from six to eleven. Not delivered, and disclosed rather than implied: the family write and its ledger row are two statements and not one, `RI-ENT-WP-08`'s `StatedAssertion`/`StatedEvidence` is not exposed, and a three-way correction collision still answers `internal_error`. Every database-tier test written for it was committed unexecuted; `9cd10a1c` ran them and found 32 failures on two invented identifier prefixes, and they are green at the closeout head — see below |
 | WP-12 | Legacy migration/backfill and compatibility adapters | Deferred |
 | WP-13 | TBR completeness fixture, security, compatibility and documentation | **Delivered (partial)** — the synthetic completeness fixture over all twelve section K structures, the structural half of the audit's section N security matrix, and this record. Deliberately NOT delivered, because none of the work packages that own them is merged: every MCP-facing security item (`RI-ENT-WP-10`/`RI-ENT-WP-11`), the RULING-M7 compatibility snapshots (`RI-ENT-WP-10`), resolution/search behaviour over the fixture (`RI-ENT-WP-09`), and the backfill projection (`RI-ENT-WP-12`). Four open items found and reported rather than closed — see below |
 
@@ -1226,16 +1226,39 @@ directly — the three one-preferred partial uniques, and
 `test_no_supersession_foreign_key_is_deferrable` — are unchanged.
 ### The boundary — what RI-ENT-WP-08 does NOT deliver
 
-**The service is deliberately unwired.** No `Capability` names
-`EntityRecordFamilyService`, no MCP tool, HTTP route or CLI command reaches it,
-and `ApplicationService` does not hold it — the module is imported by nothing
-outside itself. Transport exposure is `RI-ENT-WP-10`/`RI-ENT-WP-11`'s, and
-`WP-11` additionally owns the capability and purpose `CHECK` migrations that
-would have to land before any of this could be published. Declaring the service
-now is the same deliberate half-step `contracts.ports` took when it declared
-the write block abstract: the caller-facing shape is fixed and reviewable
-before anything can invoke it. The module's own docstring says this; it is
-reproduced here rather than paraphrased into something stronger.
+**The service is no longer unwired, and this paragraph's claim that it is
+deliberately unwired is withdrawn in full.** It read, through `RI-ENT-WP-09`:
+
+> **The service is deliberately unwired.** No `Capability` names
+> `EntityRecordFamilyService`, no MCP tool, HTTP route or CLI command reaches
+> it, and `ApplicationService` does not hold it — the module is imported by
+> nothing outside itself. Transport exposure is
+> `RI-ENT-WP-10`/`RI-ENT-WP-11`'s, and `WP-11` additionally owns the capability
+> and purpose `CHECK` migrations that would have to land before any of this
+> could be published.
+
+Every sentence of that was true when it was written and the first three are now
+false. `RI-ENT-WP-10` published five reads over the six families and
+`RI-ENT-WP-11` fifteen mutation contracts over five of them; MCP tools, HTTP
+routes and CLI commands reach all twenty, `ApplicationService` registers a
+handler for every one, and the migration the last sentence anticipated is
+`16f05c46b8c3`. It is withdrawn here, where a reader who remembers it will come
+looking for it, rather than deleted, because a claim this document asserted in
+its own voice has to be seen to be retracted.
+
+**Two narrow readings of it survive and are worth keeping.** No `Capability`
+names `EntityRecordFamilyService` *directly*: `RI-ENT-WP-11`'s handlers reach
+its five families' verbs through a new module, `application/entity_family_writes.py`,
+which supplies the idempotency key and the mutation-ledger row the family writer
+deliberately has neither of — `entity_record_families.py` itself was not edited,
+because it is under independent review on another branch and editing it here
+would collide with the reviewed head. And the half-step this paragraph described
+was the right one: declaring the caller-facing shape before anything could
+invoke it is exactly what let `RI-ENT-WP-11` publish over it without redesigning
+it. What follows in this section — the atomicity that belongs to the caller's
+transaction, the untranslated `IntegrityError` on a three-way correction
+collision — was **not** fixed by the transport packages and remains true as
+written.
 
 **Atomicity belongs to the caller's transaction, not to the service.** A
 correction is a sequence of statements, never one. `SqlEntityRepository` takes the
@@ -2497,14 +2520,23 @@ nor `resolved_exact:typed_name` is a key in the table.
      reachability *before* the lifecycle transition as well as after, with the
      bite proved by re-running the same mutation.
 
-  Both modules are green at this head and the full `database or recovery or
-  e2e` tier is **2008 passed, 0 failed**, measured chunk by chunk and
-  reconciled against a `--collect-only` of 2008/17216. (Corrected from
-  1995 / 1995-of-17140, which were true before this branch integrated
-  `origin/main` at `717e1d15`: UI-IMP-WP02 adds a `database`-marked
-  module and three schema tests, so the selection genuinely grew and the
-  earlier pair was false in a sentence that scopes itself "at this
-  head". Re-measured, not adjusted by a delta.) These two defects are
+  Both modules are green, and on `ri-ent/wp09-resolution` at `2a0326ea` --
+  the head that sentence was written at and the head it is true of -- the full
+  `database or recovery or e2e` tier was **2008 passed, 0 failed**, measured
+  chunk by chunk and reconciled against a `--collect-only` of 2008/17216.
+  (Corrected there from 1995 / 1995-of-17140, which were true before that
+  branch integrated `origin/main` at `717e1d15`: UI-IMP-WP02 adds a
+  `database`-marked module and three schema tests, so the selection genuinely
+  grew and the earlier pair was false in a sentence that scopes itself "at this
+  head". Re-measured, not adjusted by a delta.) **Neither figure is true of
+  THIS tree, and the sentence said "at this head" while auto-merging into a
+  different one.** It reached this document from `origin/main` at `6db2a203`
+  with no conflict marker anywhere near it -- the exact shape of FINDING-M1 --
+  and was caught by re-measuring rather than by resolving. The selection here
+  collects 2,081 of 18,470 rather than 2,008 of 17,216, because this branch
+  carries RI-ENT-WP-10/11 on top of the same WP-09 commits; the executed figure
+  at this head is recorded in the closeout gate block below, and is the one that
+  governs. These two defects are
   the same shape as the `correct_affiliation` defect that blocked RI-ENT-WP-08:
   a documented invariant with nothing holding it, invisible to a green suite.
 
@@ -2529,9 +2561,14 @@ rather than implied.**
 
 ### Scope boundary — what this increment deliberately does NOT do
 
-The audit lists WP-13 as depending on all prior work packages. `RI-ENT-WP-09`
-through `RI-ENT-WP-12` are **not merged**: WP-09 is in review, WP-10/WP-11 and
-WP-12 are being authored concurrently. This increment is therefore bounded to
+The audit lists WP-13 as depending on all prior work packages. When this
+increment was authored, `RI-ENT-WP-09` through `RI-ENT-WP-12` were **not
+merged**: WP-09 was in review, WP-10/WP-11 and WP-12 were being authored
+concurrently. (Corrected 2026-09-03 at the base integration of `origin/main`
+at `8f0e4779`: WP-09 has since merged as PR #175 at `6db2a203`, and WP-10/WP-11
+as PR #177 at `e004942b`; WP-12 remains unmerged. The scope boundary below is
+stated as it bound the increment when it was written, and is unchanged by
+those merges.) This increment is therefore bounded to
 what depends only on `RI-ENT-WP-01` through `RI-ENT-WP-08`, which is what its
 base carries. Deferred, with the work package that owns each:
 
@@ -2699,10 +2736,736 @@ two constructs the prose names would have walked straight past the real site.
 
 `COMPAT-001` is satisfied trivially: this increment adds **no migration, no
 table, no column, no constraint, no enum member and no source module**. It adds
-two test modules and documentation. Nothing it contains can break a consumer,
+three test modules and documentation -- two when this sentence was first
+written (`tests/database/test_tbr_completeness_fixture.py` and
+`tests/unit/test_entity_record_family_security_matrix.py`), and a third at
+closeout, `tests/architecture/test_a_project_name_is_never_a_global_identity.py`
+(corrected 2026-09-03; the closeout extended the increment without extending
+this sentence). Nothing it contains can break a consumer,
 and the compatibility obligation RULING-M7 states — a snapshot test per
 existing `entities.*` tool — belongs to `RI-ENT-WP-10`, which owns the
 capabilities those snapshots would bind.
+
+## RI-ENT-WP-10 — MCP rich read contracts
+
+**Objective** (source audit, section I): publish a rich structured profile read
+over the record families `RI-ENT-WP-02` through `RI-ENT-WP-06` added, and a
+paged read per family beside it. **Finding**: `MCP-CONTRACT-001` (Critical).
+**Non-goal**: every mutation contract (`RI-ENT-WP-11`), legacy backfill
+(`WP-12`), the TBR fixture (`WP-13`).
+
+### What the plane could not do before this work package
+
+Six record families had been stored since `RI-ENT-WP-02` — typed names, the
+organization profile, addresses, communication methods, project participations
+and person/organization affiliations — and `RI-ENT-WP-08` had given all six a
+repository and a service above it. **No capability named any of them.** A caller
+holding every `entities.` name the plane published could not read a legal name,
+a registered address, a work phone number, a project role or an employer, and
+`entities.context` did not help: its card assembles aliases, identifiers,
+assignments, relationships, observations and memories, and reads none of the
+six. The tables were written by the resolution and identity-correction paths and
+read back by nothing a transport could reach.
+
+### What was delivered
+
+**Every name below is a read under `Purpose.ENTITY_READ`. No `Purpose` was
+added, and `purpose_is_known` needed no widening on either account.**
+
+| Capability | Kind | What it reads |
+|---|---|---|
+| `entities.profile` | composite read | all six families in one bounded assembly |
+| `entities.names.list` | keyset page | `entity_names` |
+| `entities.addresses.list` | keyset page | `entity_addresses` |
+| `entities.communication.list` | keyset page | `entity_communication_methods` |
+| `entities.participations.list` | keyset page | `entity_project_participations`, from the stated end |
+
+None of the five is in any write register. They join `_ENTITY_CAPABILITIES` and
+not `_ENTITY_WRITE_CAPABILITIES`, and `tests/contract/test_entity_write_gate.py`
+derives that from the purpose map rather than taking it on trust.
+
+**`entities.profile` is bounded, and says so in the response rather than in a
+runbook.** Each collection is cut at `ENTITY_PROFILE_COLLECTION_LIMIT` (25) with
+one row read past it to detect the overflow; the card carries `is_complete`, and
+`Truncation(is_truncated=..., reason="profile_collection_limit_reached")`
+**issues no cursor**. That absence is deliberate and not an omission: a position
+into an assembly of seven collections would have to mean seven positions at
+once, and the four `.list` capabilities are the continuation for whichever
+collection overflowed. `limitations` and `is_complete` precede the records they
+qualify, per `RI-AC-013`. An unknown `entity_id` is `not_found` rather than an
+empty profile, exactly as `entities.relationships` answers. `principal_id` is
+emitted by no view.
+
+**`entities.participations.list` makes the caller state which end.** The
+port deliberately has no "either end" read, so `perspective` is exactly
+`"project"` or `"participant"` and anything else is an `InvalidRequestError`
+naming `SafeDetail.SELECTOR`. A read that silently unioned both ends would
+answer a question nobody asked and would page over two orderings at once.
+
+**Four `*_page` port methods** — `name_page`, `address_page`,
+`communication_method_page`, `participation_page` — were declared
+`@abstractmethod` on `EntitiesRepository` as siblings of the established
+`identifier_page`/`alias_page`, keyset-ordered on each family's own primary key,
+and implemented in `SqlEntityRepository` and in **both** in-memory doubles
+(`tests/conftest.py` and `tests/evaluation/resolution_harness.py`), because a
+missing method on a subclass of the port is a `TypeError` at instantiation. The
+existing `limit`-only readers are untouched: they answer identity correction,
+and these answer a caller scrolling. **The SQL half is database-gated and was
+never executed**; the doubles are what the contract tier exercises, and that is
+where this package's page evidence comes from.
+
+### `entities.context` is unchanged, and that is a test result rather than a claim
+
+`entities.profile` is a **new** capability and `entities.context` was not
+widened into it. That is not a preference. The audit's own compatibility table
+classifies "replace bounded `entities.context` with a complete profile" as
+**BREAKING**, and `COMPAT-001`'s policy — recorded in this document's
+`RI-ENT-WP-01` section — prohibits a breaking change to a published generated
+schema in this campaign. `entities.context` and `entities.profile` answer
+different questions off different tables, and both now exist rather than one
+having eaten the other. The diff carries the proof: `_entities_context`
+and `_context_card_view` are byte-identical to `516f9e0`.
+
+**`RULING-M7`, and why it was necessary.** The pre-existing card assertions at
+`tests/contract/test_entity_capabilities.py:406` and `:429` named the keys they
+cared about and compared no key *set*, so a field **added** to
+`_context_card_view` would have satisfied every one of them — the guard would
+have stayed green through exactly the change a consumer has to be told about.
+Three exhaustive assertions were therefore **added**:
+
+- `test_the_context_card_publishes_exactly_twelve_keys` — an *ordered*
+  comparison of the twelve card keys, ordered rather than set-equal because
+  `RI-AC-013` is about reading order and a card that moved `limitations` below
+  `memories` would satisfy a set comparison while losing the property the order
+  carries;
+- `test_the_context_cards_nested_entries_publish_exactly_their_own_keys` — the
+  `coverage` and `memories` entries, the card's own composed shapes and the two
+  a widening would most plausibly reach into;
+- `test_the_four_other_entity_reads_publish_exactly_the_keys_they_publish` —
+  `entities.get`, `entities.relationships`, `entities.identifiers.list` and
+  `entities.aliases.list`.
+
+They are **written out rather than derived from the view functions**, which is
+the whole point: a key set derived from `_context_card_view` would agree with
+itself after any edit and would prove nothing. "No consumer broke" is now a test
+result rather than a sentence in a report.
+
+**The assertion was proved to bite, and here is what was done.** The
+implementing worker left no record of the demonstration the design specification
+asked for, so the Orchestrator performed it directly at head `7ffe8218`: a
+thirteenth key, `zz_probe_key`, was planted on `_context_card_view`, and
+`test_the_context_card_publishes_exactly_twelve_keys` failed immediately —
+`AssertionError: assert ['zz_probe_ke...tations', ...] == ['entity', 'a...`, at
+`tests/contract/test_entity_capabilities.py:522`. The plant was then reverted
+and the working tree confirmed byte-identical to the commit
+(tree `46ae09a518dc2e4f6e5c6f320f2a90899c7dbb1d` before and after), with the
+same test passing again. So the claim that a field added to the context card
+now reddens the suite is a measured result, not a reading of the assertion's
+shape.
+
+### `RULING-M3` — the audit's own field names were not transcribed
+
+The audit's example response shape in section I contains `"role_confidence"` and
+`"legal_identity_confidence"`. **Neither was transcribed, and no near-synonym
+was substituted for either.** What ships instead is the categorical, unordered
+vocabulary this campaign has used since `RI-ENT-WP-07`: `assertion_status`,
+`role_basis_code`, `legal_identity_status_code` and `verification_status_code`
+— each a closed set of named states rather than a position on a scale, and none
+of them a number a caller could sort people by.
+
+`tests/architecture/test_relationship_scoring_surface_is_denied.py` was **not
+amended, not widened, not exempted, and not reasoned around**. Its diff from
+`516f9e0` is empty, and that diff — not this paragraph — is the evidence.
+
+### The count defect this package introduced, and the correction that closed it
+
+`93885e2` corrected "thirty-four `entities.` names" everywhere the spelled-count
+sweep reads it and stopped there, which left two whole classes of derived figure
+stale and neither is one that sweep can see.
+
+The first is a defect this package introduced: `_ENTITY_CAPABILITIES` grew by
+five reads while `_ENTITY_WRITE_CAPABILITIES` did not move, so the read half of
+the plane went from eleven to sixteen and nine documents and docstrings still
+said eleven. `tests/architecture/test_spelled_counts_match_the_sets_they_name.py`
+compares a spelled count against `Capability` or `Purpose`, and every one of
+those figures is a *subset* — one clause of a sentence whose neighbouring clause
+names the whole — so the sweep parsed the sentence, checked the clause it
+understood, and was structurally blind to the one beside it. "The eleven reads
+and the twenty-three writes" stayed green while half of it was false.
+
+The second is that **the arbiter reads words and is blind to digits.**
+`bootstrap/gateway.py`, `adapters/cli/__init__.py`, `adapters/cli/app.py`,
+`adapters/mcp/__init__.py`, `contracts/ports.py`,
+`docs/architecture/module-boundaries.md`,
+`tests/contract/test_transport_parity.py` and two runbooks all carried a
+digit-form `104`, and the runbooks quoted the readiness string as
+`49 of 104 capabilities are unwired.` — every one of them green the whole time.
+`fc73555` corrected all of them by measurement, reading each replacement off the
+live sets or the live manifest string. It is recorded here because the same
+defect class recurred in `RI-ENT-WP-11` and in this phase's migration, and
+because a campaign that has been bitten three times by it should say so.
+
+### Not delivered, and disclosed rather than implied
+
+- **No mutation of any kind.** Every capability here is a read; the write
+  contracts are `RI-ENT-WP-11`'s and are recorded below.
+- **`entities.context` is not widened, and will not be by this campaign.** A
+  caller who wants the six families must name `entities.profile`. That is the
+  compatibility rule working, not a gap.
+- **`entities.profile` issues no cursor**, so an entity with more than
+  twenty-five rows in a collection is *reported* as incomplete and is not
+  *continuable* through that capability. The four `.list` reads are the
+  continuation and the caller has to switch to one.
+- **The four `*_page` SQL bodies were never executed.** They are keyset reads
+  written against a closed database tier and verified statically only; the
+  in-memory doubles that the contract tier exercises are a different
+  implementation of the same signature and cannot find a defect in the SQL.
+- **No assertion or evidence is exposed.** `RI-ENT-WP-07`'s `entity_assertions`
+  rows are not read by any view here, so `ENTITY-PROVENANCE-001`'s MCP-exposure
+  clause is untouched by this package.
+- **No supporting index and no migration in this package.** The phase's single
+  revision is `16f05c46b8c3`, recorded under `RI-ENT-WP-11` below; it widens
+  closed CHECK sets and adds no index.
+
+### Tiers run for this work package
+
+The gate-safe tiers only, and nothing else at any point by any `WP-10` worker:
+`tests/unit`, `tests/relationship`, `tests/architecture` and `tests/contract`
+under `-m "not database and not recovery and not e2e and not network and not
+connector and not evaluation"`, plus `ruff check`, `ruff format --check` and
+`mypy src`. Nothing marked `database`, `recovery` or `e2e`, and nothing under
+`tests/database`, `tests/schema`, `tests/migration`, `tests/concurrency`,
+`tests/end_to_end`, `tests/recovery`, `tests/security` or `tests/capture`, was
+run — a machine-wide serial database gate was closed for the whole of this work
+package and the whole of `RI-ENT-WP-11` after it. The phase's measured gate
+results are recorded once, at the end of the `RI-ENT-WP-11` section below.
+
+## RI-ENT-WP-11 — MCP mutation contracts
+
+`MCP-CONTRACT-002`. `RI-ENT-WP-08` gave the five Entity-bound record families a
+writer and `RI-ENT-WP-10` published five reads over them; neither published a
+way to *change* one. This work package publishes the capabilities that do, three
+verbs per family, and the mutation-ledger row that accounts for each write.
+
+**All five families landed.** The table below is complete: every verb the
+source audit named for these families is published, and nothing in `WP-11`'s
+scope was left for a later pass. Where this package stops short is not a family
+— it is the caller-supplied assertion, the `internal_error` a three-way
+correction collision still answers, and every database-tier test in it, each
+recorded under "Deliberately not delivered" and "Unexecuted is not verified"
+below.
+
+| Family | Capability names | `MutationRecordFamily` |
+|---|---|---|
+| Typed names | `entities.names.add`, `entities.names.supersede`, `entities.names.retire` | `name` |
+| Addresses | `entities.addresses.add`, `entities.addresses.revise`, `entities.addresses.retire` | `address` |
+| Communication methods | `entities.communication.add`, `entities.communication.revise`, `entities.communication.retire` | `communication_method` |
+| Project participations | `entities.participations.create`, `entities.participations.revise`, `entities.participations.end` | `project_participation` |
+| Person-organization affiliations | `entities.affiliations.create`, `entities.affiliations.revise`, `entities.affiliations.end` | `person_organization_affiliation` |
+
+**RULING 5 holds and is enforced by the transport rather than by a convention.**
+There is no `entities.profile.save` and there will not be one. Every command
+declares its fields explicitly and the generated MCP schema carries
+`"additionalProperties": false`, so a payload key nothing declares is refused
+before the constructor runs. No command accepts a field map, a `values` mapping,
+a `fields` dict or `**kwargs`.
+
+**The absence mechanism is `EntityDirectedService`'s.** No command carries
+`principal_id`, `authority`, `actor_class`, `state`, `version`, `recorded_at`,
+`updated_at`, `retired_at` or `superseded_by_*`. The server supplies all of them
+from the `Authorization`, and there is nothing that reads such a field and
+ignores it. Optimistic concurrency is `expected_version` on every supersession
+and every withdrawal.
+
+**`supersede` and `revise` are one act under two spellings, and neither is an
+edit.** Both reach the family's `correct_*` verb: a successor row is minted and
+written, and the predecessor is marked SUPERSEDED under the version the caller
+asserted. The audit fixed the inconsistent spelling and it is not normalised
+here, because renaming a published capability to make a table look tidy is a
+worse defect than an inconsistent verb.
+
+**Merge and split remain operator-only, and nothing here went near that.**
+`_OPERATOR_ONLY` is byte-identical to `516f9e0`: the entity-plane names in it
+are still exactly `entities.merge.preview`, `entities.merge`,
+`entities.split.preview` and `entities.split`, and no name published by this
+work package joined it. The distinction is the one "Merge/split disposition
+(`RULING 2`)" above already draws. Correcting a record family is the Principal
+restating a fact about the Principal's own Entity; a merge decides that two
+Entities are one person, which is an identity judgement this campaign reserved
+to an operator and has not un-reserved.
+
+**`RULING-M3` holds across the mutation contracts as it does across the reads.**
+No command field, response key, enum member, identifier or test name introduced
+by this package carries a denied token. What a caller may state about a role, a
+legal identity or a verified channel is a *closed categorical vocabulary* that
+arrives as the enum and is refused otherwise — `NameTypeCode`,
+`AddressTypeCode`, `CommunicationMethodTypeCode`,
+`CommunicationUsageContextCode`, `CommunicationVerificationStatusCode`,
+`RoleBasisCode`, `StakeholderSideCode`, `StakeholderClassCode`,
+`ParticipationStatusCode`, `AffiliationTypeCode`, `OrganizationKindCode`,
+`LegalIdentityStatusCode`, `AssertionStatus` and `EvidenceRole`. There is no
+field on any of these fifteen commands that a caller could sort people by.
+`tests/architecture/test_relationship_scoring_surface_is_denied.py` was not
+amended, widened, exempted or reasoned around; its diff from `516f9e0` is empty.
+
+**The source-mutation name proxy gained exactly one exemption entry, holding a
+pair of names, and was not weakened.** `tests/security/test_mcp_and_cli_negative_evidence.py` and
+`tests/security/test_http_negative_evidence.py` both assert that no non-exempt
+capability *value* contains one of `write`, `create`, `update`, `delete`,
+`remove`, `rename`, `move` or `put` as a substring. Of the names published
+here, exactly two hit it — `entities.participations.create` and
+`entities.affiliations.create` — and the other thirteen pass the proxy unaided,
+which is the check working rather than an omission. A new
+`ENTITY_RECORD_FAMILY_EXEMPTION` frozenset holding exactly those two was added
+to both files, mirroring the existing `ENTITY_DIRECTED_EXEMPTION` and carrying
+its justification: a project participation and a person-organization affiliation
+are **product-owned** records under `ADR-003`, the Principal's own statement
+about the Principal's own Entities; their rows carry no `source_id` and the
+plane reaches no `SourceProvider` at all. `MUTATING_NAMES` is untouched, no
+existing exemption is widened, and a future `entities.participations.delete`
+is still caught. **Both of those files are database-tier and neither was
+executed** — see below.
+
+**A disclosure about this branch's own history, because the commit message is
+misleading and was deliberately not amended.** Commit `aeb09b52` carries the
+message "WIP checkpoint: RI-ENT-WP-11 mutation contracts, preserved mid-flight",
+written by the Manager after a worker was killed by an API session limit with a
+large working set uncommitted; the message says the address family was "likely
+incomplete" because that is what the Manager could honestly say at the time. The
+Orchestrator subsequently **measured** that commit and it is a complete, fully
+green state carrying the whole address family. The message was not amended
+because rewriting a pushed commit mid-history would void the identity the later
+gates are bound to, so the correction is recorded here instead. Read `aeb09b52`
+as a finished increment; do not read its message's implication that the work in
+it was unfinished.
+
+### The ledger bridge, and the atomicity it does *not* have
+
+`EntityRecordFamilyService` returns `RecordedFact`/`CorrectedFact`/`RetiredFact`,
+writes no `entity_mutation_events` row and holds no idempotency key. Making the
+five families reach `SqlEntityRepository._append_mutation` would have meant
+changing around fifteen accepted `EntitiesRepository` port methods from
+`-> None` to `-> DirectedReceipt` while `RI-ENT-WP-08` is under independent
+review, which is a redesign of an accepted contract rather than a use of one.
+
+So a new application module — `src/my_pa/application/entity_family_writes.py` —
+uses two port methods that were already there and are already family-agnostic:
+`directed_replay` (which filters on `(principal_id, capability,
+idempotency_key)` and has no `record_family` predicate) and
+`record_mutation_event`. `entity_mutation_events` carries no family-specific
+column and no foreign key on `record_id`; the only thing standing between it and
+these five families was the closed CHECK `a_mutated_record_family_is_known`,
+which the phase's migration widens.
+
+**The write and its ledger row are two statements, not one, and this is a real
+difference from the directed plane.** `_append_mutation` writes the record and
+the ledger row inside one repository method, so
+`one_entity_mutation_per_key_and_capability` arbitrates the whole act. Here the
+family write and the ledger insert are two separate calls, so that unique
+arbitrates only because **the caller owns the transaction** —
+`SqlUnitOfWork.entities` hands out a repository bound to the open transaction and
+`ApplicationService.invoke` is what opens and commits it. Inside a transaction
+the outcome is still correct: two concurrent writers holding one key both write a
+family row, exactly one commits the ledger row, and the loser's whole transaction
+aborts and takes its family row with it. **Called outside a transaction, a family
+row can be left with no ledger row.** That is stated here and in the module's own
+docstring rather than described as equivalent to the directed plane's
+single-statement arbitration.
+
+`SqlEntityRepository.record_mutation_event` now wraps its INSERT in the same
+`_duplicate_translated(_MUTATION_KEY_UNIQUE)` the directed writer already used,
+so two writers racing past its own pre-read produce a typed refusal rather than a
+raw driver `IntegrityError`. That changes no answer an earlier caller got — an
+untranslated `IntegrityError` and an untranslated `DirectedWriteError` both reach
+`invoke`'s terminal catch for `application.entity_governance`, which classifies
+neither — and it makes the two writers of one table classify one constraint one
+way.
+
+### `MutationRecordFamily` widened from six to eleven
+
+`NAME`, `ADDRESS`, `COMMUNICATION_METHOD`, `PROJECT_PARTICIPATION` and
+`PERSON_ORGANIZATION_AFFILIATION`, spelled exactly as `IdentityEffectFamily`
+spells the same five families, because two vocabularies for one concept are two
+things that can start disagreeing about which rows a correction touched. The
+enum's docstring asserted a closure at six and has been rewritten rather than
+left standing.
+
+`ORGANIZATION_PROFILE` is deliberately **not** added: no `RI-ENT-WP-11`
+capability writes `entity_organization_profiles`, so a member for it would name a
+ledger subject nothing can produce.
+
+**Disclosed side effect.** `entity_proposals`' CHECK
+`an_accepted_proposal_record_family_is_known` is built by the same
+`_one_of(..., MutationRecordFamily, ...)` helper, so widening the enum widens
+that constraint's metadata too and the phase's migration must widen both to keep
+`tables.py` and the DDL in agreement. It is a metadata-parity consequence with no
+behavioural effect: `_PROMOTION_BY_KIND` covers exactly the fifteen existing
+`EntityProposalKind` members and `EntityProposalKind` is not widened here, so no
+new family becomes promotable through a proposal. That is not the same as "no
+change", and it is not left undisclosed.
+
+`SqlEntityRepository.proposal_target_version` is deliberately **not** extended to
+the five new families. It returns `None` for an unmapped family, which would be a
+silent degradation if anything could reach it with one — and nothing can, for the
+reason above: no proposal kind names any of the five.
+
+### No re-enrichment trigger, and why
+
+Nothing is added to `TRIGGERS_BY_MUTATION_CAPABILITY` or to
+`_DIRECT_REENRICHMENT_CAPABILITIES`. `ReenrichmentSubjectKind` has no member for
+a name, an address, a communication method, a participation or an affiliation,
+and `_SUBJECT_ID_KINDS` maps every member it does have to an `IdKind` — so a
+direct caller could not name the subject it changed. The generic path is worse:
+an entry in `TRIGGERS_BY_MUTATION_CAPABILITY` would register Principal-wide work
+under a trigger belonging to a different record family (`NEW_ALIAS` where no
+alias row was written, `ROLE_OR_ORGANIZATION_CHANGE` where no assignment was),
+which is the shape `TRIGGERS_BY_ACCEPTED_PROPOSAL_KIND` records seven absences
+for. Widening the subject vocabulary belongs to the re-enrichment package.
+
+### Deliberately not delivered
+
+- **The caller-supplied assertion is not exposed.** `RI-ENT-WP-08`'s
+  `StatedAssertion`/`StatedEvidence` structure would have to arrive as a nested
+  object; the schema builder describes no nested dataclass, so the only shape
+  that would publish is `dict[str, object]` — the free-form payload RULING 5
+  forbids. It is omitted rather than half-exposed, and every command here writes
+  a fact with no assertion attached. The *assertion* half of
+  `ENTITY-PROVENANCE-001`'s MCP-exposure clause therefore remains open, even
+  though the *facts* half is now closed by these contracts and by
+  `RI-ENT-WP-10`'s reads — which is why that finding's row reads "partly closed"
+  and names both halves rather than reporting a verdict.
+- **A correction whose successor collides with a *third* active row still
+  answers `internal_error`.** The five families' inserts raise the driver's own
+  `IntegrityError`, untranslated, exactly as `EntityRecordFamilyService`'s
+  docstrings already say they do; the application layer holds no `sqlalchemy`, so
+  the only place to classify that is the persistence adapter, and those methods
+  are `RI-ENT-WP-08`'s and under review. The exception does not reach a caller —
+  `invoke`'s terminal catch answers `internal_error` — but `internal_error` is
+  the wrong class for a conflict a caller could act on, and it is recorded as a
+  limitation rather than described as handled. The one violation this work
+  package itself introduces, two writers racing for one idempotency key, *is*
+  classified.
+- **No re-enrichment subject vocabulary.** Recorded in full under "No
+  re-enrichment trigger" above: the absence is deliberate, and the widening
+  belongs to the re-enrichment package rather than to this one.
+
+### The migration, which landed after the contracts and separately from them
+
+The phase's single revision is **`16f05c46b8c3`**, commit `959f6c1b`, written by
+a dedicated owner rather than by any contract worker and landing after every
+capability name `RI-ENT-WP-10` and `RI-ENT-WP-11` publish -- twenty in all --
+was already committed. It is the chain's head. It was written against `c99cd8ed8d1c` and re-parented
+onto `UI-IMP-WP02`'s `2c00c9ac64bc` when `origin/main` was merged in on
+2026-09-02 -- both had been written against `c99cd8ed8d1c`, so the merged tree
+held two heads until one stacked on the other (RULING-M11); the two are
+disjoint, `2c00c9ac64bc` creating five `identity`-schema tables and touching
+none of the three `knowledge`-schema constraints below. It widens
+three closed CHECK sets and nothing else:
+
+| Constraint | Before | After |
+|---|---|---|
+| `knowledge.audit_events.capability_is_known` | 115 values | 135 values |
+| `knowledge.entity_mutation_events.a_mutated_record_family_is_known` | 6 | 11 |
+| `knowledge.entity_proposals.an_accepted_proposal_record_family_is_known` | 6 | 11 |
+
+`knowledge.audit_events.purpose_is_known` is deliberately **not** widened,
+because neither work package adds a `Purpose`. The third row is the
+metadata-parity consequence disclosed above and has no behavioural effect: no
+new family becomes promotable through a proposal.
+
+**The gap between the contracts and the revision was real and is worth
+recording.** `authorize` commits an `audit_events` row *before* the handler
+runs, and `capability_is_known` is a closed CHECK, so between `93885e2` and
+`959f6c1b` every one of the new names was green in every from-scratch test and
+would have answered `internal_error` against a migrated database. Nothing in the
+gate-safe tiers could see that, because a from-scratch test database is built
+from `tables.py` rather than from the revision chain. It was found by
+inspection, not by a test, which is the same way the digit-form count defects
+were found.
+
+### Unexecuted is not verified
+
+> **Superseded at the closeout, 2026-09-02, and left standing rather than
+> rewritten.** Everything in this section was true when it was written and is
+> the record of *why* it was true. It is no longer the current state: the
+> closeout ran the full `database or recovery or e2e` selection at `3dfa74f9`
+> and it is **2075 passed, 0 failed, 0 errors** -- see "The closeout gate"
+> below, which is the section that governs. Two of the modules named below had
+> already been executed before that, in `9cd10a1c`, which found two invented
+> identifier prefixes and 32 failures in one of them. Read what follows as the
+> disclosure it was, and the gate block as the result.
+
+**Every database-tier test written for `RI-ENT-WP-10` and `RI-ENT-WP-11` was
+committed unexecuted.** A machine-wide serial database gate was
+closed for the entire duration of both work packages — a concurrent run would
+have corrupted another work package's measurements on shared disposable database
+names — so no worker on either package ran anything marked `database`,
+`recovery` or `e2e`, or anything under `tests/database`, `tests/schema`,
+`tests/migration`, `tests/concurrency`, `tests/end_to_end`, `tests/recovery`,
+`tests/security` or `tests/capture`.
+
+The modules, by name:
+
+- **`tests/database/test_entity_family_write_ledger.py`** — thirty-two tests
+  across the five families, added over four commits. It is *expected* to have
+  been failing until `16f05c46b8c3` landed. It was executed in `9cd10a1c`,
+  which found 32 failures on two invented identifier prefixes, and is green at
+  the closeout head. The
+  tests are:
+  `test_an_added_name_writes_one_ledger_row_naming_the_new_record_family`,
+  `test_a_retry_with_the_same_key_and_payload_replays_and_writes_nothing`,
+  `test_a_retry_with_the_same_key_and_a_different_payload_is_refused`,
+  `test_a_supersession_names_its_predecessor_and_the_version_it_asserted`,
+  `test_a_retirement_advances_the_version_it_names`,
+  `test_a_stale_expected_version_is_refused_and_leaves_no_ledger_row`,
+  `test_one_key_under_two_capabilities_is_two_writes_and_not_one`,
+  `test_a_second_ledger_row_for_one_key_and_capability_is_refused`,
+  `test_an_added_address_writes_a_ledger_row_naming_the_address_family`,
+  `test_an_address_retry_with_the_same_key_and_payload_replays`,
+  `test_an_address_retry_with_a_different_payload_is_refused`,
+  `test_an_address_revision_is_a_supersession_and_not_an_edit`,
+  `test_an_address_retirement_advances_its_version_and_releases_its_slot`,
+  `test_a_stale_address_version_is_refused_and_leaves_no_ledger_row`,
+  `test_an_added_channel_writes_a_ledger_row_naming_the_communication_family`,
+  `test_a_channel_retry_with_the_same_key_and_payload_replays`,
+  `test_a_channel_retry_with_a_different_payload_is_refused`,
+  `test_a_channel_revision_is_a_supersession_and_not_an_edit`,
+  `test_a_channel_retirement_advances_its_version_and_releases_its_slot`,
+  `test_a_stale_channel_version_is_refused_and_leaves_no_ledger_row`,
+  `test_a_created_participation_writes_a_ledger_row_naming_its_family`,
+  `test_a_participation_retry_with_the_same_key_and_payload_replays`,
+  `test_a_participation_retry_with_a_different_payload_is_refused`,
+  `test_a_participation_revision_is_a_supersession_and_not_an_edit`,
+  `test_a_participation_end_advances_the_version_it_names`,
+  `test_a_stale_participation_version_is_refused_and_leaves_no_ledger_row`,
+  `test_a_created_affiliation_writes_a_ledger_row_naming_its_family`,
+  `test_an_affiliation_retry_with_the_same_key_and_payload_replays`,
+  `test_an_affiliation_retry_with_a_different_payload_is_refused`,
+  `test_an_affiliation_revision_is_a_supersession_and_not_an_edit`,
+  `test_an_affiliation_end_advances_its_version_and_writes_no_date_it_was_not_given`,
+  and `test_a_stale_affiliation_version_is_refused_and_leaves_no_ledger_row`.
+- **`tests/database/test_ri_ent_wp_10_11_vocabulary_migration.py`** — commit
+  `bcd2048`, the database-tier binding for `16f05c46b8c3` itself. It drives all
+  three widened CHECKs with real inserts at head, proves an undeclared name is
+  still refused so the widening did not open them, downgrades one revision and
+  requires every new value to vanish before upgrading and requiring it back, and
+  drives every live `Capability`, `Purpose` and `MutationRecordFamily` through
+  the stored CHECKs. Its own commit records `pytest --collect-only` collecting
+  thirty-five tests in it. **No assertion in it had ever run against a server
+  when that was written**; it was executed in `9cd10a1c` and is green at the
+  closeout head.
+- **`tests/security/test_mcp_and_cli_negative_evidence.py`**,
+  **`tests/security/test_http_negative_evidence.py`** and
+  **`tests/security/test_entity_privacy_regression.py`** — all three were
+  *edited* (the exemption frozenset in the first two, the `_EVERY_CAPABILITY`
+  registry and its served-name count in the third) and none was run. The
+  registry edits in the first two are guard-adjacent by construction and deserve
+  explicit reviewer scrutiny for that reason, not less.
+
+**Unexecuted is not verified, and this campaign has already paid for treating it
+as though it were.** `RI-ENT-WP-09` committed a statically-verified
+database-tier module under the same closed gate; on its first real execution
+**eleven of its thirty tests errored at setup**, against a `NameTypeCode` member
+that never existed. Nothing about the modules above is stronger evidence than
+that module was. Expect them to contain defects; the honest description of their
+status *when this was written* was "written, statically verified, never run",
+and their figures were collection counts, not execution results. **That
+expectation was correct and it was paid out**: `9cd10a1c` executed two of them
+and found 32 failures on two identifier prefixes that do not exist. Every module
+named above has since been executed and is green at `3dfa74f9`.
+
+Two specific claims elsewhere in this section are therefore weaker than they
+read. The wrapping of `SqlEntityRepository.record_mutation_event`'s INSERT in
+`_duplicate_translated(_MUTATION_KEY_UNIQUE)` is a change to a **shared**
+infrastructure method that `RI-ENT-WP-11` made and that no executed test
+exercises: the race it classifies needs two concurrent sessions against a real
+server, which is precisely what could not be run. And the atomicity account
+above is derived from reading the SQL and from who owns the transaction, not
+from observing an aborted transaction.
+
+### Tiers run for this work package, with the figures the Orchestrator measured
+
+Measured at `959f6c1b` by the Orchestrator rather than by any worker, and
+reproduced here verbatim rather than paraphrased:
+
+```
+ruff check .                            All checks passed!
+ruff format --check .                   1194 files already formatted
+mypy src                                Success: no issues found in 307 source files
+alembic heads                           16f05c46b8c3 (head)        [exactly one head]
+pytest <18 gate-safe directories>       15144 passed, 137 deselected, 0 failed
+  -m "not database and not recovery and not e2e and not network
+      and not connector and not evaluation"
+pytest tests/architecture (standalone)  4792 passed, 0 failed
+FAST tier --collect-only                16182 collected, 2036 deselected
+```
+
+The eighteen gate-safe directories are `tests/unit`, `tests/relationship`,
+`tests/architecture`, `tests/contract`, `tests/policy`, `tests/canary`,
+`tests/connector_conformance`, `tests/entity_resolution`, `tests/evaluation`,
+`tests/integration`, `tests/jobs`, `tests/parser_isolation`, `tests/pipeline`,
+`tests/projection`, `tests/provider_conformance`, `tests/runtime_attestation`,
+`tests/search_quality` and `tests/situation`. Everything outside them was
+unexecuted at `959f6c1b`, as recorded above.
+
+**The sentence that stood here was false, and it is FINDING-M7.** It said that
+at the closeout head everything outside those eighteen had been executed too.
+It had not. That list omits `tests/security`, and `tests/security` is mostly
+outside the `database or recovery or e2e` selection as well -- 196 of its tests
+carry one of those markers and **742 do not** -- so those 742 were executed by
+neither half of the gate and the gate reported green over a hole. Tree-wide the
+hole was **1,047 FAST-selected tests**: `tests/security` 742,
+`tests/migration` 173, `tests/schema` 125, `tests/concurrency` 5 and
+`tests/database` 2, each of them a test the marker selection admits and the
+directory list did not reach.
+
+Three real failures were sitting in it. `tests/security/test_http_negative_evidence.py`
+had ten `RI-ENT-WP-11` capabilities answering `404` over the wire, caught by CI
+and by an independent reviewer rather than by this gate.
+
+**The list is retired as a gate boundary.** The FAST tier is now run tree-wide
+by marker, which is what CI runs and what the marker expression already means,
+and the gate reconciles
+
+```
+FAST collected  -  FAST executed  ==  0
+```
+
+at every head that claims a green gate. A directory list can fall behind the
+tree; a marker expression cannot, because it is the same expression on both
+sides of the subtraction. The eighteen names above are kept as the record of
+what was executed at `959f6c1b`, not as a boundary anything still relies on.
+
+Eleven tests sit outside both selections at this head and that is by their own
+markers, not by a hole: five `slow` in `tests/contract/test_task_mcp_protocol_harness.py`,
+one `slow` in `tests/integration/test_gsqs_remote_eval_http.py`, two
+`evaluation` in `tests/evaluation/test_semantic_gate_harness.py`, and three
+`connector` in `tests/unit/test_wp12_slice_c_application.py`. **The identity is
+re-derived at every head rather than carried**, and at the UI-IMP-WP03 merge it
+is 16,378 + 2,081 + 11 = 18,470, which is the whole tree. It read
+16,247 + 2,075 + 11 = 18,333 before that integration; the residue is the same
+eleven tests, enumerated by name above rather than counted, because that base
+added none.
+
+Two guard diffs from `516f9e0` are **empty**, and were checked rather than
+assumed: `AGENTS.md`, which no worker on either package may amend, and
+`tests/architecture/test_relationship_scoring_surface_is_denied.py`.
+`tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py` is
+**not** unchanged, and the exception is disclosed rather than buried: its
+`test_the_chain_is_readable_and_non_empty` counted eighty-six revisions and the
+chain held eighty-seven at `d58f1309`, so the Orchestrator corrected that count
+there (+6/-2, the extra lines being the comment explaining why); the base merge
+then took the chain to eighty-eight and the same constant was corrected again
+by measurement, which is where it stands at the closeout head. It is a
+derived fact about the tree corrected by measuring it (`RULING-M2`), in the
+module's non-vacuity guard; the rule this module exists to enforce is untouched,
+and `DENIED`, `ALLOWED` and `FROZEN` are byte-identical to `516f9e0`.
+
+Anti-laundering, across both packages: **0** skips, **0** xfails, **0** tests
+deleted, **3** `noqa` added and **16** `type: ignore` comments added. Every
+`noqa` is `S608` on an f-string `INSERT` inside the unexecuted migration-test
+module, which is the pre-existing idiom for test SQL in this repository; every
+`type: ignore` is `[index]` or `[arg-type]` on a JSON-response subscript in a
+test file, which is the pre-existing idiom in those files. None of the nineteen
+suppresses an assertion.
+
+The sets these packages moved, measured rather than computed: `Capability`
+104 → **124**; `entities.` names 34 → **54**; `Purpose` 34, **unchanged**;
+`PERMITTED_PAIRS` 106 → **126**; `MutationRecordFamily` 6 → **11**.
+
+The work is on `ri-ent/wp10-11-mcp`, based on `516f9e0` (tree `bf0d211`), and
+these are its commits in order:
+
+| Commit | What it landed |
+|---|---|
+| `93885e20` | `RI-ENT-WP-10`: the six Entity-bound record families published as five reads |
+| `fc735550` | `RI-ENT-WP-10`: every count derived from the read/write split, corrected by measurement |
+| `150f8713` | `RI-ENT-WP-11`: the typed-name family as three mutation contracts |
+| `aeb09b52` | `RI-ENT-WP-11`: the address family — a Manager checkpoint whose message is misleading, measured complete and green, disclosed above |
+| `4ea1a232` | `RI-ENT-WP-11`: the communication-method family |
+| `8349e200` | `RI-ENT-WP-11`: the project-participation family |
+| `e28916c1` | `RI-ENT-WP-11`: the person-organization-affiliation family |
+| `959f6c1b` | the phase's single migration `16f05c46b8c3` — the head the gate figures above were measured at |
+
+Commits landing after `959f6c1b` — the database-tier binding for that migration,
+and the documentation corrections this section is part of — are not covered by
+the figures above, which were measured at `959f6c1b` exactly and are not
+restated for a later head so that this document cannot drift ahead of what
+actually ran.
+
+### The closeout gate, at `3dfa74f9` (tree `ccef26a4`)
+
+Run by the Orchestrator after `origin/main` at `6db2a203` (RI-ENT-WP-09, PR
+#175) was merged in, on the exact head named above. **This block supersedes the
+`959f6c1b` figures for every row it restates**, and every figure below is an
+execution result rather than a collection count except where it says otherwise.
+
+```
+ruff check .                            All checks passed!
+ruff format --check .                   1205 files already formatted
+mypy src                                Success: no issues found in 312 source files
+mypy (configured targets)               Success: no issues found in 443 source files
+alembic heads                           16f05c46b8c3 (head)        [exactly one head]
+alembic history                         88 revisions, matching 88 files
+pytest tests/architecture               4845 passed, 0 failed      [4845 collected]
+pytest <18 gate-safe directories>       15198 passed, 143 deselected, 0 failed
+  -m "not slow and not database and not network and not connector
+      and not evaluation and not e2e and not recovery"
+pytest -m "database or recovery or e2e" 2075 passed, 0 failed, 0 errors
+  chunked by directory and summed; reconciled against --collect-only 2075
+```
+
+**The database tier was run in full, chunked, and the chunks sum exactly.**
+`tests/database` in three groups of nineteen, nineteen and eighteen modules:
+322 + 393 + 261 = 976. `tests/schema` alone: 662 passed, 125 deselected.
+The eleven remaining directories, each in its own invocation: `tests/security`
+196, `tests/search_quality` 84, `tests/migration` 38, `tests/capture` 32,
+`tests/concurrency` 23, `tests/contract` 18, `tests/pipeline` 15, `tests/jobs`
+14, `tests/end_to_end` 13, `tests/recovery` 3, `tests/provider_conformance` 1 --
+437 in all. 976 + 662 + 437 = **2075**, which is the `--collect-only` figure for
+the same selection at the same head, so no chunk was missed and none was counted
+twice.
+
+Those eleven ran one directory per invocation for a reason worth recording: a
+single invocation naming both `tests/jobs` and `tests/migration` fails at
+collection with five `ImportError`s, because both directories hold a
+`conftest.py`, neither holds an `__init__.py`, and `tests/migration`'s modules
+import theirs as a top-level `conftest` -- so whichever directory pytest inserts
+first wins and the other's modules cannot import their own fixtures. That is a
+property of how the run was chunked, not a defect in the tree; the first attempt
+made that mistake, produced `2872 deselected, 5 errors`, and **was discarded
+rather than counted**, which is the rule this campaign applies to any run that
+did not complete.
+
+**`tests/schema` went from 1 failed / 661 passed to 662 passed, and exactly one
+test moved.** The failure was
+`tests/schema/test_capture_schema_migration.py::test_stopping_at_the_capture_revision_emits_the_twelve_it_merged_with`,
+fixed in `efd926dd`; see that commit for the measurement.
+
+The two tests that `docs/plans/relationship-intelligence-implementation-plan.md`
+records as failing only inside a sandboxed worktree --
+`tests/architecture/test_citations_resolve_at_head.py`'s pair, whose `ROOT`
+resolves under `.claude/worktrees/...` where `.claude` is in that test's own
+`SKIPPED_DIRECTORIES` -- **passed here**, because this worktree is not under
+`.claude`. 4845 collected, 4845 passed, nothing skipped.
+
+**Three commits land after `3dfa74f9` under `RULING-M12`, and they move two of
+the figures above by one each.** The block stays as measured rather than being
+rewritten, because it is the record of a head that existed; what follows is the
+delta, measured on the later head rather than inferred.
+`tests/contract/test_relationship_intelligence_profiles.py` gained
+`test_every_governed_capability_is_granted_or_deliberately_withheld`, which is
+FAST-eligible and inside the gate-safe set, and binding the implementation
+plan's database-tier cell to `TIER_CLAIM` added one parametrized verification
+test to `tests/architecture`. So `tests/architecture` collects **4846** and the
+FAST selection collects **16247** of 18333, both re-measured; `database or
+recovery or e2e` is **unmoved at 2075**, because neither new test carries a
+marker in that selection, so the 2075-passed result above stands unqualified at
+the later head. `tests/architecture` was re-run green at that head.
+
+Nothing else in the gate moved: no source module, no test module count beyond
+those two tests, no migration, and one Alembic head throughout.
+
 
 ## Test evidence
 

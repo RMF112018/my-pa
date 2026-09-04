@@ -365,6 +365,58 @@ class SafeDetail(StrEnum):
     PREVIEW_DIGEST = "preview_digest"
     CHOICES = "choices"
 
+    #: `RI-ENT-WP-11`'s record-family write fields. One token per field a
+    #: command can actually refuse, added with the code that reports it, which
+    #: is what this enum's own docstring asks for.
+    #:
+    #: **A token per field rather than one per family.** A caller told
+    #: `target_id` when the value it got wrong was `name_type_code` learns which
+    #: request failed and not which part of it, and these commands carry up to
+    #: fifteen caller-supplied fields each. The lifecycle writes already set the
+    #: precedent -- `assignment_id`, `alias_id`, `identifier_id` are three
+    #: tokens for three identifiers rather than one shared `record_id`.
+    #:
+    #: Each names a *field*, never a value: which key was rejected, and nothing
+    #: about what was in it. A display value, an address line and a job title
+    #: are exactly the content this vocabulary exists to keep out of a public
+    #: error, and none of them is echoed by naming the key it arrived under.
+    ENTITY_NAME_ID = "entity_name_id"
+    NAME_TYPE_CODE = "name_type_code"
+    IS_PREFERRED = "is_preferred"
+    ENTITY_ADDRESS_ID = "entity_address_id"
+    ADDRESS_TYPE_CODE = "address_type_code"
+    RAW_VALUE = "raw_value"
+    LINE1 = "line1"
+    LINE2 = "line2"
+    CITY = "city"
+    REGION = "region"
+    POSTAL_CODE = "postal_code"
+    COUNTRY = "country"
+    LABEL = "label"
+    COMMUNICATION_METHOD_ID = "communication_method_id"
+    METHOD_TYPE_CODE = "method_type_code"
+    USAGE_CONTEXT_CODE = "usage_context_code"
+    VERIFICATION_STATUS_CODE = "verification_status_code"
+    LINKED_EXTERNAL_IDENTIFIER_ID = "linked_external_identifier_id"
+    PARTICIPATION_ID = "participation_id"
+    PROJECT_ENTITY_ID = "project_entity_id"
+    PARTICIPANT_ENTITY_ID = "participant_entity_id"
+    PROJECT_DISPLAY_NAME = "project_display_name"
+    ROLE_BASIS_CODE = "role_basis_code"
+    STAKEHOLDER_SIDE_CODE = "stakeholder_side_code"
+    STAKEHOLDER_CLASS_CODE = "stakeholder_class_code"
+    RELATIONSHIP_STATUS_CODE = "relationship_status_code"
+    ROLE_CODE = "role_code"
+    ROLE_TEXT = "role_text"
+    DISCIPLINE_CODE = "discipline_code"
+    DISCIPLINE_TEXT = "discipline_text"
+    SCOPE_TEXT = "scope_text"
+    AFFILIATION_ID = "affiliation_id"
+    PERSON_ENTITY_ID = "person_entity_id"
+    AFFILIATION_TYPE_CODE = "affiliation_type_code"
+    ORGANIZATION_ENTITY_ID = "organization_entity_id"
+    JOB_TITLE = "job_title"
+
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a
 #: message that described the request would describe it to whoever guessed it.

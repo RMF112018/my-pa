@@ -196,7 +196,7 @@ class EntityContextService:
         """The bounded memory summary, and what it could not say.
 
         **The one read here that does not take `_FETCH`, and the difference is
-        deliberate.** The five entity reads are given the overflow row because
+        deliberate.** The five record-family reads are given the overflow row because
         the port's contract is "return what I asked for" and this module owns the
         bound. `summaries_for_context` owns it instead: it takes the number the
         card can *carry*, adds its own overflow row, and answers with the

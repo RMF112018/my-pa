@@ -19,23 +19,35 @@ import pytest
 from tests.conftest import FakeUnitOfWork, Scene, build_service, metadata_for
 
 from my_pa.application.commands import (
+    AddEntityAddress,
     AddEntityAlias,
+    AddEntityCommunicationMethod,
+    AddEntityName,
     ArchiveEntity,
     BindEntityIdentifier,
     CreateEntity,
+    CreateEntityAffiliation,
     CreateEntityAssignment,
+    CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
+    EndEntityAffiliation,
     EndEntityAssignment,
+    EndEntityParticipation,
     EndEntityRelationship,
     GetEntity,
     GetEntityContext,
     GetEntityIdentityHistory,
+    GetEntityProfile,
     GetEntityRelationships,
+    ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
+    ListEntityCommunicationMethods,
     ListEntityIdentifiers,
+    ListEntityNames,
     ListEntityObservations,
+    ListEntityParticipations,
     ListUnresolvedMentions,
     MergeEntities,
     ObserveEntityMention,
@@ -44,14 +56,22 @@ from my_pa.application.commands import (
     ResolveEntity,
     ResolveUnresolvedMention,
     RestoreEntity,
+    RetireEntityAddress,
     RetireEntityAlias,
+    RetireEntityCommunicationMethod,
     RetireEntityIdentifier,
+    RetireEntityName,
+    ReviseEntityAddress,
+    ReviseEntityAffiliation,
     ReviseEntityAssignment,
+    ReviseEntityCommunicationMethod,
+    ReviseEntityParticipation,
     ReviseEntityRelationship,
     SearchEntities,
     SplitEntity,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
+    SupersedeEntityName,
     UpdateEntity,
 )
 from my_pa.application.errors import InvalidRequestError
@@ -63,9 +83,13 @@ from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.relationship.authoring import CallerNamespace
 from my_pa.domain.relationship.entity import (
+    AddressTypeCode,
+    AffiliationTypeCode,
     AliasType,
     Assignment,
     AssignmentType,
+    CommunicationMethodTypeCode,
+    CommunicationUsageContextCode,
     Entity,
     EntityAlias,
     EntityRelationship,
@@ -74,7 +98,12 @@ from my_pa.domain.relationship.entity import (
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
+    NameTypeCode,
+    ParticipationStatusCode,
     RelationshipState,
+    RoleBasisCode,
+    StakeholderClassCode,
+    StakeholderSideCode,
 )
 from my_pa.domain.relationship.governance import (
     EntityObservation,
@@ -103,6 +132,11 @@ TOWER = "ent_tower0004tower0004"
 #: has to exist for the refusal to be the one under test.
 ASSIGNMENT = "asn_offswitch01offswitch1"
 RELATIONSHIP = "erel_offswitch1offswitch"
+ENTITY_NAME = "enam_offswitch1offswitc"
+ENTITY_ADDRESS = "eadr_offswitch1offswitc"
+COMMUNICATION_METHOD = "ecmm_offswitch1offswit"
+PARTICIPATION = "eppt_offswitch1offswit"
+AFFILIATION = "poaf_offswitch1offswit"
 WHEN = datetime(2026, 8, 18, 12, tzinfo=UTC)
 
 #: What the one staged memory says. Synthetic and about a working preference, so
@@ -460,6 +494,152 @@ def test_an_entity_no_source_has_observed_says_so(staged: Scene) -> None:
     assert card["is_complete"] is True
 
 
+# --- RULING-M7: what these responses publish, exhaustively -------------------
+#
+# The assertions above name keys they care about; none of them compares the
+# whole key set, so a field *added* to any of these responses satisfies every
+# one of them. That is the change a consumer has to be told about, and
+# `RI-ENT-WP-10` added a plane beside these five without touching any of them --
+# a claim worth holding as a test rather than as a sentence in a report.
+#
+# Written out rather than derived from the view functions, deliberately. A set
+# derived from `_context_card_view` would agree with itself after any edit and
+# would prove nothing; these are the keys the published contract names, and the
+# edit that changes one has to change this list too.
+
+
+def test_the_context_card_publishes_exactly_twelve_keys(staged: Scene) -> None:
+    """`entities.context` is unchanged by `RI-ENT-WP-10`, and this is the proof.
+
+    Ordered comparison rather than set equality, because `RI-AC-013` is about
+    reading order: coverage, freshness and exclusions belong *before* the
+    records they qualify, and a card that moved `limitations` below `memories`
+    would satisfy a set comparison while losing the property the order carries.
+    """
+    result = _payload(staged, Capability.ENTITIES_CONTEXT, GetEntityContext(entity_id=ALICE))
+    card = result["context_card"]
+    assert isinstance(card, dict)
+    assert list(card) == [
+        "entity",
+        "assembled_at",
+        "coverage",
+        "most_recent_observation_at",
+        "limitations",
+        "is_complete",
+        "aliases",
+        "identifiers",
+        "assignments",
+        "relationships",
+        "observations",
+        "memories",
+    ]
+
+
+def test_the_context_cards_nested_entries_publish_exactly_their_own_keys(
+    staged: Scene,
+) -> None:
+    """The two collections a widening would most plausibly reach into.
+
+    `coverage` and `memories` are the card's own composed shapes rather than a
+    record view shared with another capability, so a field added to either
+    would appear here and nowhere else.
+    """
+    _record_memory(staged, ALICE, ALICE_MEMORY)
+    result = _payload(staged, Capability.ENTITIES_CONTEXT, GetEntityContext(entity_id=ALICE))
+    card = result["context_card"]
+    assert isinstance(card, dict)
+    assert set(card["coverage"][0]) == {
+        "source_id",
+        "observation_count",
+        "most_recent_observation_at",
+    }
+    assert set(card["memories"][0]) == {
+        "memory_id",
+        "kind",
+        "statement",
+        "authority",
+        "classification",
+        "pinned",
+        "effective_from",
+        "effective_to",
+        "recorded_at",
+    }
+
+
+def test_the_four_other_entity_reads_publish_exactly_the_keys_they_publish(
+    staged: Scene,
+) -> None:
+    """`entities.get`, `.relationships`, `.identifiers.list` and `.aliases.list`.
+
+    One test over the four, because the claim is one claim: none of these four
+    responses changed. Each envelope and each record it carries is compared
+    whole.
+    """
+    got = _payload(staged, Capability.ENTITIES_GET, GetEntity(entity_id=ALICE))
+    assert set(got) == {"entity"}
+    assert set(got["entity"]) == {  # type: ignore[arg-type]
+        "entity_id",
+        "entity_type",
+        "canonical_name",
+        "display_name",
+        "status",
+        "created_at",
+        "updated_at",
+        "version",
+        "superseded_by_entity_id",
+    }
+
+    edges = _payload(
+        staged, Capability.ENTITIES_RELATIONSHIPS, GetEntityRelationships(entity_id=ALICE)
+    )
+    assert set(edges) == {"relationships"}
+    assert set(edges["relationships"][0]) == {  # type: ignore[index]
+        "relationship_id",
+        "from_entity_id",
+        "relationship_type",
+        "to_entity_id",
+        "scope_entity_id",
+        "state",
+        "version",
+        "effective_from",
+        "effective_to",
+        "is_current",
+    }
+
+    identifiers = _payload(
+        staged, Capability.ENTITIES_IDENTIFIERS_LIST, ListEntityIdentifiers(entity_id=ALICE)
+    )
+    assert set(identifiers) == {"entity_id", "identifiers"}
+    assert set(identifiers["identifiers"][0]) == {  # type: ignore[index]
+        "identifier_id",
+        "namespace",
+        "display_value",
+        "verified",
+        "state",
+        "version",
+        "effective_from",
+        "effective_to",
+        "retired_at",
+        "updated_at",
+        "superseded_by_identifier_id",
+    }
+
+    aliases = _payload(staged, Capability.ENTITIES_ALIASES_LIST, ListEntityAliases(entity_id=ALICE))
+    assert set(aliases) == {"entity_id", "aliases"}
+    assert set(aliases["aliases"][0]) == {  # type: ignore[index]
+        "alias_id",
+        "alias_type",
+        "display_value",
+        "state",
+        "version",
+        "effective_from",
+        "effective_to",
+        "retired_at",
+        "updated_at",
+        "superseded_by_alias_id",
+    }
+
+
 def test_a_context_card_for_an_unknown_entity_is_not_found(staged: Scene) -> None:
     body = _invoke(
         staged,
@@ -616,6 +796,124 @@ _OFF_SWITCH_COMMANDS: dict[Capability, object] = {
     # each command has to be is well formed rather than resolvable.
     Capability.ENTITIES_IDENTIFIERS_LIST: ListEntityIdentifiers(entity_id=ALICE),
     Capability.ENTITIES_ALIASES_LIST: ListEntityAliases(entity_id=ALICE),
+    # `RI-ENT-WP-10`'s five record-family reads, all naming `ALICE`.
+    # `perspective` is spelled because the command has no default.
+    Capability.ENTITIES_PROFILE: GetEntityProfile(entity_id=ALICE),
+    Capability.ENTITIES_NAMES_LIST: ListEntityNames(entity_id=ALICE),
+    Capability.ENTITIES_ADDRESSES_LIST: ListEntityAddresses(entity_id=ALICE),
+    Capability.ENTITIES_COMMUNICATION_LIST: ListEntityCommunicationMethods(entity_id=ALICE),
+    Capability.ENTITIES_PARTICIPATIONS_LIST: ListEntityParticipations(
+        entity_id=ALICE, perspective="participant"
+    ),
+    # `RI-ENT-WP-11`'s record-family writes, all naming `ALICE` and a derived
+    # name identifier, on the same terms as the lifecycle writes above: the
+    # plane is disabled in this sweep, so what each command has to be is well
+    # formed rather than resolvable.
+    Capability.ENTITIES_NAMES_ADD: AddEntityName(
+        entity_id=ALICE,
+        name_type_code=NameTypeCode.LEGAL,
+        display_value="Alice Chen",
+        idempotency_key="off-switch-names-add",
+    ),
+    Capability.ENTITIES_NAMES_SUPERSEDE: SupersedeEntityName(
+        entity_name_id=ENTITY_NAME,
+        expected_version=1,
+        entity_id=ALICE,
+        name_type_code=NameTypeCode.LEGAL,
+        display_value="Alice Chen",
+        idempotency_key="off-switch-names-supersede",
+    ),
+    Capability.ENTITIES_NAMES_RETIRE: RetireEntityName(
+        entity_name_id=ENTITY_NAME,
+        expected_version=1,
+        idempotency_key="off-switch-names-retire",
+    ),
+    Capability.ENTITIES_ADDRESSES_ADD: AddEntityAddress(
+        entity_id=ALICE,
+        address_type_code=AddressTypeCode.BUSINESS,
+        raw_value="1 Synthetic Way",
+        idempotency_key="off-switch-addresses-add",
+    ),
+    Capability.ENTITIES_ADDRESSES_REVISE: ReviseEntityAddress(
+        entity_address_id=ENTITY_ADDRESS,
+        expected_version=1,
+        entity_id=ALICE,
+        address_type_code=AddressTypeCode.BUSINESS,
+        raw_value="2 Synthetic Way",
+        idempotency_key="off-switch-addresses-revise",
+    ),
+    Capability.ENTITIES_ADDRESSES_RETIRE: RetireEntityAddress(
+        entity_address_id=ENTITY_ADDRESS,
+        expected_version=1,
+        idempotency_key="off-switch-addresses-retire",
+    ),
+    Capability.ENTITIES_COMMUNICATION_ADD: AddEntityCommunicationMethod(
+        entity_id=ALICE,
+        method_type_code=CommunicationMethodTypeCode.EMAIL,
+        usage_context_code=CommunicationUsageContextCode.CORPORATE,
+        display_value="off.switch@example.test",
+        idempotency_key="off-switch-communication-add",
+    ),
+    Capability.ENTITIES_COMMUNICATION_REVISE: ReviseEntityCommunicationMethod(
+        communication_method_id=COMMUNICATION_METHOD,
+        expected_version=1,
+        entity_id=ALICE,
+        method_type_code=CommunicationMethodTypeCode.EMAIL,
+        usage_context_code=CommunicationUsageContextCode.CORPORATE,
+        display_value="off.switch.corrected@example.test",
+        idempotency_key="off-switch-communication-revise",
+    ),
+    Capability.ENTITIES_COMMUNICATION_RETIRE: RetireEntityCommunicationMethod(
+        communication_method_id=COMMUNICATION_METHOD,
+        expected_version=1,
+        idempotency_key="off-switch-communication-retire",
+    ),
+    Capability.ENTITIES_PARTICIPATIONS_CREATE: CreateEntityParticipation(
+        project_entity_id=TOWER,
+        participant_entity_id=ALICE,
+        project_display_name="Alice Chen on Tower",
+        role_basis_code=RoleBasisCode.CONTRACTUAL,
+        stakeholder_side_code=StakeholderSideCode.DESIGN,
+        stakeholder_class_code=StakeholderClassCode.CORE,
+        relationship_status_code=ParticipationStatusCode.ACTIVE,
+        idempotency_key="off-switch-participations-create",
+    ),
+    Capability.ENTITIES_PARTICIPATIONS_REVISE: ReviseEntityParticipation(
+        participation_id=PARTICIPATION,
+        expected_version=1,
+        project_entity_id=TOWER,
+        participant_entity_id=ALICE,
+        project_display_name="Alice Chen on Tower, corrected",
+        role_basis_code=RoleBasisCode.CONTRACTUAL,
+        stakeholder_side_code=StakeholderSideCode.DESIGN,
+        stakeholder_class_code=StakeholderClassCode.CORE,
+        relationship_status_code=ParticipationStatusCode.ACTIVE,
+        idempotency_key="off-switch-participations-revise",
+    ),
+    Capability.ENTITIES_PARTICIPATIONS_END: EndEntityParticipation(
+        participation_id=PARTICIPATION,
+        expected_version=1,
+        idempotency_key="off-switch-participations-end",
+    ),
+    Capability.ENTITIES_AFFILIATIONS_CREATE: CreateEntityAffiliation(
+        person_entity_id=ALICE,
+        affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+        idempotency_key="off-switch-affiliations-create",
+        organization_entity_id=ACME,
+    ),
+    Capability.ENTITIES_AFFILIATIONS_REVISE: ReviseEntityAffiliation(
+        affiliation_id=AFFILIATION,
+        expected_version=1,
+        person_entity_id=ALICE,
+        affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+        organization_entity_id=ACME,
+        idempotency_key="off-switch-affiliations-revise",
+    ),
+    Capability.ENTITIES_AFFILIATIONS_END: EndEntityAffiliation(
+        affiliation_id=AFFILIATION,
+        expected_version=1,
+        idempotency_key="off-switch-affiliations-end",
+    ),
     Capability.ENTITIES_CREATE: CreateEntity(
         entity_type=EntityType.PERSON,
         display_name="Alice Chen",
@@ -792,11 +1090,11 @@ def test_the_off_switch_sweep_covers_every_capability_on_the_plane() -> None:
     """
     served = {capability for capability in Capability if capability.value.startswith("entities.")}
     assert set(_OFF_SWITCH_COMMANDS) == served
-    # Thirty-four after RI final completion: identity history and the governed
-    # split's two halves join the existing plane. The count is asserted rather than derived for
-    # the reason it always was -- it is what tells a reader the prefix scan found
-    # the plane and not a substring of it.
-    assert len(served) == 34
+    # Fifty-four after `RI-ENT-WP-11`'s five record families: the
+    # thirty-nine `RI-ENT-WP-10` left plus three write verbs per family. The count is
+    # asserted rather than derived for the reason it always was -- it is what
+    # tells a reader the prefix scan found the plane and not a substring of it.
+    assert len(served) == 54
 
 
 @pytest.mark.parametrize(

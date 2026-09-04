@@ -51,7 +51,10 @@ from tests.conftest import (
 )
 
 from my_pa.application.commands import (
+    AddEntityAddress,
     AddEntityAlias,
+    AddEntityCommunicationMethod,
+    AddEntityName,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
@@ -65,7 +68,9 @@ from my_pa.application.commands import (
     CreateCapture,
     CreateCommitment,
     CreateEntity,
+    CreateEntityAffiliation,
     CreateEntityAssignment,
+    CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
     CreateManagedDocument,
@@ -74,7 +79,9 @@ from my_pa.application.commands import (
     CreateSituation,
     CreateTask,
     DecideReviewCase,
+    EndEntityAffiliation,
     EndEntityAssignment,
+    EndEntityParticipation,
     EndEntityRelationship,
     EnrollSource,
     FetchSource,
@@ -84,6 +91,7 @@ from my_pa.application.commands import (
     GetEntity,
     GetEntityContext,
     GetEntityIdentityHistory,
+    GetEntityProfile,
     GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
@@ -97,10 +105,14 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
+    ListEntityCommunicationMethods,
     ListEntityIdentifiers,
+    ListEntityNames,
     ListEntityObservations,
+    ListEntityParticipations,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
@@ -131,11 +143,18 @@ from my_pa.application.commands import (
     RestoreEntity,
     RestoreManagedDocument,
     RestoreRelationshipMemory,
+    RetireEntityAddress,
     RetireEntityAlias,
+    RetireEntityCommunicationMethod,
     RetireEntityIdentifier,
+    RetireEntityName,
     RevealSubject,
     ReviseCapture,
+    ReviseEntityAddress,
+    ReviseEntityAffiliation,
     ReviseEntityAssignment,
+    ReviseEntityCommunicationMethod,
+    ReviseEntityParticipation,
     ReviseEntityRelationship,
     ReviseManagedDocument,
     ReviseRelationshipMemory,
@@ -151,6 +170,7 @@ from my_pa.application.commands import (
     SubmitGoodNotesProposal,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
+    SupersedeEntityName,
     TransitionTask,
     UpdateCommitment,
     UpdateEntity,
@@ -181,10 +201,19 @@ from my_pa.domain.intelligence.catalog import (
 from my_pa.domain.policy.decision import DenialReason
 from my_pa.domain.relationship.authoring import CallerNamespace
 from my_pa.domain.relationship.entity import (
+    AddressTypeCode,
+    AffiliationTypeCode,
     AliasType,
     AssignmentType,
+    CommunicationMethodTypeCode,
+    CommunicationUsageContextCode,
     EntityRelationshipType,
     EntityType,
+    NameTypeCode,
+    ParticipationStatusCode,
+    RoleBasisCode,
+    StakeholderClassCode,
+    StakeholderSideCode,
 )
 from my_pa.domain.relationship.governance import (
     ObservationAuthority,
@@ -569,6 +598,132 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         ),
         Capability.ENTITIES_ALIASES_LIST: ListEntityAliases(
             entity_id=issue_identifier(IdKind.ENTITY)
+        ),
+        # `RI-ENT-WP-10`'s five record-family reads. Minted identifiers for the
+        # reason every read above mints one, and `perspective` is spelled out
+        # because the command has no default: an omitted one is an
+        # `invalid_request`, which would stand in for the `denied` these tests
+        # exist to prove.
+        Capability.ENTITIES_PROFILE: GetEntityProfile(entity_id=issue_identifier(IdKind.ENTITY)),
+        Capability.ENTITIES_NAMES_LIST: ListEntityNames(entity_id=issue_identifier(IdKind.ENTITY)),
+        Capability.ENTITIES_ADDRESSES_LIST: ListEntityAddresses(
+            entity_id=issue_identifier(IdKind.ENTITY)
+        ),
+        Capability.ENTITIES_COMMUNICATION_LIST: ListEntityCommunicationMethods(
+            entity_id=issue_identifier(IdKind.ENTITY)
+        ),
+        Capability.ENTITIES_PARTICIPATIONS_LIST: ListEntityParticipations(
+            entity_id=issue_identifier(IdKind.ENTITY), perspective="participant"
+        ),
+        # `RI-ENT-WP-11`'s record-family writes. Every field the command
+        # requires is stated, for the reason the reads above mint identifiers:
+        # a command that could not be constructed would answer
+        # `invalid_request`, which would stand in for the `denied` these tests
+        # exist to prove.
+        Capability.ENTITIES_NAMES_ADD: AddEntityName(
+            entity_id=issue_identifier(IdKind.ENTITY),
+            name_type_code=NameTypeCode.LEGAL,
+            display_value="Synthetic Person",
+            idempotency_key="policy-entity-names-add",
+        ),
+        Capability.ENTITIES_NAMES_SUPERSEDE: SupersedeEntityName(
+            entity_name_id=issue_identifier(IdKind.ENTITY_NAME),
+            expected_version=1,
+            entity_id=issue_identifier(IdKind.ENTITY),
+            name_type_code=NameTypeCode.LEGAL,
+            display_value="Synthetic Person",
+            idempotency_key="policy-entity-names-supersede",
+        ),
+        Capability.ENTITIES_NAMES_RETIRE: RetireEntityName(
+            entity_name_id=issue_identifier(IdKind.ENTITY_NAME),
+            expected_version=1,
+            idempotency_key="policy-entity-names-retire",
+        ),
+        Capability.ENTITIES_ADDRESSES_ADD: AddEntityAddress(
+            entity_id=issue_identifier(IdKind.ENTITY),
+            address_type_code=AddressTypeCode.BUSINESS,
+            raw_value="1 Synthetic Way",
+            idempotency_key="policy-entity-addresses-add",
+        ),
+        Capability.ENTITIES_ADDRESSES_REVISE: ReviseEntityAddress(
+            entity_address_id=issue_identifier(IdKind.ENTITY_ADDRESS),
+            expected_version=1,
+            entity_id=issue_identifier(IdKind.ENTITY),
+            address_type_code=AddressTypeCode.BUSINESS,
+            raw_value="2 Synthetic Way",
+            idempotency_key="policy-entity-addresses-revise",
+        ),
+        Capability.ENTITIES_ADDRESSES_RETIRE: RetireEntityAddress(
+            entity_address_id=issue_identifier(IdKind.ENTITY_ADDRESS),
+            expected_version=1,
+            idempotency_key="policy-entity-addresses-retire",
+        ),
+        Capability.ENTITIES_COMMUNICATION_ADD: AddEntityCommunicationMethod(
+            entity_id=issue_identifier(IdKind.ENTITY),
+            method_type_code=CommunicationMethodTypeCode.EMAIL,
+            usage_context_code=CommunicationUsageContextCode.CORPORATE,
+            display_value="policy.synthetic@example.test",
+            idempotency_key="policy-entity-communication-add",
+        ),
+        Capability.ENTITIES_COMMUNICATION_REVISE: ReviseEntityCommunicationMethod(
+            communication_method_id=issue_identifier(IdKind.ENTITY_COMMUNICATION_METHOD),
+            expected_version=1,
+            entity_id=issue_identifier(IdKind.ENTITY),
+            method_type_code=CommunicationMethodTypeCode.EMAIL,
+            usage_context_code=CommunicationUsageContextCode.CORPORATE,
+            display_value="policy.corrected@example.test",
+            idempotency_key="policy-entity-communication-revise",
+        ),
+        Capability.ENTITIES_COMMUNICATION_RETIRE: RetireEntityCommunicationMethod(
+            communication_method_id=issue_identifier(IdKind.ENTITY_COMMUNICATION_METHOD),
+            expected_version=1,
+            idempotency_key="policy-entity-communication-retire",
+        ),
+        Capability.ENTITIES_PARTICIPATIONS_CREATE: CreateEntityParticipation(
+            project_entity_id=issue_identifier(IdKind.ENTITY),
+            participant_entity_id=issue_identifier(IdKind.ENTITY),
+            project_display_name="Synthetic Person on Synthetic Project",
+            role_basis_code=RoleBasisCode.CONTRACTUAL,
+            stakeholder_side_code=StakeholderSideCode.DESIGN,
+            stakeholder_class_code=StakeholderClassCode.CORE,
+            relationship_status_code=ParticipationStatusCode.ACTIVE,
+            idempotency_key="policy-entity-participations-create",
+        ),
+        Capability.ENTITIES_PARTICIPATIONS_REVISE: ReviseEntityParticipation(
+            participation_id=issue_identifier(IdKind.ENTITY_PROJECT_PARTICIPATION),
+            expected_version=1,
+            project_entity_id=issue_identifier(IdKind.ENTITY),
+            participant_entity_id=issue_identifier(IdKind.ENTITY),
+            project_display_name="Synthetic Person, corrected",
+            role_basis_code=RoleBasisCode.CONTRACTUAL,
+            stakeholder_side_code=StakeholderSideCode.DESIGN,
+            stakeholder_class_code=StakeholderClassCode.CORE,
+            relationship_status_code=ParticipationStatusCode.ACTIVE,
+            idempotency_key="policy-entity-participations-revise",
+        ),
+        Capability.ENTITIES_PARTICIPATIONS_END: EndEntityParticipation(
+            participation_id=issue_identifier(IdKind.ENTITY_PROJECT_PARTICIPATION),
+            expected_version=1,
+            idempotency_key="policy-entity-participations-end",
+        ),
+        Capability.ENTITIES_AFFILIATIONS_CREATE: CreateEntityAffiliation(
+            person_entity_id=issue_identifier(IdKind.ENTITY),
+            affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+            idempotency_key="policy-entity-affiliations-create",
+            organization_entity_id=issue_identifier(IdKind.ENTITY),
+        ),
+        Capability.ENTITIES_AFFILIATIONS_REVISE: ReviseEntityAffiliation(
+            affiliation_id=issue_identifier(IdKind.PERSON_ORGANIZATION_AFFILIATION),
+            expected_version=1,
+            person_entity_id=issue_identifier(IdKind.ENTITY),
+            affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+            organization_entity_id=issue_identifier(IdKind.ENTITY),
+            idempotency_key="policy-entity-affiliations-revise",
+        ),
+        Capability.ENTITIES_AFFILIATIONS_END: EndEntityAffiliation(
+            affiliation_id=issue_identifier(IdKind.PERSON_ORGANIZATION_AFFILIATION),
+            expected_version=1,
+            idempotency_key="policy-entity-affiliations-end",
         ),
         Capability.ENTITIES_CREATE: CreateEntity(
             entity_type=EntityType.PERSON,
@@ -979,6 +1134,36 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_OBSERVATIONS_LIST,
         Capability.ENTITIES_OBSERVE,
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
+        # `RI-ENT-WP-10`'s five record-family reads. A typed name, an address, a
+        # communication method, a participation and an affiliation are the
+        # Principal's own record of their own contact: those rows carry no
+        # `source_id` and no `enrollment_id` for a scope to be compared
+        # against. All five sit in `domain.policy.decision._SCOPELESS`.
+        Capability.ENTITIES_PROFILE,
+        Capability.ENTITIES_NAMES_LIST,
+        Capability.ENTITIES_ADDRESSES_LIST,
+        Capability.ENTITIES_COMMUNICATION_LIST,
+        Capability.ENTITIES_PARTICIPATIONS_LIST,
+        # `RI-ENT-WP-11`'s record-family writes, on the identical argument and
+        # unchanged by the fact that they write: recording, superseding or
+        # retiring a typed name writes a row that carries no `source_id` and no
+        # `enrollment_id` for a scope to be compared against. They sit in
+        # `domain.policy.decision._SCOPELESS` beside the reads.
+        Capability.ENTITIES_NAMES_ADD,
+        Capability.ENTITIES_NAMES_SUPERSEDE,
+        Capability.ENTITIES_NAMES_RETIRE,
+        Capability.ENTITIES_ADDRESSES_ADD,
+        Capability.ENTITIES_ADDRESSES_REVISE,
+        Capability.ENTITIES_ADDRESSES_RETIRE,
+        Capability.ENTITIES_COMMUNICATION_ADD,
+        Capability.ENTITIES_COMMUNICATION_REVISE,
+        Capability.ENTITIES_COMMUNICATION_RETIRE,
+        Capability.ENTITIES_PARTICIPATIONS_CREATE,
+        Capability.ENTITIES_PARTICIPATIONS_REVISE,
+        Capability.ENTITIES_PARTICIPATIONS_END,
+        Capability.ENTITIES_AFFILIATIONS_CREATE,
+        Capability.ENTITIES_AFFILIATIONS_REVISE,
+        Capability.ENTITIES_AFFILIATIONS_END,
         # The Relationship Memory plane names an Entity, not a source. A memory
         # is the product's own knowledge under ADR-003 -- written by the
         # Principal about a person, never read out of a source root -- so its
@@ -1151,6 +1336,36 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.ENTITIES_OBSERVATIONS_LIST,
         Capability.ENTITIES_OBSERVE,
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
+        # `RI-ENT-WP-10`'s five record-family reads. A typed name, an address, a
+        # communication method, a participation and an affiliation are the
+        # Principal's own record of their own contact: those rows carry no
+        # `source_id` and no `enrollment_id` for a scope to be compared
+        # against. All five sit in `domain.policy.decision._SCOPELESS`.
+        Capability.ENTITIES_PROFILE,
+        Capability.ENTITIES_NAMES_LIST,
+        Capability.ENTITIES_ADDRESSES_LIST,
+        Capability.ENTITIES_COMMUNICATION_LIST,
+        Capability.ENTITIES_PARTICIPATIONS_LIST,
+        # `RI-ENT-WP-11`'s record-family writes, on the identical argument and
+        # unchanged by the fact that they write: recording, superseding or
+        # retiring a typed name writes a row that carries no `source_id` and no
+        # `enrollment_id` for a scope to be compared against. They sit in
+        # `domain.policy.decision._SCOPELESS` beside the reads.
+        Capability.ENTITIES_NAMES_ADD,
+        Capability.ENTITIES_NAMES_SUPERSEDE,
+        Capability.ENTITIES_NAMES_RETIRE,
+        Capability.ENTITIES_ADDRESSES_ADD,
+        Capability.ENTITIES_ADDRESSES_REVISE,
+        Capability.ENTITIES_ADDRESSES_RETIRE,
+        Capability.ENTITIES_COMMUNICATION_ADD,
+        Capability.ENTITIES_COMMUNICATION_REVISE,
+        Capability.ENTITIES_COMMUNICATION_RETIRE,
+        Capability.ENTITIES_PARTICIPATIONS_CREATE,
+        Capability.ENTITIES_PARTICIPATIONS_REVISE,
+        Capability.ENTITIES_PARTICIPATIONS_END,
+        Capability.ENTITIES_AFFILIATIONS_CREATE,
+        Capability.ENTITIES_AFFILIATIONS_REVISE,
+        Capability.ENTITIES_AFFILIATIONS_END,
         # The Relationship Memory plane names an Entity, not a source. A memory
         # is the product's own knowledge under ADR-003 -- written by the
         # Principal about a person, never read out of a source root -- so its

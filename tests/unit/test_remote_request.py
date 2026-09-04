@@ -447,7 +447,8 @@ def test_compose_stamps_idempotency_for_task_create() -> None:
 #: The `entities.` writes whose replay identity is **not** a caller-shaped key,
 #: and so are deliberately outside the sweep below.
 #:
-#: Every one of the eighteen Phase A writes carries an `idempotency_key` field on
+#: Every one of the thirty-three keyed writes -- Phase A's eighteen plus
+#: `RI-ENT-WP-11`'s record-family writes -- carries an `idempotency_key` field on
 #: its command, which is what makes membership of
 #: `_IDEMPOTENT_REMOTE_CAPABILITIES` meaningful for it: the set's mechanism is
 #: *inserting a derived key into the payload*, so a capability in it must have a
@@ -506,7 +507,9 @@ def _entity_writes() -> frozenset[Capability]:
 def test_every_entity_write_is_a_server_stamped_idempotent_remote_capability() -> None:
     """The whole write half, derived and compared rather than enumerated twice."""
     writes = _entity_writes()
-    assert len(writes) == 18
+    # Thirty-three after `RI-ENT-WP-11`'s five record families: Phase A's
+    # eighteen plus three verbs per family, each carrying its own key.
+    assert len(writes) == 33
     assert writes <= _IDEMPOTENT_REMOTE_CAPABILITIES
     # And the exception is not the rule: every keyless write really does carry a
     # write purpose, so subtracting them narrowed the sweep rather than being a
@@ -524,7 +527,10 @@ def test_no_entity_read_is_stamped_with_an_idempotency_key() -> None:
         if capability.value.startswith("entities.")
         and not permitted_purposes(capability) & _WRITE_PURPOSES
     }
-    assert len(reads) == 11
+    # Sixteen after `RI-ENT-WP-10`: the eleven earlier reads plus its five
+    # record-family reads, none of which carries an `idempotency_key` field
+    # because none of them writes.
+    assert len(reads) == 16
     assert not reads & _IDEMPOTENT_REMOTE_CAPABILITIES
 
 
@@ -602,7 +608,7 @@ def test_compose_stamps_a_key_for_an_observation_ingest_write() -> None:
     ids=lambda item: item.value,
 )
 def test_no_entity_write_accepts_a_caller_supplied_key(capability: Capability) -> None:
-    """Refused before a Purpose is resolved, on every one of the eighteen.
+    """Refused before a Purpose is resolved, on every one of them.
 
     Parametrised deliberately: `REMOTE_OWNED_PAYLOAD_FIELDS` is checked once in
     `compose_remote_arguments` for every capability, so a per-capability sweep

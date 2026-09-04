@@ -49,7 +49,10 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from my_pa.application.commands import (
+    AddEntityAddress,
     AddEntityAlias,
+    AddEntityCommunicationMethod,
+    AddEntityName,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
@@ -63,7 +66,9 @@ from my_pa.application.commands import (
     CreateCapture,
     CreateCommitment,
     CreateEntity,
+    CreateEntityAffiliation,
     CreateEntityAssignment,
+    CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
     CreateManagedDocument,
@@ -72,7 +77,9 @@ from my_pa.application.commands import (
     CreateSituation,
     CreateTask,
     DecideReviewCase,
+    EndEntityAffiliation,
     EndEntityAssignment,
+    EndEntityParticipation,
     EndEntityRelationship,
     EnrollSource,
     FetchSource,
@@ -82,6 +89,7 @@ from my_pa.application.commands import (
     GetEntity,
     GetEntityContext,
     GetEntityIdentityHistory,
+    GetEntityProfile,
     GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
@@ -95,10 +103,14 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
+    ListEntityCommunicationMethods,
     ListEntityIdentifiers,
+    ListEntityNames,
     ListEntityObservations,
+    ListEntityParticipations,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
@@ -129,11 +141,18 @@ from my_pa.application.commands import (
     RestoreEntity,
     RestoreManagedDocument,
     RestoreRelationshipMemory,
+    RetireEntityAddress,
     RetireEntityAlias,
+    RetireEntityCommunicationMethod,
     RetireEntityIdentifier,
+    RetireEntityName,
     RevealSubject,
     ReviseCapture,
+    ReviseEntityAddress,
+    ReviseEntityAffiliation,
     ReviseEntityAssignment,
+    ReviseEntityCommunicationMethod,
+    ReviseEntityParticipation,
     ReviseEntityRelationship,
     ReviseManagedDocument,
     ReviseRelationshipMemory,
@@ -149,6 +168,7 @@ from my_pa.application.commands import (
     SubmitGoodNotesProposal,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
+    SupersedeEntityName,
     TransitionTask,
     UpdateCommitment,
     UpdateEntity,
@@ -359,6 +379,37 @@ def _requested_scope(
             # carries no `source_id` and no `enrollment_id` at all.
             | ListEntityIdentifiers()
             | ListEntityAliases()
+            # `RI-ENT-WP-10`'s five record-family reads make the same
+            # measurement as the two paged reads above them. A typed name, an
+            # address, a communication method, a participation and an
+            # affiliation are the Principal's own record of their own contact:
+            # those rows carry no `source_id` and no `enrollment_id`, so there
+            # is nothing here for a caller to state and nothing to resolve.
+            | GetEntityProfile()
+            | ListEntityNames()
+            | ListEntityAddresses()
+            | ListEntityCommunicationMethods()
+            | ListEntityParticipations()
+            # `RI-ENT-WP-11`'s record-family writes make the same measurement,
+            # and a write makes it more plainly than a read: recording,
+            # superseding or retiring a typed name is the Principal's own
+            # statement about the Principal's own contact, and the row it writes
+            # carries no `source_id` and no `enrollment_id` at all.
+            | AddEntityName()
+            | SupersedeEntityName()
+            | RetireEntityName()
+            | AddEntityAddress()
+            | ReviseEntityAddress()
+            | RetireEntityAddress()
+            | AddEntityCommunicationMethod()
+            | ReviseEntityCommunicationMethod()
+            | RetireEntityCommunicationMethod()
+            | CreateEntityParticipation()
+            | ReviseEntityParticipation()
+            | EndEntityParticipation()
+            | CreateEntityAffiliation()
+            | ReviseEntityAffiliation()
+            | EndEntityAffiliation()
             | CreateEntity()
             | UpdateEntity()
             | ArchiveEntity()

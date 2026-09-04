@@ -57,6 +57,7 @@ from my_pa.domain.relationship.normalization import (
 
 __all__ = [
     "ARCHIVABLE_STATUSES",
+    "ENTITY_PROFILE_COLLECTION_LIMIT",
     "MAX_DIRECTED_EVIDENCE_REFS",
     "MAX_DIRECTED_REASON_CHARACTERS",
     "MAX_DIRECTED_TEXT_CHARACTERS",
@@ -83,6 +84,7 @@ __all__ = [
     "EntityName",
     "EntityNameState",
     "EntityOrganizationProfile",
+    "EntityProfileLimitation",
     "EntityProjectParticipation",
     "EntityProjectParticipationState",
     "EntityRelationship",
@@ -2411,3 +2413,57 @@ def descriptor_key(value: str | None) -> str:
     rule; stated twice and never compared it is two rules that drift.
     """
     return "" if value is None else value.strip().lower()
+
+
+# --- RI-ENT-WP-10: what one assembled profile carries ------------------------
+#
+# The bound is decided here and enforced in the repository, which is the split
+# `application.entity_context` states for the context card: the port answers
+# "what is recorded", and how much of that one assembled answer carries is a
+# product judgement that belongs beside the records it bounds. The limit-only
+# readers on the port keep their unbounded default, so a caller who wants every
+# address can still ask for every address.
+
+#: How many rows of each record family one `entities.profile` answer carries.
+#:
+#: The same figure `CONTEXT_CARD_COLLECTION_LIMIT` uses, and deliberately not a
+#: larger one: a profile assembles seven collections where the card assembles
+#: six, so a bound raised here multiplies further than it looks. A caller that
+#: needs past it has the four `entities.*.list` capabilities, which page one
+#: family at a time and issue a real cursor.
+ENTITY_PROFILE_COLLECTION_LIMIT: int = 25
+
+
+class EntityProfileLimitation(StrEnum):
+    """What an assembled profile left out, in a closed vocabulary.
+
+    Named per collection rather than as one "truncated" flag, for the reason
+    `ContextCardLimitation` is: "there are more addresses than these" and "there
+    are more participations than these" call for different next requests, and a
+    single flag would make the caller guess which. Here the next request is a
+    named capability, so the mapping is exact -- each member points at the one
+    `entities.*.list` name that pages the family it names.
+
+    The two participation members and the two affiliation members are separate
+    because their families carry two independent entity columns: a profile that
+    overflowed on the projects this person takes part in has said nothing about
+    whether it also overflowed on the people taking part in it.
+    """
+
+    MORE_NAMES_THAN_THIS_PROFILE_CARRIES = "more_names_than_this_profile_carries"
+    MORE_ADDRESSES_THAN_THIS_PROFILE_CARRIES = "more_addresses_than_this_profile_carries"
+    MORE_COMMUNICATION_METHODS_THAN_THIS_PROFILE_CARRIES = (
+        "more_communication_methods_than_this_profile_carries"
+    )
+    MORE_PARTICIPATIONS_AS_PROJECT_THAN_THIS_PROFILE_CARRIES = (
+        "more_participations_as_project_than_this_profile_carries"
+    )
+    MORE_PARTICIPATIONS_AS_PARTICIPANT_THAN_THIS_PROFILE_CARRIES = (
+        "more_participations_as_participant_than_this_profile_carries"
+    )
+    MORE_AFFILIATIONS_AS_PERSON_THAN_THIS_PROFILE_CARRIES = (
+        "more_affiliations_as_person_than_this_profile_carries"
+    )
+    MORE_AFFILIATIONS_AS_ORGANIZATION_THAN_THIS_PROFILE_CARRIES = (
+        "more_affiliations_as_organization_than_this_profile_carries"
+    )

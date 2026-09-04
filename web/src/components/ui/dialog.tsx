@@ -46,7 +46,7 @@ export function Dialog({ open, onClose, title, children }: DialogProps) {
           type="button"
           onClick={onClose}
           aria-label="Close dialog"
-          className="rounded p-1 text-muted hover:bg-moss-sand"
+          className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--radius-md)] text-muted hover:bg-moss-sand"
         >
           ✕
         </button>

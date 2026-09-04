@@ -123,6 +123,7 @@ from my_pa.application.commands import (
     GetCorpusCoverage,
     GetEntity,
     GetEntityContext,
+    GetEntityGraph,
     GetEntityIdentityHistory,
     GetEntityProfile,
     GetEntityRelationships,
@@ -717,6 +718,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "entity_id": person.entity_id,
             "direction": "any",
         },
+        Capability.ENTITIES_GRAPH: {"focus_entity_id": person.entity_id},
         # No arguments: the queue is every unplaced mention in the Principal's
         # own partition, so there is nothing to name.
         Capability.ENTITIES_UNRESOLVED_MENTIONS: {},
@@ -1482,6 +1484,7 @@ def commands_for(
         Capability.ENTITIES_RELATIONSHIPS: GetEntityRelationships(
             entity_id=person.entity_id, direction="any"
         ),
+        Capability.ENTITIES_GRAPH: GetEntityGraph(focus_entity_id=person.entity_id),
         Capability.ENTITIES_UNRESOLVED_MENTIONS: ListUnresolvedMentions(),
         # The entity plane's authoring half, written as the commands the payload
         # table above must normalise to. The vocabulary members and the datetime

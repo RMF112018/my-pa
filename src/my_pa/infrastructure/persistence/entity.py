@@ -3012,11 +3012,7 @@ class SqlEntityRepository(EntitiesRepository):
         _require_row_limit(limit)
         if after_edge_id is not None:
             self._require_reachable_graph_cursor(principal_id, after_edge_id)
-        type_filter = (
-            None
-            if relationship_types is None
-            else entity_relationships.c.relationship_type.in_(tuple(sorted(relationship_types)))
-        )
+        types = tuple(sorted(relationship_types)) if relationship_types is not None else None
         seed_select = union_all(
             *(select(literal(seed).label("entity_id")) for seed in seeds)
         ).subquery("graph_seeds")
@@ -3024,12 +3020,20 @@ class SqlEntityRepository(EntitiesRepository):
             select(entity_relationships.c.to_entity_id.label("entity_id")).where(
                 _mine(entity_relationships, principal_id),
                 entity_relationships.c.from_entity_id.in_(select(seed_select.c.entity_id)),
-                _optional(type_filter),
+                _optional(
+                    entity_relationships.c.relationship_type.in_(types)
+                    if types is not None
+                    else None
+                ),
             ),
             select(entity_relationships.c.from_entity_id.label("entity_id")).where(
                 _mine(entity_relationships, principal_id),
                 entity_relationships.c.to_entity_id.in_(select(seed_select.c.entity_id)),
-                _optional(type_filter),
+                _optional(
+                    entity_relationships.c.relationship_type.in_(types)
+                    if types is not None
+                    else None
+                ),
             ),
             select(entity_assignments.c.scope_entity_id.label("entity_id")).where(
                 _mine(entity_assignments, principal_id),
@@ -3068,7 +3072,11 @@ class SqlEntityRepository(EntitiesRepository):
                     entity_relationships.c.from_entity_id.in_(select(frontier.c.entity_id)),
                     entity_relationships.c.to_entity_id.in_(select(frontier.c.entity_id)),
                 ),
-                _optional(type_filter),
+                _optional(
+                    entity_relationships.c.relationship_type.in_(types)
+                    if types is not None
+                    else None
+                ),
                 _optional(
                     entity_relationships.c.relationship_id > after_edge_id
                     if after_edge_id is not None
@@ -3120,9 +3128,9 @@ class SqlEntityRepository(EntitiesRepository):
             .order_by(entities.c.entity_id)
         ).all()
         return EntityGraphPage(
-            entities=tuple(_row_to_entity(row) for row in entity_rows),
-            assignments=tuple(assignments),
-            relationships=tuple(relationships),
+            tuple(_row_to_entity(row) for row in entity_rows),
+            tuple(assignments),
+            tuple(relationships),
         )
 
     def _require_reachable_graph_cursor(self, principal_id: str, after_edge_id: str) -> None:
@@ -3136,14 +3144,19 @@ class SqlEntityRepository(EntitiesRepository):
             validate_identifier(after_edge_id, IdKind.ASSIGNMENT)
         except InvalidIdentifierError:
             validate_identifier(after_edge_id, IdKind.ENTITY_RELATIONSHIP)
-            table = entity_relationships
-            column = entity_relationships.c.relationship_id
+            reachable = self._connection.execute(
+                select(entity_relationships.c.relationship_id).where(
+                    _mine(entity_relationships, principal_id),
+                    entity_relationships.c.relationship_id == after_edge_id,
+                )
+            ).first()
         else:
-            table = entity_assignments
-            column = entity_assignments.c.assignment_id
-        reachable = self._connection.execute(
-            select(column).where(_mine(table, principal_id), column == after_edge_id)
-        ).first()
+            reachable = self._connection.execute(
+                select(entity_assignments.c.assignment_id).where(
+                    _mine(entity_assignments, principal_id),
+                    entity_assignments.c.assignment_id == after_edge_id,
+                )
+            ).first()
         if reachable is None:
             raise UnknownScopeError("a graph cursor names an edge in this scope")
 

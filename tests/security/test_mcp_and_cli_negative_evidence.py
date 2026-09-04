@@ -372,6 +372,7 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_RESOLVE,
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
+        Capability.ENTITIES_GRAPH,
         Capability.ENTITIES_UNRESOLVED_MENTIONS,
         # The authoring half (`WP-RI-A-02`) is scopeless more plainly still: it
         # writes the Principal's own record of a person, and the row it writes

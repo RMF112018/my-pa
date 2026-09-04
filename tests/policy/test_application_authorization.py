@@ -90,6 +90,7 @@ from my_pa.application.commands import (
     GetCorpusCoverage,
     GetEntity,
     GetEntityContext,
+    GetEntityGraph,
     GetEntityIdentityHistory,
     GetEntityProfile,
     GetEntityRelationships,
@@ -587,6 +588,7 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.ENTITIES_RELATIONSHIPS: GetEntityRelationships(
             entity_id=issue_identifier(IdKind.ENTITY)
         ),
+        Capability.ENTITIES_GRAPH: GetEntityGraph(focus_entity_id=issue_identifier(IdKind.ENTITY)),
         Capability.ENTITIES_UNRESOLVED_MENTIONS: ListUnresolvedMentions(),
         # The entity plane's authoring half (`WP-RI-A-02`). Every identifier is
         # minted for the reason the reads above mint theirs, and every
@@ -1103,6 +1105,7 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_RESOLVE,
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
+        Capability.ENTITIES_GRAPH,
         Capability.ENTITIES_UNRESOLVED_MENTIONS,
         # The authoring half (`WP-RI-A-02`) makes the same measurement more
         # plainly than a read does: it writes the Principal's own record of a
@@ -1305,6 +1308,7 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.ENTITIES_RESOLVE,
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
+        Capability.ENTITIES_GRAPH,
         Capability.ENTITIES_UNRESOLVED_MENTIONS,
         # The authoring half (`WP-RI-A-02`) makes the same measurement more
         # plainly than a read does: it writes the Principal's own record of a

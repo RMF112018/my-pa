@@ -647,6 +647,7 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         },
         Capability.ENTITIES_CONTEXT: {"entity_id": person.entity_id},
         Capability.ENTITIES_RELATIONSHIPS: {"entity_id": person.entity_id, "direction": "any"},
+        Capability.ENTITIES_GRAPH: {"focus_entity_id": person.entity_id},
         Capability.ENTITIES_UNRESOLVED_MENTIONS: {},
         # The entity plane's authoring half (`WP-RI-A-02`), and its payloads carry
         # no marker for the reason the reads above carry none: every field is an
@@ -1526,6 +1527,7 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_RESOLVE,
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
+        Capability.ENTITIES_GRAPH,
         Capability.ENTITIES_UNRESOLVED_MENTIONS,
         # The authoring half (`WP-RI-A-02`) is scopeless more plainly still: it
         # writes the Principal's own record of a person, and the row it writes

@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-one hundred and twenty-four capabilities. There are two ways to prove that and only one stays
+one hundred and twenty-seven capabilities. There are two ways to prove that and only one stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -27,7 +27,7 @@ as bytes: `RequestMetadata` through the contract's own canonical encoding, the
 command through its fields.
 
 **And the answers, over every fully composed capability and ten refusals.** A
-default composition exposes fifty-five: the six managed-document names, the
+default composition exposes fifty-eight: the six managed-document names, the
 fifty-four `entities.` names and the nine Relationship Memory names are
 withheld without their explicit configuration, and this harness sets all of
 them — including `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED`, which is a

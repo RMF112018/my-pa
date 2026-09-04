@@ -325,7 +325,7 @@ _ORDINAL_UNITS = (
     "seventy-first",
     "seventy-second",
     "seventy-third",
-    "seventy-seventh",
+    "seventy-fourth",
     "seventy-fifth",
     "seventy-sixth",
     "seventy-seventh",
@@ -406,6 +406,12 @@ _ORDINAL_UNITS = (
     "hundred-twenty-third",
     "hundred-twenty-fourth",
     "hundred-twenty-fifth",
+    # GoodNotes pull took the capability set to one hundred and twenty-seven,
+    # so the green-half plant needs the next ordinal. Keep this tuple dense: a
+    # gap makes a readable compound ordinal fall back to its final unit.
+    "hundred-twenty-sixth",
+    "hundred-twenty-seventh",
+    "hundred-twenty-eighth",
 )
 
 
@@ -912,7 +918,7 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
     # records what deriving it would cost.
     (
         "ops/runbooks/mcp-and-cli-operations.md",
-        "**fifty-five**",
+        "**fifty-eight**",
         "A default process publishes",
         "the count a default composition publishes — `Capability` less the six "
         "`documents.`, fifty-four `entities.` and nine `relationship_memory.` names it "
@@ -921,18 +927,18 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
     ),
     (
         "ops/runbooks/mcp-and-cli-operations.md",
-        "**fifty-five**",
+        "**fifty-eight**",
         "none beginning `documents.`",
         "the same default-publication count, in the line naming the test that measures it",
     ),
     (
         "README.md",
-        "fifty-five tools",
-        "process publishes fifty-five tools",
+        "fifty-eight tools",
+        "process publishes fifty-eight tools",
         "the same default-publication count, in the bullet describing the MCP "
         "adapter; the tool list is derived from `available_capabilities`, not "
         "from `Capability`, which the same bullet states correctly as "
-        "one hundred and twenty-four",
+        "one hundred and twenty-seven",
     ),
     # --- the Intelligence Artifact plane, newly swept --------------------------
     #

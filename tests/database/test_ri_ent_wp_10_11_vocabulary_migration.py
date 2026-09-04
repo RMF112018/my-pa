@@ -468,7 +468,7 @@ def test_the_stored_vocabularies_are_missing_nothing_the_domain_declares(
     names are stored and are not in `Capability`, and they predate all of this.
     The direction that breaks a request is a name the domain declares and the
     database has never heard of, and the only way to be sure of it for all one
-    hundred and twenty-four is to try all one hundred and twenty-four.
+    hundred and twenty-seven is to try all one hundred and twenty-seven.
 
     `Purpose` is driven for the same reason and not because this revision
     touched it: it deliberately does not widen `purpose_is_known`, because

@@ -410,7 +410,8 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # the `entity_authoring` the plane's other writes already use, so it
     # contributes one pair per capability rather than the thirty-four a cross
     # product would give.
-    # GoodNotes pull adds three capabilities, two purposes, and three pairs.
+    # GoodNotes pull adds its pull, complete, and status capabilities under its
+    # pull and observation purposes, producing three permitted pairs.
     # Unioned: 127 capabilities, 36 purposes, 129 permitted pairs.
     assert len(PERMITTED_PAIRS) == 129
     assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 129 == 4443

@@ -868,6 +868,15 @@ describe("System reports what is off as off", () => {
     ]);
     expect(body.connectedSources).toBeNull();
   });
+
+  it("keeps synthetic System JSON from inventing a top-level intelligence field", async () => {
+    vi.stubEnv("MYPA_DATA_PROVIDER", "synthetic");
+    const cookie = await signIn();
+    const body = await (await system(get(cookie, "/api/system"))).json();
+    expect(body.backend).toBeNull();
+    expect(body.intelligence).toBeUndefined();
+    expect(body.pwa.fields).toBe("PWA_FIELDS_PENDING_WP26");
+  });
 });
 
 describe("Today is a derivation, not a feed", () => {

@@ -147,7 +147,6 @@ export async function GET(request: NextRequest) {
       dataProvider: "synthetic",
       backend: null,
       connectedSources: null,
-      intelligence: null,
       disclosure: syntheticDisclosure(SCOPE),
     });
   }

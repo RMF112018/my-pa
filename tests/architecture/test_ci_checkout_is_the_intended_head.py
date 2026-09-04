@@ -20,14 +20,16 @@ INVOKE_LOG: Final = "ApplicationService.invoke"
 def test_repository_checks_pin_checkout_and_record_package_identity() -> None:
     """The provenance the frozen audit required, as workflow text.
 
-    Four jobs check out this repository. Each must pin `ref` to the PR head
+    Eight jobs check out this repository: validate, web-security,
+    dependency-floor, and the five database-tier lanes. The database-tier
+    aggregator does not check out. Each checkout must pin `ref` to the PR head
     (or push SHA) and refuse when `git rev-parse HEAD` disagrees. Jobs that
     install Python must also print the published package name and the
     `ApplicationService.invoke` execution boundary.
     """
     text = WORKFLOW.read_text(encoding="utf-8")
     checkouts = text.count("uses: actions/checkout@")
-    assert checkouts == 4, checkouts
+    assert checkouts == 8, checkouts
     assert text.count(CHECKOUT_PIN) >= checkouts, (
         f"each checkout must set ref to `{CHECKOUT_PIN}`; found "
         f"{text.count(CHECKOUT_PIN)} pins for {checkouts} checkouts"

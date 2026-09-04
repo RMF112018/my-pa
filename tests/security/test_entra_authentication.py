@@ -24,7 +24,6 @@ The database is disposable, created and dropped by this module's own fixture.
 
 from __future__ import annotations
 
-import io
 import json
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -34,11 +33,8 @@ from uuid import UUID
 
 import jwt
 import pytest
-from alembic import command
-from alembic.config import Config
 from cryptography.hazmat.primitives.asymmetric import rsa
 from sqlalchemy import Engine, text
-from sqlalchemy.engine import make_url
 from tests.wire import Wire, serve
 
 import my_pa.bootstrap.gateway as gateway
@@ -77,7 +73,6 @@ ISSUER = f"https://login.example.invalid/{MOSS_TENANT}/v2.0"
 JWKS_URI = f"https://login.example.invalid/{MOSS_TENANT}/discovery/v2.0/keys"
 
 KEY_ID = "synthetic-signing-key-1"
-
 
 # ---- keys and tokens, minted in-process --------------------------------------
 
@@ -132,22 +127,6 @@ def _administer(engine: Engine, *statements: object) -> None:
             connection.execute(statement)  # type: ignore[arg-type]
 
 
-@pytest.fixture
-def disposable_database() -> Iterator[str]:
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DATABASE}" WITH (FORCE)')
-    try:
-        _administer(maintenance, drop, text(f'CREATE DATABASE "{DATABASE}"'))
-        url = configured.set(database=DATABASE).render_as_string(hide_password=False)
-        yield url
-    finally:
-        _administer(maintenance, drop)
-        maintenance.dispose()
-
-
 def entra_settings(database_url: str) -> Settings:
     return Settings(
         database_url=database_url,
@@ -173,7 +152,6 @@ def authenticated_wire(
     validation, the registry write, the transport — is the composed article.
     """
     monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", disposable_database)
-    command.upgrade(Config(str(ROOT / "alembic.ini"), output_buffer=io.StringIO()), "head")
     monkeypatch.setattr(gateway, "jwks_signing_key_source", lambda _uri: lambda _token: public_jwk)
     runtime = build_gateway_runtime(entra_settings(disposable_database))
     assert runtime.principal is None, "an authenticated composition has no process principal"
@@ -758,7 +736,6 @@ def test_the_local_operator_composition_still_reads_no_credential(
 ) -> None:
     """`D-30` is unchanged: the default mode serves without a token, as before."""
     monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", disposable_database)
-    command.upgrade(Config(str(ROOT / "alembic.ini"), output_buffer=io.StringIO()), "head")
     runtime = build_gateway_runtime(Settings(database_url=disposable_database))
     assert runtime.authenticate is None
     assert runtime.principal is not None

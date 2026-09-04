@@ -31,8 +31,6 @@ opened and no live source is reached.
 
 from __future__ import annotations
 
-import io
-import os
 import re
 import threading
 from collections.abc import Iterator
@@ -41,12 +39,8 @@ from pathlib import Path
 from typing import Final
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import Connection, Engine, func, select, text
-from sqlalchemy.engine import make_url
 
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.extraction.coverage import LimitationReason
@@ -117,31 +111,6 @@ def _administer(maintenance: Engine, *statements: object) -> None:
 #: Principal's work and no one else's, so every job a run is meant to see
 #: has to be queued under the Principal that run names.
 WORKER_PRINCIPAL = "prn_wwww0004wwwwwwwwwwwwww00000004"
-
-
-@pytest.fixture(scope="module")
-def disposable_database() -> Iterator[str]:
-    """An empty database at head, dropped when the module finishes."""
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-    variable = f"{ENV_PREFIX}DATABASE_URL"
-    previous = os.environ.get(variable)
-    try:
-        _administer(maintenance, drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        os.environ[variable] = url
-        command.upgrade(Config(str(ROOT / "alembic.ini"), output_buffer=io.StringIO()), "head")
-        yield url
-    finally:
-        if previous is None:
-            os.environ.pop(variable, None)
-        else:
-            os.environ[variable] = previous
-        _administer(maintenance, drop)
-        maintenance.dispose()
 
 
 @pytest.fixture

@@ -47,9 +47,8 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Connection, Engine, text
-from sqlalchemy.engine import make_url
 
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
+from my_pa.bootstrap.settings import ENV_PREFIX
 from my_pa.contracts.ports import UnknownScopeError
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
@@ -275,7 +274,6 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
     }
 )
 
-
 SCOPE_PRIMARY_KEY = "an_enrollment_holds_an_object_once"
 SCOPE_FOREIGN_KEYS: Final[frozenset[str]] = frozenset(
     {
@@ -357,31 +355,6 @@ def test_the_new_revision_emits_its_ddl_offline(monkeypatch: pytest.MonkeyPatch)
         f"FOREIGN KEY(source_object_id) REFERENCES {SCHEMA}.source_objects (source_object_id) "
         "ON DELETE CASCADE" in emitted
     ), "the object reference is not emitted; an identifier bound to no row would be storable"
-
-
-@pytest.fixture
-def disposable_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """Create an empty database, point the settings at it, drop it afterwards."""
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-
-    def _administer(*statements: object) -> None:
-        # CREATE and DROP DATABASE cannot run inside a transaction block.
-        with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            for statement in statements:
-                connection.execute(statement)  # type: ignore[arg-type]
-
-    try:
-        _administer(drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", url)
-        yield url
-    finally:
-        _administer(drop)
-        maintenance.dispose()
 
 
 @pytest.fixture
@@ -743,3 +716,9 @@ def test_a_root_that_names_no_observed_object_records_no_scope(scope_engine: Eng
             connection, observed_root.enrollment.enrollment_id, (enrolled.object_ids[0],)
         )
         assert held == 1
+
+
+@pytest.fixture
+def disposable_database(empty_database_url: str) -> str:
+    """Empty disposable catalog; migration tests still drive Alembic themselves."""
+    return empty_database_url

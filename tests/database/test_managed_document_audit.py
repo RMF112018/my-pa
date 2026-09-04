@@ -58,10 +58,8 @@ from pathlib import Path
 from typing import Any, Final
 
 import pytest
-from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, text
-from sqlalchemy.engine import make_url
 
 from my_pa.application.commands import (
     ArchiveManagedDocument,
@@ -72,7 +70,6 @@ from my_pa.application.commands import (
     ReviseManagedDocument,
 )
 from my_pa.application.service import ApplicationService
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import UnitOfWork
 from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
@@ -116,30 +113,6 @@ LIMITS: Final = EffectiveLimits(
 
 def _config() -> Config:
     return Config(str(ROOT / "alembic.ini"))
-
-
-@pytest.fixture
-def disposable_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """Create an empty database, point the settings at it, drop it afterwards."""
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-
-    def _administer(*statements: object) -> None:
-        with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            for statement in statements:
-                connection.execute(statement)  # type: ignore[arg-type]
-
-    try:
-        _administer(drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", url)
-        yield url
-    finally:
-        _administer(drop)
-        maintenance.dispose()
 
 
 class _Runtime:
@@ -232,7 +205,6 @@ def _a_permitted_purpose(capability: Capability) -> Purpose:
 @pytest.fixture
 def runtime(disposable_database: str, tmp_path: Path) -> Iterator[_Runtime]:
     """A migrated database, a temporary managed root, and the composed service."""
-    command.upgrade(_config(), "head")
     root = tmp_path / "managed"
     root.mkdir()
     composed = _Runtime(disposable_database, root)

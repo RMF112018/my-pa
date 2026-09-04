@@ -97,8 +97,6 @@ both sides and cancels.
 from __future__ import annotations
 
 import io
-import os
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Final
 
@@ -107,9 +105,7 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, text
-from sqlalchemy.engine import make_url
 
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.infrastructure.database.engine import create_database_engine
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -205,45 +201,6 @@ def _schema_facts(engine: Engine) -> tuple[str, ...]:
         return tuple(str(row) for row in rows)
 
 
-@pytest.fixture
-def disposable_database() -> Iterator[str]:
-    """An empty database, pointed at by the settings, dropped afterwards.
-
-    Never the configured one: this module downgrades to `base` repeatedly, which
-    deletes schemas.
-    """
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(configured.set(database="postgres"))
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-
-    def _administer(*statements: object) -> None:
-        # CREATE and DROP DATABASE cannot run inside a transaction block.
-        with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            for statement in statements:
-                connection.execute(statement)  # type: ignore[arg-type]
-
-    variable = f"{ENV_PREFIX}DATABASE_URL"
-    previous = os.environ.get(variable)
-    try:
-        _administer(drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        # Rendered with the password because this is an environment variable, not
-        # an argument: `migrations/env.py` reads the URL out of the environment at
-        # import time and Alembic offers no way to hand this fixture's connection
-        # to it, so the credential has to survive the trip as text. The engine
-        # built above takes the `URL` object instead, which is why only this site
-        # renders one.
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        os.environ[variable] = url
-        yield url
-    finally:
-        if previous is None:
-            os.environ.pop(variable, None)
-        else:
-            os.environ[variable] = previous
-        _administer(drop)
-        maintenance.dispose()
-
-
 @pytest.mark.database
 def test_every_revision_returns_the_database_to_what_the_one_below_it_denotes(
     disposable_database: str,
@@ -321,3 +278,9 @@ def test_every_revision_returns_the_database_to_what_the_one_below_it_denotes(
         command.downgrade(_config(), "base")
     finally:
         engine.dispose()
+
+
+@pytest.fixture
+def disposable_database(empty_database_url: str) -> str:
+    """Empty disposable catalog; migration tests still drive Alembic themselves."""
+    return empty_database_url

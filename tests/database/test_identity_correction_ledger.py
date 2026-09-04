@@ -23,19 +23,15 @@ states about what may go in `before_state` and `after_state`.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Final
 
 import pytest
-from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, text
-from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import UnknownScopeError
 from my_pa.domain.relationship.entity import EntityStatus
 from my_pa.domain.relationship.identity_correction import (
@@ -45,8 +41,6 @@ from my_pa.domain.relationship.identity_correction import (
     IdentityEffectKind,
     state_digest,
 )
-from my_pa.domain.relationship.normalization import normalize_name
-from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 
 pytestmark = pytest.mark.database
@@ -79,65 +73,6 @@ OTHER_DIGEST: Final = "1" * 64
 
 def _config() -> Config:
     return Config(str(ROOT / "alembic.ini"))
-
-
-@pytest.fixture
-def disposable_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """Create an empty database, point the settings at it, drop it afterwards."""
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-
-    def _administer(*statements: object) -> None:
-        with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            for statement in statements:
-                connection.execute(statement)  # type: ignore[arg-type]
-
-    try:
-        _administer(drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", url)
-        yield url
-    finally:
-        _administer(drop)
-        maintenance.dispose()
-
-
-@pytest.fixture
-def migrated_engine(disposable_database: str) -> Iterator[Engine]:
-    """The disposable database, upgraded to head and disposed afterwards."""
-    engine = create_database_engine(disposable_database)
-    try:
-        command.upgrade(_config(), "head")
-        with engine.begin() as connection:
-            for entity_id, principal_id in (
-                (SURVIVOR, PRINCIPAL_A),
-                (MERGED, PRINCIPAL_A),
-                (FOREIGN, PRINCIPAL_B),
-            ):
-                display_name = f"Synthetic {entity_id}"
-                connection.execute(
-                    text(
-                        f"INSERT INTO {SCHEMA}.entities "  # noqa: S608
-                        "(entity_id, principal_id, entity_type, canonical_name, display_name, "
-                        " status, created_at, updated_at, version) "
-                        "VALUES (:entity_id, :principal_id, 'person', :canonical_name, "
-                        ":display_name, "
-                        " 'active', :when, :when, 1)"
-                    ),
-                    {
-                        "entity_id": entity_id,
-                        "principal_id": principal_id,
-                        "canonical_name": normalize_name(display_name),
-                        "display_name": display_name,
-                        "when": WHEN,
-                    },
-                )
-        yield engine
-    finally:
-        engine.dispose()
 
 
 def _insert_preview(engine: Engine, **overrides: object) -> None:

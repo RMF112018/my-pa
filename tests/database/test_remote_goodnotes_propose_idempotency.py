@@ -3,15 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-import io
-import os
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.sql import Executable
@@ -25,7 +21,7 @@ from my_pa.application.goodnotes_orchestrator import (
     GoodNotesDurableNoteOrchestrator,
 )
 from my_pa.application.service import ApplicationService
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
+from my_pa.bootstrap.settings import load_settings
 from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.domain.capture.submission import CaptureTransport
@@ -137,32 +133,6 @@ def _connected_v2_payload(
         "candidate_tags": ["GENERAL"],
         "ranked_candidates": [],
     }
-
-
-@pytest.fixture(scope="module")
-def engine() -> Iterator[Engine]:
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DATABASE}" WITH (FORCE)')
-    variable = f"{ENV_PREFIX}DATABASE_URL"
-    previous = os.environ.get(variable)
-    try:
-        administer(maintenance, drop, text(f'CREATE DATABASE "{DATABASE}"'))
-        url = configured.set(database=DATABASE).render_as_string(hide_password=False)
-        os.environ[variable] = url
-        command.upgrade(Config(str(ROOT / "alembic.ini"), output_buffer=io.StringIO()), "head")
-        built = create_database_engine(url)
-        yield built
-        built.dispose()
-    finally:
-        if previous is None:
-            os.environ.pop(variable, None)
-        else:
-            os.environ[variable] = previous
-        administer(maintenance, drop)
-        maintenance.dispose()
 
 
 @pytest.fixture
@@ -364,3 +334,8 @@ def test_remote_goodnotes_proposal_admits_replays_and_refuses_conflicts(
     conflict = envelope.to_canonical_dict()
     assert conflict["error"] is not None
     assert conflict["error"]["code"] == "conflict"
+
+
+@pytest.fixture
+def engine(db_engine: Engine) -> Engine:
+    return db_engine

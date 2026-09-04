@@ -15,7 +15,6 @@ that list operations return zero foreign rows rather than filtered leftovers.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,9 +23,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, select, text
-from sqlalchemy.engine import make_url
 
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.domain.identity.user_account import (
     ConsentState,
     ForeignTenantError,
@@ -72,37 +69,8 @@ def _config() -> Config:
 
 
 @pytest.fixture
-def disposable_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """Create an empty database, point the settings at it, drop it afterwards."""
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DATABASE}" WITH (FORCE)')
-
-    def _administer(*statements: object) -> None:
-        with maintenance.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
-            for statement in statements:
-                connection.execute(statement)  # type: ignore[arg-type]
-
-    try:
-        _administer(drop, text(f'CREATE DATABASE "{DATABASE}"'))
-        url = configured.set(database=DATABASE).render_as_string(hide_password=False)
-        monkeypatch.setenv(f"{ENV_PREFIX}DATABASE_URL", url)
-        yield url
-    finally:
-        _administer(drop)
-        maintenance.dispose()
-
-
-@pytest.fixture
-def engine(disposable_database: str) -> Iterator[Engine]:
-    command.upgrade(_config(), "head")
-    engine = create_database_engine(disposable_database)
-    try:
-        yield engine
-    finally:
-        engine.dispose()
+def engine(db_engine: Engine) -> Engine:
+    return db_engine
 
 
 @pytest.fixture
@@ -113,9 +81,10 @@ def service() -> PrincipalIdentityService:
 pytestmark = pytest.mark.database
 
 
-def test_the_identity_revision_round_trips_from_empty(disposable_database: str) -> None:
+@pytest.mark.migration_edge
+def test_the_identity_revision_round_trips_from_empty(empty_database_url: str) -> None:
     """The identity schema upgrades from empty to head and downgrades back."""
-    engine = create_database_engine(disposable_database)
+    engine = create_database_engine(empty_database_url)
     try:
         command.upgrade(_config(), "head")
         with engine.connect() as connection:

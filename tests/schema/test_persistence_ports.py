@@ -19,23 +19,17 @@ synthetic; no path here exists and none is opened.
 
 from __future__ import annotations
 
-import io
-import os
 import secrets
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from alembic import command
-from alembic.config import Config
-from sqlalchemy import Engine, text
-from sqlalchemy.engine import make_url
+from sqlalchemy import Engine
 from tests.conftest import DEFAULT_LIMITS, RecordingAudit
 
 from my_pa.application.commands import ListSources
 from my_pa.application.service import ApplicationService
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import RepositoryFailureError, UnitOfWork
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.common.classification import Classification
@@ -84,33 +78,8 @@ def administer(maintenance: Engine, *statements: object) -> None:
 
 
 @pytest.fixture(scope="module")
-def disposable_database() -> Iterator[str]:
-    """An empty database at head, dropped when the module finishes."""
-    configured = make_url(load_settings().database_url)
-    maintenance = create_database_engine(
-        configured.set(database="postgres").render_as_string(hide_password=False)
-    )
-    drop = text(f'DROP DATABASE IF EXISTS "{DISPOSABLE_DATABASE}" WITH (FORCE)')
-    variable = f"{ENV_PREFIX}DATABASE_URL"
-    previous = os.environ.get(variable)
-    try:
-        administer(maintenance, drop, text(f'CREATE DATABASE "{DISPOSABLE_DATABASE}"'))
-        url = configured.set(database=DISPOSABLE_DATABASE).render_as_string(hide_password=False)
-        os.environ[variable] = url
-        command.upgrade(Config(str(ROOT / "alembic.ini"), output_buffer=io.StringIO()), "head")
-        yield url
-    finally:
-        if previous is None:
-            os.environ.pop(variable, None)
-        else:
-            os.environ[variable] = previous
-        administer(maintenance, drop)
-        maintenance.dispose()
-
-
-@pytest.fixture(scope="module")
-def engine(disposable_database: str) -> Iterator[Engine]:
-    built = create_database_engine(disposable_database)
+def engine(module_cloned_database_url: str) -> Iterator[Engine]:
+    built = create_database_engine(module_cloned_database_url)
     try:
         yield built
     finally:

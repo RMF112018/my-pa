@@ -310,6 +310,24 @@
         },
         {
           "availability": "available",
+          "name": "goodnotes.pull",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "goodnotes.complete",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "goodnotes.status",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
           "name": "gsqs.start",
           "operator_only": false,
           "version": "v1"
@@ -772,15 +790,15 @@
     },
     "readiness": {
       "contract_version": "v1",
-      "implemented_capabilities": 124,
+      "implemented_capabilities": 127,
       "limitations": [
         "Content types awaiting an operator decision: application/pdf. They are reported rather than silently skipped.",
-        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, knowledge.search, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
+        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, goodnotes.pull, knowledge.search, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
         "Model proposals and semantic retrieval are disabled; deterministic lexical retrieval remains active.",
         "Worker-plane health is unavailable, stale, absent for queued work, or reports dead-lettered work; inspect worker_planes."
       ],
       "state": "degraded",
-      "total_capabilities": 124
+      "total_capabilities": 127
     },
     "worker_planes": [
       {

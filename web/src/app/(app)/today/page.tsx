@@ -25,7 +25,7 @@ import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { PulseList } from "@/components/pulse/pulse-list";
 import { BackendPulseList } from "@/components/pulse/backend-pulse-list";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
-import { IntelligencePulse } from "@/components/intelligence/intelligence-pulse";
+import { IntelligencePulse } from "./intelligence-pulse";
 import type { ContinuityPulseResult, PulseItem } from "@/lib/api/decode/capabilities/continuity.pulse";
 import type { BackendPulseItem } from "@/contracts/views";
 

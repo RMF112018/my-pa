@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { readinessAnswerFromOutcome } from "./readiness-load";
+import { readinessAnswerFromOutcome } from "./intelligence-readiness";
 import type { GatewayOutcome } from "@/lib/api/gateway";
 import type { ReportsResolveSetResult } from "@/lib/api/decode/capabilities/reports.resolve_set";
 import type { PythonDisclosure } from "@/lib/api/gateway";

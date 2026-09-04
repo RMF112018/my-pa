@@ -4,6 +4,9 @@
  * READY is specialist coverage for morning_brief_inputs, never "system healthy".
  * An unavailable list is unavailable, not all-clear. An empty list is "no
  * artifact", not an error and not all-clear.
+ *
+ * Lives under app/(app) so the server-only gateway import stays inside the
+ * allowlist in gateway.test.ts (route handlers, server pages, lib/api).
  */
 import Link from "next/link";
 import { invokeGateway, type GatewayOutcome } from "@/lib/api/gateway";
@@ -19,7 +22,7 @@ import {
   nonReadyRequiredCount,
   resolveSetPayload,
 } from "@/components/intelligence/cycle-selection";
-import { readinessAnswerFromOutcome } from "@/components/intelligence/readiness-load";
+import { readinessAnswerFromOutcome } from "@/lib/api/intelligence-readiness";
 import { intelligenceHome } from "@/lib/routes/intelligence";
 
 const AGGREGATE_TONE: Record<string, "green" | "gold" | "coral" | "neutral"> = {

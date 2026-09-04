@@ -19,7 +19,7 @@ import { FeatureRouteState } from "@/components/shell/feature-route-state";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
 import { ReportListing } from "@/components/intelligence/report-card";
 import { ReadinessPanel, type ReadinessAnswer } from "@/components/intelligence/readiness-panel";
-import { readinessAnswerFromOutcome } from "@/components/intelligence/readiness-load";
+import { readinessAnswerFromOutcome } from "@/lib/api/intelligence-readiness";
 import {
   currentCycleRunId,
   resolveSetPayload,

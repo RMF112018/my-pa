@@ -12,7 +12,9 @@ acceptance, merge eligibility, or final repository completion. PR #186 and
 the admitted RI work, including PR #192's `entities.graph`, are merged, and
 their migration and database-test infrastructure have been reconciled into
 this branch. The exact integrated head passed FAST and then received a fresh
-non-author `BLOCK`; this correction invalidates that verdict, so a fresh
+non-author `BLOCK`; the first correction closed its status-isolation finding,
+and a second exact-head review blocked on the stale README and architecture
+figures corrected here. This correction invalidates that verdict, so a fresh
 exact-head review is required.
 
 ## Authority and repository identity
@@ -23,10 +25,10 @@ exact-head review is required.
 - The current authenticated `origin/main` is commit
   `6033b8d1cfbb3e326c846b5ffec3e8fe980f99ff`, tree
   `5bea9c02278cb701474b5c0299a86ae67ddd66b1`.
-- The clean pre-correction basis, carrying the post-PR192 reconciliation and
+- The clean pre-correction basis, carrying the first review correction and
   all subsequent GoodNotes corrections described below, is commit
-  `21974cce2f9f4021f6c584516df035d7f02da9a2`, tree
-  `38626f42c5c65f79071b9f4daef243c1545ea85b`. The corrective commit created
+  `3daa23745494cee5e1cfb46a1ee0d30a02646860`, tree
+  `8b8e37efd8b85ce9d4cd3661b235d22b8537097c`. The corrective commit created
   after this refresh is reported in its handoff rather than guessed here.
 - The isolated branch is `bf/goodnotes-post-ui-safe-sync-20260903` in
   `/private/tmp/my-pa-goodnotes-post-ui-safe-sync-20260903`.
@@ -67,10 +69,11 @@ and this ledger update.
   branch. GoodNotes then moved its SQL tests to the repository-native shared
   provisioner and supplied the exact promotion evidence required by the
   production gate.
-- Subsequent accepted UI work entered through synchronization merges
+- Historical accepted UI work entered through synchronization merges
   `1cc0982f9063daf383a512f196a37c28ad2eb9fc` and
-  `95406a24799eacda9a49bb4d071ab296c3f80a8d`. The latter binds this branch to
-  current `origin/main` `67ad2262`; neither merge changed GoodNotes semantics.
+  `95406a24799eacda9a49bb4d071ab296c3f80a8d`. The latter then bound this branch
+  to the then-current `origin/main` `67ad2262`; neither merge changed GoodNotes
+  semantics.
 - PR #152's formerly overlapping plan path was released only after that PR was
   explicitly abandoned as historical evidence. The four derived count
   literals were then refreshed without changing RI prose or semantics.
@@ -157,9 +160,10 @@ semantic or prose changes. The campaign assertion is
   exact Principal/run/full stored proposal digest/`ACCEPT` evidence. The full
   ten-module GoodNotes PostgreSQL selection then passed.
 - `29e8c302459ecdf530c730a18b290f4be274ce54` reconciled the accepted RI work
-  and migration graph; `1cc0982f9063daf383a512f196a37c28ad2eb9fc` and
+  and migration graph; historical synchronization merges
+  `1cc0982f9063daf383a512f196a37c28ad2eb9fc` and
   `95406a24799eacda9a49bb4d071ab296c3f80a8d` subsequently synchronized the
-  admitted UI changes through current `main`.
+  admitted UI changes through the then-current `main`.
 - `8b304cf6ebbd539867eedad6d5149b8af7054338` reconciled the post-RI migration
   invariants so `6a2f9d1c4b80` directly follows `b8e4d1a6c073` and remains the
   sole head.
@@ -219,7 +223,13 @@ semantic or prose changes. The campaign assertion is
   counters across authenticated clients within one Principal, and this ledger
   still described the pre-PR192 basis. The bounded correction partitions
   status by exact Principal/client and reconciles only current-state evidence;
-  a fresh review of its resulting exact head remains required.
+  its resulting exact head was then submitted for fresh review.
+- `3daa23745494cee5e1cfb46a1ee0d30a02646860` closes that status-isolation
+  finding. A second independent exact-head review returned `BLOCK` because the
+  README still stated the old entity-family total/write split and the
+  architecture index still called sole head `6a2f9d1c4b80` revision ninety.
+  This correction derives both claims from runtime/repository sets; its result
+  requires another fresh exact-head review.
 
 ## Work-package status
 
@@ -260,6 +270,10 @@ Head-qualified results include:
   protected-prefix `my_pa_p_*` catalogs. The relevant unit/public-contract
   selection passed 58 tests. Ruff, format, targeted mypy, and diff checks
   passed.
+- The current-state correction's README/architecture/spelled/claimed-count
+  guard selection passed 62 tests. Runtime composition derives 55
+  `entities.*` names as 17 reads and 38 writes; Alembic derives 91 revisions
+  and sole head `6a2f9d1c4b80`. Ruff, format, and diff checks passed.
 - R7 date semantics: 27 passed; Ruff, format, mypy, and diff checks passed.
 - R4/R8 liveness/promotion: 90 passed; Ruff, format, mypy, and diff checks
   passed.
@@ -413,9 +427,12 @@ invalidate that future exact-head verdict.
 After the post-PR192 integration, exact head `21974cce`, tree `38626f42`,
 passed FAST and then received a fresh independent `BLOCK` for the
 cross-client status aggregation and stale current-state evidence recorded
-above. This correction invalidates that exact-head verdict. The current state
-is `FAST_PASS_REVIEW_BLOCKED_CORRECTION_PENDING_REREVIEW`, not `PASS`; a
-fresh non-author review must bind to the resulting corrective head.
+above. First corrective commit `3daa2374` closed the status-isolation finding;
+its fresh exact-head review returned a second `BLOCK` for the stale README and
+architecture-index figures corrected here. This correction invalidates that
+verdict. The current state is
+`FAST_PASS_REVIEW_BLOCKED_CORRECTION_PENDING_REREVIEW`, not `PASS`; a fresh
+non-author review must bind to the resulting corrective head.
 
 P2-W12's six blockers and four majors were mapped as challenge evidence. They
 are not self-closed by this campaign and require their own governing authority.

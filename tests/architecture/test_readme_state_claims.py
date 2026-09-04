@@ -27,7 +27,11 @@ from typing import Final
 import pytest
 
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
-from my_pa.application.service import _HANDLERS
+from my_pa.application.service import (
+    _ENTITY_CAPABILITIES,
+    _ENTITY_WRITE_CAPABILITIES,
+    _HANDLERS,
+)
 from my_pa.bootstrap.settings import DATABASE_URL_SCHEME, Settings
 from my_pa.contracts.v1.capabilities import Availability, ReadinessState
 from my_pa.domain.identity.operation import Capability
@@ -41,6 +45,7 @@ SPECS_INDEX = ROOT / "docs" / "specs" / "README.md"
 COMPLETION_PLAN = ROOT / "docs" / "plans" / "mcv-completion-plan.md"
 SYSTEM_CONTEXT = ROOT / "docs" / "architecture" / "system-context.md"
 MODULE_BOUNDARIES = ROOT / "docs" / "architecture" / "module-boundaries.md"
+ARCHITECTURE_INDEX = ROOT / "docs" / "architecture" / "00_ARCHITECTURE_INDEX.md"
 
 #: The paragraph that states what this build reports. Anchored on its opening
 #: word rather than on a line number, and read to the next blank line, so
@@ -353,6 +358,12 @@ def test_readme_derives_the_current_alembic_count_and_head() -> None:
     assert f"{SPELLED_COUNTS[count]} Alembic revisions" in readme
     assert f"head `{head}`" in readme
 
+    architecture_index = ARCHITECTURE_INDEX.read_text(encoding="utf-8")
+    spelled = SPELLED_COUNTS[count].lower()
+    assert f"Alembic owns {spelled} revisions at head `{head}`" in architecture_index
+    assert f"current head `{head}` at revision {spelled}" in architecture_index
+    assert f"current head `{head}` at revision ninety." not in architecture_index
+
 
 def test_relationships_are_not_listed_as_unimplemented_once_the_package_exists() -> None:
     """The not-implemented list, with the emptiness the `not in` below needs.
@@ -468,12 +479,26 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # composed by default, and `RI-ENT-WP-10`'s five record-family reads arrived
     # on the withheld side too, as do `RI-ENT-WP-11`'s record-family writes. The
     # GoodNotes pull adds three default-composed names after the entity work,
-    # so the combined surface exposes fifty-eight and still withholds sixty-nine.
+    # so the combined surface exposes fifty-eight and still withholds seventy.
     assert default == 58 and total == 128 and withheld == 70
+
+    entity_total = len(_ENTITY_CAPABILITIES)
+    entity_writes = len(_ENTITY_WRITE_CAPABILITIES)
+    entity_reads = entity_total - entity_writes
+    assert _ENTITY_WRITE_CAPABILITIES <= _ENTITY_CAPABILITIES
+    assert entity_total == 55 and entity_reads == 17 and entity_writes == 38
 
     readme = README.read_text(encoding="utf-8")
     assert f"{default} of the {total} capabilities are `available`" in readme
     assert f"`{withheld} of {total} capabilities are unwired.`" in readme
+    entity_split = (
+        f"{SPELLED_COUNTS[entity_total].lower()} `entities.*` capabilities: "
+        f"{SPELLED_COUNTS[entity_reads].lower()} reads and "
+        f"{SPELLED_COUNTS[entity_writes].lower()} writes"
+    )
+    assert entity_split in readme
+    assert "forty-two `entities.*` capabilities" not in readme
+    assert "twenty-nine writes" not in readme
 
     system_context = SYSTEM_CONTEXT.read_text(encoding="utf-8").lower()
     assert "one hundred and twenty-eight capabilities" in system_context

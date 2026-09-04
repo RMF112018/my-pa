@@ -404,7 +404,7 @@ class Capability(StrEnum):
     REPORTS_LIST = "reports.list"
     REPORTS_SEARCH = "reports.search"
     REPORTS_RESOLVE_SET = "reports.resolve_set"
-    # The relationship-intelligence entity plane. Fifty-four `entities.` names
+    # The relationship-intelligence entity plane. Fifty-five `entities.` names
     # over `knowledge.entities` and the tables around it, declared in four
     # blocks by the package that added each: WP-RI-05's six reads here, then
     # WP-RI-A-02's twelve, WP-RI-A-03's seven and WP-RI-A-04's three.
@@ -646,6 +646,14 @@ class Capability(StrEnum):
     ENTITIES_ADDRESSES_LIST = "entities.addresses.list"
     ENTITIES_COMMUNICATION_LIST = "entities.communication.list"
     ENTITIES_PARTICIPATIONS_LIST = "entities.participations.list"
+    #: `UI-IMP-WP15`. A seeded, SQL-bounded 1-hop or 2-hop graph over
+    #: `entity_assignments` and `entity_relationships`. Not a widening of
+    #: `entities.relationships`: that page is depth-one and 1-hop only
+    #: (`RI-PR135-MAJOR-001`), and a browser that chained it would invent a
+    #: walk, treat a truncated hub as complete, and derive authority the
+    #: server owns. A caller granted one has no occasion to hold the other.
+    #: Maps to `Purpose.ENTITY_READ` with the other identity-plane reads.
+    ENTITIES_GRAPH = "entities.graph"
 
     #: `RI-ENT-WP-11`, the write half of the same six record families
     #: `RI-ENT-WP-10` published as reads. `RI-ENT-WP-08` gave every family a
@@ -1112,6 +1120,7 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.ENTITIES_ADDRESSES_LIST: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_COMMUNICATION_LIST: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_PARTICIPATIONS_LIST: frozenset({Purpose.ENTITY_READ}),
+        Capability.ENTITIES_GRAPH: frozenset({Purpose.ENTITY_READ}),
         # `RI-ENT-WP-11`'s record-family writes, all under `ENTITY_AUTHORING`
         # and none under `ENTITY_READ`. The separation is the rule `purpose.py`
         # states and the directed six already keep: a purpose wide enough to

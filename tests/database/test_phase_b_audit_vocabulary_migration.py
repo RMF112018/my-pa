@@ -59,7 +59,9 @@ DISPOSABLE_DATABASE: Final = "my_pa_phase_b_vocabulary_test"
 #: out rather than imported so current chain drift and historical identity are
 #: checked independently.
 HEAD_REVISION: Final = "b8e4d1a6c073"
-#: The additive GoodNotes migration directly above `HEAD_REVISION`, and the
+#: PR192's graph-vocabulary admission directly above `HEAD_REVISION`.
+GRAPH_REVISION: Final = "c3f8a1d07e94"
+#: The additive GoodNotes migration directly above `GRAPH_REVISION`, and the
 #: sole current chain head.
 CURRENT_HEAD_REVISION: Final = "6a2f9d1c4b80"
 #: What was head until `HEAD_REVISION` stacked on it (RI-ENT-WP-10/11, widening
@@ -205,7 +207,7 @@ def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> N
     assert heads == [CURRENT_HEAD_REVISION], (
         f"expected exactly {CURRENT_HEAD_REVISION}, found {heads}"
     )
-    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == HEAD_REVISION
+    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == GRAPH_REVISION
     # `b8e4d1a6c073` (RI-ENT-WP-12, backfilling one `display`-typed
     # `entity_names` row per active `entities` row and writing no
     # `entity_project_participations` row, RULING-M10) is additive on
@@ -232,6 +234,7 @@ def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> N
     # additive on `b727e870d45e`, which is additive on
     # `IDENTITY_HISTORY_REVISION` -- three more links than this chain had before
     # `c99cd8ed8d1c` landed, and one more than it had before `b8e4d1a6c073` did.
+    assert script.get_revision(GRAPH_REVISION).down_revision == HEAD_REVISION
     assert script.get_revision(HEAD_REVISION).down_revision == SECOND_TO_HEAD_REVISION
     assert script.get_revision(SECOND_TO_HEAD_REVISION).down_revision == THIRD_TO_HEAD_REVISION
     assert script.get_revision(THIRD_TO_HEAD_REVISION).down_revision == FOURTH_TO_HEAD_REVISION

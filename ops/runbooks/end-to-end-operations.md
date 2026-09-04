@@ -1,8 +1,9 @@
 # End-to-end operations
 
 > **2026-09-04 current-state correction.** The repository chain is at
-> **single head `b8e4d1a6c073`, 89 revisions**. Measured, not carried:
+> **single head `c3f8a1d07e94`, 90 revisions**. Measured, not carried:
 > `ls migrations/versions/*.py | wc -l` and `ScriptDirectory.get_heads()`.
+> `c3f8a1d07e94` is additive on `b8e4d1a6c073` and admits `entities.graph`.
 > `b8e4d1a6c073` is additive on `16f05c46b8c3` (RI-ENT-WP-12). `origin/main`
 > at `455a3671` held 88 revisions at `16f05c46b8c3`; this figure is of the
 > merged tree, not a sum.

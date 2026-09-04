@@ -285,6 +285,7 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.ENTITIES_RESOLVE, Purpose.ENTITY_READ),
         (Capability.ENTITIES_CONTEXT, Purpose.ENTITY_READ),
         (Capability.ENTITIES_RELATIONSHIPS, Purpose.ENTITY_READ),
+        (Capability.ENTITIES_GRAPH, Purpose.ENTITY_READ),
         (Capability.ENTITIES_UNRESOLVED_MENTIONS, Purpose.ENTITY_READ),
         (Capability.ENTITIES_IDENTIFIERS_LIST, Purpose.ENTITY_READ),
         (Capability.ENTITIES_ALIASES_LIST, Purpose.ENTITY_READ),
@@ -412,9 +413,10 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # product would give.
     # GoodNotes pull adds its pull, complete, and status capabilities under its
     # pull and observation purposes, producing three permitted pairs.
-    # Unioned: 127 capabilities, 36 purposes, 129 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 129
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 129 == 4443
+    # `UI-IMP-WP15` adds `entities.graph` under `entity_read`.
+    # Unioned: 128 capabilities, 36 purposes, 130 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 130
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 130 == 4478
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

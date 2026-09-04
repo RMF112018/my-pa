@@ -47,6 +47,7 @@ from my_pa.application.commands import (
     EndEntityRelationship,
     GetEntity,
     GetEntityContext,
+    GetEntityGraph,
     GetEntityIdentityHistory,
     GetEntityProfile,
     GetEntityRelationships,
@@ -340,6 +341,7 @@ _EVERY_CAPABILITY: Final = (
     (Capability.ENTITIES_RESOLVE, ResolveEntity(reference="Confidential Counterparty")),
     (Capability.ENTITIES_CONTEXT, GetEntityContext(entity_id=FOREIGN_ENTITY)),
     (Capability.ENTITIES_RELATIONSHIPS, GetEntityRelationships(entity_id=FOREIGN_ENTITY)),
+    (Capability.ENTITIES_GRAPH, GetEntityGraph(focus_entity_id=FOREIGN_ENTITY)),
     (Capability.ENTITIES_UNRESOLVED_MENTIONS, ListUnresolvedMentions()),
     # The authoring half (`WP-RI-A-02`), every one of them aimed at the *other*
     # Principal's entity. A write is the sharper half of this claim than a read:
@@ -798,10 +800,10 @@ def test_this_file_exercises_every_capability_on_the_plane() -> None:
     """
     served = {capability for capability in Capability if capability.value.startswith("entities.")}
     assert {capability for capability, _ in _EVERY_CAPABILITY} == served
-    # Fifty-four after `RI-ENT-WP-11`'s five record families. The count
+    # Fifty-five after UI-IMP-WP15 admitted `entities.graph`. The count
     # is asserted as well as the set, because a prefix scan that stopped matching
     # would satisfy the equality against an equally empty tuple.
-    assert len(served) == 54
+    assert len(served) == 55
 
 
 # --- the partition, under every capability ---------------------------------

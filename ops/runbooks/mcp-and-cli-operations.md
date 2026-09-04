@@ -76,7 +76,7 @@ All three transports call one function — `adapters/normalization.normalize` �
 and none of them can build a request value of its own. A request that HTTP
 refuses, MCP and the CLI refuse, with the same code, the same message, the same
 `safe_details`, and the same audit event. That is `SPEC-AC-001`, and
-`tests/contract/test_transport_parity.py` holds it over all one hundred and twenty-seven capabilities.
+`tests/contract/test_transport_parity.py` holds it over all one hundred and twenty-eight capabilities.
 
 Practically: **there is no capability reachable from a shell that is not
 reachable over HTTP, and no authority that comes with being local.** The CLI is
@@ -181,9 +181,9 @@ one declared capability, `tools`, and nothing else.
 ## The tool list
 
 `tools/list` returns the tools **this process can serve**, and that is not the
-same as the tools this build implements. The build implements one hundred and twenty-seven, one
+same as the tools this build implements. The build implements one hundred and twenty-eight, one
 per capability name. A default process publishes **fifty-eight**. That is the
-127, less the six `documents.` names, the fifty-four `entities.` names
+127, less the six `documents.` names, the fifty-five `entities.` names
 and the nine `relationship_memory.` names a default composition withholds.
 
 **The six `documents.` tools appear only when `MY_PA_MANAGED_DOCUMENT_ROOT` is
@@ -191,14 +191,14 @@ configured**, and nothing else gates them. There is no default location and no
 inference: with the variable unset the composition root builds no managed byte
 store, `capabilities.get` omits those names, `tools/list` omits those tools, and
 a `tools/call` naming one is refused `unsupported`. Set the variable and the
-same child publishes those six, reaching sixty-four of the one hundred and twenty-seven. The
-remaining sixty-three are the fifty-four `entities.` names, which `D-RI-20`
+same child publishes those six, reaching sixty-four of the one hundred and twenty-eight. The
+remaining sixty-three are the fifty-five `entities.` names, which `D-RI-20`
 gates behind `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` on exactly the same terms
 — and whose thirty-eight writes need
 `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` beside it, so a process with
 the plane switch alone publishes eighty — and the nine
 `relationship_memory.` names, which need the plane variable *and*
-`MY_PA_RELATIONSHIP_MEMORY_ENABLED`; a child publishing all one hundred and twenty-seven has
+`MY_PA_RELATIONSHIP_MEMORY_ENABLED`; a child publishing all one hundred and twenty-eight has
 all required feature gates and composition dependencies satisfied. An operator who expects `documents.create`
 on the list and does not find it should look at that variable first — it is the
 only thing that decides it. (Pointing the plane at real storage is `EXT-10` and
@@ -270,8 +270,8 @@ that names it again is refused.
 ## Calling a tool
 
 **Current-state correction (2026-08-28):** the tool list is derived from all
-**one hundred and twenty-seven** current capabilities, and the schema has
-**ninety** revisions at head `6a2f9d1c4b80` (`6a2f9d1c4b80` is additive on `b8e4d1a6c073` and adds five Principal-partitioned, content-free GoodNotes pull and semantic-review ledger tables while admitting `goodnotes.pull`, `goodnotes.complete`, and `goodnotes.status` to the frozen audit vocabulary; corrected 2026-09-03 from
+**one hundred and twenty-eight** current capabilities, and the schema has
+**ninety-one** revisions at head `6a2f9d1c4b80` (`6a2f9d1c4b80` is additive on `c3f8a1d07e94` and adds five Principal-partitioned, content-free GoodNotes pull and semantic-review ledger tables while admitting `goodnotes.pull`, `goodnotes.complete`, and `goodnotes.status` to the frozen audit vocabulary; `c3f8a1d07e94` admits `entities.graph` on `b8e4d1a6c073`; corrected 2026-09-03 from
 eighty-eight at `16f05c46b8c3`, on which `b8e4d1a6c073` is additive and
 backfills one `display`-typed `entity_names` row per active `entities` row --
 `display_value` from `entities.display_name`, `normalized_value` from

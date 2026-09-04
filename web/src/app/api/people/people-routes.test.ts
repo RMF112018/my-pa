@@ -6,6 +6,7 @@ import { GET as peopleCollection } from "@/app/api/people/route";
 import { GET as peopleGet } from "@/app/api/people/[entityId]/route";
 import { GET as peopleProfile } from "@/app/api/people/[entityId]/profile/route";
 import { GET as peopleUnresolved } from "@/app/api/people/unresolved/route";
+import { GET as peopleGraph } from "@/app/api/people/graph/route";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resetSessionRegistry } from "@/lib/auth/session-registry";
 import { withSessionServiceFetch } from "@/lib/auth/session-service-fetch-stub";
@@ -179,5 +180,116 @@ describe("People BFF entity reads", () => {
     const body = await response.json();
     expect(body.error.code).toBe("upstream_contract_invalid");
     expect(JSON.stringify(body)).not.toContain("should-not-leak");
+  });
+});
+
+const GRAPH = {
+  nodes: [
+    {
+      entity_id: ENTITY_ID,
+      projection_id: `gprj_${ENTITY_ID}`,
+      entity_type: "person",
+      display_label: "Pat Synthetic",
+      status: "active",
+      superseded_by_entity_id: null,
+    },
+  ],
+  edges: [
+    {
+      edge_kind: "relationship",
+      edge_id: "erel_aaaaaaaa11111111",
+      type: "works_for",
+      from_entity_id: ENTITY_ID,
+      to_entity_id: FOREIGN_ENTITY,
+      from_projection_id: `gprj_${ENTITY_ID}`,
+      to_projection_id: `gprj_${FOREIGN_ENTITY}`,
+      scope_entity_id: null,
+      is_current: null,
+      state: "active",
+      version: 1,
+    },
+  ],
+  next_cursor: null,
+};
+
+describe("People BFF graph", () => {
+  it("refuses a graph with neither focusEntityId nor scopeEntityId", async () => {
+    const gateway = stubPeopleGateway();
+    const response = await peopleGraph(request(await cookie(), "/api/people/graph"));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { errorClass: "validation", code: "invalid_request" },
+    });
+    expect(gateway).not.toHaveBeenCalled();
+  });
+
+  it("posts entities.graph for a seeded neighborhood", async () => {
+    const gateway = stubPeopleGateway(async () => gatewayOk(GRAPH));
+    const response = await peopleGraph(
+      request(await cookie(), `/api/people/graph?focusEntityId=${ENTITY_ID}&hops=2`),
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(String(gateway.mock.calls[0]?.[0])).toContain("/v1/entities.graph");
+    const sent = JSON.parse(String(gateway.mock.calls[0]?.[1]?.body ?? "{}")) as {
+      payload?: Record<string, unknown>;
+    };
+    expect(sent.payload).toMatchObject({ focus_entity_id: ENTITY_ID, hops: 2 });
+    expect(sent.payload).not.toHaveProperty("principal_id");
+  });
+
+  it("posts entities.graph for a scope frame", async () => {
+    const gateway = stubPeopleGateway(async () => gatewayOk(GRAPH));
+    const response = await peopleGraph(
+      request(
+        await cookie(),
+        `/api/people/graph?scopeEntityId=${FOREIGN_ENTITY}&relationshipTypes=works_for,reports_to`,
+      ),
+    );
+    expect(response.status).toBe(200);
+    expect(String(gateway.mock.calls[0]?.[0])).toContain("/v1/entities.graph");
+    const sent = JSON.parse(String(gateway.mock.calls[0]?.[1]?.body ?? "{}")) as {
+      payload?: Record<string, unknown>;
+    };
+    expect(sent.payload).toEqual({
+      scope_entity_id: FOREIGN_ENTITY,
+      relationship_types: ["works_for", "reports_to"],
+    });
+  });
+
+  it("answers not-found for a foreign seed without leaking existence", async () => {
+    const gateway = stubPeopleGateway(async () => gatewayNotFound());
+    const response = await peopleGraph(
+      request(await cookie(), `/api/people/graph?focusEntityId=${FOREIGN_ENTITY}`),
+    );
+    expect(response.status).toBe(404);
+    const body = await response.json();
+    expect(body.error.errorClass).toBe("not_found");
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toMatch(/exist/i);
+    expect(serialized).not.toMatch(/another principal/i);
+    expect(String(gateway.mock.calls[0]?.[0])).toContain("/v1/entities.graph");
+  });
+
+  it("fails closed when nodes is omitted", async () => {
+    const { nodes: _, ...rest } = GRAPH;
+    stubPeopleGateway(async () => gatewayOk({ ...rest, leaked: "must-not-dump" }));
+    const response = await peopleGraph(
+      request(await cookie(), `/api/people/graph?focusEntityId=${ENTITY_ID}`),
+    );
+    expect(response.status).toBe(503);
+    const body = await response.json();
+    expect(body.error.code).toBe("upstream_contract_invalid");
+    expect(JSON.stringify(body)).not.toContain("must-not-dump");
+    expect(body).not.toHaveProperty("nodes");
+  });
+
+  it("fails closed when edges is omitted", async () => {
+    const { edges: _, ...rest } = GRAPH;
+    stubPeopleGateway(async () => gatewayOk(rest));
+    const response = await peopleGraph(
+      request(await cookie(), `/api/people/graph?focusEntityId=${ENTITY_ID}`),
+    );
+    expect(response.status).toBe(503);
   });
 });

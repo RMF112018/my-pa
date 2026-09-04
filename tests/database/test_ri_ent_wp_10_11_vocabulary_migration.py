@@ -84,7 +84,9 @@ REVISION: Final = "16f05c46b8c3"
 #: `REVISION` is the link directly beneath it. Written out rather than derived
 #: so chain drift fails here rather than passing.
 HEAD_REVISION: Final = "b8e4d1a6c073"
-#: The additive GoodNotes migration directly above `HEAD_REVISION`, and the
+#: PR192's graph-vocabulary admission directly above `HEAD_REVISION`.
+GRAPH_REVISION: Final = "c3f8a1d07e94"
+#: The additive GoodNotes migration directly above `GRAPH_REVISION`, and the
 #: sole current chain head.
 CURRENT_HEAD_REVISION: Final = "6a2f9d1c4b80"
 #: What was head until `REVISION` stacked on it, and therefore the revision
@@ -337,7 +339,8 @@ def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> N
     assert heads == [CURRENT_HEAD_REVISION], (
         f"expected exactly {CURRENT_HEAD_REVISION}, found {heads}"
     )
-    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == HEAD_REVISION
+    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == GRAPH_REVISION
+    assert script.get_revision(GRAPH_REVISION).down_revision == HEAD_REVISION
     assert script.get_revision(HEAD_REVISION).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS_REVISION
     assert script.get_revision(PREVIOUS_REVISION).down_revision == SECOND_TO_PREVIOUS_REVISION
@@ -468,7 +471,7 @@ def test_the_stored_vocabularies_are_missing_nothing_the_domain_declares(
     names are stored and are not in `Capability`, and they predate all of this.
     The direction that breaks a request is a name the domain declares and the
     database has never heard of, and the only way to be sure of it for all one
-    hundred and twenty-seven is to try all one hundred and twenty-seven.
+    hundred and twenty-eight is to try all one hundred and twenty-eight.
 
     `Purpose` is driven for the same reason and not because this revision
     touched it: it deliberately does not widen `purpose_is_known`, because

@@ -66,7 +66,7 @@ PHASE_B_HEAD: Final = "3d07af4dc513"
 GSQS_REVISION: Final = "c4b0a1d9e827"
 PHASE_B_START: Final = "c7a1f04b9e63"
 #: The chain's current head is `6a2f9d1c4b80` (GoodNotes pull/review), serialized
-#: as the direct child of `b8e4d1a6c073`. That RI-ENT-WP-12 parent backfills one
+#: as the direct child of `c3f8a1d07e94`. That graph-vocabulary parent is additive on `b8e4d1a6c073`, whose RI-ENT-WP-12 migration backfills one
 #: `display`-typed `entity_names` row per active `entities` row -- `display_value`
 #: from `entities.display_name`, `normalized_value` from `entities.canonical_name`,
 #: never a `legal` name -- and writes no `entity_project_participations` row
@@ -196,7 +196,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(PHASE_B_REVISION).down_revision == "a1f7d3c85e40"
     assert script.get_revision(PHASE_B_HEAD).down_revision == PHASE_B_REVISION
     assert script.get_heads() == [HEAD_REVISION]
-    # 90 migration files: 89 through `b8e4d1a6c073` as described below, plus
+    # 91 migration files: 90 through `c3f8a1d07e94` as described below, plus
     # `6a2f9d1c4b80` (GoodNotes pull/review) as its direct child. The first 85
     # run through `1cda4d536268` (RI-ENT-WP-07), plus
     # `c99cd8ed8d1c` (commit `37ead78`, RI-ENT-WP-08's blocker-clearing pass),
@@ -214,7 +214,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     # wrote 87 here from a shared baseline of 86, the base merge counted 88,
     # and RI-ENT-WP-12's integration counted 89 from the merged tree rather
     # than adding one to either side (RULING-M2).
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 90
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 91
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

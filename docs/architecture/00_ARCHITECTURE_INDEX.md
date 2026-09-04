@@ -35,12 +35,12 @@ See [`../decisions/00_ADR_INDEX.md`](../decisions/00_ADR_INDEX.md) and the unres
 ## Implementation boundary
 
 This index records architecture direction and current composition. The `my_pa`
-package defines one hundred and twenty-seven capabilities and exposes them through the HTTP,
+package defines one hundred and twenty-eight capabilities and exposes them through the HTTP,
 MCP, and operator-CLI adapters; a default composition serves fifty-eight of
 them, because the `documents.`, `entities.` and `relationship_memory.` families
 each require an environment variable that has no default. The gateway and worker
 composition roots use the same PostgreSQL-backed policy and application seams.
-Alembic owns ninety revisions at head `6a2f9d1c4b80`; `6a2f9d1c4b80` is additive on `b8e4d1a6c073` and adds the GoodNotes pull ledger, while the chain admits GSQS at `c4b0a1d9e827` immediately before Phase B continues at `c7a1f04b9e63`, `b727e870d45e` is additive on `8e1c4a7b2d90`, `7e114f822af2` is additive on `b727e870d45e`, adding the `entity_names`/`entity_organization_profiles` tables (RI-ENT-WP-02), `16f05c46b8c3` admits the RI-ENT-WP-10/11 capability names, and `b8e4d1a6c073` (RI-ENT-WP-12) is additive on `16f05c46b8c3` and backfills one `display`-typed `entity_names` row per active entity. Re-measured 2026-09-04 after the GoodNotes integration: 90 files, single head `6a2f9d1c4b80` (`ls migrations/versions/*.py` and `ScriptDirectory.get_heads()`). The prior merge of `origin/main` `455a3671` held eighty-nine files at `b8e4d1a6c073`, while that merge's `origin/main` held eighty-eight at `16f05c46b8c3`. The current candidate
+Alembic owns ninety-one revisions at head `6a2f9d1c4b80`; `6a2f9d1c4b80` is additive on `c3f8a1d07e94` and adds the GoodNotes pull ledger; `c3f8a1d07e94` admits `entities.graph` on `b8e4d1a6c073`, while the chain admits GSQS at `c4b0a1d9e827` immediately before Phase B continues at `c7a1f04b9e63`, `b727e870d45e` is additive on `8e1c4a7b2d90`, `7e114f822af2` is additive on `b727e870d45e`, adding the `entity_names`/`entity_organization_profiles` tables (RI-ENT-WP-02), `16f05c46b8c3` admits the RI-ENT-WP-10/11 capability names, and `b8e4d1a6c073` (RI-ENT-WP-12) is additive on `16f05c46b8c3` and backfills one `display`-typed `entity_names` row per active entity. Re-measured 2026-09-04 after the post-PR192 GoodNotes integration: 91 files, single head `6a2f9d1c4b80` (`ls migrations/versions/*.py` and `ScriptDirectory.get_heads()`). The prior merge of `origin/main` `455a3671` held eighty-nine files at `b8e4d1a6c073`, while that merge's `origin/main` held eighty-eight at `16f05c46b8c3`. The current candidate
 also includes the MossAIc web BFF/PWA, managed documents, GoodNotes, the bounded
 model gate, Frontier MCP, and the Apple source host. These documents describe the
 resulting implementation and the accepted, inactive NAS target. They do not

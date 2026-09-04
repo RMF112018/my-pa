@@ -98,6 +98,7 @@ from my_pa.application.commands import (
     GetCorpusCoverage,
     GetEntity,
     GetEntityContext,
+    GetEntityGraph,
     GetEntityIdentityHistory,
     GetEntityProfile,
     GetEntityRelationships,
@@ -875,6 +876,29 @@ def _get_entity_context(payload: Mapping[str, Any]) -> Command:
 
 def _get_entity_relationships(payload: Mapping[str, Any]) -> Command:
     return GetEntityRelationships(**payload)
+
+
+def _get_entity_graph(payload: Mapping[str, Any]) -> Command:
+    """`entities.graph`, with `as_of` parsed and `relationship_types` as a tuple.
+
+    JSON has neither datetime nor tuple. The command refuses a string `as_of`
+    and a list of types, so conversion belongs here — the same reason
+    `_resolve_entity` parses `as_of` rather than leaving the string for the
+    constructor to reject as the wrong shape.
+    """
+    converted = dict(payload)
+    supplied = converted.get("as_of")
+    if supplied is not None:
+        if not isinstance(supplied, str):
+            raise InvalidRequestError(SafeDetail.AS_OF)
+        try:
+            converted["as_of"] = datetime.fromisoformat(supplied)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.AS_OF) from None
+    types = converted.get("relationship_types")
+    if isinstance(types, list):
+        converted["relationship_types"] = tuple(types)
+    return GetEntityGraph(**converted)
 
 
 def _list_unresolved_mentions(payload: Mapping[str, Any]) -> Command:
@@ -1840,6 +1864,7 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.ENTITIES_RESOLVE: _resolve_entity,
         Capability.ENTITIES_CONTEXT: _get_entity_context,
         Capability.ENTITIES_RELATIONSHIPS: _get_entity_relationships,
+        Capability.ENTITIES_GRAPH: _get_entity_graph,
         Capability.ENTITIES_UNRESOLVED_MENTIONS: _list_unresolved_mentions,
         Capability.ENTITIES_IDENTIFIERS_LIST: _list_entity_identifiers,
         Capability.ENTITIES_ALIASES_LIST: _list_entity_aliases,
@@ -1907,7 +1932,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a value outside
-    the 124 canonical names refers to nothing.
+    the 125 canonical names refers to nothing.
     """
     try:
         return Capability(capability)

@@ -1,7 +1,7 @@
 """Add durable GoodNotes pull and semantic-review ledgers.
 
 Revision ID: 6a2f9d1c4b80
-Revises: b8e4d1a6c073
+Revises: c3f8a1d07e94
 Create Date: 2026-09-04
 
 The five tables are additive, Principal-partitioned, content-free orchestration
@@ -17,7 +17,7 @@ from typing import Final
 from alembic import op
 
 revision: str = "6a2f9d1c4b80"
-down_revision: str | None = "b8e4d1a6c073"
+down_revision: str | None = "c3f8a1d07e94"
 branch_labels: str | None = None
 depends_on: str | None = None
 
@@ -40,7 +40,7 @@ _CAPABILITIES_BEFORE_THIS_REVISION: Final = (
     "'entities.assignments.revise', 'entities.communication.add', "
     "'entities.communication.list', 'entities.communication.retire', "
     "'entities.communication.revise', 'entities.context', 'entities.create', "
-    "'entities.get', 'entities.identifiers.bind', 'entities.identifiers.list', "
+    "'entities.get', 'entities.graph', 'entities.identifiers.bind', 'entities.identifiers.list', "
     "'entities.identifiers.retire', 'entities.identifiers.supersede', "
     "'entities.identity_history', 'entities.merge', 'entities.merge.preview', "
     "'entities.names.add', 'entities.names.list', 'entities.names.retire', "
@@ -52,7 +52,8 @@ _CAPABILITIES_BEFORE_THIS_REVISION: Final = (
     "'entities.relationships.revise', 'entities.resolve', 'entities.restore', "
     "'entities.search', 'entities.split', 'entities.split.preview', "
     "'entities.unresolved_mentions', 'entities.unresolved_mentions.resolve', "
-    "'entities.update', 'goodnotes.content', 'goodnotes.propose', 'goodnotes.work', "
+    "'entities.update', 'goodnotes.content', 'goodnotes.propose', "
+    "'goodnotes.work', "
     "'gsqs.start', 'gsqs.status', 'knowledge.coverage', 'knowledge.read', "
     "'knowledge.reveal', 'knowledge.search', 'native_sources.backfill', "
     "'native_sources.configure', 'native_sources.disable', 'native_sources.discover', "
@@ -86,7 +87,7 @@ _CAPABILITIES_AT_THIS_REVISION: Final = (
     "'entities.assignments.revise', 'entities.communication.add', "
     "'entities.communication.list', 'entities.communication.retire', "
     "'entities.communication.revise', 'entities.context', 'entities.create', "
-    "'entities.get', 'entities.identifiers.bind', 'entities.identifiers.list', "
+    "'entities.get', 'entities.graph', 'entities.identifiers.bind', 'entities.identifiers.list', "
     "'entities.identifiers.retire', 'entities.identifiers.supersede', "
     "'entities.identity_history', 'entities.merge', 'entities.merge.preview', "
     "'entities.names.add', 'entities.names.list', 'entities.names.retire', "
@@ -98,7 +99,8 @@ _CAPABILITIES_AT_THIS_REVISION: Final = (
     "'entities.relationships.revise', 'entities.resolve', 'entities.restore', "
     "'entities.search', 'entities.split', 'entities.split.preview', "
     "'entities.unresolved_mentions', 'entities.unresolved_mentions.resolve', "
-    "'entities.update', 'goodnotes.complete', 'goodnotes.content', 'goodnotes.propose', "
+    "'entities.update', 'goodnotes.complete', 'goodnotes.content', "
+    "'goodnotes.propose', "
     "'goodnotes.pull', 'goodnotes.status', 'goodnotes.work', 'gsqs.start', 'gsqs.status', "
     "'knowledge.coverage', 'knowledge.read', 'knowledge.reveal', 'knowledge.search', "
     "'native_sources.backfill', 'native_sources.configure', 'native_sources.disable', "

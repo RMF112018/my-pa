@@ -41,7 +41,9 @@ NEXT_REVISION: Final = "16f05c46b8c3"
 #: `REVISION` is two links beneath it. Written out rather than derived so chain
 #: drift fails here rather than passing.
 HEAD_REVISION: Final = "b8e4d1a6c073"
-#: The additive GoodNotes migration directly above `HEAD_REVISION`, and the
+#: PR192's graph-vocabulary migration directly above `HEAD_REVISION`.
+GRAPH_REVISION: Final = "c3f8a1d07e94"
+#: The additive GoodNotes migration directly above `GRAPH_REVISION`, and the
 #: sole current chain head.
 CURRENT_HEAD_REVISION: Final = "6a2f9d1c4b80"
 NEW_TABLES: Final = frozenset(
@@ -94,16 +96,17 @@ def test_tables_share_the_canonical_identity_metadata() -> None:
     assert NEW_TABLES.issubset({table.name for table in IDENTITY_METADATA.tables.values()})
 
 
-def test_the_chain_has_one_head_and_this_revision_is_three_links_beneath_it() -> None:
+def test_the_chain_has_one_head_and_this_revision_is_four_links_beneath_it() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD_REVISION]
-    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == HEAD_REVISION
+    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == GRAPH_REVISION
+    assert script.get_revision(GRAPH_REVISION).down_revision == HEAD_REVISION
     assert script.get_revision(HEAD_REVISION).down_revision == NEXT_REVISION
     assert script.get_revision(NEXT_REVISION).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PRIOR_REVISION
-    # 90 on the merged tree: 88 at `16f05c46b8c3`, plus `b8e4d1a6c073` and its
-    # additive GoodNotes successor, counted rather than derived (RULING-M2).
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 90
+    # 91 on the merged tree: 88 at `16f05c46b8c3`, plus `b8e4d1a6c073`, the
+    # graph vocabulary admission, and additive GoodNotes successor.
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 91
 
 
 @pytest.mark.database

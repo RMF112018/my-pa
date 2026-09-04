@@ -163,6 +163,7 @@ from my_pa.application.commands import (
     GetCorpusCoverage,
     GetEntity,
     GetEntityContext,
+    GetEntityGraph,
     GetEntityIdentityHistory,
     GetEntityProfile,
     GetEntityRelationships,
@@ -2106,6 +2107,117 @@ def _relationship_view(edge: EntityRelationship, at: datetime | None = None) -> 
     }
 
 
+def _graph_projection_id(entity_id: str, assignment_id: str | None = None) -> str:
+    """A deterministic renderer key. Not identity; not canonical."""
+    if assignment_id is None:
+        return f"gprj_{entity_id}"
+    return f"gprj_{entity_id}_{assignment_id}"
+
+
+def _bounded_graph_edges(
+    assignments: tuple[Assignment, ...],
+    relationships: tuple[EntityRelationship, ...],
+    page_size: int,
+) -> tuple[list[Assignment | EntityRelationship], bool]:
+    """The unified `edge_id` stream, sliced to `page_size`, plus overflow."""
+    merged: list[Assignment | EntityRelationship] = sorted(
+        (*assignments, *relationships),
+        key=lambda item: (
+            item.assignment_id if isinstance(item, Assignment) else item.relationship_id
+        ),
+    )
+    return merged[:page_size], len(merged) > page_size
+
+
+def _graph_edge_id(item: Assignment | EntityRelationship) -> str:
+    return item.assignment_id if isinstance(item, Assignment) else item.relationship_id
+
+
+def _graph_node(entity: Entity, projection_id: str) -> dict[str, object]:
+    return {
+        "entity_id": entity.entity_id,
+        "projection_id": projection_id,
+        "entity_type": entity.entity_type.value,
+        "display_label": entity.display_name,
+        "status": entity.status.value,
+        "superseded_by_entity_id": entity.superseded_by_entity_id,
+    }
+
+
+def _graph_view(
+    *,
+    entities: tuple[Entity, ...],
+    page: list[Assignment | EntityRelationship],
+    seed_ids: frozenset[str],
+    at: datetime | None,
+) -> dict[str, object]:
+    """Nodes and edges for one graph page. `people_path` is omitted on purpose."""
+    by_id = {entity.entity_id: entity for entity in entities}
+    nodes: dict[str, dict[str, object]] = {}
+    edges: list[dict[str, object]] = []
+
+    def add_node(entity_id: str, projection_id: str) -> None:
+        entity = by_id.get(entity_id)
+        if entity is None or projection_id in nodes:
+            return
+        nodes[projection_id] = _graph_node(entity, projection_id)
+
+    for seed in sorted(seed_ids):
+        add_node(seed, _graph_projection_id(seed))
+    for item in page:
+        if isinstance(item, Assignment):
+            if item.scope_entity_id is None:
+                continue
+            framed = _graph_projection_id(item.entity_id, item.assignment_id)
+            add_node(item.entity_id, framed)
+            scope_proj = None
+            if item.scope_entity_id is not None:
+                scope_proj = _graph_projection_id(item.scope_entity_id)
+                add_node(item.scope_entity_id, scope_proj)
+            viewed = _assignment_view(item, at)
+            edges.append(
+                {
+                    "edge_kind": "assignment",
+                    "edge_id": item.assignment_id,
+                    "type": viewed["assignment_type"],
+                    "from_entity_id": item.entity_id,
+                    "to_entity_id": item.scope_entity_id,
+                    "from_projection_id": framed,
+                    "to_projection_id": scope_proj,
+                    "scope_entity_id": item.scope_entity_id,
+                    "is_current": viewed["is_current"],
+                    "status": viewed["status"],
+                    "version": viewed["version"],
+                }
+            )
+            continue
+        from_proj = _graph_projection_id(item.from_entity_id)
+        to_proj = _graph_projection_id(item.to_entity_id)
+        add_node(item.from_entity_id, from_proj)
+        add_node(item.to_entity_id, to_proj)
+        viewed = _relationship_view(item, at)
+        edges.append(
+            {
+                "edge_kind": "relationship",
+                "edge_id": item.relationship_id,
+                "type": viewed["relationship_type"],
+                "from_entity_id": item.from_entity_id,
+                "to_entity_id": item.to_entity_id,
+                "from_projection_id": from_proj,
+                "to_projection_id": to_proj,
+                "scope_entity_id": item.scope_entity_id,
+                "is_current": viewed["is_current"],
+                "state": viewed["state"],
+                "version": viewed["version"],
+            }
+        )
+    edges.sort(key=lambda row: str(row["edge_id"]))
+    return {
+        "nodes": [nodes[key] for key in sorted(nodes)],
+        "edges": edges,
+    }
+
+
 def _resolution_view(answer: EntityResolution) -> dict[str, object]:
     """One resolution as the wire sees it.
 
@@ -2814,7 +2926,7 @@ class ApplicationService:
         `_HANDLERS` is what this build *implements* and is fixed at import. This
         is what it can *serve*, which is smaller whenever a capability needs
         something the composition root did not supply — the six `documents.`
-        names in a process with no managed root, and the fifty-four `entities.` names
+        names in a process with no managed root, and the fifty-five `entities.` names
         in one that has not enabled the relationship plane. It is one answer with
         two readers: `capabilities.get` publishes it, and the MCP transport
         publishes the tools derived from it, so a client's tool list and the
@@ -4991,7 +5103,7 @@ class ApplicationService:
         the request.
 
         **This is the floor, and it was missing.** `available_capabilities`
-        withholds the fifty-four `entities.` names, and two readers consult it —
+        withholds the fifty-five `entities.` names, and two readers consult it —
         `capabilities.get` and the MCP tool list. The HTTP transport is not one
         of them: `/v1/{capability}` routes by path segment and `_run` dispatches
         straight from `_HANDLERS`, so every one of the six executed and
@@ -5837,6 +5949,69 @@ class ApplicationService:
                     is_truncated=truncated,
                     reason="page_size_reached" if truncated else None,
                     next_cursor=page[-1].relationship_id if truncated and page else None,
+                ),
+            ),
+        )
+
+    def _entities_graph(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: GetEntityGraph,
+    ) -> _Result:
+        """`entities.graph`: one bounded page of a seeded 1-hop or 2-hop neighborhood.
+
+        Seeds are read first so an unknown or foreign identifier is `not_found`
+        naming that field — an empty graph is "this person has no recorded
+        neighborhood", not "there is no such person".
+
+        `is_current` is computed only when the caller supplied `as_of`, using
+        the same `_assignment_view` / `_relationship_view` rule. The request
+        clock is not substituted.
+        """
+        self._entity_plane()
+        principal_id = authorization.principal.principal_id
+        page_size = self._page_size(command.page_size)
+        seeds: list[tuple[str, SafeDetail]] = []
+        if command.focus_entity_id is not None:
+            seeds.append((command.focus_entity_id, SafeDetail.FOCUS_ENTITY_ID))
+        if command.scope_entity_id is not None:
+            seeds.append((command.scope_entity_id, SafeDetail.SCOPE_ENTITY_ID))
+        seed_ids = frozenset(entity_id for entity_id, _ in seeds)
+        with _translated(), _entity_translated():
+            for entity_id, detail in seeds:
+                if unit_of_work.entities.get(principal_id, entity_id) is None:
+                    raise NotFoundError(detail)
+            found = unit_of_work.entities.graph_neighborhood(
+                principal_id,
+                seed_ids,
+                hops=command.hops,
+                relationship_types=(
+                    None
+                    if command.relationship_types is None
+                    else frozenset(command.relationship_types)
+                ),
+                limit=page_size + 1,
+                after_edge_id=command.after,
+            )
+        page, truncated = _bounded_graph_edges(found.assignments, found.relationships, page_size)
+        last_edge_id = _graph_edge_id(page[-1]) if truncated and page else None
+        payload = _graph_view(
+            entities=found.entities,
+            page=page,
+            seed_ids=seed_ids,
+            at=command.as_of,
+        )
+        payload["next_cursor"] = last_edge_id
+        return _Result(
+            payload=payload,
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_ENTITY_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                    next_cursor=last_edge_id,
                 ),
             ),
         )
@@ -10193,6 +10368,7 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.ENTITIES_RESOLVE: ApplicationService._entities_resolve,
         Capability.ENTITIES_CONTEXT: ApplicationService._entities_context,
         Capability.ENTITIES_RELATIONSHIPS: ApplicationService._entities_relationships,
+        Capability.ENTITIES_GRAPH: ApplicationService._entities_graph,
         Capability.ENTITIES_UNRESOLVED_MENTIONS: (ApplicationService._entities_unresolved_mentions),
         Capability.ENTITIES_IDENTIFIERS_LIST: ApplicationService._entities_identifiers_list,
         Capability.ENTITIES_ALIASES_LIST: ApplicationService._entities_aliases_list,
@@ -10337,6 +10513,7 @@ _ENTITY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_ADDRESSES_LIST,
         Capability.ENTITIES_COMMUNICATION_LIST,
         Capability.ENTITIES_PARTICIPATIONS_LIST,
+        Capability.ENTITIES_GRAPH,
         # `RI-ENT-WP-11`'s record-family writes. Here *and* in
         # `_ENTITY_WRITE_CAPABILITIES` below: turning the plane off withholds
         # them like every other `entities.` name, and the write switch narrows

@@ -342,6 +342,7 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     125: "One hundred and twenty-five",
     126: "One hundred and twenty-six",
     127: "One hundred and twenty-seven",
+    128: "One hundred and twenty-eight",
 }
 
 
@@ -468,18 +469,18 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # on the withheld side too, as do `RI-ENT-WP-11`'s record-family writes. The
     # GoodNotes pull adds three default-composed names after the entity work,
     # so the combined surface exposes fifty-eight and still withholds sixty-nine.
-    assert default == 58 and total == 127 and withheld == 69
+    assert default == 58 and total == 128 and withheld == 70
 
     readme = README.read_text(encoding="utf-8")
     assert f"{default} of the {total} capabilities are `available`" in readme
     assert f"`{withheld} of {total} capabilities are unwired.`" in readme
 
     system_context = SYSTEM_CONTEXT.read_text(encoding="utf-8").lower()
-    assert "one hundred and twenty-seven capabilities" in system_context
+    assert "one hundred and twenty-eight capabilities" in system_context
     assert "exposes fifty-eight of them" in system_context
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
-    assert "one hundred and twenty-seven capabilities" in module_boundaries
+    assert "one hundred and twenty-eight capabilities" in module_boundaries
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:

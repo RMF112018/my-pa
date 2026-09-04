@@ -1,4 +1,4 @@
-"""The ports the 124 capability use cases call, and nothing else.
+"""The ports the 125 capability use cases call, and nothing else.
 
 `docs/architecture/module-boundaries.md` section 5.2 puts application ports here
 and section 5.3 gives the application the transaction boundary. `AGENTS.md`
@@ -287,6 +287,7 @@ __all__ = [
     "EnrollmentRepository",
     "EntitiesRepository",
     "EntityChildPage",
+    "EntityGraphPage",
     "EntityMutationAdmission",
     "EntityMutationReceipt",
     "EntitySummary",
@@ -871,6 +872,20 @@ class EntityChildPage[
 
     records: tuple[T, ...]
     is_truncated: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class EntityGraphPage:
+    """One bounded page of a seeded assignment+relationship neighborhood.
+
+    `entities` includes every endpoint of the page's edges plus the seeds, so
+    a known seed with no recorded edges is an empty graph of that seed rather
+    than `not_found`. Truncation is the caller's to disclose from `limit+1`.
+    """
+
+    entities: tuple[Entity, ...]
+    assignments: tuple[Assignment, ...]
+    relationships: tuple[EntityRelationship, ...]
 
 
 def _directed_digest(payload: dict[str, Any]) -> str:
@@ -2850,6 +2865,33 @@ class EntitiesRepository(ABC):
         an offset that shifts. Rows are ordered by `assignment_id` and
         `after_assignment_id` excludes every identifier at or before the one
         named, for the reason `relationships` gives for its own keyset.
+        """
+
+    @abstractmethod
+    def graph_neighborhood(
+        self,
+        principal_id: str,
+        seed_entity_ids: frozenset[str],
+        *,
+        hops: int,
+        relationship_types: frozenset[str] | None,
+        limit: int,
+        after_edge_id: str | None = None,
+    ) -> EntityGraphPage:
+        """SQL-bounded 1-hop or 2-hop neighborhood of `seed_entity_ids`.
+
+        `hops` is 1 or 2. Depth 1 is edges incident to the seeds. Depth 2 is
+        edges incident to the seeds and their 1-hop neighbors. There is no
+        recursive walk past two.
+
+        Assignment edges bind `entity_id` to `scope_entity_id` and are part of
+        the walk so a canvas can group Person→Org without inferring employment
+        from names. Relationship edges may be filtered by `relationship_types`;
+        `None` means every type.
+
+        Rows are a unified edge stream ordered by `edge_id` (assignment `asn_…`
+        and relationship `erel_…` do not collide). `after_edge_id` is a keyset
+        on that order. `limit` is a query-time `LIMIT`.
         """
 
     @abstractmethod

@@ -88,9 +88,8 @@ test.describe("the signed-in surfaces", () => {
 
     await page.goto("/people");
     await expect(page.getByRole("heading", { name: "People", level: 1 })).toBeVisible();
-    await expect(page.locator('[data-state="degraded"]')).toContainText(
-      /no admitted same-origin BFF exposure/i,
-    );
+    await expect(page.getByRole("searchbox", { name: "Search people" })).toBeVisible();
+    await expect(page.getByText(/no admitted same-origin BFF exposure/i)).toHaveCount(0);
   });
 
   test("predecessor deep links preserve the successor content and active destination", async ({ page }, testInfo) => {
@@ -179,6 +178,24 @@ test.describe("the signed-in surfaces", () => {
     await expect(page.getByText(/e7f3a9c2d514/)).toHaveCount(0);
     // And the local-operator limit is disclosed rather than glossed.
     await expect(page.getByTestId("system-local-operator")).toBeVisible();
+    // Worker heartbeat is rendered or explicitly unknown — never implied healthy.
+    const heartbeatKnown = page.getByTestId("system-worker-heartbeat");
+    const heartbeatUnknown = page.getByTestId("system-worker-heartbeat-unknown");
+    expect((await heartbeatKnown.count()) + (await heartbeatUnknown.count())).toBeGreaterThan(0);
+    // Intelligence resolve_set members stay visible and are not flattened to system health.
+    await expect(page.getByTestId("system-intelligence-not-system-health")).toContainText(
+      /not a claim that the system is healthy/i,
+    );
+    await expect(page.getByTestId("system-intelligence-aggregate")).toBeVisible();
+    await expect(page.getByTestId("system-intelligence-members")).toBeVisible();
+    const memberStates = await page.getByTestId("system-intelligence-member-readiness").allTextContents();
+    expect(memberStates.length).toBeGreaterThan(1);
+    expect(memberStates.some((state) => state === "MISSING")).toBe(true);
+    const aggregate = (await page.getByTestId("system-intelligence-aggregate").textContent()) ?? "";
+    expect(memberStates).not.toEqual([aggregate]);
+    // PWA fields are pending WP26, not invented.
+    await expect(page.getByTestId("system-pwa-pending")).toContainText("PWA_FIELDS_PENDING_WP26");
+    await expect(page.getByTestId("system-refresh")).toBeVisible();
   });
 
   test("a capture is persisted, and the Library proves it", async ({ page }) => {

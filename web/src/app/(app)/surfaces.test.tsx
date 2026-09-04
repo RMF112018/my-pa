@@ -61,8 +61,16 @@ vi.mock("next/headers", () => ({
 vi.mock("@/lib/auth/principal", () => ({
   resolveSessionPrincipal: async () => PRINCIPAL,
 }));
+vi.mock("next/navigation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("next/navigation")>();
+  return {
+    ...actual,
+    useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }),
+  };
+});
 
 import LibraryPage from "@/app/(app)/library/page";
+import PeoplePage from "@/app/(app)/people/page";
 import ReviewPage from "@/app/(app)/review/page";
 import TodayPage from "@/app/(app)/today/page";
 import SituationsPage from "@/app/(app)/situations/page";
@@ -102,6 +110,20 @@ function answerWith(result: unknown, disclosure: unknown) {
           headers: { "content-type": "application/json" },
         }),
     ),
+  );
+}
+
+function answerByCapability(map: Record<string, unknown>, disclosure: unknown = whole()) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: unknown) => {
+      const capability = String(url).match(/\/v1\/([^/?#]+)/)?.[1] ?? "";
+      const result = Object.prototype.hasOwnProperty.call(map, capability) ? map[capability] : {};
+      return new Response(JSON.stringify({ result, disclosure }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }),
   );
 }
 
@@ -432,6 +454,69 @@ describe("System reports what it was told, and says so when it was told nothing"
     ],
   };
 
+  const REPORTS_LIST = {
+    items: [
+      {
+        report_id: "rpt_aaaaaaaa11111111",
+        cycle_run_id: "micr_aaaaaaaa11111111",
+        stage: "collector",
+        artifact_kind: "collector_candidates",
+        focus_area_id: "communications",
+        source_lane: null,
+        title: "E2E morning brief collector",
+        content_sha256: "a".repeat(64),
+        artifact_state: "final",
+      },
+    ],
+    next_cursor: null,
+  };
+
+  const RESOLVE_SET = {
+    cycle_run_id: "micr_aaaaaaaa11111111",
+    cycle_id: "morning_intelligence",
+    business_date: "2026-08-20",
+    set_id: "morning_brief_inputs",
+    aggregate: "BLOCKED",
+    members: [
+      {
+        member_id: "communications",
+        focus_area_id: "communications",
+        source_lane: null,
+        readiness: "READY",
+        required: true,
+        artifact_id: "rpt_aaaaaaaa11111111",
+        producer_run_id: "prun_aaaaaaaa11111111",
+        content_sha256: "a".repeat(64),
+        committed_at: "2026-08-20T12:00:00Z",
+        readiness_reason: "present",
+      },
+      {
+        member_id: "people",
+        focus_area_id: "people",
+        source_lane: null,
+        readiness: "MISSING",
+        required: true,
+        artifact_id: null,
+        producer_run_id: null,
+        content_sha256: null,
+        committed_at: null,
+        readiness_reason: "missing",
+      },
+    ],
+  };
+
+  function answerSystem(overrides: {
+    capabilities?: unknown;
+    list?: unknown;
+    resolve?: unknown;
+  } = {}) {
+    answerByCapability({
+      "capabilities.get": overrides.capabilities ?? CAPABILITIES_GET,
+      "reports.list": overrides.list ?? REPORTS_LIST,
+      "reports.resolve_set": overrides.resolve ?? RESOLVE_SET,
+    });
+  }
+
   it("prints the readiness count the application actually returned", async () => {
     answerWith(CAPABILITIES_GET, whole());
     await renderServerPage(() => SystemPage());
@@ -466,6 +551,61 @@ describe("System reports what it was told, and says so when it was told nothing"
     await renderServerPage(() => SystemPage());
     expect(screen.getByTestId("system-local-operator").textContent).toMatch(/one fixed principal/);
     expect(screen.queryByTestId("system-auth-mode-misconfigured")).toBeNull();
+  });
+
+  it("renders an absent worker heartbeat as unknown, never healthy", async () => {
+    answerSystem();
+    await renderServerPage(() => SystemPage());
+    expect(screen.getByTestId("system-worker-heartbeat-unknown").textContent).toMatch(
+      /last heartbeat unknown/,
+    );
+    expect(screen.queryByTestId("system-worker-heartbeat")).toBeNull();
+    expect(screen.getByTestId("system-worker-planes").textContent).not.toMatch(/\bhealthy\b/);
+  });
+
+  it("keeps worker_absent visibly not-healthy", async () => {
+    answerSystem({
+      capabilities: {
+        ...CAPABILITIES_GET,
+        worker_planes: [
+          {
+            plane: "capture",
+            state: "worker_absent",
+            backlog: 1,
+            dead_lettered: 0,
+            last_heartbeat_at: null,
+          },
+        ],
+      },
+    });
+    await renderServerPage(() => SystemPage());
+    expect(screen.getByTestId("system-worker-not-healthy").textContent).toMatch(/not healthy/);
+    expect(screen.getByTestId("system-worker-planes").textContent).toMatch(/worker_absent/);
+  });
+
+  it("shows Intelligence aggregate and members without flattening READY to system health", async () => {
+    answerSystem();
+    await renderServerPage(() => SystemPage());
+    expect(screen.getByTestId("system-intelligence-aggregate").textContent).toBe("BLOCKED");
+    const members = screen.getAllByTestId("system-intelligence-member");
+    expect(members).toHaveLength(2);
+    const states = screen.getAllByTestId("system-intelligence-member-readiness").map((el) => el.textContent);
+    expect(states).toEqual(["READY", "MISSING"]);
+    expect(states).not.toEqual(["BLOCKED"]);
+    expect(screen.getByTestId("system-intelligence-not-system-health").textContent).toMatch(
+      /not a claim that the system is healthy/,
+    );
+    expect(screen.getByTestId("system-pwa-pending").textContent).toMatch(/PWA_FIELDS_PENDING_WP26/);
+    expect(screen.getByTestId("system-sources-unknown").textContent).toMatch(/cannot list/);
+    expect(screen.getByTestId("system-refresh")).toBeTruthy();
+  });
+
+  it("does not invent a cycle when reports.list is empty", async () => {
+    answerSystem({ list: { items: [], next_cursor: null } });
+    await renderServerPage(() => SystemPage());
+    expect(screen.getByTestId("system-intelligence-no-cycle").textContent).toMatch(/cycle_run_id is unknown/);
+    expect(screen.queryByTestId("system-intelligence-members")).toBeNull();
+    expect(screen.queryByTestId("system-intelligence-aggregate")).toBeNull();
   });
 });
 
@@ -510,5 +650,128 @@ describe("no surface accepts an identity from anything but the session", () => {
     expect(wire).not.toContain(foreign);
     // And what was sent is the derivation of the session's own claims.
     expect(seen[0]["principal_id"]).toMatch(/^prn_[0-9a-f]{32}$/);
+  });
+});
+
+const ENTITY_SUMMARY = {
+  entity_id: "ent_aaaaaaaa11111111",
+  entity_type: "person",
+  canonical_name: "pat synthetic",
+  display_name: "Pat Synthetic",
+  status: "active",
+  affiliated_organizations: ["Acme Synthetic"],
+  project_roles: ["architect"],
+};
+
+const ENTITY_VIEW = {
+  entity_id: "ent_aaaaaaaa11111111",
+  entity_type: "person",
+  canonical_name: "pat synthetic",
+  display_name: "Pat Synthetic",
+  status: "active",
+  created_at: "2026-08-09T12:00:00.000Z",
+  updated_at: "2026-08-09T12:00:00.000Z",
+  version: 1,
+  superseded_by_entity_id: null,
+};
+
+const PROFILE = {
+  entity: ENTITY_VIEW,
+  assembled_at: "2026-08-09T12:00:00.000Z",
+  limitations: [],
+  is_complete: true,
+  organization_profile: null,
+  names: [
+    {
+      entity_name_id: "enam_aaaaaaaa11111111",
+      entity_id: ENTITY_VIEW.entity_id,
+      name_type_code: "display",
+      display_value: "Pat Synthetic",
+      normalized_value: "pat synthetic",
+      is_preferred: true,
+      effective_from: null,
+      effective_to: null,
+      state: "active",
+      version: 1,
+      updated_at: "2026-08-09T12:00:00.000Z",
+      retired_at: null,
+      superseded_by_entity_name_id: null,
+    },
+  ],
+  addresses: [],
+  communication_methods: [],
+  participations_as_project: [],
+  participations_as_participant: [],
+  affiliations_as_person: [],
+  affiliations_as_organization: [],
+};
+
+const RESOLUTION = {
+  outcome: "ambiguous",
+  entity_id: null,
+  candidates: [
+    {
+      entity_id: ENTITY_VIEW.entity_id,
+      entity_type: "person",
+      display_name: "Alex Chen",
+      status: "active",
+      superseded_by_entity_id: null,
+      matched_on: ["canonical_name"],
+      signals: [],
+    },
+  ],
+  warnings: ["several_entities_share_this_name"],
+  candidates_were_truncated: false,
+};
+
+describe("People reaches search, resolve, and profile instead of a directory", () => {
+  it("does not list everyone when nothing was asked", async () => {
+    socketFails();
+    await renderServerPage(() => PeoplePage({ searchParams: NO_PARAMS }));
+    expect(screen.getByTestId("people-idle")).toHaveAttribute("data-state", "empty");
+    expect(screen.getByRole("searchbox", { name: "Search people" })).toBeTruthy();
+    expect(screen.queryByText(/no admitted same-origin BFF exposure/i)).toBeNull();
+  });
+
+  it("renders the entities a successful search returned", async () => {
+    answerWith({ entities: [ENTITY_SUMMARY] }, whole());
+    await renderServerPage(() =>
+      PeoplePage({ searchParams: Promise.resolve({ q: "Pat Synthetic" }) }),
+    );
+    expect(screen.getByTestId("people-search-hits")).toBeTruthy();
+    expect(screen.getByText("Pat Synthetic")).toBeTruthy();
+    expect(screen.queryByTestId("people-search-empty")).toBeNull();
+  });
+
+  it("says empty only when search actually matched none", async () => {
+    answerWith({ entities: [] }, whole());
+    await renderServerPage(() => PeoplePage({ searchParams: Promise.resolve({ q: "nobody" }) }));
+    const empty = screen.getByTestId("people-search-empty");
+    expect(empty).toHaveAttribute("data-state", "empty");
+  });
+
+  it("does NOT say empty when the backend answered that it did not search", async () => {
+    answerWith({ entities: [] }, notSearched());
+    await renderServerPage(() => PeoplePage({ searchParams: Promise.resolve({ q: "nobody" }) }));
+    expect(screen.getByTestId("people-search-unavailable")).toHaveAttribute("data-state", "unavailable");
+    expect(screen.queryByTestId("people-search-empty")).toBeNull();
+  });
+
+  it("keeps an ambiguous resolve outcome visible", async () => {
+    answerWith({ resolution: RESOLUTION }, whole());
+    await renderServerPage(() =>
+      PeoplePage({ searchParams: Promise.resolve({ reference: "Alex Chen" }) }),
+    );
+    expect(screen.getByTestId("people-resolve-outcome").textContent).toMatch(/ambiguous/i);
+    expect(screen.queryByRole("button", { name: /merge/i })).toBeNull();
+  });
+
+  it("reads a profile from entities.profile", async () => {
+    answerWith({ profile: PROFILE }, whole());
+    await renderServerPage(() =>
+      PeoplePage({ searchParams: Promise.resolve({ entityId: ENTITY_VIEW.entity_id }) }),
+    );
+    expect(screen.getByTestId("people-profile")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Pat Synthetic", level: 2 })).toBeTruthy();
   });
 });

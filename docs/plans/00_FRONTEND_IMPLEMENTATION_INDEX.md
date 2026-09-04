@@ -26,7 +26,7 @@ The controlling post-audit sequence is `UI-IMP-WP01..WP30`. Older `WP-FE-*` orde
 
 `UI-IMP-WP06` typed BFF success, error, receipt, and degraded contracts are implemented on this PR. That is not production activation, not `PASS_VERIFIED` of the whole frontend, and not Wave 1 closure until post-merge audit.
 
-`NEXT_EXECUTABLE_PACKAGE: Wave 4 in progress on origin/main@37f767b85fbc0cd1e84fd0c8acd831b0c47142b2. This PR is UI-IMP-WP14 People / Relationship Intelligence UI (search / resolve / profile — not browse-all). UI-IMP-WP12 is a parallel PR from the same base. UI-IMP-WP21 and UI-IMP-WP22 remain PROVISIONAL_NOT_ACTIVATED. UI-IMP-WP23 Federated Search follows the Intelligence/People route freeze. The prior “Wave 4 is not next” sentence was pre-Wave-3-closeout routing and is superseded by the operator Wave 4 dispatch.`
+`NEXT_EXECUTABLE_PACKAGE: Wave 4 in progress on origin/main@9f933ab964f1c7502c871c2ec282ae0cc27e7f8a (UI-IMP-WP14 merged). This PR is UI-IMP-WP12 Morning Intelligence UI. UI-IMP-WP21 and UI-IMP-WP22 remain PROVISIONAL_NOT_ACTIVATED. UI-IMP-WP23 Federated Search follows this Intelligence route freeze. The prior “Wave 4 is not next” sentence was pre-Wave-3-closeout routing and is superseded by the operator Wave 4 dispatch.`
 
 ## Evidence limitations
 

@@ -191,6 +191,32 @@ test.describe("what axe cannot decide", () => {
   });
 });
 
+test.describe("Intelligence working surface landmarks", () => {
+  test.beforeEach(async ({ page }) => {
+    await signIn(page);
+  });
+
+  test("Intelligence landing keeps one h1, a labelled region, and a History link", async ({
+    page,
+  }) => {
+    await page.goto("/intelligence");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
+    await expect(page.getByRole("heading", { name: "Intelligence", level: 1 })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Intelligence" })).toHaveCount(1);
+    const history = page.getByRole("link", { name: "History" });
+    await expect(history).toBeVisible();
+    await history.focus();
+    await expect(history).toBeFocused();
+  });
+
+  test("Intelligence history keeps one h1 and a back link", async ({ page }) => {
+    await page.goto("/intelligence/history");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
+    await expect(page.getByRole("heading", { name: "Intelligence history", level: 1 })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Current Intelligence" })).toBeVisible();
+  });
+});
+
 test.describe("People search, warnings, and profile extras", () => {
   test.beforeEach(async ({ page }) => {
     await signIn(page);

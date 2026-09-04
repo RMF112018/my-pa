@@ -65,8 +65,8 @@ is not a defect.
 
 ## 3. What is implemented
 
-Three hundred and eighteen Python modules under `src/my_pa` and four hundred and fifty-four test modules —
-`find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
+Three hundred and eighteen Python modules under `src/my_pa` and four hundred and fifty-seven test modules —
+`find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. Corrected on 2026-09-04 to **three hundred and eighteen and four hundred and fifty-seven** by merging `origin/main` `37f767b8` (PR #186) into `ri-ent/wp13-fixture`: `origin/main` recorded three hundred and eighteen and four hundred and fifty-four, true of *its* tree; this branch recorded three hundred and eighteen and four hundred and fifty-three at `62ff47f5`, true of *its*; neither is true of the merge. PR #186 adds four test modules under `tests/db/` — `test_provisioning.py`, `test_provisioning_guards.py`, `test_provisioning_unit.py`, `test_transactional.py` — and no source module. Re-measured by running the two commands above against the merged tree with every conflict marker gone, never by summing the two deltas (RULING-M2, FINDING-M1). The figures
 published here have now gone stale three times: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
 true at WP-4B3 `main@6660dbb`, and each was carried through the packages that
@@ -107,7 +107,15 @@ one source module and three test modules: `1b2dd18` added
 time the source-module figure has moved since the 2026-08-29 correction, every
 step between it and this one having been test-side only. `95b16cf` and
 `34367b4` changed the contents of those files without adding a module on either
-side, so neither moves either figure. Both figures were recomputed by running
+side, so neither moves either figure. Corrected again on 2026-09-02, on the
+test side only, from four hundred and thirty-two to four hundred and
+thirty-four: RI-ENT-WP-13 added two test modules and no source module —
+`tests/database/test_tbr_completeness_fixture.py`, the synthetic TBR
+completeness fixture, and
+`tests/unit/test_entity_record_family_security_matrix.py`, the structural half
+of the audit's security matrix. That accounts for the movement in full, with no
+residual, and the source-module figure is unmoved because RI-ENT-WP-13 adds
+nothing under `src/my_pa`. Both figures were recomputed by running
 the two commands above against this tree rather than by adding an assumed delta
 to the stated pair, and corrected again on 2026-09-01 to three hundred and six
 and four hundred and thirty-eight, when RI-ENT-WP-09 added six test modules and
@@ -155,7 +163,8 @@ modules: `src/my_pa/domain/identity/secret_digests.py`,
 `src/my_pa/infrastructure/persistence/webauthn_auth.py`,
 `tests/database/test_webauthn_auth_persistence.py`,
 `tests/schema/test_webauthn_auth_persistence_migration.py`, and
-`tests/unit/test_webauthn_auth_persistence.py`; that correction also records
+`tests/unit/test_webauthn_auth_persistence.py`. 
+Corrected again on 2026-09-04 to **three hundred and eighteen and four hundred and fifty-seven** by merging `origin/main` `37f767b8` (PR #186) onto the tree that had already integrated `25301329`; that tree's pair was three hundred and eighteen and four hundred and fifty-three, true of `62ff47f5`, and `origin/main`'s pair at `37f767b8` was three hundred and eighteen and four hundred and fifty-four, true of *its* tree. Corrected on 2026-09-03 to **three hundred and eighteen and four hundred and fifty-three** by the base integration of `origin/main` into `ri-ent/wp13-fixture`, in two steps: `8f0e4779` (PR #177, RI-ENT-WP-10/11, at `e004942b`, and PR #182, UI-IMP-WP07 through WP10, on top of it) and then `1bb7c3cf` (PR #183, UI-IMP-WP11, which modified `tests/contract/test_bff_success_decoder_parity.py` and `tests/unit/test_intelligence_artifact_pipeline.py` in place and added no module under either `find` -- the pair was re-measured after that step and did not move). `origin/main` recorded three hundred and eighteen and four hundred and fifty, true of *its* tree; this branch recorded three hundred and seventeen and four hundred and forty-nine, true of *its*; neither is true of the merge, which is the seventh consecutive integration in this campaign where that held. Re-measured by running the two commands above against the merged tree with every conflict marker gone, and again after this paragraph had itself been rewritten -- never by summing the two deltas (RULING-M2). The movement is nameable from the shared base `1055e5bc` (317/446): this branch adds no source module and three test modules (`tests/architecture/test_a_project_name_is_never_a_global_identity.py`, `tests/database/test_tbr_completeness_fixture.py`, `tests/unit/test_entity_record_family_security_matrix.py`); `origin/main` adds one source module (`src/my_pa/application/entity_family_writes.py`) and four test modules (`tests/architecture/test_entity_plane_prose_matches_the_capability_sets.py`, `tests/contract/test_entity_record_family_reads.py`, `tests/database/test_entity_family_write_ledger.py`, `tests/database/test_ri_ent_wp_10_11_vocabulary_migration.py`). No file was added on both sides this time, so the two sets happen to be disjoint -- measured, not relied on. PR #182's `tests/end_to_end/seed_review.py` is not a `test_*.py` and moves neither figure. **The dated entries `origin/main` carried at `1055e5bc` for the 317/445 (UI-IMP-WP04) and 317/446 (UI-IMP-WP06) steps, which this branch's earlier resolution at `e94dd4b3` had collapsed into a single summary clause, are restored here verbatim and in the order that file held them; each "this tree" inside them is the tree that wrote it:** Corrected again on 2026-09-03 to **three hundred and seventeen and four hundred and forty-six**, when UI-IMP-WP06 added `tests/contract/test_bff_success_decoder_parity.py` without adding a source module. The pair `find` reports on this tree is 317/446. Corrected again on 2026-09-02 to **three hundred and seventeen and four hundred and forty-five**, when this tree's `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"` were run after UI-IMP-WP04 added two source modules (`src/my_pa/application/session_service_auth.py`, `src/my_pa/adapters/http/auth_sessions.py`) and two test modules (`tests/unit/test_session_service_auth.py`, `tests/unit/test_session_service_isolation.py`). The pair `find` reports on this tree is 317/445. Prior correction the same day to three hundred and fifteen and four hundred and forty-three recorded the tree after merging `ri-ent/wp09-resolution` with `origin/main` and landing UI-IMP-WP03. The merge of WP-09's six test modules onto WP-02's five source and three test modules produced 311/441; WP-03 then added four source modules (`src/my_pa/application/webauthn_bff_attestation.py`, `src/my_pa/domain/identity/webauthn_relying_party.py`, `src/my_pa/infrastructure/security/webauthn_ceremony.py`, `src/my_pa/adapters/http/webauthn.py`) and two test modules (`tests/unit/test_webauthn_ceremony.py`, `tests/database/test_webauthn_ceremony.py`). Isolation (`7452cc6`) moved ceremony execute into the existing `bootstrap.gateway` composition root and added neither a source module nor a test module. 311+4=315 and 441+2=443, which was the pair `find` reported on that tree. Prior correction the same day to three hundred and eleven and four hundred and forty-one recorded the merge of `ri-ent/wp09-resolution` (306/438) with `origin/main` (311/435) before ceremony landed; that pair was a scaffold for the merge, not this tree. **Re-measured by running the two commands above -- never by summing the two deltas**, which is the trap an independent reviewer named when it found this exact conflict before the merge was attempted. `95b16cf` and `34367b4` changed the contents of the WP-08 files without adding a module on either side, so neither moves either figure. **This branch's own history of this paragraph, as it stood at `e94dd4b3`, preserved:** Corrected again on 2026-09-02 to **three hundred and eleven and four hundred and forty-one**, when `ri-ent/wp09-resolution` and `origin/main` were merged and NEITHER side's pair was true of the result: this branch had corrected the pair to 306/438 for RI-ENT-WP-09's six test modules, `origin/main` had corrected the same pair to 311/435 for UI-IMP-WP02's five source and three test modules, and both corrections were made from the same baseline. The merged tree carries both sets of modules, so the true pair is neither. **Re-measured on the merged tree by running the two commands above -- never by summing the two deltas**, which is the trap an independent reviewer named when it found this exact conflict before the merge was attempted. `95b16cf` and `34367b4` changed the contents of the WP-08 files without adding a module on either side, so neither moves either figure. **Moved on 2026-09-03 by integrating `origin/main` at `1055e5bc`** (UI-IMP-WP03 through WP-06, five bases' worth of frontend and auth work). `origin/main` recorded the pair as three hundred and seventeen and four hundred and forty-six, true of *its* tree; this branch recorded three hundred and eleven and four hundred and forty-four, true of *its*. Re-measured on the merged tree with every conflict marker gone: **three hundred and seventeen and four hundred and forty-nine** — RI-ENT-WP-13 adds no source module and three test modules that `origin/main` does not carry. Neither side's pair was true of the result, which is now the sixth consecutive integration in this campaign where that held. **`origin/main` also still carries the FINDING-M3 prose corruption at this paragraph** — the sentence that opens "The source-module" and runs straight into the fused pair "f" + "five and four hundred and twenty-nine", eleven words dropped by a programmatic splice in the controlling context's own conflict resolution at `9943aa11`. This branch's repaired text is what survives the merge, and this integration is how the repair reaches `main`. **`origin/main`'s history of this same paragraph, as it stood at `e004942b`, preserved -- it continues from the UI-IMP-WP02 module list above:** `tests/unit/test_webauthn_auth_persistence.py`; that correction also records
 that `95b16cf` and `34367b4` changed the contents of the WP-08 files without
 adding a module on either side, so neither moves either figure. **Neither
 branch's pair is true of the merged tree, and the two corrections do not
@@ -220,7 +229,48 @@ five and four hundred and twenty-nine, was true at `f4eaa4f`; the chain above
 therefore skips from four hundred and twenty-six to four hundred and
 twenty-nine, because `f4eaa4f` moved the sentence without extending this note,
 and the skipped step is recorded here rather than reconstructed. (The audit basis `main@e773e6f` was fifty-six and twenty-seven; the
-pair recorded against it here was the revalidation's, one basis out.) **"Nothing checks them" was the
+pair recorded against it here was the revalidation's, one basis out.)
+Corrected again on 2026-09-02 at RI-ENT-WP-13 closeout to **three hundred and
+eleven and four hundred and forty-four**: the source figure is unmoved, and the
+test figure moves by exactly one, `tests/architecture/test_a_project_name_is_never_a_global_identity.py`,
+the guard that makes the `project_display_name` boundary mechanical. Re-measured
+by running the two commands above against the tree that carries it, not by
+adding one to the stated pair. The `441` recorded in the entry above is **not**
+superseded and must not be "corrected": it is the pair as it stood at the
+`ri-ent/wp09-resolution`/`origin/main` merge, and it was right for that tree.
+
+**Prose repair, 2026-09-02, RI-ENT-WP-13 closeout (`FINDING-M3`).** The
+sentence beginning "The pair standing before this correction" read, between
+`9943aa11` and this correction, as "The source-module" run directly into the
+fused pair "f" + "five and four hundred and twenty-nine" — eleven words gone
+and two sentences fused into one token.
+
+**Git did not do this, and this record must not say it did.** `9943aa11` is the
+controlling context's own merge commit resolving the RI-ENT-WP-09 count
+conflict, and it resolved that conflict **programmatically, by splitting and
+concatenating the file as a Python string** rather than by editing it. The
+split anchor, `"The source-module f"`, was not unique in the document, so the
+trailing fragment ran straight into the surviving tail. No conflict marker
+survived because none was ever written: the corruption was introduced by the
+resolution, not by the merge. Attributing it to git would teach a future reader
+that merges silently mangle prose; the real lesson is narrower and far more
+actionable — **never resolve a text conflict by string concatenation, and read
+the affected paragraph after any programmatic edit to a document.**
+
+The damage travelled onto `main` at `6db2a203`. The restored wording is
+`717e1d15`'s, the last uncorrupted version, and its figures were re-derived
+rather than trusted: `git ls-tree -r --name-only f4eaa4f` gives three hundred
+and five modules under `src/my_pa` and four hundred and twenty-nine `test_*.py`
+under `tests`. `ri-ent/wp10-11-mcp` reached the identical restoration
+independently during its own base integration, so two contexts converged on the
+same eleven words from the same evidence.
+
+It is recorded at length because **every mechanical check passed over it**: the
+figures around the sentence were all correct, `ruff` and `mypy` do not read
+prose, and the count guards compare a figure to the tree rather than a sentence
+to grammar. It reached `main` through an independent review that PASSED. A
+count guard proves a figure; nothing in this repository proves a sentence, and
+the only thing that could have found this is someone reading it. **"Nothing checks them" was the
 diagnosis and it is now wrong**:
 `../../tests/architecture/test_spelled_counts_match_the_sets_they_name.py` runs
 both commands above, and the revision count and head below, and fails when an

@@ -40,7 +40,7 @@ MCP, and operator-CLI adapters; a default composition serves fifty-five of
 them, because the `documents.`, `entities.` and `relationship_memory.` families
 each require an environment variable that has no default. The gateway and worker
 composition roots use the same PostgreSQL-backed policy and application seams.
-Alembic owns seventy-nine revisions at head `7e114f822af2`; the chain admits GSQS at `c4b0a1d9e827` immediately before Phase B continues at `c7a1f04b9e63`, `b727e870d45e` is additive on `8e1c4a7b2d90`, and `7e114f822af2` is additive on `b727e870d45e`, adding the `entity_names`/`entity_organization_profiles` tables (RI-ENT-WP-02). The current candidate
+Alembic owns eighty-seven revisions at head `2c00c9ac64bc`; the chain admits GSQS at `c4b0a1d9e827` immediately before Phase B continues at `c7a1f04b9e63`, `b727e870d45e` is additive on `8e1c4a7b2d90`, `7e114f822af2` is additive on `b727e870d45e`, adding the `entity_names`/`entity_organization_profiles` tables (RI-ENT-WP-02), and the eight revisions above it carry RI-ENT-WP-03 through RI-ENT-WP-07 and UI-IMP-WP02. The current candidate
 also includes the MossAIc web BFF/PWA, managed documents, GoodNotes, the bounded
 model gate, Frontier MCP, and the Apple source host. These documents describe the
 resulting implementation and the accepted, inactive NAS target. They do not
@@ -50,7 +50,7 @@ risk acceptance.
 Corrected 2026-08-23: the paragraph above claimed 30 capabilities and 34
 revisions at head `b4e8d2c7a613`. That pair was self-consistent when it was
 written — `b4e8d2c7a613` is still in this chain and is still its 34th revision —
-and further revisions have landed on top of it since, with current head `7e114f822af2` (corrected again 2026-08-30 from `b727e870d45e`, which is itself corrected 2026-08-29 from `8e1c4a7b2d90`, for the same reason and by the same derivation). The
+and further revisions have landed on top of it since, with current head `2c00c9ac64bc` (corrected again 2026-09-02 from `7e114f822af2`/seventy-nine, which was itself corrected 2026-08-30 from `b727e870d45e`, itself corrected 2026-08-29 from `8e1c4a7b2d90`, every one of them for the same reason and by the same derivation). **The 2026-09-02 correction is the fourth in this register and the pattern is now the finding, not the figure:** `7e114f822af2` was the 79th revision when that pair was written, so it too was self-consistent when written and stale within days. The eight revisions since carry RI-ENT-WP-03 through RI-ENT-WP-07 and UI-IMP-WP02. Nothing mechanical reads this paragraph — `tests/architecture/test_readme_state_claims.py` binds the chain figure in `README.md`, `system-context.md` and two runbooks, and this index is in none of those lists — which is precisely why it has now gone stale four times and its sibling has not. The
 current figures were already stated in [`system-context.md`](system-context.md)
 beside it, which has been kept current through those work packages while this
 index was not, and that is how a figure like this survives: the sibling is the

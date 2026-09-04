@@ -41,6 +41,22 @@ describe("cycle selection from backend fields", () => {
     expect(currentCycleRunId(items)).toBe("micr_older0000000001");
   });
 
+  it("falls back to list order when only some cycles have resolve_set dates", () => {
+    const items = [
+      entry({ report_id: "rpt_listedfirst0001", cycle_run_id: "micr_listedfirst0001" }),
+      entry({ report_id: "rpt_datedolder00001", cycle_run_id: "micr_datedolder00001" }),
+    ];
+    const dates = [{ cycle_run_id: "micr_datedolder00001", business_date: "2026-08-20" }];
+    expect(currentCycleRunId(items, dates)).toBe("micr_listedfirst0001");
+    const groups = groupArtifactsByCycle(items, dates);
+    expect(groups.find((group) => group.cycle_run_id === "micr_listedfirst0001")?.current).toBe(
+      true,
+    );
+    expect(groups.find((group) => group.cycle_run_id === "micr_datedolder00001")?.current).toBe(
+      false,
+    );
+  });
+
   it("selects current vs history from backend business_date, not Date.now()", () => {
     const items = [
       entry({

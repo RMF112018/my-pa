@@ -3,9 +3,10 @@
  *
  * `reports.list` entries do not carry `committed_at` or `report_date`.
  * Recency on the listing itself is therefore backend list order: the first
- * listed artifact's `cycle_run_id` is current unless `reports.resolve_set`
- * supplied a `business_date` for listed cycles — in that case the latest
- * ISO `business_date` wins. `Date.now()` is never consulted.
+ * listed artifact's `cycle_run_id` is current. Latest ISO `business_date`
+ * wins only when every listed cycle has a resolve_set date. A partial date
+ * set must not badge an older dated run as current. `Date.now()` is never
+ * consulted.
  */
 import type { ReportListEntry } from "@/lib/api/decode/capabilities/reports.list";
 
@@ -37,20 +38,27 @@ export function currentCycleRunId(
   dates: readonly CycleDate[] = [],
 ): string | null {
   if (items.length === 0) return null;
-  const dateByCycle = new Map(dates.map((row) => [row.cycle_run_id, row.business_date]));
-  let latest: { cycle: string; date: string } | null = null;
+  const uniqueCycles: string[] = [];
   const seen = new Set<string>();
   for (const item of items) {
     if (seen.has(item.cycle_run_id)) continue;
     seen.add(item.cycle_run_id);
-    const date = dateByCycle.get(item.cycle_run_id);
+    uniqueCycles.push(item.cycle_run_id);
+  }
+  const dateByCycle = new Map(dates.map((row) => [row.cycle_run_id, row.business_date]));
+  const allDated = uniqueCycles.every((cycle) => dateByCycle.has(cycle));
+  if (!allDated) {
+    return uniqueCycles[0] ?? null;
+  }
+  let latest: { cycle: string; date: string } | null = null;
+  for (const cycle of uniqueCycles) {
+    const date = dateByCycle.get(cycle);
     if (date === undefined) continue;
     if (latest === null || date > latest.date) {
-      latest = { cycle: item.cycle_run_id, date };
+      latest = { cycle, date };
     }
   }
-  if (latest) return latest.cycle;
-  return items[0]?.cycle_run_id ?? null;
+  return latest?.cycle ?? uniqueCycles[0] ?? null;
 }
 
 export function groupArtifactsByCycle(

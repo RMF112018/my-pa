@@ -24,13 +24,20 @@ test("Intelligence is a working surface over seeded report artifacts", async ({ 
   await expect(page.getByRole("button", { name: /merge/i })).toHaveCount(0);
 
   const readiness = page.getByTestId("intelligence-readiness");
-  if (await readiness.count()) {
+  const readinessUnavailable = page.getByTestId("intelligence-readiness-unavailable");
+  expect((await readiness.count()) + (await readinessUnavailable.count())).toBe(1);
+  if ((await readinessUnavailable.count()) > 0) {
+    await expect(readinessUnavailable).toBeVisible();
+  } else {
     await expect(readiness).toBeVisible();
     await expect(page.getByTestId("intelligence-readiness-not-health")).toContainText(
       /not a claim that the system is healthy/i,
     );
+    const membersNone = page.getByTestId("intelligence-readiness-members-none");
+    const memberList = page.getByTestId("intelligence-readiness-members");
+    expect((await membersNone.count()) + (await memberList.count())).toBe(1);
     const members = page.getByTestId("intelligence-readiness-member");
-    if (await members.count()) {
+    if ((await members.count()) > 0) {
       await expect(members.first()).toBeVisible();
       const states = await page.getByTestId("intelligence-readiness-member-state").allTextContents();
       expect(states.some((state) => state !== "READY")).toBe(true);

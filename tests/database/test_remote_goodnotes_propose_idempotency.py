@@ -137,9 +137,7 @@ def runtime(engine: Engine) -> Iterator[_Runtime]:
 class _Runtime:
     def __init__(self, engine: Engine) -> None:
         self.engine = engine
-        self.audit_engine = create_database_engine(
-            engine.url.render_as_string(hide_password=False)
-        )
+        self.audit_engine = create_database_engine(engine.url.render_as_string(hide_password=False))
         audit = SqlAlchemyAuditSink(self.audit_engine)
 
         def unit_of_work() -> SqlAlchemyUnitOfWork:

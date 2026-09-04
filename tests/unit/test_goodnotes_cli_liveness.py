@@ -210,15 +210,13 @@ def test_composed_runtime_accepts_current_exact_runtime_issued_receipt(
     assert result.principal_id == PRINCIPAL
     assert engine.connections == 2
 
-
-def test_mutation_during_database_admission_cannot_change_bytes_sent_to_ocr(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    page = _source(tmp_path)
-    manifest = tmp_path / "goodnotes-manifest.json"
+    admission_root = tmp_path / "admission-mutation"
+    admission_root.mkdir()
+    page = _source(admission_root)
+    manifest = admission_root / "goodnotes-manifest.json"
     original = page.read_bytes()
     replacement = b"%PDF-1.7\nchanged-during-admission\n%%EOF\n"
-    composed = _runtime(tmp_path, Clock())
+    composed = _runtime(admission_root, Clock())
     transcriber = RecordingTranscriber()
     runtime = replace(composed, transcriber=transcriber)
     receipts = runtime.observe_liveness(principal_id=PRINCIPAL)
@@ -247,15 +245,13 @@ def test_mutation_during_database_admission_cannot_change_bytes_sent_to_ocr(
     assert result.principal_id == PRINCIPAL
     assert transcriber.seen == [original]
 
-
-def test_source_and_manifest_mutation_after_liveness_is_refused_before_database_or_ocr(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    page = _source(tmp_path)
-    manifest = tmp_path / "goodnotes-manifest.json"
+    presnapshot_root = tmp_path / "pre-snapshot-mutation"
+    presnapshot_root.mkdir()
+    page = _source(presnapshot_root)
+    manifest = presnapshot_root / "goodnotes-manifest.json"
     replacement = b"%PDF-1.7\nchanged-before-snapshot\n%%EOF\n"
     transcriber = RecordingTranscriber()
-    runtime = replace(_runtime(tmp_path, Clock()), transcriber=transcriber)
+    runtime = replace(_runtime(presnapshot_root, Clock()), transcriber=transcriber)
     receipts = runtime.observe_liveness(principal_id=PRINCIPAL)
     original_inventory = bootstrap.ManifestGoodNotesSource.inventory
 

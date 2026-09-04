@@ -8,11 +8,11 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import Table, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Row
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.sql import Select
+from sqlalchemy.sql import ColumnElement, Select
 
 from my_pa.contracts.ports import (
     GoodNotesPullAssignmentRecord as PullAssignment,
@@ -59,6 +59,12 @@ from my_pa.domain.capture.review import (
 from my_pa.domain.common.identifiers import IdKind, make_identifier
 from my_pa.domain.common.time import utc_now
 from my_pa.domain.goodnotes.models import GoodNotesPageWork, GoodNotesSemanticReviewCase
+from my_pa.infrastructure.persistence.principal_scope import (
+    capture_context,
+    matching_partition_criterion,
+    partition_criterion,
+    principal_bound_values,
+)
 from my_pa.infrastructure.persistence.tables import (
     goodnotes_ingestion_run_stages,
     goodnotes_ingestion_runs,
@@ -135,6 +141,14 @@ def _work_key(work: GoodNotesPageWork) -> tuple[str, str, str]:
     return work.run_id, work.page_version_id, work.content_sha256
 
 
+def _mine(table: Table, principal_id: str) -> ColumnElement[bool]:
+    return partition_criterion(table, capture_context(principal_id))
+
+
+def _bound(table: Table, principal_id: str, values: dict[str, object]) -> dict[str, object]:
+    return principal_bound_values(values, table, capture_context(principal_id))
+
+
 def _assignment_from_row(row: object) -> PullAssignment:
     value = row._mapping  # type: ignore[attr-defined]
     return PullAssignment(
@@ -185,19 +199,19 @@ class SqlGoodNotesPullRepository:
             .select_from(
                 goodnotes_ingestion_runs.join(
                     goodnotes_ingestion_run_stages,
-                    (goodnotes_ingestion_run_stages.c.principal_id == principal_id)
+                    _mine(goodnotes_ingestion_run_stages, principal_id)
                     & (goodnotes_ingestion_run_stages.c.run_id == goodnotes_ingestion_runs.c.run_id)
                     & (goodnotes_ingestion_run_stages.c.stage == "CONTENT_READY")
                     & (goodnotes_ingestion_run_stages.c.status == "SUCCEEDED"),
                 )
                 .join(
                     goodnotes_source_snapshots,
-                    (goodnotes_source_snapshots.c.principal_id == principal_id)
+                    _mine(goodnotes_source_snapshots, principal_id)
                     & (goodnotes_source_snapshots.c.run_id == goodnotes_ingestion_runs.c.run_id),
                 )
                 .join(
                     goodnotes_page_positions,
-                    (goodnotes_page_positions.c.principal_id == principal_id)
+                    _mine(goodnotes_page_positions, principal_id)
                     & (
                         goodnotes_page_positions.c.snapshot_id
                         == goodnotes_source_snapshots.c.snapshot_id
@@ -205,7 +219,7 @@ class SqlGoodNotesPullRepository:
                 )
                 .join(
                     goodnotes_page_versions,
-                    (goodnotes_page_versions.c.principal_id == principal_id)
+                    _mine(goodnotes_page_versions, principal_id)
                     & (
                         goodnotes_page_versions.c.page_version_id
                         == goodnotes_page_positions.c.page_version_id
@@ -213,7 +227,7 @@ class SqlGoodNotesPullRepository:
                 )
                 .join(
                     goodnotes_page_rasters,
-                    (goodnotes_page_rasters.c.principal_id == principal_id)
+                    _mine(goodnotes_page_rasters, principal_id)
                     & (
                         goodnotes_page_rasters.c.page_version_id
                         == goodnotes_page_versions.c.page_version_id
@@ -221,7 +235,7 @@ class SqlGoodNotesPullRepository:
                     & (goodnotes_page_rasters.c.run_id == goodnotes_ingestion_runs.c.run_id),
                 )
             )
-            .where(goodnotes_ingestion_runs.c.principal_id == principal_id)
+            .where(_mine(goodnotes_ingestion_runs, principal_id))
             .distinct()
             .order_by(
                 goodnotes_ingestion_runs.c.run_id,
@@ -253,7 +267,7 @@ class SqlGoodNotesPullRepository:
                 goodnotes_pull_assignments.c.content_sha256,
                 func.max(goodnotes_pull_assignments.c.attempt).label("attempts"),
             )
-            .where(goodnotes_pull_assignments.c.principal_id == principal_id)
+            .where(_mine(goodnotes_pull_assignments, principal_id))
             .group_by(
                 goodnotes_pull_assignments.c.run_id,
                 goodnotes_pull_assignments.c.page_version_id,
@@ -268,7 +282,7 @@ class SqlGoodNotesPullRepository:
             str(value)
             for value in self._connection.scalars(
                 select(goodnotes_pull_completions.c.assignment_id).where(
-                    goodnotes_pull_completions.c.principal_id == principal_id
+                    _mine(goodnotes_pull_completions, principal_id)
                 )
             )
         }
@@ -280,7 +294,7 @@ class SqlGoodNotesPullRepository:
                     goodnotes_pull_assignments.c.page_version_id,
                     goodnotes_pull_assignments.c.content_sha256,
                 ).where(
-                    goodnotes_pull_assignments.c.principal_id == principal_id,
+                    _mine(goodnotes_pull_assignments, principal_id),
                     goodnotes_pull_assignments.c.assignment_id.in_(completed),
                 )
             )
@@ -318,7 +332,7 @@ class SqlGoodNotesPullRepository:
         try:
             prior = self._connection.execute(
                 select(goodnotes_pull_claims).where(
-                    goodnotes_pull_claims.c.principal_id == principal_id,
+                    _mine(goodnotes_pull_claims, principal_id),
                     goodnotes_pull_claims.c.claim_id == claim_id,
                 )
             ).one_or_none()
@@ -348,29 +362,39 @@ class SqlGoodNotesPullRepository:
             now = self._clock()
             self._connection.execute(
                 goodnotes_pull_claims.insert().values(
-                    principal_id=principal_id,
-                    claim_id=claim_id,
-                    context_id=context_id,
-                    client_id=client_id,
-                    request_fingerprint=fingerprint,
-                    assignment_count=len(assignments),
-                    created_at=now,
+                    _bound(
+                        goodnotes_pull_claims,
+                        principal_id,
+                        {
+                            "claim_id": claim_id,
+                            "context_id": context_id,
+                            "client_id": client_id,
+                            "request_fingerprint": fingerprint,
+                            "assignment_count": len(assignments),
+                            "created_at": now,
+                        },
+                    )
                 )
             )
             for ordinal, assignment in enumerate(assignments, 1):
                 self._connection.execute(
                     goodnotes_pull_assignments.insert().values(
-                        principal_id=principal_id,
-                        assignment_id=assignment.assignment_id,
-                        claim_id=claim_id,
-                        context_id=context_id,
-                        client_id=client_id,
-                        run_id=assignment.work.run_id,
-                        page_version_id=assignment.work.page_version_id,
-                        content_sha256=assignment.work.content_sha256,
-                        attempt=assignment.attempt,
-                        ordinal=ordinal,
-                        created_at=now,
+                        _bound(
+                            goodnotes_pull_assignments,
+                            principal_id,
+                            {
+                                "assignment_id": assignment.assignment_id,
+                                "claim_id": claim_id,
+                                "context_id": context_id,
+                                "client_id": client_id,
+                                "run_id": assignment.work.run_id,
+                                "page_version_id": assignment.work.page_version_id,
+                                "content_sha256": assignment.work.content_sha256,
+                                "attempt": assignment.attempt,
+                                "ordinal": ordinal,
+                                "created_at": now,
+                            },
+                        )
                     )
                 )
         except PullRepositoryConflictError:
@@ -384,7 +408,7 @@ class SqlGoodNotesPullRepository:
     ) -> PullAssignment | None:
         row = self._connection.execute(
             self._assignment_select().where(
-                goodnotes_pull_assignments.c.principal_id == principal_id,
+                _mine(goodnotes_pull_assignments, principal_id),
                 goodnotes_pull_assignments.c.client_id == client_id,
                 goodnotes_pull_assignments.c.assignment_id == assignment_id,
             )
@@ -407,7 +431,7 @@ class SqlGoodNotesPullRepository:
                 goodnotes_semantic_proposals.c.payload,
                 goodnotes_semantic_proposals.c.payload_sha256,
             ).where(
-                goodnotes_semantic_proposals.c.principal_id == principal_id,
+                _mine(goodnotes_semantic_proposals, principal_id),
                 goodnotes_semantic_proposals.c.run_id == assignment.work.run_id,
                 goodnotes_semantic_proposals.c.page_version_id == assignment.work.page_version_id,
                 goodnotes_semantic_proposals.c.content_sha256 == assignment.work.content_sha256,
@@ -428,7 +452,7 @@ class SqlGoodNotesPullRepository:
         latest = self._connection.execute(
             select(goodnotes_semantic_review_decisions)
             .where(
-                goodnotes_semantic_review_decisions.c.principal_id == principal_id,
+                _mine(goodnotes_semantic_review_decisions, principal_id),
                 goodnotes_semantic_review_decisions.c.proposal_sha256 == proposal_sha256,
             )
             .order_by(goodnotes_semantic_review_decisions.c.sequence.desc())
@@ -452,7 +476,7 @@ class SqlGoodNotesPullRepository:
     ) -> GoodNotesSemanticProposalMaterial | None:
         row = self._connection.execute(
             select(goodnotes_semantic_proposals).where(
-                goodnotes_semantic_proposals.c.principal_id == principal_id,
+                _mine(goodnotes_semantic_proposals, principal_id),
                 goodnotes_semantic_proposals.c.proposal_id == proposal_id,
             )
         ).one_or_none()
@@ -524,15 +548,20 @@ class SqlGoodNotesPullRepository:
                 )
                 self._connection.execute(
                     goodnotes_pull_completions.insert().values(
-                        principal_id=principal_id,
-                        completion_id=receipt.completion_id,
-                        assignment_id=receipt.assignment_id,
-                        context_id=context_id,
-                        client_id=client_id,
-                        idempotency_key=receipt.idempotency_key,
-                        request_fingerprint=receipt.request_fingerprint,
-                        result_sha256=receipt.result_sha256,
-                        created_at=now,
+                        _bound(
+                            goodnotes_pull_completions,
+                            principal_id,
+                            {
+                                "completion_id": receipt.completion_id,
+                                "assignment_id": receipt.assignment_id,
+                                "context_id": context_id,
+                                "client_id": client_id,
+                                "idempotency_key": receipt.idempotency_key,
+                                "request_fingerprint": receipt.request_fingerprint,
+                                "result_sha256": receipt.result_sha256,
+                                "created_at": now,
+                            },
+                        )
                     )
                 )
                 receipts.append(receipt)
@@ -543,7 +572,7 @@ class SqlGoodNotesPullRepository:
     def status(self, principal_id: str, client_id: str) -> GoodNotesPullStatus:
         session = self._connection.execute(
             select(goodnotes_pull_sessions.c.max_attempts).where(
-                goodnotes_pull_sessions.c.principal_id == principal_id,
+                _mine(goodnotes_pull_sessions, principal_id),
                 goodnotes_pull_sessions.c.client_id == client_id,
             )
         ).one_or_none()
@@ -569,7 +598,7 @@ class SqlGoodNotesPullRepository:
             raise SemanticReviewConflictError
         rows = self._connection.execute(
             select(goodnotes_semantic_proposals)
-            .where(goodnotes_semantic_proposals.c.principal_id == principal_id)
+            .where(_mine(goodnotes_semantic_proposals, principal_id))
             .order_by(
                 goodnotes_semantic_proposals.c.created_at,
                 goodnotes_semantic_proposals.c.proposal_id,
@@ -583,7 +612,7 @@ class SqlGoodNotesPullRepository:
                     goodnotes_semantic_review_decisions.c.action,
                 )
                 .where(
-                    goodnotes_semantic_review_decisions.c.principal_id == principal_id,
+                    _mine(goodnotes_semantic_review_decisions, principal_id),
                     goodnotes_semantic_review_decisions.c.proposal_id == row.proposal_id,
                 )
                 .order_by(goodnotes_semantic_review_decisions.c.sequence)
@@ -644,7 +673,7 @@ class SqlGoodNotesPullRepository:
             raise ReviewConflictError("the expected review version is stale")
         proposal = self._connection.execute(
             select(goodnotes_semantic_proposals).where(
-                goodnotes_semantic_proposals.c.principal_id == request.principal_id,
+                _mine(goodnotes_semantic_proposals, request.principal_id),
                 goodnotes_semantic_proposals.c.proposal_id == case.proposal_id,
             )
         ).one()
@@ -722,7 +751,7 @@ class SqlGoodNotesPullRepository:
         proposal = self._connection.execute(
             select(goodnotes_semantic_proposals)
             .where(
-                goodnotes_semantic_proposals.c.principal_id == decision.principal_id,
+                _mine(goodnotes_semantic_proposals, decision.principal_id),
                 goodnotes_semantic_proposals.c.proposal_id == decision.proposal_id,
             )
             .with_for_update()
@@ -741,7 +770,7 @@ class SqlGoodNotesPullRepository:
         prior = self._semantic_review(decision.principal_id, decision.decision_id)
         by_request = self._connection.execute(
             select(goodnotes_semantic_review_decisions).where(
-                goodnotes_semantic_review_decisions.c.principal_id == decision.principal_id,
+                _mine(goodnotes_semantic_review_decisions, decision.principal_id),
                 goodnotes_semantic_review_decisions.c.request_fingerprint
                 == decision.request_fingerprint,
             )
@@ -773,7 +802,7 @@ class SqlGoodNotesPullRepository:
                     select(func.count())
                     .select_from(goodnotes_semantic_review_decisions)
                     .where(
-                        goodnotes_semantic_review_decisions.c.principal_id == decision.principal_id,
+                        _mine(goodnotes_semantic_review_decisions, decision.principal_id),
                         goodnotes_semantic_review_decisions.c.run_id == decision.run_id,
                         goodnotes_semantic_review_decisions.c.proposal_sha256
                         == decision.proposal_sha256,
@@ -786,17 +815,22 @@ class SqlGoodNotesPullRepository:
         try:
             self._connection.execute(
                 goodnotes_semantic_review_decisions.insert().values(
-                    principal_id=decision.principal_id,
-                    decision_id=decision.decision_id,
-                    run_id=decision.run_id,
-                    proposal_id=decision.proposal_id,
-                    proposal_sha256=decision.proposal_sha256,
-                    sequence=sequence,
-                    action=action.value,
-                    request_fingerprint=decision.request_fingerprint,
-                    corrected_payload=decision.corrected_payload,
-                    corrected_result_sha256=decision.corrected_result_sha256,
-                    decided_at=decision.decided_at,
+                    _bound(
+                        goodnotes_semantic_review_decisions,
+                        decision.principal_id,
+                        {
+                            "decision_id": decision.decision_id,
+                            "run_id": decision.run_id,
+                            "proposal_id": decision.proposal_id,
+                            "proposal_sha256": decision.proposal_sha256,
+                            "sequence": sequence,
+                            "action": action.value,
+                            "request_fingerprint": decision.request_fingerprint,
+                            "corrected_payload": decision.corrected_payload,
+                            "corrected_result_sha256": decision.corrected_result_sha256,
+                            "decided_at": decision.decided_at,
+                        },
+                    )
                 )
             )
         except IntegrityError:
@@ -811,7 +845,7 @@ class SqlGoodNotesPullRepository:
         rows = self._connection.execute(
             select(goodnotes_semantic_review_decisions)
             .where(
-                goodnotes_semantic_review_decisions.c.principal_id == principal_id,
+                _mine(goodnotes_semantic_review_decisions, principal_id),
                 goodnotes_semantic_review_decisions.c.run_id == run_id,
                 goodnotes_semantic_review_decisions.c.proposal_sha256.in_(proposal_sha256s),
             )
@@ -844,18 +878,23 @@ class SqlGoodNotesPullRepository:
         self._connection.execute(
             pg_insert(goodnotes_pull_sessions)
             .values(
-                principal_id=principal_id,
-                context_id=context_id,
-                client_id=client_id,
-                max_attempts=max_attempts,
-                created_at=self._clock(),
+                _bound(
+                    goodnotes_pull_sessions,
+                    principal_id,
+                    {
+                        "context_id": context_id,
+                        "client_id": client_id,
+                        "max_attempts": max_attempts,
+                        "created_at": self._clock(),
+                    },
+                )
             )
             .on_conflict_do_nothing(constraint="one_goodnotes_pull_session_per_client")
         )
         session = self._connection.execute(
             select(goodnotes_pull_sessions)
             .where(
-                goodnotes_pull_sessions.c.principal_id == principal_id,
+                _mine(goodnotes_pull_sessions, principal_id),
                 goodnotes_pull_sessions.c.client_id == client_id,
             )
             .with_for_update()
@@ -876,7 +915,7 @@ class SqlGoodNotesPullRepository:
             goodnotes_page_versions.c.render_profile_version,
         ).join(
             goodnotes_page_versions,
-            (goodnotes_page_versions.c.principal_id == goodnotes_pull_assignments.c.principal_id)
+            matching_partition_criterion(goodnotes_page_versions, goodnotes_pull_assignments)
             & (
                 goodnotes_page_versions.c.page_version_id
                 == goodnotes_pull_assignments.c.page_version_id
@@ -889,7 +928,7 @@ class SqlGoodNotesPullRepository:
         rows = self._connection.execute(
             self._assignment_select()
             .where(
-                goodnotes_pull_assignments.c.principal_id == principal_id,
+                _mine(goodnotes_pull_assignments, principal_id),
                 goodnotes_pull_assignments.c.claim_id == claim_id,
             )
             .order_by(goodnotes_pull_assignments.c.ordinal)
@@ -901,7 +940,7 @@ class SqlGoodNotesPullRepository:
     ) -> PullCompletionReceipt | None:
         row = self._connection.execute(
             select(goodnotes_pull_completions).where(
-                goodnotes_pull_completions.c.principal_id == principal_id,
+                _mine(goodnotes_pull_completions, principal_id),
                 goodnotes_pull_completions.c.assignment_id == assignment_id,
             )
         ).one_or_none()
@@ -912,7 +951,7 @@ class SqlGoodNotesPullRepository:
     ) -> PullCompletionReceipt | None:
         row = self._connection.execute(
             select(goodnotes_pull_completions).where(
-                goodnotes_pull_completions.c.principal_id == principal_id,
+                _mine(goodnotes_pull_completions, principal_id),
                 goodnotes_pull_completions.c.idempotency_key == idempotency_key,
             )
         ).one_or_none()
@@ -934,7 +973,7 @@ class SqlGoodNotesPullRepository:
     ) -> Row[tuple[object, ...]] | None:
         return self._connection.execute(
             select(goodnotes_semantic_review_decisions).where(
-                goodnotes_semantic_review_decisions.c.principal_id == principal_id,
+                _mine(goodnotes_semantic_review_decisions, principal_id),
                 goodnotes_semantic_review_decisions.c.decision_id == decision_id,
             )
         ).one_or_none()

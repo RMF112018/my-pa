@@ -150,6 +150,7 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # `HAND_WRITTEN_COMPARISONS`.
         "infrastructure/persistence/entity_proposal_review.py",
         "infrastructure/persistence/goodnotes.py",
+        "infrastructure/persistence/goodnotes_pull.py",
         "infrastructure/persistence/goodnotes_semantics.py",
         "infrastructure/persistence/goodnotes_delivery.py",
         "infrastructure/persistence/intelligence.py",
@@ -376,6 +377,14 @@ PER_MODULE_ONLY: Final = {
     "infrastructure/persistence/goodnotes.py": (
         "all reads use the shared partition criterion and all writes use "
         "principal_bound_values; helper-built joins consume those predicates."
+    ),
+    "infrastructure/persistence/goodnotes_pull.py": (
+        "all executed reads compose `_mine`, a one-line wrapper over "
+        "partition_criterion; the reusable assignment join additionally uses "
+        "matching_partition_criterion and is only executed after `_mine` is "
+        "applied. All inserts compose `_bound`, a one-line wrapper over "
+        "principal_bound_values. The module has not yet joined a dedicated "
+        "statement-level scanner."
     ),
     "infrastructure/persistence/goodnotes_semantics.py": (
         "all reads use the shared partition criterion and proposal inserts use "

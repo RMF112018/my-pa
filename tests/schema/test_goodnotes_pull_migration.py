@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import io
+import re
 from pathlib import Path
 from typing import Final
 
@@ -11,6 +12,8 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+
+from my_pa.bootstrap.gateway import local_principal
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "6a2f9d1c4b80"
@@ -77,6 +80,21 @@ def test_offline_upgrade_emits_all_ledgers_constraints_and_immutability(
         "goodnotes_semantic_review_corrected_digest_shape",
     ):
         assert fragment in sql
+
+
+def test_every_ledger_accepts_the_canonical_local_principal_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MY_PA_DATABASE_URL", "postgresql+psycopg://localhost/my_pa")
+    output = io.StringIO()
+    command.upgrade(_config(output), "head", sql=True)
+    sql = output.getvalue()
+    goodnotes_pull_sql = sql[sql.index("CREATE TABLE knowledge.goodnotes_pull_sessions") :]
+    canonical_pattern = r"prn_[A-Za-z0-9]{8,64}"
+
+    assert re.fullmatch(canonical_pattern, local_principal().principal_id)
+    assert goodnotes_pull_sql.count("principal_id ~ '^prn_[A-Za-z0-9]{8,64}$'") == len(TABLES)
+    assert "principal_id ~ '^prn_[a-f0-9]{24}$'" not in goodnotes_pull_sql
 
 
 def test_offline_downgrade_is_reversible_to_the_parent(

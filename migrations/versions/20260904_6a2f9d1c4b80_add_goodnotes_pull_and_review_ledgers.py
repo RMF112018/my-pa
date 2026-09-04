@@ -176,7 +176,7 @@ def upgrade() -> None:
           created_at timestamptz NOT NULL,
           PRIMARY KEY (principal_id, context_id),
           CONSTRAINT goodnotes_pull_session_principal_id_shape
-            CHECK (principal_id ~ '^prn_[a-f0-9]{{24}}$'),
+            CHECK (principal_id ~ '^prn_[A-Za-z0-9]{{8,64}}$'),
           CONSTRAINT goodnotes_pull_session_context_is_bounded
             CHECK (char_length(context_id) BETWEEN 1 AND 128 AND context_id !~ '\\s'),
           CONSTRAINT goodnotes_pull_session_client_is_bounded
@@ -201,7 +201,7 @@ def upgrade() -> None:
           created_at timestamptz NOT NULL,
           PRIMARY KEY (principal_id, claim_id),
           CONSTRAINT goodnotes_pull_claim_principal_id_shape
-            CHECK (principal_id ~ '^prn_[a-f0-9]{{24}}$'),
+            CHECK (principal_id ~ '^prn_[A-Za-z0-9]{{8,64}}$'),
           CONSTRAINT goodnotes_pull_claim_id_shape CHECK (claim_id ~ '^[a-f0-9]{{64}}$'),
           CONSTRAINT goodnotes_pull_claim_fingerprint_shape
             CHECK (request_fingerprint ~ '^[a-f0-9]{{64}}$'),
@@ -230,7 +230,7 @@ def upgrade() -> None:
           created_at timestamptz NOT NULL,
           PRIMARY KEY (principal_id, assignment_id),
           CONSTRAINT goodnotes_pull_assignment_principal_id_shape
-            CHECK (principal_id ~ '^prn_[a-f0-9]{{24}}$'),
+            CHECK (principal_id ~ '^prn_[A-Za-z0-9]{{8,64}}$'),
           CONSTRAINT goodnotes_pull_assignment_id_shape
             CHECK (assignment_id ~ '^[a-f0-9]{{64}}$'),
           CONSTRAINT goodnotes_pull_attempt_is_bounded CHECK (attempt BETWEEN 1 AND 10),
@@ -271,7 +271,7 @@ def upgrade() -> None:
           created_at timestamptz NOT NULL,
           PRIMARY KEY (principal_id, completion_id),
           CONSTRAINT goodnotes_pull_completion_principal_id_shape
-            CHECK (principal_id ~ '^prn_[a-f0-9]{{24}}$'),
+            CHECK (principal_id ~ '^prn_[A-Za-z0-9]{{8,64}}$'),
           CONSTRAINT goodnotes_pull_completion_id_shape
             CHECK (completion_id ~ '^[a-f0-9]{{64}}$'),
           CONSTRAINT goodnotes_pull_completion_key_is_bounded
@@ -311,7 +311,7 @@ def upgrade() -> None:
           decided_at timestamptz NOT NULL,
           PRIMARY KEY (principal_id, decision_id),
           CONSTRAINT goodnotes_semantic_review_principal_id_shape
-            CHECK (principal_id ~ '^prn_[a-f0-9]{{24}}$'),
+            CHECK (principal_id ~ '^prn_[A-Za-z0-9]{{8,64}}$'),
           CONSTRAINT goodnotes_semantic_review_decision_id_shape
             CHECK (decision_id ~ '^gnsrd_[a-f0-9]{{24}}$'),
           CONSTRAINT goodnotes_semantic_review_proposal_digest_shape

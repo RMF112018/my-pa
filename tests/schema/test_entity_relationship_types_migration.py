@@ -274,6 +274,11 @@ def test_downgrading_one_step_removes_exactly_this_table_and_restores_the_origin
         "entity_relationship_types",
         "entity_assertions",
         "entity_assertion_evidence",
+        "goodnotes_pull_sessions",
+        "goodnotes_pull_claims",
+        "goodnotes_pull_assignments",
+        "goodnotes_pull_completions",
+        "goodnotes_semantic_review_decisions",
     }
     # The rest of the entity plane survives the downgrade of this revision alone.
     assert {

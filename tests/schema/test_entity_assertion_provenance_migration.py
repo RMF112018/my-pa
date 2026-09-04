@@ -205,7 +205,13 @@ def test_downgrading_one_step_removes_exactly_these_two_tables(migrated_engine: 
     command.downgrade(_config(), PREVIOUS_REVISION)
     after = _tables(migrated_engine)
 
-    assert before - after == NEW_TABLES
+    assert before - after == NEW_TABLES | {
+        "goodnotes_pull_sessions",
+        "goodnotes_pull_claims",
+        "goodnotes_pull_assignments",
+        "goodnotes_pull_completions",
+        "goodnotes_semantic_review_decisions",
+    }
     assert {
         "entities",
         "entity_names",

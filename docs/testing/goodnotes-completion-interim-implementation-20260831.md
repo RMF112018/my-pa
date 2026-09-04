@@ -23,13 +23,13 @@ evidence only and was not transplanted.
 
 | Item | Exact state | Treatment |
 | --- | --- | --- |
-| Current `origin/main` | commit `1bb7c3cf397b6d86887439a1590a19186f2183bf`; tree `b4c8839c40b7d1c3631bb6e05d14c9b8f8336f74` | Exact merge-base after the nonconflicting PR #183 synchronization. |
+| Current `origin/main` | commit `25301329e9172014b58f555ee99575fc24244fb1`; tree `7ca6398ca4f03fcbec9b1500a44f91ce034a6d9d` | Exact merge-base after the nonconflicting PR #184/#185 synchronization. |
 | Current GoodNotes corrected code head | commit `11f77f4770af8c335e9590bd5db4a2925cdc0196`; tree `bad9b8042ddf37f360140c40211d04885439806d` | Contains the bounded R7 identity-target seam and the validator-driven code correction described below. |
-| Current post-sync integration head | commit `a4a104f5068c0621855338b015326f70c977452c`; tree `89321159d12fc99376e2a541d56d7cb772e0a092` | Clean state before this one-file ledger correction. It merges current main without changing the GoodNotes commits or their 22-path delta. Post-sync code checks passed, but validation failed because this ledger still named the pre-sync identities. |
+| Current post-sync integration head | commit `b273298cdb1b3f34adc998264eabda3774fc27b6`; tree `fa6bd4d911fbe28d7eef724aa3b4c6ce0d9ba1c4` | Clean state before this one-file ledger correction. It merges current main without changing the GoodNotes commits or their 22-path delta. Current-head focused checks pass; this ledger correction rebinds the evidence identity. |
 | Frozen pre-WP08 GoodNotes branch | commit `50f29a042da716e75820bf150d606b67aa99718e`; tree `2c68219fb3db82a6b071a84f8d18a402ff6adda3` | Preserved without mutation as historical evidence. |
 | Current main Alembic graph | sole head `16f05c46b8c3` | The GoodNotes tranche adds no migration. |
-| RI WP12 | clean commit `fc8911b2241654f03210d77bfe22894dd2d41ddd`; tree `1ba3ae769d3594516b684c6bbe9e69f8860c3950` | Owns successor migration `b8e4d1a6c073`, shared service/plans/runbooks, and schema-test ancestry. GoodNotes migration or shared-path work remains serialized behind it. |
-| RI WP13 | commit `e94dd4b35966777e675079911a9350fc75de39f4`; tree `f1b2eecce4d54f761f42e26202fd19bda042958b`; PR #181 open and conflicting | An active staged merge owns broad shared paths, including plans, service, ports, authorization, transports, the `16f05c46b8c3` migration, and schema/contract/security tests. It is not incorporated or modified here. |
+| RI WP12 | local branch `fc8911b2241654f03210d77bfe22894dd2d41ddd`; tree `1ba3ae769d3594516b684c6bbe9e69f8860c3950` | Historical/local concurrent evidence. Its proposed successor migration is not in current `main`; no GoodNotes migration or shared-path edit is made in this tranche. |
+| RI WP13 | remote head `903b8b15a9e1d1d3f0ef97b85ab6bb9cb636f393`; tree `b65b801bb768aca9b3246ffeddb5de751f52a163`; PR #181 open | Owns its ten PR paths, including shared RI/MCV/architecture/operations documentation. Its local worktree also contains unrelated staged UI/report changes and is treated as contaminated and wholly no-touch. It adds no migration. |
 
 The GoodNotes delta from current `origin/main` contains 22 paths. It does not
 edit either shared plan, `src/my_pa/application/service.py`,
@@ -105,6 +105,15 @@ post-sync validation found the code checks green but returned `FAIL` because
 the ledger still identified the prior base and integration head. This document
 corrects only that evidence identity; its resulting commit requires fresh
 validation and review.
+
+After PRs #184 and #185 merged, the concurrency register was refreshed again.
+Their two-commit delta had no changed-path intersection with the 22-path
+GoodNotes delta. Merge commit
+`b273298cdb1b3f34adc998264eabda3774fc27b6`, tree
+`fa6bd4d911fbe28d7eef724aa3b4c6ce0d9ba1c4`, synchronized the GoodNotes branch
+to exact current `origin/main`
+`25301329e9172014b58f555ee99575fc24244fb1` without modifying a GoodNotes
+source path or migration.
 
 During synchronization, a worker mistakenly operated in the primary checkout.
 The tracked checkout was restored to its pre-incident detached commit
@@ -200,6 +209,10 @@ commits:
   `4,932` while collection reports `4,971`; and the MCV plan claims 318 source
   modules while the repository holds 321. These authoritative claims remain
   owned by their active shared plans;
+- on exact current-main integration head `b273298c`, Ruff check passed over all
+  22 changed paths, Ruff format check reported 20 files already formatted,
+  targeted mypy reported no issues in four source files, and the eight changed
+  GoodNotes unit modules completed with `204 passed`;
 - the isolated database campaign partially executed `1,462 passed, 0 failed`
   in `56:03`; 620 tests in the named database/recovery/e2e selection were not
   executed, so this is not a completed database tier or an applicable PR-tier

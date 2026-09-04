@@ -107,20 +107,26 @@ def test_the_server_name_is_neutral() -> None:
 # ---- the tool list, derived --------------------------------------------------
 
 
-def test_tools_list_publishes_exactly_the_capability_set(served: Served[McpTransport]) -> None:
-    """Over the protocol, not off the constant: what a client actually receives."""
+def test_tools_list_publishes_exactly_the_local_capability_set(
+    served: Served[McpTransport],
+) -> None:
+    """Over the protocol, local stdio withholds authenticated-client operations."""
     with served as session:
         listed = session.list_tools()
-    assert [tool.name for tool in listed.tools] == [c.value for c in Capability]
+    assert [tool.name for tool in listed.tools] == [
+        capability.value
+        for capability in Capability
+        if capability not in _AUTHENTICATED_CLIENT_CAPABILITIES
+    ]
     assert all(tool.description for tool in listed.tools), "a tool has no description"
 
 
 def test_no_capability_name_is_written_down_in_the_adapter() -> None:
     """The list is derived, and this is what makes "derived" checkable.
 
-    Equality with `Capability` above is also satisfied by the same names typed
-    out by hand that happen to match today. What rules that out is that none of
-    the capability strings appears in the adapter's source at all — so a new
+    The derived expectation above could also be satisfied by names typed out by
+    hand that happen to match today. What rules that out is that none of the
+    capability strings appears in the adapter's source at all — so a new
     capability cannot be missing from a list nobody wrote.
     """
     adapters = Path(mcp_module.__file__).resolve().parent
@@ -504,6 +510,18 @@ _COMPOSED_CAPABILITIES: Final = frozenset(
     capability for capability in Capability if capability.value.startswith(_COMPOSED_PREFIXES)
 )
 
+_AUTHENTICATED_CLIENT_CAPABILITIES: Final = frozenset(
+    {
+        Capability.GOODNOTES_PULL,
+        Capability.GOODNOTES_COMPLETE,
+        Capability.GOODNOTES_STATUS,
+    }
+)
+
+_UNCONFIGURED_LOCAL_CAPABILITIES: Final = (
+    _COMPOSED_CAPABILITIES | _AUTHENTICATED_CLIENT_CAPABILITIES
+)
+
 
 def test_a_real_child_process_publishes_only_what_it_was_composed_with() -> None:
     """What `tools/list` publishes is what the process can serve, in a real child.
@@ -525,17 +543,19 @@ def test_a_real_child_process_publishes_only_what_it_was_composed_with() -> None
 
     Both children keep the unreachable database URL this module uses
     deliberately: neither composition reads a row. The *third* case — a process
-    with a managed root, publishing all seventy — does read one, because the
-    store is constructed with the configured source roots to refuse an
-    overlapping root, so it is proved in
-    `test_a_child_with_a_managed_root_publishes_every_capability` against a real
-    server instead.
+    with a managed root, publishing every locally available capability — does
+    read one, because the store is constructed with the configured source roots
+    to refuse an overlapping root, so it is proved in
+    `test_a_child_with_a_managed_root_publishes_every_locally_available_capability`
+    against a real server instead.
     """
     assert _COMPOSED_CAPABILITIES, "no capability needs composition, so this proves nothing"
 
     unconfigured, _errors = _child_tool_list()
     assert unconfigured == [
-        capability.value for capability in Capability if capability not in _COMPOSED_CAPABILITIES
+        capability.value
+        for capability in Capability
+        if capability not in _UNCONFIGURED_LOCAL_CAPABILITIES
     ]
     assert not any(name.startswith("documents.") for name in unconfigured)
 
@@ -544,10 +564,10 @@ def test_a_real_child_process_publishes_only_what_it_was_composed_with() -> None
 
 
 @pytest.mark.database
-def test_a_child_with_a_managed_root_publishes_every_capability(
+def test_a_child_with_a_managed_root_publishes_every_locally_available_capability(
     tmp_path: Path, cloned_database_url: str
 ) -> None:
-    """The other half: composed for the managed plane, the child publishes all of it.
+    """The other half: a fully composed local child publishes its local surface.
 
     Marked `database` because composing the byte store reads the configured
     source roots — the check that refuses a managed root which is, contains, or
@@ -565,8 +585,8 @@ def test_a_child_with_a_managed_root_publishes_every_capability(
         MY_PA_DATABASE_URL=cloned_database_url,
         MY_PA_MANAGED_DOCUMENT_ROOT=str(root),
         MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED="true",
-        # Every relationship switch, because each narrows the surface and "every
-        # capability" is the claim this test makes. The write switch withholds
+        # Every relationship switch, because each narrows the local surface. The
+        # write switch withholds
         # the thirty-eight `entities.` writes on its own, the memory plane needs
         # the entity plane under it, and the identity-correction switch is a
         # third narrowing *inside* the write half that withholds the governed
@@ -579,9 +599,23 @@ def test_a_child_with_a_managed_root_publishes_every_capability(
         MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED="true",
         MY_PA_RELATIONSHIP_MEMORY_ENABLED="true",
         MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED="true",
+        # The pull plane is independently disabled by default and requires a
+        # bounded signing key when this composition test enables it. Local stdio
+        # has no authenticated client identity, so publication still withholds
+        # the three client-only operations below.
+        MY_PA_GOODNOTES_PULL_ENABLED="true",
+        MY_PA_GOODNOTES_PULL_CURSOR_SIGNING_KEY="synthetic-test-signing-key-00001",
     )
-    assert composed == [capability.value for capability in Capability]
+    expected = [
+        capability.value
+        for capability in Capability
+        if capability not in _AUTHENTICATED_CLIENT_CAPABILITIES
+    ]
+    assert composed == expected
     assert {capability.value for capability in _COMPOSED_CAPABILITIES} <= set(composed)
+    assert not {capability.value for capability in _AUTHENTICATED_CLIENT_CAPABILITIES} & set(
+        composed
+    )
     assert not any(root.iterdir()), "a listing wrote into the managed root"
 
 

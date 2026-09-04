@@ -78,8 +78,12 @@ test.describe("the signed-in surfaces", () => {
   test("new capability routes state their admitted availability without inventing data", async ({ page }) => {
     await page.goto("/intelligence");
     await expect(page.getByRole("heading", { name: "Intelligence", level: 1 })).toBeVisible();
-    await expect(page.locator('[data-state="unavailable"]')).toContainText(
-      /not admitted to current main/i,
+    await expect(page.getByText(/not admitted to current main/i)).toHaveCount(0);
+    await expect(page.getByTestId("intelligence-unavailable")).toHaveCount(0);
+    await expect(page.getByTestId("intelligence-listing")).toBeVisible();
+    await expect(page.getByTestId("intelligence-report").first()).toBeVisible();
+    await expect(page.getByTestId("intelligence-report").first()).not.toContainText(
+      /scraped item one/i,
     );
 
     await page.goto("/people");

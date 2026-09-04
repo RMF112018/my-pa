@@ -2565,7 +2565,7 @@ The audit lists WP-13 as depending on all prior work packages. When this
 increment was authored, `RI-ENT-WP-09` through `RI-ENT-WP-12` were **not
 merged**: WP-09 was in review, WP-10/WP-11 and WP-12 were being authored
 concurrently. (Corrected 2026-09-03 at the base integration of `origin/main`
-at `8f0e4779`: WP-09 has since merged as PR #175 at `6db2a203`, and WP-10/WP-11
+at `8f0e4779` and then `1bb7c3cf`: WP-09 has since merged as PR #175 at `6db2a203`, and WP-10/WP-11
 as PR #177 at `e004942b`; WP-12 remains unmerged. The scope boundary below is
 stated as it bound the increment when it was written, and is unchanged by
 those merges.) This increment is therefore bounded to

@@ -186,6 +186,16 @@ Conservative dispositions for typed BFF success, error, receipt, and degraded co
 - Capture/review/work receipt bands: named runtime decode now exists for the corresponding GatewayCapability keys. Lifecycle UX remains `UI-IMP-WP09` / `UI-IMP-WP10`. At most `VALIDATION_REQUIRED` notes; never `PASS_VERIFIED`.
 - Twenty-nine `APPLICATION_GATEWAY_CAPABILITY` keys now have named runtime decoders; omitted arrays fail closed; `review.decide` no longer synthesizes version/disposition; `rate_limited` is HTTP 429; malformed success is `upstream_contract_invalid` / 503.
 
+## UI-IMP-WP11 Reports / Morning Intelligence BFF notes
+
+Conservative dispositions for the Reports read-plane BFF. This is not WP12 Morning Brief UI, not production activation, and not `PASS_VERIFIED` for `PFE-AC-048..057`.
+
+- **PFE-AC-048 / 053 / 054 / 055 / 056:** `implementation_disposition = VALIDATION_REQUIRED` for contract substrate. `reports.latest`, `reports.list`, `reports.search`, and `reports.resolve_set` are admitted with runtime decoders. Resolver member states are not flattened to a boolean. Scheduler success is not treated as durable readiness. UI landing/history chrome remains `UI-IMP-WP12`.
+- **PFE-AC-049:** opaque persisted `structured_content` is returned on `reports.read` when present; `body_markdown` remains secondary. No `BriefSection`/`BriefItem` canonical model was invented. Structured Brief UI remains WP12.
+- **PFE-AC-050 / 051 / 057:** provenance and dependency identifiers survive the BFF. Item linking, Evidence-from-Brief chrome, and specialist UX remain WP12. Browser scraping is not used.
+- **PFE-AC-052:** unchanged; Create-Task from a Brief item is out of this package.
+- Five `reports.*` read capabilities are in `gateway.json`. `reports.begin_cycle`, `reports.commit`, and `reports.record_run_state` are not browser-admitted. `frontend / contract` and `frontend / e2e-critical` (`reports-contract.spec.ts`) protect the admitted shapes.
+
 ## Known evidence limitations / record overrides
 
 These limitations are additive to the default `FINAL_WP02_RECONCILIATION_MISSING` status and do not create a pass:

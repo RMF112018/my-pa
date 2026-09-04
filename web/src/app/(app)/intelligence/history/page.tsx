@@ -181,7 +181,10 @@ export default async function IntelligenceHistoryPage({
                 </Link>
               </CardBody>
             </Card>
-            <ReportListing items={group.items} currentCycle={group.cycle_run_id} />
+            <ReportListing
+              items={group.items}
+              currentCycle={group.current ? group.cycle_run_id : null}
+            />
           </section>
         ))
       )}

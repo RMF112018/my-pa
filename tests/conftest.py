@@ -5851,12 +5851,8 @@ class _Entities(EntitiesRepository):
                 edges.append((edge.relationship_id, edge))
         edges.sort(key=lambda item: item[0])
         page = edges[:limit]
-        assignments = tuple(
-            item for _, item in page if isinstance(item, Assignment)
-        )
-        relationships = tuple(
-            item for _, item in page if isinstance(item, EntityRelationship)
-        )
+        assignments = tuple(item for _, item in page if isinstance(item, Assignment))
+        relationships = tuple(item for _, item in page if isinstance(item, EntityRelationship))
         needed = set(seeds)
         for assignment in assignments:
             needed.add(assignment.entity_id)

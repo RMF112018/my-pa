@@ -45,6 +45,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import make_url
+from tests.db.provisioning import DISPOSABLE_NAME_PREFIX, PROTECTED_CATALOGS
 
 from my_pa.bootstrap.gateway import local_principal
 from my_pa.bootstrap.settings import ENV_PREFIX
@@ -71,9 +72,6 @@ from my_pa.infrastructure.providers.identity import RegistryIdentity
 import threading  # isort: skip
 
 ROOT = Path(__file__).resolve().parents[2]
-
-#: Fixed name so a run interrupted before teardown is cleaned up by the next one.
-DISPOSABLE_DATABASE = "my_pa_extraction_executor_test"
 
 WHEN = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
 
@@ -796,15 +794,15 @@ def test_a_worker_process_killed_mid_extraction_leaves_its_lease_and_loses_nothi
     Both waits below are bounded, and each fails **loud** naming itself. Neither
     is a property: no assertion here says anything happened within a time.
     """
-    # Belt and braces before a *process* is pointed at a database. The module
-    # fixture has already repointed `MY_PA_DATABASE_URL` to the disposable
-    # database, so `load_settings()` reports that one and comparing against it
+    # Belt and braces before a *process* is pointed at a database. The clone
+    # fixture has already repointed `MY_PA_DATABASE_URL` to a unique disposable
+    # catalog, so `load_settings()` reports that one and comparing against it
     # would compare a value with itself; the canonical name is what must be
     # excluded, and it is excluded by name.
     target = make_url(disposable_database).database
     assert target is not None, disposable_database
-    assert target == DISPOSABLE_DATABASE, target
-    assert target.startswith("my_pa_"), target
+    assert target.startswith(DISPOSABLE_NAME_PREFIX), target
+    assert target not in PROTECTED_CATALOGS, target
     assert target != "my_pa", "the child was about to be pointed at the canonical corpus"
 
     corpus = _corpus(

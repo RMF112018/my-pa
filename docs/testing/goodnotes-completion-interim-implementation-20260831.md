@@ -20,9 +20,9 @@ reconciliation, exact-head review, and merge.
 - The current authenticated base is `origin/main` commit
   `25301329e9172014b58f555ee99575fc24244fb1`, tree
   `7ca6398ca4f03fcbec9b1500a44f91ce034a6d9d`.
-- The current implementation code head before this ledger-only update is
-  `9dc1acca9875153fb7687b80f372b8465a578009`, tree
-  `342aac877e263680125b518cb46c3a8a25402849`.
+- The current corrected implementation head before this ledger-only update is
+  `17760373b71e59533f9c4adf3cd0af9468bd7d89`, tree
+  `c02af7f3e073888563b75eb5a86760200f58d615`.
 - The isolated branch is `bf/goodnotes-post-ui-safe-sync-20260903` in
   `/private/tmp/my-pa-goodnotes-post-ui-safe-sync-20260903`.
 - The primary checkout remains detached at its pre-existing commit and was not
@@ -86,6 +86,17 @@ campaign assertion is
 - `9dc1acca9875153fb7687b80f372b8465a578009` wired the disabled-by-default
   authenticated control plane, MCP publication/authorization, durable Review
   bridge, server-only completion, and content-free status.
+- Independent exact-head review returned `FAIL` at `ba54cc09`, tree
+  `2ac1d62f`, because SQL completion confused the result-payload digest with the
+  full proposal digest and because several schema-valid Review dispositions
+  could crash canonical case projection while structured correction was
+  unreachable.
+- `17760373b71e59533f9c4adf3cd0af9468bd7d89` separates proposal and result
+  identities, makes the eight-disposition projection total, and implements
+  governed typed semantic correction. The original proposal remains immutable;
+  the corrected body and its canonical result digest are stored in the same
+  serialized Review ledger, promoted from defensive copies, and admitted only
+  after the canonical proposal validator accepts the bounded field patch.
 
 ## Work-package status
 
@@ -138,6 +149,13 @@ Head-qualified results include:
   single-service-entry contracts: 1,679 passed.
 - Phase C targeted mypy over 12 changed source/composition files passed; Ruff
   check/format over 17 paths and `git diff --check` passed.
+- P1 corrective selection: 676 passed, including the full Principal scanner;
+  focused correction/promotion/static-migration selection: 21 passed; targeted
+  mypy over five source files, Ruff check/format over 11 paths, and diff checks
+  passed.
+- The amended migration and corrected SQL repository passed all 3 focused
+  tests against `my_pa_goodnotes_pull_repository_test`; post-run database
+  existence count was zero.
 
 An HTTP/transport attempt produced 170 passes before the sandbox denied local
 `127.0.0.1:0` binds, causing 282 failures and 300 setup errors. This is an
@@ -148,9 +166,12 @@ passed, and no contrary claim is made.
 
 ## Review, runtime, and closure gates
 
-Historical exact-head reviews were invalidated by later synchronization and
-implementation commits. A fresh reviewer who authored none of this change must
-review the final reconciled head and has authority to block. Any later commit,
+The fresh non-author reviewer returned `FAIL` at exact head
+`ba54cc098de71dc4ea3439264e9893af8ceed915`, tree
+`2ac1d62fdbeeb2c07723aef145b2a47cd31de55c`, with the two P1 findings described
+above. Commit `17760373` invalidates that verdict after correcting both
+findings. A different fresh reviewer who authored none of this change must now
+review the corrected exact head and has authority to block. Any later commit,
 including #186 reconciliation, invalidates that verdict.
 
 P2-W12's six blockers and four majors were mapped as challenge evidence. They

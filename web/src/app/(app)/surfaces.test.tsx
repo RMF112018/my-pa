@@ -71,6 +71,7 @@ vi.mock("next/navigation", async (importOriginal) => {
 
 import LibraryPage from "@/app/(app)/library/page";
 import PeoplePage from "@/app/(app)/people/page";
+import PeopleEntityPage from "@/app/(app)/people/[entityId]/page";
 import ReviewPage from "@/app/(app)/review/page";
 import TodayPage from "@/app/(app)/today/page";
 import SituationsPage from "@/app/(app)/situations/page";
@@ -767,11 +768,34 @@ describe("People reaches search, resolve, and profile instead of a directory", (
   });
 
   it("reads a profile from entities.profile", async () => {
-    answerWith({ profile: PROFILE }, whole());
+    answerByCapability({
+      "entities.profile": { profile: PROFILE },
+      "entities.assignments.list": { assignments: [] },
+      "entities.relationships": { relationships: [] },
+      "entities.identity_history": {
+        entity_id: ENTITY_VIEW.entity_id,
+        entries: [],
+        is_truncated: false,
+        next_cursor: null,
+        audit_id: "audit_aaaaaaaa11111111",
+      },
+    });
     await renderServerPage(() =>
-      PeoplePage({ searchParams: Promise.resolve({ entityId: ENTITY_VIEW.entity_id }) }),
+      PeopleEntityPage({ params: Promise.resolve({ entityId: ENTITY_VIEW.entity_id }) }),
     );
     expect(screen.getByTestId("people-profile")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Pat Synthetic", level: 2 })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Pat Synthetic", level: 1 })).toBeTruthy();
+  });
+
+  it("redirects a query-param entityId to the canonical profile path", async () => {
+    const saved = Object.getOwnPropertyDescriptor(globalThis, "window");
+    Reflect.deleteProperty(globalThis, "window");
+    try {
+      await expect(
+        PeoplePage({ searchParams: Promise.resolve({ entityId: ENTITY_VIEW.entity_id }) }),
+      ).rejects.toThrow();
+    } finally {
+      if (saved) Object.defineProperty(globalThis, "window", saved);
+    }
   });
 });

@@ -226,6 +226,14 @@ Conservative dispositions for the People working surface on the WP13 entity read
 - **PFE-AC-076:** related Tasks/Commitments/meetings/intelligence are omitted unless a canonical relation is on the payload. No name-scan joining.
 - Legacy `/relationships/[personId]` remains the continuity timeline (continuity `person_id`, not `entity_id`). No blind redirect.
 
+## UI-IMP-WP23 Federated Search BFF notes
+
+This is Search BFF substrate, not Command UX, not `PASS_VERIFIED` of `PFE-AC-083..085`, and not a claim against the full 250-criterion ledger.
+
+- **PFE-AC-083:** at most `VALIDATION_REQUIRED` for typed federated hits and per-domain coverage. `GET /api/search?q=` fans out to admitted `*.search` capabilities; report hits remain `ReportSearchMatch`; entity hits remain `EntitySummary` without `entities.resolve` / `entities.list`. Coverage never reports a silently omitted domain as searched with `hitCount` 0.
+- **PFE-AC-084 / 085:** remain `IMPLEMENTATION_REQUIRED` (WP24 Command / Cmd+K).
+- **UI-IMP-WP22 remains `PROVISIONAL_NOT_ACTIVATED`** (same as WP21; no `goodnotes.*` in `gateway.json`; federated coverage omits GoodNotes as not activated). Correct non-activation does not block Wave 4.
+
 ## UI-IMP-WP21 disposition (docs only; recorded with WP25)
 
 `UI-IMP-WP21 PROVISIONAL_NOT_ACTIVATED`

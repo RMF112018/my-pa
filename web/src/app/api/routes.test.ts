@@ -158,8 +158,61 @@ const SITUATIONS_WITH_WORKSPACE = {
   relationship_events: [],
 };
 
+const REPORTS_LIST = {
+  items: [
+    {
+      report_id: "rpt_aaaaaaaa11111111",
+      cycle_run_id: "micr_aaaaaaaa11111111",
+      stage: "collector",
+      artifact_kind: "collector_candidates",
+      focus_area_id: "communications",
+      source_lane: null,
+      title: "E2E morning brief collector",
+      content_sha256: "a".repeat(64),
+      artifact_state: "final",
+    },
+  ],
+  next_cursor: null,
+};
+
+const RESOLVE_SET = {
+  cycle_run_id: "micr_aaaaaaaa11111111",
+  cycle_id: "morning_intelligence",
+  business_date: "2026-08-20",
+  set_id: "morning_brief_inputs",
+  aggregate: "BLOCKED",
+  members: [
+    {
+      member_id: "communications",
+      focus_area_id: "communications",
+      source_lane: null,
+      readiness: "READY",
+      required: true,
+      artifact_id: "rpt_aaaaaaaa11111111",
+      producer_run_id: "prun_aaaaaaaa11111111",
+      content_sha256: "a".repeat(64),
+      committed_at: "2026-08-20T12:00:00Z",
+      readiness_reason: "present",
+    },
+    {
+      member_id: "people",
+      focus_area_id: "people",
+      source_lane: null,
+      readiness: "MISSING",
+      required: true,
+      artifact_id: null,
+      producer_run_id: null,
+      content_sha256: null,
+      committed_at: null,
+      readiness_reason: "missing",
+    },
+  ],
+};
+
 const CAPABILITY_RESULTS: Record<string, unknown> = {
   "capabilities.get": CAPABILITIES_GET,
+  "reports.list": REPORTS_LIST,
+  "reports.resolve_set": RESOLVE_SET,
   "capture.list": { captures: [] },
   "capture.search": { matches: [], searchable_versions: 0, stored_versions: 0 },
   "capture.create": CAPTURE_RECEIPT,
@@ -312,6 +365,8 @@ describe("a default build produces no fixture data at all", () => {
     }
     expect(sent.map((call) => call.url)).toEqual([
       "http://127.0.0.1:8000/v1/capabilities.get",
+      "http://127.0.0.1:8000/v1/reports.list",
+      "http://127.0.0.1:8000/v1/reports.resolve_set",
       "http://127.0.0.1:8000/v1/capture.list",
       "http://127.0.0.1:8000/v1/review.list",
       "http://127.0.0.1:8000/v1/knowledge.reveal",
@@ -789,6 +844,38 @@ describe("System reports what is off as off", () => {
     stubGateway(CAPABILITIES_GET);
     const raw = await (await system(get(cookie, "/api/system"))).text();
     expect(raw).not.toContain("schemaHead");
+    expect(raw).not.toContain("gitSha");
+    expect(raw).not.toContain("commitSha");
+  });
+
+  it("passes through worker heartbeats and does not invent PWA identity", async () => {
+    const cookie = await signIn();
+    stubGatewayByCapability();
+    const body = await (await system(get(cookie, "/api/system"))).json();
+    expect(body.pwa.fields).toBe("PWA_FIELDS_PENDING_WP26");
+    expect(JSON.stringify(body.pwa)).not.toMatch(/cacheIdentity|updateChannel|offlineSync/);
+    expect(body.backend.workerPlanes[0].last_heartbeat_at).toBeNull();
+    expect(body.backend.intelligence.state).toBe("resolved");
+    expect(body.backend.intelligence.result.aggregate).toBe("BLOCKED");
+    const members = body.backend.intelligence.result.members;
+    expect(members).toHaveLength(2);
+    expect(members.map((member: { readiness: string }) => member.readiness)).toEqual([
+      "READY",
+      "MISSING",
+    ]);
+    expect(members.map((member: { readiness: string }) => member.readiness)).not.toEqual([
+      body.backend.intelligence.result.aggregate,
+    ]);
+    expect(body.connectedSources).toBeNull();
+  });
+
+  it("keeps synthetic System JSON from inventing a top-level intelligence field", async () => {
+    vi.stubEnv("MYPA_DATA_PROVIDER", "synthetic");
+    const cookie = await signIn();
+    const body = await (await system(get(cookie, "/api/system"))).json();
+    expect(body.backend).toBeNull();
+    expect(body.intelligence).toBeUndefined();
+    expect(body.pwa.fields).toBe("PWA_FIELDS_PENDING_WP26");
   });
 });
 

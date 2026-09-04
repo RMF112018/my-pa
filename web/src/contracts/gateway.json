@@ -211,6 +211,86 @@
       "purpose": "report_read",
       "payloadFields": ["cycle_run_id", "set_id", "focus_area_id"],
       "probe": { "cycle_run_id": "micr_aaaaaaaa11111111", "set_id": "morning_brief_inputs" }
+    },
+    "entities.search": {
+      "purpose": "entity_read",
+      "payloadFields": ["query", "entity_type", "page_size", "after"],
+      "probe": { "query": "synthetic person" }
+    },
+    "entities.get": {
+      "purpose": "entity_read",
+      "payloadFields": ["entity_id"],
+      "probe": { "entity_id": "ent_aaaaaaaa11111111" }
+    },
+    "entities.resolve": {
+      "purpose": "entity_read",
+      "payloadFields": ["reference", "namespace", "entity_type", "scope_entity_id", "as_of"],
+      "probe": { "reference": "synthetic.person@example.test" }
+    },
+    "entities.context": {
+      "purpose": "entity_read",
+      "payloadFields": ["entity_id"],
+      "probe": { "entity_id": "ent_aaaaaaaa11111111" }
+    },
+    "entities.relationships": {
+      "purpose": "entity_read",
+      "payloadFields": ["entity_id", "direction", "page_size", "after"],
+      "probe": { "entity_id": "ent_aaaaaaaa11111111" }
+    },
+    "entities.unresolved_mentions": {
+      "purpose": "entity_read",
+      "payloadFields": ["page_size", "after"],
+      "probe": {}
+    },
+    "entities.identifiers.list": {
+      "purpose": "entity_read",
+      "payloadFields": ["entity_id", "states", "namespaces", "page_size", "after"],
+      "probe": { "entity_id": "ent_aaaaaaaa11111111" }
+    },
+    "entities.aliases.list": {
+      "purpose": "entity_read",
+      "payloadFields": ["entity_id", "states", "alias_types", "page_size", "after"],
+      "probe": { "entity_id": "ent_aaaaaaaa11111111" }
+    },
+    "entities.assignments.list": {
+      "purpose": "entity_read",
+      "payloadFields": ["entity_id", "active_only", "page_size", "after"],
+      "probe": { "entity_id": "ent_aaaaaaaa11111111" }
+    },
+    "entities.observations.list": {
+      "purpose": "entity_read",
+      "payloadFields": ["entity_id", "unresolved_only", "page_size", "after"],
+      "probe": {}
+    },
+    "entities.identity_history": {
+      "purpose": "entity_read",
+      "payloadFields": ["entity_id", "page_size", "after"],
+      "probe": { "entity_id": "ent_aaaaaaaa11111111" }
+    },
+    "entities.profile": {
+      "purpose": "entity_read",
+      "payloadFields": ["entity_id"],
+      "probe": { "entity_id": "ent_aaaaaaaa11111111" }
+    },
+    "entities.names.list": {
+      "purpose": "entity_read",
+      "payloadFields": ["entity_id", "page_size", "after"],
+      "probe": { "entity_id": "ent_aaaaaaaa11111111" }
+    },
+    "entities.addresses.list": {
+      "purpose": "entity_read",
+      "payloadFields": ["entity_id", "page_size", "after"],
+      "probe": { "entity_id": "ent_aaaaaaaa11111111" }
+    },
+    "entities.communication.list": {
+      "purpose": "entity_read",
+      "payloadFields": ["entity_id", "page_size", "after"],
+      "probe": { "entity_id": "ent_aaaaaaaa11111111" }
+    },
+    "entities.participations.list": {
+      "purpose": "entity_read",
+      "payloadFields": ["entity_id", "perspective", "page_size", "after"],
+      "probe": { "entity_id": "ent_aaaaaaaa11111111", "perspective": "participant" }
     }
   },
   "_dispositionComment": [

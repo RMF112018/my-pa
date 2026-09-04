@@ -238,9 +238,10 @@ def _service(marked: Scene) -> ApplicationService:
     `tests/contract/test_transport_parity.py` records: `_Entities` implements none
     of the sixteen identity-correction port methods, so a build that composed the
     plane would answer `internal_error` for merge/split and this file's
-    all-succeed sweeps would be measuring a crash. The two are still driven --
-    every negative sweep here sends them and reads the refusal -- and what they
-    are exempted from is the *positive* sweep, which asserts a successful answer.
+    all-succeed sweeps would be measuring a crash. Those four contracts and the
+    three default-off GoodNotes pull contracts are still driven -- every negative
+    sweep here sends them and reads the refusal -- and what they are exempted
+    from is the *positive* sweep, which asserts a successful answer.
     Identity correction itself is proved against a real server in `tests/database` and
     `tests/recovery`.
     """
@@ -252,13 +253,17 @@ def _service(marked: Scene) -> ApplicationService:
 
 
 #: These are driven for refusals and not for answers, because the harness
-#: composes no governed identity-correction ledger.
+#: composes neither a governed identity-correction ledger nor the default-off,
+#: authenticated-client-bound GoodNotes pull plane.
 UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
     {
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
         Capability.ENTITIES_SPLIT_PREVIEW,
         Capability.ENTITIES_SPLIT,
+        Capability.GOODNOTES_PULL,
+        Capability.GOODNOTES_COMPLETE,
+        Capability.GOODNOTES_STATUS,
     }
 )
 

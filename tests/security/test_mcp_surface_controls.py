@@ -119,6 +119,7 @@ class CountingService(ApplicationService):
         principal: Principal,
         transport: CaptureTransport = CaptureTransport.LOCAL,
         capability_grants: frozenset[tuple[Capability, Purpose | None]] | None = None,
+        authenticated_client_id: str | None = None,
     ) -> ResponseEnvelope:
         self.calls.append(command.capability)
         return super().invoke(
@@ -127,6 +128,7 @@ class CountingService(ApplicationService):
             principal=principal,
             transport=transport,
             capability_grants=capability_grants,
+            authenticated_client_id=authenticated_client_id,
         )
 
 

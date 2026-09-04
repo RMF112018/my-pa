@@ -4992,7 +4992,7 @@ def _entity_docs(*names: str) -> Mapping[str, Mapping[str, str]]:
     return MappingProxyType({name: _ENTITY_FIELD_DOCS[name] for name in names})
 
 
-GetEntityGraph.mcp_payload_properties = _entity_docs(  # type: ignore[attr-defined, misc]
+GetEntityGraph.mcp_payload_properties = _entity_docs(  # type: ignore[attr-defined]
     "focus_entity_id",
     "scope_entity_id",
     "hops",

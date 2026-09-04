@@ -5845,9 +5845,10 @@ class _Entities(EntitiesRepository):
                 and edge.relationship_type.value not in relationship_types
             ):
                 continue
-            if edge.from_entity_id in frontier or edge.to_entity_id in frontier:
-                if after_edge_id is None or edge.relationship_id > after_edge_id:
-                    edges.append((edge.relationship_id, edge))
+            if (edge.from_entity_id in frontier or edge.to_entity_id in frontier) and (
+                after_edge_id is None or edge.relationship_id > after_edge_id
+            ):
+                edges.append((edge.relationship_id, edge))
         edges.sort(key=lambda item: item[0])
         page = edges[:limit]
         assignments = tuple(

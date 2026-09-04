@@ -1,4 +1,4 @@
-import { ok } from "../primitives";
+import { ok, type DecodeResult } from "../primitives";
 import type { Decoder } from "../types";
 import {
   ASSIGNMENT_TYPES,
@@ -52,7 +52,7 @@ export interface EntitiesGraphResult {
   readonly next_cursor: string | null;
 }
 
-function decodeGraphNode(input: unknown) {
+function decodeGraphNode(input: unknown): DecodeResult<GraphNode> {
   const known = pick(input, [
     "entity_id",
     "projection_id",
@@ -84,7 +84,7 @@ function decodeGraphNode(input: unknown) {
   } satisfies GraphNode);
 }
 
-function decodeGraphEdge(input: unknown) {
+function decodeGraphEdge(input: unknown): DecodeResult<GraphEdge> {
   const known = pick(input, [
     "edge_kind",
     "edge_id",
@@ -122,27 +122,7 @@ function decodeGraphEdge(input: unknown) {
   if (typeof version !== "number" || !Number.isSafeInteger(version)) {
     return fail("a required field was not the expected type");
   }
-  if (kind.value === "assignment") {
-    const status = oneOf(known.value.status, DIRECTED_STATES);
-    if (!status.ok) return status;
-    return ok({
-      edge_kind: kind.value,
-      edge_id: edgeId.value,
-      type: type.value,
-      from_entity_id: fromEntity.value,
-      to_entity_id: toEntity.value,
-      from_projection_id: fromProjection.value,
-      to_projection_id: toProjection.value,
-      scope_entity_id: scope.value,
-      is_current: isCurrent.value,
-      status: status.value,
-      version,
-    } satisfies GraphEdge);
-  }
-  const state = oneOf(known.value.state, DIRECTED_STATES);
-  if (!state.ok) return state;
-  return ok({
-    edge_kind: kind.value,
+  const shared = {
     edge_id: edgeId.value,
     type: type.value,
     from_entity_id: fromEntity.value,
@@ -151,9 +131,26 @@ function decodeGraphEdge(input: unknown) {
     to_projection_id: toProjection.value,
     scope_entity_id: scope.value,
     is_current: isCurrent.value,
-    state: state.value,
     version,
-  } satisfies GraphEdge);
+  };
+  if (kind.value === "assignment") {
+    const status = oneOf(known.value.status, DIRECTED_STATES);
+    if (!status.ok) return status;
+    const edge: GraphEdge = {
+      ...shared,
+      edge_kind: "assignment",
+      status: status.value,
+    };
+    return ok(edge);
+  }
+  const state = oneOf(known.value.state, DIRECTED_STATES);
+  if (!state.ok) return state;
+  const edge: GraphEdge = {
+    ...shared,
+    edge_kind: "relationship",
+    state: state.value,
+  };
+  return ok(edge);
 }
 
 export const decodeEntitiesGraph: Decoder<EntitiesGraphResult> = (input) => {

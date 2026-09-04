@@ -73,7 +73,7 @@ GSQS_REVISION: Final = "c4b0a1d9e827"
 #: `design_coordinates_with` to `design_coordination_with`; that in turn stacked on
 #: `1cda4d536268` (RI-ENT-WP-07). Written out rather than derived so chain drift fails here
 #: rather than passing.
-HEAD_REVISION: Final = "16f05c46b8c3"
+HEAD_REVISION: Final = "6a2f9d1c4b80"
 PRIOR: Final = "f8c3a1e6b247"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260816_c9e2b6a4d813_add_goodnotes_note_unit_occurrence_.py"
@@ -160,7 +160,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert len(list(script.get_heads())) == 1
     assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PRIOR
-    # 88 migration files: 85 through `1cda4d536268` (RI-ENT-WP-07), plus
+    # 89 migration files: 85 through `1cda4d536268` (RI-ENT-WP-07), plus
     # `c99cd8ed8d1c` (commit `37ead78`, RI-ENT-WP-08's blocker-clearing pass),
     # which renames the seeded entity_relationship_types row
     # `design_coordinates_with` to `design_coordination_with`, plus
@@ -171,8 +171,8 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     # RI-ENT-WP-10's five entity reads and RI-ENT-WP-11's fifteen entity
     # mutation contracts, creating and altering no table. Both branches wrote
     # 87 here from a shared baseline of 86 and neither is true of the merged
-    # tree, which carries both revisions; 88 is counted from it (RULING-M2).
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 88
+    # tree, which carries both revisions; 89 is counted from it (RULING-M2).
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 89
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

@@ -8587,6 +8587,251 @@ goodnotes_semantic_proposals = Table(
     ),
 )
 
+#: Durable, content-free scheduled-client pull context. One authenticated
+#: client has one reusable context inside a Principal partition.
+goodnotes_pull_sessions = Table(
+    "goodnotes_pull_sessions",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("context_id", String(128), primary_key=True),
+    Column("client_id", String(128), nullable=False),
+    Column("max_attempts", Integer, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint(
+        "char_length(context_id) BETWEEN 1 AND 128 AND context_id !~ '\\s'",
+        name="goodnotes_pull_session_context_is_bounded",
+    ),
+    CheckConstraint(
+        "char_length(client_id) BETWEEN 1 AND 128 AND client_id !~ '\\s'",
+        name="goodnotes_pull_session_client_is_bounded",
+    ),
+    UniqueConstraint("principal_id", "client_id", name="one_goodnotes_pull_session_per_client"),
+    UniqueConstraint(
+        "principal_id",
+        "context_id",
+        "client_id",
+        name="goodnotes_pull_session_context_client_identity",
+    ),
+    CheckConstraint(
+        "max_attempts BETWEEN 1 AND 10", name="goodnotes_pull_session_attempts_are_bounded"
+    ),
+)
+
+#: One atomic claim attempt, including an empty result. The request fingerprint
+#: makes a digest collision a conflict rather than an accidental replay.
+goodnotes_pull_claims = Table(
+    "goodnotes_pull_claims",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("claim_id", String(64), primary_key=True),
+    Column("context_id", String(128), nullable=False),
+    Column("client_id", String(128), nullable=False),
+    Column("request_fingerprint", String(64), nullable=False),
+    Column("assignment_count", Integer, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint("claim_id ~ '^[a-f0-9]{64}$'", name="goodnotes_pull_claim_id_shape"),
+    CheckConstraint(
+        "request_fingerprint ~ '^[a-f0-9]{64}$'",
+        name="goodnotes_pull_claim_fingerprint_shape",
+    ),
+    CheckConstraint(
+        "assignment_count BETWEEN 0 AND 100",
+        name="goodnotes_pull_claim_assignment_count_is_bounded",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "context_id", "client_id"],
+        [
+            f"{SCHEMA}.goodnotes_pull_sessions.principal_id",
+            f"{SCHEMA}.goodnotes_pull_sessions.context_id",
+            f"{SCHEMA}.goodnotes_pull_sessions.client_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_pull_claims_session_fk",
+    ),
+)
+
+#: Immutable assignment identities. Attempts are rows, never an in-place
+#: counter, so retry history survives restart without being rewritten.
+goodnotes_pull_assignments = Table(
+    "goodnotes_pull_assignments",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("assignment_id", String(64), primary_key=True),
+    Column("claim_id", String(64), nullable=False),
+    Column("context_id", String(128), nullable=False),
+    Column("client_id", String(128), nullable=False),
+    Column("run_id", String(36), nullable=False),
+    Column("page_version_id", String(30), nullable=False),
+    Column("content_sha256", String(64), nullable=False),
+    Column("attempt", Integer, nullable=False),
+    Column("ordinal", Integer, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint("assignment_id ~ '^[a-f0-9]{64}$'", name="goodnotes_pull_assignment_id_shape"),
+    CheckConstraint("attempt BETWEEN 1 AND 10", name="goodnotes_pull_attempt_is_bounded"),
+    CheckConstraint("ordinal BETWEEN 1 AND 100", name="goodnotes_pull_ordinal_is_bounded"),
+    UniqueConstraint(
+        "principal_id", "claim_id", "ordinal", name="one_goodnotes_pull_claim_ordinal"
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "run_id",
+        "page_version_id",
+        "content_sha256",
+        "attempt",
+        name="one_goodnotes_pull_work_attempt",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "claim_id"],
+        [
+            f"{SCHEMA}.goodnotes_pull_claims.principal_id",
+            f"{SCHEMA}.goodnotes_pull_claims.claim_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_pull_assignments_claim_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "context_id", "client_id"],
+        [
+            f"{SCHEMA}.goodnotes_pull_sessions.principal_id",
+            f"{SCHEMA}.goodnotes_pull_sessions.context_id",
+            f"{SCHEMA}.goodnotes_pull_sessions.client_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_pull_assignments_session_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "run_id"],
+        [
+            f"{SCHEMA}.goodnotes_ingestion_runs.principal_id",
+            f"{SCHEMA}.goodnotes_ingestion_runs.run_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_pull_assignments_run_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "page_version_id"],
+        [
+            f"{SCHEMA}.goodnotes_page_versions.principal_id",
+            f"{SCHEMA}.goodnotes_page_versions.page_version_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_pull_assignments_page_version_fk",
+    ),
+)
+
+#: Content-free immutable completion receipts. Proposal payload stays solely in
+#: goodnotes_semantic_proposals; result_sha256 binds the two ledgers.
+goodnotes_pull_completions = Table(
+    "goodnotes_pull_completions",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("completion_id", String(64), primary_key=True),
+    Column("assignment_id", String(64), nullable=False),
+    Column("context_id", String(128), nullable=False),
+    Column("client_id", String(128), nullable=False),
+    Column("idempotency_key", String(128), nullable=False),
+    Column("request_fingerprint", String(64), nullable=False),
+    Column("result_sha256", String(64), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint("completion_id ~ '^[a-f0-9]{64}$'", name="goodnotes_pull_completion_id_shape"),
+    CheckConstraint(
+        "char_length(idempotency_key) BETWEEN 1 AND 128 AND idempotency_key !~ '\\s'",
+        name="goodnotes_pull_completion_key_is_bounded",
+    ),
+    CheckConstraint(
+        "request_fingerprint ~ '^[a-f0-9]{64}$'",
+        name="goodnotes_pull_completion_fingerprint_shape",
+    ),
+    CheckConstraint("result_sha256 ~ '^[a-f0-9]{64}$'", name="goodnotes_pull_result_digest_shape"),
+    UniqueConstraint(
+        "principal_id", "assignment_id", name="one_goodnotes_pull_completion_per_assignment"
+    ),
+    UniqueConstraint("principal_id", "idempotency_key", name="one_goodnotes_pull_completion_key"),
+    ForeignKeyConstraint(
+        ["principal_id", "assignment_id"],
+        [
+            f"{SCHEMA}.goodnotes_pull_assignments.principal_id",
+            f"{SCHEMA}.goodnotes_pull_assignments.assignment_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_pull_completions_assignment_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "context_id", "client_id"],
+        [
+            f"{SCHEMA}.goodnotes_pull_sessions.principal_id",
+            f"{SCHEMA}.goodnotes_pull_sessions.context_id",
+            f"{SCHEMA}.goodnotes_pull_sessions.client_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_pull_completions_session_fk",
+    ),
+)
+
+#: One append-only human review fact for one exact semantic proposal payload.
+goodnotes_semantic_review_decisions = Table(
+    "goodnotes_semantic_review_decisions",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("decision_id", String(36), primary_key=True),
+    Column("run_id", String(36), nullable=False),
+    Column("proposal_id", String(36), nullable=False),
+    Column("proposal_sha256", String(64), nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column("action", String(32), nullable=False),
+    Column("request_fingerprint", String(64), nullable=False),
+    Column("decided_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint(
+        "decision_id ~ '^gnsrd_[a-f0-9]{24}$'",
+        name="goodnotes_semantic_review_decision_id_shape",
+    ),
+    CheckConstraint(
+        "proposal_sha256 ~ '^[a-f0-9]{64}$'",
+        name="goodnotes_semantic_review_proposal_digest_shape",
+    ),
+    _one_of("action", Disposition, name="goodnotes_semantic_review_action_is_known"),
+    CheckConstraint(
+        "request_fingerprint ~ '^[a-f0-9]{64}$'",
+        name="goodnotes_semantic_review_fingerprint_shape",
+    ),
+    CheckConstraint("sequence >= 1", name="goodnotes_semantic_review_sequence_is_positive"),
+    UniqueConstraint(
+        "principal_id",
+        "run_id",
+        "proposal_sha256",
+        "sequence",
+        name="one_goodnotes_semantic_review_per_sequence",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "request_fingerprint",
+        name="one_goodnotes_semantic_review_request",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "run_id"],
+        [
+            f"{SCHEMA}.goodnotes_ingestion_runs.principal_id",
+            f"{SCHEMA}.goodnotes_ingestion_runs.run_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_semantic_review_run_fk",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "proposal_id"],
+        [
+            f"{SCHEMA}.goodnotes_semantic_proposals.principal_id",
+            f"{SCHEMA}.goodnotes_semantic_proposals.proposal_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_semantic_review_proposal_fk",
+    ),
+)
+
 #: Principal-bound associations from ranked GN-04 candidate strings. Does not
 #: reuse `goodnotes_note_links` kinds. Unresolved literals stay unresolved;
 #: nothing here creates a Project, person, or Task.

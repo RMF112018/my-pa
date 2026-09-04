@@ -19,8 +19,10 @@ import hmac
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from typing import Protocol
 
+from my_pa.application.goodnotes_occurrences import GoodNotesSemanticPromotionEvidence
 from my_pa.domain.goodnotes.models import GoodNotesPageWork
 from my_pa.domain.identity.principal import Principal
 
@@ -271,6 +273,26 @@ class PullCompletionConflictError(Exception):
     """An idempotency key or assignment was completed with different content."""
 
 
+class SemanticReviewConflictError(Exception):
+    """One exact semantic proposal already has a different review decision."""
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticReviewDecision:
+    """Append-only review fact for one exact semantic proposal digest."""
+
+    decision_id: str
+    principal_id: str
+    run_id: str
+    proposal_id: str
+    proposal_sha256: str
+    action: str
+    request_fingerprint: str
+    decided_at: datetime
+    sequence: int | None = None
+    replayed: bool = False
+
+
 class GoodNotesPullRepository(Protocol):
     """Principal-partitioned orchestration ledger; never a source-provider port."""
 
@@ -300,6 +322,17 @@ class GoodNotesPullRepository(Protocol):
         admissions: tuple[PullCompletionAdmission, ...],
     ) -> tuple[PullCompletionReceipt, ...]:
         """Atomically store all completions, replay all, or reject without writes."""
+
+    def status(self, principal_id: str, client_id: str) -> GoodNotesPullStatus:
+        """Return content-free durable counts for this exact client partition."""
+
+    def record_semantic_review(self, decision: SemanticReviewDecision) -> SemanticReviewDecision:
+        """Append or exactly replay one proposal-bound review decision."""
+
+    def semantic_review_evidence(
+        self, principal_id: str, run_id: str, proposal_sha256s: tuple[str, ...]
+    ) -> tuple[GoodNotesSemanticPromotionEvidence, ...]:
+        """Project persisted decisions for the R8 promotion gate."""
 
 
 class GoodNotesPullOrchestrator:
@@ -367,6 +400,19 @@ class GoodNotesPullOrchestrator:
             if len(chosen) == request.batch_size:
                 break
         if not chosen:
+            try:
+                claimed = self._repository.claim_batch(
+                    context.principal.principal_id,
+                    context.client_id,
+                    context.context_id,
+                    (),
+                    (),
+                    max_attempts=self._max_attempts,
+                )
+            except PullRepositoryConflictError:
+                raise GoodNotesPullError(ERROR_REPOSITORY_CONFLICT) from None
+            if claimed:
+                raise GoodNotesPullError(ERROR_REPOSITORY_CONFLICT)
             return PullBatch(assignments=(), next_cursor=None)
         assignments = tuple(item[1] for item in chosen)
         expected = tuple(item[0].attempts for item in chosen)

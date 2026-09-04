@@ -158,6 +158,7 @@ from my_pa.infrastructure.persistence.goodnotes import (
     goodnotes_review_cases,
     is_goodnotes_review_case,
 )
+from my_pa.infrastructure.persistence.goodnotes_pull import SqlGoodNotesPullRepository
 from my_pa.infrastructure.persistence.goodnotes_semantics import SqlGoodNotesSemanticRepository
 from my_pa.infrastructure.persistence.intelligence import SqlIntelligenceStore
 from my_pa.infrastructure.persistence.jobs import enqueue_job, job_for
@@ -1137,6 +1138,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def goodnotes_semantics(self) -> GoodNotesSemanticRepository:
         """Immutable page-version work and semantic proposal receipts."""
         return SqlGoodNotesSemanticRepository(self._open)
+
+    @property
+    def goodnotes_pull(self) -> SqlGoodNotesPullRepository:
+        """Durable pull sessions, receipts, and semantic-review decisions."""
+        return SqlGoodNotesPullRepository(self._open)
 
     def intelligence_for(self, principal_id: str) -> SqlIntelligenceStore:
         """Intelligence Artifact store, on this transaction's connection."""

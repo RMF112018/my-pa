@@ -54,7 +54,7 @@ PHASE_B_START = "c7a1f04b9e63"
 #: `design_coordinates_with` to `design_coordination_with`; that in turn stacked on
 #: `1cda4d536268` (RI-ENT-WP-07). Written out rather than derived so chain drift fails here
 #: rather than passing.
-HEAD = "16f05c46b8c3"
+HEAD = "6a2f9d1c4b80"
 REVISION_PATH = (
     ROOT
     / "migrations"

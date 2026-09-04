@@ -4546,12 +4546,18 @@ class GoodNotesPullStatusRecord:
 
 @dataclass(frozen=True, slots=True)
 class GoodNotesSemanticPromotionEvidenceRecord:
+    """Persisted review evidence bound to one Principal and ingestion run."""
+
     principal_id: str
     run_id: str
     proposal_sha256: str
     disposition: Disposition
     corrected_payload: dict[str, object] | None = field(default=None, repr=False)
     result_sha256: str | None = None
+
+    def is_bound_to(self, principal_id: str, run_id: str) -> bool:
+        """Match the application evidence contract at the persistence boundary."""
+        return self.principal_id == principal_id and self.run_id == run_id
 
 
 @dataclass(frozen=True, slots=True)

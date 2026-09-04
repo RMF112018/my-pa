@@ -9,6 +9,11 @@ import pytest
 
 from my_pa.adapters.mcp.server import _answer
 from my_pa.application.commands import CompleteGoodNotesPull, PullGoodNotesWork
+from my_pa.application.goodnotes_occurrences import (
+    GoodNotesSemanticPromotionEvidence,
+    _reviewed_proposals,
+    semantic_proposal_sha256,
+)
 from my_pa.application.goodnotes_pull_orchestration import (
     PullAssignment,
     PullCompletionAdmission,
@@ -255,6 +260,45 @@ def test_canonical_correction_detaches_from_mutable_request_containers() -> None
     supplied["segments"] = []
 
     assert stored == {"segments": [{"transcription": "corrected"}]}
+
+
+def test_persisted_and_in_memory_promotion_evidence_share_exact_binding() -> None:
+    principal_id = "prn_aaaaaaaaaaaaaaaaaaaaaaaa"
+    run_id = issue_stable_id("gnrun", "promotion-binding")
+    proposal = (
+        issue_stable_id("gnver", "promotion-binding"),
+        "note-unit.v1",
+        "synthetic",
+        "1",
+        {
+            "segments": [],
+            "candidate_tags": [],
+            "ranked_candidates": [],
+            "confidence": None,
+        },
+    )
+    proposal_sha256 = semantic_proposal_sha256(*proposal)
+    values = (
+        GoodNotesSemanticPromotionEvidence(
+            principal_id=principal_id,
+            run_id=run_id,
+            proposal_sha256=proposal_sha256,
+            disposition=Disposition.ACCEPT,
+        ),
+        GoodNotesSemanticPromotionEvidenceRecord(
+            principal_id=principal_id,
+            run_id=run_id,
+            proposal_sha256=proposal_sha256,
+            disposition=Disposition.ACCEPT,
+        ),
+    )
+
+    for evidence in values:
+        assert evidence.is_bound_to(principal_id, run_id)
+        assert not evidence.is_bound_to("prn_bbbbbbbbbbbbbbbbbbbbbbbb", run_id)
+        assert not evidence.is_bound_to(principal_id, issue_stable_id("gnrun", "other"))
+
+    assert _reviewed_proposals(principal_id, run_id, (proposal,), (values[1],)) == (proposal,)
 
 
 def test_completion_refuses_material_not_bound_to_reviewed_proposal(scene: Scene) -> None:

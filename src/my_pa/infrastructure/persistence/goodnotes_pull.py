@@ -58,6 +58,7 @@ from my_pa.domain.capture.review import (
 )
 from my_pa.domain.common.identifiers import IdKind, make_identifier
 from my_pa.domain.common.time import utc_now
+from my_pa.domain.goodnotes.dates import canonical_date_evidence
 from my_pa.domain.goodnotes.models import GoodNotesPageWork, GoodNotesSemanticReviewCase
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
@@ -106,6 +107,9 @@ def _corrected_result_sha256(payload: dict[str, object]) -> str:
         key: payload[key]
         for key in ("segments", "candidate_tags", "ranked_candidates", "confidence")
     }
+    dates = canonical_date_evidence(payload.get("date_evidence", {}))
+    if dates:
+        fields["date_evidence"] = dates
     encoded = json.dumps(fields, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode()).hexdigest()
 
@@ -327,8 +331,9 @@ class SqlGoodNotesPullRepository:
             proposal = matches[0]
             seen.add(str(proposal.proposal_id))
             payload = _canonical_payload(proposal.payload)
-            # fingerprint_proposal hashes exactly the four semantic fields for
-            # payload_sha256; its envelope has a separate complete proposal digest.
+            # payload_sha256 binds the four historical semantic fields plus any
+            # nonempty canonical date evidence. The envelope has a separate
+            # complete proposal digest.
             # Do not accept multiple digest formats. Review below binds every byte
             # of the original payload, including any envelope metadata.
             if _corrected_result_sha256(payload) != proposal.payload_sha256:

@@ -549,3 +549,102 @@ def test_tools_list_protocol_preserves_kind_and_version_discrimination(scene: Sc
             suffix="protocol-failed-shape",
         ),
     )
+
+
+@pytest.mark.parametrize("version", [NOTE_UNIT_SCHEMA_V1, NOTE_UNIT_SCHEMA_V2])
+@pytest.mark.parametrize(
+    "dates,valid",
+    [
+        ({}, True),
+        (
+            {
+                "page_candidates": [
+                    {
+                        "scope": "PAGE",
+                        "value": "2026-09-05",
+                        "literal": "5 September",
+                        "evidence_refs": ["synthetic-header"],
+                        "confidence": 0.9,
+                    }
+                ]
+            },
+            True,
+        ),
+        (None, False),
+        ([], False),
+        ({"unknown": []}, False),
+        (
+            {
+                "event_dates": [
+                    {
+                        "scope": "PAGE",
+                        "value": "2026-09-05",
+                        "literal": "5 September",
+                        "evidence_refs": ["synthetic-header"],
+                    }
+                ]
+            },
+            False,
+        ),
+        (
+            {
+                "body_dates": [
+                    {
+                        "scope": "BODY",
+                        "value": "2026-09-05",
+                        "literal": str(i),
+                        "evidence_refs": ["x"],
+                    }
+                    for i in range(33)
+                ]
+            },
+            False,
+        ),
+    ],
+)
+def test_date_plane_schema_runtime_parity(version: str, dates: object, valid: bool) -> None:
+    document = _proposal_document(version, [_note_unit()])
+    document["date_evidence"] = dates
+    assert _schema_admits(_published_payload(), document) is valid
+    assert (_runtime_error(document) is None) is valid
+
+
+@pytest.mark.parametrize(
+    "dates",
+    [
+        {},
+        {"body_dates": []},
+        None,
+        {
+            "body_dates": [
+                {
+                    "scope": "BODY",
+                    "value": "2026-09-05",
+                    "literal": "5 September",
+                    "evidence_refs": ["synthetic-body"],
+                }
+            ]
+        },
+    ],
+)
+def test_wire_normalization_uses_shared_date_admission(dates: object) -> None:
+    document = _proposal_document(NOTE_UNIT_SCHEMA_V2, [_note_unit()])
+    document["date_evidence"] = dates
+    envelope = {
+        "contract_version": "v1",
+        "request_id": "req-schema-date-001",
+        "purpose": "goodnotes_proposal",
+        "principal_id": "prn_24abf5d2d0c25e1c82f6e72425e9ed37",
+        "requested_at": "2026-08-19T19:00:00.000Z",
+        "scope": {"source_ids": [], "enrollment_ids": []},
+        "payload": document,
+    }
+    if dates is None:
+        with pytest.raises(InvalidRequestError):
+            normalize(Capability.GOODNOTES_PROPOSE.value, envelope)
+    else:
+        from my_pa.domain.goodnotes.dates import canonical_date_evidence
+
+        _, command = normalize(Capability.GOODNOTES_PROPOSE.value, envelope)
+        assert isinstance(command, SubmitGoodNotesProposal)
+        assert command.date_evidence == canonical_date_evidence(dates)

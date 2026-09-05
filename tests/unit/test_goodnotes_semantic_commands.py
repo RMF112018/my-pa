@@ -156,3 +156,58 @@ def test_unknown_schema_version_is_refused() -> None:
     with pytest.raises(InvalidRequestError) as refused:
         _proposal(schema_version="note-unit.v3")
     assert refused.value.safe_details == (SafeDetail.SCHEMA_VERSION,)
+
+
+@pytest.mark.parametrize(
+    ("version", "request_digest"),
+    [
+        ("note-unit.v1", "34bdcad7564086f072a6251ea220c2f794985a965c4b893c1f87ae355f4a78b3"),
+        ("note-unit.v2", "a79ab305abbd32427163010d5c6692408cc13a350fd9be4c9278d843d7816304"),
+    ],
+)
+@pytest.mark.parametrize(
+    "empty", [{}, {"page_candidates": [], "event_dates": [], "body_dates": []}]
+)
+def test_no_date_fingerprints_preserve_pre_r7_bytes(
+    version: str, request_digest: str, empty: dict
+) -> None:
+    from my_pa.application.goodnotes_semantics import fingerprint_proposal
+
+    historical = (
+        request_digest,
+        "52abcefff83ae3a015741309f577e13ce45ff0d02980b49034ce28643d500399",
+    )
+    assert fingerprint_proposal(_proposal(schema_version=version))[:2] == historical
+    fingerprint, payload_digest, body = fingerprint_proposal(
+        _proposal(schema_version=version, date_evidence=empty)
+    )
+    assert (fingerprint, payload_digest) == historical
+    assert "date_evidence" not in body
+
+
+def test_date_plane_changes_both_fingerprints_and_is_not_rendered() -> None:
+    from my_pa.application.goodnotes_semantics import fingerprint_proposal
+
+    dates = {
+        "event_dates": [
+            {
+                "scope": "EVENT",
+                "value": "2026-09-05",
+                "literal": INJECTION,
+                "evidence_refs": ["synthetic-date"],
+            }
+        ]
+    }
+    command = _proposal(date_evidence=dates)
+    before = fingerprint_proposal(_proposal())
+    after = fingerprint_proposal(command)
+    assert after[0] != before[0] and after[1] != before[1]
+    assert after[2]["date_evidence"] == dates
+    assert INJECTION not in repr(command)
+
+
+@pytest.mark.parametrize("value", [None, [], True, {"event_dates": None}, {"unknown": []}])
+def test_command_rejects_malformed_date_plane(value: object) -> None:
+    with pytest.raises(InvalidRequestError) as refused:
+        _proposal(date_evidence=value)
+    assert refused.value.safe_details == (SafeDetail.PAYLOAD,)

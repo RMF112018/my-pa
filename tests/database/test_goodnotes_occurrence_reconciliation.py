@@ -18,7 +18,6 @@ from my_pa.application.goodnotes_occurrences import (
     GoodNotesOccurrenceReconciler,
     GoodNotesSemanticPromotionEvidence,
     OccurrenceReconcileBusyError,
-    _context_anchor,
     semantic_proposal_sha256,
 )
 from my_pa.application.goodnotes_semantics import fingerprint_proposal
@@ -35,7 +34,6 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesNotebook,
     GoodNotesNoteChangeState,
     GoodNotesNoteOccurrence,
-    GoodNotesNoteRevision,
     GoodNotesPage,
     GoodNotesPagePosition,
     GoodNotesPageRaster,
@@ -246,6 +244,7 @@ def _propose(
     key: str,
     segments: tuple[dict[str, object], ...],
     content_sha256: str = DIGEST,
+    date_evidence: dict[str, object] | None = None,
 ) -> None:
     command = SubmitGoodNotesProposal(
         run_id=run_id,
@@ -256,6 +255,7 @@ def _propose(
         analyzer_version="1",
         idempotency_key=key,
         segments=segments,
+        date_evidence={} if date_evidence is None else date_evidence,
     )
     fingerprint, payload_digest, body = fingerprint_proposal(command)
     semantics.submit_proposal(
@@ -662,45 +662,26 @@ def test_unique_visual_match_with_new_transcription_is_revised(engine: Engine) -
     with engine.begin() as connection:
         lineage = PostgresGoodNotesRepository(connection)
         semantics = SqlGoodNotesSemanticRepository(connection)
-        run_id, page_id, notebook_id, logical_id = _plant(lineage, A, "revised")
-        note = lineage.store_note(
-            GoodNotesNote(
-                note_id=issue_stable_id("gnnt", A, "revised"),
-                principal_id=A,
-                notebook_id=notebook_id,
-                identity_status=GoodNotesIdentityStatus.ACTIVE,
-                created_at=WHEN,
-                last_seen_at=WHEN,
-            )
+        run_id, page_id, _, _ = _plant(lineage, A, "revised")
+        _propose(
+            semantics,
+            principal_id=A,
+            run_id=run_id,
+            page_version_id=page_id,
+            key="revised-first",
+            segments=(_segment(x_min=0.1, transcription="follow up Tuesday"),),
         )
-        occurrence = lineage.store_occurrence(
-            GoodNotesNoteOccurrence(
-                occurrence_id=issue_stable_id("gnocc", A, "revised"),
-                principal_id=A,
-                note_id=note.note_id,
-                logical_page_id=logical_id,
-                x_min=0.1,
-                y_min=0.2,
-                width=0.2,
-                height=0.1,
-                identity_status=GoodNotesIdentityStatus.ACTIVE,
-                created_at=WHEN,
-                last_seen_at=WHEN,
-            )
+        _accepted_evidence(lineage, A, run_id)
+        first = GoodNotesOccurrenceReconciler().reconcile(
+            A, run_id, repository=lineage, clock=lambda: WHEN
         )
-        original = lineage.store_revision(
-            GoodNotesNoteRevision(
-                revision_id=issue_stable_id("gnrev", A, "revised-first"),
-                principal_id=A,
-                note_id=note.note_id,
-                schema_version="note-unit.v1",
-                analyzer_name="synthetic",
-                analyzer_version="1",
-                transcription="follow up Tuesday",
-                created_at=WHEN,
-                occurrence_id=occurrence.occurrence_id,
-            )
-        )
+        occurrence_id = first.changes[0].occurrence_id
+        assert occurrence_id is not None
+        occurrence = lineage.occurrence(A, occurrence_id)
+        assert occurrence is not None
+        original = lineage.latest_revision_for_occurrence(A, occurrence_id)
+        assert original is not None
+        run_id, page_id = _next_semantic_version(lineage, run_id, page_id, "revised-next")
         _propose(
             semantics,
             principal_id=A,
@@ -732,37 +713,30 @@ def test_new_occurrence_does_not_reuse_note_by_page_wide_context_hash(engine: En
     with engine.begin() as connection:
         lineage = PostgresGoodNotesRepository(connection)
         semantics = SqlGoodNotesSemanticRepository(connection)
-        run_id, page_id, notebook_id, logical_id = _plant(lineage, A, "append")
+        run_id, page_id, notebook_id, _ = _plant(lineage, A, "append")
         heading = _segment(x_min=0.4, transcription="synthetic heading", kind="SOURCE_CONTEXT")
         existing_unit = _segment(x_min=0.1, transcription="synthetic note", crop_sha256=CROP)
         appended = _segment(x_min=0.6, transcription="synthetic note", crop_sha256="e" * 64)
-        note = lineage.store_note(
-            GoodNotesNote(
-                note_id=issue_stable_id("gnnt", A, "append"),
-                principal_id=A,
-                notebook_id=notebook_id,
-                identity_status=GoodNotesIdentityStatus.ACTIVE,
-                created_at=WHEN,
-                last_seen_at=WHEN,
-            )
+        existing_unit["geometry"] = {"x_min": 0.1, "y_min": 0.2, "width": 0.15, "height": 0.1}
+        _propose(
+            semantics,
+            principal_id=A,
+            run_id=run_id,
+            page_version_id=page_id,
+            key="append-first",
+            segments=(heading, existing_unit),
         )
-        existing = lineage.store_occurrence(
-            GoodNotesNoteOccurrence(
-                occurrence_id=issue_stable_id("gnocc", A, "append"),
-                principal_id=A,
-                note_id=note.note_id,
-                logical_page_id=logical_id,
-                x_min=0.1,
-                y_min=0.2,
-                width=0.2,
-                height=0.1,
-                identity_status=GoodNotesIdentityStatus.ACTIVE,
-                created_at=WHEN,
-                last_seen_at=WHEN,
-                crop_sha256=CROP,
-                context_anchor_sha256=_context_anchor((heading, existing_unit, appended)),
-            )
+        _accepted_evidence(lineage, A, run_id)
+        first = GoodNotesOccurrenceReconciler().reconcile(
+            A, run_id, repository=lineage, clock=lambda: WHEN
         )
+        occurrence_id = first.changes[0].occurrence_id
+        assert occurrence_id is not None
+        existing = lineage.occurrence(A, occurrence_id)
+        assert existing is not None
+        note = lineage.note(A, existing.note_id)
+        assert note is not None
+        run_id, page_id = _next_semantic_version(lineage, run_id, page_id, "append-next")
         _propose(
             semantics,
             principal_id=A,
@@ -1679,3 +1653,127 @@ def test_unique_grounded_crop_moves_across_pages_with_history_and_replay(engine:
         replay = GoodNotesOccurrenceReconciler().reconcile(A, third.run_id, repository=repository)
         assert replay.replayed and replay.changes == returned.changes
         assert _counts(connection, A) == (1, 3)
+
+
+def _next_semantic_version(
+    repository: PostgresGoodNotesRepository, prior_run: str, prior_page: str, key: str
+) -> tuple[str, str]:
+    run = repository.create_run(_run(A, key))
+    snapshot = repository.store_snapshot(
+        replace(
+            repository.snapshots_for_run(A, prior_run)[0],
+            snapshot_id=issue_stable_id("gnsnap", A, key),
+            raw_sha256=hashlib.sha256(key.encode()).hexdigest(),
+            run_id=run.run_id,
+            observed_at=LATER,
+            settled_at=LATER,
+        )
+    )
+    version = repository.page_version(A, prior_page)
+    raster = repository.page_raster(A, prior_page)
+    assert version is not None and raster is not None
+    page = GoodNotesPage(
+        page_id=issue_stable_id("gnpg", A, key),
+        principal_id=A,
+        source_id="src_aaaaaaaaaaaaaaaaaaaaaaaa",
+        source_object_id="obj_aaaaaaaaaaaaaaaaaaaaaaaa",
+        page_number=1,
+    )
+    version = repository.store_page_version_render(
+        page=page,
+        version=replace(
+            version, page_id=page.page_id, page_version_id=issue_stable_id("gnver", A, key)
+        ),
+    )
+    repository.store_page_position(
+        GoodNotesPagePosition(
+            principal_id=A,
+            snapshot_id=snapshot.snapshot_id,
+            page_number=1,
+            logical_page_id=version.logical_page_id,
+            page_version_id=version.page_version_id,
+            match_method=GoodNotesMatchMethod.ORDINAL_WEAK,
+            created_at=LATER,
+        )
+    )
+    repository.store_page_raster(
+        replace(
+            raster, run_id=run.run_id, page_version_id=version.page_version_id, created_at=LATER
+        )
+    )
+    repository.connection.execute(
+        goodnotes_ingestion_run_stages.insert().values(
+            principal_id=A,
+            run_id=run.run_id,
+            stage="CONTENT_READY",
+            status="SUCCEEDED",
+            started_at=LATER,
+            ended_at=LATER,
+        )
+    )
+    return run.run_id, version.page_version_id
+
+
+@pytest.mark.parametrize("remove", [False, True])
+def test_date_only_change_appends_revision_from_promoted_sql_provenance(
+    engine: Engine, remove: bool
+) -> None:
+    from my_pa.application.goodnotes_delivery import GoodNotesNewOnlyDelivery
+    from my_pa.infrastructure.persistence.goodnotes_durable_note import PostgresDurableNoteStore
+
+    dates = {
+        "page_candidates": [
+            {
+                "scope": "PAGE",
+                "value": "2026-09-05",
+                "literal": "2026-09-05",
+                "evidence_refs": ["header"],
+            }
+        ]
+    }
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        run, page, _, _ = _plant(repository, A, "date-sql-first")
+        _propose(
+            SqlGoodNotesSemanticRepository(connection),
+            principal_id=A,
+            run_id=run,
+            page_version_id=page,
+            key="date-sql-first",
+            segments=(_segment(x_min=0.1, transcription="same ink"),),
+            date_evidence=dates if remove else {},
+        )
+        _accepted_evidence(repository, A, run)
+        first = GoodNotesOccurrenceReconciler().reconcile(
+            A, run, repository=repository, clock=lambda: WHEN
+        )
+        occurrence_id = first.changes[0].occurrence_id
+        assert occurrence_id is not None
+        original = repository.latest_revision_for_occurrence(A, occurrence_id)
+        assert original is not None
+        run, page = _next_semantic_version(repository, run, page, "date-sql-second")
+        _propose(
+            SqlGoodNotesSemanticRepository(connection),
+            principal_id=A,
+            run_id=run,
+            page_version_id=page,
+            key="date-sql-second",
+            segments=(_segment(x_min=0.1, transcription="same ink"),),
+            date_evidence={} if remove else dates,
+        )
+        _accepted_evidence(repository, A, run)
+        second = GoodNotesOccurrenceReconciler().reconcile(
+            A, run, repository=repository, clock=lambda: LATER
+        )
+        assert second.changes[0].change_state is GoodNotesNoteChangeState.REVISED
+        latest = repository.latest_revision_for_occurrence(A, occurrence_id)
+        assert latest is not None and latest.supersedes_revision_id == original.revision_id
+        assert latest.transcription == original.transcription
+        assert latest.page_version_id == page
+        assert repository.revision(A, original.revision_id) == original
+        assert GoodNotesOccurrenceReconciler().reconcile(A, run, repository=repository).replayed
+        assert (
+            GoodNotesNewOnlyDelivery()
+            .deliver(A, run, "operator-local", repository=PostgresDurableNoteStore(connection))
+            .receipt.suppressed
+        )

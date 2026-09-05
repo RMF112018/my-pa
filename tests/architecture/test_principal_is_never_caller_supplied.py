@@ -959,6 +959,11 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("operation", "principal_id"),
         ("operation", "principal_id"),
     ),
+    # UI-IMP-WP17. Four `record.principal_id` reads (insert/update calling
+    # capture_context(record.principal_id) and get_canvas_workspace(...,
+    # record.principal_id, ...)). These are the stored/server record partition,
+    # not a request-body owner.
+    "infrastructure/persistence/canvas_workspace.py": (("record", "principal_id"),) * 4,
     "infrastructure/persistence/capture.py": (
         ("request", "principal_id"),
         ("request", "principal_id"),

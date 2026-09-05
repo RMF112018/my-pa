@@ -90,7 +90,9 @@ def test_every_ledger_accepts_the_canonical_local_principal_shape(
     output = io.StringIO()
     command.upgrade(_config(output), "head", sql=True)
     sql = output.getvalue()
-    goodnotes_pull_sql = sql[sql.index("CREATE TABLE knowledge.goodnotes_pull_sessions") :]
+    start = sql.index("CREATE TABLE knowledge.goodnotes_pull_sessions")
+    later = sql.find("CREATE TABLE knowledge.canvas_workspaces", start)
+    goodnotes_pull_sql = sql[start:] if later == -1 else sql[start:later]
     canonical_pattern = r"prn_[A-Za-z0-9]{8,64}"
 
     assert re.fullmatch(canonical_pattern, local_principal().principal_id)

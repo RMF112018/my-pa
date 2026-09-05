@@ -3315,6 +3315,29 @@ class PutCanvasWorkspace:
 
     capability: ClassVar[Capability] = Capability.CANVAS_WORKSPACE_PUT
 
+    #: What the published schema says about the one field an annotation cannot
+    #: describe. `Mapping[str, Mapping[str, float]]` is a nested object and
+    #: `_schema_for` answers `None` for it, which `payload_schema_for` publishes
+    #: as `{}` — a field documented as accepting anything, which is the slow
+    #: erosion `test_every_command_field_has_a_described_json_type` exists to stop.
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+        {
+            "positions": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                        "x": {"type": "number"},
+                        "y": {"type": "number"},
+                    },
+                    "required": ["x", "y"],
+                    "additionalProperties": False,
+                },
+                "description": ("Entity-id keys to {x, y} points. Extra point keys are refused."),
+            }
+        }
+    )
+
     expected_version: int
     positions: Mapping[str, Mapping[str, float]]
     focus_entity_id: str | None = None

@@ -11,14 +11,11 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import UTC, datetime
-from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
 import pytest
-from alembic import command
-from alembic.config import Config
-from sqlalchemy import Engine
+from sqlalchemy import Engine, text
 
 from my_pa.contracts.ports import CanvasWorkspaceRecord
 from my_pa.infrastructure.database.engine import create_database_engine
@@ -28,7 +25,6 @@ from my_pa.infrastructure.persistence.canvas_workspace import (
     update_canvas_workspace,
 )
 
-ROOT: Final = Path(__file__).resolve().parents[2]
 PRINCIPAL_A: Final = "prn_aaaa0001aaaaaaaaaaaaaaaa00000001"
 PRINCIPAL_B: Final = "prn_bbbb0002bbbbbbbbbbbbbbbb00000002"
 FOCUS: Final = "ent_canvas0001canvas0001canvas00"
@@ -38,15 +34,11 @@ pytestmark = pytest.mark.database
 
 
 @pytest.fixture
-def disposable_database(empty_database_url: str) -> str:
-    return empty_database_url
-
-
-@pytest.fixture
 def engine(disposable_database: str) -> Iterator[Engine]:
     engine = create_database_engine(disposable_database)
     try:
-        command.upgrade(Config(str(ROOT / "alembic.ini")), "head")
+        with engine.begin() as connection:
+            connection.execute(text("TRUNCATE knowledge.canvas_workspaces"))
         yield engine
     finally:
         engine.dispose()

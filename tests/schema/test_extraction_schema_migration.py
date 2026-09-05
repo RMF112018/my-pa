@@ -433,6 +433,7 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "goodnotes_semantic_review_decisions",
         }
     ),
+    "a4d8e31b2c90": frozenset({"goodnotes_semantic_promotion_receipts"}),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

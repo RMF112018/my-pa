@@ -327,6 +327,11 @@ from my_pa.application.goodnotes_gsqs_b0_workflow import (
     status_workflow,
     workflow_root_from_env,
 )
+from my_pa.application.goodnotes_occurrences import (
+    GoodNotesOccurrenceReconciler,
+    GoodNotesOccurrenceRepository,
+    OccurrenceReconcileBusyError,
+)
 from my_pa.application.goodnotes_pull_orchestration import (
     ERROR_INVALID_CURSOR,
     ERROR_INVALID_REQUEST,
@@ -2829,6 +2834,7 @@ class ApplicationService:
         producer_origins: ProducerOriginRegistry | None = None,
         gsqs_b0_ports: WorkflowPorts | None = None,
         goodnotes_pull_enabled: bool = False,
+        goodnotes_canonical_semantic_writes_enabled: bool = False,
         goodnotes_pull_cursor_signing_key: bytes | None = None,
     ) -> None:
         self._unit_of_work = unit_of_work
@@ -2873,6 +2879,9 @@ class ApplicationService:
         self._relationship_reenrichment_enabled = relationship_reenrichment_enabled
         self._gsqs_b0_ports = gsqs_b0_ports
         self._goodnotes_pull_enabled = goodnotes_pull_enabled
+        self._goodnotes_canonical_semantic_writes_enabled = (
+            goodnotes_canonical_semantic_writes_enabled
+        )
         self._goodnotes_pull_cursor_signing_key = goodnotes_pull_cursor_signing_key
         if goodnotes_pull_enabled and goodnotes_pull_cursor_signing_key is None:
             raise ValueError("enabled GoodNotes pull requires a signing key")
@@ -8706,8 +8715,18 @@ class ApplicationService:
                 max_attempts=MAX_PULL_RETRIES,
                 cursor_signing_key=cast(bytes, self._goodnotes_pull_cursor_signing_key),
             ).complete(context, tuple(completions))
+            if self._goodnotes_canonical_semantic_writes_enabled:
+                store = cast(GoodNotesOccurrenceRepository, unit_of_work.goodnotes_durable_notes)
+                for run_id in sorted({item.run_id for item in completions}):
+                    if store.accepted_semantic_material(principal_id, run_id) is None:
+                        continue
+                    GoodNotesOccurrenceReconciler().reconcile(
+                        principal_id, run_id, repository=store, clock=self._clock
+                    )
         except GoodNotesPullError as error:
             self._raise_goodnotes_pull(error)
+        except (ValueError, NotImplementedError, OccurrenceReconcileBusyError):
+            raise ConflictError() from None
         return _Result(
             payload={
                 "completions": [asdict(item) for item in public_completion_receipts(receipts)]

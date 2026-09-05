@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql import Executable
 
@@ -22,7 +22,7 @@ from my_pa.application.goodnotes_occurrences import (
     semantic_proposal_sha256,
 )
 from my_pa.application.goodnotes_semantics import fingerprint_proposal
-from my_pa.domain.capture.review import Disposition
+from my_pa.contracts.ports import GoodNotesSemanticReviewDecisionRecord
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.goodnotes.models import (
     GoodNotesIdentityStatus,
@@ -48,7 +48,16 @@ from my_pa.domain.goodnotes.page_crop import aligned_crop_box
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.goodnotes.visual import grayscale_png
 from my_pa.infrastructure.persistence.goodnotes import PostgresGoodNotesRepository
+from my_pa.infrastructure.persistence.goodnotes_pull import (
+    SqlGoodNotesPullRepository,
+    _corrected_result_sha256,
+)
 from my_pa.infrastructure.persistence.goodnotes_semantics import SqlGoodNotesSemanticRepository
+from my_pa.infrastructure.persistence.tables import (
+    goodnotes_ingestion_run_stages,
+    goodnotes_logical_pages,
+    goodnotes_semantic_proposals,
+)
 
 pytestmark = pytest.mark.database
 ROOT = Path(__file__).resolve().parents[2]
@@ -162,6 +171,7 @@ def _plant(
             page_id=page.page_id,
             source_version_id="ver_aaaaaaaaaaaaaaaaaaaaaaaa",
             content_sha256=DIGEST,
+            exact_render_sha256=hashlib.sha256(_ink_png()).hexdigest(),
             observed_at=WHEN,
             logical_page_id=logical.logical_page_id,
             renderer_name="synthetic",
@@ -176,7 +186,7 @@ def _plant(
             page_number=1,
             logical_page_id=logical.logical_page_id,
             created_at=WHEN,
-            match_method=GoodNotesMatchMethod.ORDINAL_WEAK,
+            match_method=GoodNotesMatchMethod.UNRESOLVED,
             page_version_id=version.page_version_id,
         )
     )
@@ -194,6 +204,16 @@ def _plant(
             renderer_version="1",
             render_profile_version="v1",
             created_at=WHEN,
+        )
+    )
+    repository.connection.execute(
+        goodnotes_ingestion_run_stages.insert().values(
+            principal_id=principal_id,
+            run_id=run.run_id,
+            stage="CONTENT_READY",
+            status="SUCCEEDED",
+            started_at=WHEN,
+            ended_at=WHEN,
         )
     )
     return run.run_id, version.page_version_id, notebook.notebook_id, logical.logical_page_id
@@ -261,15 +281,33 @@ def _accepted_evidence(
     principal_id: str,
     run_id: str,
 ) -> tuple[GoodNotesSemanticPromotionEvidence, ...]:
-    return tuple(
-        GoodNotesSemanticPromotionEvidence(
-            principal_id=principal_id,
-            run_id=run_id,
-            proposal_sha256=semantic_proposal_sha256(*proposal),
-            disposition=Disposition.ACCEPT,
+    pull = SqlGoodNotesPullRepository(repository.connection)
+    for row in repository.connection.execute(
+        select(goodnotes_semantic_proposals).where(
+            goodnotes_semantic_proposals.c.principal_id == principal_id,
+            goodnotes_semantic_proposals.c.run_id == run_id,
         )
-        for proposal in repository.semantic_proposals_for_run(principal_id, run_id)
-    )
+    ):
+        digest = semantic_proposal_sha256(
+            str(row.page_version_id),
+            str(row.schema_version),
+            str(row.analyzer_name),
+            str(row.analyzer_version),
+            row.payload,
+        )
+        pull.record_semantic_review(
+            GoodNotesSemanticReviewDecisionRecord(
+                decision_id="gnsrd_" + digest[:24],
+                principal_id=principal_id,
+                run_id=run_id,
+                proposal_id=str(row.proposal_id),
+                proposal_sha256=digest,
+                action="accept",
+                request_fingerprint=digest,
+                decided_at=WHEN,
+            )
+        )
+    return ()
 
 
 def _counts(connection: object, principal_id: str) -> tuple[int, int]:
@@ -586,8 +624,20 @@ def test_missing_geometry_fails_closed_without_partial_writes(engine: Engine) ->
             analyzer_version="1",
             idempotency_key="bad-geometry",
             request_fingerprint="e" * 64,
-            payload_sha256="f" * 64,
-            payload={"segments": [{"kind": "NOTE_UNIT", "transcription": "no box"}]},
+            payload_sha256=_corrected_result_sha256(
+                {
+                    "segments": [{"kind": "NOTE_UNIT", "transcription": "no box"}],
+                    "candidate_tags": [],
+                    "ranked_candidates": [],
+                    "confidence": None,
+                }
+            ),
+            payload={
+                "segments": [{"kind": "NOTE_UNIT", "transcription": "no box"}],
+                "candidate_tags": [],
+                "ranked_candidates": [],
+                "confidence": None,
+            },
             correlation_id=issue_identifier(IdKind.CORRELATION),
             request_id="bad-geometry",
             audit_id=issue_identifier(IdKind.AUDIT),
@@ -990,3 +1040,405 @@ def test_deleted_logical_page_emits_removed_for_prior_occurrences(engine: Engine
 @pytest.fixture
 def engine(db_engine: Engine) -> Engine:
     return db_engine
+
+
+def test_promotion_requires_persisted_review_and_terminal_zero_output_receipt(
+    engine: Engine,
+) -> None:
+    from my_pa.contracts.ports import GoodNotesSemanticReviewConflictError
+    from my_pa.infrastructure.persistence.tables import goodnotes_semantic_promotion_receipts
+
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        run_id, page_id, _, _ = _plant(repository, A, "zero-reviewed")
+        _propose(
+            SqlGoodNotesSemanticRepository(connection),
+            principal_id=A,
+            run_id=run_id,
+            page_version_id=page_id,
+            key="zero-reviewed",
+            segments=(_segment(x_min=0.1, transcription="context", kind="SOURCE_CONTEXT"),),
+        )
+        pull = SqlGoodNotesPullRepository(connection)
+        assert pull.accepted_semantic_material(A, run_id) is None
+        assert pull.accepted_semantic_material(B, run_id) is None
+        with pytest.raises(ValueError):
+            GoodNotesOccurrenceReconciler().reconcile(A, run_id, repository=repository)
+        assert _counts(connection, A) == (0, 0)
+        _accepted_evidence(repository, A, run_id)
+        result = GoodNotesOccurrenceReconciler().reconcile(A, run_id, repository=repository)
+        assert result.changes == ()
+        receipt = connection.execute(select(goodnotes_semantic_promotion_receipts)).one()
+        assert len(receipt.bindings) == 1
+        assert "segments" not in receipt.bindings[0]
+        replay = GoodNotesOccurrenceReconciler().reconcile(A, run_id, repository=repository)
+        assert replay.replayed
+        assert pull.record_semantic_promotion(A, run_id) == receipt.receipt_id
+        # A later run may retire a page; historical promotion remains replayable.
+        connection.execute(
+            update(goodnotes_logical_pages)
+            .where(goodnotes_logical_pages.c.principal_id == A)
+            .values(identity_status="RETIRED")
+        )
+        assert repository.accepted_semantic_material(A, run_id, require_promoted=True) is not None
+        # Exact original Review retry remains legal after canonical promotion.
+        _accepted_evidence(repository, A, run_id)
+        proposal = connection.execute(select(goodnotes_semantic_proposals)).one()
+        with pytest.raises(GoodNotesSemanticReviewConflictError):
+            pull.record_semantic_review(
+                GoodNotesSemanticReviewDecisionRecord(
+                    decision_id="gnsrd_" + "b" * 24,
+                    principal_id=A,
+                    run_id=run_id,
+                    proposal_id=proposal.proposal_id,
+                    proposal_sha256=semantic_proposal_sha256(
+                        proposal.page_version_id,
+                        proposal.schema_version,
+                        proposal.analyzer_name,
+                        proposal.analyzer_version,
+                        proposal.payload,
+                    ),
+                    action="reject",
+                    request_fingerprint="a" * 64,
+                    decided_at=LATER,
+                )
+            )
+        assert _counts(connection, A) == (0, 0)
+
+
+def test_full_run_missing_position_never_promotes_subset(engine: Engine) -> None:
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        run_id, page_id, notebook_id, _ = _plant(repository, A, "partial-run")
+        _propose(
+            SqlGoodNotesSemanticRepository(connection),
+            principal_id=A,
+            run_id=run_id,
+            page_version_id=page_id,
+            key="partial-run",
+            segments=(_segment(x_min=0.1, transcription="synthetic"),),
+        )
+        _accepted_evidence(repository, A, run_id)
+        # A second immutable snapshot advertises a page which is not ready yet.
+        repository.store_snapshot(
+            GoodNotesSourceSnapshot(
+                snapshot_id=issue_stable_id("gnsnap", "pending-second"),
+                principal_id=A,
+                notebook_id=notebook_id,
+                source_object_id="obj_bbbbbbbbbbbbbbbbbbbbbbbb",
+                observed_path="pending.pdf",
+                raw_sha256="f" * 64,
+                size_bytes=1,
+                page_count=1,
+                observed_at=WHEN,
+                settled_at=WHEN,
+                run_id=run_id,
+            )
+        )
+        assert repository.accepted_semantic_material(A, run_id) is None
+        with pytest.raises(ValueError):
+            GoodNotesOccurrenceReconciler().reconcile(A, run_id, repository=repository)
+        assert _counts(connection, A) == (0, 0)
+
+
+@pytest.mark.parametrize("promotion_first", [False, True])
+def test_review_and_promotion_serialize_on_same_run_lock(
+    engine: Engine, promotion_first: bool
+) -> None:
+    from sqlalchemy.exc import DBAPIError
+
+    from my_pa.contracts.ports import GoodNotesSemanticReviewConflictError
+
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        run_id, page_id, _, _ = _plant(repository, A, "race")
+        _propose(
+            SqlGoodNotesSemanticRepository(connection),
+            principal_id=A,
+            run_id=run_id,
+            page_version_id=page_id,
+            key="race",
+            segments=(_segment(x_min=0.1, transcription="context", kind="SOURCE_CONTEXT"),),
+        )
+        _accepted_evidence(repository, A, run_id)
+        proposal = connection.execute(select(goodnotes_semantic_proposals)).one()
+        rejection = GoodNotesSemanticReviewDecisionRecord(
+            decision_id="gnsrd_" + "b" * 24,
+            principal_id=A,
+            run_id=run_id,
+            proposal_id=proposal.proposal_id,
+            proposal_sha256=semantic_proposal_sha256(
+                proposal.page_version_id,
+                proposal.schema_version,
+                proposal.analyzer_name,
+                proposal.analyzer_version,
+                proposal.payload,
+            ),
+            action="reject",
+            request_fingerprint="a" * 64,
+            decided_at=LATER,
+        )
+    with engine.connect() as winner:
+        transaction = winner.begin()
+        if promotion_first:
+            GoodNotesOccurrenceReconciler().reconcile(
+                A, run_id, repository=PostgresGoodNotesRepository(winner)
+            )
+        else:
+            SqlGoodNotesPullRepository(winner).record_semantic_review(rejection)
+        with engine.connect() as contender:
+            competing = contender.begin()
+            contender.execute(text("SET LOCAL lock_timeout = '250ms'"))
+            with pytest.raises(DBAPIError, match="lock timeout"):
+                if promotion_first:
+                    SqlGoodNotesPullRepository(contender).record_semantic_review(rejection)
+                else:
+                    GoodNotesOccurrenceReconciler().reconcile(
+                        A, run_id, repository=PostgresGoodNotesRepository(contender)
+                    )
+            competing.rollback()
+        transaction.commit()
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        if promotion_first:
+            with pytest.raises(GoodNotesSemanticReviewConflictError):
+                SqlGoodNotesPullRepository(connection).record_semantic_review(rejection)
+            assert (
+                repository.accepted_semantic_material(A, run_id, require_promoted=True) is not None
+            )
+        else:
+            assert repository.accepted_semantic_material(A, run_id) is None
+            with pytest.raises(ValueError):
+                GoodNotesOccurrenceReconciler().reconcile(A, run_id, repository=repository)
+        assert _counts(connection, A) == (0, 0)
+
+
+def test_corrected_review_payload_is_canonical_and_original_is_immutable(engine: Engine) -> None:
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        run_id, page_id, _, _ = _plant(repository, A, "corrected")
+        _propose(
+            SqlGoodNotesSemanticRepository(connection),
+            principal_id=A,
+            run_id=run_id,
+            page_version_id=page_id,
+            key="corrected",
+            segments=(_segment(x_min=0.1, transcription="original synthetic"),),
+        )
+        _accepted_evidence(repository, A, run_id)
+        proposal = connection.execute(select(goodnotes_semantic_proposals)).one()
+        correction = {
+            "segments": [_segment(x_min=0.1, transcription="corrected synthetic")],
+            "candidate_tags": ["corrected"],
+            "ranked_candidates": [],
+            "confidence": 0.9,
+        }
+        pull = SqlGoodNotesPullRepository(connection)
+        recorded = pull.record_semantic_review(
+            GoodNotesSemanticReviewDecisionRecord(
+                decision_id="gnsrd_bbbbbbbbbbbbbbbbbbbbbbbb",
+                principal_id=A,
+                run_id=run_id,
+                proposal_id=proposal.proposal_id,
+                proposal_sha256=semantic_proposal_sha256(
+                    proposal.page_version_id,
+                    proposal.schema_version,
+                    proposal.analyzer_name,
+                    proposal.analyzer_version,
+                    proposal.payload,
+                ),
+                action="correct_and_accept",
+                request_fingerprint="b" * 64,
+                decided_at=LATER,
+                corrected_payload=correction,
+                corrected_result_sha256=_corrected_result_sha256(correction),
+            )
+        )
+        assert recorded.sequence == 2  # ACCEPT is revisable until canonical promotion.
+        result = GoodNotesOccurrenceReconciler().reconcile(A, run_id, repository=repository)
+        occurrence_id = result.changes[0].occurrence_id
+        assert occurrence_id is not None
+        revision = repository.latest_revision_for_occurrence(A, occurrence_id)
+        assert revision is not None
+        assert revision.transcription == "corrected synthetic"
+        material = repository.accepted_semantic_material(A, run_id, require_promoted=True)
+        assert material is not None
+        assert material[0].payload == correction
+        stored = connection.execute(select(goodnotes_semantic_proposals)).one()
+        assert stored.payload == proposal.payload
+        assert stored.payload_sha256 == proposal.payload_sha256
+
+
+def test_ambiguous_new_page_cannot_promote_even_with_accept(engine: Engine) -> None:
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        run_id, page_id, _, logical_id = _plant(repository, A, "ambiguous-new")
+        _propose(
+            SqlGoodNotesSemanticRepository(connection),
+            principal_id=A,
+            run_id=run_id,
+            page_version_id=page_id,
+            key="ambiguous-new",
+            segments=(_segment(x_min=0.1, transcription="synthetic"),),
+        )
+        _accepted_evidence(repository, A, run_id)
+        connection.execute(
+            update(goodnotes_logical_pages)
+            .where(
+                goodnotes_logical_pages.c.principal_id == A,
+                goodnotes_logical_pages.c.logical_page_id == logical_id,
+            )
+            .values(identity_status="AMBIGUOUS")
+        )
+        assert repository.accepted_semantic_material(A, run_id) is None
+        with pytest.raises(ValueError):
+            GoodNotesOccurrenceReconciler().reconcile(A, run_id, repository=repository)
+        assert _counts(connection, A) == (0, 0)
+
+
+def test_promoted_run_refuses_new_proposal_key_and_preserves_durable_replay(engine: Engine) -> None:
+    from my_pa.contracts.ports import GoodNotesProposalConflictError
+    from my_pa.infrastructure.persistence.tables import goodnotes_semantic_promotion_receipts
+
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        run_id, page_id, _, _ = _plant(repository, A, "late-proposal")
+        _propose(
+            SqlGoodNotesSemanticRepository(connection),
+            principal_id=A,
+            run_id=run_id,
+            page_version_id=page_id,
+            key="initial",
+            segments=(_segment(x_min=0.1, transcription="synthetic"),),
+        )
+        _accepted_evidence(repository, A, run_id)
+        first = GoodNotesOccurrenceReconciler().reconcile(A, run_id, repository=repository)
+        assert first.changes
+        receipt = connection.execute(select(goodnotes_semantic_promotion_receipts)).one()
+    with engine.begin() as connection:
+        semantics = SqlGoodNotesSemanticRepository(connection)
+        with pytest.raises(GoodNotesProposalConflictError, match="already promoted"):
+            _propose(
+                semantics,
+                principal_id=A,
+                run_id=run_id,
+                page_version_id=page_id,
+                key="late-request",
+                segments=(_segment(x_min=0.1, transcription="synthetic"),),
+            )
+        _propose(
+            semantics,
+            principal_id=A,
+            run_id=run_id,
+            page_version_id=page_id,
+            key="initial",
+            segments=(_segment(x_min=0.1, transcription="synthetic"),),
+        )
+        with pytest.raises(GoodNotesProposalConflictError):
+            _propose(
+                semantics,
+                principal_id=A,
+                run_id=run_id,
+                page_version_id=page_id,
+                key="initial",
+                segments=(_segment(x_min=0.1, transcription="changed"),),
+            )
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        replay = GoodNotesOccurrenceReconciler().reconcile(A, run_id, repository=repository)
+        assert replay.replayed
+        assert replay.changes == first.changes
+        assert repository.accepted_semantic_material(A, run_id, require_promoted=True) is not None
+        assert len(connection.execute(select(goodnotes_semantic_proposals)).all()) == 1
+        stored = connection.execute(select(goodnotes_semantic_promotion_receipts)).one()
+        assert stored == receipt
+
+
+@pytest.mark.parametrize("promotion_first", [False, True])
+def test_submit_and_promotion_share_run_lock(engine: Engine, promotion_first: bool) -> None:
+    from sqlalchemy.exc import DBAPIError
+
+    from my_pa.contracts.ports import GoodNotesProposalConflictError, RepositoryFailureError
+    from my_pa.infrastructure.persistence.tables import goodnotes_semantic_promotion_receipts
+
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        run_id, page_id, _, _ = _plant(repository, A, "submit-race")
+        _propose(
+            SqlGoodNotesSemanticRepository(connection),
+            principal_id=A,
+            run_id=run_id,
+            page_version_id=page_id,
+            key="initial",
+            segments=(_segment(x_min=0.1, transcription="synthetic"),),
+        )
+        _accepted_evidence(repository, A, run_id)
+    with engine.connect() as winner:
+        transaction = winner.begin()
+        if promotion_first:
+            GoodNotesOccurrenceReconciler().reconcile(
+                A, run_id, repository=PostgresGoodNotesRepository(winner)
+            )
+        else:
+            _propose(
+                SqlGoodNotesSemanticRepository(winner),
+                principal_id=A,
+                run_id=run_id,
+                page_version_id=page_id,
+                key="racing-request",
+                segments=(_segment(x_min=0.1, transcription="synthetic"),),
+            )
+        with engine.connect() as contender:
+            competing = contender.begin()
+            contender.execute(text("SET LOCAL lock_timeout = '250ms'"))
+            if promotion_first:
+                # Submit maps the DB timeout to its existing content-safe error.
+                with pytest.raises(RepositoryFailureError, match="could not be completed"):
+                    _propose(
+                        SqlGoodNotesSemanticRepository(contender),
+                        principal_id=A,
+                        run_id=run_id,
+                        page_version_id=page_id,
+                        key="racing-request",
+                        segments=(_segment(x_min=0.1, transcription="synthetic"),),
+                    )
+            else:
+                with pytest.raises(DBAPIError, match="lock timeout"):
+                    GoodNotesOccurrenceReconciler().reconcile(
+                        A, run_id, repository=PostgresGoodNotesRepository(contender)
+                    )
+            competing.rollback()
+        transaction.commit()
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        if promotion_first:
+            with pytest.raises(GoodNotesProposalConflictError, match="already promoted"):
+                _propose(
+                    SqlGoodNotesSemanticRepository(connection),
+                    principal_id=A,
+                    run_id=run_id,
+                    page_version_id=page_id,
+                    key="racing-request",
+                    segments=(_segment(x_min=0.1, transcription="synthetic"),),
+                )
+            _propose(
+                SqlGoodNotesSemanticRepository(connection),
+                principal_id=A,
+                run_id=run_id,
+                page_version_id=page_id,
+                key="initial",
+                segments=(_segment(x_min=0.1, transcription="synthetic"),),
+            )
+            assert (
+                GoodNotesOccurrenceReconciler().reconcile(A, run_id, repository=repository).replayed
+            )
+            assert len(connection.execute(select(goodnotes_semantic_proposals)).all()) == 1
+            assert len(connection.execute(select(goodnotes_semantic_promotion_receipts)).all()) == 1
+        else:
+            # Ordinary pre-promotion multiple proposals remain ambiguous, never
+            # allowing a receipt which could later be poisoned by the second row.
+            assert repository.accepted_semantic_material(A, run_id) is None
+            with pytest.raises(ValueError):
+                GoodNotesOccurrenceReconciler().reconcile(A, run_id, repository=repository)
+            assert len(connection.execute(select(goodnotes_semantic_proposals)).all()) == 2
+            assert connection.execute(select(goodnotes_semantic_promotion_receipts)).first() is None

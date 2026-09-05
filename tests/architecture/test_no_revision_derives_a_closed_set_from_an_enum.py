@@ -752,8 +752,9 @@ def test_the_chain_is_readable_and_non_empty() -> None:
     # RULING-M11) is the eighty-ninth, again counted rather than picked
     # (RULING-M2). This is a derived fact about the tree; the deny rule, the
     # allowlist and the freeze ledger are untouched.
-    assert len(revisions) == 91
-    assert len({revision for revision, _ in revisions}) == 91
+    # R8 adds immutable promotion receipts as revision92 on the existing head.
+    assert len(revisions) == 92
+    assert len({revision for revision, _ in revisions}) == 92
     assert {
         "9c6b4a18ed72",
         "1a4c9e77b2d5",

@@ -174,17 +174,18 @@ def _propose(store: MemoryDurableNoteStore, run_id: str) -> None:
         positions = store.page_positions(A, snapshot.snapshot_id)
         break
     assert positions
-    version_id = positions[0].page_version_id
-    assert version_id is not None
-    store.store_semantic_proposal(
-        A,
-        run_id,
-        version_id,
-        "note-unit.v1",
-        "synthetic",
-        "1",
-        {"segments": [_segment()]},
-    )
+    for position in positions:
+        version_id = position.page_version_id
+        assert version_id is not None
+        store.store_semantic_proposal(
+            A,
+            run_id,
+            version_id,
+            "note-unit.v1",
+            "synthetic",
+            "1",
+            {"segments": [_segment()]},
+        )
 
 
 def _propose_source_context(store: MemoryDurableNoteStore, run_id: str) -> None:
@@ -219,36 +220,10 @@ def _promotion_evidence(
     run_id: str,
     disposition: Disposition = Disposition.ACCEPT,
 ) -> tuple[GoodNotesSemanticPromotionEvidence, ...]:
-    return tuple(
-        GoodNotesSemanticPromotionEvidence(
-            principal_id=A,
-            run_id=run_id,
-            proposal_sha256=semantic_proposal_sha256(*proposal),
-            disposition=disposition,
-            corrected_payload=(
-                {
-                    "run_id": run_id,
-                    "page_version_id": proposal[0],
-                    "content_sha256": "0" * 64,
-                    "schema_version": proposal[1],
-                    "analyzer_name": proposal[2],
-                    "analyzer_version": proposal[3],
-                    "candidate_tags": [],
-                    "ranked_candidates": [],
-                    "confidence": None,
-                    **proposal[4],
-                }
-                if disposition is Disposition.CORRECT_AND_ACCEPT
-                else None
-            ),
-            result_sha256=(
-                hashlib.sha256(b"corrected-payload").hexdigest()
-                if disposition is Disposition.CORRECT_AND_ACCEPT
-                else None
-            ),
-        )
-        for proposal in store.semantic_proposals_for_run(A, run_id)
-    )
+    if (A, run_id) not in store._promotions:
+        for proposal in store.semantic_proposals_for_run(A, run_id):
+            store.review_semantic_proposal(A, run_id, proposal[0], disposition)
+    return ()
 
 
 @pytest.mark.parametrize(
@@ -369,7 +344,7 @@ def test_canonical_promotion_requires_evidence_and_accepts_corrected_review(
                 clock=lambda: WHEN,
                 **kwargs,
             )
-        assert "lacks server review evidence" in str(raised.value.__cause__)
+        assert "lacks complete server review evidence" in str(raised.value.__cause__)
         assert store._notes == {}
     else:
         result = _orchestrator().run(
@@ -397,7 +372,13 @@ def test_promotion_evidence_is_context_bound_and_unique(mutation: str) -> None:
         clock=lambda: WHEN,
     )
     _propose(store, first.run.run_id)
-    item = _promotion_evidence(store, first.run.run_id)[0]
+    proposal = store.semantic_proposals_for_run(A, first.run.run_id)[0]
+    item = GoodNotesSemanticPromotionEvidence(
+        principal_id=A,
+        run_id=first.run.run_id,
+        proposal_sha256=semantic_proposal_sha256(*proposal),
+        disposition=Disposition.ACCEPT,
+    )
     if mutation == "principal":
         evidence = (replace(item, principal_id="prn_bbbbbbbbbbbbbbbbbbbbbbbb"),)
     elif mutation == "run":
@@ -1225,3 +1206,160 @@ def test_t17_completed_reconcile_without_proposal_fails_closed() -> None:
         _run(store, pdf, "t17-missing-proposal", PREVIEW)
     assert store.delivery_receipts_for_run(A, first.run.run_id) == ()
     assert store._attempts == []
+
+
+def test_fabricated_accept_with_exact_digest_cannot_authorize_writes() -> None:
+    store = MemoryDurableNoteStore()
+    request = _request(vector_pdf((COVER,)), "forged-exact-accept")
+    first = _orchestrator().run(
+        request,
+        renderer=production_page_renderer(),
+        splitter=split_admitted_pdf,
+        store=store,
+        clock=lambda: WHEN,
+    )
+    _propose(store, first.run.run_id)
+    proposal = store.semantic_proposals_for_run(A, first.run.run_id)[0]
+    forged = GoodNotesSemanticPromotionEvidence(
+        A, first.run.run_id, semantic_proposal_sha256(*proposal), Disposition.ACCEPT
+    )
+    with pytest.raises(DurableNoteStageError, match="stage failed"):
+        _orchestrator().run(
+            request,
+            renderer=production_page_renderer(),
+            splitter=split_admitted_pdf,
+            store=store,
+            clock=lambda: WHEN,
+            promotion_evidence=(forged,),
+        )
+    assert not store._notes and not store._occurrences and not store._revisions
+    assert not store._changes and not store._promotions
+
+
+def test_corrected_review_controls_canonical_revision_and_preview() -> None:
+    from copy import deepcopy
+
+    store = MemoryDurableNoteStore()
+    request = _request(vector_pdf((COVER,)), "corrected-continuity")
+    first = _orchestrator().run(
+        request,
+        renderer=production_page_renderer(),
+        splitter=split_admitted_pdf,
+        store=store,
+        clock=lambda: WHEN,
+    )
+    _propose(store, first.run.run_id)
+    proposal = store.semantic_proposals_for_run(A, first.run.run_id)[0]
+    original = deepcopy(proposal[4])
+    corrected = {
+        "segments": [
+            {**_segment(), "transcription": "accepted corrected note", "primary_class": "PROJECT"}
+        ],
+        "candidate_tags": [],
+        "ranked_candidates": [],
+        "confidence": None,
+    }
+    store.review_semantic_proposal(
+        A, first.run.run_id, proposal[0], Disposition.CORRECT_AND_ACCEPT, corrected
+    )
+    result = _orchestrator().run(
+        request,
+        renderer=production_page_renderer(),
+        splitter=split_admitted_pdf,
+        store=store,
+        clock=lambda: WHEN,
+    )
+    assert result.run.status is GoodNotesIngestionStatus.SUCCEEDED
+    assert store.semantic_proposals_for_run(A, first.run.run_id)[0][4] == original
+    assert {r.transcription for r in store._revisions.values()} == {"accepted corrected note"}
+    assert {note.primary_class.value for note in store._notes.values()} == {"PROJECT"}
+    receipt = store.delivery_receipts_for_run(A, first.run.run_id)[0]
+    assert receipt.body is not None
+    assert "accepted corrected note" in receipt.body
+    assert "synthetic note" not in receipt.body
+    with pytest.raises(ValueError, match="terminal"):
+        store.review_semantic_proposal(A, first.run.run_id, proposal[0], Disposition.REJECT)
+
+
+def test_partial_review_cannot_reconcile_or_retire_existing_occurrences() -> None:
+    from my_pa.application.goodnotes_occurrences import GoodNotesOccurrenceReconciler
+
+    store = MemoryDurableNoteStore()
+    request = _request(vector_pdf((COVER, BODY)), "partial-review")
+    first = _orchestrator().run(
+        request,
+        renderer=production_page_renderer(),
+        splitter=split_admitted_pdf,
+        store=store,
+        clock=lambda: WHEN,
+    )
+    _propose(store, first.run.run_id)
+    proposals = store.semantic_proposals_for_run(A, first.run.run_id)
+    store.review_semantic_proposal(A, first.run.run_id, proposals[0][0])
+    with pytest.raises(ValueError, match="complete server review"):
+        GoodNotesOccurrenceReconciler().reconcile(
+            A, first.run.run_id, repository=store, clock=lambda: WHEN
+        )
+    assert not store._notes and not store._changes and not store._promotions
+    store.review_semantic_proposal(A, first.run.run_id, proposals[1][0])
+    result = GoodNotesOccurrenceReconciler().reconcile(
+        A, first.run.run_id, repository=store, clock=lambda: WHEN
+    )
+    assert len(result.changes) == 2
+    before = dict(store._occurrences)
+    del store._reviews[(A, first.run.run_id, proposals[1][0])]
+    with pytest.raises(ValueError, match="complete server review"):
+        GoodNotesOccurrenceReconciler().reconcile(
+            A, first.run.run_id, repository=store, clock=lambda: WHEN
+        )
+    assert store._occurrences == before
+
+
+def test_zero_output_receipt_replay_revalidates_review_binding() -> None:
+    from my_pa.application.goodnotes_occurrences import GoodNotesOccurrenceReconciler
+
+    store = MemoryDurableNoteStore()
+    request = _request(vector_pdf((COVER,)), "zero-binding")
+    first = _orchestrator().run(
+        request,
+        renderer=production_page_renderer(),
+        splitter=split_admitted_pdf,
+        store=store,
+        clock=lambda: WHEN,
+    )
+    _propose_source_context(store, first.run.run_id)
+    _promotion_evidence(store, first.run.run_id)
+    reconciler = GoodNotesOccurrenceReconciler()
+    first_result = reconciler.reconcile(A, first.run.run_id, repository=store, clock=lambda: WHEN)
+    assert not first_result.changes and not first_result.replayed
+    replay = reconciler.reconcile(A, first.run.run_id, repository=store, clock=lambda: WHEN)
+    assert replay.replayed and not replay.changes
+    key = next(iter(store._reviews))
+    store._reviews[key] = replace(store._reviews[key], sequence=99)
+    with pytest.raises(ValueError, match="binding changed"):
+        reconciler.reconcile(A, first.run.run_id, repository=store, clock=lambda: WHEN)
+    with pytest.raises(ValueError, match="binding changed"):
+        _orchestrator()._delivery.deliver(A, first.run.run_id, "operator-local", repository=store)
+
+
+def test_existing_changes_without_promotion_receipt_cannot_replay() -> None:
+    from my_pa.application.goodnotes_occurrences import GoodNotesOccurrenceReconciler
+
+    store = MemoryDurableNoteStore()
+    request = _request(vector_pdf((COVER,)), "missing-promotion-receipt")
+    first = _orchestrator().run(
+        request,
+        renderer=production_page_renderer(),
+        splitter=split_admitted_pdf,
+        store=store,
+        clock=lambda: WHEN,
+    )
+    _propose(store, first.run.run_id)
+    _promotion_evidence(store, first.run.run_id)
+    reconciler = GoodNotesOccurrenceReconciler()
+    reconciler.reconcile(A, first.run.run_id, repository=store, clock=lambda: WHEN)
+    before = dict(store._changes)
+    store._promotions.clear()
+    with pytest.raises(ValueError, match="no verified promotion receipt"):
+        reconciler.reconcile(A, first.run.run_id, repository=store, clock=lambda: WHEN)
+    assert store._changes == before

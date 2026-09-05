@@ -68,6 +68,7 @@ from my_pa.infrastructure.persistence.principal_scope import (
 from my_pa.infrastructure.persistence.tables import (
     goodnotes_ingestion_run_stages,
     goodnotes_ingestion_runs,
+    goodnotes_logical_pages,
     goodnotes_page_positions,
     goodnotes_page_rasters,
     goodnotes_page_versions,
@@ -75,6 +76,7 @@ from my_pa.infrastructure.persistence.tables import (
     goodnotes_pull_claims,
     goodnotes_pull_completions,
     goodnotes_pull_sessions,
+    goodnotes_semantic_promotion_receipts,
     goodnotes_semantic_proposals,
     goodnotes_semantic_review_decisions,
     goodnotes_source_snapshots,
@@ -183,6 +185,255 @@ class SqlGoodNotesPullRepository:
     def __init__(self, connection: Connection, *, clock: Callable[[], datetime] = utc_now) -> None:
         self._connection = connection
         self._clock = clock
+
+    def _lock_run(self, principal_id: str, run_id: str) -> bool:
+        return (
+            self._connection.execute(
+                select(goodnotes_ingestion_runs.c.run_id)
+                .where(
+                    _mine(goodnotes_ingestion_runs, principal_id),
+                    goodnotes_ingestion_runs.c.run_id == run_id,
+                )
+                .with_for_update()
+            ).first()
+            is not None
+        )
+
+    def _accepted_run(
+        self, principal_id: str, run_id: str
+    ) -> tuple[tuple[GoodNotesSemanticProposalMaterial, ...], list[dict[str, object]]] | None:
+        """Lock the complete immutable page set before consulting Review authority."""
+        if not self._lock_run(principal_id, run_id):
+            return None
+        promoted = (
+            self._connection.execute(
+                select(goodnotes_semantic_promotion_receipts.c.receipt_id).where(
+                    _mine(goodnotes_semantic_promotion_receipts, principal_id),
+                    goodnotes_semantic_promotion_receipts.c.run_id == run_id,
+                )
+            ).first()
+            is not None
+        )
+        ready = self._connection.execute(
+            select(goodnotes_ingestion_run_stages.c.status).where(
+                _mine(goodnotes_ingestion_run_stages, principal_id),
+                goodnotes_ingestion_run_stages.c.run_id == run_id,
+                goodnotes_ingestion_run_stages.c.stage == "CONTENT_READY",
+            )
+        ).scalar_one_or_none()
+        if ready != "SUCCEEDED":
+            return None
+        snapshots = self._connection.execute(
+            select(goodnotes_source_snapshots)
+            .where(
+                _mine(goodnotes_source_snapshots, principal_id),
+                goodnotes_source_snapshots.c.run_id == run_id,
+            )
+            .order_by(goodnotes_source_snapshots.c.snapshot_id)
+        ).all()
+        if not snapshots:
+            return None
+        expected: list[dict[str, object]] = []
+        for snapshot in snapshots:
+            positions = self._connection.execute(
+                select(goodnotes_page_positions)
+                .where(
+                    _mine(goodnotes_page_positions, principal_id),
+                    goodnotes_page_positions.c.snapshot_id == snapshot.snapshot_id,
+                )
+                .order_by(goodnotes_page_positions.c.page_number)
+            ).all()
+            if [p.page_number for p in positions] != list(range(1, snapshot.page_count + 1)):
+                return None
+            for position in positions:
+                # Lineage distinguishes new ACTIVE pages from AMBIGUOUS pages
+                # using logical identity_status: both have UNRESOLVED matching
+                # method (goodnotes_lineage.py match_logical_pages). A new page
+                # has no prior version. Reject unresolved reuse here and require
+                # ACTIVE same-notebook identity plus exact raster proof below.
+                if position.page_version_id is None or (
+                    position.match_method == "UNRESOLVED"
+                    and position.prior_page_version_id is not None
+                ):
+                    return None
+                version = self._connection.execute(
+                    select(goodnotes_page_versions).where(
+                        _mine(goodnotes_page_versions, principal_id),
+                        goodnotes_page_versions.c.page_version_id == position.page_version_id,
+                    )
+                ).one_or_none()
+                raster = self._connection.execute(
+                    select(goodnotes_page_rasters).where(
+                        _mine(goodnotes_page_rasters, principal_id),
+                        goodnotes_page_rasters.c.page_version_id == position.page_version_id,
+                        goodnotes_page_rasters.c.run_id == run_id,
+                    )
+                ).one_or_none()
+                logical_status = self._connection.execute(
+                    select(goodnotes_logical_pages.c.identity_status).where(
+                        _mine(goodnotes_logical_pages, principal_id),
+                        goodnotes_logical_pages.c.logical_page_id == position.logical_page_id,
+                        goodnotes_logical_pages.c.notebook_id == snapshot.notebook_id,
+                    )
+                ).scalar_one_or_none()
+                if (
+                    logical_status is None
+                    or (not promoted and logical_status != "ACTIVE")
+                    or version is None
+                    or raster is None
+                    or version.logical_page_id != position.logical_page_id
+                    or raster.exact_render_sha256 != version.exact_render_sha256
+                    or raster.png_sha256 != hashlib.sha256(bytes(raster.png_bytes)).hexdigest()
+                    or raster.renderer_name != version.renderer_name
+                    or raster.renderer_version != version.renderer_version
+                    or raster.render_profile_version != version.render_profile_version
+                ):
+                    return None
+                expected.append(
+                    {
+                        "snapshot_id": str(snapshot.snapshot_id),
+                        "page_number": int(position.page_number),
+                        "logical_page_id": str(position.logical_page_id),
+                        "page_version_id": str(position.page_version_id),
+                        "content_sha256": str(version.content_sha256),
+                        "png_sha256": str(raster.png_sha256),
+                    }
+                )
+        if len(expected) > 10000:
+            raise ValueError("GoodNotes promotion page set exceeds its bound")
+        proposals = self._connection.execute(
+            select(goodnotes_semantic_proposals)
+            .where(
+                _mine(goodnotes_semantic_proposals, principal_id),
+                goodnotes_semantic_proposals.c.run_id == run_id,
+            )
+            .order_by(goodnotes_semantic_proposals.c.proposal_id)
+            .with_for_update()
+        ).all()
+        if len(proposals) != len(expected):
+            return None
+        materials: list[GoodNotesSemanticProposalMaterial] = []
+        bindings: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for page in expected:
+            matches = [
+                p
+                for p in proposals
+                if p.page_version_id == page["page_version_id"]
+                and p.content_sha256 == page["content_sha256"]
+            ]
+            if len(matches) != 1 or str(matches[0].proposal_id) in seen:
+                return None
+            proposal = matches[0]
+            seen.add(str(proposal.proposal_id))
+            payload = _canonical_payload(proposal.payload)
+            # fingerprint_proposal hashes exactly the four semantic fields for
+            # payload_sha256; its envelope has a separate complete proposal digest.
+            # Do not accept multiple digest formats. Review below binds every byte
+            # of the original payload, including any envelope metadata.
+            if _corrected_result_sha256(payload) != proposal.payload_sha256:
+                raise ValueError("GoodNotes original proposal digest mismatch")
+            original_digest = _semantic_proposal_sha256(
+                str(proposal.page_version_id),
+                str(proposal.schema_version),
+                str(proposal.analyzer_name),
+                str(proposal.analyzer_version),
+                payload,
+            )
+            decision = self._connection.execute(
+                select(goodnotes_semantic_review_decisions)
+                .where(
+                    _mine(goodnotes_semantic_review_decisions, principal_id),
+                    goodnotes_semantic_review_decisions.c.run_id == run_id,
+                    goodnotes_semantic_review_decisions.c.proposal_id == proposal.proposal_id,
+                )
+                .order_by(goodnotes_semantic_review_decisions.c.sequence.desc())
+                .limit(1)
+            ).one_or_none()
+            if decision is None or decision.action not in {
+                Disposition.ACCEPT.value,
+                Disposition.CORRECT_AND_ACCEPT.value,
+            }:
+                return None
+            if decision.proposal_sha256 != original_digest:
+                raise ValueError("GoodNotes Review proposal binding mismatch")
+            result_digest = str(proposal.payload_sha256)
+            if decision.action == Disposition.CORRECT_AND_ACCEPT.value:
+                payload = _canonical_payload(decision.corrected_payload)
+                result_digest = _corrected_result_sha256(payload)
+                if result_digest != decision.corrected_result_sha256:
+                    raise ValueError("GoodNotes accepted result digest mismatch")
+            materials.append(
+                GoodNotesSemanticProposalMaterial(
+                    proposal_id=str(proposal.proposal_id),
+                    run_id=run_id,
+                    page_version_id=str(proposal.page_version_id),
+                    content_sha256=str(proposal.content_sha256),
+                    schema_version=str(proposal.schema_version),
+                    analyzer_name=str(proposal.analyzer_name),
+                    analyzer_version=str(proposal.analyzer_version),
+                    payload=payload,
+                )
+            )
+            bindings.append(
+                {
+                    **page,
+                    "proposal_id": str(proposal.proposal_id),
+                    "proposal_sha256": original_digest,
+                    "decision_id": str(decision.decision_id),
+                    "sequence": int(decision.sequence),
+                    "action": str(decision.action),
+                    "result_sha256": result_digest,
+                }
+            )
+        return tuple(materials), bindings
+
+    def accepted_semantic_material(
+        self, principal_id: str, run_id: str, *, require_promoted: bool = False
+    ) -> tuple[GoodNotesSemanticProposalMaterial, ...] | None:
+        accepted = self._accepted_run(principal_id, run_id)
+        receipt = self._connection.execute(
+            select(goodnotes_semantic_promotion_receipts).where(
+                _mine(goodnotes_semantic_promotion_receipts, principal_id),
+                goodnotes_semantic_promotion_receipts.c.run_id == run_id,
+            )
+        ).one_or_none()
+        if receipt is not None and (
+            accepted is None
+            or receipt.binding_sha256 != _digest([principal_id, run_id, accepted[1]])
+            or receipt.bindings != accepted[1]
+        ):
+            raise ValueError("GoodNotes promotion receipt binding mismatch")
+        if accepted is None or (require_promoted and receipt is None):
+            return None
+        return accepted[0]
+
+    def record_semantic_promotion(self, principal_id: str, run_id: str) -> str:
+        accepted = self._accepted_run(principal_id, run_id)
+        if accepted is None:
+            raise ValueError("GoodNotes full run is not eligible for promotion")
+        # Check existing immutable authority even on zero-change replays.
+        self.accepted_semantic_material(principal_id, run_id)
+        binding_digest = _digest([principal_id, run_id, accepted[1]])
+        receipt_id = "gnspr_" + binding_digest[:24]
+        self._connection.execute(
+            pg_insert(goodnotes_semantic_promotion_receipts)
+            .values(
+                _bound(
+                    goodnotes_semantic_promotion_receipts,
+                    principal_id,
+                    {
+                        "run_id": run_id,
+                        "receipt_id": receipt_id,
+                        "binding_sha256": binding_digest,
+                        "bindings": accepted[1],
+                        "promoted_at": self._clock(),
+                    },
+                )
+            )
+            .on_conflict_do_nothing()
+        )
+        return receipt_id
 
     def work_states(self, principal_id: str) -> tuple[PullWorkState, ...]:
         return self._work_states(principal_id)
@@ -547,6 +798,9 @@ class SqlGoodNotesPullRepository:
         context_id: str,
         admissions: tuple[PullCompletionAdmission, ...],
     ) -> tuple[PullCompletionReceipt, ...]:
+        for run_id in sorted({item.completion.run_id for item in admissions}):
+            if not self._lock_run(principal_id, run_id):
+                raise PullRepositoryConflictError
         prior: list[PullCompletionReceipt] = []
         states = {_work_key(state.work): state for state in self.work_states(principal_id)}
         for admission in admissions:
@@ -856,6 +1110,8 @@ class SqlGoodNotesPullRepository:
             if _corrected_result_sha256(canonical_correction) != decision.corrected_result_sha256:
                 raise SemanticReviewConflictError
             decision = replace(decision, corrected_payload=canonical_correction)
+        if not self._lock_run(decision.principal_id, decision.run_id):
+            raise SemanticReviewConflictError
         proposal = self._connection.execute(
             select(goodnotes_semantic_proposals)
             .where(
@@ -904,6 +1160,16 @@ class SqlGoodNotesPullRepository:
                 sequence=int(existing.sequence),
                 replayed=True,
             )
+        if (
+            self._connection.execute(
+                select(goodnotes_semantic_promotion_receipts.c.receipt_id).where(
+                    _mine(goodnotes_semantic_promotion_receipts, decision.principal_id),
+                    goodnotes_semantic_promotion_receipts.c.run_id == decision.run_id,
+                )
+            ).first()
+            is not None
+        ):
+            raise SemanticReviewConflictError
         review_partition = _mine(goodnotes_semantic_review_decisions, decision.principal_id)
         current_version = int(
             self._connection.scalar(

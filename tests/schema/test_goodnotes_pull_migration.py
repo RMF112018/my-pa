@@ -36,7 +36,8 @@ def _config(buffer: io.StringIO | None = None) -> Config:
 
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [REVISION]
+    assert len(script.get_heads()) == 1
+    assert REVISION in {item.revision for item in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 
 
@@ -64,7 +65,7 @@ def test_offline_upgrade_emits_all_ledgers_constraints_and_immutability(
 ) -> None:
     monkeypatch.setenv("MY_PA_DATABASE_URL", "postgresql+psycopg://localhost/my_pa")
     output = io.StringIO()
-    command.upgrade(_config(output), "head", sql=True)
+    command.upgrade(_config(output), REVISION, sql=True)
     sql = output.getvalue()
     for table in TABLES:
         assert f"CREATE TABLE knowledge.{table}" in sql
@@ -87,7 +88,7 @@ def test_every_ledger_accepts_the_canonical_local_principal_shape(
 ) -> None:
     monkeypatch.setenv("MY_PA_DATABASE_URL", "postgresql+psycopg://localhost/my_pa")
     output = io.StringIO()
-    command.upgrade(_config(output), "head", sql=True)
+    command.upgrade(_config(output), REVISION, sql=True)
     sql = output.getvalue()
     goodnotes_pull_sql = sql[sql.index("CREATE TABLE knowledge.goodnotes_pull_sessions") :]
     canonical_pattern = r"prn_[A-Za-z0-9]{8,64}"

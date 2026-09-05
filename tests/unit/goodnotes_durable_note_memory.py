@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from copy import deepcopy
+from dataclasses import dataclass
+
+from my_pa.application.goodnotes_occurrences import semantic_proposal_sha256
+from my_pa.contracts.ports import GoodNotesSemanticProposalMaterial
+from my_pa.domain.capture.review import Disposition
 from my_pa.domain.goodnotes.models import (
     GoodNotesDeliveryAttempt,
     GoodNotesDeliveryReceipt,
@@ -15,13 +23,26 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesRunNoteChange,
     GoodNotesRunStage,
     GoodNotesSourceSnapshot,
+    issue_stable_id,
 )
 from tests.unit.goodnotes_lineage_memory import MemoryLineageRepository
+
+
+@dataclass(frozen=True)
+class MemorySemanticReview:
+    proposal_id: str
+    original_digest: str
+    decision_id: str
+    sequence: int
+    disposition: Disposition
+    payload: dict[str, object]
 
 
 class MemoryDurableNoteStore(MemoryLineageRepository):
     def __init__(self) -> None:
         super().__init__()
+        self._reviews: dict[tuple[str, str, str], MemorySemanticReview] = {}
+        self._promotions: dict[tuple[str, str], str] = {}
         self._stages: dict[tuple[str, str, str], GoodNotesRunStage] = {}
         self._rasters: dict[tuple[str, str], GoodNotesPageRaster] = {}
         self._proposals: list[tuple[str, str, str, str, str, str, dict[str, object]]] = []
@@ -95,6 +116,127 @@ class MemoryDurableNoteStore(MemoryLineageRepository):
         return tuple(
             row[2:] for row in self._proposals if row[0] == principal_id and row[1] == run_id
         )
+
+    def review_semantic_proposal(
+        self,
+        principal_id: str,
+        run_id: str,
+        page_version_id: str,
+        disposition: Disposition = Disposition.ACCEPT,
+        corrected_payload: dict[str, object] | None = None,
+    ) -> None:
+        """Explicit synthetic Review ledger append, independent of caller evidence."""
+        if (principal_id, run_id) in self._promotions:
+            raise ValueError("promoted Review is terminal")
+        proposal = next(
+            row
+            for row in self.semantic_proposals_for_run(principal_id, run_id)
+            if row[0] == page_version_id
+        )
+        key = (principal_id, run_id, page_version_id)
+        prior = self._reviews.get(key)
+        sequence = 1 if prior is None else prior.sequence + 1
+        digest = semantic_proposal_sha256(*proposal)
+        self._reviews[key] = MemorySemanticReview(
+            issue_stable_id("gnrun", principal_id, run_id, page_version_id),
+            digest,
+            issue_stable_id("gnrun", principal_id, run_id, page_version_id, str(sequence)),
+            sequence,
+            disposition,
+            deepcopy(proposal[4] if corrected_payload is None else corrected_payload),
+        )
+
+    def accepted_semantic_material(
+        self, principal_id: str, run_id: str, *, require_promoted: bool = False
+    ) -> tuple[GoodNotesSemanticProposalMaterial, ...] | None:
+        proposals = self.semantic_proposals_for_run(principal_id, run_id)
+        snapshots = self.snapshots_for_run(principal_id, run_id)
+        positions = tuple(
+            position
+            for snapshot in snapshots
+            for position in self.page_positions(principal_id, snapshot.snapshot_id)
+        )
+        expected = {position.page_version_id for position in positions}
+        if (
+            not snapshots
+            or not positions
+            or None in expected
+            or len(proposals) != len(expected)
+            or {row[0] for row in proposals} != expected
+        ):
+            return None
+        material = []
+        bindings = []
+        for proposal in sorted(proposals, key=lambda row: row[0]):
+            page_id = proposal[0]
+            raster = self.page_raster(principal_id, page_id)
+            if raster is None or raster.run_id != run_id:
+                return None
+            review = self._reviews.get((principal_id, run_id, page_id))
+            if review is None:
+                return None
+            if review.original_digest != semantic_proposal_sha256(*proposal):
+                raise ValueError("semantic proposal digest changed")
+            if review.disposition not in {Disposition.ACCEPT, Disposition.CORRECT_AND_ACCEPT}:
+                raise ValueError("semantic proposal is not eligible for promotion")
+            accepted_digest = semantic_proposal_sha256(*proposal[:4], review.payload)
+            bindings.append(
+                (
+                    page_id,
+                    review.proposal_id,
+                    review.original_digest,
+                    review.decision_id,
+                    review.sequence,
+                    accepted_digest,
+                )
+            )
+            material.append(
+                GoodNotesSemanticProposalMaterial(
+                    proposal_id=review.proposal_id,
+                    run_id=run_id,
+                    page_version_id=page_id,
+                    content_sha256=raster.png_sha256,
+                    schema_version=proposal[1],
+                    analyzer_name=proposal[2],
+                    analyzer_version=proposal[3],
+                    payload=deepcopy(review.payload),
+                )
+            )
+        binding = hashlib.sha256(json.dumps(bindings, sort_keys=True).encode()).hexdigest()
+        held = self._promotions.get((principal_id, run_id))
+        if held is not None and held != binding:
+            raise ValueError("semantic promotion binding changed")
+        if require_promoted and held is None:
+            return None
+        return tuple(material)
+
+    def record_semantic_promotion(self, principal_id: str, run_id: str) -> str:
+        material = self.accepted_semantic_material(principal_id, run_id)
+        if material is None:
+            raise ValueError("semantic run lacks complete server review evidence")
+        bindings = []
+        for item in material:
+            review = self._reviews[(principal_id, run_id, item.page_version_id)]
+            bindings.append(
+                (
+                    item.page_version_id,
+                    review.proposal_id,
+                    review.original_digest,
+                    review.decision_id,
+                    review.sequence,
+                    semantic_proposal_sha256(
+                        item.page_version_id,
+                        item.schema_version,
+                        item.analyzer_name,
+                        item.analyzer_version,
+                        item.payload,
+                    ),
+                )
+            )
+        self._promotions[(principal_id, run_id)] = hashlib.sha256(
+            json.dumps(bindings, sort_keys=True).encode()
+        ).hexdigest()
+        return issue_stable_id("gnrun", principal_id, run_id)
 
     def occurrences_for_logical_pages(
         self, principal_id: str, logical_page_ids: tuple[str, ...]

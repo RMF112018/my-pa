@@ -1112,6 +1112,7 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             "goodnotes_pull_assignments_are_immutable",
             "goodnotes_pull_completions_are_immutable",
             "goodnotes_semantic_review_decisions_are_immutable",
+            "goodnotes_semantic_promotion_receipts_are_immutable",
         }
         for name in ("a_proposal_cites_at_least_one_span", "a_span_link_leaves_its_proposal_cited"):
             assert "CONSTRAINT TRIGGER" in triggers[name]

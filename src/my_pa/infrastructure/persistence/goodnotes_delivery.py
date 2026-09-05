@@ -6,6 +6,7 @@ from sqlalchemy import ColumnElement, Table, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
 
+from my_pa.contracts.ports import GoodNotesSemanticProposalMaterial
 from my_pa.domain.goodnotes.models import (
     GoodNotesDeliveryAttempt,
     GoodNotesDeliveryAttemptState,
@@ -47,6 +48,13 @@ class PostgresGoodNotesDeliveryRepository:
     def __init__(self, connection: Connection) -> None:
         self.connection = connection
         self._notes = PostgresGoodNotesRepository(connection)
+
+    def accepted_semantic_material(
+        self, principal_id: str, run_id: str, *, require_promoted: bool = False
+    ) -> tuple[GoodNotesSemanticProposalMaterial, ...] | None:
+        return self._notes.accepted_semantic_material(
+            principal_id, run_id, require_promoted=require_promoted
+        )
 
     def run(self, principal_id: str, run_id: str) -> GoodNotesIngestionRun | None:
         return self._notes.run(principal_id, run_id)

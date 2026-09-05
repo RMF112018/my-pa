@@ -705,6 +705,7 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # value, and threads it into lineage, occurrence, and preview stores.
     # Continuation identity/consistency checks re-read the stored run partition
     # and the request Principal before any FAILED→RUNNING mutation.
+    # R8 additionally scopes the durable accepted-material lookup to this request owner.
     "application/goodnotes_orchestrator.py": (
         ("request", "principal_id"),
         ("request", "principal_id"),
@@ -724,6 +725,8 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("run", "principal_id"),
         ("run", "principal_id"),
         ("run", "principal_id"),
         ("run", "principal_id"),
@@ -901,7 +904,10 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # The request reads belong to the authenticated unified Review capability;
     # the decision/work/row/value reads recheck server-composed or persisted
     # records before admitting a claim, replay, or review-ledger write.
+    # R8 also scopes the run lock and terminal promotion-receipt lookup to that owner.
     "infrastructure/persistence/goodnotes_pull.py": (
+        ("decision", "principal_id"),
+        ("decision", "principal_id"),
         ("decision", "principal_id"),
         ("decision", "principal_id"),
         ("decision", "principal_id"),

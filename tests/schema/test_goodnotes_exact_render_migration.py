@@ -56,8 +56,9 @@ PHASE_A_REVISION: Final = "823e23b6cc63"
 PHASE_B_REVISION: Final = "b64e29a0f7c1"
 PHASE_B_HEAD: Final = "3d07af4dc513"
 GSQS_REVISION: Final = "c4b0a1d9e827"
-#: The chain's current head is `6a2f9d1c4b80` (GoodNotes pull/review), serialized
-#: as the direct child of `c3f8a1d07e94`. That graph-vocabulary parent is additive on
+#: The chain's current head is `a4d8e31b2c90` (R8 promotion receipt), additive
+#: on `6a2f9d1c4b80` (GoodNotes pull/review), whose parent is `c3f8a1d07e94`.
+#: That graph-vocabulary parent is additive on
 #: `b8e4d1a6c073`, whose RI-ENT-WP-12 migration backfills one
 #: `display`-typed `entity_names` row per active `entities` row -- `display_value`
 #: from `entities.display_name`, `normalized_value` from `entities.canonical_name`,
@@ -76,7 +77,7 @@ GSQS_REVISION: Final = "c4b0a1d9e827"
 #: renames the seeded `entity_relationship_types` row `design_coordinates_with` to
 #: `design_coordination_with`; that in turn stacked on `1cda4d536268` (RI-ENT-WP-07).
 #: Written out rather than derived so chain drift fails here rather than passing.
-HEAD_REVISION: Final = "6a2f9d1c4b80"
+HEAD_REVISION: Final = "a4d8e31b2c90"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_c3e9a7f1b204_add_goodnotes_exact_render_digest.py"
 )
@@ -120,8 +121,9 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert len(list(script.get_heads())) == 1
     assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PRIOR
-    # 91 migration files: 90 through `c3f8a1d07e94` as described below, plus
-    # `6a2f9d1c4b80` (GoodNotes pull/review) as its direct child. The first 85
+    # 92 migration files: `a4d8e31b2c90` (R8 promotion receipt) extends
+    # the 91-file predecessor chain ending at `6a2f9d1c4b80` (pull/review),
+    # whose parent is `c3f8a1d07e94`. The first 85
     # run through `1cda4d536268` (RI-ENT-WP-07), plus
     # `c99cd8ed8d1c` (commit `37ead78`, RI-ENT-WP-08's blocker-clearing pass),
     # which renames the seeded entity_relationship_types row
@@ -138,7 +140,8 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     # wrote 87 here from a shared baseline of 86, the base merge counted 88,
     # and RI-ENT-WP-12's integration counted 89 from the merged tree rather
     # than adding one to either side (RULING-M2).
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 91
+    # R8 adds one receipt migration on the previous 91-revision chain.
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 92
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

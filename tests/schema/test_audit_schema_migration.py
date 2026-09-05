@@ -294,6 +294,8 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "goodnotes_pull_assignments",
         "goodnotes_pull_completions",
         "goodnotes_semantic_review_decisions",
+        # R8 receipt is also removed when downgrading from the current head.
+        "goodnotes_semantic_promotion_receipts",
     }
 )
 

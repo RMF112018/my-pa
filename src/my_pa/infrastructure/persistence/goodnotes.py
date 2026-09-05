@@ -24,7 +24,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
 
-from my_pa.contracts.ports import ReviewDecisionRequest
+from my_pa.contracts.ports import GoodNotesSemanticProposalMaterial, ReviewDecisionRequest
 from my_pa.domain.capture.proposal import ProposalState, RiskClass
 from my_pa.domain.capture.review import (
     Disposition,
@@ -1446,6 +1446,22 @@ class PostgresGoodNotesRepository:
             .all()
         )
         return tuple(_snapshot(row) for row in rows)
+
+    def accepted_semantic_material(
+        self, principal_id: str, run_id: str, *, require_promoted: bool = False
+    ) -> tuple[GoodNotesSemanticProposalMaterial, ...] | None:
+        from my_pa.infrastructure.persistence.goodnotes_pull import SqlGoodNotesPullRepository
+
+        return SqlGoodNotesPullRepository(self.connection).accepted_semantic_material(
+            principal_id, run_id, require_promoted=require_promoted
+        )
+
+    def record_semantic_promotion(self, principal_id: str, run_id: str) -> str:
+        from my_pa.infrastructure.persistence.goodnotes_pull import SqlGoodNotesPullRepository
+
+        return SqlGoodNotesPullRepository(self.connection).record_semantic_promotion(
+            principal_id, run_id
+        )
 
     def semantic_proposals_for_run(
         self, principal_id: str, run_id: str

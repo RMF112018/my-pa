@@ -5,12 +5,14 @@ from __future__ import annotations
 import hashlib
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from my_pa.application.goodnotes_occurrences import (
     GoodNotesOccurrenceReconciler,
     GoodNotesSemanticPromotionEvidence,
-    semantic_proposal_sha256,
+    _note_units,
+    match_occurrences,
 )
-from my_pa.domain.capture.review import Disposition
 from my_pa.domain.goodnotes.models import (
     GoodNotesIdentityStatus,
     GoodNotesIngestionRun,
@@ -283,18 +285,13 @@ def _segment(
 def _accepted_evidence(
     store: MemoryDurableNoteStore, run_id: str
 ) -> tuple[GoodNotesSemanticPromotionEvidence, ...]:
-    return tuple(
-        GoodNotesSemanticPromotionEvidence(
-            principal_id=A,
-            run_id=run_id,
-            proposal_sha256=semantic_proposal_sha256(*proposal),
-            disposition=Disposition.ACCEPT,
-        )
-        for proposal in store.semantic_proposals_for_run(A, run_id)
-    )
+    if (A, run_id) not in store._promotions:
+        for proposal in store.semantic_proposals_for_run(A, run_id):
+            store.review_semantic_proposal(A, run_id, proposal[0])
+    return ()
 
 
-def test_hallucinated_crop_without_raster_is_ambiguous_ledger_not_new() -> None:
+def test_missing_raster_blocks_canonical_admission_but_classifies_visual_ambiguity() -> None:
     store = MemoryDurableNoteStore()
     run_id, page_id, _, _ = _plant(store, "no-raster", png=None)
     store.store_semantic_proposal(
@@ -306,18 +303,48 @@ def test_hallucinated_crop_without_raster_is_ambiguous_ledger_not_new() -> None:
         "1",
         {"segments": [_segment(x_min=0.1, transcription="ghost", crop_sha256=AGENT_CROP)]},
     )
-    result = GoodNotesOccurrenceReconciler().reconcile(
-        A,
-        run_id,
-        repository=store,
-        clock=lambda: LATER,
-        promotion_evidence=_accepted_evidence(store, run_id),
-    )
-    assert [item.change_state for item in result.changes] == [GoodNotesNoteChangeState.AMBIGUOUS]
-    assert result.changes[0].note_id is None
-    assert result.changes[0].occurrence_id is None
-    assert result.changes[0].page_version_id == page_id
+    _accepted_evidence(store, run_id)
+    reconciler = GoodNotesOccurrenceReconciler()
+    with pytest.raises(ValueError, match="lacks complete server review evidence"):
+        reconciler.reconcile(A, run_id, repository=store, clock=lambda: LATER)
     assert store._notes == {}
+    assert store._occurrences == {}
+    assert store._revisions == {}
+    assert store._links == {}
+    assert store._changes == {}
+    assert store._promotions == {}
+
+    # The lower-level visual classification still treats an ungrounded crop as
+    # ambiguous. Exercise that unit in isolation; this is not canonical admission.
+    proposal = store.semantic_proposals_for_run(A, run_id)[0]
+    version = store.page_version(A, page_id)
+    assert version is not None and version.logical_page_id is not None
+    snapshot = store.snapshots_for_run(A, run_id)[0]
+    current = _note_units(
+        payload=proposal[4],
+        page_version_id=page_id,
+        logical_page_id=version.logical_page_id,
+        snapshot_id=snapshot.snapshot_id,
+        schema_version=proposal[1],
+        analyzer_name=proposal[2],
+        analyzer_version=proposal[3],
+        png_bytes=None,
+    )
+    assert len(current) == 1 and not current[0].visual_verified
+    changes = reconciler._persist(
+        principal_id=A,
+        run_id=run_id,
+        notebook_id=snapshot.notebook_id,
+        matches=match_occurrences(current=current, prior=()),
+        repository=store,
+        now=LATER,
+    )
+    assert [item.change_state for item in changes] == [GoodNotesNoteChangeState.AMBIGUOUS]
+    assert changes[0].note_id is None
+    assert changes[0].occurrence_id is None
+    assert changes[0].page_version_id == page_id
+    assert store._notes == {}
+    assert store._promotions == {}
 
 
 def test_hallucinated_box_on_white_of_inked_page_is_ambiguous_not_new() -> None:

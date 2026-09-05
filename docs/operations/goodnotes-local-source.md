@@ -98,4 +98,23 @@ writes an immutable delivery receipt. A run with zero NEW changes writes an
 internal suppressed receipt and has no user-facing body. Destination is an
 explicit string such as `operator-local`; this path does not send to Teams,
 email, or Abacus and does not create Projects, people, or Tasks.
-Agent and MCP exposure of reconciliation remain later slices.
+The authenticated `goodnotes.complete` path can continue canonical reconciliation
+when the existing canonical-write rollout gates permit it. Completion receipts
+alone do not authorize canonical writes. The server requires the complete stored
+run page set, exact proposal digests, and the latest promoting semantic Review
+for every expected page. Missing or unreviewed pages leave canonical promotion
+pending, so a partial completion cannot retire another page's notes.
+
+Canonical reconciliation and its immutable per-run promotion receipt commit in
+one transaction. The receipt binds expected pages, proposal identities, original
+and accepted-result digests, and exact Review decision identities/sequences;
+zero-note output still receives a receipt. Replays verify this binding. Caller
+promotion-evidence objects cannot authorize canonical writes. A promoting Review
+decision remains revisable before promotion; after the promotion receipt, new
+Review decisions conflict while exact original request replay remains idempotent.
+This follows the existing accepted-Review terminal behavior.
+
+Reconciliation, preview and associations read the same receipt-bound accepted
+semantic material. CORRECT_AND_ACCEPT uses the immutable corrected Review
+payload, preserving the original proposal as evidence. Completion does not send
+a message, invoke OCR/model inference, reread live sources or enable a schedule.

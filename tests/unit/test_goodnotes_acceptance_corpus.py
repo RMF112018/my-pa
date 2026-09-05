@@ -23,9 +23,7 @@ from my_pa.application.goodnotes_delivery import (
 from my_pa.application.goodnotes_occurrences import (
     GoodNotesOccurrenceReconciler,
     GoodNotesSemanticPromotionEvidence,
-    semantic_proposal_sha256,
 )
-from my_pa.domain.capture.review import Disposition
 from my_pa.domain.goodnotes.models import (
     GoodNotesEntityDirectoryRecord,
     GoodNotesEntityKind,
@@ -94,15 +92,10 @@ def _production() -> PdfiumNormalizedRenderer:
 def _accepted_evidence(
     store: MemoryDurableNoteStore, principal_id: str, run_id: str
 ) -> tuple[GoodNotesSemanticPromotionEvidence, ...]:
-    return tuple(
-        GoodNotesSemanticPromotionEvidence(
-            principal_id=principal_id,
-            run_id=run_id,
-            proposal_sha256=semantic_proposal_sha256(*proposal),
-            disposition=Disposition.ACCEPT,
-        )
-        for proposal in store.semantic_proposals_for_run(principal_id, run_id)
-    )
+    if (principal_id, run_id) not in store._promotions:
+        for proposal in store.semantic_proposals_for_run(principal_id, run_id):
+            store.review_semantic_proposal(principal_id, run_id, proposal[0])
+    return ()
 
 
 def test_a_byte_different_visually_equivalent_pdfs_share_normalized_identity() -> None:

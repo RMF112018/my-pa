@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from copy import deepcopy
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -429,45 +430,86 @@ def test_new_plus_revised_receipt_membership_is_new_only(engine: Engine) -> None
         lineage = PostgresGoodNotesRepository(connection)
         semantics = SqlGoodNotesSemanticRepository(connection)
         delivery = PostgresGoodNotesDeliveryRepository(connection)
-        run_id, page_id, notebook_id, logical_id = _plant(lineage, A, "mix")
-        note = lineage.store_note(
-            GoodNotesNote(
-                note_id=issue_stable_id("gnnt", A, "mix"),
-                principal_id=A,
-                notebook_id=notebook_id,
-                identity_status=GoodNotesIdentityStatus.ACTIVE,
-                created_at=WHEN,
-                last_seen_at=WHEN,
+        run_id, page_id, _, logical_id = _plant(lineage, A, "mix")
+        prior_segment = _segment(x_min=0.1, transcription="follow up Tuesday")
+        prior_segment["geometry"] = {"x_min": 0.1, "y_min": 0.2, "width": 0.15, "height": 0.1}
+        _propose(
+            semantics,
+            principal_id=A,
+            run_id=run_id,
+            page_version_id=page_id,
+            key="mix-first",
+            segments=(prior_segment,),
+        )
+        _accepted_evidence(lineage, A, run_id)
+        first = GoodNotesOccurrenceReconciler().reconcile(
+            A, run_id, repository=lineage, clock=lambda: WHEN
+        )
+        occurrence_id = first.changes[0].occurrence_id
+        assert occurrence_id is not None
+        original = lineage.latest_revision_for_occurrence(A, occurrence_id)
+        assert original is not None
+        previous_snapshot = lineage.snapshots_for_run(A, run_id)[0]
+        previous_version = lineage.page_version(A, page_id)
+        previous_raster = lineage.page_raster(A, page_id)
+        assert previous_version is not None and previous_raster is not None
+        next_run = lineage.create_run(_run(A, "mix-next"))
+        snapshot = lineage.store_snapshot(
+            replace(
+                previous_snapshot,
+                snapshot_id=issue_stable_id("gnsnap", A, "mix-next"),
+                source_object_id="obj_eeeeeeeeeeeeeeeeeeeeeeee",
+                raw_sha256=hashlib.sha256(b"mix-next").hexdigest(),
+                run_id=next_run.run_id,
+                observed_at=LATER,
+                settled_at=LATER,
             )
         )
-        occurrence = lineage.store_occurrence(
-            GoodNotesNoteOccurrence(
-                occurrence_id=issue_stable_id("gnocc", A, "mix"),
+        page = GoodNotesPage(
+            page_id=issue_stable_id("gnpg", A, "mix-next"),
+            principal_id=A,
+            source_id="src_aaaaaaaaaaaaaaaaaaaaaaaa",
+            source_object_id=snapshot.source_object_id,
+            page_number=1,
+        )
+        version = lineage.store_page_version_render(
+            page=page,
+            version=replace(
+                previous_version,
+                page_id=page.page_id,
+                page_version_id=issue_stable_id("gnver", A, "mix-next"),
+            ),
+        )
+        lineage.store_page_position(
+            GoodNotesPagePosition(
                 principal_id=A,
-                note_id=note.note_id,
+                snapshot_id=snapshot.snapshot_id,
+                page_number=1,
                 logical_page_id=logical_id,
-                x_min=0.1,
-                y_min=0.2,
-                width=0.2,
-                height=0.1,
-                identity_status=GoodNotesIdentityStatus.ACTIVE,
-                created_at=WHEN,
-                last_seen_at=WHEN,
+                page_version_id=version.page_version_id,
+                match_method=GoodNotesMatchMethod.ORDINAL_WEAK,
+                created_at=LATER,
             )
         )
-        lineage.store_revision(
-            GoodNotesNoteRevision(
-                revision_id=issue_stable_id("gnrev", A, "mix-first"),
+        lineage.store_page_raster(
+            replace(
+                previous_raster,
+                run_id=next_run.run_id,
+                page_version_id=version.page_version_id,
+                created_at=LATER,
+            )
+        )
+        connection.execute(
+            goodnotes_ingestion_run_stages.insert().values(
                 principal_id=A,
-                note_id=note.note_id,
-                schema_version="note-unit.v1",
-                analyzer_name="synthetic",
-                analyzer_version="1",
-                transcription="follow up Tuesday",
-                created_at=WHEN,
-                occurrence_id=occurrence.occurrence_id,
+                run_id=next_run.run_id,
+                stage="CONTENT_READY",
+                status="SUCCEEDED",
+                started_at=LATER,
+                ended_at=LATER,
             )
         )
+        run_id, page_id = next_run.run_id, version.page_version_id
         _propose(
             semantics,
             principal_id=A,
@@ -475,7 +517,7 @@ def test_new_plus_revised_receipt_membership_is_new_only(engine: Engine) -> None
             page_version_id=page_id,
             key="mix",
             segments=(
-                _segment(x_min=0.1, transcription="follow up Thursday"),
+                {**prior_segment, "transcription": "follow up Thursday"},
                 _segment(x_min=0.6, transcription="synthetic note", crop_sha256=CROP),
             ),
         )
@@ -486,6 +528,12 @@ def test_new_plus_revised_receipt_membership_is_new_only(engine: Engine) -> None
             promotion_evidence=_accepted_evidence(lineage, A, run_id),
             clock=lambda: LATER,
         )
+        latest = lineage.latest_revision_for_occurrence(A, occurrence_id)
+        assert latest is not None and latest.supersedes_revision_id == original.revision_id
+        assert latest.note_id == original.note_id
+        assert latest.transcription == "follow up Thursday"
+        assert latest.page_version_id == page_id and latest.snapshot_id == snapshot.snapshot_id
+        assert lineage.revision(A, original.revision_id) == original
         states = {item.change_state for item in reconciled.changes}
         assert GoodNotesNoteChangeState.NEW in states
         assert GoodNotesNoteChangeState.UNCHANGED in states

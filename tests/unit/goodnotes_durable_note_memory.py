@@ -55,6 +55,9 @@ class MemoryDurableNoteStore(MemoryLineageRepository):
         self._attempts: list[GoodNotesDeliveryAttempt] = []
         self._associations: list[GoodNotesEntityAssociation] = []
 
+    def snapshot(self, principal_id: str, snapshot_id: str) -> GoodNotesSourceSnapshot | None:
+        return self._snapshots.get((principal_id, snapshot_id))
+
     def snapshots_for_run(
         self, principal_id: str, run_id: str
     ) -> tuple[GoodNotesSourceSnapshot, ...]:

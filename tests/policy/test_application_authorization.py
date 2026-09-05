@@ -86,6 +86,7 @@ from my_pa.application.commands import (
     EndEntityRelationship,
     EnrollSource,
     FetchSource,
+    GetCanvasWorkspace,
     GetCapabilities,
     GetCommitmentHistory,
     GetCorpusCoverage,
@@ -132,6 +133,7 @@ from my_pa.application.commands import (
     PreviewEntitySplit,
     ProposeRelationshipMemory,
     PullGoodNotesWork,
+    PutCanvasWorkspace,
     ReadCapture,
     ReadCommitment,
     ReadIntelligenceArtifact,
@@ -595,6 +597,14 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             entity_id=issue_identifier(IdKind.ENTITY)
         ),
         Capability.ENTITIES_GRAPH: GetEntityGraph(focus_entity_id=issue_identifier(IdKind.ENTITY)),
+        Capability.CANVAS_WORKSPACE_GET: GetCanvasWorkspace(
+            focus_entity_id=issue_identifier(IdKind.ENTITY)
+        ),
+        Capability.CANVAS_WORKSPACE_PUT: PutCanvasWorkspace(
+            expected_version=0,
+            positions={},
+            focus_entity_id=issue_identifier(IdKind.ENTITY),
+        ),
         Capability.ENTITIES_UNRESOLVED_MENTIONS: ListUnresolvedMentions(),
         # The entity plane's authoring half (`WP-RI-A-02`). Every identifier is
         # minted for the reason the reads above mint theirs, and every
@@ -1128,6 +1138,10 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
         Capability.ENTITIES_GRAPH,
+        # Product-owned canvas overlay (ADR-003): names a Principal partition,
+        # not a source.
+        Capability.CANVAS_WORKSPACE_GET,
+        Capability.CANVAS_WORKSPACE_PUT,
         Capability.ENTITIES_UNRESOLVED_MENTIONS,
         # The authoring half (`WP-RI-A-02`) makes the same measurement more
         # plainly than a read does: it writes the Principal's own record of a
@@ -1334,6 +1348,10 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
         Capability.ENTITIES_GRAPH,
+        # Product-owned canvas overlay (ADR-003): names a Principal partition,
+        # not a source.
+        Capability.CANVAS_WORKSPACE_GET,
+        Capability.CANVAS_WORKSPACE_PUT,
         Capability.ENTITIES_UNRESOLVED_MENTIONS,
         # The authoring half (`WP-RI-A-02`) makes the same measurement more
         # plainly than a read does: it writes the Principal's own record of a

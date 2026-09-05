@@ -304,6 +304,20 @@
       "purpose": "entity_read",
       "payloadFields": ["entity_id", "perspective", "page_size", "after"],
       "probe": { "entity_id": "ent_aaaaaaaa11111111", "perspective": "participant" }
+    },
+    "canvas.workspace.get": {
+      "purpose": "canvas_workspace_read",
+      "payloadFields": ["focus_entity_id", "scope_entity_id"],
+      "probe": { "focus_entity_id": "ent_aaaaaaaa11111111" }
+    },
+    "canvas.workspace.put": {
+      "purpose": "canvas_workspace_authoring",
+      "payloadFields": ["focus_entity_id", "scope_entity_id", "expected_version", "positions"],
+      "probe": {
+        "focus_entity_id": "ent_aaaaaaaa11111111",
+        "expected_version": 0,
+        "positions": { "ent_aaaaaaaa11111111": { "x": 12.5, "y": 40.25 } }
+      }
     }
   },
   "_dispositionComment": [

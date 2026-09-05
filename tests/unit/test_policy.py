@@ -357,6 +357,10 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.ENTITIES_AFFILIATIONS_CREATE, Purpose.ENTITY_AUTHORING),
         (Capability.ENTITIES_AFFILIATIONS_REVISE, Purpose.ENTITY_AUTHORING),
         (Capability.ENTITIES_AFFILIATIONS_END, Purpose.ENTITY_AUTHORING),
+        # UI-IMP-WP17 canvas overlay. A purpose pair of its own rather than
+        # `entity_read`/`entity_authoring` or `capture_authoring`.
+        (Capability.CANVAS_WORKSPACE_GET, Purpose.CANVAS_WORKSPACE_READ),
+        (Capability.CANVAS_WORKSPACE_PUT, Purpose.CANVAS_WORKSPACE_AUTHORING),
     }
 )
 
@@ -414,9 +418,11 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # GoodNotes pull adds its pull, complete, and status capabilities under its
     # pull and observation purposes, producing three permitted pairs.
     # `UI-IMP-WP15` adds `entities.graph` under `entity_read`.
-    # Unioned: 128 capabilities, 36 purposes, 130 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 130
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 130 == 4478
+    # `UI-IMP-WP17` adds `canvas.workspace.get`/`canvas.workspace.put` under
+    # `canvas_workspace_read`/`canvas_workspace_authoring`.
+    # Unioned: 130 capabilities, 38 purposes, 132 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 132
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 132 == 4808
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

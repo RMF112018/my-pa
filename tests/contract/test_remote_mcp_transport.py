@@ -360,6 +360,7 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.ENTITIES_AFFILIATIONS_CREATE,
         Capability.ENTITIES_AFFILIATIONS_REVISE,
         Capability.ENTITIES_AFFILIATIONS_END,
+        Capability.CANVAS_WORKSPACE_PUT,
     }
     destructive_writes = {
         Capability.CAPTURE_REVISE,
@@ -412,6 +413,10 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.ENTITIES_PARTICIPATIONS_END,
         Capability.ENTITIES_AFFILIATIONS_REVISE,
         Capability.ENTITIES_AFFILIATIONS_END,
+        # UI-IMP-WP17. Put is in `_WRITE_CAPABILITIES` and not
+        # `_ADDITIVE_WRITE_CAPABILITIES`: a later put replaces stored positions
+        # under optimistic concurrency, so `is_destructive_capability` is true.
+        Capability.CANVAS_WORKSPACE_PUT,
     }
     for capability in Capability:
         tool = tools.get(capability.value)

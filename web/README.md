@@ -15,7 +15,7 @@ An explicitly enabled synthetic provider remains available for development and
 is refused when `NODE_ENV=production`. It does not silently replace an
 unconfigured or unavailable backend.
 
-The Python contract contains one hundred and twenty-eight capability names. The System route reads
+The Python contract contains one hundred and thirty capability names. The System route reads
 the live `capabilities.get` manifest, including each capability's runtime
 availability, instead of restating an availability count in this tier. Six of
 those names are the managed-document lifecycle (`documents.create`,
@@ -46,6 +46,8 @@ All application pages require a verified session. `/sign-in` is public.
 | `GET /api/people/:entityId/profile` | `entities.profile` | Assembles the record-family profile; this is not merge and not a directory |
 | `GET /api/people/:entityId/context` | `entities.context` | Returns the frozen context card without widening it |
 | `GET /api/people/graph` | `entities.graph` | Seeded 1-hop or 2-hop neighborhood; missing seed is refused rather than listing a directory |
+| `/canvas` | `entities.graph`, `canvas.workspace.get` | Seeded Map neighborhood with an optional stored overlay; unseeded `/canvas` does not call `canvas.workspace.get` |
+| `POST /api/canvas/workspace` | `canvas.workspace.put` | Persists one expected-version overlay; identity is the session; a stale version is a typed conflict |
 | `GET /api/people/:entityId/relationships` | `entities.relationships` | Lists same-Principal relationships |
 | `GET /api/people/:entityId/names` | `entities.names.list` | Lists names for one same-Principal entity |
 | `GET /api/people/:entityId/addresses` | `entities.addresses.list` | Lists addresses for one same-Principal entity |

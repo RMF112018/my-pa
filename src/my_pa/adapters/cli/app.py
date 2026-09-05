@@ -12,7 +12,7 @@ over a socket: nothing in this file knows which capabilities those are.
 
 **Why the envelope is options and the payload is JSON.** The two halves of a
 request have two owners. The envelope is one fixed shape — `RequestMetadata`'s
-fields, the same for all 128 capabilities — so it is presented as
+fields, the same for all 130 capabilities — so it is presented as
 options, which is what a CLI is for. The payload is capability-specific, so
 fifteen sets of hand-written options would be fifteen statements of what
 `application.commands` already says, and a 102nd capability would

@@ -84,6 +84,7 @@ from my_pa.application.commands import (
     EndEntityRelationship,
     EnrollSource,
     FetchSource,
+    GetCanvasWorkspace,
     GetCapabilities,
     GetCommitmentHistory,
     GetCorpusCoverage,
@@ -130,6 +131,7 @@ from my_pa.application.commands import (
     PreviewEntitySplit,
     ProposeRelationshipMemory,
     PullGoodNotesWork,
+    PutCanvasWorkspace,
     ReadCapture,
     ReadCommitment,
     ReadIntelligenceArtifact,
@@ -382,6 +384,8 @@ def _requested_scope(
             | GetEntityContext()
             | GetEntityRelationships()
             | GetEntityGraph()
+            | GetCanvasWorkspace()
+            | PutCanvasWorkspace()
             | GetEntityIdentityHistory()
             | ListUnresolvedMentions()
             # The authoring half (`WP-RI-A-02`) makes the same measurement, and

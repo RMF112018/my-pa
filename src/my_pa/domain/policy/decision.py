@@ -395,6 +395,10 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.ENTITIES_AFFILIATIONS_CREATE,
         Capability.ENTITIES_AFFILIATIONS_REVISE,
         Capability.ENTITIES_AFFILIATIONS_END,
+        # Product-owned canvas overlay (ADR-003): names a Principal partition,
+        # not a source. Rows carry no `source_id` and no `enrollment_id`.
+        Capability.CANVAS_WORKSPACE_GET,
+        Capability.CANVAS_WORKSPACE_PUT,
     }
 )
 

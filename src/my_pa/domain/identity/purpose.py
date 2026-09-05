@@ -314,3 +314,17 @@ class Purpose(StrEnum):
     # surface on production `my-pa` MCP.
     GSQS_B0_EXECUTION = "gsqs_b0_execution"
     GSQS_B0_OBSERVATION = "gsqs_b0_observation"
+    # Canvas workspace overlay (UI-IMP-WP17). A pair of purposes rather than a
+    # reuse of `entity_read`/`entity_authoring` or `capture_authoring`, on D-91:
+    # would reuse widen the grant? Yes. `entity_read`/`entity_authoring` are the
+    # identity plane (who a person is, and WP18's relationship edits). Admitting
+    # a layout overlay under either would let a grant issued to look up or
+    # correct an identity also persist a browser arrangement, and a grant issued
+    # to arrange a canvas would reach identity writes. `capture_authoring` is
+    # ADR-003's append-only note plane; a canvas overlay is neither a capture
+    # nor append-only. Reading and writing are separated, on the capture plane's
+    # own split: a purpose wide enough to cover both is a purpose that grants
+    # both, and a grant issued to load an arrangement must not also let the
+    # caller overwrite it.
+    CANVAS_WORKSPACE_READ = "canvas_workspace_read"
+    CANVAS_WORKSPACE_AUTHORING = "canvas_workspace_authoring"

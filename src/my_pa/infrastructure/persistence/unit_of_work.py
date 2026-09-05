@@ -57,6 +57,8 @@ from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
 from my_pa.contracts.ports import (
     Acceptance,
     AuditSink,
+    CanvasWorkspaceRecord,
+    CanvasWorkspaceRepository,
     CaptureAdmission,
     CaptureAdmissionRequest,
     CaptureRepository,
@@ -117,6 +119,11 @@ from my_pa.domain.search.query import SearchRequest
 from my_pa.domain.source.enrollment import Enrollment, EnrollmentRequest
 from my_pa.domain.source.registry import ConfiguredSource
 from my_pa.infrastructure.persistence import IsolationLevelError
+from my_pa.infrastructure.persistence.canvas_workspace import (
+    get_canvas_workspace,
+    insert_canvas_workspace,
+    update_canvas_workspace,
+)
 from my_pa.infrastructure.persistence.capture import (
     admit_capture,
     capture_page,
@@ -944,6 +951,37 @@ class _Knowledge(KnowledgeRepository):
         )
 
 
+class _CanvasWorkspaces(CanvasWorkspaceRepository):
+    """The canvas overlay plane, over `persistence.canvas_workspace`."""
+
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+
+    def get(
+        self,
+        principal_id: str,
+        focus_entity_id: str | None,
+        scope_entity_id: str | None,
+    ) -> CanvasWorkspaceRecord | None:
+        return _read(
+            lambda: get_canvas_workspace(
+                self._connection, principal_id, focus_entity_id, scope_entity_id
+            )
+        )
+
+    def insert(self, record: CanvasWorkspaceRecord) -> CanvasWorkspaceRecord:
+        return _read(lambda: insert_canvas_workspace(self._connection, record))
+
+    def update(
+        self, record: CanvasWorkspaceRecord, *, expected_version: int
+    ) -> CanvasWorkspaceRecord:
+        return _read(
+            lambda: update_canvas_workspace(
+                self._connection, record, expected_version=expected_version
+            )
+        )
+
+
 class SqlAlchemyUnitOfWork(UnitOfWork):
     """One PostgreSQL transaction, and the repositories that run inside it.
 
@@ -1174,6 +1212,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def goodnotes_pull(self) -> SqlGoodNotesPullRepository:
         """Durable pull sessions, receipts, and semantic-review decisions."""
         return SqlGoodNotesPullRepository(self._open)
+
+    @property
+    def canvas_workspaces(self) -> CanvasWorkspaceRepository:
+        """Principal-partitioned canvas overlay, on this transaction's connection."""
+        return _CanvasWorkspaces(self._open)
 
     @property
     def goodnotes_durable_notes(self) -> PostgresDurableNoteStore:

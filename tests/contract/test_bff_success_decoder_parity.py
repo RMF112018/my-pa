@@ -21,6 +21,11 @@ from typing import Any, Final
 
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
 from my_pa.contracts.ports import CaptureSearchMatch
+from my_pa.contracts.v1.canvas_workspace import (
+    CanvasPointView,
+    CanvasWorkspaceReceiptView,
+    CanvasWorkspaceView,
+)
 from my_pa.contracts.v1.capabilities import EffectiveLimits, ReadinessReport, ReadinessState
 from my_pa.contracts.v1.capture import CaptureListEntry, CaptureReceiptView
 from my_pa.contracts.v1.commitments import (
@@ -713,6 +718,30 @@ def _entity_id() -> str:
     return "ent_aaaaaaaa11111111"
 
 
+def _canvas_positions() -> dict[str, CanvasPointView]:
+    return {_entity_id(): CanvasPointView(x=12.5, y=40.25)}
+
+
+def _canvas_workspace_get() -> dict[str, object]:
+    return CanvasWorkspaceView(
+        focus_entity_id=_entity_id(),
+        scope_entity_id=None,
+        version=1,
+        positions=_canvas_positions(),
+        updated_at=AT,
+    ).model_dump(mode="json")
+
+
+def _canvas_workspace_put() -> dict[str, object]:
+    return CanvasWorkspaceReceiptView(
+        focus_entity_id=_entity_id(),
+        scope_entity_id=None,
+        version=1,
+        positions=_canvas_positions(),
+        updated_at=AT,
+    ).model_dump(mode="json")
+
+
 def _entity_view_payload() -> dict[str, Any]:
     stamped = _stamp()
     return {
@@ -1107,6 +1136,8 @@ def python_success_payloads() -> dict[str, dict[str, Any]]:
             "perspective": "participant",
             "participations": [_participation_payload()],
         },
+        "canvas.workspace.get": _canvas_workspace_get(),
+        "canvas.workspace.put": _canvas_workspace_put(),
     }
 
 

@@ -273,6 +273,7 @@ class SafeDetail(StrEnum):
     RELATIONSHIP_TYPES = "relationship_types"
     FOCUS_ENTITY_ID = "focus_entity_id"
     HOPS = "hops"
+    POSITIONS = "positions"
     ROLE = "role"
     DISCIPLINE = "discipline"
     RESPONSIBILITY_CLASS = "responsibility_class"

@@ -36,8 +36,9 @@ def _config(buffer: io.StringIO | None = None) -> Config:
 
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert len(script.get_heads()) == 1
-    assert REVISION in {item.revision for item in script.walk_revisions()}
+    assert script.get_heads() == ["d4e8b1c7a902"]
+    assert script.get_revision("d4e8b1c7a902").down_revision == "a4d8e31b2c90"
+    assert script.get_revision("a4d8e31b2c90").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 
 
@@ -90,7 +91,9 @@ def test_every_ledger_accepts_the_canonical_local_principal_shape(
     output = io.StringIO()
     command.upgrade(_config(output), REVISION, sql=True)
     sql = output.getvalue()
-    goodnotes_pull_sql = sql[sql.index("CREATE TABLE knowledge.goodnotes_pull_sessions") :]
+    start = sql.index("CREATE TABLE knowledge.goodnotes_pull_sessions")
+    later = sql.find("CREATE TABLE knowledge.canvas_workspaces", start)
+    goodnotes_pull_sql = sql[start:] if later == -1 else sql[start:later]
     canonical_pattern = r"prn_[A-Za-z0-9]{8,64}"
 
     assert re.fullmatch(canonical_pattern, local_principal().principal_id)

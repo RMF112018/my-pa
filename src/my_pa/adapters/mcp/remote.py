@@ -47,6 +47,7 @@ _WRITE_PURPOSES: Final = frozenset(
     {
         Purpose.BOUNDED_ENROLLMENT,
         Purpose.CAPTURE_AUTHORING,
+        Purpose.CANVAS_WORKSPACE_AUTHORING,
         Purpose.REVIEW_DISPOSITION,
         Purpose.DOCUMENT_AUTHORING,
         Purpose.CONTINUITY_AUTHORING,

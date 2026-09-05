@@ -433,6 +433,13 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "goodnotes_semantic_review_decisions",
         }
     ),
+    # UI-IMP-WP17: Principal-partitioned canvas overlay, additive on the
+    # GoodNotes pull head and creating nothing else.
+    "d4e8b1c7a902": frozenset(
+        {
+            "canvas_workspaces",
+        }
+    ),
     "a4d8e31b2c90": frozenset({"goodnotes_semantic_promotion_receipts"}),
 }
 

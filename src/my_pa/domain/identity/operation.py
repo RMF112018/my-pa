@@ -756,6 +756,18 @@ class Capability(StrEnum):
     #: decided.
     RELATIONSHIP_MEMORY_PROPOSE = "relationship_memory.propose"
 
+    #: `UI-IMP-WP17`. A Principal-owned canvas overlay keyed by focus and/or
+    #: scope entity, not a widening of `entities.graph`: that capability returns
+    #: a seeded neighborhood, and this one stores arrangement the graph does
+    #: not. Maps to `canvas_workspace_read` / `canvas_workspace_authoring`
+    #: rather than `entity_read` / `entity_authoring` or `capture_authoring`;
+    #: `purpose.py` records why. Get is a read (missing overlay is empty, not
+    #: an error). Put is a write and is in `_WRITE_CAPABILITIES`; it is not
+    #: additive, because a later put replaces the stored positions under
+    #: optimistic concurrency. Neither is operator-only.
+    CANVAS_WORKSPACE_GET = "canvas.workspace.get"
+    CANVAS_WORKSPACE_PUT = "canvas.workspace.put"
+
 
 class NativeSourceCapability(StrEnum):
     """Authenticated native-host commands, separate from legacy public transports."""
@@ -1190,6 +1202,8 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         # A grant issued so a rule can raise candidates reaches this capability
         # and neither `relationship_memory.create` nor any of the four reads.
         Capability.RELATIONSHIP_MEMORY_PROPOSE: frozenset({Purpose.RELATIONSHIP_MEMORY_PROPOSAL}),
+        Capability.CANVAS_WORKSPACE_GET: frozenset({Purpose.CANVAS_WORKSPACE_READ}),
+        Capability.CANVAS_WORKSPACE_PUT: frozenset({Purpose.CANVAS_WORKSPACE_AUTHORING}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),
@@ -1301,6 +1315,7 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_AFFILIATIONS_CREATE,
         Capability.ENTITIES_AFFILIATIONS_REVISE,
         Capability.ENTITIES_AFFILIATIONS_END,
+        Capability.CANVAS_WORKSPACE_PUT,
     }
 )
 

@@ -123,6 +123,7 @@ async function neighborhood(
             scopeEntityId={scopeEntityId}
             savedPositions={overlay.positions}
             version={overlay.version}
+            graphQuery={query}
           />
         </section>
       </div>
@@ -224,6 +225,7 @@ export async function CanvasPage({
     ...(relationshipTypes.length > 0 ? { relationshipTypes } : {}),
     ...(asOf ? { asOf } : {}),
     ...(pageSize.kind === "ok" ? { pageSize: pageSize.value } : {}),
+    ...(after ? { after } : {}),
   };
 
   const outcome = await invokeGateway(principal, "entities.graph", payload);

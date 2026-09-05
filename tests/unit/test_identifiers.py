@@ -184,6 +184,11 @@ def test_contract_prefixes_are_stable() -> None:
         # `entity_assertion_evidence`.
         "east",
         "easev",
+        # PC-CM-IMP-WP01: one first-class `ProjectConstraint` and one
+        # Project-scoped `ConstraintCategory` (`domain.project_controls`).
+        # Neither is a Task, a Commitment, or a third Project identity.
+        "cst",
+        "ccat",
     }
 
 
@@ -248,3 +253,31 @@ def test_identifier_does_not_carry_path_or_host_shape() -> None:
     for illegal in ("/", "\\", ".", ":", "@", "~"):
         with pytest.raises(InvalidIdentifierError):
             validate_identifier(f"src_abc{illegal}123def")
+
+
+def test_project_controls_prefixes_are_unique_across_every_kind() -> None:
+    # PC-CM-IMP-WP01 added `cst` and `ccat`; the whole enum must still be
+    # collision-free, not just those two against each other.
+    values = [kind.value for kind in IdKind]
+    assert len(set(values)) == len(IdKind)
+    assert IdKind.PROJECT_CONSTRAINT.value == "cst"
+    assert IdKind.CONSTRAINT_CATEGORY.value == "ccat"
+
+
+@pytest.mark.parametrize("kind", [IdKind.PROJECT_CONSTRAINT, IdKind.CONSTRAINT_CATEGORY])
+def test_project_controls_identifiers_round_trip_and_reject_wrong_kind(kind: IdKind) -> None:
+    suffix = "0123456789abcdef"
+    value = make_identifier(kind, suffix)
+    assert value == f"{kind.value}_{suffix}"
+    assert parse_identifier(value) == (kind, suffix)
+    assert validate_identifier(value, kind) == value
+    with pytest.raises(InvalidIdentifierError):
+        validate_identifier(value, IdKind.PROJECT)
+    with pytest.raises(InvalidIdentifierError):
+        validate_identifier(value, IdKind.TASK)
+    # The suffix shape is unchanged for the new kinds: too short, and
+    # non-alphanumeric, are still refused.
+    with pytest.raises(InvalidIdentifierError):
+        make_identifier(kind, "short")
+    with pytest.raises(InvalidIdentifierError):
+        make_identifier(kind, "abc-123-def-456")

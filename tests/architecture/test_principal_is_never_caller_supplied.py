@@ -785,6 +785,15 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     "domain/context/prepared.py": (("item", "principal_id"),),
     "domain/context/run.py": (("item", "principal_id"),),
     "domain/modeling/gate.py": (("item", "principal_id"),),
+    # PC-CM-IMP-WP01: `validate_publish_completeness` compares the Draft's
+    # stored partition with the Category's and refuses a mismatch, so a Publish
+    # can never bind a Constraint to a Category from another Principal. Both
+    # values are `prn_` fields of domain records, validated on construction;
+    # neither is a request-body field, and no lookup or resolution happens here.
+    "domain/project_controls/constraint.py": (
+        ("category", "principal_id"),
+        ("draft", "principal_id"),
+    ),
     # Persist copies the packed package's partition, already confined to
     # `authorization.principal`. Not a request-body field.
     "application/context/service.py": (

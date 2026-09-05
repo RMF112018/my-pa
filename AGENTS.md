@@ -288,6 +288,16 @@ If a substantive task requires this topology but the available execution harness
 
 A truly atomic, low-risk task that does not meet the substantive criteria above may use direct bounded execution; do not manufacture meaningless subagents for a trivial read or isolated mechanical edit. The controlling context must be able to explain why the task was classified as atomic if challenged.
 
+### 8.4 Repeatable NAS build and deployment
+
+For any request to build the `my-pa` NAS package or deploy it to the NAS, use
+[`$my-pa-nas-build-deploy`](.codex/skills/my-pa-nas-build-deploy/SKILL.md)
+before planning or action. The skill routes the current repository runbooks and
+scripts; it does not grant deployment authority, credential access, firewall
+mutation, service interruption, destructive restore, or risk acceptance.
+Sections 8.1–8.3 and every operator-only gate and mandatory stop in sections
+8.2 and 9 continue to apply.
+
 ## 9. Mandatory stops
 
 Stop and report the blocker when:

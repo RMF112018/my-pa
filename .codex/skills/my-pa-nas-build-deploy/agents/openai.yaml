@@ -1,0 +1,7 @@
+interface:
+  display_name: "my-pa NAS Build & Deploy"
+  short_description: "Build and safely deploy my-pa to Synology NAS"
+  default_prompt: "Use $my-pa-nas-build-deploy to build the live origin/main package and deploy it through the canonical NAS gates."
+
+policy:
+  allow_implicit_invocation: true

@@ -737,6 +737,42 @@ def test_cross_page_move_preserves_identity_history_and_suppresses_new_delivery(
     )
     assert replayed_delivery.receipt.receipt_id == delivery.receipt.receipt_id
 
+    links_before_return = dict(store._links)
+    return_run, return_version = _next_version(
+        store,
+        key="move-return",
+        notebook_id=notebook_id,
+        logical_id=first_logical,
+        png=png,
+    )
+    store.store_semantic_proposal(
+        A, return_run, return_version, "note-unit.v1", "synthetic", "1", payload
+    )
+    _accepted_evidence(store, return_run)
+    returned = reconciler.reconcile(
+        A, return_run, repository=store, clock=lambda: LATER + timedelta(minutes=2)
+    )
+    assert len(returned.changes) == 1
+    returning_change = returned.changes[0]
+    assert returning_change.change_state is GoodNotesNoteChangeState.REVISED
+    assert (returning_change.note_id, returning_change.occurrence_id) == (
+        original.note_id,
+        original.occurrence_id,
+    )
+    returned_occurrence = store.occurrence(A, original.occurrence_id)
+    assert returned_occurrence is not None
+    assert returned_occurrence.logical_page_id == first_logical
+    assert returned_occurrence.page_version_id == return_version
+    returned_revision = store.latest_revision_for_occurrence(A, original.occurrence_id)
+    assert returned_revision is not None
+    assert returned_revision.supersedes_revision_id == revision.revision_id
+    assert store._links == links_before_return
+    assert reconciler.reconcile(A, return_run, repository=store).changes == returned.changes
+    return_delivery = GoodNotesNewOnlyDelivery().deliver(
+        A, return_run, "operator-local", repository=store, clock=lambda: LATER
+    )
+    assert return_delivery.receipt.suppressed and return_delivery.receipt.body is None
+
 
 def test_retired_destination_refuses_before_canonical_writes() -> None:
     png = _ink_png()

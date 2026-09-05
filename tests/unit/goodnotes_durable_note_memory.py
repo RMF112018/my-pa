@@ -347,8 +347,16 @@ class MemoryDurableNoteStore(MemoryLineageRepository):
         return revision
 
     def store_note_link(self, link: GoodNotesNoteLink) -> GoodNotesNoteLink:
+        prior = self.note_link(link.principal_id, link.link_id)
+        if prior is not None:
+            if prior != link:
+                raise ValueError("GoodNotes note link is immutable")
+            return prior
         self._links[(link.principal_id, link.link_id)] = link
         return link
+
+    def note_link(self, principal_id: str, link_id: str) -> GoodNotesNoteLink | None:
+        return self._links.get((principal_id, link_id))
 
     def store_run_note_change(self, change: GoodNotesRunNoteChange) -> GoodNotesRunNoteChange:
         self._changes[(change.principal_id, change.change_id)] = change

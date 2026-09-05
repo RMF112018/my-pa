@@ -223,6 +223,8 @@ class GoodNotesOccurrenceRepository(Protocol):
 
     def store_revision(self, revision: GoodNotesNoteRevision) -> GoodNotesNoteRevision: ...
 
+    def note_link(self, principal_id: str, link_id: str) -> GoodNotesNoteLink | None: ...
+
     def store_note_link(self, link: GoodNotesNoteLink) -> GoodNotesNoteLink: ...
 
     def store_run_note_change(self, change: GoodNotesRunNoteChange) -> GoodNotesRunNoteChange: ...
@@ -944,15 +946,17 @@ class GoodNotesOccurrenceReconciler:
             )
         )
         if location_changed:
+            link_id = issue_stable_id(
+                "gnlink", principal_id, occurrence.note_id, "page", current.logical_page_id
+            )
+            existing_link = repository.note_link(principal_id, link_id)
             repository.store_note_link(
                 GoodNotesNoteLink(
-                    link_id=issue_stable_id(
-                        "gnlink", principal_id, occurrence.note_id, "page", current.logical_page_id
-                    ),
+                    link_id=link_id,
                     principal_id=principal_id,
                     note_id=occurrence.note_id,
                     link_kind=GoodNotesNoteLinkKind.NOTE_TO_LOGICAL_PAGE,
-                    created_at=now,
+                    created_at=now if existing_link is None else existing_link.created_at,
                     target_logical_page_id=current.logical_page_id,
                 )
             )

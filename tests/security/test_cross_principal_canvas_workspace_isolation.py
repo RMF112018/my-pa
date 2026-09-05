@@ -1,8 +1,9 @@
 """Two synthetic Principals; zero canvas-overlay leakage (UI-IMP-WP17).
 
-Database tier, over a disposable database this module creates and drops. The
-subject is Principal isolation of the product-owned canvas workspace: Principal
-A cannot read or write Principal B's overlay even with the same seed ids.
+Database tier, over the shared current-schema `disposable_database` fixture.
+The subject is Principal isolation of the product-owned canvas workspace:
+Principal A cannot read or write Principal B's overlay even with the same
+seed ids.
 
 Every identity is synthetic; no live personal data is used.
 """

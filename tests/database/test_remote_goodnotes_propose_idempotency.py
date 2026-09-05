@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from sqlalchemy import Engine, text
 
 from my_pa.adapters.normalization import normalize
 from my_pa.adapters.remote_request import compose_remote_arguments
-from my_pa.application.commands import SubmitGoodNotesProposal
+from my_pa.application.commands import DecideReviewCase, SubmitGoodNotesProposal
 from my_pa.application.goodnotes_lineage import ObservedNotebookFile
 from my_pa.application.goodnotes_orchestrator import (
     DurableNoteRequest,
@@ -21,6 +22,7 @@ from my_pa.application.goodnotes_orchestrator import (
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.contracts.v1.envelope import RequestMetadata
+from my_pa.domain.capture.review import CorrectionPatch, Disposition
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.goodnotes.liveness import (
@@ -42,6 +44,7 @@ from my_pa.infrastructure.goodnotes.pdf import split_admitted_pdf
 from my_pa.infrastructure.goodnotes.render import production_page_renderer
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.goodnotes_durable_note import PostgresDurableNoteStore
+from my_pa.infrastructure.persistence.goodnotes_pull import SqlGoodNotesPullRepository
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from tests.unit.vector_pdf import Rect, vector_pdf
 
@@ -339,3 +342,133 @@ def test_remote_goodnotes_proposal_admits_replays_and_refuses_conflicts(
 @pytest.fixture
 def engine(db_engine: Engine) -> Engine:
     return db_engine
+
+
+def _date_evidence() -> dict[str, object]:
+    def evidence(scope: str, value: str, reference: str) -> dict[str, object]:
+        return {"scope": scope, "value": value, "literal": value, "evidence_refs": [reference]}
+
+    return {
+        "page_candidates": [
+            evidence("PAGE", "2026-09-05", "heading-left"),
+            evidence("PAGE", "2026-09-05", "heading-right"),
+        ],
+        "event_dates": [evidence("EVENT", "2026-09-06", "event-line")],
+        "body_dates": [evidence("BODY", "2026-09-07", "body-line")],
+    }
+
+
+@pytest.mark.parametrize("correction", ["omit", "empty", "replace"])
+def test_public_date_proposal_review_and_promotion_preserve_accepted_provenance(
+    engine: Engine, runtime: _Runtime, correction: str
+) -> None:
+    run_id, version_id, digest = _stage_waiting(engine, f"date-review-{correction}")
+    dates = _date_evidence()
+    payload = {**_connected_v2_payload(run_id, version_id, digest), "date_evidence": dates}
+    original = runtime.remote_propose(payload)
+    assert runtime.remote_propose(payload)["proposal_id"] == original["proposal_id"]
+    with engine.begin() as connection:
+        repository = SqlGoodNotesPullRepository(connection)
+        cases = repository.semantic_review_cases(A, limit=10)
+        case = next(item for item in cases if item.proposal_id == original["proposal_id"])
+        before = repository.semantic_proposal_material(A, case.proposal_id)
+        assert before is not None and before.payload["date_evidence"] == dates
+        assert (
+            repository.semantic_proposal_material("prn_bbbbbbbbbbbbbbbbbbbbbbbb", case.proposal_id)
+            is None
+        )
+    patch: dict[str, object] = {"confidence": {"transcription": 0.0, "segmentation": 0.9}}
+    expected = dates
+    if correction == "empty":
+        patch["date_evidence"] = {"page_candidates": [], "event_dates": [], "body_dates": []}
+        expected = {}
+    elif correction == "replace":
+        expected = {
+            **dates,
+            "page_candidates": [
+                {
+                    "scope": "PAGE",
+                    "value": "2026-09-08",
+                    "literal": "September 8",
+                    "evidence_refs": ["revised-heading"],
+                },
+                {
+                    "scope": "PAGE",
+                    "value": "2026-09-09",
+                    "literal": "September 9",
+                    "evidence_refs": ["other-heading"],
+                },
+            ],
+        }
+        patch["date_evidence"] = expected
+    service = ApplicationService(
+        unit_of_work=lambda: SqlAlchemyUnitOfWork(
+            engine, audit=SqlAlchemyAuditSink(runtime.audit_engine), goodnotes_pull_enabled=True
+        ),
+        limits=LIMITS,
+        clock=lambda: WHEN,
+        goodnotes_pull_enabled=True,
+        goodnotes_pull_cursor_signing_key=b"synthetic-date-test-key" * 2,
+    )
+    command = DecideReviewCase(
+        review_case_id=case.review_case_id,
+        expected_review_version=case.review_version,
+        disposition=Disposition.CORRECT_AND_ACCEPT,
+        correction_patch=CorrectionPatch.of(patch),
+    )
+    metadata = RequestMetadata(
+        request_id=issue_identifier(IdKind.CORRELATION),
+        capability=Capability.REVIEW_DECIDE,
+        purpose=Purpose.REVIEW_DISPOSITION,
+        principal_id=A,
+        requested_at=WHEN,
+    )
+    reviewed = service.invoke(metadata, command, principal=runtime.principal).to_canonical_dict()
+    assert reviewed.get("error") is None, reviewed.get("error")
+    replay = service.invoke(metadata, command, principal=runtime.principal).to_canonical_dict()
+    assert replay.get("error") is None, replay.get("error")
+    assert replay["result"]["decision_id"] == reviewed["result"]["decision_id"]
+    with engine.begin() as connection:
+        repository = SqlGoodNotesPullRepository(connection)
+        material = repository.accepted_semantic_material(A, run_id)
+        assert material is not None and len(material) == 1
+        assert material[0].payload.get("date_evidence", {}) == expected
+        assert repository.semantic_proposal_material(A, case.proposal_id) == before
+        repository.record_semantic_promotion(A, run_id)
+        assert repository.accepted_semantic_material(A, run_id, require_promoted=True) == material
+        assert (
+            repository.accepted_semantic_material(
+                "prn_bbbbbbbbbbbbbbbbbbbbbbbb", run_id, require_promoted=True
+            )
+            is None
+        )
+
+
+def test_public_date_change_conflicts_with_existing_request_key(
+    engine: Engine, runtime: _Runtime
+) -> None:
+    run_id, version_id, digest = _stage_waiting(engine, "date-conflicting-key")
+    payload = {
+        **_connected_v2_payload(run_id, version_id, digest),
+        "date_evidence": _date_evidence(),
+    }
+    runtime.remote_propose(payload)
+    composed = compose_remote_arguments(
+        capability_name=Capability.GOODNOTES_PROPOSE.value,
+        arguments={"payload": payload},
+        principal=runtime.principal,
+        grants=frozenset({(Capability.GOODNOTES_PROPOSE, Purpose.GOODNOTES_PROPOSAL)}),
+        clock=lambda: WHEN,
+        issue_id=lambda _kind: issue_identifier(IdKind.CORRELATION),
+    )
+    metadata, command = normalize(Capability.GOODNOTES_PROPOSE.value, composed)
+    assert isinstance(command, SubmitGoodNotesProposal)
+    changed = replace(command, date_evidence={})
+    result = runtime.service.invoke(
+        metadata,
+        changed,
+        principal=runtime.principal,
+        transport=CaptureTransport.REMOTE_CLIENT,
+        capability_grants=frozenset({(Capability.GOODNOTES_PROPOSE, Purpose.GOODNOTES_PROPOSAL)}),
+    ).to_canonical_dict()
+    assert result["error"] is not None and result["error"]["code"] == "conflict"

@@ -25,7 +25,6 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesNotebook,
     GoodNotesNoteChangeState,
     GoodNotesNoteOccurrence,
-    GoodNotesNoteRevision,
     GoodNotesPage,
     GoodNotesPagePosition,
     GoodNotesPageRaster,
@@ -452,44 +451,24 @@ def test_transcription_only_is_unchanged_with_revision() -> None:
     png = _ink_png()
     store = MemoryDurableNoteStore()
     run_id, page_id, notebook_id, logical_id = _plant(store, "transcript", png=png)
-    note = store.store_note(
-        GoodNotesNote(
-            note_id=issue_stable_id("gnnt", A, "transcript"),
-            principal_id=A,
-            notebook_id=notebook_id,
-            identity_status=GoodNotesIdentityStatus.ACTIVE,
-            created_at=WHEN,
-            last_seen_at=WHEN,
-        )
+    store.store_semantic_proposal(
+        A,
+        run_id,
+        page_id,
+        "note-unit.v1",
+        "synthetic",
+        "1",
+        {"segments": [_segment(x_min=0.1, transcription="follow up Tuesday")]},
     )
-    occurrence = store.store_occurrence(
-        GoodNotesNoteOccurrence(
-            occurrence_id=issue_stable_id("gnocc", A, "transcript"),
-            principal_id=A,
-            note_id=note.note_id,
-            logical_page_id=logical_id,
-            x_min=0.1,
-            y_min=0.2,
-            width=0.2,
-            height=0.1,
-            identity_status=GoodNotesIdentityStatus.ACTIVE,
-            created_at=WHEN,
-            last_seen_at=WHEN,
-            crop_sha256=crop_normalized_png(png, 0.1, 0.2, 0.2, 0.1).digest,
-        )
+    _accepted_evidence(store, run_id)
+    first = GoodNotesOccurrenceReconciler().reconcile(
+        A, run_id, repository=store, clock=lambda: WHEN
     )
-    original = store.store_revision(
-        GoodNotesNoteRevision(
-            revision_id=issue_stable_id("gnrev", A, "transcript-first"),
-            principal_id=A,
-            note_id=note.note_id,
-            schema_version="note-unit.v1",
-            analyzer_name="synthetic",
-            analyzer_version="1",
-            transcription="follow up Tuesday",
-            created_at=WHEN,
-            occurrence_id=occurrence.occurrence_id,
-        )
+    occurrence = store._occurrences[(A, first.changes[0].occurrence_id)]
+    original = store.latest_revision_for_occurrence(A, occurrence.occurrence_id)
+    assert original is not None
+    run_id, page_id = _next_version(
+        store, key="transcript-next", notebook_id=notebook_id, logical_id=logical_id, png=png
     )
     store.store_semantic_proposal(
         A,
@@ -820,3 +799,141 @@ def test_retired_destination_refuses_before_canonical_writes() -> None:
     assert store.run_note_changes(A, run_id) == ()
     assert store.latest_revision_for_occurrence(A, prior.occurrence_id) is None
     assert store.accepted_semantic_material(A, run_id, require_promoted=True) is None
+
+
+def _date_plane(value: str) -> dict[str, object]:
+    return {
+        "page_candidates": [
+            {"scope": "PAGE", "value": value, "literal": value, "evidence_refs": ["header"]}
+        ]
+    }
+
+
+@pytest.mark.parametrize(
+    "prior_dates,current_dates",
+    [
+        ({}, {}),
+        ({}, _date_plane("2026-09-05")),
+        (_date_plane("2026-09-05"), _date_plane("2026-09-06")),
+        (_date_plane("2026-09-05"), {}),
+    ],
+)
+def test_date_only_revision_uses_last_revision_not_ambiguous_run_pointer(
+    prior_dates: dict[str, object], current_dates: dict[str, object]
+) -> None:
+    from dataclasses import replace
+
+    from my_pa.domain.capture.review import Disposition
+
+    store = MemoryDurableNoteStore()
+    first_run, page, notebook, logical = _plant(store, "date-first", png=_ink_png())
+    payload = {
+        "segments": [_segment(x_min=0.1, transcription="same ink")],
+        "date_evidence": prior_dates,
+    }
+    store.store_semantic_proposal(A, first_run, page, "note-unit.v1", "synthetic", "1", payload)
+    _accepted_evidence(store, first_run)
+    first = GoodNotesOccurrenceReconciler().reconcile(
+        A, first_run, repository=store, clock=lambda: WHEN
+    )
+    occurrence_id = first.changes[0].occurrence_id
+    assert occurrence_id is not None
+    original = store.latest_revision_for_occurrence(A, occurrence_id)
+    assert original is not None
+    run, page = _next_version(
+        store, key="date-next", notebook_id=notebook, logical_id=logical, png=_ink_png()
+    )
+    # AMBIGUOUS bookkeeping may point at an unrelated, unpromoted run.
+    occurrence = store._occurrences[(A, occurrence_id)]
+    store.store_occurrence(
+        replace(
+            occurrence,
+            identity_status=GoodNotesIdentityStatus.AMBIGUOUS,
+            run_id=issue_stable_id("gnrun", A, "ambiguous"),
+        )
+    )
+    store.store_semantic_proposal(A, run, page, "note-unit.v1", "synthetic", "1", payload)
+    store.review_semantic_proposal(
+        A, run, page, Disposition.CORRECT_AND_ACCEPT, {**payload, "date_evidence": current_dates}
+    )
+    result = GoodNotesOccurrenceReconciler().reconcile(
+        A, run, repository=store, clock=lambda: LATER
+    )
+    changed = prior_dates != current_dates
+    assert result.changes[0].change_state is (
+        GoodNotesNoteChangeState.REVISED if changed else GoodNotesNoteChangeState.UNCHANGED
+    )
+    latest = store.latest_revision_for_occurrence(A, occurrence_id)
+    assert latest is not None
+    if changed:
+        assert latest.supersedes_revision_id == original.revision_id
+        assert latest.page_version_id == page
+        assert latest.transcription == original.transcription
+    else:
+        assert latest == original
+    assert store._revisions[(A, original.revision_id)] == original
+    assert GoodNotesOccurrenceReconciler().reconcile(A, run, repository=store).replayed
+    assert (
+        GoodNotesNewOnlyDelivery()
+        .deliver(A, run, "operator-local", repository=store)
+        .receipt.suppressed
+    )
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "missing_snapshot",
+        "wrong_principal",
+        "wrong_notebook",
+        "membership",
+        "unpromoted",
+        "tampered",
+    ],
+)
+def test_prior_date_provenance_fails_closed(corruption: str) -> None:
+    from dataclasses import replace
+
+    from my_pa.application.goodnotes_occurrences import _prior_date_digest
+
+    store = MemoryDurableNoteStore()
+    run, page, _, _ = _plant(store, "date-refusal", png=_ink_png())
+    store.store_semantic_proposal(
+        A,
+        run,
+        page,
+        "note-unit.v1",
+        "synthetic",
+        "1",
+        {"segments": [_segment(x_min=0.1, transcription="same ink")]},
+    )
+    _accepted_evidence(store, run)
+    first = GoodNotesOccurrenceReconciler().reconcile(A, run, repository=store, clock=lambda: WHEN)
+    occurrence_id = first.changes[0].occurrence_id
+    assert occurrence_id is not None
+    occurrence = store._occurrences[(A, occurrence_id)]
+    revision = store.latest_revision_for_occurrence(A, occurrence_id)
+    assert revision is not None and revision.snapshot_id is not None
+    snapshot_key = (A, revision.snapshot_id)
+    snapshot = store._snapshots[snapshot_key]
+    if corruption == "missing_snapshot":
+        del store._snapshots[snapshot_key]
+    elif corruption == "wrong_principal":
+        store._snapshots[snapshot_key] = replace(
+            snapshot, principal_id="prn_bbbbbbbbbbbbbbbbbbbbbbbb"
+        )
+    elif corruption == "wrong_notebook":
+        store._snapshots[snapshot_key] = replace(
+            snapshot, notebook_id=issue_stable_id("gnnb", A, "wrong")
+        )
+    elif corruption == "membership":
+        store._positions.clear()
+    elif corruption == "unpromoted":
+        store._promotions.clear()
+    else:
+        key = (A, run, page)
+        store._reviews[key] = replace(
+            store._reviews[key], payload={"date_evidence": _date_plane("2026-09-06")}
+        )
+    with pytest.raises(ValueError):
+        _prior_date_digest(A, occurrence, revision, store)

@@ -700,9 +700,13 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("page", "principal_id"),
         ("request", "principal_id"),
     ),
-    # R6 rechecks stored snapshots and prior occurrences against the authenticated
-    # reconciliation owner before allowing cross-page visual identity matching.
+    # R6 verifies stored visual identity; R7 verifies immutable revision,
+    # snapshot, note and position ownership before comparing accepted dates.
     "application/goodnotes_occurrences.py": (
+        ("note", "principal_id"),
+        ("positions", "principal_id"),
+        ("revision", "principal_id"),
+        ("snapshot", "principal_id"),
         ("snapshot", "principal_id"),
         ("stored_occurrence", "principal_id"),
     ),

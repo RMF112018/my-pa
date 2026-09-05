@@ -128,3 +128,90 @@ def test_datetime_cannot_be_substituted_for_a_page_date() -> None:
             literal="2026-09-04T00:00:00Z",
             evidence_refs=("region:1",),
         )
+
+
+def _wire_date(**overrides: object) -> dict[str, object]:
+    return {
+        "scope": "PAGE",
+        "value": "2026-09-05",
+        "literal": "5 September",
+        "evidence_refs": ["synthetic-page-header"],
+        **overrides,
+    }
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"scope": "EVENT"},
+        {"value": "2026-02-30"},
+        {"value": "20260905"},
+        {"value": "2026-09-05T00:00:00"},
+        {"value": 20260905},
+        {"literal": ""},
+        {"literal": "x" * 201},
+        {"literal": "x\x00"},
+        {"evidence_refs": []},
+        {"evidence_refs": ["x", "x"]},
+        {"evidence_refs": ["x" * 201]},
+        {"evidence_refs": ["x\x00"]},
+        {"evidence_refs": [None]},
+        {"evidence_refs": "x"},
+        {"evidence_refs": [str(i) for i in range(33)]},
+        {"confidence": True},
+        {"confidence": None},
+        {"confidence": "0.5"},
+        {"confidence": float("nan")},
+        {"confidence": float("inf")},
+        {"confidence": -0.1},
+        {"confidence": 1.1},
+        {"unknown": "x"},
+    ],
+)
+def test_wire_date_items_fail_closed(changes: dict[str, object]) -> None:
+    from my_pa.domain.goodnotes.dates import canonical_date_evidence
+
+    with pytest.raises((ValueError, TypeError)):
+        canonical_date_evidence({"page_candidates": [_wire_date(**changes)]})
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        [],
+        True,
+        {"unknown": []},
+        {"page_candidates": ()},
+        {"page_candidates": [_wire_date(), _wire_date()]},
+        {"page_candidates": [_wire_date(literal=str(i)) for i in range(33)]},
+        {"page_candidates": [{}]},
+    ],
+)
+def test_wire_date_container_bounds(value: object) -> None:
+    from my_pa.domain.goodnotes.dates import canonical_date_evidence
+
+    with pytest.raises((ValueError, TypeError)):
+        canonical_date_evidence(value)
+
+
+def test_wire_date_maximum_and_distinct_evidence_preserved() -> None:
+    from my_pa.domain.goodnotes.dates import canonical_date_evidence
+
+    values = {
+        name: [
+            _wire_date(
+                scope=scope, literal=str(i), confidence=1, evidence_refs=[str(j) for j in range(32)]
+            )
+            for i in range(32)
+        ]
+        for name, scope in [
+            ("page_candidates", "PAGE"),
+            ("event_dates", "EVENT"),
+            ("body_dates", "BODY"),
+        ]
+    }
+    result = canonical_date_evidence(values)
+    assert result == values
+    assert canonical_date_evidence(result) == result
+    assert canonical_date_evidence({"page_candidates": []}) == {}

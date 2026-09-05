@@ -4382,6 +4382,7 @@ class ApplicationService:
                             "candidate_tags",
                             "ranked_candidates",
                             "confidence",
+                            "date_evidence",
                         }
                         if not set(patch) <= allowed_fields:
                             raise ReviewCorrectionError(
@@ -4401,6 +4402,7 @@ class ApplicationService:
                                 candidate_tags=tuple(corrected.get("candidate_tags", ())),
                                 ranked_candidates=tuple(corrected.get("ranked_candidates", ())),
                                 confidence=corrected.get("confidence"),
+                                date_evidence=corrected.get("date_evidence", {}),
                             )
                         except (TypeError, ValueError):
                             raise ReviewCorrectionError(

@@ -22,6 +22,7 @@ from my_pa.contracts.ports import GoodNotesSemanticProposalMaterial
 from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import utc_now
+from my_pa.domain.goodnotes.dates import canonical_date_evidence
 from my_pa.domain.goodnotes.models import (
     NOTE_UNIT_SCHEMA_V2,
     GoodNotesIdentityStatus,
@@ -95,6 +96,7 @@ class CurrentOccurrence:
     visual_verified: bool = False
     crop_dhash: str | None = None
     transcription_status: GoodNotesTranscriptionStatus | None = None
+    date_evidence_sha256: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +184,8 @@ class GoodNotesOccurrenceRepository(Protocol):
     def snapshots_for_run(
         self, principal_id: str, run_id: str
     ) -> tuple[GoodNotesSourceSnapshot, ...]: ...
+
+    def snapshot(self, principal_id: str, snapshot_id: str) -> GoodNotesSourceSnapshot | None: ...
 
     def page_positions(
         self, principal_id: str, snapshot_id: str
@@ -564,6 +568,63 @@ def _context_anchor(segments: Sequence[dict[str, object]]) -> str | None:
     return hashlib.sha256("\x1e".join(sorted(parts)).encode()).hexdigest()
 
 
+def _date_digest(payload: dict[str, object]) -> str:
+    evidence = canonical_date_evidence(payload.get("date_evidence", {}))
+    return hashlib.sha256(
+        json.dumps(evidence, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _prior_date_digest(
+    principal_id: str,
+    occurrence: GoodNotesNoteOccurrence,
+    revision: GoodNotesNoteRevision | None,
+    repository: GoodNotesOccurrenceRepository,
+) -> str:
+    """Recover dates from immutable revision provenance, never mutable run pointers."""
+    error = "prior GoodNotes revision has no verified semantic provenance"
+    if (
+        revision is None
+        or revision.principal_id != principal_id
+        or revision.note_id != occurrence.note_id
+        or revision.occurrence_id != occurrence.occurrence_id
+        or revision.snapshot_id is None
+        or revision.page_version_id is None
+    ):
+        raise ValueError(error)
+    snapshot = repository.snapshot(principal_id, revision.snapshot_id)
+    note = repository.note(principal_id, occurrence.note_id)
+    if (
+        snapshot is None
+        or snapshot.principal_id != principal_id
+        or snapshot.snapshot_id != revision.snapshot_id
+        or note is None
+        or note.principal_id != principal_id
+        or snapshot.notebook_id != note.notebook_id
+    ):
+        raise ValueError(error)
+    positions = tuple(
+        position
+        for position in repository.page_positions(principal_id, snapshot.snapshot_id)
+        if position.page_version_id == revision.page_version_id
+    )
+    if (
+        len(positions) != 1
+        or positions[0].principal_id != principal_id
+        or positions[0].snapshot_id != snapshot.snapshot_id
+    ):
+        raise ValueError(error)
+    accepted = repository.accepted_semantic_material(
+        principal_id, snapshot.run_id, require_promoted=True
+    )
+    material = tuple(
+        item for item in accepted or () if item.page_version_id == revision.page_version_id
+    )
+    if len(material) != 1 or material[0].run_id != snapshot.run_id:
+        raise ValueError(error)
+    return _date_digest(material[0].payload)
+
+
 def _note_units(
     *,
     payload: dict[str, object],
@@ -582,6 +643,7 @@ def _note_units(
     if len(segments) != len(raw_segments):
         raise ValueError("a GoodNotes proposal is missing required geometry")
     anchor = _context_anchor(segments)
+    date_digest = _date_digest(payload)
     current: list[CurrentOccurrence] = []
     for segment in segments:
         kind = segment.get("kind")
@@ -649,6 +711,7 @@ def _note_units(
                 visual_verified=grounded is not None and not grounded.blank,
                 crop_dhash=None if grounded is None else grounded.dhash,
                 transcription_status=status,
+                date_evidence_sha256=date_digest,
             )
         )
     return tuple(current)
@@ -921,6 +984,10 @@ class GoodNotesOccurrenceReconciler:
         if current is None or prior is None:
             raise ValueError("a paired occurrence match is missing current or prior identity")
         latest = repository.latest_revision_for_occurrence(principal_id, prior.occurrence_id)
+        date_changed = (
+            _prior_date_digest(principal_id, prior, latest, repository)
+            != current.date_evidence_sha256
+        )
         prior_digest = None if latest is None else _transcription_digest(latest.transcription)
         current_digest = _transcription_digest(current.transcription)
         transcription_changed = prior_digest != current_digest
@@ -972,7 +1039,7 @@ class GoodNotesOccurrenceReconciler:
             )
         )
         revision_id = None
-        if transcription_changed or visual_changed:
+        if transcription_changed or visual_changed or date_changed:
             stored_revision = repository.store_revision(
                 GoodNotesNoteRevision(
                     revision_id=issue_stable_id(
@@ -995,7 +1062,7 @@ class GoodNotesOccurrenceReconciler:
             revision_id = stored_revision.revision_id
         state = (
             GoodNotesNoteChangeState.REVISED
-            if visual_changed
+            if visual_changed or date_changed
             else GoodNotesNoteChangeState.UNCHANGED
         )
         return repository.store_run_note_change(

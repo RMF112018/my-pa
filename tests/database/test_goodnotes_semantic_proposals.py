@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -30,6 +31,10 @@ from my_pa.domain.goodnotes.models import (
 )
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence.goodnotes import PostgresGoodNotesRepository
+from my_pa.infrastructure.persistence.goodnotes_pull import (
+    SqlGoodNotesPullRepository,
+    _corrected_result_sha256,
+)
 from my_pa.infrastructure.persistence.goodnotes_semantics import SqlGoodNotesSemanticRepository
 
 pytestmark = pytest.mark.database
@@ -250,3 +255,44 @@ def test_cross_principal_isolation_exact_replay_and_no_run_note_changes(engine: 
 @pytest.fixture
 def engine(db_engine: Engine) -> Engine:
     return db_engine
+
+
+def test_date_payload_digest_parity_and_historical_empty_replay(engine: Engine) -> None:
+    with engine.begin() as connection:
+        run_id, page_id = _plant(PostgresGoodNotesRepository(connection), A, "date-parity")
+        semantics = SqlGoodNotesSemanticRepository(connection)
+        plain = _command(run_id, page_id, key="historical-date-absent", transcription="synthetic")
+        empty = replace(
+            plain, date_evidence={"page_candidates": [], "event_dates": [], "body_dates": []}
+        )
+        assert fingerprint_proposal(plain) == fingerprint_proposal(empty)
+        original = _submit(semantics, plain, principal_id=A)
+        replay = _submit(semantics, empty, principal_id=A)
+        assert original.created and not replay.created
+        assert replay.proposal.proposal_id == original.proposal.proposal_id
+        date_payload: dict[str, object] = {
+            "body_dates": [
+                {
+                    "scope": "BODY",
+                    "value": "2026-09-05",
+                    "literal": "September 5",
+                    "evidence_refs": ["body"],
+                    "confidence": 1,
+                }
+            ],
+        }
+        dated = replace(plain, idempotency_key="nonempty-date", date_evidence=date_payload)
+        fingerprint, digest, body = fingerprint_proposal(dated)
+        assert fingerprint != fingerprint_proposal(plain)[0]
+        assert digest == _corrected_result_sha256(body)
+        assert digest != _corrected_result_sha256(fingerprint_proposal(plain)[2])
+        persisted = _submit(semantics, dated, principal_id=A)
+        material = SqlGoodNotesPullRepository(connection).semantic_proposal_material(
+            A, persisted.proposal.proposal_id
+        )
+        assert material is not None and material.payload == body
+        assert material.payload["date_evidence"] == dated.date_evidence
+        with pytest.raises(GoodNotesProposalConflictError):
+            _submit(
+                semantics, replace(dated, idempotency_key=plain.idempotency_key), principal_id=A
+            )

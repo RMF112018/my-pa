@@ -76,6 +76,7 @@ from my_pa.domain.documents.managed import (
     validate_managed_media_type,
     validate_managed_title,
 )
+from my_pa.domain.goodnotes.dates import canonical_date_evidence
 from my_pa.domain.goodnotes.models import (
     NOTE_UNIT_SCHEMA_V1,
     GoodNotesNoteClass,
@@ -695,6 +696,57 @@ def _goodnotes_propose_payload_properties() -> dict[str, object]:
                 "Optional page-level confidence. Prefer per-NOTE_UNIT confidence "
                 "on segments for note-unit.v2."
             ),
+        },
+        "date_evidence": {
+            "type": "object",
+            "additionalProperties": False,
+            "description": (
+                "Optional separate PAGE, EVENT and BODY evidence; never scheduling instructions."
+            ),
+            "properties": {
+                name: {
+                    "type": "array",
+                    "maxItems": 32,
+                    "uniqueItems": True,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["scope", "value", "literal", "evidence_refs"],
+                        "properties": {
+                            "scope": {"type": "string", "const": scope},
+                            "value": {
+                                "type": "string",
+                                "format": "date",
+                                "pattern": r"^\d{4}-\d{2}-\d{2}$",
+                            },
+                            "literal": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 200,
+                                "pattern": r"^[^\u0000]+$",
+                            },
+                            "evidence_refs": {
+                                "type": "array",
+                                "minItems": 1,
+                                "maxItems": 32,
+                                "uniqueItems": True,
+                                "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200,
+                                    "pattern": r"^[^\u0000]+$",
+                                },
+                            },
+                            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                        },
+                    },
+                }
+                for name, scope in (
+                    ("page_candidates", "PAGE"),
+                    ("event_dates", "EVENT"),
+                    ("body_dates", "BODY"),
+                )
+            },
         },
         "if": {
             "properties": {"schema_version": {"const": NOTE_UNIT_SCHEMA_V1}},
@@ -3834,6 +3886,7 @@ class SubmitGoodNotesProposal:
     candidate_tags: tuple[str, ...] = ()
     ranked_candidates: tuple[dict[str, object], ...] = ()
     confidence: dict[str, object] | None = None
+    date_evidence: dict[str, object] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
         _goodnotes_id(self.run_id, "gnrun", SafeDetail.RUN_ID)
@@ -3860,6 +3913,11 @@ class SubmitGoodNotesProposal:
         object.__setattr__(self, "candidate_tags", _candidate_tags(self.candidate_tags))
         object.__setattr__(self, "ranked_candidates", _ranked_candidates(self.ranked_candidates))
         object.__setattr__(self, "confidence", _confidence(self.confidence))
+        try:
+            dates = canonical_date_evidence(self.date_evidence)
+        except (TypeError, ValueError, OverflowError):
+            raise InvalidRequestError(SafeDetail.PAYLOAD) from None
+        object.__setattr__(self, "date_evidence", dates)
 
 
 SubmitGoodNotesProposal.__doc__ = (

@@ -82,7 +82,7 @@ PREVIOUS_REVISION: Final = "16f05c46b8c3"
 
 #: Every `migrations/versions/*.py` on the chain, this revision included.
 #: Counted on the merged tree after the re-parent (RULING-M2): 88 on
-: `origin/main` at `16f05c46b8c3` plus this revision, graph vocabulary,
+#: `origin/main` at `16f05c46b8c3` plus this revision, graph vocabulary,
 #: GoodNotes pull, promotion receipt, and canvas overlay successors.
 REVISION_FILE_COUNT: Final = 93
 

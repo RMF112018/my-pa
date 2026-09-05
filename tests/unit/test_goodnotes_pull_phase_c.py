@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta
 
 import pytest
 
 from my_pa.adapters.mcp.server import _answer
-from my_pa.application.commands import CompleteGoodNotesPull, PullGoodNotesWork
+from my_pa.application.commands import (
+    CompleteGoodNotesPull,
+    GetGoodNotesPullStatus,
+    PullGoodNotesWork,
+)
 from my_pa.application.goodnotes_occurrences import (
     GoodNotesOccurrenceReconciler,
     GoodNotesSemanticPromotionEvidence,
@@ -18,6 +23,7 @@ from my_pa.application.goodnotes_pull_orchestration import (
     PullAssignment,
     PullCompletionAdmission,
     PullCompletionReceipt,
+    PullRepositoryConflictError,
     PullWorkState,
 )
 from my_pa.application.service import ApplicationService
@@ -26,7 +32,7 @@ from my_pa.contracts.ports import (
     GoodNotesPullStatusRecord,
     GoodNotesSemanticPromotionEvidenceRecord,
 )
-from my_pa.contracts.v1.envelope import RequestMetadata
+from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.review import Disposition
 from my_pa.domain.capture.submission import CaptureTransport
@@ -42,8 +48,18 @@ class _PullRepository:
     work: GoodNotesPageWork
     disposition: Disposition = Disposition.ACCEPT
     assignments: dict[str, PullAssignment] = field(default_factory=dict)
-    attempts: int = 0
-    completed: bool = False
+    client_states: dict[str, PullWorkState] = field(default_factory=dict)
+    sessions: dict[str, tuple[str, int, int]] = field(default_factory=dict)
+    now: datetime = WHEN
+
+    @property
+    def attempts(self) -> int:
+        return sum(state.attempts for state in self.client_states.values())
+
+    @property
+    def completed(self) -> bool:
+        return any(state.completed for state in self.client_states.values())
+
     material_proposal_sha256: str | None = None
 
     @property
@@ -59,10 +75,25 @@ class _PullRepository:
         )
         return hashlib.sha256(value).hexdigest()
 
-    def work_states(self, principal_id: str) -> tuple[PullWorkState, ...]:
+    def lock_session(
+        self,
+        principal_id: str,
+        client_id: str,
+        context_id: str,
+        *,
+        max_attempts: int,
+        lease_seconds: int,
+    ) -> datetime:
+        assert principal_id == self.work.principal_id
+        policy = (context_id, max_attempts, lease_seconds)
+        if self.sessions.setdefault(client_id, policy) != policy:
+            raise PullRepositoryConflictError
+        return self.now
+
+    def work_states(self, principal_id: str, client_id: str) -> tuple[PullWorkState, ...]:
         if principal_id != self.work.principal_id:
             return ()
-        return (PullWorkState(self.work, attempts=self.attempts, completed=self.completed),)
+        return (self.client_states.get(client_id, PullWorkState(self.work)),)
 
     def claim_batch(
         self,
@@ -73,12 +104,28 @@ class _PullRepository:
         expected_attempts: tuple[int, ...],
         *,
         max_attempts: int,
+        lease_seconds: int,
     ) -> tuple[PullAssignment, ...]:
-        del context_id, max_attempts
+        self.lock_session(
+            principal_id,
+            client_id,
+            context_id,
+            max_attempts=max_attempts,
+            lease_seconds=lease_seconds,
+        )
         if assignments:
             assert principal_id == self.work.principal_id
-            assert expected_attempts == (self.attempts,)
-            self.attempts += 1
+            state = self.client_states.get(client_id, PullWorkState(self.work))
+            assert expected_attempts == (state.attempts,)
+            assert state.assigned_at is None or self.now >= state.assigned_at + timedelta(
+                seconds=lease_seconds
+            )
+            self.client_states[client_id] = replace(
+                state,
+                attempts=state.attempts + 1,
+                latest_assignment=assignments[0],
+                assigned_at=self.now,
+            )
             self.assignments[assignments[0].assignment_id] = assignments[0]
             assert assignments[0].client_id == client_id
         return assignments
@@ -128,17 +175,34 @@ class _PullRepository:
                     result_sha256=completion.result_sha256,
                 )
             )
-        self.completed = True
+        self.client_states[client_id] = replace(self.client_states[client_id], completed=True)
         return tuple(values)
 
-    def status(self, principal_id: str, client_id: str) -> GoodNotesPullStatusRecord:
-        del client_id
+    def status(
+        self,
+        principal_id: str,
+        client_id: str,
+        *,
+        context_id: str,
+        max_attempts: int,
+        lease_seconds: int,
+    ) -> GoodNotesPullStatusRecord:
         assert principal_id == self.work.principal_id
+        if client_id in self.sessions and self.sessions[client_id] != (
+            context_id,
+            max_attempts,
+            lease_seconds,
+        ):
+            raise PullRepositoryConflictError
+        state = self.client_states.get(client_id, PullWorkState(self.work))
+        active = state.assigned_at is not None and self.now < state.assigned_at + timedelta(
+            seconds=lease_seconds
+        )
         return GoodNotesPullStatusRecord(
-            pending=0 if self.attempts else 1,
-            assigned=1 if self.attempts and not self.completed else 0,
-            completed=1 if self.completed else 0,
-            exhausted=0,
+            pending=int(not state.completed and not active and state.attempts < max_attempts),
+            assigned=int(not state.completed and active),
+            completed=int(state.completed),
+            exhausted=int(not state.completed and not active and state.attempts >= max_attempts),
         )
 
     def semantic_review_evidence(
@@ -455,3 +519,61 @@ def test_remote_mcp_passes_only_server_authenticated_client_context(scene: Scene
     )
     assert failed is True
     assert other.attempts == 0
+
+
+def test_public_restart_and_configured_lease_resume_stable_context(scene: Scene) -> None:
+    repository = _repository(scene)
+
+    def service(lease: int) -> ApplicationService:
+        return ApplicationService(
+            unit_of_work=lambda: _PullUnitOfWork(scene, repository),
+            limits=DEFAULT_LIMITS,
+            clock=lambda: WHEN,
+            goodnotes_pull_enabled=True,
+            goodnotes_pull_cursor_signing_key=b"k" * 32,
+            goodnotes_pull_assignment_lease_seconds=lease,
+        )
+
+    def pull(lease: int) -> ResponseEnvelope:
+        return service(lease).invoke(
+            _metadata(Capability.GOODNOTES_PULL, Purpose.GOODNOTES_PULL),
+            PullGoodNotesWork(batch_size=1, cursor=None),
+            principal=scene.principal,
+            authenticated_client_id="oauth-client-a",
+        )
+
+    first = pull(60)
+    assert first.error is None
+    policy = repository.sessions["oauth-client-a"]
+    assert policy[2] == 60
+    repository.now += timedelta(seconds=59)
+    restarted = pull(60)
+    assert restarted.error is None and restarted.result == first.result
+    assert repository.sessions["oauth-client-a"] == policy
+    changed = pull(61)
+    assert changed.error is not None and changed.error.code == "conflict"
+    status = service(61).invoke(
+        _metadata(Capability.GOODNOTES_STATUS, Purpose.GOODNOTES_PULL_OBSERVATION),
+        GetGoodNotesPullStatus(),
+        principal=scene.principal,
+        authenticated_client_id="oauth-client-a",
+    )
+    assert status.error is not None and status.error.code == "conflict"
+    assert repository.attempts == 1
+    repository.now += timedelta(seconds=1)
+    successor = pull(60)
+    assert successor.error is None and successor.result != first.result
+    assert repository.attempts == 2
+
+
+def test_public_status_before_discovery_does_not_create_session(scene: Scene) -> None:
+    repository = _repository(scene)
+    result = _service(scene, repository).invoke(
+        _metadata(Capability.GOODNOTES_STATUS, Purpose.GOODNOTES_PULL_OBSERVATION),
+        GetGoodNotesPullStatus(),
+        principal=scene.principal,
+        authenticated_client_id="oauth-client-a",
+    )
+    assert result.error is None
+    assert result.result == {"pending": 1, "assigned": 0, "completed": 0, "exhausted": 0}
+    assert repository.sessions == {}

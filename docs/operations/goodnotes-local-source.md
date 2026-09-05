@@ -152,3 +152,34 @@ unpromoted prior provenance fails closed rather than inventing prior dates.
 Dates never establish identity, infer scheduling, or come from page ordinal,
 file paths, modification time or observation time. No new date columns or
 user-facing delivery format are introduced.
+
+Authenticated client pull uses a durable Principal-and-client partition for
+assignments, attempts, completion keys and status. Restarting the server or
+losing a cursor resumes the same outstanding assignment ID and attempt, ordered
+by original assignment time then immutable work identity. Existing cursor
+authentication and the stable server-derived client context remain unchanged.
+One client's progress does not consume another client's budget; both clients
+still require the same authoritative semantic proposal and promoting Review.
+
+`MY_PA_GOODNOTES_PULL_ASSIGNMENT_LEASE_SECONDS` is a non-secret integer setting,
+default **900 seconds**, bounded **60–86400 seconds**. It does not enable pull
+or activate a source. The policy is persisted immutably with each client
+session; changing the configured value for an existing session fails closed
+instead of reinterpreting its assignments. Existing sessions receive 900
+seconds through the additive migration. Context/key rotation remains outside
+this contract.
+
+Discovery resumes unexpired assignments first and fills remaining batch space
+with fresh or expired retry-eligible work. Ordinary polling never spends another
+attempt. Expiry permits one successor under the same session lock used by
+completion: a still-current expired assignment may complete, but a committed
+successor makes the old handle stale. Completed work is never retried. Status
+counts fresh or expired retry-eligible work as pending, unexpired work as
+assigned (including the final attempt), and expired unresolved final attempts
+as exhausted. Status reads existing policy without creating a session.
+
+Attempts and completion receipts remain append-only. Migration downgrade
+refuses client-key collisions or nondefault lease policies that the preceding
+schema cannot represent; it never deletes history to make narrowing succeed.
+No scheduler, retry request field, new public capability or source write is
+introduced.

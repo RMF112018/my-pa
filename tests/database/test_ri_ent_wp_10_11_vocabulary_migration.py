@@ -88,7 +88,7 @@ HEAD_REVISION: Final = "b8e4d1a6c073"
 GRAPH_REVISION: Final = "c3f8a1d07e94"
 PULL_REVISION: Final = "6a2f9d1c4b80"
 PROMOTION_REVISION: Final = "a4d8e31b2c90"
-CURRENT_HEAD_REVISION: Final = "d4e8b1c7a902"
+CURRENT_HEAD_REVISION: Final = "e8f2a6c9d104"
 #: What was head until `REVISION` stacked on it, and therefore the revision
 #: this module downgrades to. This revision was written against `c99cd8ed8d1c`
 #: and re-parented onto `UI-IMP-WP02`'s `2c00c9ac64bc` when `origin/main` merged
@@ -339,7 +339,8 @@ def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> N
     assert heads == [CURRENT_HEAD_REVISION], (
         f"expected exactly {CURRENT_HEAD_REVISION}, found {heads}"
     )
-    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "a4d8e31b2c90"
+    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "d4e8b1c7a902"
+    assert script.get_revision("d4e8b1c7a902").down_revision == "a4d8e31b2c90"
     assert script.get_revision("a4d8e31b2c90").down_revision == "6a2f9d1c4b80"
     assert script.get_revision("6a2f9d1c4b80").down_revision == GRAPH_REVISION
     assert script.get_revision(GRAPH_REVISION).down_revision == HEAD_REVISION

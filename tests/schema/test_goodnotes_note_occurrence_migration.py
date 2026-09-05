@@ -140,8 +140,9 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert len(list(script.get_heads())) == 1
     assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PRIOR
-    # 91 migration files: 90 through `c3f8a1d07e94` as described below, plus
-    # `6a2f9d1c4b80` (GoodNotes pull/review) as its direct child. The first 85
+    # 92 migration files: `a4d8e31b2c90` (R8 promotion receipt) extends
+    # the 91-file predecessor chain ending at `6a2f9d1c4b80` (pull/review),
+    # whose parent is `c3f8a1d07e94`. The first 85
     # run through `1cda4d536268` (RI-ENT-WP-07), plus
     # `c99cd8ed8d1c` (commit `37ead78`, RI-ENT-WP-08's blocker-clearing pass),
     # which renames the seeded entity_relationship_types row

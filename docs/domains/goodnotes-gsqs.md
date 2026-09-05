@@ -34,7 +34,7 @@ GoodNotes local-source handling is a filesystem and subprocess security boundary
 - on supported POSIX systems, one process session/group per OCR invocation with bounded nonblocking pipe handling and bounded cleanup; timeout, output overflow, pipe failure, or a descendant retaining a pipe cannot turn partial output into success;
 - fail-closed behavior when the required process-containment mechanism is unavailable.
 
-The current implementation details are documented in `docs/operations/goodnotes-local-source.md` and enforced by the corresponding architecture/security/unit tests. A future unmerged hardening change is candidate evidence until merged; current documentation must follow the authenticated repository tree.
+The current implementation details are documented in the [GoodNotes local-source contract](../operations/goodnotes-local-source.md) and enforced by the corresponding architecture/security/unit tests. A future unmerged hardening change is candidate evidence until merged; current documentation must follow the authenticated repository tree.
 
 ## Semantics and review
 
@@ -66,4 +66,4 @@ Check:
 9. synthetic security/database/contract tests;
 10. runbook/update implications.
 
-Detailed operational truth is routed from `ops/runbooks/README.md`.
+Detailed operational truth is routed from the [operations runbook index](../../ops/runbooks/README.md).

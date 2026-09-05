@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from sqlalchemy import Engine, insert, text
+from sqlalchemy import Engine, insert, select, text
 from sqlalchemy.sql import Executable
 
 from my_pa.application.commands import SubmitGoodNotesProposal
@@ -22,7 +24,7 @@ from my_pa.application.goodnotes_occurrences import (
     semantic_proposal_sha256,
 )
 from my_pa.application.goodnotes_semantics import fingerprint_proposal
-from my_pa.domain.capture.review import Disposition
+from my_pa.contracts.ports import GoodNotesSemanticReviewDecisionRecord
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.goodnotes.models import (
     GoodNotesDeliveryAttemptState,
@@ -52,8 +54,13 @@ from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.goodnotes.visual import grayscale_png
 from my_pa.infrastructure.persistence.goodnotes import PostgresGoodNotesRepository
 from my_pa.infrastructure.persistence.goodnotes_delivery import PostgresGoodNotesDeliveryRepository
+from my_pa.infrastructure.persistence.goodnotes_pull import SqlGoodNotesPullRepository
 from my_pa.infrastructure.persistence.goodnotes_semantics import SqlGoodNotesSemanticRepository
-from my_pa.infrastructure.persistence.tables import projects
+from my_pa.infrastructure.persistence.tables import (
+    goodnotes_ingestion_run_stages,
+    goodnotes_semantic_proposals,
+    projects,
+)
 
 pytestmark = pytest.mark.database
 ROOT = Path(__file__).resolve().parents[2]
@@ -169,6 +176,7 @@ def _plant(
             page_id=page.page_id,
             source_version_id="ver_aaaaaaaaaaaaaaaaaaaaaaaa",
             content_sha256=DIGEST,
+            exact_render_sha256=hashlib.sha256(_ink_png()).hexdigest(),
             observed_at=WHEN,
             logical_page_id=logical.logical_page_id,
             renderer_name="synthetic",
@@ -201,6 +209,16 @@ def _plant(
             renderer_version="1",
             render_profile_version="v1",
             created_at=WHEN,
+        )
+    )
+    repository.connection.execute(
+        goodnotes_ingestion_run_stages.insert().values(
+            principal_id=principal_id,
+            run_id=run.run_id,
+            stage="CONTENT_READY",
+            status="SUCCEEDED",
+            started_at=WHEN,
+            ended_at=WHEN,
         )
     )
     return run.run_id, version.page_version_id, notebook.notebook_id, logical.logical_page_id
@@ -286,15 +304,33 @@ def _accepted_evidence(
     principal_id: str,
     run_id: str,
 ) -> tuple[GoodNotesSemanticPromotionEvidence, ...]:
-    return tuple(
-        GoodNotesSemanticPromotionEvidence(
-            principal_id=principal_id,
-            run_id=run_id,
-            proposal_sha256=semantic_proposal_sha256(*proposal),
-            disposition=Disposition.ACCEPT,
+    pull = SqlGoodNotesPullRepository(repository.connection)
+    for row in repository.connection.execute(
+        select(goodnotes_semantic_proposals).where(
+            goodnotes_semantic_proposals.c.principal_id == principal_id,
+            goodnotes_semantic_proposals.c.run_id == run_id,
         )
-        for proposal in repository.semantic_proposals_for_run(principal_id, run_id)
-    )
+    ):
+        digest = semantic_proposal_sha256(
+            str(row.page_version_id),
+            str(row.schema_version),
+            str(row.analyzer_name),
+            str(row.analyzer_version),
+            row.payload,
+        )
+        pull.record_semantic_review(
+            GoodNotesSemanticReviewDecisionRecord(
+                decision_id="gnsrd_" + digest[:24],
+                principal_id=principal_id,
+                run_id=run_id,
+                proposal_id=str(row.proposal_id),
+                proposal_sha256=digest,
+                action="accept",
+                request_fingerprint=digest,
+                decided_at=WHEN,
+            )
+        )
+    return ()
 
 
 def _project(connection: object, principal_id: str, name: str) -> str:
@@ -474,7 +510,15 @@ def test_no_new_run_writes_suppressed_receipt(engine: Engine) -> None:
     with engine.begin() as connection:
         lineage = PostgresGoodNotesRepository(connection)
         delivery = PostgresGoodNotesDeliveryRepository(connection)
-        run_id, _, _, _ = _plant(lineage, A, "none")
+        run_id, page_id, _, _ = _plant(lineage, A, "none")
+        _propose(
+            SqlGoodNotesSemanticRepository(connection),
+            principal_id=A,
+            run_id=run_id,
+            page_version_id=page_id,
+            key="no-note-accepted",
+            segments=(_segment(x_min=0.1, transcription="", kind="SOURCE_CONTEXT"),),
+        )
         GoodNotesOccurrenceReconciler().reconcile(
             A,
             run_id,
@@ -778,7 +822,16 @@ def test_null_revision_id_does_not_use_latest_at_delivery(engine: Engine) -> Non
     with engine.begin() as connection:
         lineage = PostgresGoodNotesRepository(connection)
         delivery = PostgresGoodNotesDeliveryRepository(connection)
-        run_id, _, notebook_id, logical_id = _plant(lineage, A, "legacy-null")
+        run_id, page_id, notebook_id, logical_id = _plant(lineage, A, "legacy-null")
+        _propose(
+            SqlGoodNotesSemanticRepository(connection),
+            principal_id=A,
+            run_id=run_id,
+            page_version_id=page_id,
+            key="null-revision-accepted",
+            segments=(_segment(x_min=0.1, transcription="synthetic original"),),
+        )
+        _accepted_evidence(lineage, A, run_id)
         note = lineage.store_note(
             GoodNotesNote(
                 note_id=issue_stable_id("gnnt", A, "legacy-null"),
@@ -842,6 +895,7 @@ def test_null_revision_id_does_not_use_latest_at_delivery(engine: Engine) -> Non
                 created_at=WHEN,
             )
         )
+        SqlGoodNotesPullRepository(connection).record_semantic_promotion(A, run_id)
         latest = lineage.latest_revision_for_occurrence(A, occurrence.occurrence_id)
         assert latest is not None
         assert latest.transcription == "synthetic corrected"
@@ -1015,3 +1069,94 @@ def test_attempt_crash_windows_do_not_duplicate_notes(engine: Engine) -> None:
 @pytest.fixture
 def engine(db_engine: Engine) -> Engine:
     return db_engine
+
+
+def test_corrected_review_drives_canonical_preview_and_associations(engine: Engine) -> None:
+    with engine.begin() as connection:
+        lineage = PostgresGoodNotesRepository(connection)
+        delivery = PostgresGoodNotesDeliveryRepository(connection)
+        pull = SqlGoodNotesPullRepository(connection)
+        run_id, page_id, _, _ = _plant(lineage, A, "corrected-review")
+        original_project = _project(connection, A, "Alpha Project")
+        accepted_project = _project(connection, A, "Beta Project")
+        _propose(
+            SqlGoodNotesSemanticRepository(connection),
+            principal_id=A,
+            run_id=run_id,
+            page_version_id=page_id,
+            key="corrected-review",
+            schema_version="note-unit.v2",
+            segments=(
+                _segment(
+                    x_min=0.1,
+                    transcription="original proposal text",
+                    primary_class="MEETING",
+                    ranked_candidates=[{"rank": 1, "candidate": "Alpha Project"}],
+                ),
+            ),
+        )
+        proposal = connection.execute(select(goodnotes_semantic_proposals)).one()
+        original = deepcopy(proposal.payload)
+        corrected = deepcopy(original)
+        corrected["segments"][0]["transcription"] = "accepted corrected text"
+        corrected["segments"][0]["primary_class"] = "PROJECT"
+        corrected["segments"][0]["ranked_candidates"] = [{"rank": 1, "candidate": "Beta Project"}]
+        digest = semantic_proposal_sha256(
+            page_id,
+            proposal.schema_version,
+            proposal.analyzer_name,
+            proposal.analyzer_version,
+            original,
+        )
+        accepted_digest = hashlib.sha256(
+            json.dumps(
+                {
+                    key: corrected[key]
+                    for key in ("segments", "candidate_tags", "ranked_candidates", "confidence")
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        pull.record_semantic_review(
+            GoodNotesSemanticReviewDecisionRecord(
+                decision_id="gnsrd_" + digest[:24],
+                principal_id=A,
+                run_id=run_id,
+                proposal_id=proposal.proposal_id,
+                proposal_sha256=digest,
+                action="correct_and_accept",
+                request_fingerprint=accepted_digest,
+                decided_at=WHEN,
+                corrected_payload=corrected,
+                corrected_result_sha256=accepted_digest,
+            )
+        )
+        reconciled = GoodNotesOccurrenceReconciler().reconcile(
+            A, run_id, repository=lineage, clock=lambda: LATER
+        )
+        assert len(reconciled.changes) == 1
+        change = reconciled.changes[0]
+        assert change.revision_id is not None and change.note_id is not None
+        revision = lineage.revision(A, change.revision_id)
+        assert revision is not None and revision.transcription == "accepted corrected text"
+        note = lineage.note(A, change.note_id)
+        assert note is not None and note.primary_class is not None
+        assert note.primary_class.value == "PROJECT"
+        result = GoodNotesNewOnlyDelivery().deliver(
+            A, run_id, DESTINATION, repository=delivery, clock=lambda: LATER
+        )
+        assert result.receipt.body is not None
+        assert "accepted corrected text" in result.receipt.body
+        assert "original proposal text" not in result.receipt.body
+        assert {item.resolved_id for item in result.associations} == {accepted_project}
+        assert original_project not in {item.resolved_id for item in result.associations}
+        assert (
+            connection.execute(select(goodnotes_semantic_proposals.c.payload)).scalar_one()
+            == original
+        )
+        replay = GoodNotesNewOnlyDelivery().deliver(
+            A, run_id, DESTINATION, repository=delivery, clock=lambda: CORRECTED
+        )
+        assert replay.receipt.replayed and replay.receipt.receipt_id == result.receipt.receipt_id
+        assert replay.associations == result.associations

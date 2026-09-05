@@ -43,11 +43,9 @@ NEXT_REVISION: Final = "16f05c46b8c3"
 HEAD_REVISION: Final = "b8e4d1a6c073"
 #: PR192's graph-vocabulary migration directly above `HEAD_REVISION`.
 GRAPH_REVISION: Final = "c3f8a1d07e94"
-#: The additive GoodNotes migration directly above `GRAPH_REVISION`, and the
-#: sole current chain head.
+#: GoodNotes pull/review, then R8 promotion receipts, then canvas overlay head.
 GOODNOTES_REVISION: Final = "6a2f9d1c4b80"
-#: The additive canvas-workspace overlay (UI-IMP-WP17), and the
-#: sole current chain head.
+PROMOTION_REVISION: Final = "a4d8e31b2c90"
 CURRENT_HEAD_REVISION: Final = "d4e8b1c7a902"
 NEW_TABLES: Final = frozenset(
     {
@@ -99,18 +97,20 @@ def test_tables_share_the_canonical_identity_metadata() -> None:
     assert NEW_TABLES.issubset({table.name for table in IDENTITY_METADATA.tables.values()})
 
 
-def test_the_chain_has_one_head_and_this_revision_is_four_links_beneath_it() -> None:
+def test_the_chain_has_one_head_and_this_revision_is_five_links_beneath_it() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD_REVISION]
-    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == GOODNOTES_REVISION
-    assert script.get_revision(GOODNOTES_REVISION).down_revision == GRAPH_REVISION
+    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "a4d8e31b2c90"
+    assert script.get_revision("a4d8e31b2c90").down_revision == "6a2f9d1c4b80"
+    assert script.get_revision("6a2f9d1c4b80").down_revision == GRAPH_REVISION
     assert script.get_revision(GRAPH_REVISION).down_revision == HEAD_REVISION
     assert script.get_revision(HEAD_REVISION).down_revision == NEXT_REVISION
     assert script.get_revision(NEXT_REVISION).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PRIOR_REVISION
     # 91 on the merged tree: 88 at `16f05c46b8c3`, plus `b8e4d1a6c073`, the
     # graph vocabulary admission, and additive GoodNotes successor.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 92
+    # R8 adds one receipt migration on the previous 91-revision chain.
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 93
 
 
 @pytest.mark.database

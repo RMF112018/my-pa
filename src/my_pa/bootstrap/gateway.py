@@ -179,6 +179,7 @@ from my_pa.application.entity_reenrichment import (
     ProductionReenrichmentCaller,
     ReenrichmentWork,
 )
+from my_pa.application.goodnotes_orchestrator import rollout_stage_permits
 from my_pa.application.native_sources import NativeSourceController
 from my_pa.application.producer_origin import ProducerOrigin, ProducerOriginRegistry
 from my_pa.application.service import ApplicationService
@@ -189,6 +190,7 @@ from my_pa.application.session_service_auth import (
 )
 from my_pa.application.webauthn_bff_attestation import verify_webauthn_attestation
 from my_pa.bootstrap.apple_machine_control import SqlAppleMachineControl
+from my_pa.bootstrap.goodnotes_rollout import allowed_activation_steps
 from my_pa.bootstrap.settings import AuthMode, Settings
 from my_pa.contracts.ports import ManagedByteStore, UnitOfWork
 from my_pa.domain.capture.client import admit_client_binding, parse_client_credential
@@ -1011,6 +1013,10 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
                 and settings.relationship_intelligence_writes_enabled
             ),
             producer_origins=producer_origins,
+            goodnotes_canonical_semantic_writes_enabled=any(
+                rollout_stage_permits(stage, "canonical_writes")
+                for stage in allowed_activation_steps(settings)
+            ),
             goodnotes_pull_enabled=settings.goodnotes_pull_enabled,
             goodnotes_pull_cursor_signing_key=(
                 settings.goodnotes_pull_cursor_signing_key.encode("utf-8")

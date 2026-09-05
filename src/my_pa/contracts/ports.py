@@ -4960,6 +4960,11 @@ class UnitOfWork(ABC):
         """
         raise NotImplementedError
 
+    @property
+    def goodnotes_durable_notes(self) -> object:
+        """Optional Review-bound canonical GoodNotes store on this transaction."""
+        raise NotImplementedError
+
     def intelligence_for(self, principal_id: str) -> object:
         """Intelligence Artifact store for the authenticated Principal.
 

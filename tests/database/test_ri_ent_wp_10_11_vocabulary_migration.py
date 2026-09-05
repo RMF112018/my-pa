@@ -86,11 +86,8 @@ REVISION: Final = "16f05c46b8c3"
 HEAD_REVISION: Final = "b8e4d1a6c073"
 #: PR192's graph-vocabulary admission directly above `HEAD_REVISION`.
 GRAPH_REVISION: Final = "c3f8a1d07e94"
-#: The additive GoodNotes migration directly above `GRAPH_REVISION`, and the
-#: sole current chain head.
-GOODNOTES_REVISION: Final = "6a2f9d1c4b80"
-#: The additive canvas-workspace overlay (UI-IMP-WP17), and the
-#: sole current chain head.
+PULL_REVISION: Final = "6a2f9d1c4b80"
+PROMOTION_REVISION: Final = "a4d8e31b2c90"
 CURRENT_HEAD_REVISION: Final = "d4e8b1c7a902"
 #: What was head until `REVISION` stacked on it, and therefore the revision
 #: this module downgrades to. This revision was written against `c99cd8ed8d1c`
@@ -342,8 +339,9 @@ def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> N
     assert heads == [CURRENT_HEAD_REVISION], (
         f"expected exactly {CURRENT_HEAD_REVISION}, found {heads}"
     )
-    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == GOODNOTES_REVISION
-    assert script.get_revision(GOODNOTES_REVISION).down_revision == GRAPH_REVISION
+    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "a4d8e31b2c90"
+    assert script.get_revision("a4d8e31b2c90").down_revision == "6a2f9d1c4b80"
+    assert script.get_revision("6a2f9d1c4b80").down_revision == GRAPH_REVISION
     assert script.get_revision(GRAPH_REVISION).down_revision == HEAD_REVISION
     assert script.get_revision(HEAD_REVISION).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS_REVISION

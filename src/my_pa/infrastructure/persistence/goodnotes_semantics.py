@@ -31,6 +31,7 @@ from my_pa.infrastructure.persistence.tables import (
     goodnotes_page_positions,
     goodnotes_page_rasters,
     goodnotes_page_versions,
+    goodnotes_semantic_promotion_receipts,
     goodnotes_semantic_proposals,
     goodnotes_source_snapshots,
 )
@@ -268,6 +269,18 @@ class SqlGoodNotesSemanticRepository(GoodNotesSemanticRepository):
         audit_id: str | None,
         created_at: datetime,
     ) -> GoodNotesProposalAdmission:
+        # Promotion, Review and proposal admission serialize at the same run
+        # boundary. A late new key cannot expand an immutable promoted page set.
+        run = self._connection.execute(
+            select(goodnotes_ingestion_runs.c.run_id)
+            .where(
+                _mine(goodnotes_ingestion_runs, principal_id),
+                goodnotes_ingestion_runs.c.run_id == run_id,
+            )
+            .with_for_update()
+        ).first()
+        if run is None:
+            raise GoodNotesProposalConflictError("the request names no stored GoodNotes run")
         prior = self._proposal_for(principal_id, idempotency_key)
         if prior is not None:
             if prior.request_fingerprint != request_fingerprint:
@@ -275,6 +288,17 @@ class SqlGoodNotesSemanticRepository(GoodNotesSemanticRepository):
                     "the idempotency key is bound to a different request"
                 )
             return GoodNotesProposalAdmission(proposal=prior, created=False)
+
+        if (
+            self._connection.execute(
+                select(goodnotes_semantic_promotion_receipts.c.receipt_id).where(
+                    _mine(goodnotes_semantic_promotion_receipts, principal_id),
+                    goodnotes_semantic_promotion_receipts.c.run_id == run_id,
+                )
+            ).first()
+            is not None
+        ):
+            raise GoodNotesProposalConflictError("the GoodNotes run is already promoted")
 
         proposal_id = issue_stable_id("gnprp", principal_id, idempotency_key, request_fingerprint)
         inserted = self._connection.execute(

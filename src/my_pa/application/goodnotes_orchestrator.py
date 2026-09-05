@@ -356,6 +356,10 @@ class GoodNotesDurableNoteOrchestrator:
                 return snapshot(run, waiting=True)
             if not rollout_stage_permits(self._rollout_stage, "canonical_writes"):
                 return snapshot(run, waiting=False)
+            if promotion_evidence:
+                raise ValueError("caller promotion evidence is not authoritative")
+            if store.accepted_semantic_material(request.principal_id, run.run_id) is None:
+                raise ValueError("semantic run lacks complete server review evidence")
             if GoodNotesPipelineStage.RECONCILE not in completed:
                 self._occurrences.reconcile(
                     request.principal_id,
@@ -768,6 +772,11 @@ def _assert_later_stage_consistency(
     ) and not store.semantic_proposals_for_run(run.principal_id, run.run_id):
         raise _consistency_error()
     if GoodNotesPipelineStage.RECONCILE in completed:
+        if (
+            store.accepted_semantic_material(run.principal_id, run.run_id, require_promoted=True)
+            is None
+        ):
+            raise _consistency_error()
         changes = store.run_note_changes(run.principal_id, run.run_id)
         for change in changes:
             if change.occurrence_id is not None and (

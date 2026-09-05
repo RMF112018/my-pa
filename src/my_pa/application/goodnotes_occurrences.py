@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Protocol
 
+from my_pa.contracts.ports import GoodNotesSemanticProposalMaterial
 from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import utc_now
@@ -51,7 +52,6 @@ _ACTIVE_PRIOR = frozenset({GoodNotesIdentityStatus.ACTIVE, GoodNotesIdentityStat
 _IOU_THRESHOLD = 0.85
 _UNVERIFIED_REASON = "UNVERIFIED_VISUAL"
 _UNREADABLE_REASON = "UNREADABLE_TRANSCRIPTION"
-_PROMOTING_DISPOSITIONS = frozenset({Disposition.ACCEPT, Disposition.CORRECT_AND_ACCEPT})
 
 
 class OccurrenceReconcileBusyError(ValueError):
@@ -115,7 +115,7 @@ class OccurrenceReconcileResult:
 
 @dataclass(frozen=True, slots=True)
 class GoodNotesSemanticPromotionEvidence:
-    """Server-held review result bound to one exact semantic proposal payload."""
+    """Deprecated caller assertion; never authorizes canonical promotion."""
 
     principal_id: str
     run_id: str
@@ -167,6 +167,12 @@ def semantic_proposal_sha256(
 
 
 class GoodNotesOccurrenceRepository(Protocol):
+    def accepted_semantic_material(
+        self, principal_id: str, run_id: str, *, require_promoted: bool = False
+    ) -> tuple[GoodNotesSemanticProposalMaterial, ...] | None: ...
+
+    def record_semantic_promotion(self, principal_id: str, run_id: str) -> str: ...
+
     def run(self, principal_id: str, run_id: str) -> GoodNotesIngestionRun | None: ...
 
     def update_run(self, run: GoodNotesIngestionRun) -> GoodNotesIngestionRun: ...
@@ -700,50 +706,6 @@ def _ground_crop(
     return crop_normalized_png(png_bytes, x_min, y_min, width, height)
 
 
-def _reviewed_proposals(
-    principal_id: str,
-    run_id: str,
-    proposals: Sequence[tuple[str, str, str, str, dict[str, object]]],
-    evidence: Sequence[GoodNotesSemanticPromotionEvidence],
-) -> tuple[tuple[str, str, str, str, dict[str, object]], ...]:
-    decisions: dict[str, GoodNotesSemanticPromotionEvidence] = {}
-    for item in evidence:
-        if not item.is_bound_to(principal_id, run_id):
-            raise ValueError("semantic promotion evidence crossed its run context")
-        if item.proposal_sha256 in decisions:
-            raise ValueError("semantic promotion evidence is duplicated")
-        decisions[item.proposal_sha256] = item
-    reviewed: list[tuple[str, str, str, str, dict[str, object]]] = []
-    consumed: set[str] = set()
-    for proposal in proposals:
-        digest = semantic_proposal_sha256(*proposal)
-        evidence_item = decisions.get(digest)
-        if evidence_item is None:
-            raise ValueError("semantic proposal lacks server review evidence")
-        if evidence_item.disposition not in _PROMOTING_DISPOSITIONS:
-            raise ValueError("semantic proposal is not eligible for promotion")
-        consumed.add(digest)
-        reviewed.append(
-            proposal
-            if evidence_item.corrected_payload is None
-            else (
-                *proposal[:4],
-                {
-                    key: evidence_item.corrected_payload[key]
-                    for key in (
-                        "segments",
-                        "candidate_tags",
-                        "ranked_candidates",
-                        "confidence",
-                    )
-                },
-            )
-        )
-    if consumed != set(decisions):
-        raise ValueError("semantic promotion evidence does not match this run")
-    return tuple(reviewed)
-
-
 class GoodNotesOccurrenceReconciler:
     def reconcile(
         self,
@@ -763,14 +725,24 @@ class GoodNotesOccurrenceReconciler:
             raise OccurrenceReconcileBusyError(
                 "another GoodNotes occurrence reconcile holds the source-root lease"
             )
+        if promotion_evidence:
+            raise ValueError("caller promotion evidence is not authoritative")
+        reviewed = repository.accepted_semantic_material(principal_id, run_id)
+        if reviewed is None:
+            raise ValueError("semantic run lacks complete server review evidence")
+        promoted = repository.accepted_semantic_material(
+            principal_id, run_id, require_promoted=True
+        )
         existing = repository.run_note_changes(principal_id, run_id)
-        if existing:
+        if promoted is not None:
             return OccurrenceReconcileResult(
                 run_id=run_id,
                 principal_id=principal_id,
                 replayed=True,
                 changes=existing,
             )
+        if existing:
+            raise ValueError("canonical changes have no verified promotion receipt")
         now = clock()
         repository.update_run(
             replace(run, lease_owner=lease_owner, lease_expires_at=now + _LEASE_TTL)
@@ -784,16 +756,13 @@ class GoodNotesOccurrenceReconciler:
             for position in repository.page_positions(principal_id, snapshot.snapshot_id):
                 if position.page_version_id is not None:
                     snapshot_by_page[position.page_version_id] = snapshot.snapshot_id
-        proposals = repository.semantic_proposals_for_run(principal_id, run_id)
-        reviewed = _reviewed_proposals(
-            principal_id,
-            run_id,
-            proposals,
-            promotion_evidence,
-        )
         current: list[CurrentOccurrence] = []
         for proposal in reviewed:
-            page_version_id, schema_version, analyzer_name, analyzer_version, payload = proposal
+            page_version_id = proposal.page_version_id
+            schema_version = proposal.schema_version
+            analyzer_name = proposal.analyzer_name
+            analyzer_version = proposal.analyzer_version
+            payload = proposal.payload
             version = repository.page_version(principal_id, page_version_id)
             if version is None:
                 raise ValueError("a GoodNotes proposal is missing required geometry")
@@ -826,6 +795,7 @@ class GoodNotesOccurrenceReconciler:
             repository=repository,
             now=now,
         )
+        repository.record_semantic_promotion(principal_id, run_id)
         repository.update_run(replace(run, lease_owner=None, lease_expires_at=None))
         return OccurrenceReconcileResult(
             run_id=run_id,

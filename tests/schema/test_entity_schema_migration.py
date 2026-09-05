@@ -317,6 +317,8 @@ STACKED_ABOVE: Final[frozenset[str]] = frozenset(
         "goodnotes_semantic_review_decisions",
         # `d4e8b1c7a902`'s Principal-partitioned canvas overlay (UI-IMP-WP17).
         "canvas_workspaces",
+# R8 receipt is also removed when downgrading from the current head.
+        "goodnotes_semantic_promotion_receipts",
     }
 )
 

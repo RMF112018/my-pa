@@ -212,6 +212,7 @@ def test_downgrading_one_step_removes_exactly_these_two_tables(migrated_engine: 
         "goodnotes_pull_completions",
         "goodnotes_semantic_review_decisions",
         "canvas_workspaces",
+"goodnotes_semantic_promotion_receipts",
     }
     assert {
         "entities",

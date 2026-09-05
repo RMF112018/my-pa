@@ -165,6 +165,7 @@ from my_pa.infrastructure.persistence.goodnotes import (
     goodnotes_review_cases,
     is_goodnotes_review_case,
 )
+from my_pa.infrastructure.persistence.goodnotes_durable_note import PostgresDurableNoteStore
 from my_pa.infrastructure.persistence.goodnotes_pull import SqlGoodNotesPullRepository
 from my_pa.infrastructure.persistence.goodnotes_semantics import SqlGoodNotesSemanticRepository
 from my_pa.infrastructure.persistence.intelligence import SqlIntelligenceStore
@@ -1216,6 +1217,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def canvas_workspaces(self) -> CanvasWorkspaceRepository:
         """Principal-partitioned canvas overlay, on this transaction's connection."""
         return _CanvasWorkspaces(self._open)
+
+    @property
+    def goodnotes_durable_notes(self) -> PostgresDurableNoteStore:
+        """Canonical continuation shares the completion transaction and Review locks."""
+        return PostgresDurableNoteStore(self._open)
 
     def intelligence_for(self, principal_id: str) -> SqlIntelligenceStore:
         """Intelligence Artifact store, on this transaction's connection."""

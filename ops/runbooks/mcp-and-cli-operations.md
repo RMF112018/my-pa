@@ -271,7 +271,7 @@ that names it again is refused.
 
 **Current-state correction (2026-08-28):** the tool list is derived from all
 **one hundred and thirty** current capabilities, and the schema has
-**ninety-two** revisions at head `d4e8b1c7a902` (`d4e8b1c7a902` is additive on `6a2f9d1c4b80` and adds the Principal-partitioned canvas workspace overlay; `6a2f9d1c4b80` is additive on `c3f8a1d07e94` and adds five Principal-partitioned, content-free GoodNotes pull and semantic-review ledger tables while admitting `goodnotes.pull`, `goodnotes.complete`, and `goodnotes.status` to the frozen audit vocabulary; `c3f8a1d07e94` admits `entities.graph` on `b8e4d1a6c073`; corrected 2026-09-03 from
+**ninety-three** revisions at head `d4e8b1c7a902` (`d4e8b1c7a902` is additive on `a4d8e31b2c90` and adds the Principal-partitioned canvas workspace overlay; `6a2f9d1c4b80` is additive on `c3f8a1d07e94` and adds five Principal-partitioned, content-free GoodNotes pull and semantic-review ledger tables while admitting `goodnotes.pull`, `goodnotes.complete`, and `goodnotes.status` to the frozen audit vocabulary; `c3f8a1d07e94` admits `entities.graph` on `b8e4d1a6c073`; corrected 2026-09-03 from
 eighty-eight at `16f05c46b8c3`, on which `b8e4d1a6c073` is additive and
 backfills one `display`-typed `entity_names` row per active `entities` row --
 `display_value` from `entities.display_name`, `normalized_value` from

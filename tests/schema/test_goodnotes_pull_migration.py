@@ -37,7 +37,8 @@ def _config(buffer: io.StringIO | None = None) -> Config:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == ["d4e8b1c7a902"]
-    assert script.get_revision("d4e8b1c7a902").down_revision == REVISION
+    assert script.get_revision("d4e8b1c7a902").down_revision == "a4d8e31b2c90"
+    assert script.get_revision("a4d8e31b2c90").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 
 
@@ -65,7 +66,7 @@ def test_offline_upgrade_emits_all_ledgers_constraints_and_immutability(
 ) -> None:
     monkeypatch.setenv("MY_PA_DATABASE_URL", "postgresql+psycopg://localhost/my_pa")
     output = io.StringIO()
-    command.upgrade(_config(output), "head", sql=True)
+    command.upgrade(_config(output), REVISION, sql=True)
     sql = output.getvalue()
     for table in TABLES:
         assert f"CREATE TABLE knowledge.{table}" in sql
@@ -88,7 +89,7 @@ def test_every_ledger_accepts_the_canonical_local_principal_shape(
 ) -> None:
     monkeypatch.setenv("MY_PA_DATABASE_URL", "postgresql+psycopg://localhost/my_pa")
     output = io.StringIO()
-    command.upgrade(_config(output), "head", sql=True)
+    command.upgrade(_config(output), REVISION, sql=True)
     sql = output.getvalue()
     start = sql.index("CREATE TABLE knowledge.goodnotes_pull_sessions")
     later = sql.find("CREATE TABLE knowledge.canvas_workspaces", start)

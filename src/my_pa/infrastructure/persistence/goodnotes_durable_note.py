@@ -22,6 +22,7 @@ from my_pa.domain.goodnotes.models import (
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence.goodnotes import PostgresGoodNotesRepository
 from my_pa.infrastructure.persistence.goodnotes_delivery import PostgresGoodNotesDeliveryRepository
+from my_pa.infrastructure.persistence.goodnotes_pull import _corrected_result_sha256
 from my_pa.infrastructure.persistence.goodnotes_semantics import SqlGoodNotesSemanticRepository
 
 __all__ = ["PostgresDurableNoteStore"]
@@ -49,7 +50,7 @@ class PostgresDurableNoteStore(PostgresGoodNotesRepository):
         if version is None:
             raise ValueError("the request names no stored GoodNotes page version")
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
-        payload_digest = hashlib.sha256(encoded.encode()).hexdigest()
+        payload_digest = _corrected_result_sha256(payload)
         fingerprint = hashlib.sha256(
             f"{run_id}\x1f{page_version_id}\x1f{version.content_sha256}\x1f"
             f"{schema_version}\x1f{encoded}".encode()

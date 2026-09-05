@@ -366,6 +366,22 @@ class IdKind(StrEnum):
     #: collide with none.
     ENTITY_ASSERTION = "east"
     ENTITY_ASSERTION_EVIDENCE = "easev"
+    #: PC-CM-IMP-WP01: the two Project Controls aggregates that carry their own
+    #: identity now (`my_pa.domain.project_controls`). A `ProjectConstraint` is
+    #: deliberately not a `TASK` or a `COMMITMENT`: it is a first-class record
+    #: bound to a continuity `PROJECT` (`prj_`), never a third Project identity,
+    #: and a stored reference has to say which of the three it names. A
+    #: `ConstraintCategory` is its own prefix rather than a reuse of the
+    #: capture-plane `CAPTURE_CLIENT`/`CAPTURE_CLASSIFICATION` members it sits
+    #: beside alphabetically, because the category is a Principal- and
+    #: Project-scoped numbering scope and nothing else in this enum is. Party
+    #: references, revisions, receipts, and sync records get no prefix here:
+    #: WP01 issues no such record. Checked against every prior member of this
+    #: enum before use (a grep of the quoted value over this file, and the
+    #: uniqueness assertion in `tests/unit/test_identifiers.py`; nearest
+    #: neighbours `cclt`/`ccls` differ): `cst`/`ccat` collide with none.
+    PROJECT_CONSTRAINT = "cst"
+    CONSTRAINT_CATEGORY = "ccat"
 
 
 class InvalidIdentifierError(ValueError):

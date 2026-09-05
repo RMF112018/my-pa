@@ -1,7 +1,7 @@
 """Add Principal-partitioned canvas workspace overlays.
 
 Revision ID: d4e8b1c7a902
-Revises: 6a2f9d1c4b80
+Revises: a4d8e31b2c90
 Create Date: 2026-09-05
 
 One additive table: a product-owned canvas arrangement (ADR-003), not a
@@ -19,7 +19,7 @@ from typing import Final
 from alembic import op
 
 revision: str = "d4e8b1c7a902"
-down_revision: str | None = "6a2f9d1c4b80"
+down_revision: str | None = "a4d8e31b2c90"
 branch_labels: str | None = None
 depends_on: str | None = None
 

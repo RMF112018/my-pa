@@ -18,6 +18,7 @@ import {
   IdentityHistoryPanel,
   RelationshipsPanel,
 } from "@/components/people/related-records";
+import { canvasMap } from "@/lib/routes/canvas";
 import { peopleHome } from "@/lib/routes/people";
 import type { EntityProfileResult } from "@/lib/api/decode/capabilities/entities.profile";
 import type { EntitiesAssignmentsListResult } from "@/lib/api/decode/capabilities/entities.assignments.list";
@@ -168,6 +169,14 @@ export async function PeopleEntityPage({
       <p className="mb-4 text-sm">
         <Link href={peopleHome()} className="text-moss-green underline">
           ← People
+        </Link>
+        {" · "}
+        <Link
+          href={canvasMap({ focusEntityId: profile.entity.entity_id })}
+          className="text-moss-green underline"
+          data-testid="people-view-map"
+        >
+          View map
         </Link>
       </p>
       {companionFailed ? (

@@ -17,6 +17,7 @@ test.describe("an unauthenticated visitor reaches no destination", () => {
       "/work",
       "/intelligence",
       "/people",
+      "/canvas",
       "/knowledge",
       "/review",
       "/system",
@@ -90,6 +91,10 @@ test.describe("the signed-in surfaces", () => {
     await expect(page.getByRole("heading", { name: "People", level: 1 })).toBeVisible();
     await expect(page.getByRole("searchbox", { name: "Search people" })).toBeVisible();
     await expect(page.getByText(/no admitted same-origin BFF exposure/i)).toHaveCount(0);
+
+    await page.goto("/canvas");
+    await expect(page.getByRole("heading", { name: "Map", level: 1 })).toBeVisible();
+    await expect(page.getByTestId("canvas-seed-required")).toBeVisible();
   });
 
   test("predecessor deep links preserve the successor content and active destination", async ({ page }, testInfo) => {

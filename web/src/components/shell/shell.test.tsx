@@ -28,19 +28,20 @@ afterEach(() => {
 });
 
 describe("app shell", () => {
-  it("renders the six primary destinations in successor order and System as utility", () => {
+  it("renders the seven primary destinations in successor order and System as utility", () => {
     render(<AppShell principal={PRINCIPAL}>content</AppShell>);
     expect(DESTINATIONS.map(({ label }) => label)).toEqual([
       "Today",
       "Work",
       "Intelligence",
       "People",
+      "Map",
       "Knowledge",
       "Review",
     ]);
     for (const [index, destination] of DESTINATIONS.entries()) {
       // The first four appear in both desktop and mobile primary navigation;
-      // Knowledge and Review move under mobile More.
+      // Map, Knowledge and Review move under mobile More.
       expect(screen.getAllByRole("link", { name: destination.label })).toHaveLength(
         index < 4 ? 2 : 1,
       );

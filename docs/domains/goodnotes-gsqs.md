@@ -21,16 +21,20 @@ Do not infer current behavior from a completion/audit package when current code 
 
 ## Source safety
 
-GoodNotes local-source handling is a filesystem security boundary. Preserve:
+GoodNotes local-source handling is a filesystem and subprocess security boundary. Preserve:
 
 - admitted root identity;
 - descriptor-relative/no-follow path handling;
 - bounded reads;
 - digest/identity revalidation;
 - refusal of unsafe representations;
-- content-free/redacted diagnostics.
+- content-free/redacted diagnostics;
+- regular-file and single-hard-link checks before and after bounded manifest, representation and observer reads; hard-link drift during a read is refused;
+- local OCR as one explicit absolute executable and argument vector with no shell;
+- on supported POSIX systems, one process session/group per OCR invocation with bounded nonblocking pipe handling and bounded cleanup; timeout, output overflow, pipe failure, or a descendant retaining a pipe cannot turn partial output into success;
+- fail-closed behavior when the required process-containment mechanism is unavailable.
 
-Unmerged PRs that harden this boundary are candidate evidence until merged; do not document them as current implementation.
+The current implementation details are documented in `docs/operations/goodnotes-local-source.md` and enforced by the corresponding architecture/security/unit tests. A future unmerged hardening change is candidate evidence until merged; current documentation must follow the authenticated repository tree.
 
 ## Semantics and review
 
@@ -51,7 +55,7 @@ A capability that can start a bounded workflow does not authorize:
 
 Check:
 
-1. source/admission security;
+1. source/admission and subprocess security;
 2. stable notebook/page/note identity;
 3. persistence/migration;
 4. provenance/evidence;

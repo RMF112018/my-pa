@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { CanvasMapClient } from "./canvas-map-client";
 import type { GraphEdge, GraphNode } from "@/lib/api/decode/capabilities/entities.graph";
 
@@ -54,6 +54,38 @@ function mount() {
   );
 }
 
+function stubMapRect() {
+  vi.spyOn(SVGSVGElement.prototype, "getBoundingClientRect").mockReturnValue({
+    x: 0,
+    y: 0,
+    left: 0,
+    top: 0,
+    right: 800,
+    bottom: 560,
+    width: 800,
+    height: 560,
+    toJSON() {
+      return {};
+    },
+  });
+}
+
+function dragNode(clientX: number, clientY: number) {
+  const node = screen.getByTestId(`canvas-node-${FOCUS}`);
+  fireEvent.pointerDown(node, { pointerId: 1, clientX, clientY });
+  const svg = screen.getByTestId("canvas-map").querySelector("svg");
+  expect(svg).not.toBeNull();
+  fireEvent.pointerMove(svg!, { pointerId: 1, clientX, clientY });
+  fireEvent.pointerUp(svg!, { pointerId: 1, clientX, clientY });
+}
+
+function putBody(init?: RequestInit) {
+  return JSON.parse(String(init?.body ?? "{}")) as {
+    expected_version?: number;
+    positions?: Record<string, { x: number; y: number }>;
+  };
+}
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -79,20 +111,10 @@ describe("CanvasMapClient", () => {
   });
 
   it("keeps local positions and shows a truthful conflict", async () => {
-    vi.spyOn(SVGSVGElement.prototype, "getBoundingClientRect").mockReturnValue({
-      x: 0,
-      y: 0,
-      left: 0,
-      top: 0,
-      right: 800,
-      bottom: 560,
-      width: 800,
-      height: 560,
-      toJSON() {
-        return {};
-      },
-    });
-    const fetchSpy = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
+    stubMapRect();
+    const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
+      void url;
+      void init;
       return new Response(
         JSON.stringify({
           error: {
@@ -107,20 +129,74 @@ describe("CanvasMapClient", () => {
     vi.stubGlobal("fetch", fetchSpy);
     mount();
     fireEvent.click(screen.getByTestId("canvas-arrange-toggle"));
-    const node = screen.getByTestId(`canvas-node-${FOCUS}`);
-    fireEvent.pointerDown(node, { pointerId: 1, clientX: 400, clientY: 280 });
-    const svg = screen.getByTestId("canvas-map").querySelector("svg");
-    expect(svg).not.toBeNull();
-    fireEvent.pointerMove(svg!, { pointerId: 1, clientX: 120, clientY: 80 });
-    fireEvent.pointerUp(svg!, { pointerId: 1, clientX: 120, clientY: 80 });
+    dragNode(120, 80);
     expect(await screen.findByTestId("canvas-workspace-conflict")).toHaveTextContent(
       /saved layout version changed/i,
     );
     const moved = screen.getByTestId("canvas-map").querySelector(`circle[cx="120"][cy="80"]`);
     expect(moved).not.toBeNull();
-    expect(JSON.parse(String(fetchSpy.mock.calls[0]?.[1]?.body ?? "{}"))).toMatchObject({
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(putBody(fetchSpy.mock.calls[0][1])).toMatchObject({
       focus_entity_id: FOCUS,
       expected_version: 0,
+    });
+  });
+
+  it("does not send overlapping PUTs with the same expected_version and keeps in-flight moves", async () => {
+    stubMapRect();
+    let releaseFirst: ((response: Response) => void) | undefined;
+    const firstFetch = new Promise<Response>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let fetchCount = 0;
+    const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
+      void url;
+      fetchCount += 1;
+      if (fetchCount === 1) {
+        return firstFetch;
+      }
+      const body = putBody(init);
+      return new Response(
+        JSON.stringify({
+          version: (body.expected_version ?? 0) + 1,
+          updated_at: "2026-09-05T17:00:00.000Z",
+          positions: body.positions ?? {},
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    mount();
+    fireEvent.click(screen.getByTestId("canvas-arrange-toggle"));
+    dragNode(120, 80);
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    dragNode(240, 160);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(putBody(fetchSpy.mock.calls[0][1]).expected_version).toBe(0);
+
+    const firstPayload = putBody(fetchSpy.mock.calls[0][1]);
+    releaseFirst!(
+      new Response(
+        JSON.stringify({
+          version: 1,
+          updated_at: "2026-09-05T17:00:00.000Z",
+          positions: firstPayload.positions ?? {},
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("canvas-map").querySelector(`circle[cx="240"][cy="160"]`)).not.toBeNull();
+    });
+    expect(screen.getByTestId("canvas-map").querySelector(`circle[cx="120"][cy="80"]`)).toBeNull();
+
+    await waitFor(() => expect(fetchSpy.mock.calls.length).toBe(2));
+    const versions = fetchSpy.mock.calls.map((call) => putBody(call[1]).expected_version);
+    expect(versions).toEqual([0, 1]);
+    expect(putBody(fetchSpy.mock.calls[1][1]).positions?.[FOCUS]).toEqual({
+      x: 240,
+      y: 160,
     });
   });
 });

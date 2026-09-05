@@ -44,6 +44,20 @@ function readReceiptPositions(value: unknown): CanvasPositions | null {
   return positions;
 }
 
+function leftoverDraft(
+  current: Record<string, LayoutPoint>,
+  sentSnapshot: Record<string, LayoutPoint>,
+): Record<string, LayoutPoint> {
+  const leftovers: Record<string, LayoutPoint> = {};
+  for (const [entityId, point] of Object.entries(current)) {
+    const sent = sentSnapshot[entityId];
+    if (sent === undefined || sent.x !== point.x || sent.y !== point.y) {
+      leftovers[entityId] = point;
+    }
+  }
+  return leftovers;
+}
+
 function clientToSvg(svg: SVGSVGElement, clientX: number, clientY: number): LayoutPoint | null {
   const rect = svg.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return null;
@@ -71,28 +85,33 @@ export function CanvasMapClient({
   const svgRef = useRef<SVGSVGElement>(null);
   const drag = useRef<{ entityId: string; pointerId: number } | null>(null);
   const draftRef = useRef<Record<string, LayoutPoint>>({});
+  const storedRef = useRef<SavedPositions>(savedPositions);
+  const expectedVersionRef = useRef(version);
+  const savingRef = useRef(false);
   const [arrange, setArrange] = useState(false);
   const [stored, setStored] = useState<SavedPositions>(savedPositions);
   const [draft, setDraft] = useState<Record<string, LayoutPoint>>({});
-  const [expectedVersion, setExpectedVersion] = useState(version);
+  const [, setExpectedVersion] = useState(version);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
   const [conflict, setConflict] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [, setSaving] = useState(false);
 
   const overlay: SavedPositions = { ...stored, ...draft };
 
   async function persist(nextDraft: Record<string, LayoutPoint>) {
-    if (Object.keys(nextDraft).length === 0 || saving) return;
-    const positions: Record<string, LayoutPoint> = { ...stored, ...nextDraft };
+    if (Object.keys(nextDraft).length === 0 || savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    setSaveError(null);
+    const sentSnapshot: Record<string, LayoutPoint> = { ...storedRef.current, ...nextDraft };
     const payload: Record<string, unknown> = {
-      expected_version: expectedVersion,
-      positions,
+      expected_version: expectedVersionRef.current,
+      positions: sentSnapshot,
     };
     if (focusEntityId) payload.focus_entity_id = focusEntityId;
     if (scopeEntityId) payload.scope_entity_id = scopeEntityId;
-    setSaving(true);
-    setSaveError(null);
+    let replay = false;
     try {
       const response = await apiPost<WorkspacePutResponse>(
         { hasSession: true },
@@ -123,13 +142,21 @@ export function CanvasMapClient({
         setSaveError("the save receipt was not usable");
         return;
       }
+      storedRef.current = receiptPositions;
+      expectedVersionRef.current = receiptVersion;
       setStored(receiptPositions);
-      draftRef.current = {};
-      setDraft({});
       setExpectedVersion(receiptVersion);
+      const leftovers = leftoverDraft(draftRef.current, sentSnapshot);
+      draftRef.current = leftovers;
+      setDraft(leftovers);
       setConflict(null);
+      replay = Object.keys(leftovers).length > 0;
     } finally {
+      savingRef.current = false;
       setSaving(false);
+    }
+    if (replay) {
+      void persist(draftRef.current);
     }
   }
 

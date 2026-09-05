@@ -58,6 +58,12 @@ const ASSIGNMENT_EDGE: GraphEdge = {
   version: 1,
 };
 
+const SECOND_EDGE: GraphEdge = {
+  ...RELATIONSHIP_EDGE,
+  edge_id: "erel_bbbbbbbb22222222",
+  type: "reports_to",
+};
+
 const EDGES: readonly GraphEdge[] = [RELATIONSHIP_EDGE, ASSIGNMENT_EDGE];
 
 const NEW_EDGE: GraphEdge = {
@@ -66,11 +72,11 @@ const NEW_EDGE: GraphEdge = {
   type: "reports_to",
 };
 
-function mount(scopeEntityId = "") {
+function mount(scopeEntityId = "", edges: readonly GraphEdge[] = EDGES) {
   return render(
     <CanvasMapClient
       nodes={NODES}
-      edges={EDGES}
+      edges={edges}
       focusEntityId={FOCUS}
       scopeEntityId={scopeEntityId}
       savedPositions={{}}
@@ -237,9 +243,9 @@ function fillCreateForm() {
   fireEvent.change(screen.getByLabelText("Relationship type"), { target: { value: "reports_to" } });
 }
 
-function selectRelationshipEdge() {
+function selectRelationshipEdge(edgeId = RELATIONSHIP_EDGE.edge_id) {
   fireEvent.change(screen.getByLabelText("Selected relationship"), {
-    target: { value: RELATIONSHIP_EDGE.edge_id },
+    target: { value: edgeId },
   });
 }
 
@@ -610,6 +616,84 @@ describe("CanvasMapClient", () => {
         ([url, init]) => fetchMeta(String(url), init).href === "/api/canvas/relationships/revise",
       ),
     ).toBe(false);
+  });
+
+  it("does not revise the newly selected edge with the prior edge window", async () => {
+    const twoEdges = [RELATIONSHIP_EDGE, SECOND_EDGE, ASSIGNMENT_EDGE];
+    const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
+      const { href, method } = fetchMeta(String(url), init);
+      if (isRelationshipsGet(href, method)) {
+        return jsonResponse({
+          relationships: [
+            {
+              relationship_id: RELATIONSHIP_EDGE.edge_id,
+              is_current: true,
+              from_entity_id: FOCUS,
+              relationship_type: "works_for",
+              to_entity_id: NEIGHBOR,
+              scope_entity_id: null,
+              state: "active",
+              effective_from: "2026-01-01T00:00:00Z",
+              effective_to: "2026-06-01T00:00:00Z",
+              version: 1,
+            },
+            {
+              relationship_id: SECOND_EDGE.edge_id,
+              is_current: true,
+              from_entity_id: FOCUS,
+              relationship_type: "reports_to",
+              to_entity_id: NEIGHBOR,
+              scope_entity_id: null,
+              state: "active",
+              effective_from: "2026-07-01T00:00:00Z",
+              effective_to: "2026-12-01T00:00:00Z",
+              version: 1,
+            },
+          ],
+        });
+      }
+      if (method === "POST" && href === "/api/canvas/relationships/revise") {
+        return jsonResponse(receipt(SECOND_EDGE.edge_id));
+      }
+      if (method === "GET" && href.startsWith("/api/people/graph")) {
+        return jsonResponse({ nodes: NODES, edges: twoEdges, next_cursor: null });
+      }
+      throw new Error(`unexpected ${method} ${href}`);
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    mount("", twoEdges);
+    openRelationshipEdit();
+    selectRelationshipEdge(RELATIONSHIP_EDGE.edge_id);
+    await waitFor(() => {
+      expect(screen.getByLabelText("Effective from")).toHaveValue("2026-01-01T00:00:00Z");
+    });
+    expect(screen.getByLabelText("Effective to")).toHaveValue("2026-06-01T00:00:00Z");
+    selectRelationshipEdge(SECOND_EDGE.edge_id);
+    await waitFor(() => {
+      expect(screen.getByLabelText("Effective from")).toHaveValue("2026-07-01T00:00:00Z");
+    });
+    expect(screen.getByLabelText("Effective to")).toHaveValue("2026-12-01T00:00:00Z");
+    fireEvent.change(screen.getByLabelText("Evidence refs"), {
+      target: { value: "ev_stated" },
+    });
+    fireEvent.click(screen.getByTestId("canvas-relationship-revise-submit"));
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(
+          ([url, init]) => fetchMeta(String(url), init).href === "/api/canvas/relationships/revise",
+        ),
+      ).toBe(true);
+    });
+    const reviseBody = postBodyFor(fetchSpy, "/api/canvas/relationships/revise");
+    expect(reviseBody).toMatchObject({
+      relationship_id: SECOND_EDGE.edge_id,
+      expected_version: 1,
+      effective_from: "2026-07-01T00:00:00Z",
+      effective_to: "2026-12-01T00:00:00Z",
+      evidence_refs: ["ev_stated"],
+    });
+    expect(reviseBody.effective_from).not.toBe("2026-01-01T00:00:00Z");
+    expect(reviseBody.effective_to).not.toBe("2026-06-01T00:00:00Z");
   });
 
   it("POSTs stated evidence_refs on revise", async () => {

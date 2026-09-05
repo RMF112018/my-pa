@@ -344,8 +344,18 @@ export function CanvasMapClient({
     void persist(nextDraft);
   }
 
+  function clearReviseForm() {
+    setEffectiveFrom("");
+    setEffectiveTo("");
+    setClearFrom(false);
+    setClearTo(false);
+    setEvidenceRefs("");
+    setClearEvidence(false);
+  }
+
   function turnOnArrange() {
     setRelationshipEdit(false);
+    clearReviseForm();
     setSelectedEdgeId(null);
     setArrange(true);
   }
@@ -389,6 +399,7 @@ export function CanvasMapClient({
   function onEdgeSelect(edgeId: string) {
     const edge = mapEdges.find((item) => item.edge_id === edgeId);
     if (!edge || edge.edge_kind !== "relationship") return;
+    clearReviseForm();
     setSelectedEdgeId(edge.edge_id);
     setRelationshipConflict(null);
     setRelationshipSaveError(null);
@@ -426,6 +437,7 @@ export function CanvasMapClient({
     setRelationshipSaveError(null);
     const reloaded = await reloadGraph();
     if (reloaded) {
+      clearReviseForm();
       setSelectedEdgeId(null);
     }
   }
@@ -570,6 +582,7 @@ export function CanvasMapClient({
           onClick={() => {
             if (relationshipEdit) {
               setRelationshipEdit(false);
+              clearReviseForm();
               setSelectedEdgeId(null);
               return;
             }
@@ -653,6 +666,7 @@ export function CanvasMapClient({
               onChange={(event) => {
                 const next = event.target.value;
                 if (!next) {
+                  clearReviseForm();
                   setSelectedEdgeId(null);
                   return;
                 }

@@ -883,8 +883,7 @@ def test_failed_compose_start_always_stops_and_verifies_partial_stack(
         "'-A MY_PA_DATA_PLANE -j RETURN' ;;\n"
         "  '-S FORWARD_FIREWALL')\n"
         '    [ "$MY_TEST_MODE" = firewall_missing ] || '
-        "printf '%s\\n' '-A FORWARD_FIREWALL -s 172.22.0.0/16 -d 172.22.0.0/16 "
-        "-i docker-d4d93b25 -o docker-d4d93b25 -j RETURN'\n"
+        "printf '%s\\n' '-A FORWARD_FIREWALL -j MY_PA_DATA_PLANE'\n"
         '    [ "$MY_TEST_MODE" = firewall_missing ] || '
         '[ "$MY_TEST_MODE" = ingress_firewall_missing ] || '
         "printf '%s\\n' '-A FORWARD_FIREWALL -s 172.23.0.0/16 -d 172.23.0.0/16 "
@@ -909,7 +908,7 @@ def test_failed_compose_start_always_stops_and_verifies_partial_stack(
         "fi\n"
         "printf '%s\\n' '*filter' ':FORWARD ACCEPT [0:0]' ':FORWARD_FIREWALL - [0:0]' "
         "':MY_PA_DATA_PLANE - [0:0]' "
-        "'-A FORWARD -j MY_PA_DATA_PLANE' '-A FORWARD -j FORWARD_FIREWALL' "
+        "'-A FORWARD -j FORWARD_FIREWALL' '-A FORWARD_FIREWALL -j MY_PA_DATA_PLANE' "
         "'-A MY_PA_DATA_PLANE -s 172.22.0.0/16 -d 172.22.0.0/16 "
         "-i docker-d4d93b25 -o docker-d4d93b25 -j ACCEPT' "
         "'-A MY_PA_DATA_PLANE -i docker-d4d93b25 -j DROP' "

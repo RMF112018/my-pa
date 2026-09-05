@@ -125,8 +125,9 @@ ops/nas/postgres-bootstrap-start.sh \
 
 5. Synology DSM `FORWARD_FIREWALL` contains RELATED/ESTABLISHED ACCEPT and
    broad source RETURNs. Data-plane protection is a repository-owned
-   `MY_PA_DATA_PLANE` chain installed as FORWARD rule 1, before
-   `FORWARD_FIREWALL`. It ACCEPTs only exact canonical same-bridge/subnet
+   `MY_PA_DATA_PLANE` chain installed as rule 1 inside `FORWARD_FIREWALL`,
+   before every DSM acceptance rule. Built-in `FORWARD` retains its single
+   jump to `FORWARD_FIREWALL`. The MY-PA chain ACCEPTs only exact canonical same-bridge/subnet
    traffic, DROPs every other packet that touches the data-plane bridge, and
    RETURNs unrelated forwarding to DSM. Plan, explicitly admit, and verify:
 
@@ -142,11 +143,13 @@ ops/nas/synology-data-plane-firewall.sh check
 ```
 
 The script derives the current network ID, Synology bridge name, and subnet
-from the exact internal Compose-owned data plane. Built-in FORWARD order is
-read from `iptables-save -t filter`. `DEFAULT_FORWARD` is obsolete on this
+from the exact internal Compose-owned data plane. Built-in FORWARD and
+`FORWARD_FIREWALL` order are read from `iptables-save -t filter`.
+`DEFAULT_FORWARD` is obsolete on this
 DSM and is not accepted. Admission means exact four-rule `MY_PA_DATA_PLANE`
-contents, FORWARD jumps `MY_PA_DATA_PLANE` then `FORWARD_FIREWALL`, and no
-source-only data-plane RETURN in `FORWARD_FIREWALL`. `plan` is read-only;
+contents, one built-in FORWARD jump to `FORWARD_FIREWALL`, the
+`MY_PA_DATA_PLANE` jump as `FORWARD_FIREWALL` rule 1, and no source-only
+data-plane RETURN in `FORWARD_FIREWALL`. `plan` is read-only;
 `apply` is idempotent and requires the exact confirmation value; `remove`
 restores the legacy source-only RETURN before withdrawing the MY_PA jump,
 then deletes only the verified repository-owned chain. `remove` also resumes

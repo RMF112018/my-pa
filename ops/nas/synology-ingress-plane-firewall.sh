@@ -95,7 +95,8 @@ bridge="docker-$(printf '%s\n' "$network_id" | cut -c1-8)"
   exit 1
 }
 
-# Shared data-plane FORWARD identity: MY_PA_DATA_PLANE then FORWARD_FIREWALL.
+# Shared data-plane identity: FORWARD enters FORWARD_FIREWALL, whose rule 1
+# enters MY_PA_DATA_PLANE before any DSM acceptance rule.
 # Independent ingress same-bridge RETURN contract is unchanged below.
 filter_save=$("$iptables_save_bin" -t filter) || {
   echo "iptables-save inspection failed; root firewall authority is required" >&2
@@ -103,10 +104,13 @@ filter_save=$("$iptables_save_bin" -t filter) || {
 }
 first_forward=$(printf '%s\n' "$filter_save" | awk '$1 == "-A" && $2 == "FORWARD" {print; exit}')
 second_forward=$(printf '%s\n' "$filter_save" | awk '$1 == "-A" && $2 == "FORWARD" {n++; if (n == 2) {print; exit}}')
-my_pa_jumps=$(printf '%s\n' "$filter_save" | awk '$0 == "-A FORWARD -j MY_PA_DATA_PLANE" {count++} END {print count + 0}')
+forward_count=$(printf '%s\n' "$filter_save" | awk '$1 == "-A" && $2 == "FORWARD" {count++} END {print count + 0}')
+first_firewall=$(printf '%s\n' "$filter_save" | awk '$1 == "-A" && $2 == "FORWARD_FIREWALL" {print; exit}')
+my_pa_jumps=$(printf '%s\n' "$filter_save" | awk '$0 == "-A FORWARD_FIREWALL -j MY_PA_DATA_PLANE" {count++} END {print count + 0}')
 default_jumps=$(printf '%s\n' "$filter_save" | awk '$0 == "-A FORWARD -j DEFAULT_FORWARD" {count++} END {print count + 0}')
-if [ "$first_forward" != "-A FORWARD -j MY_PA_DATA_PLANE" ] || \
-   [ "$second_forward" != "-A FORWARD -j FORWARD_FIREWALL" ] || \
+if [ "$first_forward" != "-A FORWARD -j FORWARD_FIREWALL" ] || \
+   [ -n "$second_forward" ] || [ "$forward_count" -ne 1 ] || \
+   [ "$first_firewall" != "-A FORWARD_FIREWALL -j MY_PA_DATA_PLANE" ] || \
    [ "$my_pa_jumps" -ne 1 ] || [ "$default_jumps" -ne 0 ]; then
   echo "Synology FORWARD chain identity mismatch" >&2
   exit 1

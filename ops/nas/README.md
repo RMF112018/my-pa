@@ -80,12 +80,14 @@ Compose file, ad-hoc PostgreSQL, and direct production `docker compose up
 postgres` are not bootstrap paths.
 
 [`synology-data-plane-firewall.sh`](synology-data-plane-firewall.sh) admits a
-repository-owned `MY_PA_DATA_PLANE` chain as FORWARD rule 1, before DSM
-`FORWARD_FIREWALL`. That chain ACCEPTs only the exact Compose-owned internal
+repository-owned `MY_PA_DATA_PLANE` chain as rule 1 inside DSM
+`FORWARD_FIREWALL`, before every DSM acceptance rule. Built-in `FORWARD`
+retains its single jump to `FORWARD_FIREWALL`. The MY-PA chain ACCEPTs only the exact Compose-owned internal
 data-plane same-bridge/subnet 4-tuple (P1), then DROPs every other packet with
 that bridge as in-interface (P2) or out-interface (P3), then RETURNs unrelated
-forwarding to DSM. Built-in FORWARD order is inspected through `iptables-save
--t filter` because `iptables -S/-L/-C FORWARD` is unreliable on this DSM.
+forwarding to DSM. Built-in FORWARD and `FORWARD_FIREWALL` order are inspected
+through `iptables-save -t filter` because direct built-in-chain inspection is
+unreliable on this DSM.
 `DEFAULT_FORWARD` is not an accepted equivalent, Docker isolation stays unwired,
 and a leftover source-only data-plane RETURN in `FORWARD_FIREWALL` is refused.
 Read-only `plan`/`check` are separate from explicitly confirmed, idempotent

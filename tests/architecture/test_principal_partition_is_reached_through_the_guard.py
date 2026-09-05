@@ -112,6 +112,9 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # `entity_reenrichment_work.principal_id` to read that owner and
         # nothing else.
         "infrastructure/jobs/reenrichment.py",
+        # UI-IMP-WP17 product-owned overlay; every read uses partition_criterion,
+        # insert uses principal_bound_values.
+        "infrastructure/persistence/canvas_workspace.py",
         "infrastructure/persistence/capture.py",
         # WP-10's client plane. Three of its four statements reach the partition
         # — the insert through `principal_bound_values`, the revoke through
@@ -418,6 +421,10 @@ PER_MODULE_ONLY: Final = {
         "partition -- the derivation the partition comes from rather than uses, "
         "exactly as `jobs.job_principal` is registered for. The module has not "
         "yet joined a dedicated statement-level scanner."
+    ),
+    "infrastructure/persistence/canvas_workspace.py": (
+        "all reads compose partition_criterion; insert/update use "
+        "principal_bound_values; not yet on a dedicated statement-level scanner."
     ),
     "infrastructure/persistence/capture.py": (
         "three statements of eight — the receipt read, the submission upsert, and "

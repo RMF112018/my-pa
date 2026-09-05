@@ -6,6 +6,8 @@
  * success authority after `invokeGateway`.
  */
 import contract from "@/contracts/gateway.json";
+import type { CanvasWorkspaceGetResult } from "./capabilities/canvas.workspace.get";
+import type { CanvasWorkspacePutResult } from "./capabilities/canvas.workspace.put";
 import type { CapabilitiesGetResult } from "./capabilities/capabilities.get";
 import type { CaptureCreateResult } from "./capabilities/capture.create";
 import type { CaptureListResult } from "./capabilities/capture.list";
@@ -67,6 +69,8 @@ export type Decoder<T> = (input: unknown) => DecodeResult<T>;
 export type GatewayCapability = keyof typeof contract.capabilities;
 
 export type CapabilityResults = {
+  readonly "canvas.workspace.get": CanvasWorkspaceGetResult;
+  readonly "canvas.workspace.put": CanvasWorkspacePutResult;
   readonly "capabilities.get": CapabilitiesGetResult;
   readonly "capture.create": CaptureCreateResult;
   readonly "capture.list": CaptureListResult;

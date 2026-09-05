@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes one hundred and twenty-eight capability names and none of them
+  ends: the transport routes one hundred and thirty capability names and none of them
   mutates a source, and every capability driven over the wire is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -656,6 +656,12 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         Capability.ENTITIES_CONTEXT: {"entity_id": person.entity_id},
         Capability.ENTITIES_RELATIONSHIPS: {"entity_id": person.entity_id, "direction": "any"},
         Capability.ENTITIES_GRAPH: {"focus_entity_id": person.entity_id},
+        Capability.CANVAS_WORKSPACE_GET: {"focus_entity_id": person.entity_id},
+        Capability.CANVAS_WORKSPACE_PUT: {
+            "focus_entity_id": person.entity_id,
+            "expected_version": 0,
+            "positions": {person.entity_id: {"x": 10.0, "y": 20.0}},
+        },
         Capability.ENTITIES_UNRESOLVED_MENTIONS: {},
         # The entity plane's authoring half (`WP-RI-A-02`), and its payloads carry
         # no marker for the reason the reads above carry none: every field is an
@@ -1539,6 +1545,10 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
         Capability.ENTITIES_GRAPH,
+        # Product-owned canvas overlay (ADR-003): names a Principal partition,
+        # not a source.
+        Capability.CANVAS_WORKSPACE_GET,
+        Capability.CANVAS_WORKSPACE_PUT,
         Capability.ENTITIES_UNRESOLVED_MENTIONS,
         # The authoring half (`WP-RI-A-02`) is scopeless more plainly still: it
         # writes the Principal's own record of a person, and the row it writes
@@ -1868,6 +1878,11 @@ ENTITY_RECORD_FAMILY_EXEMPTION = frozenset(
     }
 )
 
+#: UI-IMP-WP17. `canvas.workspace.put` is the only canvas name the substring
+#: proxy refuses (`put` is in MUTATING_NAMES). It writes a product-owned overlay
+#: (ADR-003), not a source. GET does not contain a mutating verb.
+CANVAS_WORKSPACE_EXEMPTION = frozenset({Capability.CANVAS_WORKSPACE_PUT})
+
 
 def test_the_transport_routes_no_mutating_capability() -> None:
     """One route, one method, and no name that mutates a *source*.
@@ -1910,6 +1925,7 @@ def test_the_transport_routes_no_mutating_capability() -> None:
         | ENTITY_DIRECTED_EXEMPTION
         | PHASE_B_PROPOSAL_EXEMPTION
         | ENTITY_RECORD_FAMILY_EXEMPTION
+        | CANVAS_WORKSPACE_EXEMPTION
     )
     checked = [c for c in _BUILDERS if c not in exempt]
     assert len(checked) == len(Capability) - len(exempt)

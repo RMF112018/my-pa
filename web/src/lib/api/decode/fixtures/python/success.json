@@ -1145,6 +1145,18 @@
           "version": "v1",
           "availability": "available",
           "operator_only": false
+        },
+        {
+          "name": "canvas.workspace.get",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "canvas.workspace.put",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
         }
       ],
       "content_types": [
@@ -1171,8 +1183,8 @@
     "readiness": {
       "state": "degraded",
       "contract_version": "v1",
-      "implemented_capabilities": 128,
-      "total_capabilities": 128,
+      "implemented_capabilities": 130,
+      "total_capabilities": 130,
       "limitations": [
         "Content types awaiting an operator decision: application/pdf. They are reported rather than silently skipped.",
         "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.graph, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, goodnotes.pull, knowledge.search, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
@@ -1877,5 +1889,29 @@
         "superseded_by_participation_id": null
       }
     ]
+  },
+  "canvas.workspace.get": {
+    "focus_entity_id": "ent_aaaaaaaa11111111",
+    "scope_entity_id": null,
+    "version": 1,
+    "positions": {
+      "ent_aaaaaaaa11111111": {
+        "x": 12.5,
+        "y": 40.25
+      }
+    },
+    "updated_at": "2026-08-09T12:00:00.000Z"
+  },
+  "canvas.workspace.put": {
+    "focus_entity_id": "ent_aaaaaaaa11111111",
+    "scope_entity_id": null,
+    "version": 1,
+    "positions": {
+      "ent_aaaaaaaa11111111": {
+        "x": 12.5,
+        "y": 40.25
+      }
+    },
+    "updated_at": "2026-08-09T12:00:00.000Z"
   }
 }

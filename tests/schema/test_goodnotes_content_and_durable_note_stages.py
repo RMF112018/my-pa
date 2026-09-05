@@ -83,7 +83,7 @@ PHASE_B_START: Final = "c7a1f04b9e63"
 #: renames the seeded `entity_relationship_types` row `design_coordinates_with` to
 #: `design_coordination_with`; that in turn stacked on `1cda4d536268` (RI-ENT-WP-07).
 #: Written out rather than derived so chain drift fails here rather than passing.
-HEAD_REVISION: Final = "a4d8e31b2c90"
+HEAD_REVISION: Final = "d4e8b1c7a902"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_a4d9c2e7b815_admit_goodnotes_content_and_durable_note_stages.py"
 )
@@ -219,7 +219,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     # and RI-ENT-WP-12's integration counted 89 from the merged tree rather
     # than adding one to either side (RULING-M2).
     # R8 adds one receipt migration on the previous 91-revision chain.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 92
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 93
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

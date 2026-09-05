@@ -279,6 +279,7 @@ def test_downgrading_one_step_removes_exactly_this_table_and_restores_the_origin
         "goodnotes_pull_assignments",
         "goodnotes_pull_completions",
         "goodnotes_semantic_review_decisions",
+        "canvas_workspaces",
         "goodnotes_semantic_promotion_receipts",
     }
     # The rest of the entity plane survives the downgrade of this revision alone.

@@ -257,6 +257,17 @@ Conservative dispositions for the Map **read** UI on the frozen WP15 `entities.g
 - UI-IMP-WP21 and UI-IMP-WP22 remain `PROVISIONAL_NOT_ACTIVATED`. UI-IMP-WP24 is not this package.
 - Cross-cutting `WP16_TEST_QUALITY_AUDIT_INCOMPLETE` remains later in this file; WP27 still owns that audit.
 
+## UI-IMP-WP17 Canvas Workspace Persistence and Arrange Mode notes
+
+Conservative dispositions for Arrange mode and product-owned workspace persistence on the WP16 Map read. Arrange is a toggle on seeded Map only; the default remains the WP16 read Map. This is not relationship editing (WP18), not inspector/temporal (WP19), not a11y/scale (WP20), not Wave 5 complete, and not `PASS_VERIFIED` for `PFE-AC-140..184`.
+
+- **Arrange / workspace band:** at most `VALIDATION_REQUIRED`. Do not mark `PFE-AC-140..184` `PASS_VERIFIED`.
+- Principal-partitioned product-owned workspace ([ADR-003](../decisions/ADR-003-product-owned-user-authored-source-records.md)): versioned save, fail-closed `expected_version` conflict, backend receipts.
+- Reload overlay: saved points win; missing points keep the WP16 radial layout; missing workspace is an empty overlay, not an error and not an empty graph.
+- Mutations go through `admitBrowserMutation`.
+- This package does not claim relationship editing, inspector/temporal product, or a11y/scale.
+- UI-IMP-WP21 and UI-IMP-WP22 remain `PROVISIONAL_NOT_ACTIVATED`. UI-IMP-WP24 is not this package.
+
 ## UI-IMP-WP23 Federated Search BFF notes
 
 This is Search BFF substrate, not Command UX, not `PASS_VERIFIED` of `PFE-AC-083..085`, and not a claim against the full 250-criterion ledger.

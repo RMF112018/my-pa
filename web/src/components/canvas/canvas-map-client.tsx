@@ -163,6 +163,7 @@ export function CanvasMapClient({
   const [clearFrom, setClearFrom] = useState(false);
   const [clearTo, setClearTo] = useState(false);
   const [evidenceRefs, setEvidenceRefs] = useState("");
+  const [clearEvidence, setClearEvidence] = useState(false);
   const [endReason, setEndReason] = useState("");
   const [endNow, setEndNow] = useState(true);
   const [effectiveEnd, setEffectiveEnd] = useState("");
@@ -426,6 +427,14 @@ export function CanvasMapClient({
   async function onRevise(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (relationshipBusy || !selectedEdge) return;
+    const refs = splitRefs(evidenceRefs);
+    if (!clearEvidence && refs.length === 0) {
+      setRelationshipConflict(null);
+      setRelationshipSaveError(
+        "This Map cannot display current citations; a window-only revise would clear them. State a replacement set, or use inspector later (WP19).",
+      );
+      return;
+    }
     setRelationshipBusy(true);
     setRelationshipConflict(null);
     setRelationshipSaveError(null);
@@ -434,6 +443,7 @@ export function CanvasMapClient({
         relationship_id: selectedEdge.edge_id,
         expected_version: selectedEdge.version,
         idempotency_key: crypto.randomUUID(),
+        evidence_refs: clearEvidence ? [] : refs,
       };
       if (effectiveFrom.trim() && !clearFrom) payload.effective_from = effectiveFrom.trim();
       if (effectiveTo.trim() && !clearTo) payload.effective_to = effectiveTo.trim();
@@ -441,8 +451,6 @@ export function CanvasMapClient({
       if (clearFrom) clear.push("effective_from");
       if (clearTo) clear.push("effective_to");
       if (clear.length > 0) payload.clear = clear;
-      const refs = splitRefs(evidenceRefs);
-      if (refs.length > 0) payload.evidence_refs = refs;
       const response = await apiPost(SESSION, "/api/canvas/relationships/revise", payload);
       await handleMutationResult(response);
     } finally {
@@ -662,7 +670,18 @@ export function CanvasMapClient({
                     value={evidenceRefs}
                     onChange={(event) => setEvidenceRefs(event.target.value)}
                     placeholder="comma-separated identifiers"
+                    disabled={clearEvidence}
                   />
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    aria-label="Clear evidence citations"
+                    data-testid="canvas-relationship-clear-evidence"
+                    checked={clearEvidence}
+                    onChange={(event) => setClearEvidence(event.target.checked)}
+                  />
+                  Clear evidence citations
                 </label>
                 <div>
                   <Button

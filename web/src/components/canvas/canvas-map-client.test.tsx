@@ -433,6 +433,9 @@ describe("CanvasMapClient", () => {
     fireEvent.change(screen.getByLabelText("Effective from"), {
       target: { value: "2026-01-01T00:00:00Z" },
     });
+    fireEvent.change(screen.getByLabelText("Evidence refs"), {
+      target: { value: "ev_stated" },
+    });
     fireEvent.click(screen.getByTestId("canvas-relationship-revise-submit"));
     expect(await screen.findByTestId("canvas-relationship-conflict")).toHaveTextContent(
       /relationship version changed/i,
@@ -445,10 +448,67 @@ describe("CanvasMapClient", () => {
       relationship_id: RELATIONSHIP_EDGE.edge_id,
       expected_version: 1,
       effective_from: "2026-01-01T00:00:00Z",
+      evidence_refs: ["ev_stated"],
     });
     expect(reviseBody).not.toHaveProperty("from_entity_id");
     expect(reviseBody).not.toHaveProperty("to_entity_id");
     expect(fetchSpy.mock.calls.some(([url]) => String(url).startsWith("/api/people/graph"))).toBe(false);
+  });
+
+  it("does not POST a window-only revise that would clear citations", async () => {
+    const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
+      const { href, method } = fetchMeta(String(url), init);
+      throw new Error(`unexpected ${method} ${href}`);
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    mount();
+    openRelationshipEdit();
+    selectRelationshipEdge();
+    fireEvent.change(screen.getByLabelText("Effective from"), {
+      target: { value: "2026-01-01T00:00:00Z" },
+    });
+    fireEvent.click(screen.getByTestId("canvas-relationship-revise-submit"));
+    expect(screen.getByTestId("canvas-relationship-save-error")).toHaveTextContent(
+      /cannot display current citations/i,
+    );
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) => fetchMeta(String(url), init).href === "/api/canvas/relationships/revise",
+      ),
+    ).toBe(false);
+  });
+
+  it("POSTs stated evidence_refs on revise", async () => {
+    const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
+      const { href, method } = fetchMeta(String(url), init);
+      if (method === "POST" && href === "/api/canvas/relationships/revise") {
+        return jsonResponse(receipt(RELATIONSHIP_EDGE.edge_id));
+      }
+      if (method === "GET" && href.startsWith("/api/people/graph")) {
+        return jsonResponse({ nodes: NODES, edges: EDGES, next_cursor: null });
+      }
+      throw new Error(`unexpected ${method} ${href}`);
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    mount();
+    openRelationshipEdit();
+    selectRelationshipEdge();
+    fireEvent.change(screen.getByLabelText("Evidence refs"), {
+      target: { value: "ev_one, ev_two" },
+    });
+    fireEvent.click(screen.getByTestId("canvas-relationship-revise-submit"));
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(
+          ([url, init]) => fetchMeta(String(url), init).href === "/api/canvas/relationships/revise",
+        ),
+      ).toBe(true);
+    });
+    const reviseCall = fetchSpy.mock.calls.find(
+      ([url, init]) => fetchMeta(String(url), init).href === "/api/canvas/relationships/revise",
+    );
+    const reviseBody = JSON.parse(String(reviseCall?.[1]?.body ?? "{}")) as Record<string, unknown>;
+    expect(reviseBody.evidence_refs).toEqual(["ev_one", "ev_two"]);
   });
 
   it("shows a truthful conflict on end, never DELETE", async () => {

@@ -88,8 +88,14 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  if (!("evidence_refs" in admitted.value.body)) {
+    return refuse(
+      "missing_evidence_refs",
+      "evidence_refs must be stated; omitting it would replace existing citations with none",
+    );
+  }
   const evidenceRefs = optionalEvidenceRefs(admitted.value.body["evidence_refs"]);
-  if (evidenceRefs === "invalid") {
+  if (evidenceRefs === undefined || evidenceRefs === "invalid") {
     return refuse("invalid_evidence_refs", "evidence_refs must be an array of non-empty strings");
   }
 
@@ -100,11 +106,11 @@ export async function POST(request: NextRequest) {
     relationship_id: relationshipId,
     expected_version: expectedVersion,
     idempotency_key: idempotencyKey,
+    evidence_refs: evidenceRefs,
   };
   if (effectiveFrom !== undefined) payload.effective_from = effectiveFrom;
   if (effectiveTo !== undefined) payload.effective_to = effectiveTo;
   if (clear !== undefined) payload.clear = clear;
-  if (evidenceRefs !== undefined) payload.evidence_refs = evidenceRefs;
 
   const outcome = await invokeGateway(
     admitted.value.principal,

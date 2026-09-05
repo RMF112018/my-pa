@@ -62,6 +62,7 @@ const VALID_BODY = {
   relationship_id: "erel_aaaaaaaa11111111",
   expected_version: 1,
   idempotency_key: "idem-1",
+  evidence_refs: [] as readonly string[],
 };
 
 beforeEach(() => {
@@ -184,6 +185,31 @@ describe("POST /api/canvas/relationships/revise", () => {
     const response = await reviseRelationship(mutatingPost(cookie, body, ORIGIN));
     expect(response.status).toBe(200);
     expect(sent).toHaveLength(1);
+    expect(sent[0].body.payload).toEqual(body);
+  });
+
+  it("refuses an omitted evidence_refs before the gateway", async () => {
+    const cookie = await signIn();
+    const withoutEvidence = {
+      relationship_id: VALID_BODY.relationship_id,
+      expected_version: VALID_BODY.expected_version,
+      idempotency_key: VALID_BODY.idempotency_key,
+    };
+    const response = await reviseRelationship(mutatingPost(cookie, withoutEvidence, ORIGIN));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { errorClass: "validation", code: "missing_evidence_refs" },
+    });
+    expect(sent).toEqual([]);
+  });
+
+  it("forwards an explicit empty evidence_refs replacement to the gateway", async () => {
+    const cookie = await signIn();
+    const body = { ...VALID_BODY, evidence_refs: [] };
+    const response = await reviseRelationship(mutatingPost(cookie, body, ORIGIN));
+    expect(response.status).toBe(200);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].url).toContain("/v1/entities.relationships.revise");
     expect(sent[0].body.payload).toEqual(body);
   });
 });

@@ -67,6 +67,9 @@ from my_pa.contracts.ports import (
     AuditSink,
     AuthoringConflictError,
     AuthoringReceipt,
+    CanvasWorkspaceConflictError,
+    CanvasWorkspaceRecord,
+    CanvasWorkspaceRepository,
     CaptureAdmission,
     CaptureAdmissionRequest,
     CaptureRepository,
@@ -543,6 +546,9 @@ class World:
         default_factory=dict
     )
     preference_keys: dict[tuple[str, str], str] = field(default_factory=dict)
+    canvas_workspaces: dict[tuple[str, str | None, str | None], CanvasWorkspaceRecord] = field(
+        default_factory=dict
+    )
     goodnotes_work: dict[tuple[str, str, str], GoodNotesPageWork] = field(default_factory=dict)
     goodnotes_proposals: dict[tuple[str, str], GoodNotesSemanticProposal] = field(
         default_factory=dict
@@ -1748,6 +1754,45 @@ class _ContextPreferences(ContextPreferenceRepository):
             alias=event.alias,
             source_id=event.source_id,
         )
+
+
+class _CanvasWorkspaces(CanvasWorkspaceRepository):
+    """Principal-partitioned canvas overlay over a `World`."""
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def _key(
+        self, principal_id: str, focus_entity_id: str | None, scope_entity_id: str | None
+    ) -> tuple[str, str | None, str | None]:
+        return (principal_id, focus_entity_id, scope_entity_id)
+
+    def get(
+        self,
+        principal_id: str,
+        focus_entity_id: str | None,
+        scope_entity_id: str | None,
+    ) -> CanvasWorkspaceRecord | None:
+        return self._world.canvas_workspaces.get(
+            self._key(principal_id, focus_entity_id, scope_entity_id)
+        )
+
+    def insert(self, record: CanvasWorkspaceRecord) -> CanvasWorkspaceRecord:
+        key = self._key(record.principal_id, record.focus_entity_id, record.scope_entity_id)
+        if key in self._world.canvas_workspaces:
+            raise CanvasWorkspaceConflictError()
+        self._world.canvas_workspaces[key] = record
+        return record
+
+    def update(
+        self, record: CanvasWorkspaceRecord, *, expected_version: int
+    ) -> CanvasWorkspaceRecord:
+        key = self._key(record.principal_id, record.focus_entity_id, record.scope_entity_id)
+        stored = self._world.canvas_workspaces.get(key)
+        if stored is None or stored.version != expected_version:
+            raise CanvasWorkspaceConflictError()
+        self._world.canvas_workspaces[key] = record
+        return record
 
 
 class _GoodNotesSemantics(GoodNotesSemanticRepository):
@@ -7288,6 +7333,11 @@ class FakeUnitOfWork(UnitOfWork):
     def goodnotes_semantics(self) -> GoodNotesSemanticRepository:
         """Immutable page-version work and semantic proposal receipts over this `World`."""
         return _GoodNotesSemantics(self._world)
+
+    @property
+    def canvas_workspaces(self) -> CanvasWorkspaceRepository:
+        """Principal-partitioned canvas overlay over this `World`."""
+        return _CanvasWorkspaces(self._world)
 
     def intelligence_for(self, principal_id: str) -> InMemoryIntelligenceStore:
         return self._world.intelligence

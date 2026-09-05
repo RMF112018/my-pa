@@ -33,8 +33,9 @@ DISPOSABLE_DATABASE: Final = "my_pa_entities_graph_vocabulary_test"
 
 REVISION: Final = "c3f8a1d07e94"
 PREVIOUS_REVISION: Final = "b8e4d1a6c073"
-HEAD_REVISION: Final = "a4d8e31b2c90"
 PULL_REVISION: Final = "6a2f9d1c4b80"
+PROMOTION_REVISION: Final = "a4d8e31b2c90"
+HEAD_REVISION: Final = "d4e8b1c7a902"
 ADMITTED_CAPABILITY: Final = "entities.graph"
 SETTLED_CAPABILITY: Final = "capabilities.get"
 SETTLED_PURPOSE: Final = "status_observation"
@@ -102,8 +103,9 @@ def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> N
     heads = list(script.get_heads())
     assert heads == [HEAD_REVISION], f"expected exactly {HEAD_REVISION}, found {heads}"
     assert script.get_revision(REVISION).down_revision == PREVIOUS_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == PULL_REVISION
     assert script.get_revision(PULL_REVISION).down_revision == REVISION
+    assert script.get_revision(PROMOTION_REVISION).down_revision == PULL_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == PROMOTION_REVISION
     with migrated_engine.begin() as connection:
         stamped = list(
             connection.execute(text("SELECT version_num FROM alembic_version")).scalars()

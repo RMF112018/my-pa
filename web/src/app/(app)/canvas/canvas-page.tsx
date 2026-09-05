@@ -1,8 +1,9 @@
 /**
- * Map — a seeded, read-only neighborhood. Not Arrange, and not a directory
- * of everyone. The page reaches `entities.graph` through `invokeGateway`
- * rather than through the People graph BFF, matching People search: a server
- * component calling its own API would be a second copy of the same decision.
+ * Map — a seeded neighborhood. Default remains the WP16 read Map; Arrange
+ * is an opt-in overlay on a seeded graph, not a directory of everyone.
+ * The page reaches `entities.graph` (and, when showing nodes,
+ * `canvas.workspace.get`) through `invokeGateway` rather than through a
+ * People or workspace BFF GET.
  */
 import type { ReactNode } from "react";
 import Link from "next/link";
@@ -15,17 +16,19 @@ import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
 import { DirectoryList } from "@/components/canvas/directory-list";
-import { GraphMap } from "@/components/canvas/graph-map";
+import { CanvasMapClient } from "@/components/canvas/canvas-map-client";
 import { canvasMap, type CanvasMapQuery } from "@/lib/routes/canvas";
 import { peopleHome } from "@/lib/routes/people";
 import type { DisclosureEnvelope } from "@/contracts/envelope";
+import type { PrincipalSession } from "@/contracts/identity";
 import type { EntitiesGraphResult } from "@/lib/api/decode/capabilities/entities.graph";
+import type { CanvasPositions } from "@/lib/api/decode/capabilities/canvas.workspace.get";
 
 const SCOPE = "canvas";
 
 const BLURB =
-  "Map is a read-only neighborhood of a seed you already hold. " +
-  "It is not Arrange, and it is not a directory of everyone.";
+  "Map is a neighborhood of a seed you already hold. " +
+  "It is not a directory of everyone.";
 
 function frame(children: ReactNode) {
   return (
@@ -65,13 +68,32 @@ function splitTypes(raw: string): readonly string[] {
     .filter((item) => item.length > 0);
 }
 
-function neighborhood(
+async function loadWorkspaceOverlay(
+  principal: PrincipalSession,
+  focusEntityId: string,
+  scopeEntityId: string,
+): Promise<{ readonly positions: CanvasPositions; readonly version: number }> {
+  const seedPayload: Record<string, unknown> = {
+    ...(focusEntityId ? { focus_entity_id: focusEntityId } : {}),
+    ...(scopeEntityId ? { scope_entity_id: scopeEntityId } : {}),
+  };
+  const workspace = await invokeGateway(principal, "canvas.workspace.get", seedPayload);
+  if (!workspace.ok) {
+    return { positions: {}, version: 0 };
+  }
+  return { positions: workspace.result.positions, version: workspace.result.version };
+}
+
+async function neighborhood(
+  principal: PrincipalSession,
   result: EntitiesGraphResult,
   disclosure: DisclosureEnvelope,
   query: CanvasMapQuery,
   focusEntityId: string,
+  scopeEntityId: string,
   degraded: boolean,
 ) {
+  const overlay = await loadWorkspaceOverlay(principal, focusEntityId, scopeEntityId);
   const cursor = result.next_cursor || disclosure.nextCursor || "";
   const showBanner = degraded || disclosure.truncated || Boolean(cursor);
   return (
@@ -94,7 +116,14 @@ function neighborhood(
           <h2 id="canvas-map-heading" className="mb-3 text-base font-semibold text-moss-slate">
             Neighborhood
           </h2>
-          <GraphMap nodes={result.nodes} edges={result.edges} focusEntityId={focusEntityId} />
+          <CanvasMapClient
+            nodes={result.nodes}
+            edges={result.edges}
+            focusEntityId={focusEntityId}
+            scopeEntityId={scopeEntityId}
+            savedPositions={overlay.positions}
+            version={overlay.version}
+          />
         </section>
       </div>
       {cursor ? (
@@ -264,5 +293,15 @@ export async function CanvasPage({
     );
   }
 
-  return frame(neighborhood(answer.result, answer.disclosure, query, focusEntityId, answer.kind === "degraded"));
+  return frame(
+    await neighborhood(
+      principal,
+      answer.result,
+      answer.disclosure,
+      query,
+      focusEntityId,
+      scopeEntityId,
+      answer.kind === "degraded",
+    ),
+  );
 }

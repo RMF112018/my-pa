@@ -11,7 +11,7 @@ The five, over both:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — proved from both ends: the tool list and the option
-  surface route one hundred and twenty-eight capability names and none of them mutates a
+  surface route one hundred and thirty capability names and none of them mutates a
   source, and every capability driven over both transports is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -376,6 +376,10 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
         Capability.ENTITIES_GRAPH,
+        # Product-owned canvas overlay (ADR-003): names a Principal partition,
+        # not a source.
+        Capability.CANVAS_WORKSPACE_GET,
+        Capability.CANVAS_WORKSPACE_PUT,
         Capability.ENTITIES_UNRESOLVED_MENTIONS,
         # The authoring half (`WP-RI-A-02`) is scopeless more plainly still: it
         # writes the Principal's own record of a person, and the row it writes
@@ -768,6 +772,11 @@ ENTITY_RECORD_FAMILY_EXEMPTION = frozenset(
     }
 )
 
+#: UI-IMP-WP17. `canvas.workspace.put` is the only canvas name the substring
+#: proxy refuses (`put` is in MUTATING_NAMES). It writes a product-owned overlay
+#: (ADR-003), not a source. GET does not contain a mutating verb.
+CANVAS_WORKSPACE_EXEMPTION = frozenset({Capability.CANVAS_WORKSPACE_PUT})
+
 
 def test_neither_transport_routes_a_mutating_capability() -> None:
     """The tool list and the CLI's positional, and no name that mutates a *source*.
@@ -792,6 +801,7 @@ def test_neither_transport_routes_a_mutating_capability() -> None:
         | ENTITY_DIRECTED_EXEMPTION
         | PHASE_B_PROPOSAL_EXEMPTION
         | ENTITY_RECORD_FAMILY_EXEMPTION
+        | CANVAS_WORKSPACE_EXEMPTION
     )
     checked = [c for c in Capability if c not in exempt]
     assert len(checked) == len(Capability) - len(exempt)

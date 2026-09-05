@@ -76,7 +76,9 @@ export function UtilityRegion({
         >
           {open ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
         </IconButton>
-        {open ? (
+        {/* Aside stays in the tree for desktop chrome; hide its inspector body on
+            mobile so CanvasInspector (and its GETs) mount once — Sheet owns mobile. */}
+        {open && !mobile ? (
           <div className="p-4">
             <InspectorContent pinned={pinned} onPinnedChange={onPinnedChange} />
             <label className="mt-6 block text-xs text-text-muted">

@@ -382,6 +382,23 @@ class IdKind(StrEnum):
     #: neighbours `cclt`/`ccls` differ): `cst`/`ccat` collide with none.
     PROJECT_CONSTRAINT = "cst"
     CONSTRAINT_CATEGORY = "ccat"
+    #: PC-CM-IMP-WP02: the Project Controls persistence records that are
+    #: addressed as rows of their own (party assignments, revisions, history
+    #: receipts, relationships, evidence links, and the sync target/run/
+    #: conflict records). Composite-keyed rows (settings, revision parties,
+    #: sync baselines) get no prefix. Checked against every prior member of
+    #: this enum before use (a grep of each quoted value over this file, and
+    #: the uniqueness assertion in `tests/unit/test_identifiers.py`); none
+    #: is a string prefix of, or prefixed by, any other value.
+    CONSTRAINT_PARTY_ASSIGNMENT = "cpty"
+    PROJECT_CONSTRAINT_REVISION = "crev"
+    PROJECT_CONSTRAINT_HISTORY = "chst"
+    CONSTRAINT_CATEGORY_HISTORY = "cchst"
+    PROJECT_CONSTRAINT_RELATIONSHIP = "crel"
+    PROJECT_CONSTRAINT_EVIDENCE_LINK = "cevd"
+    CONSTRAINT_SYNC_TARGET = "csyt"
+    CONSTRAINT_SYNC_RUN = "csyr"
+    CONSTRAINT_SYNC_CONFLICT = "csyc"
 
 
 class InvalidIdentifierError(ValueError):

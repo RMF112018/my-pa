@@ -55,7 +55,7 @@ import { decodeEntitiesNamesList } from "./capabilities/entities.names.list";
 import { decodeEntitiesAddressesList } from "./capabilities/entities.addresses.list";
 import { decodeEntitiesCommunicationList } from "./capabilities/entities.communication.list";
 import { decodeEntitiesParticipationsList } from "./capabilities/entities.participations.list";
-import type { Decoder, GatewayCapability } from "./types";
+import type { CapabilityResults, Decoder, GatewayCapability } from "./types";
 
 export type { CapabilityResults, DecodeResult, Decoder } from "./types";
 export type { DecodedDisclosure } from "./disclosure";
@@ -115,4 +115,17 @@ export const DECODERS = {
   "entities.addresses.list": decodeEntitiesAddressesList,
   "entities.communication.list": decodeEntitiesCommunicationList,
   "entities.participations.list": decodeEntitiesParticipationsList,
-} satisfies Record<GatewayCapability, Decoder<unknown>>;
+} satisfies { [K in GatewayCapability]: Decoder<CapabilityResults[K]> };
+
+/**
+ * Registry lookup that preserves the capability's decoded result type.
+ *
+ * The assertion is the registry map, not network data. Callers still pass
+ * `unknown` into the selected decoder.
+ */
+export function decodeCapability<C extends GatewayCapability>(
+  capability: C,
+  input: unknown,
+): import("./primitives").DecodeResult<CapabilityResults[C]> {
+  return (DECODERS[capability] as Decoder<CapabilityResults[C]>)(input);
+}

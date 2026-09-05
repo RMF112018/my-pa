@@ -42,7 +42,8 @@
  */
 import contract from "@/contracts/gateway.json";
 import { rejectCallerSuppliedPrincipal } from "@/lib/auth/claims";
-import { DECODERS } from "@/lib/api/decode";
+import { decodeCapability } from "@/lib/api/decode";
+import type { CapabilityResults } from "@/lib/api/decode";
 import type { DecodedDisclosure } from "@/lib/api/decode/disclosure";
 import { decodeEnvelope } from "@/lib/api/decode/envelope";
 import {
@@ -321,21 +322,21 @@ export async function callGateway(
 
 /**
  * The only authority path for routes and RSC. Transport plus the capability
- * decoder selected from `DECODERS`. Capability stubs fail closed until C/D
- * replace them.
+ * decoder selected from the registry. The result type is the capability's
+ * decoded contract, not a caller-supplied generic.
  *
  * WP05 mutation admission order lives in routes, not here:
  * Origin → Principal → body. Side effects happen in routes. Decoding happens
  * AFTER upstream returns.
  */
-export async function invokeGateway(
+export async function invokeGateway<C extends GatewayCapability>(
   principal: PrincipalSession,
-  capability: GatewayCapability,
+  capability: C,
   payload: Record<string, unknown> = {},
-): Promise<GatewayOutcome<unknown>> {
+): Promise<GatewayOutcome<CapabilityResults[C]>> {
   const outcome = await callGateway(principal, capability, payload);
   if (!outcome.ok) return outcome;
-  const decoded = DECODERS[capability](outcome.result);
+  const decoded = decodeCapability(capability, outcome.result);
   if (!decoded.ok) {
     logDecodeFailure(capability, "upstream_contract_invalid");
     return {

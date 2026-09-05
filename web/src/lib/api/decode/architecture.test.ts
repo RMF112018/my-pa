@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import contract from "@/contracts/gateway.json";
 import { DECODERS } from "./index";
+import type { CapabilityResults, GatewayCapability } from "./types";
 
 const SRC = join(process.cwd(), "src");
 
@@ -30,10 +31,16 @@ describe("decoder architecture", () => {
     expect(text).not.toMatch(/callGateway\s*</);
     expect(text).not.toMatch(/envelope\.result \?\? \{\}[\s\S]*as T/);
     expect(text).not.toMatch(/as T\b/);
+    expect(text).toMatch(/invokeGateway<C extends GatewayCapability>/);
   });
 
   it("Object.keys(gateway.json.capabilities) sorted equals Object.keys(DECODERS) sorted", () => {
-    expect(Object.keys(DECODERS).sort()).toEqual(Object.keys(contract.capabilities).sort());
+    const decoderKeys = Object.keys(DECODERS).sort();
+    expect(decoderKeys.length).toBeGreaterThan(0);
+    expect(decoderKeys).toEqual(Object.keys(contract.capabilities).sort());
+    expect(DECODERS).toHaveProperty("capture.create");
+    expect(DECODERS).toHaveProperty("tasks.read");
+    expect(DECODERS).toHaveProperty("review.decide");
   });
 
   it("each decoder rejects at least one malformed fixture", () => {
@@ -43,5 +50,14 @@ describe("decoder architecture", () => {
       const plausible = decode({ pulse_items: 1 });
       expect(plausible.ok, `${capability} accepted a plausible object`).toBe(false);
     }
+  });
+
+  it("CapabilityResults keys match gateway.json and are not a uniform unknown map", () => {
+    const keys = Object.keys(contract.capabilities) as GatewayCapability[];
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys.sort()).toEqual(Object.keys(DECODERS).sort());
+    type ResultKeys = keyof CapabilityResults;
+    const sample: ResultKeys = "capture.create";
+    expect(sample).toBe("capture.create");
   });
 });

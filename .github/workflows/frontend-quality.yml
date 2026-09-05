@@ -33,7 +33,7 @@ jobs:
           git merge-base origin/main HEAD >/dev/null
           mapfile -t changed < <(git diff --name-only origin/main...HEAD)
           printf '%s\n' "${changed[@]}"
-          if printf '%s\n' "${changed[@]}" | grep -Eq '^(web/|src/my_pa/.*/webauthn|src/my_pa/application/webauthn|src/my_pa/adapters/http/webauthn|src/my_pa/domain/identity/webauthn|src/my_pa/application/session_service|src/my_pa/adapters/http/auth_sessions|src/my_pa/bootstrap/settings.py|src/my_pa/bootstrap/gateway.py|src/my_pa/adapters/http/app.py|apps/gateway.py|pyproject.toml|web/package-lock.json)'; then
+          if printf '%s\n' "${changed[@]}" | grep -Eq '^(web/|src/my_pa/contracts/|src/my_pa/application/capabilities\.py|tests/contract/|src/my_pa/.*/webauthn|src/my_pa/application/webauthn|src/my_pa/adapters/http/webauthn|src/my_pa/domain/identity/webauthn|src/my_pa/application/session_service|src/my_pa/adapters/http/auth_sessions|src/my_pa/bootstrap/settings.py|src/my_pa/bootstrap/gateway.py|src/my_pa/adapters/http/app.py|apps/gateway.py|pyproject.toml|web/package-lock.json)'; then
             echo "applicable=true" >> "$GITHUB_OUTPUT"
           else
             echo "applicable=false" >> "$GITHUB_OUTPUT"

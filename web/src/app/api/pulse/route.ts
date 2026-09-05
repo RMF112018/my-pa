@@ -67,7 +67,7 @@ export async function GET(request: NextRequest) {
 
   const outcome = await invokeGateway(guard.principal, "continuity.pulse");
   if (!outcome.ok) return gatewayRefusal(SCOPE, outcome.status, outcome.error);
-  const result = outcome.result as { pulse_items: readonly PulseItem[] };
+  const result = outcome.result;
 
   return NextResponse.json({
     shape: "backend",

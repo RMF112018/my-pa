@@ -184,7 +184,18 @@ Conservative dispositions for typed BFF success, error, receipt, and degraded co
 - **PFE-AC-126 / 131**: Remain `UNRECONCILED` (`PFE-AC-123..139` mapping discrepancy). Contract negatives and a promoting frontend contract job are substrate, not Drive `PASS_VERIFIED`.
 - **PFE-AC-136** is not passed from this package.
 - Capture/review/work receipt bands: named runtime decode now exists for the corresponding GatewayCapability keys. Lifecycle UX remains `UI-IMP-WP09` / `UI-IMP-WP10`. At most `VALIDATION_REQUIRED` notes; never `PASS_VERIFIED`.
-- Twenty-nine `APPLICATION_GATEWAY_CAPABILITY` keys now have named runtime decoders; omitted arrays fail closed; `review.decide` no longer synthesizes version/disposition; `rate_limited` is HTTP 429; malformed success is `upstream_contract_invalid` / 503.
+- Named runtime decoders exist for every admitted `APPLICATION_GATEWAY_CAPABILITY` key (51 on this tree, matching `gateway.json`); omitted arrays fail closed; `review.decide` no longer synthesizes version/disposition; `rate_limited` is HTTP 429 with preserved `code`; malformed success is `upstream_contract_invalid` / 503.
+
+## UI-IMP-WP06 Wave 1 closure gap-fill notes
+
+Follow-on to `#180` on later `main` (typed `CapabilityResults`, 51/51 Python success fixtures, no post-decode `as GatewayOutcome` on `invokeGateway`, browser fail-closed on unreadable/non-object 2xx). Production activation and whole-frontend `PASS_VERIFIED` remain unclaimed. Wave 1 security/shared-contract foundation is not declared complete in this ledger entry until exact-head review and merge.
+
+- **PFE-AC-097** remains `IMPLEMENTATION_REQUIRED`. Hashed recovery is live. Operator-local recovery is not implemented. Not `PASS_VERIFIED`.
+- **PFE-AC-101** remains not `PASS_VERIFIED`. `implementation_disposition = VALIDATION_REQUIRED`.
+- **PFE-AC-005 / 006** remain `UNRECONCILED`; Drive criterion wording is not in the repository. Not `PASS_VERIFIED`.
+- **PFE-AC-126 / 131** remain `UNRECONCILED` (mapping discrepancy). Contract negatives including 51/51 Python parity and malformed-success 503 are substrate, not Drive `PASS_VERIFIED`.
+- **PFE-AC-136** is not passed from this package.
+- WP07+ shell/content work is not this package. Later Wave 2–5 packages already on `main` are not reopened.
 
 ## UI-IMP-WP11 Reports / Morning Intelligence BFF notes
 

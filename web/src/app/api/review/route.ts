@@ -68,7 +68,7 @@ export async function GET(request: NextRequest) {
 
   const outcome = await invokeGateway(guard.principal, "review.list");
   if (!outcome.ok) return gatewayRefusal(SCOPE, outcome.status, outcome.error);
-  const result = outcome.result as { review_cases: readonly ReviewCase[] };
+  const result = outcome.result;
 
   return NextResponse.json({
     shape: "backend",

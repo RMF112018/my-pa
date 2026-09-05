@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
 
   const outcome = await invokeGateway(guard.principal, "continuity.projects");
   if (!outcome.ok) return gatewayRefusal(SCOPE, outcome.status, outcome.error);
-  const result = outcome.result as { projects: readonly ProjectRow[] };
+  const result = outcome.result;
 
   return NextResponse.json({
     shape: "backend",

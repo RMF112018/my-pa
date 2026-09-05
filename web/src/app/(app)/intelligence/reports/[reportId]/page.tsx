@@ -6,13 +6,12 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resolveSessionPrincipal } from "@/lib/auth/principal";
-import { invokeGateway, type GatewayOutcome } from "@/lib/api/gateway";
+import { invokeGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { FeatureRouteState } from "@/components/shell/feature-route-state";
 import { SurfaceState } from "@/components/ui/surface-state";
 import { ReportDetailView } from "@/components/intelligence/report-detail-view";
 import { REPORT_IDENTIFIER } from "@/components/intelligence/cycle-selection";
-import type { ReportsReadResult } from "@/lib/api/decode/capabilities/reports.read";
 
 export const metadata = { title: "Intelligence report — my-pa" };
 export const dynamic = "force-dynamic";
@@ -57,10 +56,10 @@ export default async function IntelligenceReportPage({
     );
   }
 
-  const outcome = (await invokeGateway(principal, "reports.read", {
+  const outcome = await invokeGateway(principal, "reports.read", {
     report_id: reportId,
     include_body: true,
-  })) as GatewayOutcome<ReportsReadResult>;
+  });
 
   if (!outcome.ok) {
     return (

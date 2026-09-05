@@ -57,7 +57,7 @@ export async function GET(request: NextRequest) {
 
   const outcome = await invokeGateway(guard.principal, "continuity.situations");
   if (!outcome.ok) return gatewayRefusal(SCOPE, outcome.status, outcome.error);
-  const result = outcome.result as { situations: readonly SituationRow[] };
+  const result = outcome.result;
 
   return NextResponse.json({
     shape: "backend",

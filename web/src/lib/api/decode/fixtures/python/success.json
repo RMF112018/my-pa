@@ -9,6 +9,32 @@
     "issued_at": "2026-08-09T12:00:00.000Z",
     "created": true
   },
+  "capture.list": {
+    "captures": [
+      {
+        "capture_id": "cap_aaaaaaaa11111111",
+        "owner_principal_id": "prn_aaaaaaaa11111111",
+        "created_at": "2026-08-09T12:00:00.000Z",
+        "version_count": 1,
+        "latest_version_id": "capver_aaaaaaaa11111111",
+        "latest_version_number": 1,
+        "latest_recorded_at": "2026-08-09T12:00:00.000Z"
+      }
+    ]
+  },
+  "capture.search": {
+    "matches": [
+      {
+        "capture_id": "cap_aaaaaaaa11111111",
+        "version_id": "capver_aaaaaaaa11111111",
+        "version_number": 1,
+        "character_count": 12,
+        "recorded_at": "2026-08-09T12:00:00.000Z"
+      }
+    ],
+    "searchable_versions": 1,
+    "stored_versions": 1
+  },
   "tasks.read": {
     "task": {
       "task_id": "tsk_aaaa0001aaaa0001aaaa0001",
@@ -55,6 +81,23 @@
       }
     ]
   },
+  "tasks.search": {
+    "tasks": [
+      {
+        "task_id": "tsk_aaaa0001aaaa0001aaaa0001",
+        "title": "Check the pour",
+        "lifecycle_state": "open",
+        "priority": "p2",
+        "due_at": "2026-01-02T00:00:00.000Z",
+        "scheduled_at": null,
+        "deferred_until": null,
+        "archived_at": null,
+        "created_at": "2026-01-01T00:00:00.000Z",
+        "updated_at": "2026-01-01T00:00:00.000Z",
+        "version": 1
+      }
+    ]
+  },
   "tasks.history": {
     "history": [
       {
@@ -69,6 +112,179 @@
         "recorded_at": "2026-01-01T00:00:00.000Z"
       }
     ]
+  },
+  "tasks.create": {
+    "task": {
+      "task_id": "tsk_aaaa0001aaaa0001aaaa0001",
+      "title": "Check the pour",
+      "description": null,
+      "lifecycle_state": "open",
+      "evidence_state": "accepted",
+      "origin_evidence_ref": "asr_aaaa0001aaaa0001aaaa0001",
+      "closure_evidence_ref": null,
+      "accepted_by_review_decision_id": null,
+      "acceptance_kind": "direct_principal",
+      "closure_history_id": null,
+      "version": 1,
+      "priority": "p2",
+      "due_at": "2026-01-02T00:00:00.000Z",
+      "scheduled_at": null,
+      "deferred_until": null,
+      "archived_at": null,
+      "project_id": null,
+      "situation_id": null,
+      "recurrence_id": null,
+      "opened_at": "2026-01-01T00:00:00.000Z",
+      "closed_at": null,
+      "created_at": "2026-01-01T00:00:00.000Z",
+      "updated_at": "2026-01-01T00:00:00.000Z",
+      "commitment_id": null,
+      "role": null
+    },
+    "history": {
+      "history_id": "thst_aaaa0001aaaa0001aaaa0001",
+      "task_id": "tsk_aaaa0001aaaa0001aaaa0001",
+      "action": "create",
+      "actor": "principal",
+      "outcome": "applied",
+      "before_version": 0,
+      "after_version": 1,
+      "occurred_at": "2026-01-01T00:00:00.000Z",
+      "recorded_at": "2026-01-01T00:00:00.000Z"
+    },
+    "replayed": false
+  },
+  "tasks.update": {
+    "task": {
+      "task_id": "tsk_aaaa0001aaaa0001aaaa0001",
+      "title": "Check the pour",
+      "description": null,
+      "lifecycle_state": "open",
+      "evidence_state": "accepted",
+      "origin_evidence_ref": "asr_aaaa0001aaaa0001aaaa0001",
+      "closure_evidence_ref": null,
+      "accepted_by_review_decision_id": null,
+      "acceptance_kind": "direct_principal",
+      "closure_history_id": null,
+      "version": 2,
+      "priority": "p2",
+      "due_at": "2026-01-02T00:00:00.000Z",
+      "scheduled_at": null,
+      "deferred_until": null,
+      "archived_at": null,
+      "project_id": null,
+      "situation_id": null,
+      "recurrence_id": null,
+      "opened_at": "2026-01-01T00:00:00.000Z",
+      "closed_at": null,
+      "created_at": "2026-01-01T00:00:00.000Z",
+      "updated_at": "2026-01-01T00:00:00.000Z",
+      "commitment_id": null,
+      "role": null
+    },
+    "history": {
+      "history_id": "thst_aaaa0001aaaa0001aaaa0001",
+      "task_id": "tsk_aaaa0001aaaa0001aaaa0001",
+      "action": "update",
+      "actor": "principal",
+      "outcome": "applied",
+      "before_version": 1,
+      "after_version": 2,
+      "occurred_at": "2026-01-01T00:00:00.000Z",
+      "recorded_at": "2026-01-01T00:00:00.000Z"
+    },
+    "replayed": false
+  },
+  "tasks.transition": {
+    "task": {
+      "task_id": "tsk_aaaa0001aaaa0001aaaa0001",
+      "title": "Check the pour",
+      "description": null,
+      "lifecycle_state": "completed",
+      "evidence_state": "accepted",
+      "origin_evidence_ref": "asr_aaaa0001aaaa0001aaaa0001",
+      "closure_evidence_ref": "asr_aaaa0001aaaa0001aaaa0001",
+      "accepted_by_review_decision_id": null,
+      "acceptance_kind": "direct_principal",
+      "closure_history_id": "thst_aaaa0001aaaa0001aaaa0001",
+      "version": 2,
+      "priority": "p2",
+      "due_at": "2026-01-02T00:00:00.000Z",
+      "scheduled_at": null,
+      "deferred_until": null,
+      "archived_at": null,
+      "project_id": null,
+      "situation_id": null,
+      "recurrence_id": null,
+      "opened_at": "2026-01-01T00:00:00.000Z",
+      "closed_at": "2026-01-02T00:00:00.000Z",
+      "created_at": "2026-01-01T00:00:00.000Z",
+      "updated_at": "2026-01-01T00:00:00.000Z",
+      "commitment_id": null,
+      "role": null
+    },
+    "history": {
+      "history_id": "thst_aaaa0001aaaa0001aaaa0001",
+      "task_id": "tsk_aaaa0001aaaa0001aaaa0001",
+      "action": "transition_lifecycle",
+      "actor": "principal",
+      "outcome": "applied",
+      "before_version": 1,
+      "after_version": 2,
+      "occurred_at": "2026-01-01T00:00:00.000Z",
+      "recorded_at": "2026-01-01T00:00:00.000Z"
+    },
+    "replayed": false
+  },
+  "tasks.bulk_preview": {
+    "bulk_operation_id": "bulk_aaaaaaaa11111111",
+    "expires_at": "2026-08-09T12:15:00+00:00",
+    "affected": 1,
+    "no_op": 0,
+    "rejected": 0,
+    "replayed": false
+  },
+  "tasks.bulk_confirm": {
+    "bulk_operation_id": "bulk_aaaaaaaa11111111",
+    "affected": 1,
+    "no_op": 0,
+    "rejected": 0,
+    "history_ids": [
+      "thst_aaaa0001aaaa0001aaaa0001"
+    ],
+    "replayed": false
+  },
+  "knowledge.search": {
+    "matches": [
+      {
+        "knowledge_id": "kn_aaaaaaaa11111111",
+        "label": "Plain text document",
+        "snippet": "morning brief",
+        "rank": "strong",
+        "source_id": "src_aaaaaaaa11111111",
+        "source_object_id": "obj_aaaaaaaa11111111",
+        "version_id": "ver_aaaaaaaa11111111"
+      }
+    ]
+  },
+  "knowledge.read": {
+    "knowledge_id": "kn_aaaaaaaa11111111",
+    "label": "Plain text document",
+    "media_type": "text/plain",
+    "character_count": 16,
+    "metadata_only": false,
+    "is_truncated": false,
+    "provenance": {
+      "source_id": "src_aaaaaaaa11111111",
+      "source_object_id": "obj_aaaaaaaa11111111",
+      "version_id": "ver_aaaaaaaa11111111",
+      "extractor": "my_pa.text",
+      "extractor_version": "1",
+      "trust_level": "source_bound_derived",
+      "observed_at": "2026-08-09T12:00:00.000Z",
+      "processed_at": "2026-08-09T12:00:00.000Z"
+    },
+    "text": "scraped item one"
   },
   "knowledge.reveal": {
     "subject_id": "cap_aaaaaaaa11111111",
@@ -113,6 +329,38 @@
         "opened_at": "2026-01-01T00:00:00.000Z",
         "closed_at": null,
         "outcome": null
+      }
+    ]
+  },
+  "continuity.projects": {
+    "projects": [
+      {
+        "project_id": "prj_aaaa0001aaaa0001aaaa0001",
+        "name": "North pour",
+        "state": "active",
+        "description": null,
+        "participants": [
+          "per_aaaa0001aaaa0001aaaa0001"
+        ],
+        "opened_at": "2026-01-01T00:00:00.000Z",
+        "closed_at": null
+      }
+    ]
+  },
+  "review.list": {
+    "review_cases": [
+      {
+        "review_case_id": "rvw_aaaaaaaa11111111",
+        "proposal_id": "prop_aaaaaaaa11111111",
+        "proposal_state": "proposed",
+        "risk_class": "high",
+        "opened_at": "2026-01-01T00:00:00.000Z",
+        "review_version": 0,
+        "latest_disposition": null,
+        "subject_kind": "capture_proposal",
+        "capture_id": "cap_aaaaaaaa11111111",
+        "version_id": "capver_aaaaaaaa11111111",
+        "proposal_type": "commitment"
       }
     ]
   },
@@ -979,6 +1227,176 @@
       }
     ],
     "counterparty_options_truncated": false
+  },
+  "commitments.list": {
+    "commitments": [
+      {
+        "commitment_id": "cmt_aaaa0001aaaa0001aaaa0001",
+        "direction": "owed_to_principal",
+        "state": "open",
+        "counterparty_person_id": "per_aaaa0001aaaa0001aaaa0001",
+        "title": "Send the drawing",
+        "description": null,
+        "due_date": "2026-01-02T00:00:00+00:00",
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "version": 1,
+        "counterparty": {
+          "person_id": "per_aaaa0001aaaa0001aaaa0001",
+          "display_name": "Synthetic B"
+        }
+      }
+    ],
+    "counterparty_options": [
+      {
+        "person_id": "per_aaaa0001aaaa0001aaaa0001",
+        "display_name": "Synthetic B"
+      }
+    ],
+    "counterparty_options_truncated": false
+  },
+  "commitments.search": {
+    "commitments": [
+      {
+        "commitment_id": "cmt_aaaa0001aaaa0001aaaa0001",
+        "direction": "owed_to_principal",
+        "state": "open",
+        "counterparty_person_id": "per_aaaa0001aaaa0001aaaa0001",
+        "title": "Send the drawing",
+        "description": null,
+        "due_date": "2026-01-02T00:00:00+00:00",
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "updated_at": "2026-01-01T00:00:00+00:00",
+        "version": 1,
+        "counterparty": {
+          "person_id": "per_aaaa0001aaaa0001aaaa0001",
+          "display_name": "Synthetic B"
+        }
+      }
+    ],
+    "counterparty_options": [
+      {
+        "person_id": "per_aaaa0001aaaa0001aaaa0001",
+        "display_name": "Synthetic B"
+      }
+    ],
+    "counterparty_options_truncated": false
+  },
+  "commitments.history": {
+    "history": [
+      {
+        "history_id": "cmthst_aaaa0001aaaa0001aaaa0001",
+        "commitment_id": "cmt_aaaa0001aaaa0001aaaa0001",
+        "action": "create",
+        "actor": "principal",
+        "outcome": "applied",
+        "before_version": 0,
+        "after_version": 1,
+        "occurred_at": "2026-01-01T00:00:00+00:00",
+        "recorded_at": "2026-01-01T00:00:00+00:00"
+      }
+    ]
+  },
+  "commitments.waiting_on": {
+    "waiting_on": [
+      {
+        "commitment_id": "cmt_aaaa0001aaaa0001aaaa0001",
+        "title": "Send the drawing",
+        "counterparty_person_id": "per_aaaa0001aaaa0001aaaa0001",
+        "due_date": "2026-01-02T00:00:00+00:00",
+        "state": "open",
+        "follow_up_task_id": "tsk_aaaa0001aaaa0001aaaa0001",
+        "follow_up_task_title": "Check the pour",
+        "follow_up_task_state": "open",
+        "counterparty": {
+          "person_id": "per_aaaa0001aaaa0001aaaa0001",
+          "display_name": "Synthetic B"
+        }
+      }
+    ]
+  },
+  "commitments.create": {
+    "commitment": {
+      "commitment_id": "cmt_aaaa0001aaaa0001aaaa0001",
+      "direction": "owed_to_principal",
+      "state": "open",
+      "counterparty_person_id": "per_aaaa0001aaaa0001aaaa0001",
+      "title": "Send the drawing",
+      "description": null,
+      "due_date": "2026-01-02T00:00:00+00:00",
+      "created_at": "2026-01-01T00:00:00+00:00",
+      "updated_at": "2026-01-01T00:00:00+00:00",
+      "version": 1,
+      "evidence_state": "accepted",
+      "origin_evidence_ref": "asr_aaaa0001aaaa0001aaaa0001",
+      "closure_evidence_ref": null,
+      "accepted_by_review_decision_id": null,
+      "closed_at": null,
+      "counterparty": {
+        "person_id": "per_aaaa0001aaaa0001aaaa0001",
+        "display_name": "Synthetic B"
+      }
+    },
+    "replayed": false
+  },
+  "commitments.update": {
+    "commitment": {
+      "commitment_id": "cmt_aaaa0001aaaa0001aaaa0001",
+      "direction": "owed_to_principal",
+      "state": "open",
+      "counterparty_person_id": "per_aaaa0001aaaa0001aaaa0001",
+      "title": "Send the drawing",
+      "description": null,
+      "due_date": "2026-01-02T00:00:00+00:00",
+      "created_at": "2026-01-01T00:00:00+00:00",
+      "updated_at": "2026-01-01T00:00:00+00:00",
+      "version": 2,
+      "evidence_state": "accepted",
+      "origin_evidence_ref": "asr_aaaa0001aaaa0001aaaa0001",
+      "closure_evidence_ref": null,
+      "accepted_by_review_decision_id": null,
+      "closed_at": null,
+      "counterparty": {
+        "person_id": "per_aaaa0001aaaa0001aaaa0001",
+        "display_name": "Synthetic B"
+      }
+    },
+    "history": {
+      "history_id": "cmthst_aaaa0001aaaa0001aaaa0001",
+      "commitment_id": "cmt_aaaa0001aaaa0001aaaa0001",
+      "action": "update",
+      "actor": "principal",
+      "outcome": "applied",
+      "before_version": 1,
+      "after_version": 2,
+      "occurred_at": "2026-01-01T00:00:00+00:00",
+      "recorded_at": "2026-01-01T00:00:00+00:00"
+    },
+    "replayed": false
+  },
+  "commitments.close": {
+    "commitment": {
+      "commitment_id": "cmt_aaaa0001aaaa0001aaaa0001",
+      "direction": "owed_to_principal",
+      "state": "closed",
+      "counterparty_person_id": "per_aaaa0001aaaa0001aaaa0001",
+      "title": "Send the drawing",
+      "description": null,
+      "due_date": "2026-01-02T00:00:00+00:00",
+      "created_at": "2026-01-01T00:00:00+00:00",
+      "updated_at": "2026-01-01T00:00:00+00:00",
+      "version": 2,
+      "evidence_state": "accepted",
+      "origin_evidence_ref": "asr_aaaa0001aaaa0001aaaa0001",
+      "closure_evidence_ref": "asr_aaaa0001aaaa0001aaaa0001",
+      "accepted_by_review_decision_id": null,
+      "closed_at": "2026-01-02T00:00:00+00:00",
+      "counterparty": {
+        "person_id": "per_aaaa0001aaaa0001aaaa0001",
+        "display_name": "Synthetic B"
+      }
+    },
+    "replayed": false
   },
   "reports.read": {
     "report_id": "rpt_aaaaaaaa11111111",

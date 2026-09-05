@@ -40,13 +40,11 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resolveSessionPrincipal } from "@/lib/auth/principal";
-import { invokeGateway, type GatewayOutcome } from "@/lib/api/gateway";
+import { invokeGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled, gatewayAuthMode } from "@/lib/api/gateway-config";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { SurfaceState } from "@/components/ui/surface-state";
-import type { CapabilitiesGetResult } from "@/lib/api/decode/capabilities/capabilities.get";
-import type { ReportsListResult } from "@/lib/api/decode/capabilities/reports.list";
 import type { ReportsResolveSetResult } from "@/lib/api/decode/capabilities/reports.resolve_set";
 import type { PrincipalSession } from "@/contracts/identity";
 import { SystemRefresh } from "./system-refresh";
@@ -95,10 +93,7 @@ type IntelligenceTruth =
 async function loadMorningBriefIntelligence(
   principal: PrincipalSession,
 ): Promise<IntelligenceTruth> {
-  const listed = (await invokeGateway(
-    principal,
-    "reports.list",
-  )) as GatewayOutcome<ReportsListResult>;
+  const listed = await invokeGateway(principal, "reports.list");
   if (!listed.ok) {
     return { state: "unavailable", detail: listed.error.message };
   }
@@ -111,10 +106,10 @@ async function loadMorningBriefIntelligence(
         "morning_brief_inputs was not resolved.",
     };
   }
-  const resolved = (await invokeGateway(principal, "reports.resolve_set", {
+  const resolved = await invokeGateway(principal, "reports.resolve_set", {
     cycle_run_id: cycleRunId,
     set_id: MORNING_BRIEF_SET_ID,
-  })) as GatewayOutcome<ReportsResolveSetResult>;
+  });
   if (!resolved.ok) {
     return { state: "unavailable", detail: resolved.error.message };
   }
@@ -146,7 +141,7 @@ export default async function SystemPage() {
     : await invokeGateway(principal, "capabilities.get");
   const intelligence = synthetic ? null : await loadMorningBriefIntelligence(principal);
 
-  const result = outcome?.ok ? (outcome.result as CapabilitiesGetResult) : undefined;
+  const result = outcome?.ok ? outcome.result : undefined;
   const manifest = result?.manifest;
   const readiness = result?.readiness;
   const workerPlanes = result?.worker_planes;

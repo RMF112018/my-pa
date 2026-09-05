@@ -25,14 +25,13 @@ import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resolveSessionPrincipal } from "@/lib/auth/principal";
 import { syntheticReviewCases } from "@/lib/fixtures/review";
-import { invokeGateway, type GatewayOutcome } from "@/lib/api/gateway";
+import { invokeGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { ReviewWorkbench } from "@/components/review/review-workbench";
 import { BackendReviewWorkbench } from "@/components/review/backend-review-workbench";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
 import type { ReviewCase } from "@/lib/api/decode/capabilities/review.list";
-import type { ReviewListResult } from "@/lib/api/decode/capabilities/review.list";
 import type { BackendReviewCase } from "@/contracts/views";
 
 export const metadata = { title: "Review — my-pa" };
@@ -100,7 +99,7 @@ export default async function ReviewPage() {
 
   const answer = surfaceAnswer(
     `${SCOPE}:review.list`,
-    (await invokeGateway(principal, "review.list")) as GatewayOutcome<ReviewListResult>,
+    await invokeGateway(principal, "review.list"),
     (result) => result.review_cases.length,
   );
 

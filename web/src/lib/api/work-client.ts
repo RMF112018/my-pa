@@ -1,11 +1,65 @@
 export type ApiFailure = Error & { status?: number; code?: string; errorClass?: string; current?: unknown };
 
-export async function workRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, { cache: "no-store", ...init, headers: { "content-type": "application/json", ...init?.headers } });
-  const body = (await response.json().catch(() => ({}))) as { error?: { code?: string; message?: string; errorClass?: string }; current?: unknown };
+function contractFailure(message: string): ApiFailure {
+  const error: ApiFailure = new Error(message);
+  error.status = 503;
+  error.code = "upstream_contract_invalid";
+  error.errorClass = "unavailable";
+  return error;
+}
+
+/** Fail closed when a required BFF collection is missing or the wrong type. */
+export function requiredCollection<T>(
+  value: readonly T[] | undefined | null,
+  name: string,
+): readonly T[] {
+  if (!Array.isArray(value)) {
+    throw contractFailure(`the ${name} collection was missing`);
+  }
+  return value;
+}
+
+export async function workRequest<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<T> {
+  const response = await fetch(path, {
+    cache: "no-store",
+    ...init,
+    headers: { "content-type": "application/json", ...init?.headers },
+  });
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    const error: ApiFailure = new Error(
+      response.ok
+        ? "the route answered with unreadable content"
+        : `Request failed (${response.status})`,
+    );
+    error.status = response.ok ? 503 : response.status;
+    error.code = response.ok ? "upstream_contract_invalid" : undefined;
+    error.errorClass = response.ok ? "unavailable" : undefined;
+    throw error;
+  }
   if (!response.ok) {
-    const error: ApiFailure = new Error(body.error?.message ?? `Request failed (${response.status})`);
-    error.status = response.status; error.code = body.error?.code; error.errorClass = body.error?.errorClass; error.current = body.current; throw error;
+    const envelope =
+      body !== null && typeof body === "object" && !Array.isArray(body)
+        ? (body as { error?: { code?: string; message?: string; errorClass?: string }; current?: unknown })
+        : {};
+    const error: ApiFailure = new Error(envelope.error?.message ?? `Request failed (${response.status})`);
+    error.status = response.status;
+    error.code = envelope.error?.code;
+    error.errorClass = envelope.error?.errorClass;
+    error.current = envelope.current;
+    throw error;
+  }
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    const error: ApiFailure = new Error("the route success was not a contract object");
+    error.status = 503;
+    error.code = "upstream_contract_invalid";
+    error.errorClass = "unavailable";
+    throw error;
   }
   return body as T;
 }

@@ -41,4 +41,9 @@ describe("Python/Vitest success-decoder parity", () => {
     const decoded = DECODERS["continuity.pulse"](mutated);
     expect(decoded.ok).toBe(false);
   });
+
+  it("every admitted capability has a Python fixture", () => {
+    const fixtures = loadSuccess();
+    expect(Object.keys(fixtures).sort()).toEqual(Object.keys(DECODERS).sort());
+  });
 });

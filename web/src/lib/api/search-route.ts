@@ -5,6 +5,7 @@ import {
   transportLimitations,
   type GatewayCapability,
 } from "@/lib/api/gateway";
+import type { CapabilityResults } from "@/lib/api/decode";
 import { requirePrincipal } from "@/lib/api/guard";
 import { notImplemented, resolveServing } from "@/lib/api/serving";
 import { rejectCallerSuppliedPrincipal, TokenClaimsError } from "@/lib/auth/claims";
@@ -21,13 +22,15 @@ const SCOPE = "search";
 const PAGE_SIZE = 10;
 const IDENTIFIER = /^[a-z]+_[A-Za-z0-9]{8,64}$/;
 
-type SearchCapability =
+type SearchCapability = Extract<
+  GatewayCapability,
   | "tasks.search"
   | "commitments.search"
   | "capture.search"
   | "reports.search"
   | "entities.search"
-  | "knowledge.search";
+  | "knowledge.search"
+>;
 
 type CalledDomain = "tasks" | "commitments" | "capture" | "reports" | "entities" | "knowledge";
 
@@ -100,10 +103,6 @@ function invalidIdentifier(field: string): NextResponse {
   );
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function publicResult(result: Record<string, unknown>) {
   return JSON.parse(
     JSON.stringify(result, (key, value) =>
@@ -112,19 +111,21 @@ function publicResult(result: Record<string, unknown>) {
   ) as Record<string, unknown>;
 }
 
-function hitItems(capability: SearchCapability, result: Record<string, unknown>): readonly unknown[] {
-  const key =
-    capability === "tasks.search"
-      ? "tasks"
-      : capability === "commitments.search"
-        ? "commitments"
-        : capability === "entities.search"
-          ? "entities"
-          : capability === "reports.search"
-            ? "items"
-            : "matches";
-  const value = result[key];
-  return Array.isArray(value) ? value : [];
+function hitItems(
+  capability: SearchCapability,
+  result: CapabilityResults[SearchCapability],
+): readonly unknown[] {
+  if (capability === "tasks.search" && "tasks" in result) return result.tasks;
+  if (capability === "commitments.search" && "commitments" in result) return result.commitments;
+  if (capability === "entities.search" && "entities" in result) return result.entities;
+  if (capability === "reports.search" && "items" in result) return result.items;
+  if (
+    (capability === "capture.search" || capability === "knowledge.search") &&
+    "matches" in result
+  ) {
+    return result.matches;
+  }
+  return [];
 }
 
 function toHits(
@@ -150,7 +151,7 @@ async function searchOne(
   principal: PrincipalSession,
   spec: CalledSpec,
 ): Promise<{ hits: FederatedSearchHit[]; coverage: DomainCoverage; truncated: boolean }> {
-  const outcome = await invokeGateway(principal, spec.capability as GatewayCapability, spec.payload);
+  const outcome = await invokeGateway(principal, spec.capability, spec.payload);
   if (!outcome.ok) {
     return {
       hits: [],
@@ -169,7 +170,7 @@ async function searchOne(
     outcome.disclosure,
     transportLimitations(),
   );
-  if (disclosure.coverage === "unavailable" || !isRecord(outcome.result)) {
+  if (disclosure.coverage === "unavailable") {
     return {
       hits: [],
       coverage: {
@@ -177,7 +178,7 @@ async function searchOne(
         capability: spec.capability,
         state: "unavailable",
         hitCount: 0,
-        reason: disclosure.coverage === "unavailable" ? "unavailable" : "upstream_contract_invalid",
+        reason: "unavailable",
       },
       truncated: false,
     };

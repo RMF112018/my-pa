@@ -30,6 +30,7 @@ const ROUTES = [
   "/work",
   "/intelligence",
   "/people",
+  "/canvas",
   "/knowledge",
   "/knowledge?q=warm",
   "/library",

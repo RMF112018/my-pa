@@ -56,7 +56,6 @@ function NodeInspector({ node }: { node: GraphNode }) {
 
   useEffect(() => {
     let cancelled = false;
-    setHistory({ status: "loading" });
     void (async () => {
       const response = await apiGet(SESSION, identityHistoryPath(node.entity_id));
       if (cancelled) return;
@@ -184,12 +183,8 @@ function EdgeInspector({
   } | null>(null);
 
   useEffect(() => {
-    if (edge.edge_kind !== "relationship") {
-      setWindowFields(null);
-      return;
-    }
+    if (edge.edge_kind !== "relationship") return;
     let cancelled = false;
-    setWindowFields(null);
     void (async () => {
       const response = await apiGet(
         SESSION,
@@ -254,7 +249,14 @@ export function CanvasInspector() {
     );
   }
   if (selection.kind === "node") {
-    return <NodeInspector node={selection.node} />;
+    return <NodeInspector key={selection.node.entity_id} node={selection.node} />;
   }
-  return <EdgeInspector edge={selection.edge} from={selection.from} to={selection.to} />;
+  return (
+    <EdgeInspector
+      key={selection.edge.edge_id}
+      edge={selection.edge}
+      from={selection.from}
+      to={selection.to}
+    />
+  );
 }

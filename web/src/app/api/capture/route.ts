@@ -48,7 +48,6 @@ import { backendDisclosure, invokeGateway, transportLimitations } from "@/lib/ap
 import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
 import { SESSION_COOKIE_NAME, sessionReplayBinding } from "@/lib/auth/session";
-import type { CaptureCreateResult } from "@/lib/api/decode/capabilities/capture.create";
 import { admitBrowserMutation } from "@/lib/http/mutation-admission";
 
 const SCOPE = "capture";
@@ -170,7 +169,7 @@ export async function POST(request: NextRequest) {
     capture_kind: captureKind,
   });
   if (!outcome.ok) return gatewayRefusal(SCOPE, outcome.status, outcome.error);
-  const receipt = outcome.result as CaptureCreateResult;
+  const receipt = outcome.result;
   return NextResponse.json({
     shape: "backend",
     status: "persisted",

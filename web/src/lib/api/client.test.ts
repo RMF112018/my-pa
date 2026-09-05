@@ -47,5 +47,40 @@ describe("principal-bound api client", () => {
     expect(result.ok).toBe(false);
     expect(result.status).toBe(401);
     expect(result.error).toBe("no valid session");
+    expect(result.code).toBeNull();
+  });
+
+  it("surfaces rate_limited by code without treating it as success", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            errorClass: "unavailable",
+            code: "rate_limited",
+            message: "too many requests",
+          },
+        }),
+        { status: 429 },
+      ),
+    );
+    const result = await apiGet({ hasSession: true }, "/api/pulse");
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(429);
+    expect(result.errorClass).toBe("unavailable");
+    expect(result.code).toBe("rate_limited");
+    expect(result.data).toBeNull();
+  });
+
+  it("does not treat a 2xx array or unreadable body as success", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify([]), { status: 200 }),
+    );
+    const arrayResult = await apiGet({ hasSession: true }, "/api/pulse");
+    expect(arrayResult.ok).toBe(false);
+    expect(arrayResult.code).toBe("upstream_contract_invalid");
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response("not-json", { status: 200 }));
+    const unreadable = await apiGet({ hasSession: true }, "/api/pulse");
+    expect(unreadable.ok).toBe(false);
+    expect(unreadable.code).toBe("upstream_contract_invalid");
   });
 });

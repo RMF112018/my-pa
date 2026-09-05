@@ -9,7 +9,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resolveSessionPrincipal } from "@/lib/auth/principal";
-import { invokeGateway, type GatewayOutcome } from "@/lib/api/gateway";
+import { invokeGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { FeatureRouteState } from "@/components/shell/feature-route-state";
@@ -24,8 +24,6 @@ import {
   type CycleDate,
 } from "@/components/intelligence/cycle-selection";
 import { intelligenceHome, intelligenceHistory } from "@/lib/routes/intelligence";
-import type { ReportsListResult } from "@/lib/api/decode/capabilities/reports.list";
-import type { ReportsResolveSetResult } from "@/lib/api/decode/capabilities/reports.resolve_set";
 import type { PrincipalSession } from "@/contracts/identity";
 
 export const metadata = { title: "Intelligence history — my-pa" };
@@ -40,11 +38,11 @@ async function datesForCycles(
   const unique = [...new Set(cycleRunIds)];
   const rows = await Promise.all(
     unique.map(async (cycle_run_id) => {
-      const outcome = (await invokeGateway(
+      const outcome = await invokeGateway(
         principal,
         "reports.resolve_set",
         resolveSetPayload(cycle_run_id),
-      )) as GatewayOutcome<ReportsResolveSetResult>;
+      );
       if (!outcome.ok) return null;
       return {
         cycle_run_id: outcome.result.cycle_run_id,
@@ -105,9 +103,9 @@ export default async function IntelligenceHistoryPage({
 
   const answer = surfaceAnswer(
     "intelligence:history:reports.list",
-    (await invokeGateway(principal, "reports.list", {
+    await invokeGateway(principal, "reports.list", {
       include_superseded: true,
-    })) as GatewayOutcome<ReportsListResult>,
+    }),
     (result) => result.items.length,
   );
 

@@ -12,7 +12,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resolveSessionPrincipal } from "@/lib/auth/principal";
-import { invokeGateway, type GatewayOutcome } from "@/lib/api/gateway";
+import { invokeGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { FeatureRouteState } from "@/components/shell/feature-route-state";
@@ -25,8 +25,6 @@ import {
   resolveSetPayload,
 } from "@/components/intelligence/cycle-selection";
 import { intelligenceHistory } from "@/lib/routes/intelligence";
-import type { ReportsListResult } from "@/lib/api/decode/capabilities/reports.list";
-import type { ReportsResolveSetResult } from "@/lib/api/decode/capabilities/reports.resolve_set";
 import type { PrincipalSession } from "@/contracts/identity";
 
 export const metadata = { title: "Intelligence — my-pa" };
@@ -41,11 +39,7 @@ async function loadReadiness(
 ): Promise<ReadinessAnswer> {
   return readinessAnswerFromOutcome(
     `${SCOPE}:reports.resolve_set`,
-    (await invokeGateway(
-      principal,
-      "reports.resolve_set",
-      resolveSetPayload(cycleRunId),
-    )) as GatewayOutcome<ReportsResolveSetResult>,
+    await invokeGateway(principal, "reports.resolve_set", resolveSetPayload(cycleRunId)),
   );
 }
 
@@ -93,7 +87,7 @@ export default async function IntelligencePage() {
 
   const answer = surfaceAnswer(
     `${SCOPE}:reports.list`,
-    (await invokeGateway(principal, "reports.list")) as GatewayOutcome<ReportsListResult>,
+    await invokeGateway(principal, "reports.list"),
     (result) => result.items.length,
   );
 

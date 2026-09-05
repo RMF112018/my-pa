@@ -20,15 +20,26 @@ from pathlib import Path
 from typing import Any, Final
 
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
+from my_pa.contracts.ports import CaptureSearchMatch
 from my_pa.contracts.v1.capabilities import EffectiveLimits, ReadinessReport, ReadinessState
-from my_pa.contracts.v1.capture import CaptureReceiptView
-from my_pa.contracts.v1.commitments import CommitmentView
+from my_pa.contracts.v1.capture import CaptureListEntry, CaptureReceiptView
+from my_pa.contracts.v1.commitments import (
+    CommitmentHistoryEntryView,
+    CommitmentListEntry,
+    CommitmentView,
+    WaitingOnEntry,
+)
 from my_pa.contracts.v1.reveal import RevealView
 from my_pa.contracts.v1.tasks import TaskHistoryEntryView, TaskListEntry, TaskView
+from my_pa.domain.capture.proposal import ProposalState, ProposalType, RiskClass
 from my_pa.domain.capture.reveal import EvidenceGap, EvidenceState
+from my_pa.domain.capture.review import ReviewCase, ReviewSubjectKind
+from my_pa.domain.common.provenance import Provenance, TrustLevel
 from my_pa.domain.common.time import format_rfc3339
+from my_pa.domain.extraction.text import EXTRACTOR, EXTRACTOR_VERSION
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.modeling.gate import ModelRoutePolicy
+from my_pa.domain.search.query import RankCategory, SearchMatch, label_for_media_type
 from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
 from my_pa.domain.task.history import TaskMutationAction, TaskMutationActor, TaskMutationOutcome
 from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskPriority
@@ -36,6 +47,7 @@ from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskPriority
 ROOT: Final = Path(__file__).resolve().parents[2]
 FIXTURE_DIR: Final = ROOT / "web" / "src" / "lib" / "api" / "decode" / "fixtures" / "python"
 SUCCESS_PATH: Final = FIXTURE_DIR / "success.json"
+GATEWAY_PATH: Final = ROOT / "web" / "src" / "contracts" / "gateway.json"
 
 AT: Final = datetime(2026, 8, 9, 12, 0, 0, tzinfo=UTC)
 DIGEST: Final = "a" * 64
@@ -64,19 +76,26 @@ def _capture_create() -> dict[str, Any]:
     ).model_dump(mode="json")
 
 
-def _task_view() -> dict[str, Any]:
+def _task_view(
+    *,
+    lifecycle_state: TaskLifecycleState = TaskLifecycleState.OPEN,
+    version: int = 1,
+    closure_evidence_ref: str | None = None,
+    closed_at: datetime | None = None,
+    closure_history_id: str | None = None,
+) -> dict[str, Any]:
     return TaskView(
         task_id="tsk_aaaa0001aaaa0001aaaa0001",
         title="Check the pour",
         description=None,
-        lifecycle_state=TaskLifecycleState.OPEN,
+        lifecycle_state=lifecycle_state,
         evidence_state=ContinuityEvidenceState.ACCEPTED,
         origin_evidence_ref="asr_aaaa0001aaaa0001aaaa0001",
-        closure_evidence_ref=None,
+        closure_evidence_ref=closure_evidence_ref,
         accepted_by_review_decision_id=None,
         acceptance_kind=ContinuityAcceptanceKind.DIRECT_PRINCIPAL,
-        closure_history_id=None,
-        version=1,
+        closure_history_id=closure_history_id,
+        version=version,
         priority=TaskPriority.P2,
         due_at=datetime(2026, 1, 2, tzinfo=UTC),
         scheduled_at=None,
@@ -86,7 +105,7 @@ def _task_view() -> dict[str, Any]:
         situation_id=None,
         recurrence_id=None,
         opened_at=datetime(2026, 1, 1, tzinfo=UTC),
-        closed_at=None,
+        closed_at=closed_at,
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         updated_at=datetime(2026, 1, 1, tzinfo=UTC),
         commitment_id=None,
@@ -110,15 +129,20 @@ def _task_list_entry() -> dict[str, Any]:
     ).model_dump(mode="json")
 
 
-def _task_history_entry() -> dict[str, Any]:
+def _task_history_entry(
+    *,
+    action: TaskMutationAction = TaskMutationAction.CREATE,
+    before_version: int = 0,
+    after_version: int = 1,
+) -> dict[str, Any]:
     return TaskHistoryEntryView(
         history_id="thst_aaaa0001aaaa0001aaaa0001",
         task_id="tsk_aaaa0001aaaa0001aaaa0001",
-        action=TaskMutationAction.CREATE,
+        action=action,
         actor=TaskMutationActor.PRINCIPAL,
         outcome=TaskMutationOutcome.APPLIED,
-        before_version=0,
-        after_version=1,
+        before_version=before_version,
+        after_version=after_version,
         occurred_at=datetime(2026, 1, 1, tzinfo=UTC),
         recorded_at=datetime(2026, 1, 1, tzinfo=UTC),
     ).model_dump(mode="json")
@@ -216,9 +240,45 @@ def _capabilities_get() -> dict[str, Any]:
     }
 
 
-def _commitments_read() -> dict[str, Any]:
-    """`CommitmentView.to_canonical_dict()` plus the handler's public wrapping."""
+def _counterparty_option() -> dict[str, str]:
+    return {
+        "person_id": "per_aaaa0001aaaa0001aaaa0001",
+        "display_name": "Synthetic B",
+    }
+
+
+def _commitment_public_payload(
+    *,
+    state: str = "open",
+    version: int = 1,
+    closure_evidence_ref: str | None = None,
+    closed_at: str | None = None,
+) -> dict[str, Any]:
+    """`CommitmentView.to_canonical_dict()` plus `_commitment_public_view`'s wrapping."""
     view = CommitmentView(
+        commitment_id="cmt_aaaa0001aaaa0001aaaa0001",
+        direction="owed_to_principal",
+        state=state,
+        counterparty_person_id="per_aaaa0001aaaa0001aaaa0001",
+        title="Send the drawing",
+        description=None,
+        due_date=datetime(2026, 1, 2, tzinfo=UTC).isoformat(),
+        created_at=datetime(2026, 1, 1, tzinfo=UTC).isoformat(),
+        updated_at=datetime(2026, 1, 1, tzinfo=UTC).isoformat(),
+        version=version,
+        evidence_state="accepted",
+        origin_evidence_ref="asr_aaaa0001aaaa0001aaaa0001",
+        closure_evidence_ref=closure_evidence_ref,
+        accepted_by_review_decision_id=None,
+        closed_at=closed_at,
+    ).to_canonical_dict()
+    view["counterparty"] = _counterparty_option()
+    return view
+
+
+def _commitment_list_entry_payload() -> dict[str, Any]:
+    """`CommitmentListEntry.to_canonical_dict()` plus `_commitment_public_list_entry` wrapping."""
+    entry = CommitmentListEntry(
         commitment_id="cmt_aaaa0001aaaa0001aaaa0001",
         direction="owed_to_principal",
         state="open",
@@ -229,27 +289,313 @@ def _commitments_read() -> dict[str, Any]:
         created_at=datetime(2026, 1, 1, tzinfo=UTC).isoformat(),
         updated_at=datetime(2026, 1, 1, tzinfo=UTC).isoformat(),
         version=1,
-        evidence_state="accepted",
-        origin_evidence_ref="asr_aaaa0001aaaa0001aaaa0001",
-        closure_evidence_ref=None,
-        accepted_by_review_decision_id=None,
-        closed_at=None,
     ).to_canonical_dict()
-    view["counterparty"] = {
-        "person_id": "per_aaaa0001aaaa0001aaaa0001",
-        "display_name": "Synthetic B",
-    }
+    entry["counterparty"] = _counterparty_option()
+    return entry
+
+
+def _commitment_history_entry(
+    *,
+    action: str = "create",
+    before_version: int = 0,
+    after_version: int = 1,
+) -> dict[str, Any]:
+    return CommitmentHistoryEntryView(
+        history_id="cmthst_aaaa0001aaaa0001aaaa0001",
+        commitment_id="cmt_aaaa0001aaaa0001aaaa0001",
+        action=action,
+        actor="principal",
+        outcome="applied",
+        before_version=before_version,
+        after_version=after_version,
+        occurred_at=datetime(2026, 1, 1, tzinfo=UTC).isoformat(),
+        recorded_at=datetime(2026, 1, 1, tzinfo=UTC).isoformat(),
+    ).to_canonical_dict()
+
+
+def _commitment_list_page() -> dict[str, Any]:
+    """Handler-identical `_commitments_list` / `_commitments_search` page keys."""
     return {
-        "commitment": view,
-        "follow_up_task": None,
-        "counterparty_options": [
-            {
-                "person_id": "per_aaaa0001aaaa0001aaaa0001",
-                "display_name": "Synthetic B",
-            }
-        ],
+        "commitments": [_commitment_list_entry_payload()],
+        "counterparty_options": [_counterparty_option()],
         "counterparty_options_truncated": False,
     }
+
+
+def _commitments_read() -> dict[str, Any]:
+    """`CommitmentView.to_canonical_dict()` plus the handler's public wrapping."""
+    return {
+        "commitment": _commitment_public_payload(),
+        "follow_up_task": None,
+        "counterparty_options": [_counterparty_option()],
+        "counterparty_options_truncated": False,
+    }
+
+
+def _capture_list() -> dict[str, Any]:
+    """`CaptureListEntry.to_canonical_dict()` as `_capture_list` publishes it."""
+    return {
+        "captures": [
+            CaptureListEntry(
+                capture_id="cap_aaaaaaaa11111111",
+                owner_principal_id="prn_aaaaaaaa11111111",
+                created_at=AT,
+                version_count=1,
+                latest_version_id="capver_aaaaaaaa11111111",
+                latest_version_number=1,
+                latest_recorded_at=AT,
+            ).to_canonical_dict()
+        ]
+    }
+
+
+def _capture_search() -> dict[str, Any]:
+    """Handler-identical `_capture_search` match keys plus searchable/stored counts."""
+    match = CaptureSearchMatch(
+        capture_id="cap_aaaaaaaa11111111",
+        version_id="capver_aaaaaaaa11111111",
+        version_number=1,
+        character_count=12,
+        recorded_at=AT,
+    )
+    return {
+        "matches": [
+            {
+                "capture_id": match.capture_id,
+                "version_id": match.version_id,
+                "version_number": match.version_number,
+                "character_count": match.character_count,
+                "recorded_at": format_rfc3339(match.recorded_at),
+            }
+        ],
+        "searchable_versions": 1,
+        "stored_versions": 1,
+    }
+
+
+def _knowledge_search() -> dict[str, Any]:
+    """Handler-identical `_knowledge_search` match keys from `SearchMatch`."""
+    match = SearchMatch(
+        knowledge_id="kn_aaaaaaaa11111111",
+        label=label_for_media_type("text/plain"),
+        snippet="morning brief",
+        rank=RankCategory.STRONG,
+        source_id="src_aaaaaaaa11111111",
+        source_object_id="obj_aaaaaaaa11111111",
+        version_id="ver_aaaaaaaa11111111",
+    )
+    return {
+        "matches": [
+            {
+                "knowledge_id": match.knowledge_id,
+                "label": match.label,
+                "snippet": match.snippet,
+                "rank": match.rank.value,
+                "source_id": match.source_id,
+                "source_object_id": match.source_object_id,
+                "version_id": match.version_id,
+            }
+        ]
+    }
+
+
+def _knowledge_read() -> dict[str, Any]:
+    """Handler-identical `_knowledge_read` payload, including optional text."""
+    text = "scraped item one"
+    provenance = Provenance(
+        source_id="src_aaaaaaaa11111111",
+        source_object_id="obj_aaaaaaaa11111111",
+        version_id="ver_aaaaaaaa11111111",
+        extractor=EXTRACTOR,
+        extractor_version=EXTRACTOR_VERSION,
+        observed_at=AT,
+        processed_at=AT,
+        trust_level=TrustLevel.SOURCE_BOUND_DERIVED,
+    )
+    return {
+        "knowledge_id": "kn_aaaaaaaa11111111",
+        "label": label_for_media_type("text/plain"),
+        "media_type": "text/plain",
+        "character_count": len(text),
+        "metadata_only": False,
+        "is_truncated": False,
+        "provenance": {
+            "source_id": provenance.source_id,
+            "source_object_id": provenance.source_object_id,
+            "version_id": provenance.version_id,
+            "extractor": provenance.extractor,
+            "extractor_version": provenance.extractor_version,
+            "trust_level": provenance.trust_level.value,
+            "observed_at": format_rfc3339(provenance.observed_at),
+            "processed_at": format_rfc3339(provenance.processed_at),
+        },
+        "text": text,
+    }
+
+
+def _review_list() -> dict[str, Any]:
+    """Handler-identical `_review_case_payload` for one capture-proposal case."""
+    case = ReviewCase(
+        review_case_id="rvw_aaaaaaaa11111111",
+        proposal_id="prop_aaaaaaaa11111111",
+        capture_id="cap_aaaaaaaa11111111",
+        version_id="capver_aaaaaaaa11111111",
+        principal_id="prn_aaaaaaaa11111111",
+        proposal_type=ProposalType.COMMITMENT,
+        proposal_state=ProposalState.PROPOSED,
+        risk_class=RiskClass.HIGH,
+        opened_at=datetime(2026, 1, 1, tzinfo=UTC),
+        review_version=0,
+        latest_disposition=None,
+    )
+    return {
+        "review_cases": [
+            {
+                "review_case_id": case.review_case_id,
+                "proposal_id": case.proposal_id,
+                "proposal_state": case.proposal_state.value,
+                "risk_class": case.risk_class.value,
+                "opened_at": format_rfc3339(case.opened_at),
+                "review_version": case.review_version,
+                "latest_disposition": (
+                    None if case.latest_disposition is None else case.latest_disposition.value
+                ),
+                "subject_kind": ReviewSubjectKind.CAPTURE_PROPOSAL.value,
+                "capture_id": case.capture_id,
+                "version_id": case.version_id,
+                "proposal_type": case.proposal_type.value,
+            }
+        ]
+    }
+
+
+def _continuity_projects() -> dict[str, Any]:
+    """Handler-identical `_continuity_projects` listing keys."""
+    return {
+        "projects": [
+            {
+                "project_id": "prj_aaaa0001aaaa0001aaaa0001",
+                "name": "North pour",
+                "state": "active",
+                "description": None,
+                "participants": ["per_aaaa0001aaaa0001aaaa0001"],
+                "opened_at": format_rfc3339(datetime(2026, 1, 1, tzinfo=UTC)),
+                "closed_at": None,
+            }
+        ]
+    }
+
+
+def _tasks_create() -> dict[str, Any]:
+    """Handler-identical `_tasks_create` mutation receipt."""
+    return {
+        "task": _task_view(),
+        "history": _task_history_entry(),
+        "replayed": False,
+    }
+
+
+def _tasks_update() -> dict[str, Any]:
+    """Handler-identical `_tasks_update` mutation receipt."""
+    return {
+        "task": _task_view(version=2),
+        "history": _task_history_entry(
+            action=TaskMutationAction.UPDATE, before_version=1, after_version=2
+        ),
+        "replayed": False,
+    }
+
+
+def _tasks_transition() -> dict[str, Any]:
+    """Handler-identical `_tasks_transition` mutation receipt."""
+    return {
+        "task": _task_view(
+            lifecycle_state=TaskLifecycleState.COMPLETED,
+            version=2,
+            closure_evidence_ref="asr_aaaa0001aaaa0001aaaa0001",
+            closed_at=datetime(2026, 1, 2, tzinfo=UTC),
+            closure_history_id="thst_aaaa0001aaaa0001aaaa0001",
+        ),
+        "history": _task_history_entry(
+            action=TaskMutationAction.TRANSITION_LIFECYCLE,
+            before_version=1,
+            after_version=2,
+        ),
+        "replayed": False,
+    }
+
+
+def _tasks_bulk_preview() -> dict[str, Any]:
+    """Handler-identical `_tasks_bulk_preview` receipt (`expires_at` via isoformat)."""
+    expires_at = datetime(2026, 8, 9, 12, 15, 0, tzinfo=UTC)
+    return {
+        "bulk_operation_id": "bulk_aaaaaaaa11111111",
+        "expires_at": expires_at.isoformat(),
+        "affected": 1,
+        "no_op": 0,
+        "rejected": 0,
+        "replayed": False,
+    }
+
+
+def _tasks_bulk_confirm() -> dict[str, Any]:
+    """Handler-identical `_tasks_bulk_confirm` receipt."""
+    return {
+        "bulk_operation_id": "bulk_aaaaaaaa11111111",
+        "affected": 1,
+        "no_op": 0,
+        "rejected": 0,
+        "history_ids": ["thst_aaaa0001aaaa0001aaaa0001"],
+        "replayed": False,
+    }
+
+
+def _commitments_create() -> dict[str, Any]:
+    """Handler-identical `_commitments_create` public view plus replayed."""
+    return {"commitment": _commitment_public_payload(), "replayed": False}
+
+
+def _commitments_update() -> dict[str, Any]:
+    """Handler-identical `_commitments_update` public view, history, replayed."""
+    return {
+        "commitment": _commitment_public_payload(version=2),
+        "history": _commitment_history_entry(action="update", before_version=1, after_version=2),
+        "replayed": False,
+    }
+
+
+def _commitments_close() -> dict[str, Any]:
+    """Handler-identical `_commitments_close` public view plus replayed."""
+    return {
+        "commitment": _commitment_public_payload(
+            state="closed",
+            version=2,
+            closure_evidence_ref="asr_aaaa0001aaaa0001aaaa0001",
+            closed_at=datetime(2026, 1, 2, tzinfo=UTC).isoformat(),
+        ),
+        "replayed": False,
+    }
+
+
+def _commitments_history() -> dict[str, Any]:
+    """`CommitmentHistoryEntryView.to_canonical_dict()` as `_commitments_history` publishes it."""
+    return {"history": [_commitment_history_entry()]}
+
+
+def _commitments_waiting_on() -> dict[str, Any]:
+    """`WaitingOnEntry.to_canonical_dict()` plus the handler's counterparty wrapping."""
+    entry = WaitingOnEntry(
+        commitment_id="cmt_aaaa0001aaaa0001aaaa0001",
+        title="Send the drawing",
+        counterparty_person_id="per_aaaa0001aaaa0001aaaa0001",
+        due_date=datetime(2026, 1, 2, tzinfo=UTC).isoformat(),
+        state="open",
+        follow_up_task_id="tsk_aaaa0001aaaa0001aaaa0001",
+        follow_up_task_title="Check the pour",
+        follow_up_task_state=TaskLifecycleState.OPEN.value,
+    ).to_canonical_dict()
+    entry["counterparty"] = _counterparty_option()
+    return {"waiting_on": [entry]}
 
 
 def _reports_read() -> dict[str, Any]:
@@ -647,15 +993,34 @@ def python_success_payloads() -> dict[str, dict[str, Any]]:
     entity_id = _entity_id()
     return {
         "capture.create": _capture_create(),
+        "capture.list": _capture_list(),
+        "capture.search": _capture_search(),
         "tasks.read": {"task": _task_view()},
         "tasks.list": {"tasks": [_task_list_entry()]},
+        "tasks.search": {"tasks": [_task_list_entry()]},
         "tasks.history": {"history": [_task_history_entry()]},
+        "tasks.create": _tasks_create(),
+        "tasks.update": _tasks_update(),
+        "tasks.transition": _tasks_transition(),
+        "tasks.bulk_preview": _tasks_bulk_preview(),
+        "tasks.bulk_confirm": _tasks_bulk_confirm(),
+        "knowledge.search": _knowledge_search(),
+        "knowledge.read": _knowledge_read(),
         "knowledge.reveal": _reveal_unavailable(),
         "continuity.pulse": _continuity_pulse(),
         "continuity.situations": _continuity_situations(),
+        "continuity.projects": _continuity_projects(),
+        "review.list": _review_list(),
         "review.decide": _review_decide(),
         "capabilities.get": _capabilities_get(),
         "commitments.read": _commitments_read(),
+        "commitments.list": _commitment_list_page(),
+        "commitments.search": _commitment_list_page(),
+        "commitments.history": _commitments_history(),
+        "commitments.waiting_on": _commitments_waiting_on(),
+        "commitments.create": _commitments_create(),
+        "commitments.update": _commitments_update(),
+        "commitments.close": _commitments_close(),
         "reports.read": _reports_read(),
         "reports.latest": _reports_latest(),
         "reports.list": _reports_list(),
@@ -755,6 +1120,15 @@ def test_committed_python_fixtures_match_live_model_dumps() -> None:
         assert payload == committed[capability], (
             f"{capability}: live Python dump drifted from the committed fixture"
         )
+
+
+def test_live_python_payloads_cover_every_gateway_capability() -> None:
+    """Every admitted gateway.json capability has a live Python success dump."""
+    assert GATEWAY_PATH.is_file(), f"shared BFF contract missing at {GATEWAY_PATH}"
+    declared = json.loads(GATEWAY_PATH.read_text(encoding="utf-8"))["capabilities"]
+    assert isinstance(declared, dict) and declared
+    live = python_success_payloads()
+    assert set(live) == set(declared)
 
 
 def test_dropping_a_required_array_is_not_the_committed_success() -> None:

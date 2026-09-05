@@ -19,14 +19,14 @@ import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resolveSessionPrincipal } from "@/lib/auth/principal";
 import { syntheticPulse } from "@/lib/fixtures/pulse";
-import { invokeGateway, type GatewayOutcome } from "@/lib/api/gateway";
+import { invokeGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { PulseList } from "@/components/pulse/pulse-list";
 import { BackendPulseList } from "@/components/pulse/backend-pulse-list";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
 import { IntelligencePulse } from "./intelligence-pulse";
-import type { ContinuityPulseResult, PulseItem } from "@/lib/api/decode/capabilities/continuity.pulse";
+import type { PulseItem } from "@/lib/api/decode/capabilities/continuity.pulse";
 import type { BackendPulseItem } from "@/contracts/views";
 
 export const metadata = { title: "Today — my-pa" };
@@ -79,7 +79,7 @@ export default async function TodayPage() {
 
   const answer = surfaceAnswer(
     "today:continuity.pulse",
-    (await invokeGateway(principal, "continuity.pulse")) as GatewayOutcome<ContinuityPulseResult>,
+    await invokeGateway(principal, "continuity.pulse"),
     (result) => result.pulse_items.length,
   );
   const intelligencePulse = await IntelligencePulse({ principal });

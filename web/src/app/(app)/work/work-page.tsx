@@ -20,21 +20,14 @@ import {
   syntheticSituations,
   syntheticPersonId,
 } from "@/lib/fixtures/situation";
-import { invokeGateway, type GatewayOutcome } from "@/lib/api/gateway";
+import { invokeGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { SituationBoard } from "@/components/situation/situation-board";
 import { BackendSituationBoard } from "@/components/situation/backend-situation-board";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
-import type {
-  ContinuitySituationsResult,
-  ContinuityWorkspace,
-  SituationRow,
-} from "@/lib/api/decode/capabilities/continuity.situations";
-import type {
-  ContinuityProjectsResult,
-  ProjectRow,
-} from "@/lib/api/decode/capabilities/continuity.projects";
+import type { ContinuityWorkspace, SituationRow } from "@/lib/api/decode/capabilities/continuity.situations";
+import type { ProjectRow } from "@/lib/api/decode/capabilities/continuity.projects";
 import type {
   BackendProject,
   BackendSituation,
@@ -136,12 +129,8 @@ export async function WorkPage() {
   }
 
   const [situationsOutcome, projectsOutcome] = await Promise.all([
-    invokeGateway(principal, "continuity.situations") as Promise<
-      GatewayOutcome<ContinuitySituationsResult>
-    >,
-    invokeGateway(principal, "continuity.projects") as Promise<
-      GatewayOutcome<ContinuityProjectsResult>
-    >,
+    invokeGateway(principal, "continuity.situations"),
+    invokeGateway(principal, "continuity.projects"),
   ]);
 
   const situationsAnswer = surfaceAnswer(

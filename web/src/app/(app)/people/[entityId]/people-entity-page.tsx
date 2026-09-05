@@ -72,19 +72,13 @@ export async function PeopleEntityPage({
   }
 
   const [profileOutcome, assignmentsOutcome, relationshipsOutcome, historyOutcome] = await Promise.all([
-    invokeGateway(principal, "entities.profile", { entity_id: entityId }) as Promise<
-      GatewayOutcome<EntityProfileResult>
-    >,
-    invokeGateway(principal, "entities.assignments.list", { entity_id: entityId }) as Promise<
-      GatewayOutcome<EntitiesAssignmentsListResult>
-    >,
-    invokeGateway(principal, "entities.relationships", { entity_id: entityId }) as Promise<
-      GatewayOutcome<EntitiesRelationshipsResult>
-    >,
+    invokeGateway(principal, "entities.profile", { entity_id: entityId }),
+    invokeGateway(principal, "entities.assignments.list", { entity_id: entityId }),
+    invokeGateway(principal, "entities.relationships", { entity_id: entityId }),
     invokeGateway(principal, "entities.identity_history", {
       entity_id: entityId,
       ...(historyAfter ? { after: historyAfter } : {}),
-    }) as Promise<GatewayOutcome<EntitiesIdentityHistoryResult>>,
+    }),
   ]);
 
   const profileAnswer = surfaceAnswer(`${SCOPE}:entities.profile`, profileOutcome, () => 1);

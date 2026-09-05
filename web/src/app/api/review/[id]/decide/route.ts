@@ -43,7 +43,6 @@ import {
   syntheticDecisionReceipt,
 } from "@/lib/fixtures/review";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
-import type { ReviewDecideResult } from "@/lib/api/decode/capabilities/review.decide";
 import type { ReviewDisposition, ReviewDecisionReceipt } from "@/contracts/views";
 
 /** The five verbs the workbench may submit, read off the shared contract. */
@@ -139,7 +138,7 @@ export async function POST(
     corrected_value: disposition === "correct" ? (correctedValue as string).trim() : undefined,
   });
   if (!outcome.ok) return gatewayRefusal(scope, outcome.status, outcome.error);
-  const decoded = outcome.result as ReviewDecideResult;
+  const decoded = outcome.result;
 
   if (!("decision_id" in decoded)) {
     return NextResponse.json({

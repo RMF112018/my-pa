@@ -36,14 +36,7 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { requirePrincipal } from "@/lib/api/guard";
-import {
-  backendDisclosure,
-  invokeGateway,
-  transportLimitations,
-  type GatewayOutcome,
-} from "@/lib/api/gateway";
-import type { CapabilitiesGetResult } from "@/lib/api/decode/capabilities/capabilities.get";
-import type { ReportsListResult } from "@/lib/api/decode/capabilities/reports.list";
+import { backendDisclosure, invokeGateway, transportLimitations } from "@/lib/api/gateway";
 import type { ReportsResolveSetResult } from "@/lib/api/decode/capabilities/reports.resolve_set";
 import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
@@ -89,10 +82,7 @@ type IntelligenceTruth =
 async function loadMorningBriefIntelligence(
   principal: PrincipalSession,
 ): Promise<IntelligenceTruth> {
-  const listed = (await invokeGateway(
-    principal,
-    "reports.list",
-  )) as GatewayOutcome<ReportsListResult>;
+  const listed = await invokeGateway(principal, "reports.list");
   if (!listed.ok) {
     return { state: "unavailable", detail: listed.error.message };
   }
@@ -105,10 +95,10 @@ async function loadMorningBriefIntelligence(
         "morning_brief_inputs was not resolved.",
     };
   }
-  const resolved = (await invokeGateway(principal, "reports.resolve_set", {
+  const resolved = await invokeGateway(principal, "reports.resolve_set", {
     cycle_run_id: cycleRunId,
     set_id: MORNING_BRIEF_SET_ID,
-  })) as GatewayOutcome<ReportsResolveSetResult>;
+  });
   if (!resolved.ok) {
     return { state: "unavailable", detail: resolved.error.message };
   }
@@ -153,7 +143,7 @@ export async function GET(request: NextRequest) {
 
   const outcome = await invokeGateway(guard.principal, "capabilities.get");
   if (!outcome.ok) return gatewayRefusal(SCOPE, outcome.status, outcome.error);
-  const result = outcome.result as CapabilitiesGetResult;
+  const result = outcome.result;
   const intelligence = await loadMorningBriefIntelligence(guard.principal);
   const extra = [
     SOURCES_UNKNOWN,

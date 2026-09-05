@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { browserWorkClock, captureEvidence, createAttemptKey, isDefinitiveAttemptFailure, workRequest } from "@/lib/api/work-client";
+import { browserWorkClock, captureEvidence, createAttemptKey, isDefinitiveAttemptFailure, requiredCollection, workRequest } from "@/lib/api/work-client";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -13,7 +13,26 @@ describe("Work browser client", () => {
   it("keeps conflict distinct for deliberate refetch and reapply", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ error: { code: "conflict", message: "version changed" } }), { status: 409, headers: { "content-type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
-    await expect(workRequest("/api/tasks/tsk_aaaaaaaa11111111")).rejects.toMatchObject({ status: 409, code: "conflict" });
+    await expect(workRequest("/api/tasks/tsk_aaaaaaaa11111111")).rejects.toMatchObject({
+      status: 409,
+      code: "conflict",
+    });
+  });
+
+  it("does not treat unreadable 2xx JSON as an empty success object", async () => {
+    const fetchMock = vi.fn<typeof fetch>(
+      async () => new Response("not-json", { status: 200, headers: { "content-type": "text/html" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(workRequest("/api/tasks")).rejects.toMatchObject({
+      status: 503,
+      code: "upstream_contract_invalid",
+    });
+  });
+
+  it("does not treat a missing required collection as empty", () => {
+    expect(() => requiredCollection(undefined, "tasks")).toThrow(/tasks collection was missing/);
+    expect(requiredCollection([], "tasks")).toEqual([]);
   });
 
   it("produces an ISO work date from a validated browser IANA timezone", () => {

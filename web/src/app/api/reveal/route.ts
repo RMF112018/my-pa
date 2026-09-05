@@ -38,7 +38,6 @@ import { requirePrincipal, readCleanBody } from "@/lib/api/guard";
 import { admitBrowserMutation } from "@/lib/http/mutation-admission";
 import { backendDisclosure, invokeGateway, transportLimitations } from "@/lib/api/gateway";
 import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
-import type { KnowledgeRevealResult } from "@/lib/api/decode/capabilities/knowledge.reveal";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
 
 const SCOPE = "reveal";
@@ -94,7 +93,7 @@ export async function POST(request: NextRequest) {
     subject_id: subjectId,
   });
   if (!outcome.ok) return gatewayRefusal(`${SCOPE}:knowledge.reveal`, outcome.status, outcome.error);
-  const revealed = outcome.result as KnowledgeRevealResult;
+  const revealed = outcome.result;
 
   return NextResponse.json({
     shape: "backend",

@@ -8,7 +8,6 @@ import { invokeGateway } from "@/lib/api/gateway";
 import { acceptedTimeline, syntheticPersonId } from "@/lib/fixtures/situation";
 import { RelationshipTimeline } from "@/components/relationship/relationship-timeline";
 import { SurfaceState } from "@/components/ui/surface-state";
-import type { ContinuitySituationsResult } from "@/lib/api/decode/capabilities/continuity.situations";
 
 export const metadata = { title: "Relationship — my-pa" };
 
@@ -49,7 +48,7 @@ export default async function RelationshipPage({
         </section>
       );
     }
-    const result = outcome.result as ContinuitySituationsResult;
+    const result = outcome.result;
     if (result.relationship_events === undefined) {
       return (
         <section aria-labelledby="relationship-heading" className="mx-auto max-w-2xl">

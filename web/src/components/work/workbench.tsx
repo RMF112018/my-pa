@@ -8,7 +8,7 @@ import { SurfaceState } from "@/components/ui/surface-state";
 import { Textarea } from "@/components/ui/textarea";
 import { CommitmentDetailView, TaskDetailView } from "@/components/work/work-detail";
 import { WorkPerspectives } from "@/components/work/work-perspectives";
-import { browserWorkClock, captureEvidence, createAttemptKey, isDefinitiveAttemptFailure, workRequest, type ApiFailure } from "@/lib/api/work-client";
+import { browserWorkClock, captureEvidence, createAttemptKey, isDefinitiveAttemptFailure, requiredCollection, workRequest, type ApiFailure } from "@/lib/api/work-client";
 import { parseWorkUrlState, WORK_PERSPECTIVES, WORK_VIEWS, type WorkPerspective, type WorkUrlState, type WorkView } from "@/lib/api/work-url";
 import type { DisclosureEnvelope } from "@/contracts/envelope";
 import type {
@@ -105,7 +105,9 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
         }
         const data = await workRequest<{ commitments?: readonly CommitmentRow[]; waiting_on?: readonly WaitingOnRow[]; disclosure?: DisclosureEnvelope }>(`${path}?${parameters}`, { signal: controller.signal });
         if (generation !== readGeneration.current) return;
-        const found = data.commitments ?? data.waiting_on ?? [];
+        const found = waitingOn
+          ? requiredCollection(data.waiting_on, "waiting_on")
+          : requiredCollection(data.commitments, "commitments");
         setRows(found); setDisclosure(data.disclosure); setNextCursor(data.disclosure?.nextCursor ?? ""); setPartial(data.disclosure?.coverage === "partial" || data.disclosure?.truncated === true); setState(found.length ? "ready" : "empty");
       } else {
         const parameters = new URLSearchParams({ pageSize: "50", workView: view, archived: archiveMode });
@@ -119,7 +121,8 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
         }
         const data = await workRequest<{ tasks: readonly TaskRow[]; disclosure?: DisclosureEnvelope }>(`/api/tasks?${parameters}`, { signal: controller.signal });
         if (generation !== readGeneration.current) return;
-        setRows(data.tasks ?? []); setDisclosure(data.disclosure); setNextCursor(data.disclosure?.nextCursor ?? ""); setPartial(data.disclosure?.coverage === "partial" || data.disclosure?.truncated === true); setState((data.tasks ?? []).length ? "ready" : "empty");
+        const tasks = requiredCollection(data.tasks, "tasks");
+        setRows(tasks); setDisclosure(data.disclosure); setNextCursor(data.disclosure?.nextCursor ?? ""); setPartial(data.disclosure?.coverage === "partial" || data.disclosure?.truncated === true); setState(tasks.length ? "ready" : "empty");
       }
     } catch (error) {
       if (generation !== readGeneration.current || controller.signal.aborted) return;
@@ -347,7 +350,7 @@ function TaskCreate({ onDone }: { onDone: () => void }) {
   useEffect(() => {
     const controller = new AbortController();
     void workRequest<{ commitments: readonly CommitmentRow[] }>("/api/commitments?pageSize=100", { signal: controller.signal })
-      .then((answer) => { setCommitments(answer.commitments ?? []); setOptionsStatus(""); })
+      .then((answer) => { setCommitments(requiredCollection(answer.commitments, "commitments")); setOptionsStatus(""); })
       .catch((error) => { if (!controller.signal.aborted) setOptionsStatus(error instanceof Error ? error.message : "Verified commitments are unavailable"); });
     return () => controller.abort();
   }, []);
@@ -370,7 +373,7 @@ function CommitmentCreate({ onDone }: { onDone: () => void }) {
   useEffect(() => {
     const controller = new AbortController();
     void workRequest<{ counterparty_options: readonly CounterpartyOption[]; counterparty_options_truncated?: boolean }>("/api/commitments?pageSize=1", { signal: controller.signal })
-      .then((answer) => { setCounterparties(answer.counterparty_options ?? []); setOptionsTruncated(Boolean(answer.counterparty_options_truncated)); setOptionsStatus(""); })
+      .then((answer) => { setCounterparties(requiredCollection(answer.counterparty_options, "counterparty_options")); setOptionsTruncated(Boolean(answer.counterparty_options_truncated)); setOptionsStatus(""); })
       .catch((error) => { if (!controller.signal.aborted) setOptionsStatus(error instanceof Error ? error.message : "Verified counterparties are unavailable"); });
     return () => controller.abort();
   }, []);

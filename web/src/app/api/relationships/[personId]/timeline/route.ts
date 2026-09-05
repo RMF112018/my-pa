@@ -5,7 +5,6 @@ import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
 import { backendDisclosure, invokeGateway, transportLimitations } from "@/lib/api/gateway";
 import { acceptedTimeline, syntheticPersonId } from "@/lib/fixtures/situation";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
-import type { ContinuitySituationsResult } from "@/lib/api/decode/capabilities/continuity.situations";
 
 export async function GET(
   request: NextRequest,
@@ -22,7 +21,7 @@ export async function GET(
   if (serving.kind === "backend") {
     const outcome = await invokeGateway(guard.principal, "continuity.situations");
     if (!outcome.ok) return gatewayRefusal(scope, outcome.status, outcome.error);
-    const result = outcome.result as ContinuitySituationsResult;
+    const result = outcome.result;
     if (result.relationship_events === undefined) {
       return gatewayRefusal(scope, 503, {
         errorClass: "unavailable",

@@ -9,14 +9,12 @@
  * allowlist in gateway.test.ts (route handlers, server pages, lib/api).
  */
 import Link from "next/link";
-import { invokeGateway, type GatewayOutcome } from "@/lib/api/gateway";
+import { invokeGateway } from "@/lib/api/gateway";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { Card, CardBody, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { LiveAnnouncement } from "@/components/ui/live-region";
 import type { PrincipalSession } from "@/contracts/identity";
-import type { ReportsListResult } from "@/lib/api/decode/capabilities/reports.list";
-import type { ReportsResolveSetResult } from "@/lib/api/decode/capabilities/reports.resolve_set";
 import {
   currentCycleRunId,
   nonReadyRequiredCount,
@@ -38,7 +36,7 @@ export async function IntelligencePulse({
 }) {
   const listAnswer = surfaceAnswer(
     "today:intelligence:reports.list",
-    (await invokeGateway(principal, "reports.list")) as GatewayOutcome<ReportsListResult>,
+    await invokeGateway(principal, "reports.list"),
     (result) => result.items.length,
   );
 
@@ -117,11 +115,7 @@ export async function IntelligencePulse({
 
   const readinessAnswer = readinessAnswerFromOutcome(
     "today:intelligence:reports.resolve_set",
-    (await invokeGateway(
-      principal,
-      "reports.resolve_set",
-      resolveSetPayload(cycleRunId),
-    )) as GatewayOutcome<ReportsResolveSetResult>,
+    await invokeGateway(principal, "reports.resolve_set", resolveSetPayload(cycleRunId)),
   );
 
   if (readinessAnswer.kind === "unavailable") {

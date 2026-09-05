@@ -9,6 +9,9 @@ describe("DECODERS registry", () => {
     const decoderKeys = Object.keys(DECODERS).sort();
     expect(decoderKeys).toEqual(contractKeys);
     expect(decoderKeys).toHaveLength(contractKeys.length);
+    expect(decoderKeys.length).toBeGreaterThan(0);
+    expect(decoderKeys).toContain("capture.create");
+    expect(decoderKeys).toContain("tasks.read");
   });
 
   it("does not include SESSION_INTERNAL_SERVICE or WEBAUTHN", () => {

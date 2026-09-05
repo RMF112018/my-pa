@@ -37,16 +37,13 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resolveSessionPrincipal } from "@/lib/auth/principal";
-import { invokeGateway, type GatewayOutcome } from "@/lib/api/gateway";
+import { invokeGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
 import { CaptureListing, CaptureMatches } from "@/components/library/library-records";
-import type { CaptureListEntry, CaptureListResult } from "@/lib/api/decode/capabilities/capture.list";
-import type {
-  CaptureSearchMatch,
-  CaptureSearchResult,
-} from "@/lib/api/decode/capabilities/capture.search";
+import type { CaptureListEntry } from "@/lib/api/decode/capabilities/capture.list";
+import type { CaptureSearchMatch } from "@/lib/api/decode/capabilities/capture.search";
 import type { BackendCaptureEntry, BackendCaptureMatch } from "@/contracts/views";
 
 /** The listing this page renders is a read of the moment, never a cached one. */
@@ -163,9 +160,9 @@ export async function KnowledgePage({
   if (query) {
     const answer = surfaceAnswer(
       `${SCOPE}:capture.search`,
-      (await invokeGateway(principal, "capture.search", {
+      await invokeGateway(principal, "capture.search", {
         query,
-      })) as GatewayOutcome<CaptureSearchResult>,
+      }),
       (result) => result.matches.length,
     );
 
@@ -218,7 +215,7 @@ export async function KnowledgePage({
 
   const answer = surfaceAnswer(
     `${SCOPE}:capture.list`,
-    (await invokeGateway(principal, "capture.list")) as GatewayOutcome<CaptureListResult>,
+    await invokeGateway(principal, "capture.list"),
     (result) => result.captures.length,
   );
 

@@ -16,7 +16,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resolveSessionPrincipal } from "@/lib/auth/principal";
-import { invokeGateway, type GatewayOutcome } from "@/lib/api/gateway";
+import { invokeGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
@@ -25,9 +25,6 @@ import { SearchHits } from "@/components/people/search-hits";
 import { ResolvePanel } from "@/components/people/resolve-panel";
 import { UnresolvedMentionsPanel } from "@/components/people/unresolved-mentions";
 import { peopleEntity } from "@/lib/routes/people";
-import type { EntitySearchResult } from "@/lib/api/decode/capabilities/entities.search";
-import type { EntityResolveResult } from "@/lib/api/decode/capabilities/entities.resolve";
-import type { EntitiesUnresolvedMentionsResult } from "@/lib/api/decode/capabilities/entities.unresolved_mentions";
 import type { PrincipalSession } from "@/contracts/identity";
 
 const SCOPE = "people";
@@ -58,9 +55,9 @@ function oneParam(
 }
 
 async function unresolvedPanel(principal: PrincipalSession, after: string) {
-  const outcome = (await invokeGateway(principal, "entities.unresolved_mentions", {
+  const outcome = await invokeGateway(principal, "entities.unresolved_mentions", {
     ...(after ? { after } : {}),
-  })) as GatewayOutcome<EntitiesUnresolvedMentionsResult>;
+  });
   const answer = surfaceAnswer(`${SCOPE}:entities.unresolved_mentions`, outcome, (result) =>
     result.mentions.length,
   );
@@ -108,9 +105,9 @@ export async function PeoplePage({
   );
 
   if (reference) {
-    const outcome = (await invokeGateway(principal, "entities.resolve", {
+    const outcome = await invokeGateway(principal, "entities.resolve", {
       reference,
-    })) as GatewayOutcome<EntityResolveResult>;
+    });
     if (!outcome.ok && outcome.error.errorClass === "validation") {
       return frame(
         <>
@@ -160,9 +157,9 @@ export async function PeoplePage({
   }
 
   if (query) {
-    const outcome = (await invokeGateway(principal, "entities.search", {
+    const outcome = await invokeGateway(principal, "entities.search", {
       query,
-    })) as GatewayOutcome<EntitySearchResult>;
+    });
     if (!outcome.ok && outcome.error.errorClass === "validation") {
       return frame(
         <>

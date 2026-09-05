@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import math
+from types import MappingProxyType
 
 import pytest
 
@@ -15,6 +17,7 @@ from my_pa.domain.common.identifiers import IdKind, make_identifier
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.infrastructure.persistence.canvas_workspace import _json_positions
 from tests.conftest import FakeProviders, World, build_service, metadata_for, operator
 
 FOCUS = make_identifier(IdKind.ENTITY, "canvasfocus01canvasfocus01")
@@ -142,6 +145,13 @@ def test_extra_position_fields_are_rejected() -> None:
             focus_entity_id=FOCUS,
             positions={MOVED: {"x": math.inf, "y": 0.0}},
         )
+
+
+def test_frozen_command_positions_are_json_serializable_for_jsonb() -> None:
+    frozen = MappingProxyType({MOVED: MappingProxyType({"x": 12.5, "y": -4.0})})
+    payload = _json_positions(frozen)
+    assert json.dumps(payload) == json.dumps({MOVED: {"x": 12.5, "y": -4.0}})
+    assert type(payload[MOVED]) is dict
 
 
 def test_a_seed_is_required() -> None:

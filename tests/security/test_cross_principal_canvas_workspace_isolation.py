@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import pytest
@@ -57,7 +58,7 @@ def _record(principal_id: str, *, x: float) -> CanvasWorkspaceRecord:
         focus_entity_id=FOCUS,
         scope_entity_id=None,
         version=1,
-        positions={FOCUS: {"x": x, "y": 0.0}},
+        positions=MappingProxyType({FOCUS: MappingProxyType({"x": x, "y": 0.0})}),
         created_at=WHEN,
         updated_at=WHEN,
     )

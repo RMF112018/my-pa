@@ -41,6 +41,14 @@ def _positions(value: object) -> Mapping[str, Mapping[str, float]]:
     return MappingProxyType(points)
 
 
+def _json_positions(positions: Mapping[str, Mapping[str, float]]) -> dict[str, dict[str, float]]:
+    """JSONB cannot store MappingProxyType values; write JSON-plain maps only."""
+    return {
+        entity_id: {"x": float(point["x"]), "y": float(point["y"])}
+        for entity_id, point in positions.items()
+    }
+
+
 def _record(row: Row[tuple[object, ...]]) -> CanvasWorkspaceRecord:
     return CanvasWorkspaceRecord(
         principal_id=row.principal_id,
@@ -89,7 +97,7 @@ def insert_canvas_workspace(
             "focus_entity_id": record.focus_entity_id,
             "scope_entity_id": record.scope_entity_id,
             "version": record.version,
-            "positions": dict(record.positions),
+            "positions": _json_positions(record.positions),
             "created_at": record.created_at,
             "updated_at": record.updated_at,
         },
@@ -130,7 +138,7 @@ def update_canvas_workspace(
         )
         .values(
             version=record.version,
-            positions=dict(record.positions),
+            positions=_json_positions(record.positions),
             updated_at=record.updated_at,
         )
     )

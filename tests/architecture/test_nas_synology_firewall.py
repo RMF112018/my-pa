@@ -30,6 +30,7 @@ forward=$(cat "${state_dir}/forward")
 chain=$(cat "${state_dir}/chain")
 broad=$(cat "${state_dir}/broad")
 drop=$(cat "${state_dir}/drop")
+foreign_reference=$(cat "${state_dir}/foreign_reference")
 chain_file="${state_dir}/chain_lines"
 
 emit_chain_lines() {
@@ -68,31 +69,35 @@ emit_chain_lines() {
 
 emit_forward() {
   case "$forward" in
-    legacy) printf '%s\n' '-A FORWARD -j FORWARD_FIREWALL' ;;
-    effective)
-      printf '%s\n' '-A FORWARD -j MY_PA_DATA_PLANE' '-A FORWARD -j FORWARD_FIREWALL'
+    legacy|effective|after_dsm|duplicate)
+      printf '%s\n' '-A FORWARD -j FORWARD_FIREWALL'
       ;;
-    after_dsm)
-      printf '%s\n' '-A FORWARD -j FORWARD_FIREWALL' '-A FORWARD -j MY_PA_DATA_PLANE'
+    direct)
+      printf '%s\n' '-A FORWARD -j MY_PA_DATA_PLANE' '-A FORWARD -j FORWARD_FIREWALL'
       ;;
     default_forward)
       printf '%s\n' '-A FORWARD -j FORWARD_FIREWALL' '-A FORWARD -j DEFAULT_FORWARD'
       ;;
     policy_only) ;;
-    duplicate)
-      printf '%s\n' '-A FORWARD -j MY_PA_DATA_PLANE' '-A FORWARD -j FORWARD_FIREWALL' \
-        '-A FORWARD -j MY_PA_DATA_PLANE'
-      ;;
     extra)
-      printf '%s\n' '-A FORWARD -j MY_PA_DATA_PLANE' '-A FORWARD -j FORWARD_FIREWALL' \
-        '-A FORWARD -j DOCKER-USER'
+      printf '%s\n' '-A FORWARD -j FORWARD_FIREWALL' '-A FORWARD -j DOCKER-USER'
       ;;
   esac
 }
 
 emit_firewall() {
   printf '%s\n' '-N FORWARD_FIREWALL'
+  case "$forward" in
+    effective) printf '%s\n' '-A FORWARD_FIREWALL -j MY_PA_DATA_PLANE' ;;
+    duplicate)
+      printf '%s\n' '-A FORWARD_FIREWALL -j MY_PA_DATA_PLANE' \
+        '-A FORWARD_FIREWALL -j MY_PA_DATA_PLANE'
+      ;;
+  esac
   printf '%s\n' '-A FORWARD_FIREWALL -m state --state RELATED,ESTABLISHED -j ACCEPT'
+  if [ "$forward" = after_dsm ]; then
+    printf '%s\n' '-A FORWARD_FIREWALL -j MY_PA_DATA_PLANE'
+  fi
   printf '%s\n' '-A FORWARD_FIREWALL -s 10.0.0.0/24 -j RETURN'
   if [ "$broad" = present ]; then
     printf '%s\n' '{BROAD}'
@@ -120,6 +125,9 @@ if [ "${FAKE_TOOL:-iptables}" = save ]; then
   fi
   emit_forward
   emit_firewall | awk '$1 == "-A"'
+  if [ "$foreign_reference" = present ]; then
+    printf '%s\n' '-A FOREIGN_CHAIN -j MY_PA_DATA_PLANE'
+  fi
   if [ "$chain" != missing ] || [ -f "$chain_file" ]; then
     emit_chain_lines
   fi
@@ -161,7 +169,7 @@ case "$*" in
     printf '%s\n' '{P4}' >> "$chain_file"
     printf '%s\n' exact > "${state_dir}/chain"
     ;;
-  "-I FORWARD 1 -j MY_PA_DATA_PLANE")
+  "-I FORWARD_FIREWALL 1 -j MY_PA_DATA_PLANE")
     if [ "${FAKE_JUMP_FAIL:-0}" = 1 ]; then exit 1; fi
     if [ "${FAKE_JUMP_VERIFY_FAIL:-0}" = 1 ]; then
       printf '%s\n' after_dsm > "${state_dir}/forward"
@@ -169,7 +177,7 @@ case "$*" in
       printf '%s\n' effective > "${state_dir}/forward"
     fi
     ;;
-  "-D FORWARD -j MY_PA_DATA_PLANE")
+  "-D FORWARD_FIREWALL -j MY_PA_DATA_PLANE")
     [ "${FAKE_JUMP_DELETE_FAIL:-0}" = 1 ] && exit 1
     printf '%s\n' legacy > "${state_dir}/forward"
     ;;
@@ -216,10 +224,10 @@ after_x=0
 after_create=0
 after_p4=0
 after_broad_delete=0
-if [ -f "$calls" ] && grep -q -- '-I FORWARD 1 -j MY_PA_DATA_PLANE' "$calls"; then
+if [ -f "$calls" ] && grep -q -- '-I FORWARD_FIREWALL 1 -j MY_PA_DATA_PLANE' "$calls"; then
   after_insert=1
 fi
-if [ -f "$calls" ] && grep -q -- '-D FORWARD -j MY_PA_DATA_PLANE' "$calls"; then
+if [ -f "$calls" ] && grep -q -- '-D FORWARD_FIREWALL -j MY_PA_DATA_PLANE' "$calls"; then
   after_delete=1
 fi
 if [ -f "$calls" ] && grep -q -- '-X MY_PA_DATA_PLANE' "$calls"; then
@@ -295,6 +303,7 @@ def _environment(
     root_uid: int = 0,
     jump_fail: str = "0",
     jump_verify_fail: str = "0",
+    foreign_reference: bool = False,
     drop: str = "unique",
 ) -> tuple[dict[str, str], Path, Path]:
     tools = tmp_path / "bin"
@@ -305,6 +314,9 @@ def _environment(
     (state / "chain").write_text(chain + "\n", encoding="utf-8")
     (state / "broad").write_text(broad + "\n", encoding="utf-8")
     (state / "drop").write_text(drop + "\n", encoding="utf-8")
+    (state / "foreign_reference").write_text(
+        ("present" if foreign_reference else "absent") + "\n", encoding="utf-8"
+    )
     (state / "calls").write_text("", encoding="utf-8")
     docker = tools / "docker"
     project = "other-project" if wrong_network else "my-pa-nas-contract"
@@ -387,7 +399,7 @@ def _assert_no_enforcement_mutation(calls: Path) -> None:
     assert "-A MY_PA_DATA_PLANE" not in recorded
     assert "-I FORWARD 1" not in recorded
     assert f"-D FORWARD_FIREWALL -s {SUBNET} -j RETURN" not in recorded
-    assert "-D FORWARD -j MY_PA_DATA_PLANE" not in recorded
+    assert "-D FORWARD_FIREWALL -j MY_PA_DATA_PLANE" not in recorded
     assert "-F MY_PA_DATA_PLANE" not in recorded
     assert "-X MY_PA_DATA_PLANE" not in recorded
 
@@ -416,6 +428,25 @@ def test_check_passes_only_for_exact_my_pa_first_state(tmp_path: Path) -> None:
     assert "gate passed" in result.stdout
 
 
+def test_foreign_external_reference_is_refused_without_mutation(tmp_path: Path) -> None:
+    environment, _state, calls = _environment(
+        tmp_path,
+        forward="legacy",
+        chain="exact",
+        broad="present",
+        foreign_reference=True,
+    )
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
+    checked = _run("check", environment)
+    assert checked.returncode != 0
+    assert "foreign-external-reference" in checked.stderr
+    calls.write_text("", encoding="utf-8")
+    applied = _run("apply", environment)
+    assert applied.returncode != 0
+    assert "foreign-external-reference" in applied.stderr
+    _assert_no_enforcement_mutation(calls)
+
+
 def test_mutation_requires_exact_confirmation(tmp_path: Path) -> None:
     environment, state, calls = _environment(tmp_path)
     result = _run("apply", environment)
@@ -433,7 +464,7 @@ def test_apply_check_idempotence_and_exact_remove(tmp_path: Path) -> None:
     assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "effective"
     assert state.joinpath("broad").read_text(encoding="utf-8").strip() == "absent"
     recorded = calls.read_text(encoding="utf-8")
-    jump = recorded.index("-I FORWARD 1 -j MY_PA_DATA_PLANE")
+    jump = recorded.index("-I FORWARD_FIREWALL 1 -j MY_PA_DATA_PLANE")
     assert recorded.index("-N MY_PA_DATA_PLANE") < jump
     assert jump < recorded.index(f"-D FORWARD_FIREWALL -s {SUBNET} -j RETURN")
     assert _run("check", environment).returncode == 0
@@ -455,6 +486,7 @@ def test_apply_check_idempotence_and_exact_remove(tmp_path: Path) -> None:
         ("default_forward", "missing", "present", "default-forward"),
         ("policy_only", "missing", "present", "policy-accept-only"),
         ("duplicate", "exact", "absent", "duplicate-jump"),
+        ("direct", "exact", "absent", "direct-forward-jump"),
         ("extra", "exact", "absent", "extra-forward"),
         ("effective", "missing", "absent", "missing-chain"),
         ("effective", "foreign", "absent", "foreign-chain"),
@@ -654,8 +686,8 @@ def test_jump_deletion_failure_after_verify_failure_is_rollback_failed(
     assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "after_dsm"
     assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
     recorded = _recorded(calls)
-    assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
-    assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
+    assert "-I FORWARD_FIREWALL 1 -j MY_PA_DATA_PLANE" in recorded
+    assert "-D FORWARD_FIREWALL -j MY_PA_DATA_PLANE" in recorded
     assert "-X MY_PA_DATA_PLANE" not in recorded
     assert "-F MY_PA_DATA_PLANE" not in recorded
     assert f"-D FORWARD_FIREWALL -s {SUBNET} -j RETURN" not in recorded
@@ -673,7 +705,7 @@ def test_cleanup_failure_after_jump_removed_is_rollback_failed(tmp_path: Path) -
     assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
     assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "empty"
     recorded = _recorded(calls)
-    assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
+    assert "-D FORWARD_FIREWALL -j MY_PA_DATA_PLANE" in recorded
     assert "-F MY_PA_DATA_PLANE" in recorded
     assert "-X MY_PA_DATA_PLANE" in recorded
     assert f"-D FORWARD_FIREWALL -s {SUBNET} -j RETURN" not in recorded
@@ -702,7 +734,7 @@ def test_r1_001_dsm_established_cannot_precede_my_pa(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert "my-pa-after-dsm" in result.stderr
     source = SCRIPT.read_text(encoding="utf-8")
-    assert '-I FORWARD 1 -j "$enforcement_chain"' in source
+    assert '-I FORWARD_FIREWALL 1 -j "$enforcement_chain"' in source
     assert "my-pa-after-dsm" in source
 
 
@@ -734,14 +766,14 @@ def test_jump_insert_failure_cleans_created_chain(tmp_path: Path) -> None:
     environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
     result = _run("apply", environment)
     assert result.returncode != 0
-    assert "failed to insert MY_PA_DATA_PLANE FORWARD jump" in result.stderr
+    assert "failed to insert MY_PA_DATA_PLANE FORWARD_FIREWALL jump" in result.stderr
     assert "ROLLBACK_FAILED" not in result.stderr
     assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
     assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "missing"
     recorded = _recorded(calls)
-    assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
+    assert "-I FORWARD_FIREWALL 1 -j MY_PA_DATA_PLANE" in recorded
     assert "-X MY_PA_DATA_PLANE" in recorded
-    assert "-D FORWARD -j MY_PA_DATA_PLANE" not in recorded
+    assert "-D FORWARD_FIREWALL -j MY_PA_DATA_PLANE" not in recorded
 
 
 def test_failed_jump_install_rolls_back_owned_chain(tmp_path: Path) -> None:
@@ -754,8 +786,8 @@ def test_failed_jump_install_rolls_back_owned_chain(tmp_path: Path) -> None:
     assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
     assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "missing"
     recorded = calls.read_text(encoding="utf-8")
-    assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
-    assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
+    assert "-I FORWARD_FIREWALL 1 -j MY_PA_DATA_PLANE" in recorded
+    assert "-D FORWARD_FIREWALL -j MY_PA_DATA_PLANE" in recorded
     assert "-X MY_PA_DATA_PLANE" in recorded
     assert f"-D FORWARD_FIREWALL -s {SUBNET} -j RETURN" not in recorded
 
@@ -803,7 +835,7 @@ def test_mutation_refuses_non_root_without_changing_rule(tmp_path: Path, action:
     assert state.joinpath("forward").read_text(encoding="utf-8").strip() == initial_forward
     recorded = calls.read_text(encoding="utf-8")
     assert "-I FORWARD 1" not in recorded
-    assert "-D FORWARD -j MY_PA_DATA_PLANE" not in recorded
+    assert "-D FORWARD_FIREWALL -j MY_PA_DATA_PLANE" not in recorded
 
 
 def test_script_inspects_forward_through_iptables_save() -> None:
@@ -925,8 +957,8 @@ def test_r3_t1_post_insert_save_fail_rolls_back_when_verified(tmp_path: Path) ->
     assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
     assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "missing"
     recorded = _recorded(calls)
-    assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
-    assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
+    assert "-I FORWARD_FIREWALL 1 -j MY_PA_DATA_PLANE" in recorded
+    assert "-D FORWARD_FIREWALL -j MY_PA_DATA_PLANE" in recorded
     assert "-F MY_PA_DATA_PLANE" in recorded
     assert "-X MY_PA_DATA_PLANE" in recorded
     assert f"-D FORWARD_FIREWALL -s {SUBNET} -j RETURN" not in recorded
@@ -947,8 +979,8 @@ def test_r3_t2_post_insert_save_fail_then_unreadable_rollback_is_failed(
     assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
     assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
     recorded = _recorded(calls)
-    assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
-    assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
+    assert "-I FORWARD_FIREWALL 1 -j MY_PA_DATA_PLANE" in recorded
+    assert "-D FORWARD_FIREWALL -j MY_PA_DATA_PLANE" in recorded
     assert "-F MY_PA_DATA_PLANE" not in recorded
     assert "-X MY_PA_DATA_PLANE" not in recorded
 
@@ -968,8 +1000,8 @@ def test_r3_t3_post_insert_save_fail_then_jump_delete_fail_skips_chain_cleanup(
     assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "effective"
     assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
     recorded = _recorded(calls)
-    assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
-    assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
+    assert "-I FORWARD_FIREWALL 1 -j MY_PA_DATA_PLANE" in recorded
+    assert "-D FORWARD_FIREWALL -j MY_PA_DATA_PLANE" in recorded
     assert "-F MY_PA_DATA_PLANE" not in recorded
     assert "-X MY_PA_DATA_PLANE" not in recorded
 
@@ -989,7 +1021,7 @@ def test_r3_t4_remove_resumes_missing_jump_cleanup_after_save_fail(
     assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
     assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
     recorded = _recorded(calls)
-    assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
+    assert "-D FORWARD_FIREWALL -j MY_PA_DATA_PLANE" in recorded
     assert "-F MY_PA_DATA_PLANE" not in recorded
     assert "-X MY_PA_DATA_PLANE" not in recorded
     environment["FAKE_FILTER_SAVE_FAIL_MODE"] = ""
@@ -999,7 +1031,7 @@ def test_r3_t4_remove_resumes_missing_jump_cleanup_after_save_fail(
     assert "firewall enforcement removed" in second.stdout
     assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "missing"
     resumed = _recorded(calls)
-    assert "-D FORWARD -j MY_PA_DATA_PLANE" not in resumed
+    assert "-D FORWARD_FIREWALL -j MY_PA_DATA_PLANE" not in resumed
     assert "-F MY_PA_DATA_PLANE" in resumed
     assert "-X MY_PA_DATA_PLANE" in resumed
 
@@ -1051,7 +1083,7 @@ def test_r3_t6_absence_unverified_then_legacy_missing_is_cleanup_complete(
     resumed = _recorded(calls)
     assert "-X MY_PA_DATA_PLANE" not in resumed
     assert "-F MY_PA_DATA_PLANE" not in resumed
-    assert "-D FORWARD -j MY_PA_DATA_PLANE" not in resumed
+    assert "-D FORWARD_FIREWALL -j MY_PA_DATA_PLANE" not in resumed
 
 
 def test_r3_t8_flush_ok_delete_fail_then_empty_cleanup_deletes_only(
@@ -1080,7 +1112,7 @@ def test_r3_t8_flush_ok_delete_fail_then_empty_cleanup_deletes_only(
     resumed = _recorded(calls)
     assert "-F MY_PA_DATA_PLANE" not in resumed
     assert "-X MY_PA_DATA_PLANE" in resumed
-    assert "-D FORWARD -j MY_PA_DATA_PLANE" not in resumed
+    assert "-D FORWARD_FIREWALL -j MY_PA_DATA_PLANE" not in resumed
 
 
 @pytest.mark.parametrize(
@@ -1129,7 +1161,7 @@ def test_r3_apply_still_activates_missing_jump_and_populates_empty(
     assert applied.returncode == 0, applied.stderr
     recorded = _recorded(calls)
     assert "-A MY_PA_DATA_PLANE" in recorded
-    assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
+    assert "-I FORWARD_FIREWALL 1 -j MY_PA_DATA_PLANE" in recorded
     assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
     assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "effective"
 
@@ -1163,7 +1195,7 @@ def test_r3_pre_insert_save_fail_does_not_install_jump(tmp_path: Path) -> None:
     assert "firewall enforcement admitted" not in result.stdout
     recorded = _recorded(calls)
     assert "-A MY_PA_DATA_PLANE -j RETURN" in recorded
-    assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" not in recorded
+    assert "-I FORWARD_FIREWALL 1 -j MY_PA_DATA_PLANE" not in recorded
     assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
     assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
 
@@ -1177,8 +1209,8 @@ def test_r3_post_broad_delete_save_fail_does_not_undo_jump(tmp_path: Path) -> No
     assert "POSTCONDITION_UNVERIFIED" in result.stderr
     assert "firewall enforcement admitted" not in result.stdout
     recorded = _recorded(calls)
-    assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
+    assert "-I FORWARD_FIREWALL 1 -j MY_PA_DATA_PLANE" in recorded
     assert f"-D FORWARD_FIREWALL -s {SUBNET} -j RETURN" in recorded
-    assert "-D FORWARD -j MY_PA_DATA_PLANE" not in recorded
+    assert "-D FORWARD_FIREWALL -j MY_PA_DATA_PLANE" not in recorded
     assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "effective"
     assert state.joinpath("broad").read_text(encoding="utf-8").strip() == "absent"

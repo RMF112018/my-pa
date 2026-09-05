@@ -2,10 +2,10 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the one hundred and twenty-five capabilities is addressable
+**Reachability.** Every one of the one hundred and twenty-eight capabilities is addressable
 over HTTP and answers. Parametrised over `Capability` rather than over a list
-written here, so a one-hundred-twenty-sixth capability added to the domain arrives as
-a failing row instead of as an untested one. Thirteen of the one hundred and twenty-five answer a
+written here, so the next capability added to the domain arrives as
+a failing row instead of as an untested one. Fourteen of the one hundred and twenty-eight answer a
 well-formed `501 unsupported` rather than a result — `_UNCOMPOSED_CAPABILITIES`,
 the plane this harness does not switch on — and one, `tasks.bulk_confirm`,
 answers a well-formed `404 not_found`, because a confirm names a preview this
@@ -98,6 +98,7 @@ from my_pa.application.commands import (
     CloseCommitment,
     Command,
     CommitIntelligenceArtifact,
+    CompleteGoodNotesPull,
     CreateCapture,
     CreateCommitment,
     CreateEntity,
@@ -128,6 +129,7 @@ from my_pa.application.commands import (
     GetEntityProfile,
     GetEntityRelationships,
     GetGoodNotesContent,
+    GetGoodNotesPullStatus,
     GetGoodNotesWork,
     GetGsqsB0Status,
     GetLatestIntelligenceArtifact,
@@ -162,6 +164,7 @@ from my_pa.application.commands import (
     PreviewEntityMerge,
     PreviewEntitySplit,
     ProposeRelationshipMemory,
+    PullGoodNotesWork,
     ReadCapture,
     ReadCommitment,
     ReadIntelligenceArtifact,
@@ -323,6 +326,13 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
         Capability.ENTITIES_MERGE,
         Capability.ENTITIES_SPLIT_PREVIEW,
         Capability.ENTITIES_SPLIT,
+        # The pull plane is independently disabled by default. This in-memory
+        # transport fixture has neither its repository nor an authenticated
+        # remote client, so these pull-plane names are reachable but unavailable at
+        # the composition floor.
+        Capability.GOODNOTES_PULL,
+        Capability.GOODNOTES_COMPLETE,
+        Capability.GOODNOTES_STATUS,
     }
 )
 
@@ -645,6 +655,9 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
                 }
             ],
         },
+        Capability.GOODNOTES_PULL: {"batch_size": 1},
+        Capability.GOODNOTES_COMPLETE: {"assignment_ids": ["a" * 64]},
+        Capability.GOODNOTES_STATUS: {},
         Capability.GSQS_START: {
             "authorization_id": "synthetic-b0-commissioning",
             "campaign_class": "SYNTHETIC",
@@ -1416,6 +1429,9 @@ def commands_for(
                 },
             ),
         ),
+        Capability.GOODNOTES_PULL: PullGoodNotesWork(batch_size=1),
+        Capability.GOODNOTES_COMPLETE: CompleteGoodNotesPull(assignment_ids=("a" * 64,)),
+        Capability.GOODNOTES_STATUS: GetGoodNotesPullStatus(),
         Capability.GSQS_START: StartGsqsB0(
             authorization_id="synthetic-b0-commissioning",
             campaign_class="SYNTHETIC",

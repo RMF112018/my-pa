@@ -16,8 +16,13 @@ from my_pa.application.goodnotes_delivery import (
     GoodNotesDeliveryAttemptLedger,
     GoodNotesNewOnlyDelivery,
 )
-from my_pa.application.goodnotes_occurrences import GoodNotesOccurrenceReconciler
+from my_pa.application.goodnotes_occurrences import (
+    GoodNotesOccurrenceReconciler,
+    GoodNotesSemanticPromotionEvidence,
+    semantic_proposal_sha256,
+)
 from my_pa.application.goodnotes_semantics import fingerprint_proposal
+from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.goodnotes.models import (
     GoodNotesDeliveryAttemptState,
@@ -276,6 +281,22 @@ def _propose(
     )
 
 
+def _accepted_evidence(
+    repository: PostgresGoodNotesRepository,
+    principal_id: str,
+    run_id: str,
+) -> tuple[GoodNotesSemanticPromotionEvidence, ...]:
+    return tuple(
+        GoodNotesSemanticPromotionEvidence(
+            principal_id=principal_id,
+            run_id=run_id,
+            proposal_sha256=semantic_proposal_sha256(*proposal),
+            disposition=Disposition.ACCEPT,
+        )
+        for proposal in repository.semantic_proposals_for_run(principal_id, run_id)
+    )
+
+
 def _project(connection: object, principal_id: str, name: str) -> str:
     project_id = issue_identifier(IdKind.PROJECT)
     connection.execute(  # type: ignore[union-attr]
@@ -331,8 +352,20 @@ def test_two_principals_same_run_id_string_do_not_leak(engine: Engine) -> None:
             key="iso-b",
             segments=(_segment(x_min=0.1, transcription="synthetic heading"),),
         )
-        GoodNotesOccurrenceReconciler().reconcile(A, run_a, repository=lineage, clock=lambda: LATER)
-        GoodNotesOccurrenceReconciler().reconcile(B, run_b, repository=lineage, clock=lambda: LATER)
+        GoodNotesOccurrenceReconciler().reconcile(
+            A,
+            run_a,
+            repository=lineage,
+            promotion_evidence=_accepted_evidence(lineage, A, run_a),
+            clock=lambda: LATER,
+        )
+        GoodNotesOccurrenceReconciler().reconcile(
+            B,
+            run_b,
+            repository=lineage,
+            promotion_evidence=_accepted_evidence(lineage, B, run_b),
+            clock=lambda: LATER,
+        )
         result_a = GoodNotesNewOnlyDelivery().deliver(
             A, run_a, DESTINATION, repository=delivery, clock=lambda: LATER
         )
@@ -411,7 +444,11 @@ def test_new_plus_revised_receipt_membership_is_new_only(engine: Engine) -> None
             ),
         )
         reconciled = GoodNotesOccurrenceReconciler().reconcile(
-            A, run_id, repository=lineage, clock=lambda: LATER
+            A,
+            run_id,
+            repository=lineage,
+            promotion_evidence=_accepted_evidence(lineage, A, run_id),
+            clock=lambda: LATER,
         )
         states = {item.change_state for item in reconciled.changes}
         assert GoodNotesNoteChangeState.NEW in states
@@ -439,7 +476,11 @@ def test_no_new_run_writes_suppressed_receipt(engine: Engine) -> None:
         delivery = PostgresGoodNotesDeliveryRepository(connection)
         run_id, _, _, _ = _plant(lineage, A, "none")
         GoodNotesOccurrenceReconciler().reconcile(
-            A, run_id, repository=lineage, clock=lambda: LATER
+            A,
+            run_id,
+            repository=lineage,
+            promotion_evidence=_accepted_evidence(lineage, A, run_id),
+            clock=lambda: LATER,
         )
         result = GoodNotesNewOnlyDelivery().deliver(
             A, run_id, DESTINATION, repository=delivery, clock=lambda: LATER
@@ -475,7 +516,11 @@ def test_unique_exact_candidate_associates(engine: Engine) -> None:
             ),
         )
         GoodNotesOccurrenceReconciler().reconcile(
-            A, run_id, repository=lineage, clock=lambda: LATER
+            A,
+            run_id,
+            repository=lineage,
+            promotion_evidence=_accepted_evidence(lineage, A, run_id),
+            clock=lambda: LATER,
         )
         result = GoodNotesNewOnlyDelivery().deliver(
             A, run_id, DESTINATION, repository=delivery, clock=lambda: LATER
@@ -512,7 +557,11 @@ def test_ambiguous_name_stays_unresolved_and_does_not_create_a_project(engine: E
             ),
         )
         GoodNotesOccurrenceReconciler().reconcile(
-            A, run_id, repository=lineage, clock=lambda: LATER
+            A,
+            run_id,
+            repository=lineage,
+            promotion_evidence=_accepted_evidence(lineage, A, run_id),
+            clock=lambda: LATER,
         )
         result = GoodNotesNewOnlyDelivery().deliver(
             A, run_id, DESTINATION, repository=delivery, clock=lambda: LATER
@@ -552,7 +601,11 @@ def test_mixed_page_candidates_do_not_cross_contaminate(engine: Engine) -> None:
             ),
         )
         reconciled = GoodNotesOccurrenceReconciler().reconcile(
-            A, run_id, repository=lineage, clock=lambda: LATER
+            A,
+            run_id,
+            repository=lineage,
+            promotion_evidence=_accepted_evidence(lineage, A, run_id),
+            clock=lambda: LATER,
         )
         result = GoodNotesNewOnlyDelivery().deliver(
             A, run_id, DESTINATION, repository=delivery, clock=lambda: LATER
@@ -607,7 +660,11 @@ def test_v1_page_level_candidates_do_not_contaminate_two_note_units(engine: Engi
             ranked_candidates=({"rank": 1, "candidate": "V1 Mix Project"},),
         )
         GoodNotesOccurrenceReconciler().reconcile(
-            A, run_id, repository=lineage, clock=lambda: LATER
+            A,
+            run_id,
+            repository=lineage,
+            promotion_evidence=_accepted_evidence(lineage, A, run_id),
+            clock=lambda: LATER,
         )
         result = GoodNotesNewOnlyDelivery().deliver(
             A, run_id, DESTINATION, repository=delivery, clock=lambda: LATER
@@ -638,7 +695,11 @@ def test_unreadable_does_not_become_fabricated_new_transcription(engine: Engine)
             ),
         )
         reconciled = GoodNotesOccurrenceReconciler().reconcile(
-            A, run_id, repository=lineage, clock=lambda: LATER
+            A,
+            run_id,
+            repository=lineage,
+            promotion_evidence=_accepted_evidence(lineage, A, run_id),
+            clock=lambda: LATER,
         )
         assert {item.change_state for item in reconciled.changes} == {
             GoodNotesNoteChangeState.AMBIGUOUS
@@ -674,7 +735,11 @@ def test_historical_summary_stays_bound_after_a_later_correction(engine: Engine)
             segments=(_segment(x_min=0.1, transcription="synthetic original"),),
         )
         reconciled = GoodNotesOccurrenceReconciler().reconcile(
-            A, run_id, repository=lineage, clock=lambda: LATER
+            A,
+            run_id,
+            repository=lineage,
+            promotion_evidence=_accepted_evidence(lineage, A, run_id),
+            clock=lambda: LATER,
         )
         new_changes = tuple(
             item for item in reconciled.changes if item.change_state is GoodNotesNoteChangeState.NEW
@@ -801,7 +866,11 @@ def test_attempt_crash_windows_do_not_duplicate_notes(engine: Engine) -> None:
             segments=(_segment(x_min=0.1, transcription="synthetic note"),),
         )
         GoodNotesOccurrenceReconciler().reconcile(
-            A, run_id, repository=lineage, clock=lambda: LATER
+            A,
+            run_id,
+            repository=lineage,
+            promotion_evidence=_accepted_evidence(lineage, A, run_id),
+            clock=lambda: LATER,
         )
         notes = connection.execute(
             text(

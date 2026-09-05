@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes one hundred and twenty-five capability names and none of them
+  ends: the transport routes one hundred and twenty-eight capability names and none of them
   mutates a source, and every capability driven over the wire is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -238,9 +238,10 @@ def _service(marked: Scene) -> ApplicationService:
     `tests/contract/test_transport_parity.py` records: `_Entities` implements none
     of the sixteen identity-correction port methods, so a build that composed the
     plane would answer `internal_error` for merge/split and this file's
-    all-succeed sweeps would be measuring a crash. The two are still driven --
-    every negative sweep here sends them and reads the refusal -- and what they
-    are exempted from is the *positive* sweep, which asserts a successful answer.
+    all-succeed sweeps would be measuring a crash. Those four contracts and the
+    three default-off GoodNotes pull contracts are still driven -- every negative
+    sweep here sends them and reads the refusal -- and what they are exempted
+    from is the *positive* sweep, which asserts a successful answer.
     Identity correction itself is proved against a real server in `tests/database` and
     `tests/recovery`.
     """
@@ -252,13 +253,17 @@ def _service(marked: Scene) -> ApplicationService:
 
 
 #: These are driven for refusals and not for answers, because the harness
-#: composes no governed identity-correction ledger.
+#: composes neither a governed identity-correction ledger nor the default-off,
+#: authenticated-client-bound GoodNotes pull plane.
 UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
     {
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
         Capability.ENTITIES_SPLIT_PREVIEW,
         Capability.ENTITIES_SPLIT,
+        Capability.GOODNOTES_PULL,
+        Capability.GOODNOTES_COMPLETE,
+        Capability.GOODNOTES_STATUS,
     }
 )
 
@@ -568,6 +573,9 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
                 }
             ],
         },
+        Capability.GOODNOTES_PULL: {"batch_size": 1},
+        Capability.GOODNOTES_COMPLETE: {"assignment_ids": ["a" * 64]},
+        Capability.GOODNOTES_STATUS: {},
         Capability.GSQS_START: {
             "authorization_id": "synthetic-b0-commissioning",
             "campaign_class": "SYNTHETIC",
@@ -1507,6 +1515,9 @@ SCOPED_CAPABILITIES = [
         Capability.GOODNOTES_WORK,
         Capability.GOODNOTES_CONTENT,
         Capability.GOODNOTES_PROPOSE,
+        Capability.GOODNOTES_PULL,
+        Capability.GOODNOTES_COMPLETE,
+        Capability.GOODNOTES_STATUS,
         Capability.GSQS_START,
         Capability.GSQS_STATUS,
         Capability.REPORTS_BEGIN_CYCLE,

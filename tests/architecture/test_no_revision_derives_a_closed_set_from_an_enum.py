@@ -737,7 +737,11 @@ def _declared_frozen(module: ModuleType) -> dict[str, str]:
 def test_the_chain_is_readable_and_non_empty() -> None:
     """Guards every other test here: an empty chain would make them all vacuous."""
     revisions = list(_revisions())
-    # Eighty-nine, counted on the merged tree. Two branches had corrected this
+    # Ninety-one, counted on the reconciled GoodNotes tree. The merged main
+    # chain contributes `c3f8a1d07e94` as the ninetieth revision directly on
+    # `b8e4d1a6c073`, and GoodNotes contributes `6a2f9d1c4b80` as the
+    # ninety-first revision directly on `c3f8a1d07e94`.
+    # Two earlier branches had corrected this
     # from eighty-five to eighty-seven from the same baseline -- RI-ENT-WP-10/11
     # for `16f05c46b8c3`, which admitted the twenty new `entities.` capability
     # names and the five new record families, and UI-IMP-WP02 for
@@ -748,8 +752,8 @@ def test_the_chain_is_readable_and_non_empty() -> None:
     # RULING-M11) is the eighty-ninth, again counted rather than picked
     # (RULING-M2). This is a derived fact about the tree; the deny rule, the
     # allowlist and the freeze ledger are untouched.
-    assert len(revisions) == 90
-    assert len({revision for revision, _ in revisions}) == 90
+    assert len(revisions) == 91
+    assert len({revision for revision, _ in revisions}) == 91
     assert {
         "9c6b4a18ed72",
         "1a4c9e77b2d5",

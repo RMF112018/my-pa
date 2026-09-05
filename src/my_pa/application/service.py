@@ -106,6 +106,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import hmac
 import json
 import sys
 from collections.abc import Callable, Iterator, Mapping
@@ -114,7 +115,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from itertools import islice
 from types import MappingProxyType
-from typing import Any, Final, assert_never, cast
+from typing import Any, Final, NoReturn, assert_never, cast
 from zoneinfo import ZoneInfo
 
 from my_pa.application.authorization import Authorization, authorize
@@ -135,6 +136,7 @@ from my_pa.application.commands import (
     CloseCommitment,
     Command,
     CommitIntelligenceArtifact,
+    CompleteGoodNotesPull,
     CreateCapture,
     CreateCommitment,
     CreateEntity,
@@ -166,6 +168,7 @@ from my_pa.application.commands import (
     GetEntityProfile,
     GetEntityRelationships,
     GetGoodNotesContent,
+    GetGoodNotesPullStatus,
     GetGoodNotesWork,
     GetGsqsB0Status,
     GetLatestIntelligenceArtifact,
@@ -201,6 +204,7 @@ from my_pa.application.commands import (
     PreviewEntityMerge,
     PreviewEntitySplit,
     ProposeRelationshipMemory,
+    PullGoodNotesWork,
     ReadCapture,
     ReadCommitment,
     ReadIntelligenceArtifact,
@@ -323,7 +327,23 @@ from my_pa.application.goodnotes_gsqs_b0_workflow import (
     status_workflow,
     workflow_root_from_env,
 )
+from my_pa.application.goodnotes_pull_orchestration import (
+    ERROR_INVALID_CURSOR,
+    ERROR_INVALID_REQUEST,
+    MAX_PULL_BATCH_SIZE,
+    MAX_PULL_RETRIES,
+    AuthenticatedPullContext,
+    GoodNotesPullError,
+    GoodNotesPullOrchestrator,
+    GoodNotesPullRepository,
+    PullCompletion,
+    PullRequest,
+    public_completion_receipts,
+    public_pull_batch,
+    stamp_authenticated_pull_context,
+)
 from my_pa.application.goodnotes_semantics import (
+    fingerprint_proposal,
     lookup_work,
     proposal_payload,
     submit_proposal,
@@ -424,6 +444,7 @@ from my_pa.domain.capture.errors import (
 from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.reveal import EvidenceState
 from my_pa.domain.capture.review import (
+    Disposition,
     EntityProposalReviewCase,
     ReviewCase,
     ReviewConflictError,
@@ -451,7 +472,7 @@ from my_pa.domain.documents.managed import (
 )
 from my_pa.domain.extraction.coverage import CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus, extract_text
-from my_pa.domain.goodnotes.models import GoodNotesReviewCase
+from my_pa.domain.goodnotes.models import GoodNotesReviewCase, GoodNotesSemanticReviewCase
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
@@ -578,7 +599,7 @@ from my_pa.domain.task.lifecycle import (
 from my_pa.domain.task.role import TaskRole
 from my_pa.domain.task.task import Task as TaskManagementTask
 
-__all__ = ["ApplicationService"]
+__all__ = ["ApplicationService", "published_capabilities"]
 
 #: The absence of truncation, as one shared immutable value. A default argument
 #: may not be a constructor call, and a frozen contract model is safe to share.
@@ -844,6 +865,7 @@ def _decode_review_cursor(token: str, *, expected_binding: str) -> tuple[datetim
 def _review_case_payload(
     case: ReviewCase
     | GoodNotesReviewCase
+    | GoodNotesSemanticReviewCase
     | RelationshipMemoryReviewCase
     | EntityProposalReviewCase,
 ) -> dict[str, Any]:
@@ -900,6 +922,13 @@ def _review_case_payload(
             "region_id": case.region_id,
             "page_version_id": case.page_version_id,
             "confidence": case.confidence,
+        }
+    if isinstance(case, GoodNotesSemanticReviewCase):
+        return {
+            **common,
+            "subject_kind": ReviewSubjectKind.GOODNOTES_SEMANTIC.value,
+            "run_id": case.run_id,
+            "page_version_id": case.page_version_id,
         }
     if isinstance(case, RelationshipMemoryReviewCase):
         return {
@@ -2799,6 +2828,8 @@ class ApplicationService:
         relationship_reenrichment_enabled: bool = False,
         producer_origins: ProducerOriginRegistry | None = None,
         gsqs_b0_ports: WorkflowPorts | None = None,
+        goodnotes_pull_enabled: bool = False,
+        goodnotes_pull_cursor_signing_key: bytes | None = None,
     ) -> None:
         self._unit_of_work = unit_of_work
         self._limits = _effective_limits(limits)
@@ -2841,6 +2872,10 @@ class ApplicationService:
         # and non-RI compositions from reaching the additive queue.
         self._relationship_reenrichment_enabled = relationship_reenrichment_enabled
         self._gsqs_b0_ports = gsqs_b0_ports
+        self._goodnotes_pull_enabled = goodnotes_pull_enabled
+        self._goodnotes_pull_cursor_signing_key = goodnotes_pull_cursor_signing_key
+        if goodnotes_pull_enabled and goodnotes_pull_cursor_signing_key is None:
+            raise ValueError("enabled GoodNotes pull requires a signing key")
         #: Explicit production composition of the optional proposal plane. The
         #: default gate is disabled; an enabled gate cannot be constructed
         #: without its local provider and canonical Review router.
@@ -2930,6 +2965,8 @@ class ApplicationService:
         # build can be in either state.
         if not self._relationship_identity_correction_enabled:
             served -= _IDENTITY_CORRECTION_CAPABILITIES
+        if not self._goodnotes_pull_enabled:
+            served -= _GOODNOTES_PULL_CAPABILITIES
         return served
 
     def invoke(
@@ -2940,6 +2977,7 @@ class ApplicationService:
         principal: Principal,
         transport: CaptureTransport = CaptureTransport.LOCAL,
         capability_grants: frozenset[tuple[Capability, Purpose | None]] | None = None,
+        authenticated_client_id: str | None = None,
     ) -> ResponseEnvelope:
         """Execute one request and return the envelope describing what happened.
 
@@ -3001,6 +3039,7 @@ class ApplicationService:
                 at=started_at,
                 transport=transport,
                 capability_grants=capability_grants,
+                authenticated_client_id=authenticated_client_id,
             )
         except ApplicationError as error:
             failure = error
@@ -3042,6 +3081,7 @@ class ApplicationService:
         at: datetime,
         transport: CaptureTransport = CaptureTransport.LOCAL,
         capability_grants: frozenset[tuple[Capability, Purpose | None]] | None = None,
+        authenticated_client_id: str | None = None,
     ) -> _Result:
         """Authorize, then execute, then commit — or refuse and still commit.
 
@@ -3094,6 +3134,7 @@ class ApplicationService:
                     at=at,
                     transport=transport,
                     capability_grants=capability_grants,
+                    authenticated_client_id=authenticated_client_id,
                 )
                 if authorization.allowed:
                     try:
@@ -4173,6 +4214,64 @@ class ApplicationService:
         entity_case: EntityProposalReviewCase | None = None
         with _translated(), _entity_governance_translated():
             try:
+                pull_repository: GoodNotesPullRepository | None = None
+                semantic_case = None
+                if self._goodnotes_pull_enabled:
+                    pull_repository = cast(GoodNotesPullRepository, unit_of_work.goodnotes_pull)
+                    semantic_case = pull_repository.semantic_review_case(
+                        request.principal_id, request.review_case_id
+                    )
+                # Keep the disposition guard readable by the declared branch-split invariant.
+                if semantic_case is not None:  # noqa: SIM102
+                    if request.disposition is Disposition.CORRECT_AND_ACCEPT:
+                        if request.correction_patch is None or request.corrected_value is not None:
+                            raise ReviewCorrectionError(
+                                "semantic correction is one structured correction patch"
+                            )
+                        repository = cast(GoodNotesPullRepository, pull_repository)
+                        material = repository.semantic_proposal_material(
+                            request.principal_id, semantic_case.proposal_id
+                        )
+                        if material is None:
+                            raise ReviewNotFoundError("the semantic proposal is absent")
+                        patch = request.correction_patch.as_mapping()
+                        allowed_fields = {
+                            "segments",
+                            "candidate_tags",
+                            "ranked_candidates",
+                            "confidence",
+                        }
+                        if not set(patch) <= allowed_fields:
+                            raise ReviewCorrectionError(
+                                "semantic correction names only governed payload fields"
+                            )
+                        corrected = {**material.payload, **patch}
+                        try:
+                            validated = SubmitGoodNotesProposal(
+                                run_id=material.run_id,
+                                page_version_id=material.page_version_id,
+                                content_sha256=material.content_sha256,
+                                schema_version=material.schema_version,
+                                analyzer_name=material.analyzer_name,
+                                analyzer_version=material.analyzer_version,
+                                idempotency_key=material.proposal_id,
+                                segments=tuple(corrected.get("segments", ())),
+                                candidate_tags=tuple(corrected.get("candidate_tags", ())),
+                                ranked_candidates=tuple(corrected.get("ranked_candidates", ())),
+                                confidence=corrected.get("confidence"),
+                            )
+                        except (TypeError, ValueError):
+                            raise ReviewCorrectionError(
+                                "semantic correction satisfies the canonical proposal contract"
+                            ) from None
+                        _fingerprint, corrected_result_sha256, corrected_body = (
+                            fingerprint_proposal(validated)
+                        )
+                        request = replace(
+                            request,
+                            semantic_corrected_payload=corrected_body,
+                            semantic_corrected_result_sha256=corrected_result_sha256,
+                        )
                 entity_case = unit_of_work.reviews.entity_proposal_case(
                     request.principal_id, request.review_case_id
                 )
@@ -8503,6 +8602,136 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
         )
 
+    def _goodnotes_pull_plane(
+        self, unit_of_work: UnitOfWork, authorization: Authorization
+    ) -> tuple[GoodNotesPullRepository, AuthenticatedPullContext]:
+        if not self._goodnotes_pull_enabled or authorization.authenticated_client_id is None:
+            raise UnsupportedError()
+        try:
+            repository = cast(GoodNotesPullRepository, unit_of_work.goodnotes_pull)
+        except NotImplementedError:
+            raise UnsupportedError() from None
+        key = self._goodnotes_pull_cursor_signing_key
+        if key is None:
+            raise UnsupportedError()
+        principal_id = authorization.principal.principal_id
+        client_id = authorization.authenticated_client_id
+        context_id = hmac.new(
+            key,
+            b"goodnotes-pull-context-v1\0"
+            + principal_id.encode("utf-8")
+            + b"\0"
+            + client_id.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        context = stamp_authenticated_pull_context(
+            principal=authorization.principal,
+            client_id=client_id,
+            context_id=context_id,
+        )
+        return repository, context
+
+    @staticmethod
+    def _raise_goodnotes_pull(error: GoodNotesPullError) -> NoReturn:
+        if error.code in {ERROR_INVALID_REQUEST, ERROR_INVALID_CURSOR}:
+            raise InvalidRequestError() from None
+        raise ConflictError() from None
+
+    def _goodnotes_pull(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: PullGoodNotesWork,
+    ) -> _Result:
+        repository, context = self._goodnotes_pull_plane(unit_of_work, authorization)
+        try:
+            batch = GoodNotesPullOrchestrator(
+                repository=repository,
+                max_batch_size=MAX_PULL_BATCH_SIZE,
+                max_attempts=MAX_PULL_RETRIES,
+                cursor_signing_key=cast(bytes, self._goodnotes_pull_cursor_signing_key),
+            ).discover(
+                context,
+                PullRequest(batch_size=command.batch_size, cursor=command.cursor),
+            )
+        except GoodNotesPullError as error:
+            self._raise_goodnotes_pull(error)
+        return _Result(
+            payload=asdict(public_pull_batch(batch)),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
+        )
+
+    def _goodnotes_complete(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CompleteGoodNotesPull,
+    ) -> _Result:
+        repository, context = self._goodnotes_pull_plane(unit_of_work, authorization)
+        principal_id = authorization.principal.principal_id
+        client_id = cast(str, authorization.authenticated_client_id)
+        completions: list[PullCompletion] = []
+        try:
+            for assignment_id in command.assignment_ids:
+                material = repository.completion_material(principal_id, client_id, assignment_id)
+                if material is None:
+                    raise GoodNotesPullError("STALE_ASSIGNMENT")
+                evidence = repository.semantic_review_evidence(
+                    principal_id, material.run_id, (material.proposal_sha256,)
+                )
+                if (
+                    len(evidence) != 1
+                    or evidence[0].proposal_sha256 != material.proposal_sha256
+                    or evidence[0].disposition
+                    not in {Disposition.ACCEPT, Disposition.CORRECT_AND_ACCEPT}
+                    or (
+                        evidence[0].disposition is Disposition.CORRECT_AND_ACCEPT
+                        and evidence[0].result_sha256 != material.result_sha256
+                    )
+                ):
+                    raise GoodNotesPullError("COMPLETION_CONFLICT")
+                completions.append(
+                    PullCompletion(
+                        assignment_id=material.assignment_id,
+                        run_id=material.run_id,
+                        page_version_id=material.page_version_id,
+                        content_sha256=material.content_sha256,
+                        result_sha256=material.result_sha256,
+                        idempotency_key=material.assignment_id,
+                    )
+                )
+            receipts = GoodNotesPullOrchestrator(
+                repository=repository,
+                max_batch_size=MAX_PULL_BATCH_SIZE,
+                max_attempts=MAX_PULL_RETRIES,
+                cursor_signing_key=cast(bytes, self._goodnotes_pull_cursor_signing_key),
+            ).complete(context, tuple(completions))
+        except GoodNotesPullError as error:
+            self._raise_goodnotes_pull(error)
+        return _Result(
+            payload={
+                "completions": [asdict(item) for item in public_completion_receipts(receipts)]
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
+        )
+
+    def _goodnotes_status(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: GetGoodNotesPullStatus,
+    ) -> _Result:
+        del command
+        repository, _context = self._goodnotes_pull_plane(unit_of_work, authorization)
+        status = repository.status(
+            authorization.principal.principal_id,
+            cast(str, authorization.authenticated_client_id),
+        )
+        return _Result(
+            payload=asdict(status),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
+        )
+
     def _gsqs_start(
         self,
         unit_of_work: UnitOfWork,
@@ -10121,6 +10350,9 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.GOODNOTES_WORK: ApplicationService._goodnotes_work,
         Capability.GOODNOTES_CONTENT: ApplicationService._goodnotes_content,
         Capability.GOODNOTES_PROPOSE: ApplicationService._goodnotes_propose,
+        Capability.GOODNOTES_PULL: ApplicationService._goodnotes_pull,
+        Capability.GOODNOTES_COMPLETE: ApplicationService._goodnotes_complete,
+        Capability.GOODNOTES_STATUS: ApplicationService._goodnotes_status,
         Capability.GSQS_START: ApplicationService._gsqs_start,
         Capability.GSQS_STATUS: ApplicationService._gsqs_status,
         Capability.REPORTS_BEGIN_CYCLE: ApplicationService._reports_begin_cycle,
@@ -10209,6 +10441,25 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.RELATIONSHIP_MEMORY_PROPOSE: ApplicationService._relationship_memory_propose,
     }
 )
+
+_GOODNOTES_PULL_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.GOODNOTES_PULL,
+        Capability.GOODNOTES_COMPLETE,
+        Capability.GOODNOTES_STATUS,
+    }
+)
+
+
+def published_capabilities(
+    service: ApplicationService, *, authenticated_client_present: bool
+) -> frozenset[Capability]:
+    """Return runtime publication after the server-owned client-context gate."""
+    served = service.available_capabilities
+    if not authenticated_client_present:
+        served -= _GOODNOTES_PULL_CAPABILITIES
+    return served
+
 
 #: Which capabilities need a composed byte store. Written out rather than
 #: derived from a name prefix, so admitting another is a decision here and not a

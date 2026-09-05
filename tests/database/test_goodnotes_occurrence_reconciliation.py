@@ -16,10 +16,13 @@ from sqlalchemy.sql import Executable
 from my_pa.application.commands import SubmitGoodNotesProposal
 from my_pa.application.goodnotes_occurrences import (
     GoodNotesOccurrenceReconciler,
+    GoodNotesSemanticPromotionEvidence,
     OccurrenceReconcileBusyError,
     _context_anchor,
+    semantic_proposal_sha256,
 )
 from my_pa.application.goodnotes_semantics import fingerprint_proposal
+from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.goodnotes.models import (
     GoodNotesIdentityStatus,
@@ -253,6 +256,22 @@ def _propose(
     )
 
 
+def _accepted_evidence(
+    repository: PostgresGoodNotesRepository,
+    principal_id: str,
+    run_id: str,
+) -> tuple[GoodNotesSemanticPromotionEvidence, ...]:
+    return tuple(
+        GoodNotesSemanticPromotionEvidence(
+            principal_id=principal_id,
+            run_id=run_id,
+            proposal_sha256=semantic_proposal_sha256(*proposal),
+            disposition=Disposition.ACCEPT,
+        )
+        for proposal in repository.semantic_proposals_for_run(principal_id, run_id)
+    )
+
+
 def _counts(connection: object, principal_id: str) -> tuple[int, int]:
     notes = int(
         connection.execute(  # type: ignore[union-attr]
@@ -296,8 +315,20 @@ def test_two_principals_same_run_id_string_do_not_leak(engine: Engine) -> None:
             segments=(_segment(x_min=0.1, transcription="beta note"),),
         )
         reconciler = GoodNotesOccurrenceReconciler()
-        result_a = reconciler.reconcile(A, run_a, repository=lineage, clock=lambda: LATER)
-        result_b = reconciler.reconcile(B, run_b, repository=lineage, clock=lambda: LATER)
+        result_a = reconciler.reconcile(
+            A,
+            run_a,
+            repository=lineage,
+            promotion_evidence=_accepted_evidence(lineage, A, run_a),
+            clock=lambda: LATER,
+        )
+        result_b = reconciler.reconcile(
+            B,
+            run_b,
+            repository=lineage,
+            promotion_evidence=_accepted_evidence(lineage, B, run_b),
+            clock=lambda: LATER,
+        )
         assert result_a.changes[0].change_state is GoodNotesNoteChangeState.NEW
         assert result_b.changes[0].change_state is GoodNotesNoteChangeState.NEW
         note_a = result_a.changes[0].note_id
@@ -337,8 +368,13 @@ def test_crash_before_commit_writes_nothing(engine: Engine) -> None:
         before_notes, before_changes = _counts(connection, A)
 
     with pytest.raises(RuntimeError, match="crash-before-commit"), engine.begin() as connection:
+        repository = Boom(connection)
         GoodNotesOccurrenceReconciler().reconcile(
-            A, run_id, repository=Boom(connection), clock=lambda: LATER
+            A,
+            run_id,
+            repository=repository,
+            promotion_evidence=_accepted_evidence(repository, A, run_id),
+            clock=lambda: LATER,
         )
 
     with engine.begin() as connection:
@@ -363,14 +399,24 @@ def test_success_then_duplicate_request_replays_the_same_change_ids(engine: Engi
             segments=(_segment(x_min=0.1, transcription="same note"),),
         )
         reconciler = GoodNotesOccurrenceReconciler()
-        first = reconciler.reconcile(A, run_id, repository=lineage, clock=lambda: LATER)
+        first = reconciler.reconcile(
+            A,
+            run_id,
+            repository=lineage,
+            promotion_evidence=_accepted_evidence(lineage, A, run_id),
+            clock=lambda: LATER,
+        )
         assert [item.change_state for item in first.changes] == [GoodNotesNoteChangeState.NEW]
         notes_after_first, changes_after_first = _counts(connection, A)
 
     with engine.begin() as connection:
         lineage = PostgresGoodNotesRepository(connection)
         second = GoodNotesOccurrenceReconciler().reconcile(
-            A, run_id, repository=lineage, clock=lambda: LATER
+            A,
+            run_id,
+            repository=lineage,
+            promotion_evidence=_accepted_evidence(lineage, A, run_id),
+            clock=lambda: LATER,
         )
         assert second.replayed is True
         assert [item.change_id for item in second.changes] == [
@@ -395,6 +441,7 @@ def test_overlapping_reconciles_busy_or_serialize_without_duplicate_new(engine: 
             key="overlap",
             segments=(_segment(x_min=0.1, transcription="one winner"),),
         )
+        promotion_evidence = _accepted_evidence(lineage, A, run_id)
 
     barrier = threading.Barrier(2)
     outcomes: list[str] = []
@@ -410,6 +457,7 @@ def test_overlapping_reconciles_busy_or_serialize_without_duplicate_new(engine: 
                         A,
                         run_id,
                         repository=PostgresGoodNotesRepository(connection),
+                        promotion_evidence=promotion_evidence,
                         clock=lambda: LATER,
                     )
                     with lock:
@@ -501,7 +549,11 @@ def test_ambiguous_does_not_insert_a_silent_new_pick(engine: Engine) -> None:
         )
         notes_before, _ = _counts(connection, A)
         result = GoodNotesOccurrenceReconciler().reconcile(
-            A, run_id, repository=lineage, clock=lambda: LATER
+            A,
+            run_id,
+            repository=lineage,
+            promotion_evidence=_accepted_evidence(lineage, A, run_id),
+            clock=lambda: LATER,
         )
         states = {item.change_state for item in result.changes}
         assert GoodNotesNoteChangeState.NEW not in states
@@ -544,7 +596,11 @@ def test_missing_geometry_fails_closed_without_partial_writes(engine: Engine) ->
         notes_before, changes_before = _counts(connection, A)
         with pytest.raises(ValueError, match="missing required geometry"):
             GoodNotesOccurrenceReconciler().reconcile(
-                A, run_id, repository=lineage, clock=lambda: LATER
+                A,
+                run_id,
+                repository=lineage,
+                promotion_evidence=_accepted_evidence(lineage, A, run_id),
+                clock=lambda: LATER,
             )
         notes_after, changes_after = _counts(connection, A)
         assert notes_after == notes_before
@@ -603,7 +659,11 @@ def test_unique_visual_match_with_new_transcription_is_revised(engine: Engine) -
             segments=(_segment(x_min=0.1, transcription="follow up Thursday"),),
         )
         result = GoodNotesOccurrenceReconciler().reconcile(
-            A, run_id, repository=lineage, clock=lambda: LATER
+            A,
+            run_id,
+            repository=lineage,
+            promotion_evidence=_accepted_evidence(lineage, A, run_id),
+            clock=lambda: LATER,
         )
         assert [item.change_state for item in result.changes] == [
             GoodNotesNoteChangeState.UNCHANGED
@@ -662,7 +722,11 @@ def test_new_occurrence_does_not_reuse_note_by_page_wide_context_hash(engine: En
         )
         notes_before, _ = _counts(connection, A)
         result = GoodNotesOccurrenceReconciler().reconcile(
-            A, run_id, repository=lineage, clock=lambda: LATER
+            A,
+            run_id,
+            repository=lineage,
+            promotion_evidence=_accepted_evidence(lineage, A, run_id),
+            clock=lambda: LATER,
         )
         notes_after, _ = _counts(connection, A)
         assert notes_after == notes_before + 1
@@ -712,7 +776,11 @@ def test_revision_page_version_survives_occurrence_pointer_update(engine: Engine
             segments=(_segment(x_min=0.1, transcription="first ink"),),
         )
         first = GoodNotesOccurrenceReconciler().reconcile(
-            A, run_id, repository=lineage, clock=lambda: LATER
+            A,
+            run_id,
+            repository=lineage,
+            promotion_evidence=_accepted_evidence(lineage, A, run_id),
+            clock=lambda: LATER,
         )
         assert first.changes[0].revision_id is not None
         revision = lineage.revision(A, first.changes[0].revision_id)
@@ -900,7 +968,11 @@ def test_deleted_logical_page_emits_removed_for_prior_occurrences(engine: Engine
             segments=(_segment(x_min=0.1, transcription="cover note"),),
         )
         result = GoodNotesOccurrenceReconciler().reconcile(
-            A, run_id, repository=lineage, clock=lambda: LATER
+            A,
+            run_id,
+            repository=lineage,
+            promotion_evidence=_accepted_evidence(lineage, A, run_id),
+            clock=lambda: LATER,
         )
         removed = [
             item

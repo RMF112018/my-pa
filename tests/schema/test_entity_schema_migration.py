@@ -309,6 +309,12 @@ STACKED_ABOVE: Final[frozenset[str]] = frozenset(
         # one link further still.
         "entity_assertions",
         "entity_assertion_evidence",
+        # `6a2f9d1c4b80`'s Principal/client pull and semantic-review ledgers.
+        "goodnotes_pull_sessions",
+        "goodnotes_pull_claims",
+        "goodnotes_pull_assignments",
+        "goodnotes_pull_completions",
+        "goodnotes_semantic_review_decisions",
     }
 )
 

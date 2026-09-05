@@ -23,6 +23,10 @@ from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.goodnotes.liveness import (
+    GoodNotesSourceLiveness,
+    GoodNotesSourceLivenessReceipt,
+)
 from my_pa.domain.goodnotes.models import (
     GoodNotesIngestionStatus,
     GoodNotesPipelineStage,
@@ -86,6 +90,16 @@ def _request(pdf: bytes, request_id: str) -> DurableNoteRequest:
             sha256=_sha(pdf),
             mtime_ns=1,
             page_count=len(split_admitted_pdf(pdf)),
+        ),
+        liveness=GoodNotesSourceLivenessReceipt(
+            source_root_id=SOURCE_ROOT,
+            relative_path=f"Validation/{request_id}.pdf",
+            state=GoodNotesSourceLiveness.AVAILABLE,
+            checked_at=WHEN,
+            maximum_staleness_seconds=300,
+            last_seen_at=WHEN,
+            current_sha256=_sha(pdf),
+            prior_sha256=None,
         ),
         pdf_bytes=pdf,
         notebook_id=issue_stable_id("gnnb", A, request_id),

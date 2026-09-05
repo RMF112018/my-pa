@@ -298,6 +298,7 @@ def _mcp_remote(args: argparse.Namespace) -> int:
         compact = settings.compact_publication_for_client(authenticated.client_id)
         return RemoteAccessContext(
             principal=authenticated.principal,
+            authenticated_client_id=authenticated.client_id,
             allowed_capabilities=capabilities,
             capability_purposes=authenticated.capability_purposes,
             relationship_grant_profile=_remote_relationship_grant_profile(
@@ -361,10 +362,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
 
-    run = subcommands.add_parser("run", help="serve the 125 capabilities over HTTP")
+    run = subcommands.add_parser("run", help="serve the 128 capabilities over HTTP")
     run.add_argument("--port", type=int, default=DEFAULT_PORT)
 
-    subcommands.add_parser("mcp", help="serve the 125 capabilities over MCP on stdio")
+    subcommands.add_parser("mcp", help="serve the 128 capabilities over MCP on stdio")
     remote = subcommands.add_parser("mcp-remote", help="serve authenticated MCP over HTTP")
     remote.add_argument(
         "--host",

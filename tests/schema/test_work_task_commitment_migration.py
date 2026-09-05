@@ -40,7 +40,9 @@ PHASE_B = "b64e29a0f7c1"
 PHASE_B_HEAD = "3d07af4dc513"
 GSQS_REVISION = "c4b0a1d9e827"
 PHASE_B_START = "c7a1f04b9e63"
-#: The chain's current head: `b8e4d1a6c073` (RI-ENT-WP-12), which backfills one
+#: The chain's current head is `6a2f9d1c4b80` (GoodNotes pull/review), serialized
+#: as the direct child of `c3f8a1d07e94`. That graph-vocabulary parent is additive on
+#: `b8e4d1a6c073`, whose RI-ENT-WP-12 migration backfills one
 #: `display`-typed `entity_names` row per active `entities` row -- `display_value`
 #: from `entities.display_name`, `normalized_value` from `entities.canonical_name`,
 #: never a `legal` name -- and writes no `entity_project_participations` row
@@ -58,7 +60,7 @@ PHASE_B_START = "c7a1f04b9e63"
 #: renames the seeded `entity_relationship_types` row `design_coordinates_with` to
 #: `design_coordination_with`; that in turn stacked on `1cda4d536268` (RI-ENT-WP-07).
 #: Written out rather than derived so chain drift fails here rather than passing.
-HEAD = "c3f8a1d07e94"
+HEAD = "6a2f9d1c4b80"
 REVISION_PATH = (
     ROOT
     / "migrations"

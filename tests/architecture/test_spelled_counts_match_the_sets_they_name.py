@@ -325,7 +325,7 @@ _ORDINAL_UNITS = (
     "seventy-first",
     "seventy-second",
     "seventy-third",
-    "seventy-seventh",
+    "seventy-fourth",
     "seventy-fifth",
     "seventy-sixth",
     "seventy-seventh",
@@ -406,12 +406,13 @@ _ORDINAL_UNITS = (
     "hundred-twenty-third",
     "hundred-twenty-fourth",
     "hundred-twenty-fifth",
-    # `UI-IMP-WP15` took the public set to a hundred and twenty-five, so
-    # `a hundred-twenty-sixth capability` became the ordinal a correct claim
-    # would use and the green-half plant indexes one past the set.
+    # GoodNotes pull and the graph read take the capability set to one hundred and twenty-eight,
+    # so the green-half plant needs the next ordinal. Keep this tuple dense: a
+    # gap makes a readable compound ordinal fall back to its final unit.
     "hundred-twenty-sixth",
     "hundred-twenty-seventh",
     "hundred-twenty-eighth",
+    "hundred-twenty-ninth",
 )
 
 
@@ -918,27 +919,27 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
     # records what deriving it would cost.
     (
         "ops/runbooks/mcp-and-cli-operations.md",
-        "**fifty-five**",
+        "**fifty-eight**",
         "A default process publishes",
         "the count a default composition publishes — `Capability` less the six "
-        "`documents.`, fifty-five `entities.` and nine `relationship_memory.` names it "
+        "`documents.`, fifty-four `entities.` and nine `relationship_memory.` names it "
         "withholds — not the size of `Capability`, which the same block states "
-        "correctly as 125",
+        "correctly as 124",
     ),
     (
         "ops/runbooks/mcp-and-cli-operations.md",
-        "**fifty-five**",
+        "**fifty-eight**",
         "none beginning `documents.`",
         "the same default-publication count, in the line naming the test that measures it",
     ),
     (
         "README.md",
-        "fifty-five tools",
-        "process publishes fifty-five tools",
+        "fifty-eight tools",
+        "process publishes fifty-eight tools",
         "the same default-publication count, in the bullet describing the MCP "
         "adapter; the tool list is derived from `available_capabilities`, not "
         "from `Capability`, which the same bullet states correctly as "
-        "one hundred and twenty-five",
+        "one hundred and twenty-eight",
     ),
     # --- the Intelligence Artifact plane, newly swept --------------------------
     #

@@ -72,6 +72,7 @@ from my_pa.application.commands import (
     CloseCommitment,
     Command,
     CommitIntelligenceArtifact,
+    CompleteGoodNotesPull,
     CreateCapture,
     CreateCommitment,
     CreateEntity,
@@ -102,6 +103,7 @@ from my_pa.application.commands import (
     GetEntityProfile,
     GetEntityRelationships,
     GetGoodNotesContent,
+    GetGoodNotesPullStatus,
     GetGoodNotesWork,
     GetGsqsB0Status,
     GetLatestIntelligenceArtifact,
@@ -136,6 +138,7 @@ from my_pa.application.commands import (
     PreviewEntityMerge,
     PreviewEntitySplit,
     ProposeRelationshipMemory,
+    PullGoodNotesWork,
     ReadCapture,
     ReadCommitment,
     ReadIntelligenceArtifact,
@@ -812,6 +815,23 @@ def _record_context_feedback(payload: Mapping[str, Any]) -> Command:
 
 def _get_goodnotes_work(payload: Mapping[str, Any]) -> Command:
     return GetGoodNotesWork(**payload)
+
+
+def _pull_goodnotes_work(payload: Mapping[str, Any]) -> Command:
+    return PullGoodNotesWork(**payload)
+
+
+def _complete_goodnotes_pull(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    if "assignment_ids" in converted:
+        converted["assignment_ids"] = _strings(
+            converted["assignment_ids"], SafeDetail.ASSIGNMENT_ID
+        )
+    return CompleteGoodNotesPull(**converted)
+
+
+def _get_goodnotes_pull_status(payload: Mapping[str, Any]) -> Command:
+    return GetGoodNotesPullStatus(**payload)
 
 
 def _start_gsqs_b0(payload: Mapping[str, Any]) -> Command:
@@ -1823,6 +1843,9 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.COMMITMENTS_CLOSE: _close_commitment,
         Capability.CONTEXT_PREPARE: _prepare_context,
         Capability.CONTEXT_FEEDBACK: _record_context_feedback,
+        Capability.GOODNOTES_PULL: _pull_goodnotes_work,
+        Capability.GOODNOTES_COMPLETE: _complete_goodnotes_pull,
+        Capability.GOODNOTES_STATUS: _get_goodnotes_pull_status,
         Capability.GOODNOTES_WORK: _get_goodnotes_work,
         Capability.GOODNOTES_CONTENT: _get_goodnotes_content,
         Capability.GOODNOTES_PROPOSE: _submit_goodnotes_proposal,

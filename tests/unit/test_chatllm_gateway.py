@@ -205,8 +205,18 @@ def test_compact_read_forwards_nested_arguments_through_normalize_to_invoke(
             principal: object,
             transport: object,
             capability_grants: object = None,
+            authenticated_client_id: str | None = None,
         ) -> ResponseEnvelope:
-            self.invocations.append((metadata, command, principal, transport, capability_grants))
+            self.invocations.append(
+                (
+                    metadata,
+                    command,
+                    principal,
+                    transport,
+                    capability_grants,
+                    authenticated_client_id,
+                )
+            )
             return ResponseEnvelope(
                 request_id="req-compact-forward",
                 correlation_id="corr_abc123def456",
@@ -233,7 +243,10 @@ def test_compact_read_forwards_nested_arguments_through_normalize_to_invoke(
     assert seen["capability"] == Capability.CAPABILITIES_GET.value
     assert seen["arguments"] is nested
     assert len(service.invocations) == 1
-    metadata, command, principal, _transport, _grants = service.invocations[0]
+    metadata, command, principal, _transport, _grants, authenticated_client_id = (
+        service.invocations[0]
+    )
     assert metadata is seen["metadata"]
     assert command is seen["command"]
     assert principal is scene.principal
+    assert authenticated_client_id is None

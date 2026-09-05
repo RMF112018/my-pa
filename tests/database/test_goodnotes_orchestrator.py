@@ -11,11 +11,20 @@ from sqlalchemy import Engine
 from sqlalchemy.sql import Executable
 
 from my_pa.application.goodnotes_lineage import ObservedNotebookFile
+from my_pa.application.goodnotes_occurrences import (
+    GoodNotesSemanticPromotionEvidence,
+    semantic_proposal_sha256,
+)
 from my_pa.application.goodnotes_orchestrator import (
     DurableNoteRequest,
     DurableNoteResult,
     DurableNoteStageError,
     GoodNotesDurableNoteOrchestrator,
+)
+from my_pa.domain.capture.review import Disposition
+from my_pa.domain.goodnotes.liveness import (
+    GoodNotesSourceLiveness,
+    GoodNotesSourceLivenessReceipt,
 )
 from my_pa.domain.goodnotes.models import (
     GoodNotesIngestionStatus,
@@ -73,6 +82,16 @@ def _request(pdf: bytes, request_id: str) -> DurableNoteRequest:
             sha256=_sha(pdf),
             mtime_ns=1,
             page_count=len(split_admitted_pdf(pdf)),
+        ),
+        liveness=GoodNotesSourceLivenessReceipt(
+            source_root_id=ROOT_ID,
+            relative_path=f"Notebooks/{request_id}.goodnotes",
+            state=GoodNotesSourceLiveness.AVAILABLE,
+            checked_at=WHEN,
+            maximum_staleness_seconds=300,
+            last_seen_at=WHEN,
+            current_sha256=_sha(pdf),
+            prior_sha256=None,
         ),
         pdf_bytes=pdf,
         notebook_id=issue_stable_id("gnnb", A, request_id),
@@ -136,13 +155,29 @@ def _run(
     *,
     fail_after: GoodNotesPipelineStage | None = None,
 ) -> DurableNoteResult:
+    request = _request(pdf, request_id)
+    existing = store.run_by_request(A, request_id)
+    evidence = (
+        ()
+        if existing is None
+        else tuple(
+            GoodNotesSemanticPromotionEvidence(
+                principal_id=A,
+                run_id=existing.run_id,
+                proposal_sha256=semantic_proposal_sha256(*proposal),
+                disposition=Disposition.ACCEPT,
+            )
+            for proposal in store.semantic_proposals_for_run(A, existing.run_id)
+        )
+    )
     return GoodNotesDurableNoteOrchestrator(rollout_stage="new-only-summary-preview").run(
-        _request(pdf, request_id),
+        request,
         renderer=production_page_renderer(),
         splitter=split_admitted_pdf,
         store=store,
         clock=lambda: WHEN,
         fail_after=fail_after,
+        promotion_evidence=evidence,
     )
 
 

@@ -33,6 +33,7 @@ DISPOSABLE_DATABASE: Final = "my_pa_entities_graph_vocabulary_test"
 
 REVISION: Final = "c3f8a1d07e94"
 PREVIOUS_REVISION: Final = "b8e4d1a6c073"
+HEAD_REVISION: Final = "6a2f9d1c4b80"
 ADMITTED_CAPABILITY: Final = "entities.graph"
 SETTLED_CAPABILITY: Final = "capabilities.get"
 SETTLED_PURPOSE: Final = "status_observation"
@@ -98,13 +99,14 @@ def test_the_admitted_name_is_declared() -> None:
 def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> None:
     script = ScriptDirectory.from_config(_config())
     heads = list(script.get_heads())
-    assert heads == [REVISION], f"expected exactly {REVISION}, found {heads}"
+    assert heads == [HEAD_REVISION], f"expected exactly {HEAD_REVISION}, found {heads}"
     assert script.get_revision(REVISION).down_revision == PREVIOUS_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == REVISION
     with migrated_engine.begin() as connection:
         stamped = list(
             connection.execute(text("SELECT version_num FROM alembic_version")).scalars()
         )
-    assert stamped == [REVISION]
+    assert stamped == [HEAD_REVISION]
 
 
 def test_head_admits_entities_graph(migrated_engine: Engine) -> None:

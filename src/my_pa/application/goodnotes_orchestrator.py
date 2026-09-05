@@ -14,11 +14,12 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Protocol
 
+from my_pa.application.goodnotes import require_available_liveness
 from my_pa.application.goodnotes_delivery import (
     GoodNotesDeliveryAttemptLedger,
     GoodNotesDeliveryRepository,
     GoodNotesNewOnlyDelivery,
-    new_only_preview_digest,
+    existing_delivery_receipt,
 )
 from my_pa.application.goodnotes_lineage import (
     GoodNotesLineageRepository,
@@ -32,9 +33,11 @@ from my_pa.application.goodnotes_lineage import (
 from my_pa.application.goodnotes_occurrences import (
     GoodNotesOccurrenceReconciler,
     GoodNotesOccurrenceRepository,
+    GoodNotesSemanticPromotionEvidence,
 )
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import utc_now
+from my_pa.domain.goodnotes.liveness import GoodNotesSourceLivenessReceipt
 from my_pa.domain.goodnotes.models import (
     MAX_GOODNOTES_RASTER_BYTES,
     PIPELINE_STAGES,
@@ -152,6 +155,7 @@ class DurableNoteRequest:
     source_id: str
     source_version_id: str
     observation: ObservedNotebookFile
+    liveness: GoodNotesSourceLivenessReceipt
     pdf_bytes: bytes = field(repr=False)
     notebook_id: str | None = None
     label: str | None = None
@@ -207,6 +211,7 @@ class GoodNotesDurableNoteOrchestrator:
         clock: Callable[[], datetime] = utc_now,
         fail_after: GoodNotesPipelineStage | None = None,
         destination: str = PREVIEW_DESTINATION,
+        promotion_evidence: Sequence[GoodNotesSemanticPromotionEvidence] = (),
     ) -> DurableNoteResult:
         validate_identifier(request.principal_id, IdKind.PRINCIPAL)
         if self._rollout_stage == _TBR_STAGE:
@@ -214,6 +219,13 @@ class GoodNotesDurableNoteOrchestrator:
         if not request.pdf_bytes:
             raise ValueError("a durable-note run requires admitted PDF bytes")
         observed_at = request.observed_at or clock()
+        require_available_liveness(
+            request.liveness,
+            source_root_id=request.source_root_id,
+            relative_path=request.observation.relative_path,
+            content_sha256=request.observation.sha256,
+            at=observed_at,
+        )
         existing = store.run_by_request(request.principal_id, request.request_id)
         if existing is not None:
             _assert_ingestion_identity(existing, request, renderer)
@@ -350,6 +362,7 @@ class GoodNotesDurableNoteOrchestrator:
                     run.run_id,
                     repository=store,
                     clock=clock,
+                    promotion_evidence=promotion_evidence,
                 )
                 self._complete_stage(
                     store, run, GoodNotesPipelineStage.RECONCILE, observed_at, clock
@@ -768,8 +781,19 @@ def _assert_later_stage_consistency(
             if change.note_id is not None and store.note(run.principal_id, change.note_id) is None:
                 raise _consistency_error()
     if GoodNotesPipelineStage.PREVIEW in completed:
-        digest = new_only_preview_digest(run.principal_id, run.run_id, repository=store)
-        receipt = store.delivery_receipt_by_key(run.principal_id, run.run_id, destination, digest)
+        receipt = existing_delivery_receipt(
+            run.principal_id,
+            run.run_id,
+            destination,
+            repository=store,
+        )
+        if receipt is not None:
+            receipt = store.delivery_receipt_by_key(
+                run.principal_id,
+                run.run_id,
+                destination,
+                receipt.summary_hash,
+            )
         if receipt is None:
             raise _consistency_error()
         if run.status is GoodNotesIngestionStatus.FAILED:
@@ -809,6 +833,17 @@ def _is_terminal_preview(
         return False
     if run.status is GoodNotesIngestionStatus.FAILED:
         return False
-    digest = new_only_preview_digest(run.principal_id, run.run_id, repository=store)
-    receipt = store.delivery_receipt_by_key(run.principal_id, run.run_id, destination, digest)
+    receipt = existing_delivery_receipt(
+        run.principal_id,
+        run.run_id,
+        destination,
+        repository=store,
+    )
+    if receipt is not None:
+        receipt = store.delivery_receipt_by_key(
+            run.principal_id,
+            run.run_id,
+            destination,
+            receipt.summary_hash,
+        )
     return receipt is not None

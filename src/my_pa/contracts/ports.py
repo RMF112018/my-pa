@@ -92,6 +92,7 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesPageWork,
     GoodNotesReviewCase,
     GoodNotesSemanticProposal,
+    GoodNotesSemanticReviewCase,
 )
 from my_pa.domain.policy.decision import validate_policy_version
 from my_pa.domain.relationship.authoring import (
@@ -3835,9 +3836,9 @@ class ReviewDecisionRequest:
     """Everything one review transition needs inside a single transaction.
 
     **Two shapes of correction, and they never travel together.**
-    `corrected_value` is the capture and GoodNotes shape and is unchanged: those
-    subjects have one normalized value, so a correction to one is one bounded
-    string. `correction_patch` is the typed-target shape: Entity and Relationship
+    `corrected_value` is the capture and GoodNotes-region shape: those subjects
+    have one normalized value, so a correction to one is one bounded string.
+    `correction_patch` is the structured-target shape: semantic GoodNotes, Entity, and Relationship
     Memory proposals ask for mutations with *named arguments*, so a correction
     has to say which of them the reviewer changed, and it is routed and validated
     against that target command's schema by the plane that owns the subject before
@@ -3870,6 +3871,8 @@ class ReviewDecisionRequest:
     corrected_value: str | None = field(default=None, repr=False)
     correction_patch: CorrectionPatch | None = field(default=None, repr=False)
     reason: str | None = field(default=None, repr=False)
+    semantic_corrected_payload: dict[str, object] | None = field(default=None, repr=False)
+    semantic_corrected_result_sha256: str | None = field(default=None, repr=False)
 
     #: The dispositions section 13 gives a reason. `accept`,
     #: `correct_and_accept` and `reprocess` are deliberately absent.
@@ -3954,7 +3957,11 @@ class ReviewRepository(ABC):
         after_opened_at: datetime | None = None,
         after_review_case_id: str | None = None,
     ) -> tuple[
-        ReviewCase | GoodNotesReviewCase | RelationshipMemoryReviewCase | EntityProposalReviewCase,
+        ReviewCase
+        | GoodNotesReviewCase
+        | GoodNotesSemanticReviewCase
+        | RelationshipMemoryReviewCase
+        | EntityProposalReviewCase,
         ...,
     ]:
         """One bounded page for this Principal, oldest case first.
@@ -4478,6 +4485,139 @@ class ContinuityAuthoringRepository(ABC):
         """Create one accepted Task under a key this transaction already reserved."""
 
 
+class GoodNotesPullRepositoryConflictError(Exception):
+    """A durable claim or completion observed stale/concurrent state."""
+
+
+class GoodNotesPullCompletionConflictError(Exception):
+    """A completion identity was replayed with different result material."""
+
+
+class GoodNotesSemanticReviewConflictError(Exception):
+    """A semantic-review identity was replayed with a different decision."""
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesPullWorkStateRecord:
+    work: GoodNotesPageWork
+    attempts: int = 0
+    completed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesPullAssignmentRecord:
+    assignment_id: str
+    client_id: str
+    context_id: str
+    work: GoodNotesPageWork
+    attempt: int
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesPullCompletionMaterial:
+    """Content-free proposal identity bound to one authenticated assignment."""
+
+    assignment_id: str
+    proposal_id: str
+    run_id: str
+    page_version_id: str
+    content_sha256: str
+    proposal_sha256: str
+    result_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesSemanticProposalMaterial:
+    """Server-only immutable semantic proposal content for governed correction."""
+
+    proposal_id: str
+    run_id: str
+    page_version_id: str
+    content_sha256: str
+    schema_version: str
+    analyzer_name: str
+    analyzer_version: str
+    payload: dict[str, object] = field(repr=False)
+
+
+class GoodNotesPullCompletionValue(Protocol):
+    @property
+    def assignment_id(self) -> str: ...
+
+    @property
+    def run_id(self) -> str: ...
+
+    @property
+    def page_version_id(self) -> str: ...
+
+    @property
+    def content_sha256(self) -> str: ...
+
+    @property
+    def result_sha256(self) -> str: ...
+
+    @property
+    def idempotency_key(self) -> str: ...
+
+
+class GoodNotesPullCompletionAdmissionValue(Protocol):
+    @property
+    def completion(self) -> GoodNotesPullCompletionValue: ...
+
+    @property
+    def request_fingerprint(self) -> str: ...
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesPullCompletionReceiptRecord:
+    completion_id: str
+    assignment_id: str
+    idempotency_key: str
+    request_fingerprint: str
+    result_sha256: str
+    replayed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesPullStatusRecord:
+    pending: int
+    assigned: int
+    completed: int
+    exhausted: int
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesSemanticPromotionEvidenceRecord:
+    """Persisted review evidence bound to one Principal and ingestion run."""
+
+    principal_id: str
+    run_id: str
+    proposal_sha256: str
+    disposition: Disposition
+    corrected_payload: dict[str, object] | None = field(default=None, repr=False)
+    result_sha256: str | None = None
+
+    def is_bound_to(self, principal_id: str, run_id: str) -> bool:
+        """Match the application evidence contract at the persistence boundary."""
+        return self.principal_id == principal_id and self.run_id == run_id
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesSemanticReviewDecisionRecord:
+    decision_id: str
+    principal_id: str
+    run_id: str
+    proposal_id: str
+    proposal_sha256: str
+    action: str
+    request_fingerprint: str
+    decided_at: datetime
+    corrected_payload: dict[str, object] | None = field(default=None, repr=False)
+    corrected_result_sha256: str | None = None
+    sequence: int | None = None
+    replayed: bool = False
+
+
 class UnitOfWork(ABC):
     """One transaction, and the repositories that run inside it.
 
@@ -4752,6 +4892,16 @@ class UnitOfWork(ABC):
         parameter on every method and is the authenticated caller's partition,
         never a caller-supplied field.
         """
+
+    @property
+    def goodnotes_pull(self) -> object:
+        """Optional durable GoodNotes pull ledger inside this transaction.
+
+        The application layer narrows this object to its bounded pull protocol;
+        keeping that protocol inward avoids making contracts depend outward on
+        an application module. Production composition overrides this property.
+        """
+        raise NotImplementedError
 
     def intelligence_for(self, principal_id: str) -> object:
         """Intelligence Artifact store for the authenticated Principal.

@@ -108,7 +108,9 @@ def succeeded(envelope: ResponseEnvelope) -> dict[str, object]:
 # ---- capabilities.get ------------------------------------------------------
 
 
-def test_capabilities_get_reports_every_capability_as_available(scene: Scene) -> None:
+def test_capabilities_get_reports_phase_a_pull_contracts_as_not_implemented(
+    scene: Scene,
+) -> None:
     service = build_service(scene.world, scene.providers)
     result = succeeded(
         run(
@@ -123,7 +125,19 @@ def test_capabilities_get_reports_every_capability_as_available(scene: Scene) ->
     assert isinstance(manifest, dict)
     availability = {c["name"]: c["availability"] for c in manifest["capabilities"]}
     assert set(availability) == {c.value for c in Capability}
-    assert set(availability.values()) == {Availability.AVAILABLE.value}
+    contract_only = {
+        Capability.GOODNOTES_PULL.value,
+        Capability.GOODNOTES_COMPLETE.value,
+        Capability.GOODNOTES_STATUS.value,
+    }
+    assert {
+        name for name, state in availability.items() if state == Availability.NOT_IMPLEMENTED.value
+    } == contract_only
+    assert all(
+        state == Availability.AVAILABLE.value
+        for name, state in availability.items()
+        if name not in contract_only
+    )
 
 
 def test_readiness_stops_reporting_contracts_only_because_the_manifest_is_derived(
@@ -143,7 +157,7 @@ def test_readiness_stops_reporting_contracts_only_because_the_manifest_is_derive
     readiness = result["readiness"]
     assert isinstance(readiness, dict)
     assert readiness["state"] == ReadinessState.DEGRADED.value
-    assert readiness["implemented_capabilities"] == len(Capability)
+    assert readiness["implemented_capabilities"] == len(Capability) - 3
     assert readiness["limitations"]
     assert "Worker-plane health" in readiness["limitations"][-1]
     assert result["worker_planes"] == [

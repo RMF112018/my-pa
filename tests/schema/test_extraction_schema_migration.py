@@ -422,6 +422,17 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "entity_assertion_evidence",
         }
     ),
+    # GoodNotes completion's Principal/client pull plane and durable semantic
+    # Review ledger, additive on the post-RI head and creating nothing else.
+    "6a2f9d1c4b80": frozenset(
+        {
+            "goodnotes_pull_sessions",
+            "goodnotes_pull_claims",
+            "goodnotes_pull_assignments",
+            "goodnotes_pull_completions",
+            "goodnotes_semantic_review_decisions",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

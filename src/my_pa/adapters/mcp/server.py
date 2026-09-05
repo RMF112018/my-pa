@@ -84,7 +84,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -119,7 +119,7 @@ from my_pa.application.errors import (
     UnsupportedError,
     problem_detail,
 )
-from my_pa.application.service import ApplicationService
+from my_pa.application.service import ApplicationService, published_capabilities
 from my_pa.contracts.v1.errors import ProblemDetail
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.common.identifiers import IdKind
@@ -146,6 +146,7 @@ class McpAccess:
     transport: CaptureTransport = CaptureTransport.LOCAL
     compact_publication: bool = False
     allowed_canonical_targets: frozenset[str] | None = None
+    authenticated_client_id: str | None = field(default=None, repr=False)
 
 
 def _document(arguments: Mapping[str, Any] | None) -> Mapping[str, Any]:
@@ -290,6 +291,7 @@ def _answer(
     allowed_capability_purposes: frozenset[tuple[Capability, Purpose | None]] | None = None,
     clock: Callable[[], datetime] = utc_now,
     canonical_targets: frozenset[str] | None = None,
+    authenticated_client_id: str | None = None,
 ) -> tuple[str, bool, ImageContent | None]:
     """One tool call, executed synchronously: text, failure flag, optional image.
 
@@ -351,6 +353,7 @@ def _answer(
             principal=principal,
             transport=transport,
             capability_grants=allowed_capability_purposes,
+            authenticated_client_id=authenticated_client_id,
         )
     except Exception:
         return _problem(InternalError()).to_canonical_json(), True, None
@@ -364,7 +367,9 @@ def _answer(
     return _problem(InternalError()).to_canonical_json(), True, None
 
 
-def published_tools(service: ApplicationService) -> tuple[Tool, ...]:
+def published_tools(
+    service: ApplicationService, *, authenticated_client_present: bool = False
+) -> tuple[Tool, ...]:
     """The tools this *composed* process can actually serve.
 
     `TOOLS` is derived from the capability set at import and is what the build
@@ -380,7 +385,12 @@ def published_tools(service: ApplicationService) -> tuple[Tool, ...]:
     capability, and whether it is operator-only, stay behind `invoke`; this reads
     only whether the process was composed with what the capability needs.
     """
-    available = {capability.value for capability in service.available_capabilities}
+    available = {
+        capability.value
+        for capability in published_capabilities(
+            service, authenticated_client_present=authenticated_client_present
+        )
+    }
     return tuple(tool for tool in TOOLS if tool.name in available)
 
 
@@ -454,7 +464,10 @@ def create_mcp_server(
         if access.compact_publication:
             tools = compact_tools(access.allowed_tools or frozenset())
         else:
-            tools = published_tools(service)
+            tools = published_tools(
+                service,
+                authenticated_client_present=access.authenticated_client_id is not None,
+            )
             if access.allowed_tools is not None:
                 tools = tuple(tool for tool in tools if tool.name in access.allowed_tools)
         if access.transport is CaptureTransport.REMOTE_CLIENT:
@@ -471,7 +484,15 @@ def create_mcp_server(
     ) -> CallToolResult:
         """`tools/call`. The one `await` in this package."""
         access = _access(context)
-        published = {tool.name for tool in published_tools(service)}
+        published = {
+            tool.name
+            for tool in published_tools(
+                service,
+                authenticated_client_present=(
+                    access is not None and access.authenticated_client_id is not None
+                ),
+            )
+        }
         if access is not None and access.compact_publication:
             remote_refusal = (
                 access.allowed_tools is not None and params.name not in access.allowed_tools
@@ -520,6 +541,7 @@ def create_mcp_server(
             access.allowed_capability_purposes,
             clock,
             access.allowed_canonical_targets if access.compact_publication else None,
+            access.authenticated_client_id,
         )
         release_here = True
         try:

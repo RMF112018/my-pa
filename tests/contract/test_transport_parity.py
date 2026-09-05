@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-one hundred and twenty-five capabilities. There are two ways to prove that and only one stays
+one hundred and twenty-eight capabilities. There are two ways to prove that and only one stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -27,7 +27,7 @@ as bytes: `RequestMetadata` through the contract's own canonical encoding, the
 command through its fields.
 
 **And the answers, over every fully composed capability and ten refusals.** A
-default composition exposes fifty-five: the six managed-document names, the
+default composition exposes fifty-eight: the six managed-document names, the
 fifty-five `entities.` names and the nine Relationship Memory names are
 withheld without their explicit configuration, and this harness sets all of
 them — including `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED`, which is a
@@ -1089,6 +1089,9 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
                 }
             ],
         },
+        Capability.GOODNOTES_PULL: {"batch_size": 1},
+        Capability.GOODNOTES_COMPLETE: {"assignment_ids": ["a" * 64]},
+        Capability.GOODNOTES_STATUS: {},
         Capability.GSQS_START: {
             "authorization_id": "synthetic-b0-commissioning",
             "campaign_class": "SYNTHETIC",
@@ -1756,8 +1759,8 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    # The one hundred and twenty-five commands and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 126, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    # The one hundred and twenty-eight commands and `RequestMetadata` beside them.
+    assert len(REQUEST_VALUES) == 129, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -2064,9 +2067,9 @@ def assert_same_answer(
     assert len(set(signals.values())) == 1, f"{where}: transports disagreed on success {signals}"
 
 
-#: The governed identity-correction capabilities, which this matrix compares a *refusal* for
-#: rather than an answer, because
-#: the harness composes no governed merge/split ledger. Named rather than skipped, so the
+#: Capabilities this matrix compares a *refusal* for rather than an answer.
+#: The harness composes neither a governed merge/split ledger nor the
+#: authenticated GoodNotes pull plane. Named rather than skipped, so the
 #: comparison below still covers them and the reason is legible.
 UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
     {
@@ -2074,6 +2077,9 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
         Capability.ENTITIES_MERGE,
         Capability.ENTITIES_SPLIT_PREVIEW,
         Capability.ENTITIES_SPLIT,
+        Capability.GOODNOTES_PULL,
+        Capability.GOODNOTES_COMPLETE,
+        Capability.GOODNOTES_STATUS,
     }
 )
 
@@ -2100,18 +2106,17 @@ def test_every_capability_answers_identically_over_all_three_transports(
 
 
 @pytest.mark.parametrize("capability", sorted(UNCOMPOSED_HERE), ids=lambda c: c.value)
-def test_governed_identity_correction_refuses_identically_over_all_three_transports(
+def test_uncomposed_capabilities_refuse_identically_over_all_three_transports(
     capability: Capability, staged: tuple[Scene, KnowledgeRecord]
 ) -> None:
-    """`SPEC-AC-001` for governed identity correction, which this harness does not compose.
+    """`SPEC-AC-001` for capabilities this harness does not compose.
 
     A refusal is an answer, and the claim `SPEC-AC-001` makes is about the
     application's semantics reaching every transport unchanged -- so the row that
     matters for these capabilities is that all three refuse, refuse for the same reason,
     and refuse in the same envelope. That is also the only end-to-end evidence
-    there is that `MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED` gates the HTTP
-    path, which routes by path segment straight into `_HANDLERS` and never reads
-    `available_capabilities`.
+    there is that composition switches gate the HTTP path, which routes by path
+    segment straight into `_HANDLERS` and never reads `available_capabilities`.
 
     `unsupported` and not `denied`: a process without the switch has no governed
     merge, which is a fact about the build rather than a shortfall in the

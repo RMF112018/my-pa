@@ -258,6 +258,9 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.CONTEXT_FEEDBACK, Purpose.CONTEXT_PREFERENCE),
         (Capability.GOODNOTES_WORK, Purpose.GOODNOTES_WORK),
         (Capability.GOODNOTES_CONTENT, Purpose.GOODNOTES_CONTENT),
+        (Capability.GOODNOTES_PULL, Purpose.GOODNOTES_PULL),
+        (Capability.GOODNOTES_COMPLETE, Purpose.GOODNOTES_PULL),
+        (Capability.GOODNOTES_STATUS, Purpose.GOODNOTES_PULL_OBSERVATION),
         (Capability.GOODNOTES_PROPOSE, Purpose.GOODNOTES_PROPOSAL),
         (Capability.GSQS_START, Purpose.GSQS_B0_EXECUTION),
         (Capability.GSQS_STATUS, Purpose.GSQS_B0_OBSERVATION),
@@ -408,11 +411,12 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # the `entity_authoring` the plane's other writes already use, so it
     # contributes one pair per capability rather than the thirty-four a cross
     # product would give.
-    # `UI-IMP-WP15` adds `entities.graph` under the `entity_read` the plane's
-    # other reads already use, so it contributes one pair.
-    # Unioned: 125 capabilities, 34 purposes, 127 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 127
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 127 == 4123
+    # GoodNotes pull adds its pull, complete, and status capabilities under its
+    # pull and observation purposes, producing three permitted pairs.
+    # `UI-IMP-WP15` adds `entities.graph` under `entity_read`.
+    # Unioned: 128 capabilities, 36 purposes, 130 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 130
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 130 == 4478
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

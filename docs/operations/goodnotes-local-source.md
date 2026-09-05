@@ -65,6 +65,18 @@ admitted bytes and are never used as visual identity. `raw-representation-v1`
 and mapped test doubles remain explicit non-default profiles. Live GoodNotes
 activation remains deferred.
 
+The observer also exposes an explicit, caller-timed liveness receipt for one
+named relative path. A newly missing path is `MISSING`; continued absence past
+the caller-supplied last-seen interval is `STALE`. The first successful
+observation after either state is `REAPPEARED`, carrying
+whether its bytes changed from the last known digest. Only `AVAILABLE` is
+eligible by that receipt alone; missing, stale, and reappeared observations do
+not silently become ingestion success or reuse prior identity. `REAPPEARED`
+persists until a caller explicitly acknowledges the exact reappeared SHA-256;
+the acknowledgment clears the state only if a new settled read still has those
+exact bytes. The caller owns the staleness interval, so repository code does
+not freeze an unsupported operational polling choice.
+
 Live GoodNotes root admission, OCR engine selection/licensing, background
 watcher activation, personal-data eligibility, and production database use
 remain operator-gated. Repository tests use synthetic vector PDFs (byte-different, visually

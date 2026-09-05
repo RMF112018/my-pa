@@ -798,38 +798,41 @@ class PostgresGoodNotesRepository:
             bound_identity,
             "page version",
         )
-        if (
-            stored.logical_page_id != version.logical_page_id
-            or stored.exact_render_sha256 != version.exact_render_sha256
-            or stored.normalized_render_sha256 != version.normalized_render_sha256
-            or stored.perceptual_hash != version.perceptual_hash
-            or stored.render_width != version.render_width
-            or stored.render_height != version.render_height
-            or stored.renderer_name != version.renderer_name
-            or stored.renderer_version != version.renderer_version
-            or stored.render_profile_version != version.render_profile_version
-        ):
-            if stored.logical_page_id not in {None, version.logical_page_id}:
+        render_fields = (
+            ("logical_page_id", stored.logical_page_id, version.logical_page_id),
+            ("exact_render_sha256", stored.exact_render_sha256, version.exact_render_sha256),
+            (
+                "normalized_render_sha256",
+                stored.normalized_render_sha256,
+                version.normalized_render_sha256,
+            ),
+            ("perceptual_hash", stored.perceptual_hash, version.perceptual_hash),
+            ("render_width", stored.render_width, version.render_width),
+            ("render_height", stored.render_height, version.render_height),
+            ("renderer_name", stored.renderer_name, version.renderer_name),
+            ("renderer_version", stored.renderer_version, version.renderer_version),
+            (
+                "render_profile_version",
+                stored.render_profile_version,
+                version.render_profile_version,
+            ),
+        )
+        backfill: dict[str, object] = {}
+        for name, held, supplied in render_fields:
+            if held is not None and held != supplied:
                 raise ValueError(
                     "the stable GoodNotes page version identity collided with other content"
                 )
+            if held is None and supplied is not None:
+                backfill[name] = supplied
+        if backfill:
             self.connection.execute(
                 update(goodnotes_page_versions)
                 .where(
                     _mine(goodnotes_page_versions, principal_id),
                     goodnotes_page_versions.c.page_version_id == version.page_version_id,
                 )
-                .values(
-                    logical_page_id=version.logical_page_id,
-                    exact_render_sha256=version.exact_render_sha256,
-                    normalized_render_sha256=version.normalized_render_sha256,
-                    perceptual_hash=version.perceptual_hash,
-                    render_width=version.render_width,
-                    render_height=version.render_height,
-                    renderer_name=version.renderer_name,
-                    renderer_version=version.renderer_version,
-                    render_profile_version=version.render_profile_version,
-                )
+                .values(**backfill)
             )
             stored = self.page_version(principal_id, version.page_version_id)
             if stored is None:

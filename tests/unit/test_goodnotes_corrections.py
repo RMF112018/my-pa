@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 import pytest
@@ -177,6 +177,69 @@ def test_missing_occurrence_and_transcription_fail_closed() -> None:
             clock=lambda: WHEN,
         )
     assert len(present.revisions) == 1
+
+
+@pytest.mark.parametrize(
+    "identity_status",
+    (GoodNotesIdentityStatus.AMBIGUOUS, GoodNotesIdentityStatus.RETIRED),
+)
+def test_correction_rejects_non_active_occurrence_without_writing(
+    identity_status: GoodNotesIdentityStatus,
+) -> None:
+    repo = _FakeCorrectionRepository(
+        principal_id=A,
+        stored_occurrence=replace(_occurrence(), identity_status=identity_status),
+        revisions=[_original()],
+    )
+    with pytest.raises(ValueError, match="not eligible for correction"):
+        GoodNotesCorrectionService().apply(
+            A,
+            OCCURRENCE,
+            transcription="synthetic correction",
+            repository=repo,
+            clock=lambda: WHEN,
+        )
+    assert [item.revision_id for item in repo.revisions] == [ORIGINAL]
+
+
+def test_correction_rejects_mismatched_revision_trace_without_writing() -> None:
+    mismatched = replace(_original(), note_id=issue_stable_id("gnnt", "other-note"))
+    repo = _FakeCorrectionRepository(
+        principal_id=A,
+        stored_occurrence=_occurrence(),
+        revisions=[mismatched],
+    )
+    with pytest.raises(ValueError, match="trace does not match its occurrence"):
+        GoodNotesCorrectionService().apply(
+            A,
+            OCCURRENCE,
+            transcription="synthetic correction",
+            repository=repo,
+            clock=lambda: WHEN,
+        )
+    assert repo.revisions == [mismatched]
+
+
+def test_correction_preserves_page_and_snapshot_trace() -> None:
+    page_version = issue_stable_id("gnver", "correction-trace")
+    snapshot = issue_stable_id("gnsnap", "correction-trace")
+    occurrence = replace(_occurrence(), page_version_id=page_version, snapshot_id=snapshot)
+    original = replace(_original(), page_version_id=page_version, snapshot_id=snapshot)
+    repo = _FakeCorrectionRepository(
+        principal_id=A,
+        stored_occurrence=occurrence,
+        revisions=[original],
+    )
+    result = GoodNotesCorrectionService().apply(
+        A,
+        OCCURRENCE,
+        transcription="synthetic correction",
+        repository=repo,
+        clock=lambda: WHEN,
+    )
+    assert result.revision.page_version_id == page_version
+    assert result.revision.snapshot_id == snapshot
+    assert result.revision.supersedes_revision_id == original.revision_id
 
 
 def test_optional_link_is_appended_without_replacing_the_revision_chain() -> None:

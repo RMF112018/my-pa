@@ -1,10 +1,10 @@
 """The all-capability child process is given every switch that withholds a capability.
 
-`tests/contract/test_mcp_transport.py::test_a_child_with_a_managed_root_publishes_every_capability`
-is the only place in this repository where a **real** composition root is started
-with everything turned on and asked to publish the whole capability set. Its
-claim -- "every capability" -- holds only if the environment it hands the child
-turns on every switch `ApplicationService.available_capabilities` subtracts on.
+`tests/contract/test_mcp_transport.py::test_a_child_with_a_managed_root_publishes_every_locally_available_capability`
+is the only place in this repository where a **real** local composition root is
+started with every local plane turned on and asked to publish its whole locally
+available capability set. Its claim holds only if the environment it hands the
+child turns on every switch `ApplicationService.available_capabilities` subtracts on.
 
 That list was written out by hand, and Phase B broke it: a fourth relationship
 switch was added, `available_capabilities` grew a fourth subtraction, and the
@@ -58,7 +58,9 @@ _MANAGED_ROOT_VARIABLE: Final = f"{ENV_PREFIX}MANAGED_DOCUMENT_ROOT"
 
 #: The module and function whose environment is under audit.
 _TRANSPORT_TEST_PATH: Final = Path(__file__).with_name("test_mcp_transport.py")
-_TRANSPORT_TEST_NAME: Final = "test_a_child_with_a_managed_root_publishes_every_capability"
+_TRANSPORT_TEST_NAME: Final = (
+    "test_a_child_with_a_managed_root_publishes_every_locally_available_capability"
+)
 
 
 def _service_tree() -> ast.Module:
@@ -158,7 +160,7 @@ def test_the_derivation_finds_the_switches_the_published_surface_branches_on() -
     """
     variables = _switch_variables()
     assert variables, "no switch narrows the published surface, so this module proves nothing"
-    assert len(variables) == 4, (
+    assert len(variables) == 5, (
         "the published surface is narrowed by a different number of switches than "
         f"this guard knows about: {sorted(variables)}"
     )
@@ -167,6 +169,7 @@ def test_the_derivation_finds_the_switches_the_published_surface_branches_on() -
         "relationship_intelligence_writes_enabled",
         "relationship_memory_enabled",
         "relationship_identity_correction_enabled",
+        "goodnotes_pull_enabled",
     }
 
 
@@ -185,9 +188,9 @@ def test_every_switch_is_a_boolean_an_operator_can_set() -> None:
 def test_the_all_capability_child_is_given_every_switch() -> None:
     """The claim this module exists for.
 
-    `test_a_child_with_a_managed_root_publishes_every_capability` asserts the
-    child publishes the whole of `Capability`. That is only a statement about
-    the child if the child was composed for the whole of it.
+    `test_a_child_with_a_managed_root_publishes_every_locally_available_capability`
+    asserts the child publishes the whole local surface. That is only a statement
+    about the child if the child was composed for every local plane.
     """
     handed = _environment_names_in_the_transport_test()
     missing = sorted(variable for variable in _switch_variables() if variable not in handed)

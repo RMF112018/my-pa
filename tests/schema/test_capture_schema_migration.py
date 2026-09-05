@@ -29,7 +29,7 @@ this one exists.
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
 emits what it emitted on the day it merged, with one hundred one capabilities and
-thirty-four purposes now declared in the domain. If this reddens, the freeze has been undone
+thirty-six purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
 
@@ -237,6 +237,11 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "goodnotes.work",
         # RWP-02. `a4d9c2e7b815` is the forward `ALTER` that admits it.
         "goodnotes.content",
+        # GoodNotes completion. `6a2f9d1c4b80` admits the authenticated
+        # Principal/client pull plane.
+        "goodnotes.pull",
+        "goodnotes.complete",
+        "goodnotes.status",
         "reports.begin_cycle",
         "reports.commit",
         "reports.latest",
@@ -1102,6 +1107,11 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             "goodnotes_entity_associations_are_immutable",
             "goodnotes_delivery_receipts_are_immutable",
             "goodnotes_delivery_attempts_are_immutable",
+            "goodnotes_pull_sessions_are_immutable",
+            "goodnotes_pull_claims_are_immutable",
+            "goodnotes_pull_assignments_are_immutable",
+            "goodnotes_pull_completions_are_immutable",
+            "goodnotes_semantic_review_decisions_are_immutable",
         }
         for name in ("a_proposal_cites_at_least_one_span", "a_span_link_leaves_its_proposal_cited"):
             assert "CONSTRAINT TRIGGER" in triggers[name]

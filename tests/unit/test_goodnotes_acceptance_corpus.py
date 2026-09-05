@@ -20,7 +20,12 @@ from my_pa.application.goodnotes_delivery import (
     GoodNotesNewOnlyDelivery,
     build_new_only_summary,
 )
-from my_pa.application.goodnotes_occurrences import GoodNotesOccurrenceReconciler
+from my_pa.application.goodnotes_occurrences import (
+    GoodNotesOccurrenceReconciler,
+    GoodNotesSemanticPromotionEvidence,
+    semantic_proposal_sha256,
+)
+from my_pa.domain.capture.review import Disposition
 from my_pa.domain.goodnotes.models import (
     GoodNotesEntityDirectoryRecord,
     GoodNotesEntityKind,
@@ -84,6 +89,20 @@ def _production() -> PdfiumNormalizedRenderer:
     assert renderer.profile_version == PDFIUM_NORMALIZED_PROFILE
     assert not isinstance(renderer, MappedPageRenderer)
     return renderer
+
+
+def _accepted_evidence(
+    store: MemoryDurableNoteStore, principal_id: str, run_id: str
+) -> tuple[GoodNotesSemanticPromotionEvidence, ...]:
+    return tuple(
+        GoodNotesSemanticPromotionEvidence(
+            principal_id=principal_id,
+            run_id=run_id,
+            proposal_sha256=semantic_proposal_sha256(*proposal),
+            disposition=Disposition.ACCEPT,
+        )
+        for proposal in store.semantic_proposals_for_run(principal_id, run_id)
+    )
 
 
 def test_a_byte_different_visually_equivalent_pdfs_share_normalized_identity() -> None:
@@ -221,7 +240,11 @@ def test_c_note_unit_novelty_is_crop_grounded_not_agent_geometry() -> None:
         {"segments": [_segment(x_min=0.1, transcription="same ink", crop_sha256=AGENT_CROP)]},
     )
     first = GoodNotesOccurrenceReconciler().reconcile(
-        GROUNDING_A, first_run, repository=store, clock=lambda: GROUNDING_LATER
+        GROUNDING_A,
+        first_run,
+        repository=store,
+        promotion_evidence=_accepted_evidence(store, GROUNDING_A, first_run),
+        clock=lambda: GROUNDING_LATER,
     )
     assert [item.change_state for item in first.changes] == [GoodNotesNoteChangeState.NEW]
     stored = store.occurrence(GROUNDING_A, first.changes[0].occurrence_id)  # type: ignore[arg-type]
@@ -242,7 +265,11 @@ def test_c_note_unit_novelty_is_crop_grounded_not_agent_geometry() -> None:
         {"segments": [_segment(x_min=0.1, transcription="same ink", crop_sha256=OTHER_AGENT_CROP)]},
     )
     second = GoodNotesOccurrenceReconciler().reconcile(
-        GROUNDING_A, second_run, repository=store, clock=lambda: GROUNDING_LATER
+        GROUNDING_A,
+        second_run,
+        repository=store,
+        promotion_evidence=_accepted_evidence(store, GROUNDING_A, second_run),
+        clock=lambda: GROUNDING_LATER,
     )
     assert GoodNotesNoteChangeState.NEW not in {item.change_state for item in second.changes}
     assert len(store._notes) == 1
@@ -259,7 +286,11 @@ def test_c_note_unit_novelty_is_crop_grounded_not_agent_geometry() -> None:
         {"segments": [_segment(x_min=0.6, transcription="ghost on white", crop_sha256=AGENT_CROP)]},
     )
     ghost = GoodNotesOccurrenceReconciler().reconcile(
-        GROUNDING_A, white_run, repository=white, clock=lambda: GROUNDING_LATER
+        GROUNDING_A,
+        white_run,
+        repository=white,
+        promotion_evidence=_accepted_evidence(white, GROUNDING_A, white_run),
+        clock=lambda: GROUNDING_LATER,
     )
     assert [item.change_state for item in ghost.changes] == [GoodNotesNoteChangeState.AMBIGUOUS]
     assert ghost.changes[0].note_id is None
@@ -331,7 +362,11 @@ def test_i_mixed_page_note_unit_v2_candidates_do_not_cross_contaminate() -> None
         },
     )
     minted = GoodNotesOccurrenceReconciler().reconcile(
-        GROUNDING_A, run_id, repository=store, clock=lambda: GROUNDING_LATER
+        GROUNDING_A,
+        run_id,
+        repository=store,
+        promotion_evidence=_accepted_evidence(store, GROUNDING_A, run_id),
+        clock=lambda: GROUNDING_LATER,
     )
     assert [item.change_state for item in minted.changes] == [
         GoodNotesNoteChangeState.NEW,
@@ -467,7 +502,11 @@ def test_j_unreadable_or_empty_transcription_does_not_mint_new() -> None:
         },
     )
     invented_result = GoodNotesOccurrenceReconciler().reconcile(
-        GROUNDING_A, run_id, repository=invented, clock=lambda: GROUNDING_LATER
+        GROUNDING_A,
+        run_id,
+        repository=invented,
+        promotion_evidence=_accepted_evidence(invented, GROUNDING_A, run_id),
+        clock=lambda: GROUNDING_LATER,
     )
     assert [item.change_state for item in invented_result.changes] == [
         GoodNotesNoteChangeState.AMBIGUOUS
@@ -489,7 +528,11 @@ def test_j_unreadable_or_empty_transcription_does_not_mint_new() -> None:
         {"segments": [_segment(x_min=0.1, transcription="", transcription_status="UNREADABLE")]},
     )
     empty_result = GoodNotesOccurrenceReconciler().reconcile(
-        GROUNDING_A, empty_run, repository=empty, clock=lambda: GROUNDING_LATER
+        GROUNDING_A,
+        empty_run,
+        repository=empty,
+        promotion_evidence=_accepted_evidence(empty, GROUNDING_A, empty_run),
+        clock=lambda: GROUNDING_LATER,
     )
     assert [item.change_state for item in empty_result.changes] == [
         GoodNotesNoteChangeState.AMBIGUOUS
@@ -534,7 +577,7 @@ def test_r_historical_new_only_summary_stays_bound_to_run_revision() -> None:
         stored_run=_run(),
         changes=(change,),
         occurrences={change.occurrence_id: _occurrence("corpus-r", page)},
-        revisions={bound.revision_id: bound, later.revision_id: later},
+        revisions={bound.revision_id: bound},
     )
     first = GoodNotesNewOnlyDelivery().deliver(
         DELIVERY_A, RUN, DESTINATION, repository=repo, clock=lambda: DELIVERY_WHEN
@@ -542,6 +585,7 @@ def test_r_historical_new_only_summary_stays_bound_to_run_revision() -> None:
     assert first.receipt.body is not None
     assert "synthetic original" in first.receipt.body
     assert "synthetic corrected" not in first.receipt.body
+    repo.revisions[later.revision_id] = later
     second = GoodNotesNewOnlyDelivery().deliver(
         DELIVERY_A, RUN, DESTINATION, repository=repo, clock=lambda: DELIVERY_LATER
     )
@@ -566,13 +610,21 @@ def test_m_duplicate_run_retry_does_not_create_extra_note_rows() -> None:
     )
     reconciler = GoodNotesOccurrenceReconciler()
     first = reconciler.reconcile(
-        GROUNDING_A, run_id, repository=store, clock=lambda: GROUNDING_LATER
+        GROUNDING_A,
+        run_id,
+        repository=store,
+        promotion_evidence=_accepted_evidence(store, GROUNDING_A, run_id),
+        clock=lambda: GROUNDING_LATER,
     )
     assert [item.change_state for item in first.changes] == [GoodNotesNoteChangeState.NEW]
     notes_after_first = len(store._notes)
     changes_after_first = len(store.run_note_changes(GROUNDING_A, run_id))
     second = reconciler.reconcile(
-        GROUNDING_A, run_id, repository=store, clock=lambda: GROUNDING_LATER
+        GROUNDING_A,
+        run_id,
+        repository=store,
+        promotion_evidence=_accepted_evidence(store, GROUNDING_A, run_id),
+        clock=lambda: GROUNDING_LATER,
     )
     assert second.replayed is True
     assert [item.change_id for item in second.changes] == [item.change_id for item in first.changes]
@@ -649,7 +701,11 @@ def test_release_floor_fabricated_unreadable_is_zero() -> None:
         },
     )
     result = GoodNotesOccurrenceReconciler().reconcile(
-        GROUNDING_A, run_id, repository=store, clock=lambda: GROUNDING_LATER
+        GROUNDING_A,
+        run_id,
+        repository=store,
+        promotion_evidence=_accepted_evidence(store, GROUNDING_A, run_id),
+        clock=lambda: GROUNDING_LATER,
     )
     assert GoodNotesNoteChangeState.NEW not in {item.change_state for item in result.changes}
     assert store._notes == {}

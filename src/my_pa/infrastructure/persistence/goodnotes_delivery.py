@@ -62,6 +62,11 @@ class PostgresGoodNotesDeliveryRepository:
     def revision(self, principal_id: str, revision_id: str) -> GoodNotesNoteRevision | None:
         return self._notes.revision(principal_id, revision_id)
 
+    def latest_revision_for_occurrence(
+        self, principal_id: str, occurrence_id: str
+    ) -> GoodNotesNoteRevision | None:
+        return self._notes.latest_revision_for_occurrence(principal_id, occurrence_id)
+
     def semantic_proposals_for_run(
         self, principal_id: str, run_id: str
     ) -> tuple[tuple[str, str, str, str, dict[str, object]], ...]:

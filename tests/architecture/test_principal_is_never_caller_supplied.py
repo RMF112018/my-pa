@@ -524,13 +524,14 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("held", "principal_id"),
     )
     + (("request", "principal_id"),) * 12,
-    # The one read in the application service is the same value on the way back
+    # These reads in the application service are the same value on the way back
     # out: `_review_decide` builds the request from
     # `authorization.principal.principal_id` on the line above and then hands
     # the field to the router that decides which plane owns the case. Reading
     # the request rather than the authorization a second time is what keeps the
-    # routing read and the decision that follows it provably the same Principal.
-    "application/service.py": (("request", "principal_id"),),
+    # routing and semantic proposal reads and the decision that follows them
+    # provably the same Principal.
+    "application/service.py": (("request", "principal_id"),) * 3,
     # `WP-RI-B-05`'s Review SQL for the entity plane. Neither read is a caller's
     # statement: `decision.principal_id` is checked *against* the acting
     # Principal and the write is refused on a mismatch -- the same shape
@@ -885,6 +886,27 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("values", "principal_id"),
         ("values", "principal_id"),
     ),
+    # GoodNotes pull work and semantic decisions are not public payloads: the
+    # service resolves the authenticated Principal/client context, and the
+    # repository constructs or reloads these records inside that partition.
+    # The request reads belong to the authenticated unified Review capability;
+    # the decision/work/row/value reads recheck server-composed or persisted
+    # records before admitting a claim, replay, or review-ledger write.
+    "infrastructure/persistence/goodnotes_pull.py": (
+        ("decision", "principal_id"),
+        ("decision", "principal_id"),
+        ("decision", "principal_id"),
+        ("decision", "principal_id"),
+        ("decision", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("row", "principal_id"),
+        ("value", "principal_id"),
+        ("work", "principal_id"),
+    ),
     # The request Principal is produced by the authenticated Review capability;
     # every dispatch probe and the selected repository reapply the partition.
     # Two reads, one per probe: the canonical Review surface now routes three
@@ -892,6 +914,7 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # theirs *within this Principal's partition* — which is also what makes a
     # foreign case answer "no such case" rather than "not yours".
     "infrastructure/persistence/unit_of_work.py": (
+        ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
     ),

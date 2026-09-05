@@ -15,6 +15,10 @@ from my_pa.application.goodnotes_lineage import (
     ObservedNotebookFile,
     ingestion_request_fingerprint,
 )
+from my_pa.application.goodnotes_occurrences import (
+    GoodNotesSemanticPromotionEvidence,
+    semantic_proposal_sha256,
+)
 from my_pa.application.goodnotes_orchestrator import (
     DurableNoteContinuationError,
     DurableNoteRequest,
@@ -26,8 +30,14 @@ from my_pa.application.goodnotes_orchestrator import (
 from my_pa.bootstrap.goodnotes_durable_note import compose_durable_note_orchestrator
 from my_pa.bootstrap.goodnotes_rollout import rollout_report
 from my_pa.bootstrap.settings import GoodNotesRolloutStage, Settings
+from my_pa.domain.capture.review import Disposition
+from my_pa.domain.goodnotes.liveness import (
+    GoodNotesSourceLiveness,
+    GoodNotesSourceLivenessReceipt,
+)
 from my_pa.domain.goodnotes.models import (
     GoodNotesDeliveryAttemptState,
+    GoodNotesIdentityStatus,
     GoodNotesIngestionStatus,
     GoodNotesPipelineStage,
     GoodNotesRunStage,
@@ -76,6 +86,16 @@ def _request(pdf: bytes, request_id: str) -> DurableNoteRequest:
             sha256=_sha(pdf),
             mtime_ns=1,
             page_count=len(split_admitted_pdf(pdf)),
+        ),
+        liveness=GoodNotesSourceLivenessReceipt(
+            source_root_id=ROOT_ID,
+            relative_path="Notebooks/durable.goodnotes",
+            state=GoodNotesSourceLiveness.AVAILABLE,
+            checked_at=WHEN,
+            maximum_staleness_seconds=300,
+            last_seen_at=WHEN,
+            current_sha256=_sha(pdf),
+            prior_sha256=None,
         ),
         pdf_bytes=pdf,
         observed_at=WHEN,
@@ -194,6 +214,210 @@ def _propose_source_context(store: MemoryDurableNoteStore, run_id: str) -> None:
     )
 
 
+def _promotion_evidence(
+    store: MemoryDurableNoteStore,
+    run_id: str,
+    disposition: Disposition = Disposition.ACCEPT,
+) -> tuple[GoodNotesSemanticPromotionEvidence, ...]:
+    return tuple(
+        GoodNotesSemanticPromotionEvidence(
+            principal_id=A,
+            run_id=run_id,
+            proposal_sha256=semantic_proposal_sha256(*proposal),
+            disposition=disposition,
+            corrected_payload=(
+                {
+                    "run_id": run_id,
+                    "page_version_id": proposal[0],
+                    "content_sha256": "0" * 64,
+                    "schema_version": proposal[1],
+                    "analyzer_name": proposal[2],
+                    "analyzer_version": proposal[3],
+                    "candidate_tags": [],
+                    "ranked_candidates": [],
+                    "confidence": None,
+                    **proposal[4],
+                }
+                if disposition is Disposition.CORRECT_AND_ACCEPT
+                else None
+            ),
+            result_sha256=(
+                hashlib.sha256(b"corrected-payload").hexdigest()
+                if disposition is Disposition.CORRECT_AND_ACCEPT
+                else None
+            ),
+        )
+        for proposal in store.semantic_proposals_for_run(A, run_id)
+    )
+
+
+@pytest.mark.parametrize(
+    ("state", "current_sha256", "changed"),
+    [
+        (GoodNotesSourceLiveness.MISSING, None, None),
+        (GoodNotesSourceLiveness.STALE, None, None),
+        (GoodNotesSourceLiveness.REAPPEARED, "current", True),
+    ],
+)
+def test_liveness_refusal_happens_before_ingestion(
+    state: GoodNotesSourceLiveness,
+    current_sha256: str | None,
+    changed: bool | None,
+) -> None:
+    pdf = vector_pdf((COVER,))
+    request = _request(pdf, f"liveness-{state.value.lower()}")
+    receipt = replace(
+        request.liveness,
+        state=state,
+        current_sha256=_sha(pdf) if current_sha256 is not None else None,
+        reappeared_content_changed=changed,
+    )
+    store = MemoryDurableNoteStore()
+    with pytest.raises(ValueError, match="not available"):
+        _orchestrator("observe-only").run(
+            replace(request, liveness=receipt),
+            renderer=production_page_renderer(),
+            splitter=split_admitted_pdf,
+            store=store,
+            clock=lambda: WHEN,
+        )
+    assert store.runs == {}
+
+
+def test_stale_available_receipt_is_refused_and_acknowledged_reappearance_proceeds() -> None:
+    pdf = vector_pdf((COVER,))
+    request = _request(pdf, "liveness-age")
+    stale = replace(request.liveness, checked_at=WHEN - timedelta(seconds=301))
+    store = MemoryDurableNoteStore()
+    with pytest.raises(ValueError, match="receipt is stale"):
+        _orchestrator("observe-only").run(
+            replace(request, liveness=stale),
+            renderer=production_page_renderer(),
+            splitter=split_admitted_pdf,
+            store=store,
+            clock=lambda: WHEN,
+        )
+    acknowledged = replace(request.liveness, prior_sha256="0" * 64)
+    result = _orchestrator("observe-only").run(
+        replace(request, liveness=acknowledged),
+        renderer=production_page_renderer(),
+        splitter=split_admitted_pdf,
+        store=store,
+        clock=lambda: WHEN,
+    )
+    assert result.run.status is GoodNotesIngestionStatus.RUNNING
+
+
+@pytest.mark.parametrize(
+    "disposition",
+    [Disposition.REJECT, Disposition.DEFER, Disposition.INVALIDATE, Disposition.REPROCESS],
+)
+def test_nonpromoting_review_dispositions_refuse_canonical_promotion(
+    disposition: Disposition,
+) -> None:
+    pdf = vector_pdf((COVER,))
+    store = MemoryDurableNoteStore()
+    request = _request(pdf, f"review-{disposition.value}")
+    first = _orchestrator().run(
+        request,
+        renderer=production_page_renderer(),
+        splitter=split_admitted_pdf,
+        store=store,
+        clock=lambda: WHEN,
+    )
+    _propose(store, first.run.run_id)
+    with pytest.raises(DurableNoteStageError) as raised:
+        _orchestrator().run(
+            request,
+            renderer=production_page_renderer(),
+            splitter=split_admitted_pdf,
+            store=store,
+            clock=lambda: WHEN,
+            promotion_evidence=_promotion_evidence(store, first.run.run_id, disposition),
+        )
+    assert "not eligible" in str(raised.value.__cause__)
+    assert store._notes == {}
+
+
+@pytest.mark.parametrize("evidence", [None, Disposition.CORRECT_AND_ACCEPT])
+def test_canonical_promotion_requires_evidence_and_accepts_corrected_review(
+    evidence: Disposition | None,
+) -> None:
+    pdf = vector_pdf((COVER,))
+    store = MemoryDurableNoteStore()
+    request = _request(pdf, f"review-{evidence or 'absent'}")
+    first = _orchestrator().run(
+        request,
+        renderer=production_page_renderer(),
+        splitter=split_admitted_pdf,
+        store=store,
+        clock=lambda: WHEN,
+    )
+    _propose(store, first.run.run_id)
+    kwargs = (
+        {}
+        if evidence is None
+        else {"promotion_evidence": _promotion_evidence(store, first.run.run_id, evidence)}
+    )
+    if evidence is None:
+        with pytest.raises(DurableNoteStageError) as raised:
+            _orchestrator().run(
+                request,
+                renderer=production_page_renderer(),
+                splitter=split_admitted_pdf,
+                store=store,
+                clock=lambda: WHEN,
+                **kwargs,
+            )
+        assert "lacks server review evidence" in str(raised.value.__cause__)
+        assert store._notes == {}
+    else:
+        result = _orchestrator().run(
+            request,
+            renderer=production_page_renderer(),
+            splitter=split_admitted_pdf,
+            store=store,
+            clock=lambda: WHEN,
+            **kwargs,
+        )
+        assert result.run.status is GoodNotesIngestionStatus.SUCCEEDED
+        assert store._notes
+
+
+@pytest.mark.parametrize("mutation", ["principal", "run", "digest", "duplicate"])
+def test_promotion_evidence_is_context_bound_and_unique(mutation: str) -> None:
+    pdf = vector_pdf((COVER,))
+    store = MemoryDurableNoteStore()
+    request = _request(pdf, f"review-binding-{mutation}")
+    first = _orchestrator().run(
+        request,
+        renderer=production_page_renderer(),
+        splitter=split_admitted_pdf,
+        store=store,
+        clock=lambda: WHEN,
+    )
+    _propose(store, first.run.run_id)
+    item = _promotion_evidence(store, first.run.run_id)[0]
+    if mutation == "principal":
+        evidence = (replace(item, principal_id="prn_bbbbbbbbbbbbbbbbbbbbbbbb"),)
+    elif mutation == "run":
+        evidence = (replace(item, run_id=issue_stable_id("gnrun", A, "other")),)
+    elif mutation == "digest":
+        evidence = (replace(item, proposal_sha256="0" * 64),)
+    else:
+        evidence = (item, item)
+    with pytest.raises(DurableNoteStageError):
+        _orchestrator().run(
+            request,
+            renderer=production_page_renderer(),
+            splitter=split_admitted_pdf,
+            store=store,
+            clock=lambda: WHEN,
+            promotion_evidence=evidence,
+        )
+    assert store._notes == {}
+
+
 def test_lineage_alone_is_not_terminal_success() -> None:
     pdf = vector_pdf((COVER,))
     store = MemoryDurableNoteStore()
@@ -232,6 +456,7 @@ def test_admitted_vector_pdf_reaches_preview_only_after_proposal() -> None:
         splitter=split_admitted_pdf,
         store=store,
         clock=lambda: WHEN,
+        promotion_evidence=_promotion_evidence(store, first.run.run_id),
     )
     assert finished.run.status is GoodNotesIngestionStatus.SUCCEEDED
     assert finished.waiting_for_proposal is False
@@ -273,6 +498,9 @@ def test_injected_failure_is_not_terminal_success_and_resume_does_not_duplicate(
             store=store,
             clock=lambda: WHEN,
             fail_after=fail_after,
+            promotion_evidence=_promotion_evidence(store, waiting.run.run_id)
+            if fail_after is GoodNotesPipelineStage.RECONCILE
+            else (),
         )
     assert raised.value.stage is fail_after
     run = store.run(A, raised.value.run_id)
@@ -286,6 +514,7 @@ def test_injected_failure_is_not_terminal_success_and_resume_does_not_duplicate(
         splitter=split_admitted_pdf,
         store=store,
         clock=lambda: WHEN,
+        promotion_evidence=_promotion_evidence(store, raised.value.run_id),
     )
     assert resumed.run.status is GoodNotesIngestionStatus.SUCCEEDED
     notes = [item for item in store._notes.values() if item.principal_id == A]
@@ -317,12 +546,15 @@ def _run(
     *,
     splitter: Callable[[bytes], tuple[bytes, ...]] = split_admitted_pdf,
 ) -> DurableNoteResult:
+    request = _request(pdf, request_id)
+    existing = store.run_by_request(A, request_id)
     return _orchestrator(stage).run(
-        _request(pdf, request_id),
+        request,
         renderer=production_page_renderer(),
         splitter=splitter,
         store=store,
         clock=lambda: WHEN,
+        promotion_evidence=() if existing is None else _promotion_evidence(store, existing.run_id),
     )
 
 
@@ -501,6 +733,7 @@ def _run_at(
     renderer: object | None = None,
     clock: Callable[[], datetime] | None = None,
 ) -> DurableNoteResult:
+    existing = store.run_by_request(request.principal_id, request.request_id)
     return GoodNotesDurableNoteOrchestrator(
         lineage=lineage,
         delivery=delivery,
@@ -511,6 +744,7 @@ def _run_at(
         splitter=split_admitted_pdf,
         store=store,
         clock=clock or (lambda: WHEN),
+        promotion_evidence=() if existing is None else _promotion_evidence(store, existing.run_id),
     )
 
 
@@ -584,6 +818,7 @@ def test_t2_bound_identity_rejects_before_prepared(mutate: str) -> None:
                 size_bytes=len(other_pdf),
                 page_count=len(split_admitted_pdf(other_pdf)),
             ),
+            liveness=replace(request.liveness, current_sha256=_sha(other_pdf)),
         )
     elif mutate == "representation_media_type":
         changed = replace(request, representation_media_type="image/jpeg")
@@ -631,6 +866,7 @@ def test_t2_path_and_mtime_are_observation_only() -> None:
             relative_path="Notebooks/moved.goodnotes",
             mtime_ns=99,
         ),
+        liveness=replace(request.liveness, relative_path="Notebooks/moved.goodnotes"),
         label="moved",
     )
     finished = _run_at(store, changed, PREVIEW)
@@ -675,6 +911,43 @@ def test_t3_t4_t7_t8_t9_preview_then_canary_replays_receipt() -> None:
     )
     assert report_after == report_before
     assert report_after["current_stage"] == "observe-only"
+
+
+def test_completed_preview_survives_later_correction_and_occurrence_retirement() -> None:
+    pdf = vector_pdf((COVER,))
+    store = MemoryDurableNoteStore()
+    request = _request(pdf, "preview-historical-receipt")
+    first = _run(store, pdf, request.request_id, PREVIEW)
+    _propose(store, first.run.run_id)
+    previewed = _run_at(store, request, PREVIEW)
+    receipt_id = previewed.preview_receipt_id
+    ended_at = previewed.run.ended_at
+    assert receipt_id is not None
+
+    occurrence_key, occurrence = next(iter(store._occurrences.items()))
+    store._occurrences[occurrence_key] = replace(
+        occurrence,
+        identity_status=GoodNotesIdentityStatus.RETIRED,
+    )
+    bound = store.latest_revision_for_occurrence(A, occurrence.occurrence_id)
+    assert bound is not None
+    store.store_revision(
+        replace(
+            bound,
+            revision_id=issue_stable_id("gnrev", "post-preview-correction"),
+            transcription="synthetic corrected later",
+            created_at=WHEN + timedelta(seconds=1),
+            supersedes_revision_id=bound.revision_id,
+        )
+    )
+
+    recovered = _run_at(store, request, CANARY)
+    assert recovered.preview_receipt_id == receipt_id
+    assert recovered.run.status is GoodNotesIngestionStatus.SUCCEEDED
+    assert recovered.run.ended_at == ended_at
+    receipts = store.delivery_receipts_for_run(A, recovered.run.run_id)
+    assert len(receipts) == 1
+    assert receipts[0].receipt_id == receipt_id
 
 
 def test_t5_t6_canary_failure_after_prepared_preserves_terminal_state() -> None:

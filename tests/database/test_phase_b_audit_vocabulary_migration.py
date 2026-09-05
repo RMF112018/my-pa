@@ -58,7 +58,12 @@ DISPOSABLE_DATABASE: Final = "my_pa_phase_b_vocabulary_test"
 #: The current head and the Phase B vocabulary edge this suite removes. Written
 #: out rather than imported so current chain drift and historical identity are
 #: checked independently.
-HEAD_REVISION: Final = "c3f8a1d07e94"
+HEAD_REVISION: Final = "b8e4d1a6c073"
+#: PR192's graph-vocabulary admission directly above `HEAD_REVISION`.
+GRAPH_REVISION: Final = "c3f8a1d07e94"
+#: The additive GoodNotes migration directly above `GRAPH_REVISION`, and the
+#: sole current chain head.
+CURRENT_HEAD_REVISION: Final = "6a2f9d1c4b80"
 #: What was head until `HEAD_REVISION` stacked on it (RI-ENT-WP-10/11, widening
 #: three closed-set CHECKs to admit that phase's capability names and record
 #: families, creating and altering no table).
@@ -199,7 +204,10 @@ def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> N
     """One Alembic head, and it is this one, on a database built from empty."""
     script = ScriptDirectory.from_config(_config())
     heads = list(script.get_heads())
-    assert heads == [HEAD_REVISION], f"expected exactly {HEAD_REVISION}, found {heads}"
+    assert heads == [CURRENT_HEAD_REVISION], (
+        f"expected exactly {CURRENT_HEAD_REVISION}, found {heads}"
+    )
+    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == GRAPH_REVISION
     # `b8e4d1a6c073` (RI-ENT-WP-12, backfilling one `display`-typed
     # `entity_names` row per active `entities` row and writing no
     # `entity_project_participations` row, RULING-M10) is additive on
@@ -226,8 +234,8 @@ def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> N
     # additive on `b727e870d45e`, which is additive on
     # `IDENTITY_HISTORY_REVISION` -- three more links than this chain had before
     # `c99cd8ed8d1c` landed, and one more than it had before `b8e4d1a6c073` did.
-    assert script.get_revision(HEAD_REVISION).down_revision == "b8e4d1a6c073"
-    assert script.get_revision("b8e4d1a6c073").down_revision == SECOND_TO_HEAD_REVISION
+    assert script.get_revision(GRAPH_REVISION).down_revision == HEAD_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == SECOND_TO_HEAD_REVISION
     assert script.get_revision(SECOND_TO_HEAD_REVISION).down_revision == THIRD_TO_HEAD_REVISION
     assert script.get_revision(THIRD_TO_HEAD_REVISION).down_revision == FOURTH_TO_HEAD_REVISION
     assert script.get_revision(FOURTH_TO_HEAD_REVISION).down_revision == FIFTH_TO_HEAD_REVISION
@@ -250,7 +258,7 @@ def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> N
     with migrated_engine.begin() as connection:
         rows = connection.execute(text("SELECT version_num FROM alembic_version"))
         stamped = list(rows.scalars())
-    assert stamped == [HEAD_REVISION]
+    assert stamped == [CURRENT_HEAD_REVISION]
 
 
 @pytest.mark.parametrize("capability", PHASE_B_CAPABILITIES)

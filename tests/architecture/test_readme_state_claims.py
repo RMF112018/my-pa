@@ -348,6 +348,11 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     126: "One hundred and twenty-six",
     127: "One hundred and twenty-seven",
     128: "One hundred and twenty-eight",
+    # UI-IMP-WP17 admits canvas.workspace get/put. The map is extended rather
+    # than the assertion relaxed: a figure this test cannot spell is a figure
+    # it cannot check.
+    129: "One hundred and twenty-nine",
+    130: "One hundred and thirty",
 }
 
 
@@ -479,8 +484,9 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # composed by default, and `RI-ENT-WP-10`'s five record-family reads arrived
     # on the withheld side too, as do `RI-ENT-WP-11`'s record-family writes. The
     # GoodNotes pull adds three default-composed names after the entity work,
-    # so the combined surface exposes fifty-eight and still withholds seventy.
-    assert default == 58 and total == 128 and withheld == 70
+    # and UI-IMP-WP17 admits canvas.workspace get/put on the served side, so the
+    # combined surface exposes sixty and still withholds seventy.
+    assert default == 60 and total == 130 and withheld == 70
 
     entity_total = len(_ENTITY_CAPABILITIES)
     entity_writes = len(_ENTITY_WRITE_CAPABILITIES)
@@ -501,11 +507,11 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert "twenty-nine writes" not in readme
 
     system_context = SYSTEM_CONTEXT.read_text(encoding="utf-8").lower()
-    assert "one hundred and twenty-eight capabilities" in system_context
-    assert "exposes fifty-eight of them" in system_context
+    assert "one hundred and thirty capabilities" in system_context
+    assert "exposes sixty of them" in system_context
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
-    assert "one hundred and twenty-eight capabilities" in module_boundaries
+    assert "one hundred and thirty capabilities" in module_boundaries
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:

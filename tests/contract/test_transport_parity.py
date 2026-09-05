@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-one hundred and twenty-eight capabilities. There are two ways to prove that and only one stays
+one hundred and thirty capabilities. There are two ways to prove that and only one stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -1183,6 +1183,12 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "hops": 1,
             "page_size": 10,
         },
+        Capability.CANVAS_WORKSPACE_GET: {"focus_entity_id": person.entity_id},
+        Capability.CANVAS_WORKSPACE_PUT: {
+            "focus_entity_id": person.entity_id,
+            "expected_version": 0,
+            "positions": {person.entity_id: {"x": 10.0, "y": 20.0}},
+        },
         # No arguments: the queue is every unplaced mention in the Principal's
         # own partition, so there is nothing to name.
         Capability.ENTITIES_UNRESOLVED_MENTIONS: {},
@@ -1759,7 +1765,7 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    # The one hundred and twenty-eight commands and `RequestMetadata` beside them.
+    # The command union and `RequestMetadata` beside them.
     assert len(REQUEST_VALUES) == 129, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 

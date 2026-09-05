@@ -10841,3 +10841,38 @@ entity_reenrichment_version_watermarks = Table(
         name="reenrichment_watermark_names_are_safe_tokens",
     ),
 )
+
+#: Principal-partitioned canvas arrangement overlay. `positions` is ADR-003
+#: product-owned JSON — entity identifier to `{x, y}` numbers — not graph
+#: edges, not a source-system write, and not a managed-document write. Version
+#: 0 is never stored; it is the get overlay for a missing row.
+canvas_workspaces = Table(
+    "canvas_workspaces",
+    METADATA,
+    Column("principal_id", String(72), nullable=False),
+    Column("focus_entity_id", String(72)),
+    Column("scope_entity_id", String(72)),
+    Column("version", Integer, nullable=False),
+    Column("positions", JSONB, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("focus_entity_id", IdKind.ENTITY),
+    _is_identifier("scope_entity_id", IdKind.ENTITY),
+    CheckConstraint(
+        "focus_entity_id IS NOT NULL OR scope_entity_id IS NOT NULL",
+        name="canvas_workspace_has_a_seed",
+    ),
+    CheckConstraint("version >= 1", name="canvas_workspace_version_is_positive"),
+    CheckConstraint(
+        "jsonb_typeof(positions) = 'object'",
+        name="canvas_workspace_positions_are_an_object",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "focus_entity_id",
+        "scope_entity_id",
+        name="one_canvas_workspace_per_principal_seed",
+        postgresql_nulls_not_distinct=True,
+    ),
+)

@@ -93,6 +93,7 @@ from my_pa.application.commands import (
     EndEntityRelationship,
     EnrollSource,
     FetchSource,
+    GetCanvasWorkspace,
     GetCapabilities,
     GetCommitmentHistory,
     GetCorpusCoverage,
@@ -139,6 +140,7 @@ from my_pa.application.commands import (
     PreviewEntitySplit,
     ProposeRelationshipMemory,
     PullGoodNotesWork,
+    PutCanvasWorkspace,
     ReadCapture,
     ReadCommitment,
     ReadIntelligenceArtifact,
@@ -322,6 +324,15 @@ def _strings(value: object, detail: SafeDetail) -> tuple[str, ...]:
 
 def _get_capabilities(payload: Mapping[str, Any]) -> Command:
     return GetCapabilities(**payload)
+
+
+def _get_canvas_workspace(payload: Mapping[str, Any]) -> Command:
+    return GetCanvasWorkspace(**payload)
+
+
+def _put_canvas_workspace(payload: Mapping[str, Any]) -> Command:
+    """`canvas.workspace.put`: extra authority fields fail closed on the command."""
+    return PutCanvasWorkspace(**payload)
 
 
 def _list_sources(payload: Mapping[str, Any]) -> Command:
@@ -1796,6 +1807,8 @@ def _split_entity(payload: Mapping[str, Any]) -> Command:
 _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = MappingProxyType(
     {
         Capability.CAPABILITIES_GET: _get_capabilities,
+        Capability.CANVAS_WORKSPACE_GET: _get_canvas_workspace,
+        Capability.CANVAS_WORKSPACE_PUT: _put_canvas_workspace,
         Capability.SOURCES_LIST: _list_sources,
         Capability.SOURCES_METADATA: _get_source_metadata,
         Capability.SOURCES_FETCH: _fetch_source,

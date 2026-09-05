@@ -36,7 +36,8 @@ def _config(buffer: io.StringIO | None = None) -> Config:
 
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [REVISION]
+    assert script.get_heads() == ["d4e8b1c7a902"]
+    assert script.get_revision("d4e8b1c7a902").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 
 

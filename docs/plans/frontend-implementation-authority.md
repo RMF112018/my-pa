@@ -46,9 +46,7 @@ Execution is organized as `UI-IMP-WP01..WP30`. Older `WP-FE-*` sequencing is his
 
 WP02 persistence substrate exists (`identity.webauthn_credentials`, `identity.webauthn_challenges`, `identity.recovery_code_sets`, `identity.recovery_codes`, `identity.auth_sessions`; see [frontend-auth-persistence.md](frontend-auth-persistence.md)). The production browser cookie and session registry remain the legacy HMAC + process-local map. WP02 does not activate WebAuthn.
 
-The next executable package is:
-
-`UI-IMP-WP13 — Canonical Entity / People BFF Read Plane`
+The next executable package is `UI-IMP-WP18 — Canvas Canonical Relationship Editing` after UI-IMP-WP17 lands. This is not production activation.
 
 WP11 Reports/Morning Intelligence BFF on this PR is contract substrate, not WP12 Morning Brief UI, production activation, or `PASS_VERIFIED` of `PFE-AC-048..057`.
 

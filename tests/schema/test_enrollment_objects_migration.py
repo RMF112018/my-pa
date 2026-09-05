@@ -277,6 +277,8 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "goodnotes_pull_assignments",
         "goodnotes_pull_completions",
         "goodnotes_semantic_review_decisions",
+        # `d4e8b1c7a902`'s Principal-partitioned canvas overlay (UI-IMP-WP17).
+        "canvas_workspaces",
     }
 )
 

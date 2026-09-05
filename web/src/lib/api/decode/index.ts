@@ -55,6 +55,8 @@ import { decodeEntitiesNamesList } from "./capabilities/entities.names.list";
 import { decodeEntitiesAddressesList } from "./capabilities/entities.addresses.list";
 import { decodeEntitiesCommunicationList } from "./capabilities/entities.communication.list";
 import { decodeEntitiesParticipationsList } from "./capabilities/entities.participations.list";
+import { decodeCanvasWorkspaceGet } from "./capabilities/canvas.workspace.get";
+import { decodeCanvasWorkspacePut } from "./capabilities/canvas.workspace.put";
 import type { CapabilityResults, Decoder, GatewayCapability } from "./types";
 
 export type { CapabilityResults, DecodeResult, Decoder } from "./types";
@@ -115,6 +117,8 @@ export const DECODERS = {
   "entities.addresses.list": decodeEntitiesAddressesList,
   "entities.communication.list": decodeEntitiesCommunicationList,
   "entities.participations.list": decodeEntitiesParticipationsList,
+  "canvas.workspace.get": decodeCanvasWorkspaceGet,
+  "canvas.workspace.put": decodeCanvasWorkspacePut,
 } satisfies { [K in GatewayCapability]: Decoder<CapabilityResults[K]> };
 
 /**

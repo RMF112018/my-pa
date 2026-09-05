@@ -32,6 +32,7 @@ inside the payload the caller controls.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -194,6 +195,7 @@ __all__ = [
     "EnrollSource",
     "EnterFrameCommand",
     "FetchSource",
+    "GetCanvasWorkspace",
     "GetCapabilities",
     "GetCommitmentHistory",
     "GetCorpusCoverage",
@@ -226,6 +228,7 @@ __all__ = [
     "OpenSituationCommand",
     "PrepareContext",
     "PullGoodNotesWork",
+    "PutCanvasWorkspace",
     "ReadCapture",
     "ReadCommitment",
     "ReadIntelligenceArtifact",
@@ -3281,6 +3284,85 @@ class GetEntityGraph:
         _moment(self.as_of, SafeDetail.AS_OF)
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
         object.__setattr__(self, "after", _graph_cursor(self.after))
+
+
+@dataclass(frozen=True, slots=True)
+class GetCanvasWorkspace:
+    """`canvas.workspace.get`: the stored overlay, or an empty one if none exists.
+
+    A seed is required — `focus_entity_id`, `scope_entity_id`, or both. Missing
+    is version 0 with no positions, not `not_found`. The seed entity need not
+    exist: the workspace is overlay identity.
+    """
+
+    capability: ClassVar[Capability] = Capability.CANVAS_WORKSPACE_GET
+
+    focus_entity_id: str | None = None
+    scope_entity_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _canvas_workspace_seed(self.focus_entity_id, self.scope_entity_id)
+
+
+@dataclass(frozen=True, slots=True)
+class PutCanvasWorkspace:
+    """`canvas.workspace.put`: store one overlay for the seeded workspace.
+
+    `expected_version` is required and may be 0, which creates the first stored
+    row at version 1. Extra point keys are refused. Positions values are finite
+    numbers only.
+    """
+
+    capability: ClassVar[Capability] = Capability.CANVAS_WORKSPACE_PUT
+
+    expected_version: int
+    positions: Mapping[str, Mapping[str, float]]
+    focus_entity_id: str | None = None
+    scope_entity_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _canvas_workspace_seed(self.focus_entity_id, self.scope_entity_id)
+        if type(self.expected_version) is not int or self.expected_version < 0:
+            raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+        object.__setattr__(self, "positions", _canvas_positions(self.positions))
+
+
+def _canvas_workspace_seed(focus_entity_id: str | None, scope_entity_id: str | None) -> None:
+    if focus_entity_id is None and scope_entity_id is None:
+        raise InvalidRequestError(SafeDetail.FOCUS_ENTITY_ID)
+    if focus_entity_id is not None:
+        _identifier(focus_entity_id, IdKind.ENTITY, SafeDetail.FOCUS_ENTITY_ID)
+    if scope_entity_id is not None:
+        _identifier(scope_entity_id, IdKind.ENTITY, SafeDetail.SCOPE_ENTITY_ID)
+
+
+def _canvas_point(value: object) -> Mapping[str, float]:
+    if isinstance(value, Mapping):
+        if set(value) != {"x", "y"}:
+            raise InvalidRequestError(SafeDetail.POSITIONS)
+        x = value["x"]
+        y = value["y"]
+        if isinstance(x, bool) or isinstance(y, bool):
+            raise InvalidRequestError(SafeDetail.POSITIONS)
+        if not isinstance(x, int | float) or not isinstance(y, int | float):
+            raise InvalidRequestError(SafeDetail.POSITIONS)
+        x_number = float(x)
+        y_number = float(y)
+        if not math.isfinite(x_number) or not math.isfinite(y_number):
+            raise InvalidRequestError(SafeDetail.POSITIONS)
+        return MappingProxyType({"x": x_number, "y": y_number})
+    raise InvalidRequestError(SafeDetail.POSITIONS)
+
+
+def _canvas_positions(value: object) -> Mapping[str, Mapping[str, float]]:
+    if not isinstance(value, Mapping) or isinstance(value, str | bytes):
+        raise InvalidRequestError(SafeDetail.POSITIONS)
+    points: dict[str, Mapping[str, float]] = {}
+    for entity_id, point in value.items():
+        if not isinstance(entity_id, str):
+            raise InvalidRequestError(SafeDetail.POSITIONS)
+        points[_identifier(entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)] = _canvas_point(point)
+    return MappingProxyType(points)
 
 
 #: The clearable descriptive and effective fields, and the closed vocabulary a
@@ -7499,6 +7581,8 @@ type Command = (
     | GetEntityContext
     | GetEntityRelationships
     | GetEntityGraph
+    | GetCanvasWorkspace
+    | PutCanvasWorkspace
     | ListUnresolvedMentions
     | ListEntityIdentifiers
     | ListEntityAliases

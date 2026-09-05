@@ -158,6 +158,7 @@ from my_pa.application.commands import (
     EndEntityRelationship,
     EnrollSource,
     FetchSource,
+    GetCanvasWorkspace,
     GetCapabilities,
     GetCommitmentHistory,
     GetCorpusCoverage,
@@ -205,6 +206,7 @@ from my_pa.application.commands import (
     PreviewEntitySplit,
     ProposeRelationshipMemory,
     PullGoodNotesWork,
+    PutCanvasWorkspace,
     ReadCapture,
     ReadCommitment,
     ReadIntelligenceArtifact,
@@ -391,6 +393,8 @@ from my_pa.contracts.ports import (
     Acceptance,
     AuthoringConflictError,
     BulkIdempotencyConflictError,
+    CanvasWorkspaceConflictError,
+    CanvasWorkspaceRecord,
     CaptureAdmission,
     CaptureAdmissionRequest,
     CaptureSearchOutcome,
@@ -415,6 +419,11 @@ from my_pa.contracts.ports import (
     WriteRequestConflictError,
     WriteRequestEvidence,
     WriteRequestResult,
+)
+from my_pa.contracts.v1.canvas_workspace import (
+    CanvasPointView,
+    CanvasWorkspaceReceiptView,
+    CanvasWorkspaceView,
 )
 from my_pa.contracts.v1.capabilities import EffectiveLimits, ReadinessReport, ReadinessState
 from my_pa.contracts.v1.capture import CaptureListEntry, CaptureReceiptView, CaptureVersionView
@@ -1075,6 +1084,29 @@ def _provider_failure(error: ProviderError) -> ApplicationError:
 #: `ADR-003` makes a user-authored record an authority in its own right, so the
 #: level is `source_original` and the basis names the person who wrote it.
 _CAPTURE_TRUST_BASIS: Final = ("user_authored",)
+
+
+def _canvas_point_views(
+    positions: Mapping[str, Mapping[str, float]],
+) -> dict[str, CanvasPointView]:
+    return {
+        entity_id: CanvasPointView(x=point["x"], y=point["y"])
+        for entity_id, point in positions.items()
+    }
+
+
+def _canvas_positions_equal(
+    left: Mapping[str, Mapping[str, float]],
+    right: Mapping[str, Mapping[str, float]],
+) -> bool:
+    if set(left) != set(right):
+        return False
+    return all(
+        float(left[key]["x"]) == float(right[key]["x"])
+        and float(left[key]["y"]) == float(right[key]["y"])
+        for key in left
+    )
+
 
 #: What a reveal's trust rests on. The stored rows and nothing else: every value
 #: in the answer was read from `capture_spans`, `capture_proposals`,
@@ -4016,6 +4048,107 @@ class ApplicationService:
                 ),
                 extra_limitations=limitations,
             ),
+        )
+
+    def _canvas_workspace_get(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: GetCanvasWorkspace,
+    ) -> _Result:
+        """The stored overlay, or an empty overlay when none exists.
+
+        Missing is version 0 with no positions and no timestamp, not `not_found`
+        and not an empty graph. The seed entity is not required to exist.
+        """
+        stored = unit_of_work.canvas_workspaces.get(
+            authorization.principal.principal_id,
+            command.focus_entity_id,
+            command.scope_entity_id,
+        )
+        if stored is None:
+            view = CanvasWorkspaceView(
+                focus_entity_id=command.focus_entity_id,
+                scope_entity_id=command.scope_entity_id,
+                version=0,
+                positions={},
+                updated_at=None,
+            )
+        else:
+            view = CanvasWorkspaceView(
+                focus_entity_id=stored.focus_entity_id,
+                scope_entity_id=stored.scope_entity_id,
+                version=stored.version,
+                positions=_canvas_point_views(stored.positions),
+                updated_at=stored.updated_at,
+            )
+        return _Result(
+            payload=view.to_canonical_dict(),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CAPTURE_TRUST_BASIS),
+        )
+
+    def _canvas_workspace_put(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: PutCanvasWorkspace,
+    ) -> _Result:
+        """Create, replay, or conflict on one overlay write.
+
+        `expected_version=0` creates when absent (stored version becomes 1).
+        Matching version and equal positions return the existing receipt.
+        A mismatch, including expected_version=0 against a stored row with
+        different positions, is a conflict and leaves the row untouched.
+        """
+        principal_id = authorization.principal.principal_id
+        stored = unit_of_work.canvas_workspaces.get(
+            principal_id, command.focus_entity_id, command.scope_entity_id
+        )
+        try:
+            if stored is None:
+                if command.expected_version != 0:
+                    raise ConflictError(SafeDetail.STALE_VERSION)
+                written = unit_of_work.canvas_workspaces.insert(
+                    CanvasWorkspaceRecord(
+                        principal_id=principal_id,
+                        focus_entity_id=command.focus_entity_id,
+                        scope_entity_id=command.scope_entity_id,
+                        version=1,
+                        positions=command.positions,
+                        created_at=authorization.at,
+                        updated_at=authorization.at,
+                    )
+                )
+            else:
+                if command.expected_version != stored.version:
+                    raise ConflictError(SafeDetail.STALE_VERSION)
+                if _canvas_positions_equal(command.positions, stored.positions):
+                    written = stored
+                else:
+                    written = unit_of_work.canvas_workspaces.update(
+                        CanvasWorkspaceRecord(
+                            principal_id=principal_id,
+                            focus_entity_id=command.focus_entity_id,
+                            scope_entity_id=command.scope_entity_id,
+                            version=stored.version + 1,
+                            positions=command.positions,
+                            created_at=stored.created_at,
+                            updated_at=authorization.at,
+                        ),
+                        expected_version=stored.version,
+                    )
+        except CanvasWorkspaceConflictError:
+            raise ConflictError(SafeDetail.STALE_VERSION) from None
+        receipt = CanvasWorkspaceReceiptView(
+            focus_entity_id=written.focus_entity_id,
+            scope_entity_id=written.scope_entity_id,
+            version=written.version,
+            positions=_canvas_point_views(written.positions),
+            updated_at=written.updated_at,
+        )
+        return _Result(
+            payload=receipt.to_canonical_dict(),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CAPTURE_TRUST_BASIS),
         )
 
     def _knowledge_reveal(
@@ -10314,6 +10447,8 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.CAPTURE_READ: ApplicationService._capture_read,
         Capability.CAPTURE_LIST: ApplicationService._capture_list,
         Capability.CAPTURE_SEARCH: ApplicationService._capture_search,
+        Capability.CANVAS_WORKSPACE_GET: ApplicationService._canvas_workspace_get,
+        Capability.CANVAS_WORKSPACE_PUT: ApplicationService._canvas_workspace_put,
         Capability.REVIEW_LIST: ApplicationService._review_list,
         Capability.REVIEW_DECIDE: ApplicationService._review_decide,
         Capability.CONTINUITY_PULSE: ApplicationService._continuity_pulse,

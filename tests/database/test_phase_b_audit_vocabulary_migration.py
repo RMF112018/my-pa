@@ -63,7 +63,10 @@ HEAD_REVISION: Final = "b8e4d1a6c073"
 GRAPH_REVISION: Final = "c3f8a1d07e94"
 #: The additive GoodNotes migration directly above `GRAPH_REVISION`, and the
 #: sole current chain head.
-CURRENT_HEAD_REVISION: Final = "6a2f9d1c4b80"
+GOODNOTES_REVISION: Final = "6a2f9d1c4b80"
+#: The additive canvas-workspace overlay (UI-IMP-WP17), and the
+#: sole current chain head.
+CURRENT_HEAD_REVISION: Final = "d4e8b1c7a902"
 #: What was head until `HEAD_REVISION` stacked on it (RI-ENT-WP-10/11, widening
 #: three closed-set CHECKs to admit that phase's capability names and record
 #: families, creating and altering no table).
@@ -207,7 +210,8 @@ def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> N
     assert heads == [CURRENT_HEAD_REVISION], (
         f"expected exactly {CURRENT_HEAD_REVISION}, found {heads}"
     )
-    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == GRAPH_REVISION
+    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == GOODNOTES_REVISION
+    assert script.get_revision(GOODNOTES_REVISION).down_revision == GRAPH_REVISION
     # `b8e4d1a6c073` (RI-ENT-WP-12, backfilling one `display`-typed
     # `entity_names` row per active `entities` row and writing no
     # `entity_project_participations` row, RULING-M10) is additive on

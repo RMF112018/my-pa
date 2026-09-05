@@ -268,6 +268,9 @@ __all__ = [
     "AuditSink",
     "AuthoringConflictError",
     "AuthoringReceipt",
+    "CanvasWorkspaceConflictError",
+    "CanvasWorkspaceRecord",
+    "CanvasWorkspaceRepository",
     "CaptureAdmission",
     "CaptureAdmissionRequest",
     "CaptureRepository",
@@ -4289,6 +4292,51 @@ class PreferenceConflictError(Exception):
     """The same idempotency key was reused with a different preference payload."""
 
 
+class CanvasWorkspaceConflictError(Exception):
+    """The stored overlay version does not match the caller's expectation."""
+
+
+@dataclass(frozen=True, slots=True)
+class CanvasWorkspaceRecord:
+    """One stored canvas overlay. Version is always >= 1; 0 is never persisted."""
+
+    principal_id: str
+    focus_entity_id: str | None
+    scope_entity_id: str | None
+    version: int
+    positions: Mapping[str, Mapping[str, float]]
+    created_at: datetime
+    updated_at: datetime
+
+
+class CanvasWorkspaceRepository(ABC):
+    """Principal-partitioned product-owned canvas overlay (ADR-003).
+
+    `principal_id` is a parameter on every method and is the authenticated
+    caller's partition, never a caller-supplied field. Missing is `None`, not
+    not-found: the get handler answers an empty overlay.
+    """
+
+    @abstractmethod
+    def get(
+        self,
+        principal_id: str,
+        focus_entity_id: str | None,
+        scope_entity_id: str | None,
+    ) -> CanvasWorkspaceRecord | None:
+        """The overlay for this Principal and seed, or `None` when none is stored."""
+
+    @abstractmethod
+    def insert(self, record: CanvasWorkspaceRecord) -> CanvasWorkspaceRecord:
+        """Create the first stored version. Unique-seed races raise conflict."""
+
+    @abstractmethod
+    def update(
+        self, record: CanvasWorkspaceRecord, *, expected_version: int
+    ) -> CanvasWorkspaceRecord:
+        """Replace positions when `expected_version` still matches the stored row."""
+
+
 class ContextPreferenceRepository(ABC):
     """Append-only preference events plus the current projection fold.
 
@@ -4900,6 +4948,15 @@ class UnitOfWork(ABC):
         The application layer narrows this object to its bounded pull protocol;
         keeping that protocol inward avoids making contracts depend outward on
         an application module. Production composition overrides this property.
+        """
+        raise NotImplementedError
+
+    @property
+    def canvas_workspaces(self) -> CanvasWorkspaceRepository:
+        """Principal-partitioned canvas overlay, inside this transaction.
+
+        Optional on older test doubles. Production and the FAST world implement
+        it. `principal_id` is the authenticated partition, never a payload field.
         """
         raise NotImplementedError
 

@@ -68,7 +68,10 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "b8e4d1a6c073"
 #: The additive GoodNotes migration directly above this module's subject
 #: revision, and therefore the sole current chain head.
-CURRENT_HEAD_REVISION: Final = "6a2f9d1c4b80"
+GOODNOTES_REVISION: Final = "6a2f9d1c4b80"
+#: The additive canvas-workspace overlay (UI-IMP-WP17), and the
+#: sole current chain head.
+CURRENT_HEAD_REVISION: Final = "d4e8b1c7a902"
 GRAPH_REVISION: Final = "c3f8a1d07e94"
 #: What was head until `REVISION` stacked on it, and therefore the revision
 #: this module downgrades to. `REVISION` was written against `c99cd8ed8d1c` and
@@ -83,7 +86,7 @@ PREVIOUS_REVISION: Final = "16f05c46b8c3"
 #: Counted on the merged tree after the re-parent (RULING-M2): 88 on
 #: `origin/main` at `16f05c46b8c3` plus this revision and its additive
 #: GoodNotes successor.
-REVISION_FILE_COUNT: Final = 91
+REVISION_FILE_COUNT: Final = 92
 
 #: The revision's frozen salt, restated. If this and the revision ever disagree
 #: the expectations below stop matching, which is the point of restating it.
@@ -434,7 +437,8 @@ def test_the_revision_is_the_single_head_and_revises_the_prior_head() -> None:
     """One head, directly above this revision, which retains its prior edge."""
     script = ScriptDirectory.from_config(_config())
     assert list(script.get_heads()) == [CURRENT_HEAD_REVISION]
-    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == GRAPH_REVISION
+    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == GOODNOTES_REVISION
+    assert script.get_revision(GOODNOTES_REVISION).down_revision == GRAPH_REVISION
     assert script.get_revision(GRAPH_REVISION).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS_REVISION
 

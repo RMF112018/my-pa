@@ -97,16 +97,41 @@ function gatewayNotFound() {
   );
 }
 
-function answerGraph(result: unknown, disclosure: unknown = whole()) {
-  const spy = vi.fn(
-    async (_url: string | URL | Request, _init?: RequestInit) =>
-      new Response(JSON.stringify({ result, disclosure }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-  );
+function emptyWorkspace(focus = FOCUS) {
+  return {
+    focus_entity_id: focus,
+    scope_entity_id: null,
+    version: 0,
+    positions: {},
+    updated_at: null,
+  };
+}
+
+function answerGraph(
+  result: unknown,
+  disclosure: unknown = whole(),
+  workspace: unknown = emptyWorkspace(),
+) {
+  const spy = vi.fn(async (url: string | URL | Request) => {
+    const href = String(url);
+    const body = href.includes("/v1/canvas.workspace.get")
+      ? { result: workspace, disclosure }
+      : { result, disclosure };
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  });
   vi.stubGlobal("fetch", spy);
   return spy;
+}
+
+function fetchUrls(spy: ReturnType<typeof vi.fn>): string[] {
+  return spy.mock.calls.map((call) => String(call[0]));
+}
+
+function payloadOf(spy: ReturnType<typeof vi.fn>, index: number): Record<string, unknown> {
+  return JSON.parse(String(spy.mock.calls[index]?.[1]?.body ?? "{}")) as Record<string, unknown>;
 }
 
 function socketFails() {
@@ -152,6 +177,8 @@ describe("Canvas page", () => {
     await renderServerPage(() => CanvasPage({ searchParams: Promise.resolve({}) }));
     expect(screen.getByTestId("canvas-synthetic")).toHaveAttribute("data-state", "not_implemented");
     expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchUrls(fetchSpy).some((url) => url.includes("canvas.workspace.get"))).toBe(false);
+    expect(screen.queryByTestId("canvas-arrange-toggle")).toBeNull();
   });
 
   it("requires a seed and does not invent a directory of everyone", async () => {
@@ -161,6 +188,8 @@ describe("Canvas page", () => {
     const search = screen.getByRole("link", { name: "Search People" });
     expect(search).toHaveAttribute("href", "/people");
     expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchUrls(fetchSpy).some((url) => url.includes("canvas.workspace.get"))).toBe(false);
+    expect(screen.queryByTestId("canvas-arrange-toggle")).toBeNull();
   });
 
   it("refuses invalid hops without calling the gateway", async () => {
@@ -170,6 +199,8 @@ describe("Canvas page", () => {
     );
     expect(screen.getByTestId("canvas-unavailable")).toHaveAttribute("data-state", "unavailable");
     expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchUrls(fetchSpy).some((url) => url.includes("canvas.workspace.get"))).toBe(false);
+    expect(screen.queryByTestId("canvas-arrange-toggle")).toBeNull();
   });
 
   it("refuses invalid pageSize without calling the gateway", async () => {
@@ -208,17 +239,22 @@ describe("Canvas page", () => {
     });
     expect(sent.payload).not.toHaveProperty("focusEntityId");
     expect(sent.payload).not.toHaveProperty("principal_id");
+    expect(String(fetchSpy.mock.calls[1]?.[0])).toContain("/v1/canvas.workspace.get");
+    const workspaceSent = payloadOf(fetchSpy, 1);
+    expect(workspaceSent.payload).toEqual({ focus_entity_id: FOCUS });
+    expect(workspaceSent.payload).not.toHaveProperty("principal_id");
+    expect(workspaceSent.payload).not.toHaveProperty("focusEntityId");
   });
 
   it("says not found when the seed is unknown", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => gatewayNotFound()),
-    );
+    const fetchSpy = vi.fn(async () => gatewayNotFound());
+    vi.stubGlobal("fetch", fetchSpy);
     await renderServerPage(() => CanvasPage({ searchParams: seededParams() }));
     expect(screen.getByTestId("canvas-not-found")).toHaveAttribute("data-state", "unavailable");
     expect(screen.queryByTestId("canvas-empty")).toBeNull();
     expect(screen.queryByTestId("canvas-directory")).toBeNull();
+    expect(screen.queryByTestId("canvas-arrange-toggle")).toBeNull();
+    expect(fetchUrls(fetchSpy).some((url) => url.includes("canvas.workspace.get"))).toBe(false);
   });
 
   it("says unavailable when the socket never answered", async () => {
@@ -229,10 +265,12 @@ describe("Canvas page", () => {
   });
 
   it("says empty only when a seeded read returned no nodes", async () => {
-    answerGraph({ nodes: [], edges: [], next_cursor: null });
+    const fetchSpy = answerGraph({ nodes: [], edges: [], next_cursor: null });
     await renderServerPage(() => CanvasPage({ searchParams: seededParams() }));
     expect(screen.getByTestId("canvas-empty")).toHaveAttribute("data-state", "empty");
     expect(screen.queryByTestId("canvas-directory")).toBeNull();
+    expect(screen.queryByTestId("canvas-arrange-toggle")).toBeNull();
+    expect(fetchUrls(fetchSpy).some((url) => url.includes("canvas.workspace.get"))).toBe(false);
   });
 
   it("renders directory and map when the neighborhood has records", async () => {
@@ -243,6 +281,38 @@ describe("Canvas page", () => {
     expect(screen.getAllByText("Pat Synthetic").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Acme Synthetic").length).toBeGreaterThan(0);
     expect(screen.queryByTestId("canvas-continue")).toBeNull();
+    expect(screen.getByTestId("canvas-arrange-toggle")).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("still shows the graph when workspace get is unavailable", async () => {
+    const fetchSpy = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes("/v1/canvas.workspace.get")) {
+        throw new TypeError("fetch failed");
+      }
+      return new Response(JSON.stringify({ result: TWO_NODES, disclosure: whole() }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    await renderServerPage(() => CanvasPage({ searchParams: seededParams() }));
+    expect(screen.getByTestId("canvas-map")).toBeTruthy();
+    expect(screen.getByTestId("canvas-directory")).toBeTruthy();
+    expect(screen.queryByTestId("canvas-unavailable")).toBeNull();
+    expect(fetchUrls(fetchSpy).some((url) => url.includes("canvas.workspace.get"))).toBe(true);
+  });
+
+  it("applies saved overlay points on the seeded map", async () => {
+    answerGraph(TWO_NODES, whole(), {
+      focus_entity_id: FOCUS,
+      scope_entity_id: null,
+      version: 1,
+      positions: { [FOCUS]: { x: 10, y: 20 } },
+      updated_at: "2026-01-01T00:00:00Z",
+    });
+    await renderServerPage(() => CanvasPage({ searchParams: seededParams() }));
+    const focusCircle = screen.getByTestId("canvas-map").querySelector(`circle[cx="10"][cy="20"]`);
+    expect(focusCircle).not.toBeNull();
   });
 
   it("does not treat omitted nodes as an empty neighborhood", async () => {

@@ -223,6 +223,8 @@ class GoodNotesOccurrenceRepository(Protocol):
 
     def store_revision(self, revision: GoodNotesNoteRevision) -> GoodNotesNoteRevision: ...
 
+    def note_link(self, principal_id: str, link_id: str) -> GoodNotesNoteLink | None: ...
+
     def store_note_link(self, link: GoodNotesNoteLink) -> GoodNotesNoteLink: ...
 
     def store_run_note_change(self, change: GoodNotesRunNoteChange) -> GoodNotesRunNoteChange: ...
@@ -234,13 +236,52 @@ def match_occurrences(
     prior: Sequence[GoodNotesNoteOccurrence],
 ) -> tuple[OccurrenceMatch, ...]:
     """Match strongest unique visual evidence to weakest. Never uses page number."""
-    pages = _logical_pages(current, prior)
+    remaining_current = list(current)
+    remaining_prior = list(prior)
     matches: list[OccurrenceMatch] = []
-    for page_id in pages:
+    crops = dict.fromkeys(
+        item.crop_sha256 for item in current if item.visual_verified and item.crop_sha256
+    )
+    for crop in crops:
+        currents = [item for item in remaining_current if item.crop_sha256 == crop]
+        priors = [item for item in remaining_prior if item.crop_sha256 == crop]
+        if not priors and len(currents) == 1:
+            continue
+        if len(currents) == 1 and len(priors) == 1 and currents[0].visual_verified:
+            matches.append(
+                OccurrenceMatch(
+                    kind=OccurrenceMatchKind.PAIRED,
+                    method=OccurrenceMatchMethod.UNIQUE_CROP,
+                    current=currents[0],
+                    prior=priors[0],
+                )
+            )
+        else:
+            matches.extend(
+                OccurrenceMatch(
+                    kind=OccurrenceMatchKind.AMBIGUOUS,
+                    method=OccurrenceMatchMethod.UNRESOLVED,
+                    current=item,
+                )
+                for item in currents
+            )
+            matches.extend(
+                OccurrenceMatch(
+                    kind=OccurrenceMatchKind.AMBIGUOUS,
+                    method=OccurrenceMatchMethod.UNRESOLVED,
+                    prior=item,
+                )
+                for item in priors
+            )
+        for item in currents:
+            remaining_current.remove(item)
+        for evidence in priors:
+            remaining_prior.remove(evidence)
+    for page_id in _logical_pages(remaining_current, remaining_prior):
         matches.extend(
             _match_page(
-                [item for item in current if item.logical_page_id == page_id],
-                [item for item in prior if item.logical_page_id == page_id],
+                [item for item in remaining_current if item.logical_page_id == page_id],
+                [item for item in remaining_prior if item.logical_page_id == page_id],
             )
         )
     return tuple(matches)
@@ -326,7 +367,6 @@ def _match_page(
         mark_ambiguous=mark_ambiguous,
     )
     _assign_iou(remaining_current, remaining_prior, claim, mark_ambiguous)
-    _assign_context_overlap(remaining_current, remaining_prior, claim, mark_ambiguous)
 
     if remaining_current and remaining_prior:
         mark_ambiguous(remaining_current, remaining_prior)
@@ -448,86 +488,6 @@ def _assign_iou(
             [item for item in contested_current if item in remaining_current],
             unique_priors,
         )
-
-
-def _assign_context_overlap(
-    remaining_current: list[CurrentOccurrence],
-    remaining_prior: list[GoodNotesNoteOccurrence],
-    claim: Callable[[CurrentOccurrence, GoodNotesNoteOccurrence, OccurrenceMatchMethod], None],
-    mark_ambiguous: Callable[
-        [Iterable[CurrentOccurrence], Iterable[GoodNotesNoteOccurrence]], None
-    ],
-) -> None:
-    unique_pairs: list[tuple[CurrentOccurrence, GoodNotesNoteOccurrence]] = []
-    contested_current: list[CurrentOccurrence] = []
-    contested_prior: list[GoodNotesNoteOccurrence] = []
-    for item in remaining_current:
-        hits = [prior for prior in remaining_prior if _context_overlap(item, prior)]
-        if len(hits) == 1:
-            unique_pairs.append((item, hits[0]))
-        elif len(hits) > 1:
-            contested_current.append(item)
-            contested_prior.extend(hits)
-    prior_claimed: dict[str, list[CurrentOccurrence]] = {}
-    for item, evidence in unique_pairs:
-        prior_claimed.setdefault(evidence.occurrence_id, []).append(item)
-    for evidence_id, currents in prior_claimed.items():
-        if len(currents) == 1:
-            item = currents[0]
-            evidence = next(
-                prior for prior in remaining_prior if prior.occurrence_id == evidence_id
-            )
-            if item in remaining_current and evidence in remaining_prior:
-                claim(item, evidence, OccurrenceMatchMethod.CONTEXT_OVERLAP)
-        else:
-            contested_current.extend(currents)
-            contested_prior.extend(
-                prior for prior in remaining_prior if prior.occurrence_id == evidence_id
-            )
-    if contested_current:
-        unique_priors: list[GoodNotesNoteOccurrence] = []
-        seen: set[str] = set()
-        for evidence in contested_prior:
-            if evidence.occurrence_id in seen or evidence not in remaining_prior:
-                continue
-            seen.add(evidence.occurrence_id)
-            unique_priors.append(evidence)
-        mark_ambiguous(
-            [item for item in contested_current if item in remaining_current],
-            unique_priors,
-        )
-
-
-def _context_overlap(current: CurrentOccurrence, prior: GoodNotesNoteOccurrence) -> bool:
-    if current.context_anchor_sha256 is None or prior.context_anchor_sha256 is None:
-        return False
-    if current.context_anchor_sha256 != prior.context_anchor_sha256:
-        return False
-    if current.logical_page_id != prior.logical_page_id:
-        return False
-    return _boxes_overlap(
-        current.x_min,
-        current.y_min,
-        current.width,
-        current.height,
-        prior.x_min,
-        prior.y_min,
-        prior.width,
-        prior.height,
-    )
-
-
-def _boxes_overlap(
-    ax: float,
-    ay: float,
-    aw: float,
-    ah: float,
-    bx: float,
-    by: float,
-    bw: float,
-    bh: float,
-) -> bool:
-    return ax < bx + bw and bx < ax + aw and ay < by + bh and by < ay + ah
 
 
 def _geometry_iou(current: CurrentOccurrence, prior: GoodNotesNoteOccurrence) -> float:
@@ -751,6 +711,11 @@ class GoodNotesOccurrenceReconciler:
         if not snapshots:
             raise ValueError("the request names no stored GoodNotes ingestion run")
         notebook_id = snapshots[0].notebook_id
+        if any(
+            snapshot.principal_id != principal_id or snapshot.notebook_id != notebook_id
+            for snapshot in snapshots
+        ):
+            raise ValueError("GoodNotes occurrence reconciliation crossed its notebook boundary")
         snapshot_by_page: dict[str, str] = {}
         for snapshot in snapshots:
             for position in repository.page_positions(principal_id, snapshot.snapshot_id):
@@ -781,12 +746,28 @@ class GoodNotesOccurrenceReconciler:
                     png_bytes=None if raster is None else raster.png_bytes,
                 )
             )
-        prior = tuple(
-            item
-            for item in repository.occurrences_for_notebook(principal_id, notebook_id)
-            if item.identity_status in _ACTIVE_PRIOR
-        )
+        stored = repository.occurrences_for_notebook(principal_id, notebook_id)
+        if any(stored_occurrence.principal_id != principal_id for stored_occurrence in stored):
+            raise ValueError("GoodNotes occurrence reconciliation crossed its Principal boundary")
+        prior = tuple(item for item in stored if item.identity_status in _ACTIVE_PRIOR)
         matches = match_occurrences(current=current, prior=prior)
+        occupied = {
+            (item.logical_page_id, item.geometry_key): item.occurrence_id for item in stored
+        }
+        destinations: set[tuple[str, str]] = set()
+        for match in matches:
+            if match.kind not in (OccurrenceMatchKind.PAIRED, OccurrenceMatchKind.NEW):
+                continue
+            item = match.current
+            if item is None or _cannot_mint_new(item):
+                continue
+            target = (item.logical_page_id, item.geometry_key)
+            owner = occupied.get(target)
+            if target in destinations or (
+                owner is not None and (match.prior is None or owner != match.prior.occurrence_id)
+            ):
+                raise ValueError("GoodNotes occurrence destination is ambiguous")
+            destinations.add(target)
         changes = self._persist(
             principal_id=principal_id,
             run_id=run_id,
@@ -943,12 +924,14 @@ class GoodNotesOccurrenceReconciler:
         prior_digest = None if latest is None else _transcription_digest(latest.transcription)
         current_digest = _transcription_digest(current.transcription)
         transcription_changed = prior_digest != current_digest
-        visual_changed = _visual_changed(prior, current)
+        location_changed = prior.logical_page_id != current.logical_page_id
+        visual_changed = location_changed or _visual_changed(prior, current)
         occurrence = repository.store_occurrence(
             replace(
                 prior,
                 identity_status=GoodNotesIdentityStatus.ACTIVE,
                 last_seen_at=now,
+                logical_page_id=current.logical_page_id,
                 page_version_id=current.page_version_id,
                 snapshot_id=current.snapshot_id,
                 run_id=run_id,
@@ -962,6 +945,21 @@ class GoodNotesOccurrenceReconciler:
                 ),
             )
         )
+        if location_changed:
+            link_id = issue_stable_id(
+                "gnlink", principal_id, occurrence.note_id, "page", current.logical_page_id
+            )
+            existing_link = repository.note_link(principal_id, link_id)
+            repository.store_note_link(
+                GoodNotesNoteLink(
+                    link_id=link_id,
+                    principal_id=principal_id,
+                    note_id=occurrence.note_id,
+                    link_kind=GoodNotesNoteLinkKind.NOTE_TO_LOGICAL_PAGE,
+                    created_at=now if existing_link is None else existing_link.created_at,
+                    target_logical_page_id=current.logical_page_id,
+                )
+            )
         note = repository.note(principal_id, occurrence.note_id)
         if note is None:
             raise ValueError("the GoodNotes note could not be stored")

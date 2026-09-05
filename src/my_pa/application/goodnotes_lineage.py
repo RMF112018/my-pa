@@ -237,12 +237,6 @@ def match_logical_pages(
         mark_ambiguous=mark_ambiguous,
     )
 
-    if len(remaining_current) == 1 and len(remaining_prior) == 1:
-        page = remaining_current[0]
-        evidence = remaining_prior[0]
-        if abs(evidence.last_page_number - page.page_number) <= 1:
-            claim(page, evidence, GoodNotesMatchMethod.SEQUENCE_TIEBREAK)
-
     if remaining_current and remaining_prior:
         mark_ambiguous(remaining_current)
     else:
@@ -297,6 +291,10 @@ def _assign_unique(
         if len(hits) > 1 or (len(hits) == 1 and feature not in current_unique):
             contested.append(page)
     if contested:
+        contested_keys = {key_current(page) for page in contested}
+        remaining_prior[:] = [
+            item for item in remaining_prior if key_prior(item) not in contested_keys
+        ]
         mark_ambiguous(contested)
 
 

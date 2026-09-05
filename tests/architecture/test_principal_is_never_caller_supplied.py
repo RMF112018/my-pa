@@ -700,6 +700,12 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("page", "principal_id"),
         ("request", "principal_id"),
     ),
+    # R6 rechecks stored snapshots and prior occurrences against the authenticated
+    # reconciliation owner before allowing cross-page visual identity matching.
+    "application/goodnotes_occurrences.py": (
+        ("snapshot", "principal_id"),
+        ("stored_occurrence", "principal_id"),
+    ),
     # Durable-note orchestration receives the same authenticated Principal as
     # an explicit DurableNoteRequest field, not a public Command or envelope
     # value, and threads it into lineage, occurrence, and preview stores.
@@ -819,6 +825,7 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("entry", "principal_id"),
         ("entry", "principal_id"),
     ),
+    # R6 validates and locks occurrence moves within the authenticated owner.
     "infrastructure/persistence/goodnotes.py": (
         ("change", "principal_id"),
         ("change", "principal_id"),
@@ -837,6 +844,13 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("observed", "principal_id"),
         ("observed", "principal_id"),
         ("observed", "principal_id"),
+        ("occurrence", "principal_id"),
+        ("occurrence", "principal_id"),
+        ("occurrence", "principal_id"),
+        ("occurrence", "principal_id"),
+        ("occurrence", "principal_id"),
+        ("occurrence", "principal_id"),
+        ("occurrence", "principal_id"),
         ("occurrence", "principal_id"),
         ("occurrence", "principal_id"),
         ("occurrence", "principal_id"),

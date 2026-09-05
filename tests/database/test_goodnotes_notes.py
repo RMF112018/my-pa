@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesIngestionStatus,
     GoodNotesIngestionTrigger,
     GoodNotesLogicalPage,
+    GoodNotesMatchMethod,
     GoodNotesNote,
     GoodNotesNotebook,
     GoodNotesNoteChangeState,
@@ -23,7 +25,11 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesNoteLinkKind,
     GoodNotesNoteOccurrence,
     GoodNotesNoteRevision,
+    GoodNotesPage,
+    GoodNotesPagePosition,
+    GoodNotesPageVersion,
     GoodNotesRunNoteChange,
+    GoodNotesSourceSnapshot,
     issue_stable_id,
 )
 from my_pa.infrastructure.persistence.goodnotes import PostgresGoodNotesRepository
@@ -288,3 +294,226 @@ def test_structural_note_link_persists_without_entity_resolution(engine: Engine)
 @pytest.fixture
 def engine(db_engine: Engine) -> Engine:
     return db_engine
+
+
+def _move_target(
+    repository: PostgresGoodNotesRepository, notebook_id: str, token: str
+) -> tuple[
+    GoodNotesLogicalPage, GoodNotesPageVersion, GoodNotesSourceSnapshot, GoodNotesIngestionRun
+]:
+    logical = repository.store_logical_page(_logical(A, notebook_id, token))
+    run = repository.create_run(_run(A, token))
+    snapshot = repository.store_snapshot(
+        GoodNotesSourceSnapshot(
+            snapshot_id=issue_stable_id("gnsnap", A, token),
+            principal_id=A,
+            notebook_id=notebook_id,
+            source_object_id="obj_aaaaaaaaaaaaaaaaaaaaaaaa",
+            observed_path="synthetic.pdf",
+            raw_sha256=FINGERPRINT,
+            size_bytes=1,
+            page_count=1,
+            observed_at=WHEN,
+            settled_at=WHEN,
+            run_id=run.run_id,
+        )
+    )
+    page = GoodNotesPage(
+        page_id=issue_stable_id("gnpg", A, token),
+        principal_id=A,
+        source_id="src_aaaaaaaaaaaaaaaaaaaaaaaa",
+        source_object_id="obj_aaaaaaaaaaaaaaaaaaaaaaaa",
+        page_number=1,
+    )
+    version = repository.store_page_version_render(
+        page=page,
+        version=GoodNotesPageVersion(
+            page_version_id=issue_stable_id("gnver", A, token),
+            page_id=page.page_id,
+            source_version_id="ver_aaaaaaaaaaaaaaaaaaaaaaaa",
+            content_sha256=FINGERPRINT,
+            observed_at=WHEN,
+            logical_page_id=logical.logical_page_id,
+        ),
+    )
+    repository.store_page_position(
+        GoodNotesPagePosition(
+            principal_id=A,
+            snapshot_id=snapshot.snapshot_id,
+            page_number=1,
+            logical_page_id=logical.logical_page_id,
+            page_version_id=version.page_version_id,
+            match_method=GoodNotesMatchMethod.UNRESOLVED,
+            created_at=WHEN,
+        )
+    )
+    return logical, version, snapshot, run
+
+
+def test_occurrence_move_preserves_identity_and_prior_revision(engine: Engine) -> None:
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        notebook, logical, _ = _parents(repository, A, "move-origin")
+        note = repository.store_note(_note(A, notebook.notebook_id, "move-note"))
+        prior = repository.store_occurrence(
+            _occurrence(A, note.note_id, logical.logical_page_id, "move", x_min=0.1)
+        )
+        revision = repository.store_revision(
+            GoodNotesNoteRevision(
+                revision_id=issue_stable_id("gnrev", A, "move-prior"),
+                principal_id=A,
+                note_id=note.note_id,
+                occurrence_id=prior.occurrence_id,
+                schema_version="note-unit.v1",
+                analyzer_name="synthetic",
+                analyzer_version="1",
+                transcription="synthetic",
+                created_at=WHEN,
+            )
+        )
+        target, version, snapshot, run = _move_target(repository, notebook.notebook_id, "target")
+        moved = replace(
+            prior,
+            logical_page_id=target.logical_page_id,
+            page_version_id=version.page_version_id,
+            snapshot_id=snapshot.snapshot_id,
+            run_id=run.run_id,
+            last_seen_at=LATER,
+        )
+        assert repository.store_occurrence(moved) == moved
+        assert repository.store_occurrence(moved) == moved
+        assert repository.revision(A, revision.revision_id) == revision
+        assert repository.note(A, note.note_id) == note
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        assert repository.occurrence(A, prior.occurrence_id) == moved
+        assert repository.occurrence(B, prior.occurrence_id) is None
+
+
+@pytest.mark.parametrize(
+    "invalid", ["notebook", "principal", "version", "snapshot", "run", "missing"]
+)
+def test_occurrence_move_refuses_foreign_or_inconsistent_location(
+    engine: Engine, invalid: str
+) -> None:
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        notebook, logical, original_run = _parents(repository, A, "refuse-origin")
+        note = repository.store_note(_note(A, notebook.notebook_id, "refuse-note"))
+        prior = repository.store_occurrence(
+            _occurrence(A, note.note_id, logical.logical_page_id, "refuse", x_min=0.1)
+        )
+        target, version, snapshot, run = _move_target(repository, notebook.notebook_id, "target")
+        moved = replace(
+            prior,
+            logical_page_id=target.logical_page_id,
+            page_version_id=version.page_version_id,
+            snapshot_id=snapshot.snapshot_id,
+            run_id=run.run_id,
+            last_seen_at=LATER,
+        )
+        if invalid == "notebook":
+            other, other_page, _ = _parents(repository, A, "foreign")
+            assert other.notebook_id != notebook.notebook_id
+            moved = replace(moved, logical_page_id=other_page.logical_page_id)
+        elif invalid == "principal":
+            moved = replace(moved, principal_id=B)
+        elif invalid == "version":
+            moved = replace(moved, page_version_id=issue_stable_id("gnver", "missing"))
+        elif invalid == "snapshot":
+            moved = replace(moved, snapshot_id=issue_stable_id("gnsnap", "missing"))
+        elif invalid == "run":
+            moved = replace(moved, run_id=original_run.run_id)
+        else:
+            moved = replace(moved, page_version_id=None)
+        with pytest.raises(ValueError):
+            repository.store_occurrence(moved)
+        assert repository.occurrence(A, prior.occurrence_id) == prior
+        assert repository.occurrence(B, prior.occurrence_id) is None
+
+
+@pytest.mark.parametrize(
+    "status", [GoodNotesIdentityStatus.ACTIVE, GoodNotesIdentityStatus.RETIRED]
+)
+def test_occupied_move_target_refuses_without_mutation(
+    engine: Engine, status: GoodNotesIdentityStatus
+) -> None:
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        notebook, logical, _ = _parents(repository, A, "occupied-origin")
+        note = repository.store_note(_note(A, notebook.notebook_id, "occupied-note"))
+        prior = repository.store_occurrence(
+            _occurrence(A, note.note_id, logical.logical_page_id, "occupied", x_min=0.1)
+        )
+        target, version, snapshot, run = _move_target(repository, notebook.notebook_id, "target")
+        occupant = repository.store_occurrence(
+            replace(
+                _occurrence(A, note.note_id, target.logical_page_id, "occupant", x_min=0.1),
+                identity_status=status,
+            )
+        )
+    with pytest.raises(ValueError, match="already occupied"), engine.begin() as connection:
+        PostgresGoodNotesRepository(connection).store_occurrence(
+            replace(
+                prior,
+                logical_page_id=target.logical_page_id,
+                page_version_id=version.page_version_id,
+                snapshot_id=snapshot.snapshot_id,
+                run_id=run.run_id,
+                last_seen_at=LATER,
+            )
+        )
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        assert repository.occurrence(A, prior.occurrence_id) == prior
+        assert repository.occurrence(A, occupant.occurrence_id) == occupant
+
+
+def test_concurrent_moves_cannot_claim_the_same_target(engine: Engine) -> None:
+    from sqlalchemy import text
+    from sqlalchemy.exc import DBAPIError
+
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        notebook, logical, _ = _parents(repository, A, "racing-origin")
+        note = repository.store_note(_note(A, notebook.notebook_id, "racing-note"))
+        left = repository.store_occurrence(
+            _occurrence(A, note.note_id, logical.logical_page_id, "racing-left", x_min=0.1)
+        )
+        right = repository.store_occurrence(
+            _occurrence(A, note.note_id, logical.logical_page_id, "racing-right", x_min=0.5)
+        )
+        target, version, snapshot, run = _move_target(repository, notebook.notebook_id, "target")
+        moved_left = replace(
+            left,
+            logical_page_id=target.logical_page_id,
+            page_version_id=version.page_version_id,
+            snapshot_id=snapshot.snapshot_id,
+            run_id=run.run_id,
+            last_seen_at=LATER,
+        )
+        moved_right = replace(
+            right,
+            logical_page_id=target.logical_page_id,
+            x_min=0.1,
+            page_version_id=version.page_version_id,
+            snapshot_id=snapshot.snapshot_id,
+            run_id=run.run_id,
+            last_seen_at=LATER,
+        )
+    with engine.connect() as winner:
+        transaction = winner.begin()
+        PostgresGoodNotesRepository(winner).store_occurrence(moved_left)
+        with engine.connect() as contender:
+            competing = contender.begin()
+            contender.execute(text("SET LOCAL lock_timeout = '250ms'"))
+            with pytest.raises(DBAPIError, match="lock timeout"):
+                PostgresGoodNotesRepository(contender).store_occurrence(moved_right)
+            competing.rollback()
+        transaction.commit()
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        with pytest.raises(ValueError, match="already occupied"):
+            repository.store_occurrence(moved_right)
+        assert repository.occurrence(A, left.occurrence_id) == moved_left
+        assert repository.occurrence(A, right.occurrence_id) == right

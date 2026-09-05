@@ -213,7 +213,7 @@ def test_matcher_source_does_not_read_transcription() -> None:
     assert "transcription" not in source
 
 
-def test_sequence_tiebreak_only_when_one_candidate_remains() -> None:
+def test_single_remaining_mismatch_is_ambiguous() -> None:
     cover = b"cover-bytes"
     body = b"body-bytes"
     prior = (_prior(COVER, 1, cover), _prior(BODY, 2, body))
@@ -224,9 +224,10 @@ def test_sequence_tiebreak_only_when_one_candidate_remains() -> None:
     )
     by_number = {item.page_number: item for item in matches}
     assert by_number[1].logical_page_id == COVER
-    assert by_number[2].logical_page_id == BODY
-    assert by_number[2].match_method is GoodNotesMatchMethod.SEQUENCE_TIEBREAK
-    assert by_number[2].is_new is False
+    assert by_number[2].logical_page_id != BODY
+    assert by_number[2].match_method is GoodNotesMatchMethod.UNRESOLVED
+    assert by_number[2].identity_status is GoodNotesIdentityStatus.AMBIGUOUS
+    assert by_number[2].is_new is True
 
 
 def _write_pdf(root: Path, relative: str, payload: bytes | None = None) -> bytes:
@@ -603,3 +604,15 @@ def test_standalone_lineage_failed_resume_rejects_content_only_mismatch_before_m
     assert held.error_class == "Synthetic"
     assert repository.page_positions(A, first.snapshot.snapshot_id) == first.positions
     assert repository.page_version(A, version_id) == held_version
+
+
+def test_singleton_mismatch_cannot_reuse_identity_at_any_ordinal() -> None:
+    for number in (1, 2, 8):
+        match = match_logical_pages(
+            notebook_id=NOTEBOOK,
+            current=((number, _render(b"different")),),
+            prior=(_prior(COVER, 1, b"original"),),
+        )[0]
+        assert match.logical_page_id != COVER
+        assert match.identity_status is GoodNotesIdentityStatus.AMBIGUOUS
+        assert match.is_new

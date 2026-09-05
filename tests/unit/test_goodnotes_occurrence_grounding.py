@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from my_pa.application.goodnotes_delivery import GoodNotesNewOnlyDelivery
 from my_pa.application.goodnotes_occurrences import (
     GoodNotesOccurrenceReconciler,
     GoodNotesSemanticPromotionEvidence,
@@ -662,3 +663,160 @@ def test_unreadable_does_not_mint_fabricated_new_transcription() -> None:
     assert store._notes == {}
     assert store._revisions == {}
     assert "invented text" not in repr(result)
+
+
+def test_cross_page_move_preserves_identity_history_and_suppresses_new_delivery() -> None:
+    png = _ink_png()
+    store = MemoryDurableNoteStore()
+    first_run, first_page, notebook_id, first_logical = _plant(store, "move-first", png=png)
+    payload: dict[str, object] = {"segments": [_segment(x_min=0.1, transcription="same ink")]}
+    store.store_semantic_proposal(
+        A, first_run, first_page, "note-unit.v1", "synthetic", "1", payload
+    )
+    reconciler = GoodNotesOccurrenceReconciler()
+    first = reconciler.reconcile(
+        A,
+        first_run,
+        repository=store,
+        clock=lambda: LATER,
+        promotion_evidence=_accepted_evidence(store, first_run),
+    )
+    original = first.changes[0]
+    assert original.note_id is not None and original.occurrence_id is not None
+    old_revision = store.latest_revision_for_occurrence(A, original.occurrence_id)
+    target = store.store_logical_page(
+        GoodNotesLogicalPage(
+            logical_page_id=issue_stable_id("gnlp", A, "move-target"),
+            principal_id=A,
+            notebook_id=notebook_id,
+            created_at=WHEN,
+            last_seen_at=WHEN,
+            identity_status=GoodNotesIdentityStatus.ACTIVE,
+        )
+    )
+    run_id, version_id = _next_version(
+        store,
+        key="move-second",
+        notebook_id=notebook_id,
+        logical_id=target.logical_page_id,
+        png=png,
+    )
+    store.store_semantic_proposal(A, run_id, version_id, "note-unit.v1", "synthetic", "1", payload)
+    result = reconciler.reconcile(
+        A,
+        run_id,
+        repository=store,
+        clock=lambda: LATER + timedelta(minutes=1),
+        promotion_evidence=_accepted_evidence(store, run_id),
+    )
+    assert len(result.changes) == 1
+    change = result.changes[0]
+    assert change.change_state is GoodNotesNoteChangeState.REVISED
+    assert (change.note_id, change.occurrence_id) == (original.note_id, original.occurrence_id)
+    occurrence = store.occurrence(A, original.occurrence_id)
+    assert occurrence is not None
+    assert occurrence.logical_page_id == target.logical_page_id
+    assert occurrence.page_version_id == version_id
+    revision = store.latest_revision_for_occurrence(A, original.occurrence_id)
+    assert revision is not None and old_revision is not None
+    assert revision.supersedes_revision_id == old_revision.revision_id
+    assert revision.page_version_id == version_id
+    assert {link.target_logical_page_id for link in store._links.values()} == {
+        first_logical,
+        target.logical_page_id,
+    }
+    replay = reconciler.reconcile(A, run_id, repository=store, clock=lambda: LATER)
+    assert replay.replayed and replay.changes == result.changes
+    delivery = GoodNotesNewOnlyDelivery().deliver(
+        A, run_id, "operator-local", repository=store, clock=lambda: LATER
+    )
+    assert delivery.receipt.body is None
+    assert delivery.receipt.suppressed
+    replayed_delivery = GoodNotesNewOnlyDelivery().deliver(
+        A, run_id, "operator-local", repository=store, clock=lambda: LATER
+    )
+    assert replayed_delivery.receipt.receipt_id == delivery.receipt.receipt_id
+
+    links_before_return = dict(store._links)
+    return_run, return_version = _next_version(
+        store,
+        key="move-return",
+        notebook_id=notebook_id,
+        logical_id=first_logical,
+        png=png,
+    )
+    store.store_semantic_proposal(
+        A, return_run, return_version, "note-unit.v1", "synthetic", "1", payload
+    )
+    _accepted_evidence(store, return_run)
+    returned = reconciler.reconcile(
+        A, return_run, repository=store, clock=lambda: LATER + timedelta(minutes=2)
+    )
+    assert len(returned.changes) == 1
+    returning_change = returned.changes[0]
+    assert returning_change.change_state is GoodNotesNoteChangeState.REVISED
+    assert (returning_change.note_id, returning_change.occurrence_id) == (
+        original.note_id,
+        original.occurrence_id,
+    )
+    returned_occurrence = store.occurrence(A, original.occurrence_id)
+    assert returned_occurrence is not None
+    assert returned_occurrence.logical_page_id == first_logical
+    assert returned_occurrence.page_version_id == return_version
+    returned_revision = store.latest_revision_for_occurrence(A, original.occurrence_id)
+    assert returned_revision is not None
+    assert returned_revision.supersedes_revision_id == revision.revision_id
+    assert store._links == links_before_return
+    assert reconciler.reconcile(A, return_run, repository=store).changes == returned.changes
+    return_delivery = GoodNotesNewOnlyDelivery().deliver(
+        A, return_run, "operator-local", repository=store, clock=lambda: LATER
+    )
+    assert return_delivery.receipt.suppressed and return_delivery.receipt.body is None
+
+
+def test_retired_destination_refuses_before_canonical_writes() -> None:
+    png = _ink_png()
+    store = MemoryDurableNoteStore()
+    run_id, page_id, notebook_id, logical_id = _plant(store, "occupied", png=png)
+    note = store.store_note(
+        GoodNotesNote(
+            note_id=issue_stable_id("gnnt", A, "occupied"),
+            principal_id=A,
+            notebook_id=notebook_id,
+            identity_status=GoodNotesIdentityStatus.RETIRED,
+            created_at=WHEN,
+            last_seen_at=WHEN,
+        )
+    )
+    prior = store.store_occurrence(
+        GoodNotesNoteOccurrence(
+            occurrence_id=issue_stable_id("gnocc", A, "occupied"),
+            principal_id=A,
+            note_id=note.note_id,
+            logical_page_id=logical_id,
+            x_min=0.1,
+            y_min=0.2,
+            width=0.2,
+            height=0.1,
+            crop_sha256=crop_normalized_png(png, 0.1, 0.2, 0.2, 0.1).digest,
+            identity_status=GoodNotesIdentityStatus.RETIRED,
+            created_at=WHEN,
+            last_seen_at=WHEN,
+        )
+    )
+    store.store_semantic_proposal(
+        A,
+        run_id,
+        page_id,
+        "note-unit.v1",
+        "synthetic",
+        "1",
+        {"segments": [_segment(x_min=0.1, transcription="same ink")]},
+    )
+    _accepted_evidence(store, run_id)
+    with pytest.raises(ValueError, match="destination is ambiguous"):
+        GoodNotesOccurrenceReconciler().reconcile(A, run_id, repository=store, clock=lambda: LATER)
+    assert store.occurrence(A, prior.occurrence_id) == prior
+    assert store.run_note_changes(A, run_id) == ()
+    assert store.latest_revision_for_occurrence(A, prior.occurrence_id) is None
+    assert store.accepted_semantic_material(A, run_id, require_promoted=True) is None

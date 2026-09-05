@@ -16,10 +16,7 @@ DATA_SUBNET = "172.22.0.0/16"
 INGRESS_ID = "a1b2c3d4" + "7" * 56
 INGRESS_BRIDGE = "docker-a1b2c3d4"
 INGRESS_SUBNET = "172.23.0.0/16"
-DATA_RULE = (
-    f"-A FORWARD_FIREWALL -s {DATA_SUBNET} -d {DATA_SUBNET} "
-    f"-i {DATA_BRIDGE} -o {DATA_BRIDGE} -j RETURN"
-)
+DATA_RULE = "-A FORWARD_FIREWALL -j MY_PA_DATA_PLANE"
 INGRESS_RULE = (
     f"-A FORWARD_FIREWALL -s {INGRESS_SUBNET} -d {INGRESS_SUBNET} "
     f"-i {INGRESS_BRIDGE} -o {INGRESS_BRIDGE} -j RETURN"
@@ -106,7 +103,7 @@ def _environment(
     iptables_save = tools / "iptables-save"
     if data_effective:
         save_forward = (
-            "'-A FORWARD -j MY_PA_DATA_PLANE' '-A FORWARD -j FORWARD_FIREWALL' "
+            "'-A FORWARD -j FORWARD_FIREWALL' '-A FORWARD_FIREWALL -j MY_PA_DATA_PLANE' "
             f"'{data_p1}' "
             f"'-A MY_PA_DATA_PLANE -i {DATA_BRIDGE} -j DROP' "
             f"'-A MY_PA_DATA_PLANE -o {DATA_BRIDGE} -j DROP' "

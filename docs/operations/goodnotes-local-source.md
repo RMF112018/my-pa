@@ -125,3 +125,21 @@ Reconciliation, preview and associations read the same receipt-bound accepted
 semantic material. CORRECT_AND_ACCEPT uses the immutable corrected Review
 payload, preserving the original proposal as evidence. Completion does not send
 a message, invoke OCR/model inference, reread live sources or enable a schedule.
+
+Semantic proposals may carry optional `date_evidence` with separate
+`page_candidates`, `event_dates`, and `body_dates` collections, each bounded to
+32 entries. Entries preserve canonical ISO dates, original literals and bounded
+nonempty evidence references, with optional finite confidence. Multiple distinct
+PAGE dates remain ambiguous; evidence for the same date remains preserved.
+Omitted or empty date evidence retains historical no-date fingerprint bytes.
+Review corrections preserve dates when omitted and remove the accepted claim
+when explicitly emptied, while the original proposal remains immutable.
+
+Accepted date evidence stays in existing proposal/Review JSON and promotion
+bindings. A date-only change appends a semantic revision even when text and
+visual identity are unchanged. Comparison follows the latest revision's exact
+snapshot/page provenance to its promoted material; missing, inconsistent or
+unpromoted prior provenance fails closed rather than inventing prior dates.
+Dates never establish identity, infer scheduling, or come from page ordinal,
+file paths, modification time or observation time. No new date columns or
+user-facing delivery format are introduced.

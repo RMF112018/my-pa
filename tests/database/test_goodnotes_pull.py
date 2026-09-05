@@ -110,8 +110,9 @@ def test_session_identity_and_retry_policy_fail_closed(engine: Engine) -> None:
 
 
 @pytest.mark.parametrize("canonical_enabled", [False, True])
+@pytest.mark.parametrize("with_dates", [False, True])
 def test_semantic_review_exact_replay_conflict_projection_and_client_status_isolation(
-    engine: Engine, monkeypatch: pytest.MonkeyPatch, canonical_enabled: bool
+    engine: Engine, monkeypatch: pytest.MonkeyPatch, canonical_enabled: bool, with_dates: bool
 ) -> None:
     run_id = "gnrun_0123456789abcdef01234567"
     proposal_id = "gnprp_0123456789abcdef01234567"
@@ -132,6 +133,17 @@ def test_semantic_review_exact_replay_conflict_projection_and_client_status_isol
         "confidence": None,
     }
     corrected_payload = {**payload, "confidence": 0.75}
+    if with_dates:
+        date = {
+            "scope": "PAGE",
+            "value": "2026-09-05",
+            "literal": "September 5",
+            "evidence_refs": ["synthetic-heading"],
+        }
+        payload["date_evidence"] = {"page_candidates": [date]}
+        corrected_payload["date_evidence"] = {
+            "page_candidates": [{**date, "value": "2026-09-06", "literal": "September 6"}]
+        }
     original_result_sha256 = _corrected_result_sha256(payload)
     corrected_result_sha256 = _corrected_result_sha256(corrected_payload)
     proposal_sha256 = semantic_proposal_sha256(page_version_id, "v1", "test", "1", payload)
@@ -321,6 +333,11 @@ def test_semantic_review_exact_replay_conflict_projection_and_client_status_isol
         assert (
             repository.semantic_review_case("prn_fedcba9876543210fedcba98", review_case_id) is None
         )
+        if with_dates:
+            with pytest.raises(SemanticReviewConflictError):
+                repository.record_semantic_review(
+                    replace(decision, corrected_result_sha256=original_result_sha256)
+                )
         assert repository.record_semantic_review(decision).replayed is False
         assert repository.record_semantic_review(decision).replayed is True
         corrected_material = repository.completion_material(PRINCIPAL, "scheduler-a", "3" * 64)

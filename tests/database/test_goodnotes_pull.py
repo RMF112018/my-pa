@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime
 from threading import Barrier
 from typing import Final
@@ -14,7 +15,7 @@ from sqlalchemy import Engine, func, select, text
 from sqlalchemy.exc import DBAPIError
 
 from my_pa.application.commands import CompleteGoodNotesPull
-from my_pa.application.goodnotes_occurrences import _reviewed_proposals, semantic_proposal_sha256
+from my_pa.application.goodnotes_occurrences import semantic_proposal_sha256
 from my_pa.application.goodnotes_pull_orchestration import (
     PullAssignment,
     PullCompletion,
@@ -46,6 +47,7 @@ from my_pa.infrastructure.persistence.tables import (
     goodnotes_page_rasters,
     goodnotes_page_versions,
     goodnotes_pages,
+    goodnotes_semantic_promotion_receipts,
     goodnotes_semantic_proposals,
     goodnotes_semantic_review_decisions,
     goodnotes_source_snapshots,
@@ -107,8 +109,9 @@ def test_session_identity_and_retry_policy_fail_closed(engine: Engine) -> None:
             repository.claim_batch(PRINCIPAL, "scheduler-a", "ctx-stable-a", (), (), max_attempts=4)
 
 
+@pytest.mark.parametrize("canonical_enabled", [False, True])
 def test_semantic_review_exact_replay_conflict_projection_and_client_status_isolation(
-    engine: Engine, monkeypatch: pytest.MonkeyPatch
+    engine: Engine, monkeypatch: pytest.MonkeyPatch, canonical_enabled: bool
 ) -> None:
     run_id = "gnrun_0123456789abcdef01234567"
     proposal_id = "gnprp_0123456789abcdef01234567"
@@ -117,7 +120,13 @@ def test_semantic_review_exact_replay_conflict_projection_and_client_status_isol
     snapshot_id = "gnsnap_0123456789abcdef01234567"
     page_version_id = "gnver_0123456789abcdef01234567"
     payload: dict[str, object] = {
-        "segments": [],
+        "segments": [
+            {
+                "kind": "SOURCE_CONTEXT",
+                "transcription": "synthetic context",
+                "geometry": {"x_min": 0.1, "y_min": 0.1, "width": 0.2, "height": 0.2},
+            }
+        ],
         "candidate_tags": [],
         "ranked_candidates": [],
         "confidence": None,
@@ -263,7 +272,7 @@ def test_semantic_review_exact_replay_conflict_projection_and_client_status_isol
                 page_version_id=page_version_id,
                 run_id=run_id,
                 exact_render_sha256="9" * 64,
-                png_sha256="7" * 64,
+                png_sha256=hashlib.sha256(b"x").hexdigest(),
                 media_type="image/png",
                 byte_length=1,
                 png_bytes=b"x",
@@ -326,13 +335,12 @@ def test_semantic_review_exact_replay_conflict_projection_and_client_status_isol
         assert evidence[0].is_bound_to(PRINCIPAL, run_id)
         assert not evidence[0].is_bound_to("prn_fedcba9876543210fedcba98", run_id)
         assert not evidence[0].is_bound_to(PRINCIPAL, "gnrun_fedcba9876543210fedcba98")
-        reviewed = _reviewed_proposals(
-            PRINCIPAL,
-            run_id,
-            ((page_version_id, "v1", "test", "1", payload),),
-            evidence,
+        reviewed = repository.accepted_semantic_material(PRINCIPAL, run_id)
+        assert reviewed is not None
+        assert reviewed[0].payload == corrected_payload
+        assert (
+            repository.accepted_semantic_material(PRINCIPAL, run_id, require_promoted=True) is None
         )
-        assert reviewed[0][4] == corrected_payload
         stored_payload = connection.scalar(
             select(goodnotes_semantic_proposals.c.payload).where(
                 goodnotes_semantic_proposals.c.principal_id == PRINCIPAL,
@@ -350,6 +358,7 @@ def test_semantic_review_exact_replay_conflict_projection_and_client_status_isol
         clock=lambda: WHEN,
         goodnotes_pull_enabled=True,
         goodnotes_pull_cursor_signing_key=b"k" * 32,
+        goodnotes_canonical_semantic_writes_enabled=canonical_enabled,
     )
     admission = PullCompletionAdmission(
         completion=PullCompletion(
@@ -470,6 +479,33 @@ def test_semantic_review_exact_replay_conflict_projection_and_client_status_isol
     assert replayed.error is None, replayed.error
     assert replayed.result is not None
     assert replayed.result["completions"][0]["replayed"] is True  # type: ignore[index]
+
+    if canonical_enabled:
+        with engine.begin() as connection:
+            repository = SqlGoodNotesPullRepository(connection)
+            assert (
+                repository.accepted_semantic_material(PRINCIPAL, run_id, require_promoted=True)
+                is not None
+            )
+            receipts = connection.execute(select(goodnotes_semantic_promotion_receipts)).all()
+            assert len(receipts) == 1
+            assert len(receipts[0].bindings) == 1
+            assert receipts[0].bindings[0]["decision_id"] == accepted.decision_id
+            assert repository.record_semantic_review(replace(accepted, sequence=None)).replayed
+            with pytest.raises(SemanticReviewConflictError):
+                repository.record_semantic_review(
+                    SemanticReviewDecision(
+                        decision_id="gnsrd_bbbbbbbbbbbbbbbbbbbbbbbb",
+                        principal_id=PRINCIPAL,
+                        run_id=run_id,
+                        proposal_id=proposal_id,
+                        proposal_sha256=proposal_sha256,
+                        action="invalidate",
+                        request_fingerprint="2" * 64,
+                        decided_at=WHEN,
+                    )
+                )
+        return
 
     with engine.begin() as connection:
         repository = SqlGoodNotesPullRepository(connection)

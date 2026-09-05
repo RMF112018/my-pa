@@ -8843,6 +8843,36 @@ goodnotes_semantic_review_decisions = Table(
     ),
 )
 
+goodnotes_semantic_promotion_receipts = Table(
+    "goodnotes_semantic_promotion_receipts",
+    METADATA,
+    Column("principal_id", String(72), primary_key=True),
+    Column("run_id", String(36), primary_key=True),
+    Column("receipt_id", String(36), nullable=False),
+    Column("binding_sha256", String(64), nullable=False),
+    Column("bindings", JSONB, nullable=False),
+    Column("promoted_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint(
+        "receipt_id ~ '^gnspr_[a-f0-9]{24}$'", name="goodnotes_promotion_receipt_shape"
+    ),
+    CheckConstraint("binding_sha256 ~ '^[a-f0-9]{64}$'", name="goodnotes_promotion_digest_shape"),
+    CheckConstraint(
+        "jsonb_typeof(bindings) = 'array' AND jsonb_array_length(bindings) <= 10000",
+        name="goodnotes_promotion_bindings_bounded",
+    ),
+    UniqueConstraint("principal_id", "receipt_id", name="one_goodnotes_promotion_receipt"),
+    ForeignKeyConstraint(
+        ["principal_id", "run_id"],
+        [
+            f"{SCHEMA}.goodnotes_ingestion_runs.principal_id",
+            f"{SCHEMA}.goodnotes_ingestion_runs.run_id",
+        ],
+        ondelete="RESTRICT",
+        name="goodnotes_promotion_run_fk",
+    ),
+)
+
 #: Principal-bound associations from ranked GN-04 candidate strings. Does not
 #: reuse `goodnotes_note_links` kinds. Unresolved literals stay unresolved;
 #: nothing here creates a Project, person, or Task.

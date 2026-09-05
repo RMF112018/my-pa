@@ -7,12 +7,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from sqlalchemy import Engine
+from sqlalchemy import Engine, select
 from sqlalchemy.sql import Executable
 
 from my_pa.application.goodnotes_lineage import ObservedNotebookFile
 from my_pa.application.goodnotes_occurrences import (
-    GoodNotesSemanticPromotionEvidence,
     semantic_proposal_sha256,
 )
 from my_pa.application.goodnotes_orchestrator import (
@@ -21,7 +20,7 @@ from my_pa.application.goodnotes_orchestrator import (
     DurableNoteStageError,
     GoodNotesDurableNoteOrchestrator,
 )
-from my_pa.domain.capture.review import Disposition
+from my_pa.contracts.ports import GoodNotesSemanticReviewDecisionRecord
 from my_pa.domain.goodnotes.liveness import (
     GoodNotesSourceLiveness,
     GoodNotesSourceLivenessReceipt,
@@ -35,7 +34,9 @@ from my_pa.domain.goodnotes.models import (
 from my_pa.infrastructure.goodnotes.pdf import split_admitted_pdf
 from my_pa.infrastructure.goodnotes.render import production_page_renderer
 from my_pa.infrastructure.persistence.goodnotes_durable_note import PostgresDurableNoteStore
+from my_pa.infrastructure.persistence.goodnotes_pull import SqlGoodNotesPullRepository
 from my_pa.infrastructure.persistence.goodnotes_semantics import SqlGoodNotesSemanticRepository
+from my_pa.infrastructure.persistence.tables import goodnotes_semantic_proposals
 from tests.unit.vector_pdf import Rect, vector_pdf
 
 pytestmark = pytest.mark.database
@@ -134,18 +135,24 @@ def _propose(store: PostgresDurableNoteStore, run_id: str) -> str:
         positions = store.page_positions(A, snapshot.snapshot_id)
         break
     assert positions
-    version_id = positions[0].page_version_id
-    assert version_id is not None
-    store.store_semantic_proposal(
-        A,
-        run_id,
-        version_id,
-        "note-unit.v1",
-        "synthetic",
-        "1",
-        {"segments": [_segment()]},
-    )
-    return version_id
+    for position in positions:
+        version_id = position.page_version_id
+        assert version_id is not None
+        store.store_semantic_proposal(
+            A,
+            run_id,
+            version_id,
+            "note-unit.v1",
+            "synthetic",
+            "1",
+            {
+                "segments": [_segment()],
+                "candidate_tags": [],
+                "ranked_candidates": [],
+                "confidence": None,
+            },
+        )
+    return store.semantic_proposals_for_run(A, run_id)[0][0]
 
 
 def _run(
@@ -157,19 +164,33 @@ def _run(
 ) -> DurableNoteResult:
     request = _request(pdf, request_id)
     existing = store.run_by_request(A, request_id)
-    evidence = (
-        ()
-        if existing is None
-        else tuple(
-            GoodNotesSemanticPromotionEvidence(
-                principal_id=A,
-                run_id=existing.run_id,
-                proposal_sha256=semantic_proposal_sha256(*proposal),
-                disposition=Disposition.ACCEPT,
+    if existing is not None:
+        pull = SqlGoodNotesPullRepository(store.connection)
+        for row in store.connection.execute(
+            select(goodnotes_semantic_proposals).where(
+                goodnotes_semantic_proposals.c.principal_id == A,
+                goodnotes_semantic_proposals.c.run_id == existing.run_id,
             )
-            for proposal in store.semantic_proposals_for_run(A, existing.run_id)
-        )
-    )
+        ):
+            digest = semantic_proposal_sha256(
+                str(row.page_version_id),
+                str(row.schema_version),
+                str(row.analyzer_name),
+                str(row.analyzer_version),
+                row.payload,
+            )
+            pull.record_semantic_review(
+                GoodNotesSemanticReviewDecisionRecord(
+                    decision_id="gnsrd_" + digest[:24],
+                    principal_id=A,
+                    run_id=existing.run_id,
+                    proposal_id=str(row.proposal_id),
+                    proposal_sha256=digest,
+                    action="accept",
+                    request_fingerprint=digest,
+                    decided_at=WHEN,
+                )
+            )
     return GoodNotesDurableNoteOrchestrator(rollout_stage="new-only-summary-preview").run(
         request,
         renderer=production_page_renderer(),
@@ -177,7 +198,6 @@ def _run(
         store=store,
         clock=lambda: WHEN,
         fail_after=fail_after,
-        promotion_evidence=evidence,
     )
 
 

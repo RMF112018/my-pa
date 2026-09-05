@@ -283,7 +283,8 @@ def test_the_chain_has_one_head_and_this_revision_revises_the_task_read_plane() 
     # from `c99cd8ed8d1c` onto `16f05c46b8c3` so the chain keeps one head
     # (RULING-M11); 91 since `6a2f9d1c4b80` added the GoodNotes pull schema on
     # top of that -- counted on the merged tree, not derived (RULING-M2).
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 91
+    # R8 adds one receipt migration on the previous 91-revision chain.
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 92
 
 
 def test_the_frozen_literals_are_the_domain_at_head() -> None:

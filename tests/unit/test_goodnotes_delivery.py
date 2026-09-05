@@ -15,6 +15,7 @@ from my_pa.application.goodnotes_delivery import (
     new_note_is_uncertain,
     resolve_entity_candidate,
 )
+from my_pa.contracts.ports import GoodNotesSemanticProposalMaterial
 from my_pa.domain.goodnotes.models import (
     GoodNotesDeliveryAttempt,
     GoodNotesDeliveryAttemptState,
@@ -295,6 +296,25 @@ class _FakeDeliveryRepository:
         if principal_id != self.principal_id:
             return ()
         return self.proposals
+
+    def accepted_semantic_material(
+        self, principal_id: str, run_id: str, *, require_promoted: bool = False
+    ) -> tuple[GoodNotesSemanticProposalMaterial, ...] | None:
+        if self.run(principal_id, run_id) is None:
+            return None
+        return tuple(
+            GoodNotesSemanticProposalMaterial(
+                proposal_id=issue_stable_id("gnrun", principal_id, run_id, row[0]),
+                run_id=run_id,
+                page_version_id=row[0],
+                content_sha256="a" * 64,
+                schema_version=row[1],
+                analyzer_name=row[2],
+                analyzer_version=row[3],
+                payload=row[4],
+            )
+            for row in self.proposals
+        )
 
     def entity_directory(self, principal_id: str) -> tuple[GoodNotesEntityDirectoryRecord, ...]:
         if principal_id != self.principal_id:

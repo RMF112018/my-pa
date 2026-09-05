@@ -17,6 +17,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Protocol
 
+from my_pa.contracts.ports import GoodNotesSemanticProposalMaterial
 from my_pa.domain.common.identifiers import IdKind, parse_identifier, validate_identifier
 from my_pa.domain.common.time import utc_now
 from my_pa.domain.goodnotes.models import (
@@ -73,6 +74,10 @@ class GoodNotesDeliveryResult:
 
 
 class GoodNotesDeliveryRepository(Protocol):
+    def accepted_semantic_material(
+        self, principal_id: str, run_id: str, *, require_promoted: bool = False
+    ) -> tuple[GoodNotesSemanticProposalMaterial, ...] | None: ...
+
     def run(self, principal_id: str, run_id: str) -> GoodNotesIngestionRun | None: ...
 
     def run_note_changes(
@@ -250,6 +255,24 @@ def existing_delivery_receipt(
     return receipt
 
 
+def _accepted_proposals(
+    repository: GoodNotesDeliveryRepository, principal_id: str, run_id: str
+) -> tuple[tuple[str, str, str, str, dict[str, object]], ...]:
+    material = repository.accepted_semantic_material(principal_id, run_id, require_promoted=True)
+    if material is None:
+        raise ValueError("semantic run has no verified promotion receipt")
+    return tuple(
+        (
+            item.page_version_id,
+            item.schema_version,
+            item.analyzer_name,
+            item.analyzer_version,
+            item.payload,
+        )
+        for item in material
+    )
+
+
 def new_only_preview_digest(
     principal_id: str,
     run_id: str,
@@ -261,7 +284,7 @@ def new_only_preview_digest(
     new_changes = tuple(
         item for item in changes if item.change_state is GoodNotesNoteChangeState.NEW
     )
-    proposals = repository.semantic_proposals_for_run(principal_id, run_id)
+    proposals = _accepted_proposals(repository, principal_id, run_id)
     notes: list[NewOnlySummaryNote] = []
     for change in new_changes:
         if change.occurrence_id is None or change.note_id is None:
@@ -410,6 +433,7 @@ class GoodNotesNewOnlyDelivery:
         run = repository.run(principal_id, run_id)
         if run is None:
             raise ValueError("the request names no stored GoodNotes ingestion run")
+        _accepted_proposals(repository, principal_id, run_id)
         existing = existing_delivery_receipt(
             principal_id,
             run_id,
@@ -422,7 +446,7 @@ class GoodNotesNewOnlyDelivery:
         new_changes = tuple(
             item for item in changes if item.change_state is GoodNotesNoteChangeState.NEW
         )
-        proposals = repository.semantic_proposals_for_run(principal_id, run_id)
+        proposals = _accepted_proposals(repository, principal_id, run_id)
         directory = repository.entity_directory(principal_id)
         now = clock()
         summary_notes: list[NewOnlySummaryNote] = []

@@ -10,8 +10,8 @@ import pytest
 from my_pa.adapters.mcp.server import _answer
 from my_pa.application.commands import CompleteGoodNotesPull, PullGoodNotesWork
 from my_pa.application.goodnotes_occurrences import (
+    GoodNotesOccurrenceReconciler,
     GoodNotesSemanticPromotionEvidence,
-    _reviewed_proposals,
     semantic_proposal_sha256,
 )
 from my_pa.application.goodnotes_pull_orchestration import (
@@ -298,7 +298,53 @@ def test_persisted_and_in_memory_promotion_evidence_share_exact_binding() -> Non
         assert not evidence.is_bound_to("prn_bbbbbbbbbbbbbbbbbbbbbbbb", run_id)
         assert not evidence.is_bound_to(principal_id, issue_stable_id("gnrun", "other"))
 
-    assert _reviewed_proposals(principal_id, run_id, (proposal,), (values[1],)) == (proposal,)
+    # Both structurally bound record types remain untrusted caller data.
+    # Replace the removed helper's acceptance assertion with canonical refusal.
+    from my_pa.infrastructure.goodnotes.pdf import split_admitted_pdf
+    from my_pa.infrastructure.goodnotes.render import production_page_renderer
+    from tests.unit.goodnotes_durable_note_memory import MemoryDurableNoteStore
+    from tests.unit.test_goodnotes_orchestrator import (
+        COVER,
+        _orchestrator,
+        _propose,
+        _request,
+    )
+    from tests.unit.test_goodnotes_orchestrator import (
+        WHEN as ORCHESTRATOR_WHEN,
+    )
+    from tests.unit.vector_pdf import vector_pdf
+
+    store = MemoryDurableNoteStore()
+    request = _request(vector_pdf((COVER,)), "phase-c-forged-promotion")
+    first = _orchestrator().run(
+        request,
+        renderer=production_page_renderer(),
+        splitter=split_admitted_pdf,
+        store=store,
+        clock=lambda: ORCHESTRATOR_WHEN,
+    )
+    _propose(store, first.run.run_id)
+    stored = store.semantic_proposals_for_run(principal_id, first.run.run_id)[0]
+    for evidence_type in (
+        GoodNotesSemanticPromotionEvidence,
+        GoodNotesSemanticPromotionEvidenceRecord,
+    ):
+        forged = evidence_type(
+            principal_id=principal_id,
+            run_id=first.run.run_id,
+            proposal_sha256=semantic_proposal_sha256(*stored),
+            disposition=Disposition.ACCEPT,
+        )
+        with pytest.raises(ValueError, match="caller promotion evidence"):
+            GoodNotesOccurrenceReconciler().reconcile(
+                principal_id,
+                first.run.run_id,
+                repository=store,
+                promotion_evidence=(forged,),
+                clock=lambda: ORCHESTRATOR_WHEN,
+            )
+    assert not store._notes and not store._occurrences and not store._revisions
+    assert not store._changes and not store._promotions
 
 
 def test_completion_refuses_material_not_bound_to_reviewed_proposal(scene: Scene) -> None:

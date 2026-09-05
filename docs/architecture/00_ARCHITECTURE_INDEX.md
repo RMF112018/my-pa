@@ -1,71 +1,15 @@
 # Architecture Index
 
-## Accepted foundation
+Current architecture is documented here:
 
-- Modular monolith in one repository
-- Separate gateway and worker processes
-- Operator CLI as a third entry surface
-- Inward dependency direction: apps/bootstrap → infrastructure/application → domain/contracts
-- PostgreSQL as the canonical metadata and knowledge store
-- Source providers separated from managed-document stores
-- Progressive, reference-driven indexing
-- Obsidian as a rebuildable projection
-- Neutral `my_pa` / `MY_PA_` naming
+- [`system-overview.md`](system-overview.md) — processes, boundaries and end-to-end flow.
+- [`backend-domain.md`](backend-domain.md) — Python layering, dependency direction and extension points.
+- [`frontend-bff-pwa.md`](frontend-bff-pwa.md) — browser/PWA/BFF architecture.
+- [`data-and-storage.md`](data-and-storage.md) — authority classes, PostgreSQL, source and managed storage.
+- [`mcp-and-agent-integration.md`](mcp-and-agent-integration.md) — MCP surfaces and capability derivation.
+- [`authentication-security.md`](authentication-security.md) — Principal/session/auth and security boundaries.
+- [`deployment-runtime.md`](deployment-runtime.md) — process/container/NAS runtime topology.
 
-## Architecture documents
+Durable decisions are indexed by [`../decisions/00_ADR_INDEX.md`](../decisions/00_ADR_INDEX.md).
 
-| Document | Status |
-|---|---|
-| [`system-context.md`](system-context.md) | Current repository architecture |
-| [`module-boundaries.md`](module-boundaries.md) | Present — proposed for repository review |
-| [`data-authority.md`](data-authority.md) | Present — proposed for repository review |
-| [`../security/threat-model.md`](../security/threat-model.md) | Present — proposed for repository review |
-| [`../decisions/ADR-003-product-owned-user-authored-source-records.md`](../decisions/ADR-003-product-owned-user-authored-source-records.md) | Accepted — the third authority class |
-| [`../decisions/ADR-008-nas-runtime-topology.md`](../decisions/ADR-008-nas-runtime-topology.md) | Accepted — staged NAS target topology; not deployed |
-| [`../decisions/ADR-009-oauth-refresh-token-families.md`](../decisions/ADR-009-oauth-refresh-token-families.md) | Accepted — rotating refresh tokens for remote MCP |
-
-## Specification
-
-The read-only Minimum Viable Candidate (MCV) contract is [`../specs/mcv-read-only-vertical-slice.md`](../specs/mcv-read-only-vertical-slice.md).
-
-## Decision records
-
-See [`../decisions/00_ADR_INDEX.md`](../decisions/00_ADR_INDEX.md) and the unresolved items in [`../../PHASE-00-OPEN-DECISION-LEDGER.md`](../../PHASE-00-OPEN-DECISION-LEDGER.md).
-
-## Implementation boundary
-
-This index records architecture direction and current composition. The `my_pa`
-package defines one hundred and thirty capabilities and exposes them through the HTTP,
-MCP, and operator-CLI adapters; a default composition serves sixty of
-them, because the `documents.`, `entities.` and `relationship_memory.` families
-each require an environment variable that has no default. The gateway and worker
-composition roots use the same PostgreSQL-backed policy and application seams.
-Alembic owns ninety-three revisions at head `d4e8b1c7a902`; `d4e8b1c7a902` is additive on `a4d8e31b2c90` and adds the Principal-partitioned canvas workspace overlay; `a4d8e31b2c90` is additive on `6a2f9d1c4b80` (R8 promotion receipts); `6a2f9d1c4b80` is additive on `c3f8a1d07e94` and adds the GoodNotes pull ledger; `c3f8a1d07e94` admits `entities.graph` on `b8e4d1a6c073`, while the chain admits GSQS at `c4b0a1d9e827` immediately before Phase B continues at `c7a1f04b9e63`, `b727e870d45e` is additive on `8e1c4a7b2d90`, `7e114f822af2` is additive on `b727e870d45e`, adding the `entity_names`/`entity_organization_profiles` tables (RI-ENT-WP-02), `16f05c46b8c3` admits the RI-ENT-WP-10/11 capability names, and `b8e4d1a6c073` (RI-ENT-WP-12) is additive on `16f05c46b8c3` and backfills one `display`-typed `entity_names` row per active entity. Re-measured 2026-09-04 after the post-PR192 GoodNotes integration: 91 files, single head `6a2f9d1c4b80` (`ls migrations/versions/*.py` and `ScriptDirectory.get_heads()`). The prior merge of `origin/main` `455a3671` held eighty-nine files at `b8e4d1a6c073`, while that merge's `origin/main` held eighty-eight at `16f05c46b8c3`. The pre-correction candidate at `21974cce2f9f4021f6c584516df035d7f02da9a2`,
-tree `38626f42c5c65f79071b9f4daef243c1545ea85b`, passed the 17,137-test FAST
-selection and then received a fresh independent `BLOCK` for cross-client
-GoodNotes status aggregation and stale current-state evidence. This correction
-requires a fresh exact-head review. The current candidate also includes the
-MossAIc web BFF/PWA, managed documents, GoodNotes, the bounded
-model gate, Frontier MCP, and the Apple source host. These documents describe the
-resulting implementation and the accepted, inactive NAS target. They do not
-authorize live source/database access, deployment, production activation, or
-risk acceptance.
-
-Corrected 2026-08-23: the paragraph above claimed 30 capabilities and 34
-revisions at head `b4e8d2c7a613`. That pair was self-consistent when it was
-written — `b4e8d2c7a613` is still in this chain and is still its 34th revision —
-and further revisions have landed on top of it since, with current head `d4e8b1c7a902` at revision ninety-three. The prior 2026-09-04 correction moved it to `b8e4d1a6c073` from `2c00c9ac64bc`/eighty-seven, which was itself corrected again 2026-09-02 from `7e114f822af2`/seventy-nine, which was itself corrected 2026-08-30 from `b727e870d45e`, itself corrected 2026-08-29 from `8e1c4a7b2d90`, every one of them for the same reason and by the same derivation. **The current correction is the sixth in this register and the pattern is now the finding, not the figure:** `2c00c9ac64bc` was the 87th revision when that pair was written, so it too was self-consistent when written and stale once `16f05c46b8c3`, `b8e4d1a6c073`, and then `6a2f9d1c4b80` landed. The revisions since carry RI-ENT-WP-03 through RI-ENT-WP-12, UI-IMP-WP02, and GoodNotes pull persistence. `tests/architecture/test_readme_state_claims.py` now derives and binds both the current revision count and sole head in this index, closing the gap that let this paragraph go stale while its siblings did not. The
-current figures were already stated in [`system-context.md`](system-context.md)
-beside it, which has been kept current through those work packages while this
-index was not, and that is how a figure like this survives: the sibling is the
-document that gets read, and the index is the document that gets cited. Neither
-number is counted by hand: the capability figure is `len(Capability)` and the
-revision figure is the file count of `migrations/versions/`. The capability one
-is now bound as well as correct — the old wording, `thirty shared application
-capabilities`, slipped past
-`tests/architecture/test_spelled_counts_match_the_sets_they_name.py` because
-that rule admits only a fixed list of adjectives between the number and the
-noun, and `shared application` is not on it, so the sentence carrying the stale
-figure was the one sentence in the file the sweep could not read. The wording
-above puts the noun where the rule can see it: planting `seventy-two` there
-reddens that guard.
+`system-context.md`, `module-boundaries.md`, and `data-authority.md` are retained historical architecture snapshots. They are no longer the current developer entry points because they contain old exact-head/campaign reconciliation narrative.

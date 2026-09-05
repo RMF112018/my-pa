@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
@@ -274,6 +275,42 @@ def test_local_source_refuses_an_intermediate_link(tmp_path: Path) -> None:
         source.inventory(A)
 
 
+@pytest.mark.parametrize("relative_path", ["goodnotes-manifest.json", "notebook/page-0001.pdf"])
+def test_local_source_refuses_hardlinked_files(tmp_path: Path, relative_path: str) -> None:
+    source = _local_manifest(tmp_path)
+    original = tmp_path / relative_path
+    alias = tmp_path / "synthetic-hardlink"
+    os.link(original, alias)
+    with pytest.raises(GoodNotesLocalSourceError, match="not a bounded file"):
+        source.inventory(A)
+    alias.unlink()
+    assert len(source.inventory(A)) == 1
+
+
+@pytest.mark.parametrize("relative_path", ["goodnotes-manifest.json", "notebook/page-0001.pdf"])
+def test_local_source_refuses_a_link_added_during_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, relative_path: str
+) -> None:
+    source = _local_manifest(tmp_path)
+    original = tmp_path / relative_path
+    inode = original.stat().st_ino
+    read = os.read
+    linked = False
+
+    def read_then_link(descriptor: int, size: int) -> bytes:
+        nonlocal linked
+        chunk = read(descriptor, size)
+        if not linked and os.fstat(descriptor).st_ino == inode:
+            os.link(original, tmp_path / "synthetic-midread-hardlink")
+            linked = True
+        return chunk
+
+    monkeypatch.setattr(os, "read", read_then_link)
+    with pytest.raises(GoodNotesLocalSourceError, match="digest changed"):
+        source.inventory(A)
+    assert linked
+
+
 def test_local_observer_records_missing_then_reappeared_without_false_success(
     tmp_path: Path,
 ) -> None:
@@ -480,6 +517,18 @@ def test_local_ocr_refuses_unbounded_or_malformed_output(tmp_path: Path) -> None
     )
     with pytest.raises(GoodNotesTranscriptionError, match="no admissible result"):
         bounded.transcribe(source.inventory(A)[0])
+
+
+def test_local_ocr_launch_failure_is_redacted(tmp_path: Path) -> None:
+    source = _local_manifest(tmp_path)
+    transcriber = BoundedLocalOCRTranscriber(
+        command=(str(tmp_path / "synthetic-private-missing-executable"),),
+        name="missing_local_ocr",
+        version="1",
+    )
+    with pytest.raises(GoodNotesTranscriptionError) as caught:
+        transcriber.transcribe(source.inventory(A)[0])
+    assert str(caught.value) == "the local OCR command did not start"
 
 
 def test_production_goodnotes_composition_is_inert_until_called(tmp_path: Path) -> None:

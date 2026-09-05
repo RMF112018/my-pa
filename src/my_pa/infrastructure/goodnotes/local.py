@@ -19,10 +19,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import selectors
+import signal
 import stat
 import subprocess
-import threading
+import time
 from collections.abc import Iterator
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
@@ -394,7 +397,11 @@ def _read_admitted(
             )
             try:
                 before = os.fstat(descriptor)
-                if not stat.S_ISREG(before.st_mode) or before.st_size > maximum_bytes:
+                if (
+                    not stat.S_ISREG(before.st_mode)
+                    or before.st_nlink != 1
+                    or before.st_size > maximum_bytes
+                ):
                     raise GoodNotesLocalSourceError(
                         "the GoodNotes source file is not a bounded file"
                     )
@@ -407,11 +414,18 @@ def _read_admitted(
                 if len(content) > maximum_bytes:
                     raise GoodNotesLocalSourceError("the GoodNotes source file exceeds its bound")
                 after = os.fstat(descriptor)
-                if (after.st_size, _mtime_ns(after), after.st_dev, after.st_ino) != (
+                if not stat.S_ISREG(after.st_mode) or (
+                    after.st_size,
+                    _mtime_ns(after),
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_nlink,
+                ) != (
                     before.st_size,
                     _mtime_ns(before),
                     before.st_dev,
                     before.st_ino,
+                    before.st_nlink,
                 ):
                     raise GoodNotesLocalSourceError("the GoodNotes representation digest changed")
                 payload = bytes(content)
@@ -516,6 +530,8 @@ class BoundedLocalOCRTranscriber:
     def _run_bounded(
         self, argv: tuple[str, ...], content: bytes, timeout_seconds: float
     ) -> tuple[int, bytes, bool]:
+        if os.name != "posix":
+            raise GoodNotesTranscriptionError("the local OCR process boundary is unavailable")
         try:
             process = subprocess.Popen(  # noqa: S603 - explicit argv, no shell
                 argv,
@@ -523,49 +539,96 @@ class BoundedLocalOCRTranscriber:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 env={"PATH": "/usr/bin:/bin"},
+                shell=False,
+                start_new_session=True,
+                bufsize=0,
             )
         except OSError as error:
             raise GoodNotesTranscriptionError("the local OCR command did not start") from error
-        if process.stdin is None or process.stdout is None:  # pragma: no cover - Popen contract
-            process.kill()
-            raise GoodNotesTranscriptionError("the local OCR pipes were unavailable")
-        stdin = process.stdin
-        stdout = process.stdout
+        deadline = time.monotonic() + timeout_seconds
         output = bytearray()
-        overflowed = threading.Event()
-
-        def write_input() -> None:
-            try:
-                stdin.write(content)
-            except BrokenPipeError:
-                pass
-            finally:
-                stdin.close()
-
-        def read_output() -> None:
-            while chunk := stdout.read(65_536):
-                remaining = self.maximum_output_bytes + 1 - len(output)
-                output.extend(chunk[:remaining])
-                if len(output) > self.maximum_output_bytes:
-                    overflowed.set()
-                    process.kill()
-                    break
-            stdout.close()
-
-        writer = threading.Thread(target=write_input, daemon=True)
-        reader = threading.Thread(target=read_output, daemon=True)
-        writer.start()
-        reader.start()
         try:
-            returncode = process.wait(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired as error:
-            process.kill()
-            process.wait()
+            if process.stdin is None or process.stdout is None:  # pragma: no cover - Popen contract
+                raise GoodNotesTranscriptionError("the local OCR pipes were unavailable")
+            stdin, stdout = process.stdin, process.stdout
+            with selectors.DefaultSelector() as selector:
+                os.set_blocking(stdin.fileno(), False)
+                os.set_blocking(stdout.fileno(), False)
+                selector.register(stdout, selectors.EVENT_READ)
+                if content:
+                    selector.register(stdin, selectors.EVENT_WRITE)
+                else:
+                    stdin.close()
+                written = 0
+                while selector.get_map():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise GoodNotesTranscriptionError("the local OCR command did not complete")
+                    for key, _ in selector.select(timeout=remaining):
+                        if key.fileobj is stdin:
+                            try:
+                                written += os.write(
+                                    stdin.fileno(), content[written : written + 65_536]
+                                )
+                            except BlockingIOError:
+                                continue
+                            except BrokenPipeError as error:
+                                raise GoodNotesTranscriptionError(
+                                    "the local OCR input was not consumed"
+                                ) from error
+                            if written == len(content):
+                                selector.unregister(stdin)
+                                stdin.close()
+                        else:
+                            try:
+                                chunk = os.read(
+                                    stdout.fileno(),
+                                    min(65_536, self.maximum_output_bytes + 1 - len(output)),
+                                )
+                            except BlockingIOError:
+                                continue
+                            if not chunk:
+                                selector.unregister(stdout)
+                                stdout.close()
+                            else:
+                                output.extend(chunk)
+                                if len(output) > self.maximum_output_bytes:
+                                    raise GoodNotesTranscriptionError(
+                                        "the local OCR command returned no admissible result"
+                                    )
+            returncode = process.wait(timeout=max(0, deadline - time.monotonic()))
+            return returncode, bytes(output), False
+        except (OSError, ValueError, subprocess.TimeoutExpired) as error:
             raise GoodNotesTranscriptionError("the local OCR command did not complete") from error
         finally:
-            writer.join(timeout=1)
-            reader.join(timeout=1)
-        return returncode, bytes(output), overflowed.is_set()
+            # start_new_session makes this child's PID its own isolated group ID.
+            # Kill the group even after direct-child exit: descendants may own pipes.
+            try:
+                if process.pid == os.getpgrp():  # pragma: no cover - isolated Popen invariant
+                    raise GoodNotesTranscriptionError("the local OCR process boundary changed")
+                try:
+                    group_id = os.getpgid(process.pid)
+                    session_id = os.getsid(process.pid)
+                except ProcessLookupError:
+                    # The leader may have exited; its descendants retain the group.
+                    pass
+                else:
+                    if group_id != process.pid or session_id != process.pid:
+                        raise GoodNotesTranscriptionError("the local OCR process boundary changed")
+                with suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+            except OSError as error:
+                raise GoodNotesTranscriptionError("the local OCR command cleanup failed") from error
+            finally:
+                for pipe in (process.stdin, process.stdout):
+                    if pipe is not None:
+                        pipe.close()
+                try:
+                    process.wait(timeout=1)
+                except subprocess.TimeoutExpired as error:
+                    raise GoodNotesTranscriptionError(
+                        "the local OCR command cleanup did not complete"
+                    ) from error
 
     @staticmethod
     def _region(value: object) -> TranscribedRegion:

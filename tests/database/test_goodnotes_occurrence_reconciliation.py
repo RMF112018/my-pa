@@ -245,11 +245,12 @@ def _propose(
     page_version_id: str,
     key: str,
     segments: tuple[dict[str, object], ...],
+    content_sha256: str = DIGEST,
 ) -> None:
     command = SubmitGoodNotesProposal(
         run_id=run_id,
         page_version_id=page_version_id,
-        content_sha256=DIGEST,
+        content_sha256=content_sha256,
         schema_version="note-unit.v1",
         analyzer_name="synthetic",
         analyzer_version="1",
@@ -261,7 +262,7 @@ def _propose(
         principal_id=principal_id,
         run_id=run_id,
         page_version_id=page_version_id,
-        content_sha256=DIGEST,
+        content_sha256=content_sha256,
         schema_version=command.schema_version,
         analyzer_name=command.analyzer_name,
         analyzer_version=command.analyzer_version,
@@ -1442,3 +1443,239 @@ def test_submit_and_promotion_share_run_lock(engine: Engine, promotion_first: bo
                 GoodNotesOccurrenceReconciler().reconcile(A, run_id, repository=repository)
             assert len(connection.execute(select(goodnotes_semantic_proposals)).all()) == 2
             assert connection.execute(select(goodnotes_semantic_promotion_receipts)).first() is None
+
+
+def test_unique_grounded_crop_moves_across_pages_with_history_and_replay(engine: Engine) -> None:
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        first_run, first_page, notebook_id, first_logical = _plant(repository, A, "move-original")
+        _propose(
+            SqlGoodNotesSemanticRepository(connection),
+            principal_id=A,
+            run_id=first_run,
+            page_version_id=first_page,
+            key="move-first",
+            segments=(_segment(x_min=0.1, transcription="same synthetic ink"),),
+        )
+        _accepted_evidence(repository, A, first_run)
+        first = GoodNotesOccurrenceReconciler().reconcile(
+            A, first_run, repository=repository, clock=lambda: WHEN
+        )
+        note_id = first.changes[0].note_id
+        occurrence_id = first.changes[0].occurrence_id
+        assert note_id is not None and occurrence_id is not None
+        old_revision = repository.latest_revision_for_occurrence(A, occurrence_id)
+        assert old_revision is not None
+        original_version = repository.page_version(A, first_page)
+        original_raster = repository.page_raster(A, first_page)
+        assert original_version is not None and original_raster is not None
+        second = repository.create_run(_run(A, "move-second"))
+        target_logical = repository.store_logical_page(
+            GoodNotesLogicalPage(
+                logical_page_id=issue_stable_id("gnlp", A, "move-target"),
+                principal_id=A,
+                notebook_id=notebook_id,
+                identity_status=GoodNotesIdentityStatus.ACTIVE,
+                created_at=WHEN,
+                last_seen_at=LATER,
+            )
+        )
+        prior_snapshot = repository.snapshots_for_run(A, first_run)[0]
+        target_snapshot = repository.store_snapshot(
+            replace(
+                prior_snapshot,
+                snapshot_id=issue_stable_id("gnsnap", A, "move-target"),
+                raw_sha256="f" * 64,
+                run_id=second.run_id,
+                observed_at=LATER,
+                settled_at=LATER,
+            )
+        )
+        target_page = GoodNotesPage(
+            page_id=issue_stable_id("gnpg", A, "move-target"),
+            principal_id=A,
+            source_id="src_aaaaaaaaaaaaaaaaaaaaaaaa",
+            source_object_id="obj_bbbbbbbbbbbbbbbbbbbbbbbb",
+            page_number=1,
+        )
+        target_version = repository.store_page_version_render(
+            page=target_page,
+            version=replace(
+                original_version,
+                page_version_id=issue_stable_id("gnver", A, "move-target"),
+                page_id=target_page.page_id,
+                logical_page_id=target_logical.logical_page_id,
+            ),
+        )
+        repository.store_page_position(
+            GoodNotesPagePosition(
+                principal_id=A,
+                snapshot_id=target_snapshot.snapshot_id,
+                page_number=1,
+                logical_page_id=target_logical.logical_page_id,
+                page_version_id=target_version.page_version_id,
+                match_method=GoodNotesMatchMethod.UNRESOLVED,
+                created_at=LATER,
+            )
+        )
+        repository.store_page_raster(
+            replace(
+                original_raster,
+                page_version_id=target_version.page_version_id,
+                run_id=second.run_id,
+                created_at=LATER,
+            )
+        )
+        connection.execute(
+            goodnotes_ingestion_run_stages.insert().values(
+                principal_id=A,
+                run_id=second.run_id,
+                stage="CONTENT_READY",
+                status="SUCCEEDED",
+                started_at=LATER,
+                ended_at=LATER,
+            )
+        )
+        _propose(
+            SqlGoodNotesSemanticRepository(connection),
+            principal_id=A,
+            run_id=second.run_id,
+            page_version_id=target_version.page_version_id,
+            key="move-second",
+            segments=(_segment(x_min=0.1, transcription="same synthetic ink"),),
+        )
+        _accepted_evidence(repository, A, second.run_id)
+        moved = GoodNotesOccurrenceReconciler().reconcile(
+            A, second.run_id, repository=repository, clock=lambda: LATER
+        )
+        assert len(moved.changes) == 1
+        assert moved.changes[0].change_state is GoodNotesNoteChangeState.REVISED
+        assert moved.changes[0].note_id == note_id
+        assert moved.changes[0].occurrence_id == occurrence_id
+        occurrence = repository.occurrence(A, occurrence_id)
+        assert occurrence is not None
+        assert (occurrence.logical_page_id, occurrence.page_version_id, occurrence.snapshot_id) == (
+            target_logical.logical_page_id,
+            target_version.page_version_id,
+            target_snapshot.snapshot_id,
+        )
+        latest = repository.latest_revision_for_occurrence(A, occurrence_id)
+        assert latest is not None and latest.revision_id != old_revision.revision_id
+        assert latest.supersedes_revision_id == old_revision.revision_id
+        assert latest.transcription == old_revision.transcription
+        assert repository.revision(A, old_revision.revision_id) == old_revision
+        for logical_id in (first_logical, target_logical.logical_page_id):
+            link = repository.note_link(
+                A, issue_stable_id("gnlink", A, note_id, "page", logical_id)
+            )
+            assert link is not None and link.target_logical_page_id == logical_id
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        replay = GoodNotesOccurrenceReconciler().reconcile(A, second.run_id, repository=repository)
+        assert replay.replayed and replay.changes == moved.changes
+        assert _counts(connection, A) == (1, 2)
+
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        original_links = tuple(
+            repository.note_link(A, issue_stable_id("gnlink", A, note_id, "page", logical_id))
+            for logical_id in (first_logical, target_logical.logical_page_id)
+        )
+        assert all(link is not None for link in original_links)
+        third_at = LATER + timedelta(hours=1)
+        third = repository.create_run(_run(A, "move-return"))
+        return_snapshot = repository.store_snapshot(
+            replace(
+                prior_snapshot,
+                snapshot_id=issue_stable_id("gnsnap", A, "move-return"),
+                raw_sha256="e" * 64,
+                run_id=third.run_id,
+                observed_at=third_at,
+                settled_at=third_at,
+            )
+        )
+        original_page = repository.page(A, original_version.page_id)
+        assert original_page is not None
+        return_version = repository.store_page_version_render(
+            page=original_page,
+            version=replace(
+                original_version,
+                page_version_id=issue_stable_id("gnver", A, "move-return"),
+                source_version_id="ver_bbbbbbbbbbbbbbbbbbbbbbbb",
+                content_sha256="d" * 64,
+                observed_at=third_at,
+            ),
+        )
+        repository.store_page_position(
+            GoodNotesPagePosition(
+                principal_id=A,
+                snapshot_id=return_snapshot.snapshot_id,
+                page_number=1,
+                logical_page_id=first_logical,
+                page_version_id=return_version.page_version_id,
+                match_method=GoodNotesMatchMethod.EXACT_NORMALIZED_RENDER,
+                created_at=third_at,
+            )
+        )
+        repository.store_page_raster(
+            replace(
+                original_raster,
+                page_version_id=return_version.page_version_id,
+                run_id=third.run_id,
+                created_at=third_at,
+            )
+        )
+        connection.execute(
+            goodnotes_ingestion_run_stages.insert().values(
+                principal_id=A,
+                run_id=third.run_id,
+                stage="CONTENT_READY",
+                status="SUCCEEDED",
+                started_at=third_at,
+                ended_at=third_at,
+            )
+        )
+        _propose(
+            SqlGoodNotesSemanticRepository(connection),
+            principal_id=A,
+            run_id=third.run_id,
+            page_version_id=return_version.page_version_id,
+            key="move-return",
+            content_sha256=return_version.content_sha256,
+            segments=(_segment(x_min=0.1, transcription="same synthetic ink"),),
+        )
+        _accepted_evidence(repository, A, third.run_id)
+        returned = GoodNotesOccurrenceReconciler().reconcile(
+            A, third.run_id, repository=repository, clock=lambda: third_at
+        )
+        assert len(returned.changes) == 1
+        assert returned.changes[0].change_state is GoodNotesNoteChangeState.REVISED
+        assert returned.changes[0].note_id == note_id
+        assert returned.changes[0].occurrence_id == occurrence_id
+        current = repository.occurrence(A, occurrence_id)
+        assert current is not None
+        assert (current.logical_page_id, current.page_version_id, current.snapshot_id) == (
+            first_logical,
+            return_version.page_version_id,
+            return_snapshot.snapshot_id,
+        )
+        final_revision = repository.latest_revision_for_occurrence(A, occurrence_id)
+        assert final_revision is not None
+        assert final_revision.supersedes_revision_id == latest.revision_id
+        assert repository.revision(A, old_revision.revision_id) == old_revision
+        assert repository.revision(A, latest.revision_id) == latest
+        for original_link in original_links:
+            assert original_link is not None
+            assert repository.note_link(A, original_link.link_id) == original_link
+        from my_pa.infrastructure.persistence.tables import (
+            goodnotes_note_links,
+            goodnotes_note_revisions,
+        )
+
+        assert len(connection.execute(select(goodnotes_note_links)).all()) == 2
+        assert len(connection.execute(select(goodnotes_note_revisions)).all()) == 3
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        replay = GoodNotesOccurrenceReconciler().reconcile(A, third.run_id, repository=repository)
+        assert replay.replayed and replay.changes == returned.changes
+        assert _counts(connection, A) == (1, 3)

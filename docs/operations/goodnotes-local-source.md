@@ -86,8 +86,15 @@ No live personal GoodNotes pages are admitted.
 Additive knowledge-schema tables persist NOTE_UNIT identity, physical
 occurrences, append-only revisions, structural note links, and exact per-run
 change-state rows. A PDF is not a note and a page is not a note; printed or
-typed agenda text is SOURCE_CONTEXT. Occurrence identity is aligned visual
-geometry plus crop/context anchors, not transcription. `GoodNotesOccurrenceReconciler`
+typed agenda text is SOURCE_CONTEXT. Logical-page identity requires visual
+evidence; sequence and path remain provenance. Occurrence matching first resolves
+unique server-verified crops across pages within the same Principal and notebook,
+then uses page-local geometry. Duplicate crop candidates remain `AMBIGUOUS`;
+transcription and context anchors cannot authorize identity reuse. A verified
+cross-page move preserves note and occurrence IDs, appends a revision and a
+structural destination-page link, and produces `REVISED` rather than `NEW`.
+Occupied destination geometry, including retired occurrences, fails closed
+without overwriting canonical history. `GoodNotesOccurrenceReconciler`
 reads Principal-bound semantic proposals, re-reads committed occurrence state,
 and writes those rows atomically with supplied-as-computed change states.
 Uncertainty is `AMBIGUOUS`; identity is never reused from a silent pick.

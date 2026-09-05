@@ -98,7 +98,7 @@ def test_regenerated_same_geometry_reuses_occurrence() -> None:
     )
     assert len(matches) == 1
     assert matches[0].kind is OccurrenceMatchKind.PAIRED
-    assert matches[0].method is OccurrenceMatchMethod.EXACT_GEOMETRY_KEY
+    assert matches[0].method is OccurrenceMatchMethod.UNIQUE_CROP
     assert matches[0].prior is not None
     assert matches[0].prior.occurrence_id == prior.occurrence_id
     assert sum(1 for item in matches if item.kind is OccurrenceMatchKind.NEW) == 0
@@ -164,20 +164,25 @@ def test_transcription_only_never_matches() -> None:
     assert all(item.kind is not OccurrenceMatchKind.PAIRED for item in matches)
 
 
-def test_page_number_never_matches_across_logical_pages() -> None:
+def test_unique_verified_crop_preserves_identity_across_logical_pages() -> None:
     prior = _prior(COVER, "cover", x_min=0.1, crop_sha256=CROP)
     matches = match_occurrences(
         current=(_current(BODY, "body", x_min=0.1, crop_sha256=CROP),),
         prior=(prior,),
     )
-    kinds = {item.kind for item in matches}
-    assert OccurrenceMatchKind.PAIRED not in kinds
-    assert OccurrenceMatchKind.NEW in kinds
-    assert OccurrenceMatchKind.REMOVED in kinds
-    new = next(item for item in matches if item.kind is OccurrenceMatchKind.NEW)
-    removed = next(item for item in matches if item.kind is OccurrenceMatchKind.REMOVED)
-    assert new.current is not None and new.current.logical_page_id == BODY
-    assert removed.prior is not None and removed.prior.occurrence_id == prior.occurrence_id
+    assert len(matches) == 1
+    assert matches[0].kind is OccurrenceMatchKind.PAIRED
+    assert matches[0].prior == prior
+    assert matches[0].current is not None
+    assert matches[0].current.logical_page_id == BODY
+
+
+def test_geometry_alone_cannot_match_across_logical_pages() -> None:
+    matches = match_occurrences(
+        current=(_current(BODY, "body", x_min=0.1),),
+        prior=(_prior(COVER, "cover", x_min=0.1),),
+    )
+    assert {item.kind for item in matches} == {OccurrenceMatchKind.NEW, OccurrenceMatchKind.REMOVED}
 
 
 def test_matcher_source_does_not_read_transcription_or_page_number() -> None:
@@ -199,7 +204,7 @@ def test_unique_crop_matches_when_geometry_moved() -> None:
     assert matches[0].prior.occurrence_id == prior.occurrence_id
 
 
-def test_unique_context_overlap_matches_when_box_shifts() -> None:
+def test_text_context_overlap_cannot_establish_identity() -> None:
     prior = _prior(
         COVER,
         "anchored",
@@ -223,9 +228,8 @@ def test_unique_context_overlap_matches_when_box_shifts() -> None:
         ),
         prior=(prior,),
     )
-    assert len(matches) == 1
-    assert matches[0].kind is OccurrenceMatchKind.PAIRED
-    assert matches[0].method is OccurrenceMatchMethod.CONTEXT_OVERLAP
+    assert len(matches) == 2
+    assert all(item.kind is OccurrenceMatchKind.AMBIGUOUS for item in matches)
 
 
 def test_different_crop_same_box_pairs_by_iou() -> None:
@@ -261,3 +265,39 @@ def test_unverified_unmatched_unit_is_ambiguous_not_new() -> None:
     assert len(matches) == 1
     assert matches[0].kind is OccurrenceMatchKind.AMBIGUOUS
     assert sum(item.kind is OccurrenceMatchKind.NEW for item in matches) == 0
+
+
+def test_duplicate_crops_are_consumed_before_exact_page_geometry() -> None:
+    currents = (
+        _current(COVER, "one", x_min=0.1, crop_sha256=CROP),
+        _current(BODY, "two", x_min=0.1, crop_sha256=CROP),
+    )
+    priors = (
+        _prior(COVER, "one", x_min=0.1, crop_sha256=CROP),
+        _prior(BODY, "two", x_min=0.1, crop_sha256=CROP),
+    )
+    for current_count, prior_count in ((1, 2), (2, 1), (2, 2), (2, 0)):
+        matches = match_occurrences(current=currents[:current_count], prior=priors[:prior_count])
+        assert len(matches) == current_count + prior_count
+        assert all(item.kind is OccurrenceMatchKind.AMBIGUOUS for item in matches)
+
+
+def test_consumed_cross_page_prior_is_not_available_to_local_fallback() -> None:
+    prior = _prior(COVER, "old", x_min=0.1, crop_sha256=CROP)
+    matches = match_occurrences(
+        current=(
+            _current(BODY, "moved", x_min=0.1, crop_sha256=CROP),
+            _current(COVER, "replacement", x_min=0.1, crop_sha256=OTHER_CROP),
+        ),
+        prior=(prior,),
+    )
+    assert sum(item.prior == prior for item in matches) == 1
+    assert [item.kind for item in matches] == [OccurrenceMatchKind.PAIRED, OccurrenceMatchKind.NEW]
+
+
+def test_unverified_crop_cannot_match_across_pages() -> None:
+    matches = match_occurrences(
+        current=(_current(BODY, "fake", x_min=0.1, crop_sha256=CROP, visual_verified=False),),
+        prior=(_prior(COVER, "old", x_min=0.1, crop_sha256=CROP),),
+    )
+    assert all(item.kind is not OccurrenceMatchKind.PAIRED for item in matches)

@@ -356,7 +356,7 @@ def test_small_added_mark_keeps_logical_page_identity() -> None:
     }
 
 
-def test_large_added_mark_keeps_identity_by_sequence_tiebreak() -> None:
+def test_large_added_mark_cannot_reuse_identity_by_sequence() -> None:
     original = vector_pdf((COVER,), producer="large-a")
     marked = vector_pdf((LARGE_MARK,), producer="large-b")
     renderer = production_page_renderer()
@@ -382,12 +382,15 @@ def test_large_added_mark_keeps_identity_by_sequence_tiebreak() -> None:
         repository=repository,
     )
     match = second.matches[0]
-    assert match.is_new is False
-    assert match.logical_page_id == first.matches[0].logical_page_id
-    assert match.match_method is GoodNotesMatchMethod.SEQUENCE_TIEBREAK
+    assert match.is_new is True
+    assert match.logical_page_id != first.matches[0].logical_page_id
+    assert match.identity_status is GoodNotesIdentityStatus.AMBIGUOUS
+    assert match.match_method is GoodNotesMatchMethod.UNRESOLVED
+    assert match.prior_page_version_id is None
+    assert second.run.ambiguous_page_count == 1
 
 
-def test_middle_page_mark_does_not_reallocate_neighbors() -> None:
+def test_middle_page_mismatch_is_ambiguous_and_preserves_neighbors() -> None:
     original = vector_pdf((COVER, BODY, (Rect(300, 300, 40, 40, 0.8),)), producer="mid-a")
     marked = vector_pdf((COVER, SMALL_MARK, (Rect(300, 300, 40, 40, 0.8),)), producer="mid-b")
     repository = MemoryLineageRepository()
@@ -409,8 +412,13 @@ def test_middle_page_mark_does_not_reallocate_neighbors() -> None:
     )
     first_ids = {item.page_number: item.logical_page_id for item in first.matches}
     second_by_number = {item.page_number: item for item in second.matches}
-    assert second.run.new_logical_page_count == 0
+    assert second.run.new_logical_page_count == 1
+    assert second.run.ambiguous_page_count == 1
     assert second_by_number[1].logical_page_id == first_ids[1]
-    assert second_by_number[2].logical_page_id == first_ids[2]
+    assert second_by_number[1].identity_status is GoodNotesIdentityStatus.ACTIVE
+    assert second_by_number[2].logical_page_id != first_ids[2]
+    assert second_by_number[2].identity_status is GoodNotesIdentityStatus.AMBIGUOUS
+    assert second_by_number[2].match_method is GoodNotesMatchMethod.UNRESOLVED
     assert second_by_number[3].logical_page_id == first_ids[3]
-    assert second_by_number[2].is_new is False
+    assert second_by_number[3].identity_status is GoodNotesIdentityStatus.ACTIVE
+    assert second_by_number[2].is_new is True

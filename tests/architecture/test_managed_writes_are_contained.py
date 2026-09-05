@@ -76,6 +76,12 @@ MANAGED_STORE: Final = "src/my_pa/infrastructure/managed_document_stores/filesys
 #: and no source root can reach it. A module added here is a decision someone has
 #: to write down.
 REGISTERED_WRITERS: Final[dict[str, str]] = {
+    "src/my_pa/infrastructure/goodnotes/local.py": (
+        "BoundedLocalOCRTranscriber._run_bounded calls os.write only on stdin.fileno() "
+        "from its own Popen(stdin=PIPE), streaming bounded admitted input to the isolated "
+        "OCR child; the descriptor names no filesystem path and this call mutates neither "
+        "source files nor managed documents."
+    ),
     "ops/nas/remote/render-cloudflared-config.py": (
         "writes a non-secret tunnel configuration to an explicit operator output path and "
         "refuses overwrite; it is deployment configuration, not user or managed content."

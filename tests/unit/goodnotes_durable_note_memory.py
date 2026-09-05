@@ -294,6 +294,48 @@ class MemoryDurableNoteStore(MemoryLineageRepository):
         return note
 
     def store_occurrence(self, occurrence: GoodNotesNoteOccurrence) -> GoodNotesNoteOccurrence:
+        prior = self.occurrence(occurrence.principal_id, occurrence.occurrence_id)
+        if prior is not None and prior.note_id != occurrence.note_id:
+            raise ValueError("GoodNotes occurrence note identity cannot change")
+        note = self.note(occurrence.principal_id, occurrence.note_id)
+        logical = self._logical.get((occurrence.principal_id, occurrence.logical_page_id))
+        if note is None or logical is None or note.notebook_id != logical.notebook_id:
+            raise ValueError("GoodNotes occurrence location crosses its notebook boundary")
+        if prior is not None and prior.logical_page_id != occurrence.logical_page_id:
+            version = (
+                None
+                if occurrence.page_version_id is None
+                else self.page_version(occurrence.principal_id, occurrence.page_version_id)
+            )
+            snapshot = (
+                None
+                if occurrence.snapshot_id is None
+                else self._snapshots.get((occurrence.principal_id, occurrence.snapshot_id))
+            )
+            if (
+                version is None
+                or snapshot is None
+                or occurrence.run_id is None
+                or version.logical_page_id != occurrence.logical_page_id
+                or snapshot.notebook_id != note.notebook_id
+                or snapshot.run_id != occurrence.run_id
+                or not any(
+                    position.logical_page_id == occurrence.logical_page_id
+                    and position.page_version_id == occurrence.page_version_id
+                    for position in self.page_positions(
+                        occurrence.principal_id, snapshot.snapshot_id
+                    )
+                )
+            ):
+                raise ValueError("GoodNotes occurrence move has inconsistent location evidence")
+        if any(
+            item.principal_id == occurrence.principal_id
+            and item.logical_page_id == occurrence.logical_page_id
+            and item.geometry_key == occurrence.geometry_key
+            and item.occurrence_id != occurrence.occurrence_id
+            for item in self._occurrences.values()
+        ):
+            raise ValueError("GoodNotes occurrence target is already occupied")
         self._occurrences[(occurrence.principal_id, occurrence.occurrence_id)] = occurrence
         return occurrence
 

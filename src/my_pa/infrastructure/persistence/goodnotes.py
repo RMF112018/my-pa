@@ -1177,6 +1177,57 @@ class PostgresGoodNotesRepository:
         return None if row is None else _note(row)
 
     def store_occurrence(self, occurrence: GoodNotesNoteOccurrence) -> GoodNotesNoteOccurrence:
+        prior_row = self.connection.execute(
+            select(goodnotes_note_occurrences)
+            .where(
+                _mine(goodnotes_note_occurrences, occurrence.principal_id),
+                goodnotes_note_occurrences.c.occurrence_id == occurrence.occurrence_id,
+            )
+            .with_for_update()
+        ).first()
+        if prior_row is not None and prior_row.note_id != occurrence.note_id:
+            raise ValueError("GoodNotes occurrence note identity cannot change")
+        note = self.note(occurrence.principal_id, occurrence.note_id)
+        logical = self.logical_page(occurrence.principal_id, occurrence.logical_page_id)
+        if note is None or logical is None or note.notebook_id != logical.notebook_id:
+            raise ValueError("GoodNotes occurrence location crosses its notebook boundary")
+        if prior_row is not None and prior_row.logical_page_id != occurrence.logical_page_id:
+            version = (
+                None
+                if occurrence.page_version_id is None
+                else self.page_version(occurrence.principal_id, occurrence.page_version_id)
+            )
+            snapshot = (
+                None
+                if occurrence.snapshot_id is None
+                else self.snapshot(occurrence.principal_id, occurrence.snapshot_id)
+            )
+            if (
+                version is None
+                or snapshot is None
+                or occurrence.run_id is None
+                or version.logical_page_id != occurrence.logical_page_id
+                or snapshot.notebook_id != note.notebook_id
+                or snapshot.run_id != occurrence.run_id
+                or not any(
+                    position.logical_page_id == occurrence.logical_page_id
+                    and position.page_version_id == occurrence.page_version_id
+                    for position in self.page_positions(
+                        occurrence.principal_id, snapshot.snapshot_id
+                    )
+                )
+            ):
+                raise ValueError("GoodNotes occurrence move has inconsistent location evidence")
+        occupied = self.connection.execute(
+            select(goodnotes_note_occurrences.c.occurrence_id).where(
+                _mine(goodnotes_note_occurrences, occurrence.principal_id),
+                goodnotes_note_occurrences.c.logical_page_id == occurrence.logical_page_id,
+                goodnotes_note_occurrences.c.geometry_key == occurrence.geometry_key,
+                goodnotes_note_occurrences.c.occurrence_id != occurrence.occurrence_id,
+            )
+        ).first()
+        if occupied is not None:
+            raise ValueError("GoodNotes occurrence target is already occupied")
         expected = _bound(
             goodnotes_note_occurrences,
             occurrence.principal_id,
@@ -1202,7 +1253,6 @@ class PostgresGoodNotesRepository:
         identity_fields: dict[str, object] = {
             "occurrence_id": occurrence.occurrence_id,
             "note_id": occurrence.note_id,
-            "logical_page_id": occurrence.logical_page_id,
         }
         self.connection.execute(
             pg_insert(goodnotes_note_occurrences)
@@ -1221,7 +1271,8 @@ class PostgresGoodNotesRepository:
             "note occurrence",
         )
         if (
-            stored.last_seen_at != occurrence.last_seen_at
+            stored.logical_page_id != occurrence.logical_page_id
+            or stored.last_seen_at != occurrence.last_seen_at
             or stored.identity_status != occurrence.identity_status
             or stored.page_version_id != occurrence.page_version_id
             or stored.snapshot_id != occurrence.snapshot_id
@@ -1241,6 +1292,7 @@ class PostgresGoodNotesRepository:
                     goodnotes_note_occurrences.c.occurrence_id == occurrence.occurrence_id,
                 )
                 .values(
+                    logical_page_id=occurrence.logical_page_id,
                     last_seen_at=occurrence.last_seen_at,
                     identity_status=occurrence.identity_status.value,
                     page_version_id=occurrence.page_version_id,

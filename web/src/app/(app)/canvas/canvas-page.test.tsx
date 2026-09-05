@@ -179,6 +179,7 @@ describe("Canvas page", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(fetchUrls(fetchSpy).some((url) => url.includes("canvas.workspace.get"))).toBe(false);
     expect(screen.queryByTestId("canvas-arrange-toggle")).toBeNull();
+    expect(screen.queryByTestId("canvas-relationship-edit-toggle")).toBeNull();
   });
 
   it("requires a seed and does not invent a directory of everyone", async () => {
@@ -190,6 +191,7 @@ describe("Canvas page", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(fetchUrls(fetchSpy).some((url) => url.includes("canvas.workspace.get"))).toBe(false);
     expect(screen.queryByTestId("canvas-arrange-toggle")).toBeNull();
+    expect(screen.queryByTestId("canvas-relationship-edit-toggle")).toBeNull();
   });
 
   it("refuses invalid hops without calling the gateway", async () => {
@@ -201,6 +203,7 @@ describe("Canvas page", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(fetchUrls(fetchSpy).some((url) => url.includes("canvas.workspace.get"))).toBe(false);
     expect(screen.queryByTestId("canvas-arrange-toggle")).toBeNull();
+    expect(screen.queryByTestId("canvas-relationship-edit-toggle")).toBeNull();
   });
 
   it("refuses invalid pageSize without calling the gateway", async () => {
@@ -254,6 +257,7 @@ describe("Canvas page", () => {
     expect(screen.queryByTestId("canvas-empty")).toBeNull();
     expect(screen.queryByTestId("canvas-directory")).toBeNull();
     expect(screen.queryByTestId("canvas-arrange-toggle")).toBeNull();
+    expect(screen.queryByTestId("canvas-relationship-edit-toggle")).toBeNull();
     expect(fetchUrls(fetchSpy).some((url) => url.includes("canvas.workspace.get"))).toBe(false);
   });
 
@@ -270,6 +274,7 @@ describe("Canvas page", () => {
     expect(screen.getByTestId("canvas-empty")).toHaveAttribute("data-state", "empty");
     expect(screen.queryByTestId("canvas-directory")).toBeNull();
     expect(screen.queryByTestId("canvas-arrange-toggle")).toBeNull();
+    expect(screen.queryByTestId("canvas-relationship-edit-toggle")).toBeNull();
     expect(fetchUrls(fetchSpy).some((url) => url.includes("canvas.workspace.get"))).toBe(false);
   });
 
@@ -282,6 +287,7 @@ describe("Canvas page", () => {
     expect(screen.getAllByText("Acme Synthetic").length).toBeGreaterThan(0);
     expect(screen.queryByTestId("canvas-continue")).toBeNull();
     expect(screen.getByTestId("canvas-arrange-toggle")).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByTestId("canvas-relationship-edit-toggle")).toHaveAttribute("aria-pressed", "false");
   });
 
   it("still shows the graph when workspace get is unavailable", async () => {

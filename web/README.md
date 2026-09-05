@@ -48,6 +48,9 @@ All application pages require a verified session. `/sign-in` is public.
 | `GET /api/people/graph` | `entities.graph` | Seeded 1-hop or 2-hop neighborhood; missing seed is refused rather than listing a directory |
 | `/canvas` | `entities.graph`, `canvas.workspace.get` | Seeded Map neighborhood with an optional stored overlay; unseeded `/canvas` does not call `canvas.workspace.get` |
 | `POST /api/canvas/workspace` | `canvas.workspace.put` | Persists one expected-version overlay; identity is the session; a stale version is a typed conflict |
+| `POST /api/canvas/relationships` | `entities.relationships.create` | Asserts one directed edge; identity is the session; a stale endpoint version is a typed conflict |
+| `POST /api/canvas/relationships/revise` | `entities.relationships.revise` | Replaces effective window and stated evidence; omitted `evidence_refs` is refused |
+| `POST /api/canvas/relationships/end` | `entities.relationships.end` | Withdraws one directed edge and keeps the row |
 | `GET /api/people/:entityId/relationships` | `entities.relationships` | Lists same-Principal relationships |
 | `GET /api/people/:entityId/names` | `entities.names.list` | Lists names for one same-Principal entity |
 | `GET /api/people/:entityId/addresses` | `entities.addresses.list` | Lists addresses for one same-Principal entity |

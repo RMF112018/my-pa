@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
-from my_pa.contracts.ports import CaptureSearchMatch
+from my_pa.contracts.ports import CaptureSearchMatch, DirectedReceipt, MutationRecordFamily
 from my_pa.contracts.v1.canvas_workspace import (
     CanvasPointView,
     CanvasWorkspaceReceiptView,
@@ -44,6 +44,7 @@ from my_pa.domain.common.time import format_rfc3339
 from my_pa.domain.extraction.text import EXTRACTOR, EXTRACTOR_VERSION
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.modeling.gate import ModelRoutePolicy
+from my_pa.domain.relationship.entity import RelationshipState
 from my_pa.domain.search.query import RankCategory, SearchMatch, label_for_media_type
 from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
 from my_pa.domain.task.history import TaskMutationAction, TaskMutationActor, TaskMutationOutcome
@@ -742,6 +743,38 @@ def _canvas_workspace_put() -> dict[str, object]:
     ).model_dump(mode="json")
 
 
+def _entities_relationships_write() -> dict[str, Any]:
+    """The directed-receipt dict `_directed_receipt` publishes for relationship writes."""
+    receipt = DirectedReceipt(
+        mutation_event_id="emut_aaaaaaaa11111111",
+        record_id="erel_aaaaaaaa11111111",
+        record_family=MutationRecordFamily.RELATIONSHIP,
+        prior_version=None,
+        version=1,
+        state=RelationshipState.ACTIVE,
+        audit_id="audit_aaaaaaaa11111111",
+        idempotency_key="idem-1",
+        superseded_id=None,
+        evidence_refs=(),
+        issued_at=AT,
+        replayed=False,
+    )
+    return {
+        "record_id": receipt.record_id,
+        "record_family": receipt.record_family.value,
+        "prior_version": receipt.prior_version,
+        "version": receipt.version,
+        "state": receipt.state,
+        "receipt_id": receipt.mutation_event_id,
+        "audit_id": receipt.audit_id,
+        "idempotency_key": receipt.idempotency_key,
+        "superseded_id": receipt.superseded_id,
+        "evidence_refs": list(receipt.evidence_refs),
+        "replayed": receipt.replayed,
+        "issued_at": format_rfc3339(receipt.issued_at),
+    }
+
+
 def _entity_view_payload() -> dict[str, Any]:
     stamped = _stamp()
     return {
@@ -1078,6 +1111,9 @@ def python_success_payloads() -> dict[str, dict[str, Any]]:
         },
         "entities.context": {"context_card": _entity_context_card_payload()},
         "entities.relationships": {"relationships": [_relationship_payload()]},
+        "entities.relationships.create": _entities_relationships_write(),
+        "entities.relationships.revise": _entities_relationships_write(),
+        "entities.relationships.end": _entities_relationships_write(),
         "entities.graph": {
             "nodes": [
                 {

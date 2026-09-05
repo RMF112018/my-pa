@@ -78,6 +78,21 @@ export const MUTATION_ROUTE_MANIFEST: readonly MutationRouteManifestEntry[] = [
   },
   {
     method: "POST",
+    path: "src/app/api/canvas/relationships/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
+    path: "src/app/api/canvas/relationships/revise/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
+    path: "src/app/api/canvas/relationships/end/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
     path: "src/app/api/session/route.ts",
     classification: "PRE_AUTH_BROWSER_MUTATION",
   },

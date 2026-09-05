@@ -1598,6 +1598,48 @@
       }
     ]
   },
+  "entities.relationships.create": {
+    "record_id": "erel_aaaaaaaa11111111",
+    "record_family": "relationship",
+    "prior_version": null,
+    "version": 1,
+    "state": "active",
+    "receipt_id": "emut_aaaaaaaa11111111",
+    "audit_id": "audit_aaaaaaaa11111111",
+    "idempotency_key": "idem-1",
+    "superseded_id": null,
+    "evidence_refs": [],
+    "replayed": false,
+    "issued_at": "2026-08-09T12:00:00.000Z"
+  },
+  "entities.relationships.revise": {
+    "record_id": "erel_aaaaaaaa11111111",
+    "record_family": "relationship",
+    "prior_version": null,
+    "version": 1,
+    "state": "active",
+    "receipt_id": "emut_aaaaaaaa11111111",
+    "audit_id": "audit_aaaaaaaa11111111",
+    "idempotency_key": "idem-1",
+    "superseded_id": null,
+    "evidence_refs": [],
+    "replayed": false,
+    "issued_at": "2026-08-09T12:00:00.000Z"
+  },
+  "entities.relationships.end": {
+    "record_id": "erel_aaaaaaaa11111111",
+    "record_family": "relationship",
+    "prior_version": null,
+    "version": 1,
+    "state": "active",
+    "receipt_id": "emut_aaaaaaaa11111111",
+    "audit_id": "audit_aaaaaaaa11111111",
+    "idempotency_key": "idem-1",
+    "superseded_id": null,
+    "evidence_refs": [],
+    "replayed": false,
+    "issued_at": "2026-08-09T12:00:00.000Z"
+  },
   "entities.graph": {
     "nodes": [
       {

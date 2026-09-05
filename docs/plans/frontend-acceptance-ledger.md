@@ -278,6 +278,19 @@ Conservative dispositions for relationship-edit mode on the seeded Map. Relation
 - After success, reload `entities.graph` / GET `/api/people/graph`; never fabricate edges; receipts from backend; `admitBrowserMutation`; fail-closed expected versions; synthetic `not_implemented`.
 - This package does not claim inspector/temporal/provenance/changes (WP19), a11y/scale/export (WP20), Wave 5 complete, or production activation.
 - UI-IMP-WP21 and UI-IMP-WP22 remain `PROVISIONAL_NOT_ACTIVATED`. UI-IMP-WP24 is not this package.
+- Inspector/temporal/provenance/changes is now UI-IMP-WP19 on this branch; WP18 remains relationship-edit mode only.
+
+## UI-IMP-WP19 Canvas Temporal, Inspector, Provenance, and Changes Semantics notes
+
+Conservative dispositions for Map as-of, Inspector binding, identity-history Changes, and citation residuals on the WP16 Map. This is not a11y/scale/export (WP20), not Wave 5 complete, and not `PASS_VERIFIED` for `PFE-AC-140..184`.
+
+- **Temporal / inspector / changes band:** at most `VALIDATION_REQUIRED`. Do not mark `PFE-AC-140..184` `PASS_VERIFIED`.
+- Temporal: seeded Map GET as-of is URL `asOf` (RFC 3339 with timezone). Invalid `asOf` fail-closes without gateway, same as invalid hops. `is_current` is server-computed when `as_of` is supplied, otherwise null. The browser does not compute currentness. GraphMap edges expose `is_current` true/false/null as `data-is-current` true/false/unspecified; nodes have no `is_current`. Unseeded Map has no as-of UI.
+- Inspector: Map node/edge selection binds to the WP08 UtilityRegion Inspector via React context. Fields are product-owned graph/relationship values only (node: `display_label`, `entity_type`, `status`, `superseded_by_entity_id`, `entity_id` plus People link; edge: `type`, `edge_kind`, state/status, `is_current` as current / not current / unspecified, version, from/to, scope). Empty selection keeps honest stub copy. Inspector selection is not persisted and does not add an ADR-003 table.
+- Changes: a selected entity loads existing `GET /api/people/[id]/identity-history` with a fail-closed decoder. The list shows `occurred_at`, `operation`, and `history_id`, and continues via `after` when a cursor is disclosed. Do not scrape source systems. A selected relationship edge may load `GET /api/people/[id]/relationships` for `effective_from` / `effective_to`; the revise form may prefill those window fields.
+- **Citations residual:** frozen `entities.graph` and `RelationshipView` do not publish `evidence_refs`. Window-only revise remains refused unless replacement refs are stated or citations are explicitly cleared. This package does not widen the WP15 graph contract.
+- This package does not claim a11y/scale/export (WP20), Wave 5 complete, or production activation.
+- UI-IMP-WP21 and UI-IMP-WP22 remain `PROVISIONAL_NOT_ACTIVATED`. UI-IMP-WP24 is not this package.
 
 ## UI-IMP-WP23 Federated Search BFF notes
 

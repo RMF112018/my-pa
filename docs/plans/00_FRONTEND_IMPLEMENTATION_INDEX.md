@@ -26,7 +26,7 @@ The controlling post-audit sequence is `UI-IMP-WP01..WP30`. Older `WP-FE-*` orde
 
 `UI-IMP-WP06` typed BFF success, error, receipt, and degraded contracts are implemented on this PR. That is not production activation, not `PASS_VERIFIED` of the whole frontend, and not Wave 1 closure until post-merge audit.
 
-`NEXT_EXECUTABLE_PACKAGE: Wave 5 WP19 inspector/temporal/provenance/changes on origin/main after UI-IMP-WP18 relationship editing; WP21/WP22 still provisional; WP24 not this package.`
+`NEXT_EXECUTABLE_PACKAGE: Wave 5 WP20 canvas a11y/responsive fallback/scale/export on origin/main after UI-IMP-WP19 inspector/temporal; WP21/WP22 still provisional; WP24 not this package.`
 
 ## Evidence limitations
 

@@ -21,6 +21,9 @@ The reader does not traverse the root. It refuses links, path escape, missing or
 non-regular files, unsupported media, duplicate page identity, digest drift,
 over-wide manifests, and representations above 25 MiB. Canonical inventory
 order is source-object identity then page number and version.
+Manifest, representation and observer reads require a regular file with exactly
+one hard link both before and after the bounded read. A link added during the
+read is refused; this file rule does not apply to parent directories.
 
 Before OCR starts, every manifest tuple `(source_id, source_object_id,
 source_version_id)` must match the canonical registry relation and the invoking
@@ -36,6 +39,12 @@ a bounded JSON document containing normalized region boxes, non-empty bounded
 text, and confidence in `[0, 1]`. The command is capped at 60 seconds, 25 MiB of
 input, 2 MiB of output, and 250 regions. It receives only a fixed minimal
 `PATH`; it selects no engine and downloads nothing.
+On supported POSIX systems, each invocation owns a separate process session and
+group. Nonblocking pipe handling bounds input, output and command completion;
+timeout, overflow, pipe failure or a descendant retaining a pipe after its
+parent exits cannot turn partial output into success. Cleanup terminates only
+the invocation's process group, closes its pipes and reaps its direct child
+within bounded waits. Unsupported process-containment platforms fail closed.
 
 Successful reconciliation derives stable page/version/region identities,
 records representation and transcription digests plus extractor name/version,

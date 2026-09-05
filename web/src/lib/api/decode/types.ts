@@ -37,6 +37,9 @@ import type { EntitiesObservationsListResult } from "./capabilities/entities.obs
 import type { EntitiesParticipationsListResult } from "./capabilities/entities.participations.list";
 import type { EntityProfileResult } from "./capabilities/entities.profile";
 import type { EntitiesRelationshipsResult } from "./capabilities/entities.relationships";
+import type { EntitiesRelationshipsCreateResult } from "./capabilities/entities.relationships.create";
+import type { EntitiesRelationshipsEndResult } from "./capabilities/entities.relationships.end";
+import type { EntitiesRelationshipsReviseResult } from "./capabilities/entities.relationships.revise";
 import type { EntityResolveResult } from "./capabilities/entities.resolve";
 import type { EntitySearchResult } from "./capabilities/entities.search";
 import type { EntitiesUnresolvedMentionsResult } from "./capabilities/entities.unresolved_mentions";
@@ -100,6 +103,9 @@ export type CapabilityResults = {
   readonly "entities.participations.list": EntitiesParticipationsListResult;
   readonly "entities.profile": EntityProfileResult;
   readonly "entities.relationships": EntitiesRelationshipsResult;
+  readonly "entities.relationships.create": EntitiesRelationshipsCreateResult;
+  readonly "entities.relationships.end": EntitiesRelationshipsEndResult;
+  readonly "entities.relationships.revise": EntitiesRelationshipsReviseResult;
   readonly "entities.resolve": EntityResolveResult;
   readonly "entities.search": EntitySearchResult;
   readonly "entities.unresolved_mentions": EntitiesUnresolvedMentionsResult;

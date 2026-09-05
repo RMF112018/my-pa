@@ -237,6 +237,65 @@
       "payloadFields": ["entity_id", "direction", "page_size", "after"],
       "probe": { "entity_id": "ent_aaaaaaaa11111111" }
     },
+    "entities.relationships.create": {
+      "purpose": "entity_authoring",
+      "payloadFields": [
+        "from_entity_id",
+        "expected_from_version",
+        "relationship_type",
+        "to_entity_id",
+        "expected_to_version",
+        "idempotency_key",
+        "scope_entity_id",
+        "expected_scope_version",
+        "effective_from",
+        "effective_to",
+        "evidence_refs"
+      ],
+      "probe": {
+        "from_entity_id": "ent_aaaaaaaa11111111",
+        "expected_from_version": 1,
+        "relationship_type": "works_for",
+        "to_entity_id": "ent_bbbbbbbb22222222",
+        "expected_to_version": 1,
+        "idempotency_key": "idem-probe-0001"
+      }
+    },
+    "entities.relationships.revise": {
+      "purpose": "entity_authoring",
+      "payloadFields": [
+        "relationship_id",
+        "expected_version",
+        "idempotency_key",
+        "effective_from",
+        "effective_to",
+        "clear",
+        "evidence_refs"
+      ],
+      "probe": {
+        "relationship_id": "erel_aaaaaaaa11111111",
+        "expected_version": 1,
+        "idempotency_key": "idem-probe-0001"
+      }
+    },
+    "entities.relationships.end": {
+      "purpose": "entity_authoring",
+      "payloadFields": [
+        "relationship_id",
+        "expected_version",
+        "reason",
+        "idempotency_key",
+        "effective_end",
+        "end_now"
+      ],
+      "probe": {
+        "relationship_id": "erel_aaaaaaaa11111111",
+        "expected_version": 1,
+        "reason": "a synthetic withdrawal",
+        "idempotency_key": "idem-probe-0001",
+        "end_now": true
+      }
+    },
     "entities.graph": {
       "purpose": "entity_read",
       "payloadFields": [

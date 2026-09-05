@@ -268,6 +268,17 @@ Conservative dispositions for Arrange mode and product-owned workspace persisten
 - This package does not claim relationship editing, inspector/temporal product, or a11y/scale.
 - UI-IMP-WP21 and UI-IMP-WP22 remain `PROVISIONAL_NOT_ACTIVATED`. UI-IMP-WP24 is not this package.
 
+## UI-IMP-WP18 Canvas Canonical Relationship Editing notes
+
+Conservative dispositions for relationship-edit mode on the seeded Map. Relationship edit is a distinct mode from Arrange. Arrange remains the position overlay. This is not inspector/temporal/provenance/changes (WP19), not a11y/scale/export (WP20), not Wave 5 complete, and not `PASS_VERIFIED` for `PFE-AC-140..184`.
+
+- **Relationship-edit band:** at most `VALIDATION_REQUIRED`. Do not mark `PFE-AC-140..184` `PASS_VERIFIED`.
+- Seeded Map only: explicit relationship-edit mode distinct from Arrange. Arrange remains position overlay. Relationship edit uses frozen `entities.relationships.create|revise|end`.
+- Create is directed; no automatic reciprocal. Revise is window/evidence only; retarget is end+create. End withdraws the row (no DELETE).
+- After success, reload `entities.graph` / GET `/api/people/graph`; never fabricate edges; receipts from backend; `admitBrowserMutation`; fail-closed expected versions; synthetic `not_implemented`.
+- This package does not claim inspector/temporal/provenance/changes (WP19), a11y/scale/export (WP20), Wave 5 complete, or production activation.
+- UI-IMP-WP21 and UI-IMP-WP22 remain `PROVISIONAL_NOT_ACTIVATED`. UI-IMP-WP24 is not this package.
+
 ## UI-IMP-WP23 Federated Search BFF notes
 
 This is Search BFF substrate, not Command UX, not `PASS_VERIFIED` of `PFE-AC-083..085`, and not a claim against the full 250-criterion ledger.

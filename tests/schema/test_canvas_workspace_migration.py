@@ -23,7 +23,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "d4e8b1c7a902"
-PREVIOUS: Final = "6a2f9d1c4b80"
+PREVIOUS: Final = "a4d8e31b2c90"
 MIGRATION: Final = ROOT / "migrations/versions/20260905_d4e8b1c7a902_add_canvas_workspaces.py"
 TABLE: Final = "canvas_workspaces"
 ADMITTED_CAPABILITIES: Final[tuple[str, ...]] = (
@@ -94,6 +94,7 @@ def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [REVISION]
     assert script.get_revision(REVISION).down_revision == PREVIOUS
+    assert script.get_revision(PREVIOUS).down_revision == "6a2f9d1c4b80"
 
 
 def test_revision_is_frozen_and_does_not_import_live_schema_or_enums() -> None:

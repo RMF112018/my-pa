@@ -4,6 +4,7 @@ import { useSyncExternalStore } from "react";
 import { PanelRightClose, PanelRightOpen, Pin, PinOff } from "lucide-react";
 import { IconButton } from "@/components/ui/icon-button";
 import { Sheet } from "@/components/ui/sheet";
+import { CanvasInspector } from "@/components/canvas/canvas-inspector";
 
 const MOBILE_QUERY = "(max-width: 767px)";
 
@@ -36,10 +37,7 @@ function InspectorContent({
           {pinned ? <PinOff size={18} /> : <Pin size={18} />}
         </IconButton>
       </div>
-      <p className="mt-3 text-sm text-text-secondary">
-        Select supported evidence to inspect source, freshness, provenance, and limitations.
-        Nothing sensitive is persisted here.
-      </p>
+      <CanvasInspector />
     </div>
   );
 }

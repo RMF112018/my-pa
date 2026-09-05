@@ -19,6 +19,25 @@ function activateKey(event: ReactKeyboardEvent<SVGElement>): boolean {
   return event.key === "Enter" || event.key === " ";
 }
 
+function edgeCurrentness(isCurrent: boolean | null): "true" | "false" | "unspecified" {
+  if (isCurrent === true) return "true";
+  if (isCurrent === false) return "false";
+  return "unspecified";
+}
+
+function edgeStrokeClass(isCurrent: boolean | null, selected: boolean): string {
+  if (selected) return "stroke-moss-green";
+  if (isCurrent === true) return "stroke-moss-slate/55";
+  if (isCurrent === false) return "stroke-moss-slate/20";
+  return "stroke-moss-slate/30";
+}
+
+function edgeStrokeWidth(isCurrent: boolean | null, selected: boolean): number {
+  if (selected) return 3;
+  if (isCurrent === true) return 2.5;
+  return 1.5;
+}
+
 export function GraphMap({
   nodes,
   edges,
@@ -28,12 +47,16 @@ export function GraphMap({
   relationshipEdit = false,
   selectedEntityId,
   selectedEdgeId,
+  inspectEntityId,
+  inspectEdgeId,
   svgRef,
   onNodePointerDown,
   onSvgPointerMove,
   onSvgPointerUp,
   onNodeSelect,
   onEdgeSelect,
+  onInspectNode,
+  onInspectEdge,
 }: {
   nodes: readonly GraphNode[];
   edges: readonly GraphEdge[];
@@ -43,16 +66,22 @@ export function GraphMap({
   relationshipEdit?: boolean;
   selectedEntityId?: string | null;
   selectedEdgeId?: string | null;
+  inspectEntityId?: string | null;
+  inspectEdgeId?: string | null;
   svgRef?: Ref<SVGSVGElement>;
   onNodePointerDown?: (entityId: string, event: ReactPointerEvent<SVGElement>) => void;
   onSvgPointerMove?: (event: ReactPointerEvent<SVGSVGElement>) => void;
   onSvgPointerUp?: (event: ReactPointerEvent<SVGSVGElement>) => void;
   onNodeSelect?: (entityId: string) => void;
   onEdgeSelect?: (edgeId: string) => void;
+  onInspectNode?: (entityId: string) => void;
+  onInspectEdge?: (edgeId: string) => void;
 }) {
   const positions = overlayLayout(nodes, focusEntityId, savedPositions);
   const drag = arrange && !relationshipEdit;
   const pickNodes = arrange || relationshipEdit;
+  const inspectNodes = Boolean(onInspectNode);
+  const inspectEdges = Boolean(onInspectEdge);
   return (
     <div data-testid="canvas-map" role="region" aria-label="Neighborhood map">
       <svg
@@ -71,37 +100,45 @@ export function GraphMap({
           if (!from || !to) return null;
           if (from.x === to.x && from.y === to.y) return null;
           const editable = relationshipEdit && edge.edge_kind === "relationship";
-          const selected = editable && edge.edge_id === selectedEdgeId;
+          const interactive = editable || inspectEdges;
+          const inspectSelected = inspectEdgeId != null && edge.edge_id === inspectEdgeId;
+          const selected = (editable && edge.edge_id === selectedEdgeId) || inspectSelected;
+          const currentness = edgeCurrentness(edge.is_current);
           return (
             <g
               key={edge.edge_id}
               data-testid={`canvas-edge-${edge.edge_id}`}
               data-edge-kind={edge.edge_kind}
-              tabIndex={editable ? 0 : undefined}
-              role={editable ? "button" : undefined}
+              data-is-current={currentness}
+              tabIndex={interactive ? 0 : undefined}
+              role={interactive ? "button" : undefined}
               aria-label={
-                editable ? `${edge.type} relationship from ${edge.from_entity_id} to ${edge.to_entity_id}` : undefined
+                interactive
+                  ? `${edge.type} ${edge.edge_kind} from ${edge.from_entity_id} to ${edge.to_entity_id}`
+                  : undefined
               }
-              aria-pressed={editable ? selected : undefined}
+              aria-pressed={interactive ? selected : undefined}
               onClick={
-                editable
+                interactive
                   ? () => {
-                      onEdgeSelect?.(edge.edge_id);
+                      if (editable) onEdgeSelect?.(edge.edge_id);
+                      onInspectEdge?.(edge.edge_id);
                     }
                   : undefined
               }
               onKeyDown={
-                editable
+                interactive
                   ? (event) => {
                       if (!activateKey(event)) return;
                       event.preventDefault();
-                      onEdgeSelect?.(edge.edge_id);
+                      if (editable) onEdgeSelect?.(edge.edge_id);
+                      onInspectEdge?.(edge.edge_id);
                     }
                   : undefined
               }
-              style={editable ? { cursor: "pointer" } : undefined}
+              style={interactive ? { cursor: "pointer" } : undefined}
             >
-              {editable ? (
+              {interactive ? (
                 <line
                   x1={from.x}
                   y1={from.y}
@@ -116,8 +153,9 @@ export function GraphMap({
                 y1={from.y}
                 x2={to.x}
                 y2={to.y}
-                className={selected ? "stroke-moss-green" : "stroke-moss-slate/30"}
-                strokeWidth={selected ? 3 : 1.5}
+                className={edgeStrokeClass(edge.is_current, selected)}
+                strokeWidth={edgeStrokeWidth(edge.is_current, selected)}
+                strokeDasharray={edge.is_current === false ? "6 4" : undefined}
               />
             </g>
           );
@@ -126,7 +164,9 @@ export function GraphMap({
           const point = positions.get(node.entity_id);
           if (!point) return null;
           const focused = node.entity_id === focusEntityId;
-          const selected = node.entity_id === selectedEntityId;
+          const inspectSelected = inspectEntityId != null && node.entity_id === inspectEntityId;
+          const selected = node.entity_id === selectedEntityId || inspectSelected;
+          const highlight = selected && (pickNodes || inspectNodes);
           const r = focused ? FOCUS_R : NODE_R;
           const mark = (
             <>
@@ -135,7 +175,7 @@ export function GraphMap({
                 cy={point.y}
                 r={r}
                 className={focused ? "fill-moss-green/15 stroke-moss-green" : "fill-surface stroke-moss-green"}
-                strokeWidth={selected && pickNodes ? 3 : 2}
+                strokeWidth={highlight ? 3 : 2}
               />
               <text
                 x={point.x}
@@ -159,13 +199,17 @@ export function GraphMap({
                 style={{ cursor: drag ? "grab" : "pointer", touchAction: drag ? "none" : undefined }}
                 onPointerDown={
                   drag
-                    ? (event) => onNodePointerDown?.(node.entity_id, event)
+                    ? (event) => {
+                        onNodePointerDown?.(node.entity_id, event);
+                        onInspectNode?.(node.entity_id);
+                      }
                     : undefined
                 }
                 onClick={
                   relationshipEdit
                     ? () => {
                         onNodeSelect?.(node.entity_id);
+                        onInspectNode?.(node.entity_id);
                       }
                     : undefined
                 }
@@ -175,9 +219,32 @@ export function GraphMap({
                         if (!activateKey(event)) return;
                         event.preventDefault();
                         onNodeSelect?.(node.entity_id);
+                        onInspectNode?.(node.entity_id);
                       }
                     : undefined
                 }
+              >
+                {mark}
+              </g>
+            );
+          }
+          if (inspectNodes) {
+            return (
+              <g
+                key={node.entity_id}
+                data-testid={`canvas-node-${node.entity_id}`}
+                data-entity-id={node.entity_id}
+                tabIndex={0}
+                role="button"
+                aria-label={node.display_label}
+                aria-pressed={inspectSelected}
+                style={{ cursor: "pointer" }}
+                onClick={() => onInspectNode?.(node.entity_id)}
+                onKeyDown={(event) => {
+                  if (!activateKey(event)) return;
+                  event.preventDefault();
+                  onInspectNode?.(node.entity_id);
+                }}
               >
                 {mark}
               </g>

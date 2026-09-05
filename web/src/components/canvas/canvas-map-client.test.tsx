@@ -92,7 +92,7 @@ describe("CanvasMapClient", () => {
         return {};
       },
     });
-    const fetchSpy = vi.fn(async () => {
+    const fetchSpy = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => {
       return new Response(
         JSON.stringify({
           error: {

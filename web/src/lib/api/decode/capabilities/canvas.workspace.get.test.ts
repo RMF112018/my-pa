@@ -37,8 +37,14 @@ describe("decodeCanvasWorkspaceGet", () => {
   });
 
   it("fails closed when positions is omitted", () => {
-    const { positions: _positions, ...rest } = OVERLAY;
-    expect(decodeCanvasWorkspaceGet(rest).ok).toBe(false);
+    expect(
+      decodeCanvasWorkspaceGet({
+        focus_entity_id: OVERLAY.focus_entity_id,
+        scope_entity_id: OVERLAY.scope_entity_id,
+        version: OVERLAY.version,
+        updated_at: OVERLAY.updated_at,
+      }).ok,
+    ).toBe(false);
   });
 
   it("fails closed when a point has a non-numeric x", () => {

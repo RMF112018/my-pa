@@ -20,8 +20,14 @@ describe("decodeCanvasWorkspacePut", () => {
   });
 
   it("fails closed when positions is omitted", () => {
-    const { positions: _positions, ...rest } = RECEIPT;
-    expect(decodeCanvasWorkspacePut(rest).ok).toBe(false);
+    expect(
+      decodeCanvasWorkspacePut({
+        focus_entity_id: RECEIPT.focus_entity_id,
+        scope_entity_id: RECEIPT.scope_entity_id,
+        version: RECEIPT.version,
+        updated_at: RECEIPT.updated_at,
+      }).ok,
+    ).toBe(false);
   });
 
   it("fails closed when a point has a non-numeric x", () => {

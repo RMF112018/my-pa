@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from types import MappingProxyType
 
-from sqlalchemy import Connection, select
+from sqlalchemy import ColumnElement, Connection, select
 from sqlalchemy.engine import Row
 from sqlalchemy.exc import IntegrityError
 
@@ -61,7 +61,9 @@ def _record(row: Row[tuple[object, ...]]) -> CanvasWorkspaceRecord:
     )
 
 
-def _seed(focus_entity_id: str | None, scope_entity_id: str | None) -> tuple[object, object]:
+def _seed(
+    focus_entity_id: str | None, scope_entity_id: str | None
+) -> tuple[ColumnElement[bool], ColumnElement[bool]]:
     return (
         canvas_workspaces.c.focus_entity_id.is_not_distinct_from(focus_entity_id),
         canvas_workspaces.c.scope_entity_id.is_not_distinct_from(scope_entity_id),

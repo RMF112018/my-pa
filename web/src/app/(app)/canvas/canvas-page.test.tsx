@@ -112,7 +112,7 @@ function answerGraph(
   disclosure: unknown = whole(),
   workspace: unknown = emptyWorkspace(),
 ) {
-  const spy = vi.fn(async (url: string | URL | Request) => {
+  const spy = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
     const href = String(url);
     const body = href.includes("/v1/canvas.workspace.get")
       ? { result: workspace, disclosure }

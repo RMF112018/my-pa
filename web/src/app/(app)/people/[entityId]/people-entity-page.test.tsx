@@ -135,6 +135,11 @@ describe("People entity page", () => {
     expect(screen.getByTestId("people-assignments-current").textContent).toMatch(/Current role/);
     expect(screen.getByTestId("people-assignments-historical").textContent).toMatch(/Former role/);
     expect(screen.getByTestId("people-history")).toBeTruthy();
+    const viewMap = screen.getByTestId("people-view-map");
+    expect(viewMap.tagName).toBe("A");
+    expect(viewMap).toHaveAttribute("href", expect.stringContaining(`/canvas?focusEntityId=`));
+    expect(viewMap.getAttribute("href")).toContain(ENTITY_ID);
+    expect(screen.getByRole("link", { name: "View map" })).toBe(viewMap);
     expect(screen.queryByRole("button", { name: /merge/i })).toBeNull();
   });
 
@@ -150,5 +155,6 @@ describe("People entity page", () => {
     );
     expect(screen.getByTestId("people-profile-unavailable")).toHaveAttribute("data-state", "unavailable");
     expect(screen.queryByTestId("people-profile")).toBeNull();
+    expect(screen.queryByTestId("people-view-map")).toBeNull();
   });
 });

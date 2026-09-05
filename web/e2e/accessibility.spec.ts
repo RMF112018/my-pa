@@ -29,6 +29,7 @@ const PAGES = [
   "/work",
   "/intelligence",
   "/people",
+  "/canvas",
   "/knowledge",
   "/review",
   "/system",

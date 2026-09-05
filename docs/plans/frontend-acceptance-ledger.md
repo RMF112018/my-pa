@@ -239,11 +239,23 @@ Conservative dispositions for the People working surface on the WP13 entity read
 
 ## UI-IMP-WP15 Canvas graph read notes
 
-Conservative dispositions for the canonical graph **read** substrate. This is not Map UI, not Arrange, not React Flow, not layout persistence, not WP16, and not `PASS_VERIFIED` of the 250-criterion ledger.
+Conservative dispositions for the canonical graph **read** substrate. This is not Map UI, not Arrange, not React Flow, not layout persistence, and not `PASS_VERIFIED` of the 250-criterion ledger. Map UI is `UI-IMP-WP16` and consumes this frozen `entities.graph` substrate; this package remains the graph-read BFF only.
 
 - **PFE-AC-140 and the graph-read band of 140..184 / 199..223:** at most `VALIDATION_REQUIRED` for the `entities.graph` capability, fail-closed decoder, and `GET /api/people/graph` BFF. A seed is required; an unknown or foreign identifier is `not_found` naming the field, not an empty graph. `is_current` is server-computed from the same assignment/relationship in-force rule when `as_of` is supplied, otherwise null. Dense hubs disclose truncation and continue through `after`.
 - This package does not claim Map rendering, merge/split, fact mutation, or command-palette work.
 - UI-IMP-WP21 and UI-IMP-WP22 remain `PROVISIONAL_NOT_ACTIVATED`. UI-IMP-WP24 is not this package.
+
+## UI-IMP-WP16 Canvas Directory/Map read notes
+
+Conservative dispositions for the Map **read** UI on the frozen WP15 `entities.graph` contract. This is not Arrange (WP17), not relationship editing (WP18), not inspector/temporal product (WP19), not a11y/scale/export (WP20), not Wave 5 complete, and not `PASS_VERIFIED` for `PFE-AC-140..184`.
+
+- **Map/directory read UI (seeded neighborhood as directory plus read-only SVG map; unseeded instructional seed-required state; People profile "View map" deep link; truncation/continue visible):** at most `VALIDATION_REQUIRED`. Do not mark `PFE-AC-140..184` `PASS_VERIFIED`.
+- WP15 already froze the graph capability and BFF. This package consumes `invokeGateway(..., "entities.graph")` and the existing `GET /api/people/graph` query names (`focusEntityId`, `scopeEntityId`, hops, relationshipTypes, asOf, pageSize, after). Route is `/canvas`. Shell label is "Map".
+- Unseeded Map is instructional seed-required, not empty-success and not `entities.list`.
+- Synthetic has no entity-plane fixture (mirrors People).
+- This package does not claim Arrange, layout persistence, relationship editing, inspector/temporal product, or a11y/scale/export.
+- UI-IMP-WP21 and UI-IMP-WP22 remain `PROVISIONAL_NOT_ACTIVATED`. UI-IMP-WP24 is not this package.
+- Cross-cutting `WP16_TEST_QUALITY_AUDIT_INCOMPLETE` remains later in this file; WP27 still owns that audit.
 
 ## UI-IMP-WP23 Federated Search BFF notes
 

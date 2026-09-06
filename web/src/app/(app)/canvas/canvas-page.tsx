@@ -193,14 +193,14 @@ async function neighborhood(
           truncated={disclosure.truncated && !cursor}
         />
       ) : null}
-      <div className="grid gap-8 lg:grid-cols-2">
-        <section aria-labelledby="canvas-directory-heading">
+      <div className="grid min-w-0 gap-8 md:grid-cols-2">
+        <section aria-labelledby="canvas-directory-heading" className="min-w-0">
           <h2 id="canvas-directory-heading" className="mb-3 text-base font-semibold text-moss-slate">
             Directory
           </h2>
           <DirectoryList nodes={result.nodes} />
         </section>
-        <section aria-labelledby="canvas-map-heading">
+        <section aria-labelledby="canvas-map-heading" className="min-w-0">
           <h2 id="canvas-map-heading" className="mb-3 text-base font-semibold text-moss-slate">
             Neighborhood
           </h2>

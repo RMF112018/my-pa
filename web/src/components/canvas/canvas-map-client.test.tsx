@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import axe from "axe-core";
 import { CanvasMapClient } from "./canvas-map-client";
 import { CanvasInspector } from "./canvas-inspector";
 import { InspectorSelectionProvider } from "@/components/shell/inspector-selection";
@@ -943,5 +944,136 @@ describe("CanvasMapClient", () => {
       expect(panel).toHaveTextContent("2026-02-01T00:00:00Z");
     });
     expect(panel).not.toHaveTextContent("evidence_refs");
+  });
+});
+
+function syntheticNode(index: number): GraphNode {
+  const entityId = index === 0 ? FOCUS : `ent_${index.toString(16).padStart(16, "0")}`;
+  return {
+    entity_id: entityId,
+    projection_id: `gprj_${entityId}`,
+    entity_type: "person",
+    display_label: `Synthetic ${index}`,
+    status: "active",
+    superseded_by_entity_id: null,
+  };
+}
+
+function neighborhoodWithRing(ringCount: number): GraphNode[] {
+  return [syntheticNode(0), ...Array.from({ length: ringCount }, (_, index) => syntheticNode(index + 1))];
+}
+
+function mountRing(ringCount: number) {
+  const nodes = neighborhoodWithRing(ringCount);
+  return render(
+    <CanvasMapClient
+      nodes={nodes}
+      edges={[]}
+      focusEntityId={FOCUS}
+      scopeEntityId=""
+      savedPositions={{}}
+      version={0}
+      graphQuery={{ focusEntityId: FOCUS }}
+    />,
+  );
+}
+
+describe("CanvasMapClient keyboard Arrange, axe, scale, and export", () => {
+  it("is axe-clean for inspectable Map controls including Arrange and export", async () => {
+    const { container } = render(
+      <main>
+        <InspectorSelectionProvider>
+          <CanvasMapClient
+            nodes={NODES}
+            edges={EDGES}
+            focusEntityId={FOCUS}
+            scopeEntityId=""
+            savedPositions={{}}
+            version={0}
+            graphQuery={{ focusEntityId: FOCUS }}
+          />
+        </InspectorSelectionProvider>
+      </main>,
+    );
+    expect(screen.getByTestId("canvas-arrange-toggle")).toBeTruthy();
+    expect(screen.getByTestId("canvas-export-text")).toBeTruthy();
+    expect(screen.getByTestId("canvas-export-svg")).toBeTruthy();
+    expect((await axe.run(container)).violations).toEqual([]);
+  });
+
+  it("nudges an Arrange node selected by focus without pointerDown", async () => {
+    const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
+      void url;
+      const body = putBody(init);
+      return jsonResponse({
+        version: (body.expected_version ?? 0) + 1,
+        updated_at: "2026-09-05T17:00:00.000Z",
+        positions: body.positions ?? {},
+      });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    mount();
+    fireEvent.click(screen.getByTestId("canvas-arrange-toggle"));
+    const node = screen.getByTestId(`canvas-node-${FOCUS}`);
+    fireEvent.focus(node);
+    fireEvent.keyDown(node, { key: "ArrowRight" });
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    const calls = fetchSpy.mock.calls.map(([url, init]) => fetchMeta(String(url), init));
+    expect(calls.every((call) => call.href === "/api/canvas/workspace" && call.method === "POST")).toBe(
+      true,
+    );
+    expect(putBody(fetchSpy.mock.calls[0][1]).positions?.[FOCUS]).toEqual(
+      expect.objectContaining({ x: expect.any(Number), y: expect.any(Number) }),
+    );
+  });
+
+  it("nudges an Arrange node selected by Enter without pointerDown", async () => {
+    const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
+      void url;
+      const body = putBody(init);
+      return jsonResponse({
+        version: (body.expected_version ?? 0) + 1,
+        updated_at: "2026-09-05T17:00:00.000Z",
+        positions: body.positions ?? {},
+      });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    mount();
+    fireEvent.click(screen.getByTestId("canvas-arrange-toggle"));
+    const node = screen.getByTestId(`canvas-node-${FOCUS}`);
+    fireEvent.keyDown(node, { key: "Enter" });
+    fireEvent.keyDown(node, { key: "ArrowLeft" });
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    const calls = fetchSpy.mock.calls.map(([url, init]) => fetchMeta(String(url), init));
+    expect(calls.every((call) => call.href === "/api/canvas/workspace" && call.method === "POST")).toBe(
+      true,
+    );
+  });
+
+  it("keeps the visual map and both export actions at 35 ring nodes", () => {
+    mountRing(35);
+    expect(screen.getByTestId("canvas-map")).toBeTruthy();
+    expect(screen.queryByTestId("canvas-map-fallback")).toBeNull();
+    expect(screen.getByTestId("canvas-export-text")).toBeTruthy();
+    expect(screen.getByTestId("canvas-export-svg")).toBeTruthy();
+  });
+
+  it("omits the visual map and SVG export at 36 ring nodes", () => {
+    mountRing(36);
+    expect(screen.getByTestId("canvas-map-fallback")).toBeTruthy();
+    expect(screen.queryByTestId("canvas-map")).toBeNull();
+    expect(screen.getByTestId("canvas-export-text")).toBeTruthy();
+    expect(screen.queryByTestId("canvas-export-svg")).toBeNull();
+  });
+
+  it("downloads neighborhood text without throwing", () => {
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:synthetic-neighborhood");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    mount();
+    expect(screen.getByTestId("canvas-export-svg")).toBeTruthy();
+    expect(() => fireEvent.click(screen.getByTestId("canvas-export-text"))).not.toThrow();
+    expect(createObjectURL).toHaveBeenCalled();
+    expect(click).toHaveBeenCalled();
   });
 });

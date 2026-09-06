@@ -5,6 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { GraphMap } from "@/components/canvas/graph-map";
+import {
+  downloadTextFile,
+  serializeNeighborhoodText,
+  serializeSvgMarkup,
+  shouldOmitVisualMap,
+} from "@/components/canvas/neighborhood-export";
 import { useInspectorSelection } from "@/components/shell/inspector-selection";
 import { apiGet, apiPost } from "@/lib/api/client";
 import { RELATIONSHIP_TYPES } from "@/lib/api/decode/capabilities/_entity-read-helpers";
@@ -216,6 +222,8 @@ export function CanvasMapClient({
   }, [nodes, edges]);
 
   const overlay: SavedPositions = { ...stored, ...draft };
+  const omitVisualMap = shouldOmitVisualMap(mapNodes, focusEntityId);
+  const arrangeActive = arrange && !omitVisualMap;
   const selectedEdge = mapEdges.find(
     (edge) => edge.edge_kind === "relationship" && edge.edge_id === selectedEdgeId,
   );
@@ -321,7 +329,7 @@ export function CanvasMapClient({
   }
 
   function onNudge(event: KeyboardEvent<HTMLDivElement>) {
-    if (!arrange || !selectedEntityId) return;
+    if (!arrangeActive || !selectedEntityId) return;
     const delta =
       event.key === "ArrowLeft"
         ? { x: -NUDGE, y: 0 }
@@ -381,6 +389,26 @@ export function CanvasMapClient({
         ? undefined
         : mapNodes.find((item) => item.entity_id === edge.to_entity_id);
     setSelection({ kind: "edge", edge, ...(from ? { from } : {}), ...(to ? { to } : {}) });
+  }
+
+  function onArrangeSelect(entityId: string) {
+    setSelectedEntityId(entityId);
+  }
+
+  function onExportText() {
+    downloadTextFile(
+      "neighborhood.txt",
+      serializeNeighborhoodText(mapNodes, mapEdges),
+      "text/plain",
+    );
+  }
+
+  function onExportSvg() {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const markup = serializeSvgMarkup(svg);
+    if (!markup) return;
+    downloadTextFile("neighborhood.svg", markup, "image/svg+xml");
   }
 
   function onNodeSelect(entityId: string) {
@@ -559,19 +587,21 @@ export function CanvasMapClient({
       <div className="mb-3 flex flex-wrap gap-2">
         <Button
           type="button"
-          variant={arrange ? "primary" : "secondary"}
+          variant={arrangeActive ? "primary" : "secondary"}
           size="sm"
-          aria-pressed={arrange}
+          aria-pressed={arrangeActive}
           data-testid="canvas-arrange-toggle"
+          disabled={omitVisualMap}
           onClick={() => {
-            if (arrange) {
+            if (omitVisualMap) return;
+            if (arrangeActive) {
               setArrange(false);
               return;
             }
             turnOnArrange();
           }}
         >
-          {arrange ? "Done arranging" : "Arrange"}
+          {arrangeActive ? "Done arranging" : "Arrange"}
         </Button>
         <Button
           type="button"
@@ -591,6 +621,26 @@ export function CanvasMapClient({
         >
           {relationshipEdit ? "Done editing relationships" : "Edit relationships"}
         </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          data-testid="canvas-export-text"
+          onClick={onExportText}
+        >
+          Export text
+        </Button>
+        {omitVisualMap ? null : (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            data-testid="canvas-export-svg"
+            onClick={onExportSvg}
+          >
+            Export SVG
+          </Button>
+        )}
       </div>
       {relationshipEdit ? (
         <div className="mb-3 grid gap-3 rounded-lg border border-border bg-surface p-3 text-sm">
@@ -826,26 +876,40 @@ export function CanvasMapClient({
           {relationshipSaveError}
         </p>
       ) : null}
-      <GraphMap
-        nodes={mapNodes}
-        edges={mapEdges}
-        focusEntityId={focusEntityId}
-        savedPositions={overlay}
-        arrange={arrange}
-        relationshipEdit={relationshipEdit}
-        selectedEntityId={selectedEntityId}
-        selectedEdgeId={selectedEdgeId}
-        inspectEntityId={selection?.kind === "node" ? selection.node.entity_id : null}
-        inspectEdgeId={selection?.kind === "edge" ? selection.edge.edge_id : null}
-        svgRef={svgRef}
-        onNodePointerDown={onNodePointerDown}
-        onSvgPointerMove={onSvgPointerMove}
-        onSvgPointerUp={onSvgPointerUp}
-        onNodeSelect={onNodeSelect}
-        onEdgeSelect={onEdgeSelect}
-        onInspectNode={publishInspectNode}
-        onInspectEdge={publishInspectEdge}
-      />
+      {omitVisualMap ? (
+        <p
+          role="status"
+          data-testid="canvas-map-fallback"
+          className="rounded-lg border border-moss-gold/40 border-l-4 border-l-moss-gold bg-moss-gold/10 p-3 text-sm text-moss-slate"
+        >
+          The visual map is omitted for this page size. Ring nodes on the radial
+          layout would overlap their diameters. Directory still lists this returned
+          page. Arrange is unavailable while the map is omitted; relationship edit
+          still uses this page.
+        </p>
+      ) : (
+        <GraphMap
+          nodes={mapNodes}
+          edges={mapEdges}
+          focusEntityId={focusEntityId}
+          savedPositions={overlay}
+          arrange={arrangeActive}
+          relationshipEdit={relationshipEdit}
+          selectedEntityId={selectedEntityId}
+          selectedEdgeId={selectedEdgeId}
+          inspectEntityId={selection?.kind === "node" ? selection.node.entity_id : null}
+          inspectEdgeId={selection?.kind === "edge" ? selection.edge.edge_id : null}
+          svgRef={svgRef}
+          onNodePointerDown={onNodePointerDown}
+          onSvgPointerMove={onSvgPointerMove}
+          onSvgPointerUp={onSvgPointerUp}
+          onNodeSelect={onNodeSelect}
+          onArrangeSelect={onArrangeSelect}
+          onEdgeSelect={onEdgeSelect}
+          onInspectNode={publishInspectNode}
+          onInspectEdge={publishInspectEdge}
+        />
+      )}
     </div>
   );
 }

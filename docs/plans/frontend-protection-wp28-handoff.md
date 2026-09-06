@@ -6,7 +6,7 @@ WP27 did **not** implement release-gate architecture. Controlling WP28 gate memb
 
 `frontend / classify`, `static`, `unit`, `production-build`, `contract`, `security`, `e2e-critical`, `accessibility`, `responsive`, and the aggregate `frontend / required`.
 
-`web/e2e/failure-states.spec.ts` remains **out** of `e2e-critical`. WP28 runs it as advisory `frontend / degraded-gateway` after `MYPA_SESSION_SERVICE_URL` points at the live gateway.
+`web/e2e/failure-states.spec.ts` remains **out** of `e2e-critical`. WP28 runs it as advisory `frontend / degraded-gateway` after `MYPA_SESSION_SERVICE_URL` points at the live gateway and `web/e2e/stack.sh` allowlists `http://localhost:3101` for session-service origin checks.
 
 ## Advisory (WP28)
 

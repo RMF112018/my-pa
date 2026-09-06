@@ -89,6 +89,8 @@ echo "e2e: seeding Principal-scoped synthetic people"
 ( cd "${REPO_DIR}" && PYTHONPATH="${REPO_DIR}/src" MY_PA_DATABASE_URL="${DATABASE_URL}" "${PYTHON}" tests/end_to_end/seed_entities.py )
 
 echo "e2e: starting the Python gateway on 127.0.0.1:${GATEWAY_PORT}"
+# Session-service origin checks use this allowlist. Live Next is :3100; the
+# dead-gateway Next is :3101. Omitting :3101 makes synthetic sign-in 403.
 (
   cd "${REPO_DIR}"
   export PYTHONPATH="${REPO_DIR}/src"
@@ -99,7 +101,7 @@ echo "e2e: starting the Python gateway on 127.0.0.1:${GATEWAY_PORT}"
   MY_PA_WEBAUTHN_BFF_SECRET=synthetic-e2e-webauthn-bff-secret-0000 \
   MY_PA_WEBAUTHN_RP_ID=localhost \
   MY_PA_WEBAUTHN_RP_NAME=my-pa \
-  MY_PA_WEBAUTHN_ALLOWED_ORIGINS=http://localhost:3100 \
+  MY_PA_WEBAUTHN_ALLOWED_ORIGINS="http://localhost:3100 http://localhost:3101" \
   MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED=true \
   "${PYTHON}" apps/gateway.py run --port "${GATEWAY_PORT}"
 ) >"${GATEWAY_LOG}" 2>&1 &

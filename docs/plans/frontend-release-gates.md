@@ -20,7 +20,7 @@ Do not remove child jobs. Do not add `continue-on-error` to them.
 | `frontend / browsers` | Firefox/WebKit critical subset; WebAuthn stays Chromium-CDP; Playwright WebKit is not Safari | Partial promotion possible after flake evidence. Never treat WebKit as Safari. |
 | `frontend / visual` | Darwin PNG baselines only; Linux CI will mismatch until linux snapshots are committed. No auto-update. | Commit linux desktop baselines; freeze auto-approval policy. |
 | `frontend / performance` | Observational `.next/static` JS census. **No accepted numeric budget.** | Accept a budget from measured evidence; do not invent one here. |
-| `frontend / degraded-gateway` | Dead-gateway `failure-states.spec.ts` after `MYPA_SESSION_SERVICE_URL` split. Sign-in topology newly enabled. | Promote into `e2e-critical` only after a green advisory streak. |
+| `frontend / degraded-gateway` | Dead-gateway `failure-states.spec.ts` after `MYPA_SESSION_SERVICE_URL` split **and** e2e stack origin allowlist including `http://localhost:3101`. Sign-in topology newly enabled. | Promote into `e2e-critical` only after a green advisory streak. |
 
 `frontend / required` does **not** depend on any row in that table.
 

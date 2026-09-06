@@ -74,3 +74,15 @@ def test_required_child_jobs_do_not_continue_on_error() -> None:
     text = _workflow()
     for job in REQUIRED_CHILDREN:
         assert "continue-on-error: true" not in _job_block(text, job), job
+
+
+def test_dead_gateway_harness_allowlists_session_origin_and_splits_urls() -> None:
+    """Sign-in on :3101 needs both the session URL split and the RP origin list."""
+    repo = Path(__file__).resolve().parents[2]
+    stack = (repo / "web" / "e2e" / "stack.sh").read_text(encoding="utf-8")
+    assert "http://localhost:3100" in stack
+    assert "http://localhost:3101" in stack
+    config = (repo / "web" / "playwright.config.ts").read_text(encoding="utf-8")
+    assert "MYPA_SESSION_SERVICE_URL: GATEWAY_URL" in config
+    assert "MYPA_CANONICAL_ORIGIN: DEAD_GATEWAY_URL" in config
+    assert "MYPA_GATEWAY_URL: \"http://127.0.0.1:1\"" in config

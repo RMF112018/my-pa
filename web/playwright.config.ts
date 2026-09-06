@@ -154,6 +154,9 @@ export default defineConfig({
         MYPA_CANONICAL_ORIGIN: DEAD_GATEWAY_URL,
         MYPA_NEXT_DIST_DIR: ".next/e2e-dead",
       },
+      // Session-service origin checks use MY_PA_WEBAUTHN_ALLOWED_ORIGINS in
+      // e2e/stack.sh. That list must include this server (localhost:3101) or
+      // synthetic sign-in returns 403 and waitForURL /today hangs.
     },
   ],
 });

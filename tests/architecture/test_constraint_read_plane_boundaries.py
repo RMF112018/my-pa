@@ -681,6 +681,16 @@ def test_no_revision_but_wp02_s_touches_a_constraint_table() -> None:
     So the question asked here is the narrow one: does any revision other than
     WP02's own perform DDL that names a Constraint table? Unrelated migrations
     are invisible to it, and a WP03 migration could not be.
+
+    **What this does not cover, stated plainly.** WP03's promise is the wider
+    "adds no migration", and a revision touching only non-Constraint tables would
+    pass here. Closing that half needs a diff against the merge base, which is
+    precisely what CI's depth-1 clone cannot supply — the constraint that forced
+    this rewrite in the first place. It is therefore a review-time fact rather
+    than a CI-time invariant: `git diff origin/main..HEAD -- migrations/` is
+    empty on this branch, and a reviewer can confirm it in one command. A guard
+    that faked the check by re-freezing the revision set would be the tripwire
+    this rewrite removed.
     """
     offenders: dict[str, list[str]] = {}
     for path in sorted(MIGRATIONS.glob("*.py")):

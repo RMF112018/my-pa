@@ -498,3 +498,60 @@ def test_no_read_writes_to_a_sync_table_or_touches_a_run(migrated_engine: Engine
             assert "DELETE FROM" not in normalised
             assert "FOR UPDATE" not in normalised
             assert "CONSTRAINT_SYNC_RUNS" not in normalised
+
+
+def test_the_project_roll_up_does_not_fan_the_target_out_across_every_baseline(
+    migrated_engine: Engine,
+) -> None:
+    """The overview's `sync_summary` reads no baseline row at all.
+
+    `sync_summary` takes an empty Constraint collection to mean "the whole
+    Project", which is what `read_overview` passes. That path consumes
+    `has_target` and the open-conflict counts and nothing else, so joining the
+    baselines there would return one row per baseline in the Project to build a
+    mapping no caller reads — a fetch whose row volume grows with the Register
+    while the statement count stays flat, which is exactly the unbounded shape a
+    statement-count guard cannot see.
+
+    Asserted two ways, because either alone is weak: the emitted SQL must not
+    name the baselines table, and the returned mapping must be empty even though
+    baselines exist. The per-Constraint call in the same test is the control —
+    it *does* read baselines, so a regression that simply stopped reading them
+    everywhere would redden here rather than pass quietly.
+    """
+    with migrated_engine.begin() as connection:
+        repository = _synced(connection)
+
+        statements: list[str] = []
+
+        def _record(
+            _conn: object,
+            _cursor: object,
+            statement: str,
+            _parameters: object,
+            _context: object,
+            _executemany: object,
+        ) -> None:
+            statements.append(statement)
+
+        event.listen(migrated_engine, "before_cursor_execute", _record)
+        try:
+            roll_up = repository.sync_summary(PRINCIPAL_A, PROJECT_A, ())
+        finally:
+            event.remove(migrated_engine, "before_cursor_execute", _record)
+
+        assert statements, "no statement was captured, so the assertions below prove nothing"
+        assert not any("constraint_sync_baselines" in s.lower() for s in statements), (
+            "the Project roll-up joined constraint_sync_baselines. It reads only "
+            "has_target and the conflict counts, so the join returns rows nobody "
+            "consumes and grows with the Register"
+        )
+        assert roll_up.has_target is True
+        assert roll_up.baseline_versions == {}
+        assert sum(roll_up.open_conflict_counts.values()) == 1
+
+        scoped = repository.sync_summary(PRINCIPAL_A, PROJECT_A, (IN_SYNC,))
+        assert scoped.baseline_versions, (
+            "the per-Constraint call read no baseline, so the roll-up assertion "
+            "above would pass even if baselines were never readable at all"
+        )

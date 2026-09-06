@@ -1705,33 +1705,48 @@ class SqlConstraintManagementRepository(ConstraintManagementRepository):
         what this reports is what is already on disk.
         """
         wanted = sorted(set(constraint_ids))
-        baseline_join: ColumnElement[bool] = and_(
-            matching_partition_criterion(constraint_sync_targets, constraint_sync_baselines),
-            constraint_sync_baselines.c.sync_target_id == constraint_sync_targets.c.sync_target_id,
-        )
+        target_statement = principal_scoped(
+            select(constraint_sync_targets.c.last_verified_at),
+            constraint_sync_targets,
+            capture_context(principal_id),
+        ).where(constraint_sync_targets.c.project_id == project_id)
         if wanted:
-            baseline_join = and_(
-                baseline_join, constraint_sync_baselines.c.constraint_id.in_(wanted)
-            )
-        target_rows = self._connection.execute(
-            principal_scoped(
+            # The baselines are joined only when a bounded set of Constraints
+            # asked for them. The overview roll-up passes none, and it reads
+            # `has_target` and the conflict counts and nothing else — joining
+            # there would fan the target row out across every baseline in the
+            # Project to build a mapping no caller then looks at, which is the
+            # unbounded fetch this module's own docstring says it does not do.
+            target_statement = principal_scoped(
                 select(
                     constraint_sync_targets.c.last_verified_at,
                     constraint_sync_baselines.c.constraint_id.label("baseline_constraint_id"),
                     constraint_sync_baselines.c.baseline_constraint_version,
                 ).select_from(
-                    constraint_sync_targets.outerjoin(constraint_sync_baselines, baseline_join)
+                    constraint_sync_targets.outerjoin(
+                        constraint_sync_baselines,
+                        and_(
+                            matching_partition_criterion(
+                                constraint_sync_targets, constraint_sync_baselines
+                            ),
+                            constraint_sync_baselines.c.sync_target_id
+                            == constraint_sync_targets.c.sync_target_id,
+                            constraint_sync_baselines.c.constraint_id.in_(wanted),
+                        ),
+                    )
                 ),
                 constraint_sync_targets,
                 capture_context(principal_id),
             ).where(constraint_sync_targets.c.project_id == project_id)
-        ).all()
+        target_rows = self._connection.execute(target_statement).all()
         baseline_versions: dict[str, int] = {}
         verified: list[datetime] = []
         for row in target_rows:
             mapping = row._mapping
             if mapping["last_verified_at"] is not None:
                 verified.append(mapping["last_verified_at"])
+            if not wanted:
+                continue
             baseline_id = mapping["baseline_constraint_id"]
             if baseline_id is not None:
                 version = mapping["baseline_constraint_version"]

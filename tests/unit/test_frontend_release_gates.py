@@ -85,4 +85,4 @@ def test_dead_gateway_harness_allowlists_session_origin_and_splits_urls() -> Non
     config = (repo / "web" / "playwright.config.ts").read_text(encoding="utf-8")
     assert "MYPA_SESSION_SERVICE_URL: GATEWAY_URL" in config
     assert "MYPA_CANONICAL_ORIGIN: DEAD_GATEWAY_URL" in config
-    assert "MYPA_GATEWAY_URL: \"http://127.0.0.1:1\"" in config
+    assert 'MYPA_GATEWAY_URL: "http://127.0.0.1:1"' in config

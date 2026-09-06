@@ -347,7 +347,7 @@ Conservative dispositions for extending `/system` and `GET /api/system`. This pa
 Advisory-only CI introduction on this PR. Not WP28/WP30. Not `VALIDATED`. Not `PROMOTED_REQUIRED`. `frontend / required` needs/list is unchanged.
 
 - `frontend / pwa-offline` starts `INTRODUCED` / `ADVISORY` (`continue-on-error: true`): Chromium desktop `web/e2e/pwa.spec.ts` and `web/e2e/offline.spec.ts`. This is not real Safari / iOS Safari / Android-device install evidence.
-- `frontend / browsers` starts `INTRODUCED` / `ADVISORY` (`continue-on-error: true`): Playwright Firefox + WebKit `web/e2e/browser-security.spec.ts` (Origin/CSRF) and `web/e2e/search-contract.spec.ts`. Playwright WebKit is not Safari. Chromium Origin/CSRF remains on `frontend / e2e-critical`; `localhost` vs `127.0.0.1` is not relaxed.
+- `frontend / browsers` starts `INTRODUCED` / `ADVISORY` (`continue-on-error: true`): Playwright Firefox + WebKit `web/e2e/browser-security.spec.ts` (Origin/CSRF) and `web/e2e/search-contract.spec.ts`. Ubuntu runners install those engines with `--with-deps` (WebKit needs GTK/GStreamer libraries the image does not ship). Playwright WebKit is not Safari. Chromium Origin/CSRF remains on `frontend / e2e-critical`; `localhost` vs `127.0.0.1` is not relaxed.
 - **HARVEST_CANNOT_PROVE:** `web/e2e/webauthn.spec.ts` (Chromium CDP `WebAuthn.enable` / virtual authenticator — Chromium-only); `web/e2e/visual.spec.ts` (not this job); real Safari / iOS Safari / Android-device install.
 
 ## UI-IMP-WP26 PWA / Offline Validation-First notes

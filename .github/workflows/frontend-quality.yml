@@ -395,7 +395,7 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
-      - run: npx playwright install firefox webkit
+      - run: npx playwright install --with-deps firefox webkit
       - name: Run Firefox/WebKit critical-path e2e (INTRODUCED / ADVISORY)
         env:
           MYPA_E2E_PYTHON: python

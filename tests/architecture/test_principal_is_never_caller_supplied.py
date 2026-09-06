@@ -804,6 +804,17 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("category", "principal_id"),
         ("draft", "principal_id"),
     ),
+    # PC-CM-IMP-WP02: `ConstraintRevision.from_constraint` copies the aggregate's
+    # own stored partition into the immutable snapshot of it, so the revision and
+    # the row it records cannot end up in different partitions. The value is a
+    # `prn_` field of a domain record validated on construction, never a
+    # request-body field, and nothing is looked up or resolved from it. The
+    # persistence adapter that writes the snapshot
+    # (`infrastructure/persistence/constraints.py`) reads no principal at all: it
+    # takes the authenticated `principal_id` as its own parameter and stamps every
+    # row through `principal_bound_values`, which is why it is absent from this
+    # registry.
+    "domain/project_controls/revision.py": (("constraint", "principal_id"),),
     # Persist copies the packed package's partition, already confined to
     # `authorization.principal`. Not a request-body field.
     "application/context/service.py": (

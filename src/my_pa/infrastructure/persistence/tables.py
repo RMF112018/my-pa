@@ -182,6 +182,16 @@ from my_pa.domain.native_sources import (
     WatcherSimulationState,
 )
 from my_pa.domain.policy.decision import POLICY_VERSION_PATTERN, DenialReason
+from my_pa.domain.project_controls.category import (
+    CONSTRAINT_CATEGORY_PREFIX_PATTERN,
+    ConstraintCategoryState,
+)
+from my_pa.domain.project_controls.constraint import (
+    ConstraintLifecycleState,
+    ConstraintOrigin,
+    ConstraintRecordQuality,
+)
+from my_pa.domain.project_controls.party import PartyKind
 from my_pa.domain.relationship.entity import (
     ARCHIVABLE_STATUSES,
     AddressTypeCode,
@@ -10911,5 +10921,1339 @@ canvas_workspaces = Table(
         "scope_entity_id",
         name="one_canvas_workspace_per_principal_seed",
         postgresql_nulls_not_distinct=True,
+    ),
+)
+
+# ---------------------------------------------------------------------------
+# Project Controls: Constraint Management (PC-CM-IMP-WP02)
+#
+# Fourteen tables, one plane. A Constraint is a product-owned record under
+# `ADR-003`: the Principal's own construction-controls ledger, not a read of any
+# source system, which is why every one of these tables carries `principal_id`
+# and why the four ledgers below are append-only at the server rather than by
+# convention. `project_constraints` holds the current row, `project_constraint_
+# revisions` holds what each version was, and `project_constraint_history` holds
+# one receipt per attempted mutation — the `commitments` / `commitment_history`
+# shape, extended with the revision the receipt produced so a reader can move
+# from "this was attempted" to "this is what it made" without inference.
+#
+# **Three foreign keys form a cycle and two more form a second one**, so five
+# are declared `use_alter=True` and `DEFERRABLE INITIALLY DEFERRED`: a
+# Constraint names its current revision, a revision names the receipt that wrote
+# it, a receipt names the revision it produced, and a sync target names both its
+# active run and its last verified run while a run names its target. Creating
+# the pair in one transaction is the normal case, not the exception, so the
+# check belongs at COMMIT; `use_alter` is what lets `create_all`/`drop_all`
+# order the metadata at all.
+#
+# **The narrow legacy-incomplete strategy.** A construction workbook imported
+# from before this product existed carries rows that the domain's published
+# shape refuses: a closed Constraint with no `published_at`, no description, no
+# dates. Four CHECKs on `project_constraints` — and only those four — admit that
+# shape, and each is gated on `origin = 'legacy_workbook_import' AND
+# record_quality = 'legacy_incomplete'` **together**. A `product` row cannot
+# reach the relaxation by setting one column, and a `normal` row cannot reach it
+# by setting the other. Everything else applies to every row: the vocabularies,
+# the draft/code pairing, the "a published Constraint belongs to a Project"
+# rule, and the exclusions that keep a closed row free of void fields and a void
+# row free of a completion date. So the import path is a bounded exception with
+# a name, rather than a schema that has quietly stopped enforcing the record.
+# Nothing in this package writes such a row; the importer is `WP13`'s.
+#
+# `constraint_sync_*` stores what was compared and what disagreed, never the
+# workbook: no cell coordinates, no credentials, no provider payload beyond a
+# bounded digest object, which is the structural half of the rule that a sync
+# ledger is metadata about an exchange and not a copy of it.
+# ---------------------------------------------------------------------------
+
+#: One row per Project that keeps Constraint dates, holding the timezone those
+#: dates are business days in. There is no default and no "to be resolved"
+#: value: a Project whose working timezone nobody has stated has no row, which
+#: a caller can see, rather than a row asserting UTC that a caller cannot.
+constraint_project_settings = Table(
+    "constraint_project_settings",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, ForeignKey(f"{SCHEMA}.projects.project_id"), nullable=False),
+    Column("timezone_name", Text, nullable=False),
+    Column("version", Integer, nullable=False, server_default=text("1")),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("principal_id", "project_id", name="one_constraint_setting_per_project"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    #: The name of an IANA zone, checked for shape only. Whether the zone
+    #: exists is `ZoneInfo`'s answer in `domain.project_controls.business_time`
+    #: and cannot be asked of a server that ships its own copy of the database.
+    CheckConstraint(
+        "length(trim(timezone_name)) BETWEEN 1 AND 64 AND timezone_name !~ '\\s'",
+        name="a_constraint_project_timezone_is_a_bare_name",
+    ),
+    CheckConstraint("version >= 1", name="a_constraint_settings_version_is_positive"),
+)
+
+#: A Constraint category: the prefix a Constraint code is issued under, and the
+#: allocator state for issuing the next one. `next_sequence` and `issued_count`
+#: are stored here rather than derived from the Constraint rows so that issuing
+#: a code is one row lock and not a scan, and `prefix_locked_at` records the
+#: moment the prefix stopped being editable — which is the first issuance, held
+#: as a biconditional so a locked prefix that never issued anything cannot exist.
+constraint_categories = Table(
+    "constraint_categories",
+    METADATA,
+    Column("category_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, ForeignKey(f"{SCHEMA}.projects.project_id"), nullable=False),
+    Column("prefix", Text, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("description", Text),
+    Column("display_order", Integer, nullable=False, server_default=text("0")),
+    Column("state", Text, nullable=False, server_default=text("'active'")),
+    Column("next_sequence", Integer, nullable=False, server_default=text("1")),
+    Column("issued_count", Integer, nullable=False, server_default=text("0")),
+    Column("prefix_locked_at", DateTime(timezone=True)),
+    Column("version", Integer, nullable=False, server_default=text("1")),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("archived_at", DateTime(timezone=True)),
+    _is_identifier("category_id", IdKind.CONSTRAINT_CATEGORY),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _one_of("state", ConstraintCategoryState, name="a_constraint_category_state_is_known"),
+    _matches(
+        "prefix",
+        CONSTRAINT_CATEGORY_PREFIX_PATTERN.pattern,
+        name="a_constraint_category_prefix_is_well_formed",
+    ),
+    CheckConstraint(
+        "length(trim(title)) BETWEEN 1 AND 200",
+        name="a_constraint_category_title_is_bounded",
+    ),
+    CheckConstraint("next_sequence >= 1", name="a_constraint_category_sequence_is_positive"),
+    CheckConstraint("issued_count >= 0", name="a_constraint_category_issue_count_is_non_negative"),
+    CheckConstraint("version >= 1", name="a_constraint_category_version_is_positive"),
+    CheckConstraint(
+        "(state = 'archived') = (archived_at IS NOT NULL)",
+        name="an_archived_constraint_category_records_when_it_was",
+    ),
+    CheckConstraint(
+        "(issued_count = 0) = (prefix_locked_at IS NULL)",
+        name="a_constraint_category_prefix_locks_at_first_issue",
+    ),
+    #: Plain rather than partial: a prefix an archived category used is not
+    #: reissued, because the codes it already issued still name it.
+    UniqueConstraint(
+        "project_id", "prefix", name="constraint_categories_prefix_is_unique_per_project"
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "category_id",
+        name="constraint_categories_principal_category_is_unique",
+    ),
+    Index("constraint_categories_by_principal_project", "principal_id", "project_id"),
+)
+
+#: The Constraint itself. `project_id` and `category_id` are nullable because a
+#: Draft is allowed to exist before either is chosen; `a_published_constraint_
+#: is_complete` is what stops that latitude from reaching a published row.
+#: `constraint_code` is `text` and never numeric — `7.03` is a code, not a
+#: number, and a numeric column would silently make `7.30` of it.
+project_constraints = Table(
+    "project_constraints",
+    METADATA,
+    Column("constraint_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, ForeignKey(f"{SCHEMA}.projects.project_id")),
+    Column("category_id", Text),
+    Column("constraint_code", Text),
+    Column("description", Text),
+    Column("date_identified", Date),
+    Column("lifecycle_state", Text, nullable=False),
+    Column("due_date", Date),
+    Column("reference", Text),
+    Column("current_update", Text),
+    Column("completion_date", Date),
+    Column("closure_commentary", Text),
+    Column("voided_date", Date),
+    Column("void_reason", Text),
+    Column("record_quality", Text, nullable=False, server_default=text("'normal'")),
+    Column("origin", Text, nullable=False),
+    Column("published_at", DateTime(timezone=True)),
+    Column("version", Integer, nullable=False, server_default=text("1")),
+    Column("current_revision_id", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("constraint_id", IdKind.PROJECT_CONSTRAINT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint(
+        "project_id IS NULL OR project_id ~ '^prj_[A-Za-z0-9]{8,64}$'",
+        name="a_constraint_project_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        "category_id IS NULL OR category_id ~ '^ccat_[A-Za-z0-9]{8,64}$'",
+        name="a_constraint_category_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        "current_revision_id IS NULL OR current_revision_id ~ '^crev_[A-Za-z0-9]{8,64}$'",
+        name="a_constraint_revision_link_is_an_opaque_identifier",
+    ),
+    _one_of(
+        "lifecycle_state",
+        ConstraintLifecycleState,
+        name="a_project_constraint_lifecycle_state_is_known",
+    ),
+    _one_of(
+        "record_quality",
+        ConstraintRecordQuality,
+        name="a_project_constraint_record_quality_is_known",
+    ),
+    _one_of("origin", ConstraintOrigin, name="a_project_constraint_origin_is_known"),
+    CheckConstraint("version >= 1", name="a_project_constraint_version_is_positive"),
+    #: The gate the four relaxations below are written against, stated once as a
+    #: rule of its own: `legacy_incomplete` is a property of an import and of
+    #: nothing else.
+    CheckConstraint(
+        "record_quality <> 'legacy_incomplete' OR origin = 'legacy_workbook_import'",
+        name="a_legacy_incomplete_constraint_is_a_workbook_import",
+    ),
+    CheckConstraint(
+        "(lifecycle_state = 'draft') = (constraint_code IS NULL)",
+        name="a_draft_constraint_carries_no_code",
+    ),
+    CheckConstraint(
+        "constraint_code IS NULL OR length(trim(constraint_code)) BETWEEN 1 AND 32",
+        name="a_constraint_code_is_not_blank",
+    ),
+    CheckConstraint(
+        "(origin = 'legacy_workbook_import' AND record_quality = 'legacy_incomplete') "
+        "OR ((lifecycle_state = 'draft') = (published_at IS NULL))",
+        name="a_published_constraint_records_when_it_published",
+    ),
+    CheckConstraint(
+        "(origin = 'legacy_workbook_import' AND record_quality = 'legacy_incomplete') "
+        "OR lifecycle_state = 'draft' "
+        "OR (project_id IS NOT NULL AND category_id IS NOT NULL "
+        "AND description IS NOT NULL AND date_identified IS NOT NULL "
+        "AND due_date IS NOT NULL)",
+        name="a_published_constraint_is_complete",
+    ),
+    CheckConstraint(
+        "lifecycle_state = 'draft' OR project_id IS NOT NULL",
+        name="a_published_constraint_belongs_to_a_project",
+    ),
+    CheckConstraint(
+        "(origin = 'legacy_workbook_import' AND record_quality = 'legacy_incomplete') "
+        "OR lifecycle_state <> 'closed' OR completion_date IS NOT NULL",
+        name="a_closed_constraint_records_its_completion",
+    ),
+    CheckConstraint(
+        "(origin = 'legacy_workbook_import' AND record_quality = 'legacy_incomplete') "
+        "OR lifecycle_state <> 'void' "
+        "OR (voided_date IS NOT NULL AND length(trim(void_reason)) > 0)",
+        name="a_void_constraint_records_its_reason",
+    ),
+    CheckConstraint(
+        "lifecycle_state <> 'closed' OR (voided_date IS NULL AND void_reason IS NULL)",
+        name="a_closed_constraint_carries_no_void_fields",
+    ),
+    CheckConstraint(
+        "lifecycle_state <> 'void' OR completion_date IS NULL",
+        name="a_void_constraint_carries_no_completion",
+    ),
+    CheckConstraint(
+        "lifecycle_state IN ('closed', 'void') "
+        "OR (completion_date IS NULL AND voided_date IS NULL AND void_reason IS NULL)",
+        name="an_active_constraint_carries_no_terminal_fields",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "constraint_id",
+        name="project_constraints_principal_constraint_is_unique",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "category_id"],
+        [
+            f"{SCHEMA}.constraint_categories.principal_id",
+            f"{SCHEMA}.constraint_categories.category_id",
+        ],
+        name="a_constraint_belongs_to_a_category_of_its_principal",
+    ),
+    #: One half of the record/revision cycle; see the section header.
+    ForeignKeyConstraint(
+        ["principal_id", "current_revision_id"],
+        [
+            f"{SCHEMA}.project_constraint_revisions.principal_id",
+            f"{SCHEMA}.project_constraint_revisions.revision_id",
+        ],
+        use_alter=True,
+        deferrable=True,
+        initially="DEFERRED",
+        name="a_constraint_names_its_current_revision",
+    ),
+    Index(
+        "project_constraints_code_is_unique_per_project",
+        "project_id",
+        "constraint_code",
+        unique=True,
+        postgresql_where=text("constraint_code IS NOT NULL"),
+    ),
+    Index("project_constraints_by_principal", "principal_id"),
+    Index(
+        "project_constraints_by_principal_project_state",
+        "principal_id",
+        "project_id",
+        "lifecycle_state",
+    ),
+)
+
+#: Who is in the ball court and who is responsible, as rows rather than as two
+#: columns, because either can be several and either can be a person this build
+#: has not resolved to an Entity yet. `entity_id` carries the `ent_` shape CHECK
+#: and **no foreign key**, for the reason `commitments.counterparty_person_id`
+#: gives: `entities` is itself Principal-partitioned, so a foreign key would be
+#: satisfiable across the partition and one Principal could learn that another's
+#: row exists by observing which insert succeeded.
+project_constraint_parties = Table(
+    "project_constraint_parties",
+    METADATA,
+    Column("party_assignment_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("constraint_id", Text, nullable=False),
+    Column("role", Text, nullable=False),
+    Column("ordinal", Integer, nullable=False),
+    Column("party_kind", Text, nullable=False),
+    Column("entity_id", Text),
+    Column("display_label", Text),
+    Column("original_label", Text),
+    Column("resolved_at", DateTime(timezone=True)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("party_assignment_id", IdKind.CONSTRAINT_PARTY_ASSIGNMENT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("constraint_id", IdKind.PROJECT_CONSTRAINT),
+    CheckConstraint(
+        "entity_id IS NULL OR entity_id ~ '^ent_[A-Za-z0-9]{8,64}$'",
+        name="a_constraint_party_entity_is_an_opaque_identifier",
+    ),
+    _one_of(
+        "role",
+        frozenset({"bic", "responsible"}),
+        name="a_constraint_party_role_is_known",
+    ),
+    _one_of("party_kind", PartyKind, name="a_constraint_party_kind_is_known"),
+    CheckConstraint(
+        "(party_kind = 'entity') = (entity_id IS NOT NULL)",
+        name="an_entity_constraint_party_names_its_entity",
+    ),
+    CheckConstraint(
+        "party_kind <> 'unresolved' OR length(trim(coalesce(display_label, ''))) > 0",
+        name="an_unresolved_constraint_party_keeps_its_label",
+    ),
+    CheckConstraint("ordinal >= 0", name="a_constraint_party_ordinal_is_non_negative"),
+    CheckConstraint(
+        "display_label IS NULL OR length(trim(display_label)) BETWEEN 1 AND 512",
+        name="a_constraint_party_display_label_is_bounded",
+    ),
+    CheckConstraint(
+        "original_label IS NULL OR length(trim(original_label)) BETWEEN 1 AND 512",
+        name="a_constraint_party_original_label_is_bounded",
+    ),
+    UniqueConstraint(
+        "constraint_id",
+        "role",
+        "ordinal",
+        name="project_constraint_parties_role_ordinal_is_unique",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "constraint_id"],
+        [
+            f"{SCHEMA}.project_constraints.principal_id",
+            f"{SCHEMA}.project_constraints.constraint_id",
+        ],
+        name="a_constraint_party_belongs_to_a_constraint_of_its_principal",
+    ),
+    Index(
+        "project_constraint_parties_by_principal_constraint",
+        "principal_id",
+        "constraint_id",
+    ),
+)
+
+#: What one version of a Constraint was. Append-only: there is no `updated_at`
+#: and the trigger refuses `UPDATE` and `DELETE` outright. The snapshot repeats
+#: the scalar column names of `project_constraints` exactly so that reading a
+#: revision needs no translation table, and it repeats the three vocabularies
+#: but **not** the completeness rules — a revision records what was, including
+#: what a legacy import was, and a snapshot that could not be written would make
+#: the ledger lie by omission.
+project_constraint_revisions = Table(
+    "project_constraint_revisions",
+    METADATA,
+    Column("revision_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text),
+    Column("constraint_id", Text, nullable=False),
+    Column("version", Integer, nullable=False),
+    Column("history_id", Text, nullable=False),
+    Column("category_id", Text),
+    Column("constraint_code", Text),
+    Column("description", Text),
+    Column("date_identified", Date),
+    Column("lifecycle_state", Text, nullable=False),
+    Column("due_date", Date),
+    Column("reference", Text),
+    Column("current_update", Text),
+    Column("completion_date", Date),
+    Column("closure_commentary", Text),
+    Column("voided_date", Date),
+    Column("void_reason", Text),
+    Column("record_quality", Text, nullable=False),
+    Column("origin", Text, nullable=False),
+    Column("published_at", DateTime(timezone=True)),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("revision_id", IdKind.PROJECT_CONSTRAINT_REVISION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("constraint_id", IdKind.PROJECT_CONSTRAINT),
+    _is_identifier("history_id", IdKind.PROJECT_CONSTRAINT_HISTORY),
+    CheckConstraint(
+        "project_id IS NULL OR project_id ~ '^prj_[A-Za-z0-9]{8,64}$'",
+        name="a_constraint_revision_project_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        "category_id IS NULL OR category_id ~ '^ccat_[A-Za-z0-9]{8,64}$'",
+        name="a_constraint_revision_category_is_an_opaque_identifier",
+    ),
+    _one_of(
+        "lifecycle_state",
+        ConstraintLifecycleState,
+        name="a_constraint_revision_lifecycle_state_is_known",
+    ),
+    _one_of(
+        "record_quality",
+        ConstraintRecordQuality,
+        name="a_constraint_revision_record_quality_is_known",
+    ),
+    _one_of("origin", ConstraintOrigin, name="a_constraint_revision_origin_is_known"),
+    CheckConstraint("version >= 1", name="a_constraint_revision_version_is_positive"),
+    UniqueConstraint(
+        "constraint_id", "version", name="project_constraint_revisions_version_is_unique"
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "revision_id",
+        name="project_constraint_revisions_principal_revision_is_unique",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "constraint_id"],
+        [
+            f"{SCHEMA}.project_constraints.principal_id",
+            f"{SCHEMA}.project_constraints.constraint_id",
+        ],
+        name="a_constraint_revision_belongs_to_a_constraint_of_its_principal",
+    ),
+    #: The second half of the cycle: a revision is written by exactly one
+    #: receipt, and that receipt names this revision back.
+    ForeignKeyConstraint(
+        ["principal_id", "history_id"],
+        [
+            f"{SCHEMA}.project_constraint_history.principal_id",
+            f"{SCHEMA}.project_constraint_history.history_id",
+        ],
+        use_alter=True,
+        deferrable=True,
+        initially="DEFERRED",
+        name="a_constraint_revision_cites_the_receipt_that_wrote_it",
+    ),
+    Index(
+        "project_constraint_revisions_by_principal_constraint",
+        "principal_id",
+        "constraint_id",
+    ),
+)
+
+#: The party rows of one revision, keyed by `(revision, role, ordinal)` rather
+#: than by an identity of their own: nothing addresses one of these rows, and
+#: `ORDER BY ordinal` within a role reconstructs the exact tuple the Constraint
+#: carried at that version.
+project_constraint_revision_parties = Table(
+    "project_constraint_revision_parties",
+    METADATA,
+    Column("revision_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("role", Text, nullable=False),
+    Column("ordinal", Integer, nullable=False),
+    Column("party_kind", Text, nullable=False),
+    Column("entity_id", Text),
+    Column("display_label", Text),
+    Column("original_label", Text),
+    Column("resolved_at", DateTime(timezone=True)),
+    PrimaryKeyConstraint(
+        "revision_id", "role", "ordinal", name="one_constraint_revision_party_position"
+    ),
+    _is_identifier("revision_id", IdKind.PROJECT_CONSTRAINT_REVISION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint(
+        "entity_id IS NULL OR entity_id ~ '^ent_[A-Za-z0-9]{8,64}$'",
+        name="a_revision_party_entity_is_an_opaque_identifier",
+    ),
+    _one_of(
+        "role",
+        frozenset({"bic", "responsible"}),
+        name="a_constraint_revision_party_role_is_known",
+    ),
+    _one_of("party_kind", PartyKind, name="a_constraint_revision_party_kind_is_known"),
+    CheckConstraint(
+        "(party_kind = 'entity') = (entity_id IS NOT NULL)",
+        name="an_entity_revision_party_names_its_entity",
+    ),
+    CheckConstraint(
+        "party_kind <> 'unresolved' OR length(trim(coalesce(display_label, ''))) > 0",
+        name="an_unresolved_revision_party_keeps_its_label",
+    ),
+    CheckConstraint("ordinal >= 0", name="a_revision_party_ordinal_is_non_negative"),
+    CheckConstraint(
+        "display_label IS NULL OR length(trim(display_label)) BETWEEN 1 AND 512",
+        name="a_revision_party_display_label_is_bounded",
+    ),
+    CheckConstraint(
+        "original_label IS NULL OR length(trim(original_label)) BETWEEN 1 AND 512",
+        name="a_revision_party_original_label_is_bounded",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "revision_id"],
+        [
+            f"{SCHEMA}.project_constraint_revisions.principal_id",
+            f"{SCHEMA}.project_constraint_revisions.revision_id",
+        ],
+        name="a_revision_party_belongs_to_a_revision_of_its_principal",
+    ),
+    Index(
+        "project_constraint_revision_parties_by_principal",
+        "principal_id",
+        "revision_id",
+    ),
+)
+
+#: One append-only receipt per attempted Constraint mutation, the shape
+#: `task_history` and `commitment_history` already establish. **There is no
+#: payload column at all**: a receipt records that something was attempted, by
+#: whom, with what outcome, and which revision it produced — never what was in
+#: it. `safe_failure_reason` is a bounded code for a refusal and exists only on
+#: a rejected row; `request_digest` is a digest and not a request.
+project_constraint_history = Table(
+    "project_constraint_history",
+    METADATA,
+    Column("history_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text),
+    Column("constraint_id", Text, nullable=False),
+    Column("operation", Text, nullable=False),
+    Column("actor", Text, nullable=False),
+    Column("outcome", Text, nullable=False),
+    Column("before_version", Integer, nullable=False),
+    Column("after_version", Integer, nullable=False),
+    Column("occurred_at", DateTime(timezone=True), nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column("idempotency_key", Text),
+    Column("request_digest", Text),
+    Column("client_context", Text),
+    Column("revision_id", Text),
+    Column("correlation_id", Text),
+    Column("safe_failure_reason", Text),
+    _is_identifier("history_id", IdKind.PROJECT_CONSTRAINT_HISTORY),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("constraint_id", IdKind.PROJECT_CONSTRAINT),
+    CheckConstraint(
+        "project_id IS NULL OR project_id ~ '^prj_[A-Za-z0-9]{8,64}$'",
+        name="a_constraint_history_project_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        "revision_id IS NULL OR revision_id ~ '^crev_[A-Za-z0-9]{8,64}$'",
+        name="a_constraint_history_revision_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        "correlation_id IS NULL OR correlation_id ~ '^corr_[A-Za-z0-9]{8,64}$'",
+        name="a_constraint_history_correlation_is_an_opaque_identifier",
+    ),
+    _one_of(
+        "operation",
+        frozenset({"close", "create", "publish", "reopen", "transition", "update", "void"}),
+        name="a_constraint_history_operation_is_known",
+    ),
+    _one_of(
+        "actor",
+        frozenset({"assistant", "principal", "system"}),
+        name="a_constraint_history_actor_is_known",
+    ),
+    _one_of(
+        "outcome",
+        frozenset({"applied", "no_op", "rejected"}),
+        name="a_constraint_history_outcome_is_known",
+    ),
+    CheckConstraint(
+        "before_version >= 0", name="a_constraint_history_before_version_is_non_negative"
+    ),
+    CheckConstraint(
+        "(outcome = 'applied') = (after_version > before_version)",
+        name="an_applied_constraint_mutation_advances_its_version",
+    ),
+    CheckConstraint(
+        "outcome = 'applied' OR after_version = before_version",
+        name="an_unapplied_constraint_mutation_changes_no_version",
+    ),
+    #: A receipt that applied produced exactly one revision, and one that did
+    #: not produced none. Stated as a biconditional because either half alone
+    #: would admit a receipt whose effect nobody can find.
+    CheckConstraint(
+        "(outcome = 'applied') = (revision_id IS NOT NULL)",
+        name="an_applied_constraint_mutation_records_its_revision",
+    ),
+    CheckConstraint(
+        "outcome = 'rejected' OR safe_failure_reason IS NULL",
+        name="only_a_rejected_constraint_mutation_records_a_reason",
+    ),
+    CheckConstraint(
+        "safe_failure_reason IS NULL OR length(trim(safe_failure_reason)) BETWEEN 1 AND 128",
+        name="a_constraint_history_failure_reason_is_bounded",
+    ),
+    CheckConstraint(
+        "idempotency_key IS NULL OR idempotency_key ~ '^[A-Za-z0-9_-]{8,128}$'",
+        name="a_constraint_history_idempotency_key_is_bounded",
+    ),
+    CheckConstraint(
+        "request_digest IS NULL OR request_digest ~ '^[0-9a-f]{64}$'",
+        name="a_constraint_history_request_digest_is_sha256",
+    ),
+    CheckConstraint(
+        f"client_context IS NULL "
+        f"OR length(trim(client_context)) BETWEEN 1 AND {MAX_CLIENT_CONTEXT_CHARACTERS}",
+        name="a_constraint_history_client_context_is_bounded",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "history_id",
+        name="project_constraint_history_principal_receipt_is_unique",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "constraint_id"],
+        [
+            f"{SCHEMA}.project_constraints.principal_id",
+            f"{SCHEMA}.project_constraints.constraint_id",
+        ],
+        name="a_constraint_receipt_belongs_to_a_constraint_of_its_principal",
+    ),
+    #: The third edge of the cycle; see the section header.
+    ForeignKeyConstraint(
+        ["principal_id", "revision_id"],
+        [
+            f"{SCHEMA}.project_constraint_revisions.principal_id",
+            f"{SCHEMA}.project_constraint_revisions.revision_id",
+        ],
+        use_alter=True,
+        deferrable=True,
+        initially="DEFERRED",
+        name="a_constraint_receipt_names_the_revision_it_wrote",
+    ),
+    Index("project_constraint_history_by_principal", "principal_id"),
+    Index(
+        "project_constraint_history_by_principal_constraint",
+        "principal_id",
+        "constraint_id",
+    ),
+    Index(
+        "project_constraint_history_key_is_unique_per_principal",
+        "principal_id",
+        "idempotency_key",
+        unique=True,
+        postgresql_where=text("idempotency_key IS NOT NULL"),
+    ),
+)
+
+#: The same receipt for a category write. There is deliberately **no** category
+#: revision table: a category is small, its history is three operations, and a
+#: second snapshot plane would be an event-sourcing framework nothing has asked
+#: for. The idempotency key is unique per Principal *within this ledger*; a
+#: caller that shares keys across the two ledgers prefixes them, which is the
+#: authoring package's decision to make rather than this table's.
+constraint_category_history = Table(
+    "constraint_category_history",
+    METADATA,
+    Column("history_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("category_id", Text, nullable=False),
+    Column("operation", Text, nullable=False),
+    Column("actor", Text, nullable=False),
+    Column("outcome", Text, nullable=False),
+    Column("before_version", Integer, nullable=False),
+    Column("after_version", Integer, nullable=False),
+    Column("occurred_at", DateTime(timezone=True), nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column("idempotency_key", Text),
+    Column("request_digest", Text),
+    Column("client_context", Text),
+    Column("correlation_id", Text),
+    Column("safe_failure_reason", Text),
+    _is_identifier("history_id", IdKind.CONSTRAINT_CATEGORY_HISTORY),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("category_id", IdKind.CONSTRAINT_CATEGORY),
+    CheckConstraint(
+        "correlation_id IS NULL OR correlation_id ~ '^corr_[A-Za-z0-9]{8,64}$'",
+        name="a_category_history_correlation_is_an_opaque_identifier",
+    ),
+    _one_of(
+        "operation",
+        frozenset({"archive", "create", "update"}),
+        name="a_constraint_category_history_operation_is_known",
+    ),
+    _one_of(
+        "actor",
+        frozenset({"assistant", "principal", "system"}),
+        name="a_constraint_category_history_actor_is_known",
+    ),
+    _one_of(
+        "outcome",
+        frozenset({"applied", "no_op", "rejected"}),
+        name="a_constraint_category_history_outcome_is_known",
+    ),
+    CheckConstraint(
+        "before_version >= 0", name="a_category_history_before_version_is_non_negative"
+    ),
+    CheckConstraint(
+        "(outcome = 'applied') = (after_version > before_version)",
+        name="an_applied_category_mutation_advances_its_version",
+    ),
+    CheckConstraint(
+        "outcome = 'applied' OR after_version = before_version",
+        name="an_unapplied_category_mutation_changes_no_version",
+    ),
+    CheckConstraint(
+        "outcome = 'rejected' OR safe_failure_reason IS NULL",
+        name="only_a_rejected_category_mutation_records_a_reason",
+    ),
+    CheckConstraint(
+        "safe_failure_reason IS NULL OR length(trim(safe_failure_reason)) BETWEEN 1 AND 128",
+        name="a_category_history_failure_reason_is_bounded",
+    ),
+    CheckConstraint(
+        "idempotency_key IS NULL OR idempotency_key ~ '^[A-Za-z0-9_-]{8,128}$'",
+        name="a_category_history_idempotency_key_is_bounded",
+    ),
+    CheckConstraint(
+        "request_digest IS NULL OR request_digest ~ '^[0-9a-f]{64}$'",
+        name="a_category_history_request_digest_is_sha256",
+    ),
+    CheckConstraint(
+        f"client_context IS NULL "
+        f"OR length(trim(client_context)) BETWEEN 1 AND {MAX_CLIENT_CONTEXT_CHARACTERS}",
+        name="a_category_history_client_context_is_bounded",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "history_id",
+        name="constraint_category_history_principal_receipt_is_unique",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "category_id"],
+        [
+            f"{SCHEMA}.constraint_categories.principal_id",
+            f"{SCHEMA}.constraint_categories.category_id",
+        ],
+        name="a_category_receipt_belongs_to_a_category_of_its_principal",
+    ),
+    Index("constraint_category_history_by_principal", "principal_id"),
+    Index(
+        "constraint_category_history_by_principal_category",
+        "principal_id",
+        "category_id",
+    ),
+    Index(
+        "constraint_category_history_key_is_unique_per_principal",
+        "principal_id",
+        "idempotency_key",
+        unique=True,
+        postgresql_where=text("idempotency_key IS NOT NULL"),
+    ),
+)
+
+#: One directed link between two Constraints of the same Principal, created by
+#: exactly one receipt so that "why does this link exist" has an answer in the
+#: ledger rather than in a reviewer's memory. One relationship type today; a
+#: second is an `ALTER` in the revision that needs it.
+project_constraint_relationships = Table(
+    "project_constraint_relationships",
+    METADATA,
+    Column("relationship_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, ForeignKey(f"{SCHEMA}.projects.project_id"), nullable=False),
+    Column("source_constraint_id", Text, nullable=False),
+    Column("target_constraint_id", Text, nullable=False),
+    Column("relationship_type", Text, nullable=False),
+    Column("created_by_history_id", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("relationship_id", IdKind.PROJECT_CONSTRAINT_RELATIONSHIP),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("source_constraint_id", IdKind.PROJECT_CONSTRAINT),
+    _is_identifier("target_constraint_id", IdKind.PROJECT_CONSTRAINT),
+    _is_identifier("created_by_history_id", IdKind.PROJECT_CONSTRAINT_HISTORY),
+    _one_of(
+        "relationship_type",
+        frozenset({"follow_up_of"}),
+        name="a_constraint_relationship_type_is_known",
+    ),
+    CheckConstraint(
+        "source_constraint_id <> target_constraint_id",
+        name="a_constraint_does_not_relate_to_itself",
+    ),
+    UniqueConstraint(
+        "source_constraint_id",
+        "target_constraint_id",
+        "relationship_type",
+        name="one_constraint_relationship_per_pair_and_type",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "source_constraint_id"],
+        [
+            f"{SCHEMA}.project_constraints.principal_id",
+            f"{SCHEMA}.project_constraints.constraint_id",
+        ],
+        name="a_constraint_relationship_names_a_source_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "target_constraint_id"],
+        [
+            f"{SCHEMA}.project_constraints.principal_id",
+            f"{SCHEMA}.project_constraints.constraint_id",
+        ],
+        name="a_constraint_relationship_names_a_target_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "created_by_history_id"],
+        [
+            f"{SCHEMA}.project_constraint_history.principal_id",
+            f"{SCHEMA}.project_constraint_history.history_id",
+        ],
+        name="a_constraint_relationship_records_the_receipt_that_made_it",
+    ),
+    Index(
+        "project_constraint_relationships_by_principal_project",
+        "principal_id",
+        "project_id",
+    ),
+)
+
+#: What a Constraint cites, as a validated reference and never as content. The
+#: four admitted families span two partition vocabularies — captures and capture
+#: assertions are `principal_id`, managed documents are `owner_principal_id` —
+#: so there is no foreign key here at all: one across the families would be
+#: satisfiable across a partition boundary and would disclose that another
+#: Principal's row exists. Same-Principal ownership is the authoring service's
+#: check, on the reference contract it already owns.
+project_constraint_evidence_links = Table(
+    "project_constraint_evidence_links",
+    METADATA,
+    Column("evidence_link_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, ForeignKey(f"{SCHEMA}.projects.project_id"), nullable=False),
+    Column("constraint_id", Text, nullable=False),
+    Column("evidence_kind", Text, nullable=False),
+    Column("evidence_ref", Text, nullable=False),
+    Column("role", Text, nullable=False),
+    Column("created_by_history_id", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("evidence_link_id", IdKind.PROJECT_CONSTRAINT_EVIDENCE_LINK),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("constraint_id", IdKind.PROJECT_CONSTRAINT),
+    _is_identifier("created_by_history_id", IdKind.PROJECT_CONSTRAINT_HISTORY),
+    _one_of(
+        "evidence_kind",
+        frozenset(
+            {
+                "capture",
+                "capture_assertion",
+                "managed_document",
+                "managed_document_version",
+            }
+        ),
+        name="a_constraint_evidence_kind_is_known",
+    ),
+    _one_of(
+        "role",
+        frozenset({"closure", "reference"}),
+        name="a_constraint_evidence_role_is_known",
+    ),
+    #: The reference has to have the shape its own kind names, or the kind is a
+    #: label a writer chose rather than a fact about the reference.
+    CheckConstraint(
+        "(evidence_kind = 'capture' AND evidence_ref ~ '^cap_[A-Za-z0-9]{8,64}$') "
+        "OR (evidence_kind = 'capture_assertion' "
+        "AND evidence_ref ~ '^asrt_[A-Za-z0-9]{8,64}$') "
+        "OR (evidence_kind = 'managed_document' "
+        "AND evidence_ref ~ '^mdoc_[A-Za-z0-9]{8,64}$') "
+        "OR (evidence_kind = 'managed_document_version' "
+        "AND evidence_ref ~ '^mdver_[A-Za-z0-9]{8,64}$')",
+        name="a_constraint_evidence_ref_matches_its_kind",
+    ),
+    UniqueConstraint(
+        "constraint_id",
+        "evidence_ref",
+        name="one_constraint_evidence_link_per_reference",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "constraint_id"],
+        [
+            f"{SCHEMA}.project_constraints.principal_id",
+            f"{SCHEMA}.project_constraints.constraint_id",
+        ],
+        name="a_constraint_evidence_link_belongs_to_its_principals_constraint",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "created_by_history_id"],
+        [
+            f"{SCHEMA}.project_constraint_history.principal_id",
+            f"{SCHEMA}.project_constraint_history.history_id",
+        ],
+        name="a_constraint_evidence_link_records_the_receipt_that_made_it",
+    ),
+    Index(
+        "project_constraint_evidence_links_by_principal_constraint",
+        "principal_id",
+        "constraint_id",
+    ),
+)
+
+#: One external workbook a Project's Constraints are reconciled against.
+#: `external_identity` is the provider's own opaque name for the workbook and is
+#: held to the no-whitespace, bounded shape every provider-native value in this
+#: schema is held to. There is no credential column anywhere in this plane. The
+#: shape CHECK bounds and forbids whitespace; it does not by itself exclude a
+#: URL, so the rule that a provider identity is a name rather than a fetchable
+#: location belongs to the writer WP11 adds, and is stated here rather than
+#: claimed of the constraint. The active-run lease lives here rather than in a lease
+#: table because a target has at most one run in flight and a second table would
+#: be a mechanism with no second caller.
+constraint_sync_targets = Table(
+    "constraint_sync_targets",
+    METADATA,
+    Column("sync_target_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, ForeignKey(f"{SCHEMA}.projects.project_id"), nullable=False),
+    Column("external_kind", Text, nullable=False),
+    Column("external_identity", Text, nullable=False),
+    Column("normalization_contract_version", Text, nullable=False),
+    Column("last_verified_provider_version", Text),
+    Column("last_verified_workbook_digest", Text),
+    Column("last_verified_at", DateTime(timezone=True)),
+    Column("last_verified_sync_run_id", Text),
+    Column("active_run_id", Text),
+    Column("active_run_lease_until", DateTime(timezone=True)),
+    Column("version", Integer, nullable=False, server_default=text("1")),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("sync_target_id", IdKind.CONSTRAINT_SYNC_TARGET),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    CheckConstraint(
+        "active_run_id IS NULL OR active_run_id ~ '^csyr_[A-Za-z0-9]{8,64}$'",
+        name="a_sync_target_active_run_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        "last_verified_sync_run_id IS NULL "
+        "OR last_verified_sync_run_id ~ '^csyr_[A-Za-z0-9]{8,64}$'",
+        name="a_sync_target_verified_run_is_an_opaque_identifier",
+    ),
+    _one_of(
+        "external_kind",
+        frozenset({"excel_workbook"}),
+        name="a_constraint_sync_external_kind_is_known",
+    ),
+    CheckConstraint(
+        "length(trim(external_identity)) BETWEEN 1 AND 1024 AND external_identity !~ '\\s'",
+        name="a_sync_target_external_identity_is_opaque",
+    ),
+    CheckConstraint(
+        "length(trim(normalization_contract_version)) BETWEEN 1 AND 64",
+        name="a_sync_target_contract_version_is_bounded",
+    ),
+    CheckConstraint(
+        "last_verified_provider_version IS NULL "
+        "OR length(trim(last_verified_provider_version)) BETWEEN 1 AND 256",
+        name="a_sync_target_provider_version_is_bounded",
+    ),
+    CheckConstraint(
+        "last_verified_workbook_digest IS NULL OR last_verified_workbook_digest ~ '^[0-9a-f]{64}$'",
+        name="a_sync_target_workbook_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "(active_run_id IS NULL) = (active_run_lease_until IS NULL)",
+        name="an_active_sync_run_holds_a_lease",
+    ),
+    CheckConstraint("version >= 1", name="a_sync_target_version_is_positive"),
+    UniqueConstraint(
+        "project_id",
+        "external_kind",
+        "external_identity",
+        name="one_constraint_sync_target_per_external_workbook",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "sync_target_id",
+        name="constraint_sync_targets_principal_target_is_unique",
+    ),
+    #: The second cycle: a target names its runs and a run names its target.
+    ForeignKeyConstraint(
+        ["principal_id", "active_run_id"],
+        [
+            f"{SCHEMA}.constraint_sync_runs.principal_id",
+            f"{SCHEMA}.constraint_sync_runs.sync_run_id",
+        ],
+        use_alter=True,
+        deferrable=True,
+        initially="DEFERRED",
+        name="a_sync_target_names_an_active_run_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "last_verified_sync_run_id"],
+        [
+            f"{SCHEMA}.constraint_sync_runs.principal_id",
+            f"{SCHEMA}.constraint_sync_runs.sync_run_id",
+        ],
+        use_alter=True,
+        deferrable=True,
+        initially="DEFERRED",
+        name="a_sync_target_names_a_verified_run_of_its_principal",
+    ),
+    Index("constraint_sync_targets_by_principal_project", "principal_id", "project_id"),
+)
+
+#: One reconciliation run against one target. The five states are the states the
+#: accepted operation sequence names — start, preview, apply, acknowledge, and
+#: the failure that ends any of them — and no more: a state nothing can reach is
+#: a claim about a workflow that does not exist yet.
+constraint_sync_runs = Table(
+    "constraint_sync_runs",
+    METADATA,
+    Column("sync_run_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, ForeignKey(f"{SCHEMA}.projects.project_id"), nullable=False),
+    Column("sync_target_id", Text, nullable=False),
+    Column("state", Text, nullable=False),
+    Column("started_at", DateTime(timezone=True), nullable=False),
+    Column("finished_at", DateTime(timezone=True)),
+    Column("provider_version_before", Text),
+    Column("provider_version_after", Text),
+    Column("workbook_digest_before", Text),
+    Column("workbook_digest_after", Text),
+    Column("preview_digest", Text),
+    Column("outcome", Text),
+    Column("safe_failure_reason", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("sync_run_id", IdKind.CONSTRAINT_SYNC_RUN),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("sync_target_id", IdKind.CONSTRAINT_SYNC_TARGET),
+    _one_of(
+        "state",
+        frozenset({"acknowledged", "applied", "failed", "previewed", "started"}),
+        name="a_constraint_sync_run_state_is_known",
+    ),
+    CheckConstraint(
+        "outcome IS NULL OR outcome IN ('applied', 'failed', 'no_change')",
+        name="a_constraint_sync_run_outcome_is_known",
+    ),
+    CheckConstraint(
+        "(state IN ('acknowledged', 'applied', 'failed')) = (finished_at IS NOT NULL)",
+        name="a_finished_sync_run_records_when_it_finished",
+    ),
+    CheckConstraint(
+        "state <> 'failed' OR safe_failure_reason IS NOT NULL",
+        name="a_failed_sync_run_records_its_reason",
+    ),
+    CheckConstraint(
+        "safe_failure_reason IS NULL OR length(trim(safe_failure_reason)) BETWEEN 1 AND 128",
+        name="a_sync_run_failure_reason_is_bounded",
+    ),
+    CheckConstraint(
+        "provider_version_before IS NULL "
+        "OR length(trim(provider_version_before)) BETWEEN 1 AND 256",
+        name="a_sync_run_provider_version_before_is_bounded",
+    ),
+    CheckConstraint(
+        "provider_version_after IS NULL OR length(trim(provider_version_after)) BETWEEN 1 AND 256",
+        name="a_sync_run_provider_version_after_is_bounded",
+    ),
+    CheckConstraint(
+        "workbook_digest_before IS NULL OR workbook_digest_before ~ '^[0-9a-f]{64}$'",
+        name="a_sync_run_digest_before_is_sha256",
+    ),
+    CheckConstraint(
+        "workbook_digest_after IS NULL OR workbook_digest_after ~ '^[0-9a-f]{64}$'",
+        name="a_sync_run_digest_after_is_sha256",
+    ),
+    CheckConstraint(
+        "preview_digest IS NULL OR preview_digest ~ '^[0-9a-f]{64}$'",
+        name="a_sync_run_preview_digest_is_sha256",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "sync_run_id",
+        name="constraint_sync_runs_principal_run_is_unique",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "sync_target_id"],
+        [
+            f"{SCHEMA}.constraint_sync_targets.principal_id",
+            f"{SCHEMA}.constraint_sync_targets.sync_target_id",
+        ],
+        name="a_sync_run_belongs_to_a_target_of_its_principal",
+    ),
+    Index(
+        "constraint_sync_runs_by_principal_target",
+        "principal_id",
+        "sync_target_id",
+        "started_at",
+    ),
+)
+
+#: What one Constraint looked like the last time this target agreed with it —
+#: the three-way merge's common ancestor. `baseline_field_digests` is a bounded
+#: JSONB object of per-field digests, not the fields: the baseline has to be
+#: able to say *which* field diverged without storing what was in it, and 8 KiB
+#: is the ceiling that keeps that true.
+constraint_sync_baselines = Table(
+    "constraint_sync_baselines",
+    METADATA,
+    Column("sync_target_id", Text, nullable=False),
+    Column("constraint_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, ForeignKey(f"{SCHEMA}.projects.project_id"), nullable=False),
+    Column("baseline_revision_id", Text, nullable=False),
+    Column("baseline_constraint_version", Integer, nullable=False),
+    Column("baseline_field_digests", JSONB, nullable=False),
+    Column("baseline_record_digest", Text, nullable=False),
+    Column("workbook_row_identity", Text, nullable=False),
+    Column("verified_provider_version", Text),
+    Column("verified_at", DateTime(timezone=True), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint(
+        "sync_target_id", "constraint_id", name="one_sync_baseline_per_constraint"
+    ),
+    _is_identifier("sync_target_id", IdKind.CONSTRAINT_SYNC_TARGET),
+    _is_identifier("constraint_id", IdKind.PROJECT_CONSTRAINT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("baseline_revision_id", IdKind.PROJECT_CONSTRAINT_REVISION),
+    CheckConstraint(
+        "baseline_constraint_version >= 1",
+        name="a_sync_baseline_version_is_positive",
+    ),
+    CheckConstraint(
+        "jsonb_typeof(baseline_field_digests) = 'object'",
+        name="a_sync_baseline_holds_field_digests",
+    ),
+    CheckConstraint(
+        "pg_column_size(baseline_field_digests) <= 8192",
+        name="a_sync_baseline_digest_object_is_bounded",
+    ),
+    CheckConstraint(
+        "baseline_record_digest ~ '^[0-9a-f]{64}$'",
+        name="a_sync_baseline_record_digest_is_sha256",
+    ),
+    #: A row key the provider issues, never a cell coordinate: a coordinate
+    #: would make this table a partial copy of the workbook's layout.
+    CheckConstraint(
+        "length(trim(workbook_row_identity)) BETWEEN 1 AND 256 AND workbook_row_identity !~ '\\s'",
+        name="a_sync_baseline_row_identity_is_opaque",
+    ),
+    CheckConstraint(
+        "verified_provider_version IS NULL "
+        "OR length(trim(verified_provider_version)) BETWEEN 1 AND 256",
+        name="a_sync_baseline_provider_version_is_bounded",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "sync_target_id"],
+        [
+            f"{SCHEMA}.constraint_sync_targets.principal_id",
+            f"{SCHEMA}.constraint_sync_targets.sync_target_id",
+        ],
+        name="a_sync_baseline_belongs_to_a_target_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "constraint_id"],
+        [
+            f"{SCHEMA}.project_constraints.principal_id",
+            f"{SCHEMA}.project_constraints.constraint_id",
+        ],
+        name="a_sync_baseline_names_a_constraint_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "baseline_revision_id"],
+        [
+            f"{SCHEMA}.project_constraint_revisions.principal_id",
+            f"{SCHEMA}.project_constraint_revisions.revision_id",
+        ],
+        name="a_sync_baseline_names_a_revision_of_its_principal",
+    ),
+    Index(
+        "constraint_sync_baselines_by_principal_target",
+        "principal_id",
+        "sync_target_id",
+    ),
+)
+
+#: A disagreement the last run could not resolve on its own. `external_candidate`
+#: is the bounded subset of what the workbook said, so a Principal deciding the
+#: conflict can see both sides; it is capped at the same 8 KiB the baseline is,
+#: and it holds no cell coordinates. `constraint_id` is nullable because a row
+#: that exists only in the workbook has no Constraint yet — which is precisely
+#: what makes it a conflict.
+constraint_sync_conflicts = Table(
+    "constraint_sync_conflicts",
+    METADATA,
+    Column("sync_conflict_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, ForeignKey(f"{SCHEMA}.projects.project_id"), nullable=False),
+    Column("sync_target_id", Text, nullable=False),
+    Column("constraint_id", Text),
+    Column("sync_run_id", Text, nullable=False),
+    Column("conflict_kind", Text, nullable=False),
+    Column("field_names", JSONB, nullable=False),
+    Column("baseline_revision_id", Text),
+    Column("db_version", Integer),
+    Column("provider_version", Text),
+    Column("external_candidate", JSONB),
+    Column("external_candidate_digest", Text),
+    Column("state", Text, nullable=False, server_default=text("'open'")),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("resolved_at", DateTime(timezone=True)),
+    Column("resolution_history_id", Text),
+    _is_identifier("sync_conflict_id", IdKind.CONSTRAINT_SYNC_CONFLICT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("sync_target_id", IdKind.CONSTRAINT_SYNC_TARGET),
+    _is_identifier("sync_run_id", IdKind.CONSTRAINT_SYNC_RUN),
+    CheckConstraint(
+        "constraint_id IS NULL OR constraint_id ~ '^cst_[A-Za-z0-9]{8,64}$'",
+        name="a_sync_conflict_constraint_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        "baseline_revision_id IS NULL OR baseline_revision_id ~ '^crev_[A-Za-z0-9]{8,64}$'",
+        name="a_sync_conflict_revision_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        "resolution_history_id IS NULL OR resolution_history_id ~ '^chst_[A-Za-z0-9]{8,64}$'",
+        name="a_sync_conflict_resolution_is_an_opaque_identifier",
+    ),
+    _one_of(
+        "conflict_kind",
+        frozenset(
+            {
+                "both_changed",
+                "deleted_in_canonical",
+                "deleted_in_external",
+                "new_in_external",
+            }
+        ),
+        name="a_constraint_sync_conflict_kind_is_known",
+    ),
+    _one_of(
+        "state",
+        frozenset({"open", "resolved", "superseded"}),
+        name="a_constraint_sync_conflict_state_is_known",
+    ),
+    CheckConstraint(
+        "jsonb_typeof(field_names) = 'array'",
+        name="a_sync_conflict_names_the_fields_that_diverged",
+    ),
+    CheckConstraint(
+        "pg_column_size(field_names) <= 8192",
+        name="a_sync_conflict_field_list_is_bounded",
+    ),
+    CheckConstraint(
+        "external_candidate IS NULL "
+        "OR (jsonb_typeof(external_candidate) = 'object' "
+        "AND pg_column_size(external_candidate) <= 8192)",
+        name="a_sync_conflict_external_candidate_is_bounded",
+    ),
+    CheckConstraint(
+        "external_candidate_digest IS NULL OR external_candidate_digest ~ '^[0-9a-f]{64}$'",
+        name="a_sync_conflict_candidate_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "provider_version IS NULL OR length(trim(provider_version)) BETWEEN 1 AND 256",
+        name="a_sync_conflict_provider_version_is_bounded",
+    ),
+    CheckConstraint(
+        "(state = 'resolved') = (resolved_at IS NOT NULL)",
+        name="a_resolved_sync_conflict_records_when_it_was",
+    ),
+    CheckConstraint(
+        "state <> 'resolved' OR resolution_history_id IS NOT NULL",
+        name="a_resolved_sync_conflict_names_its_receipt",
+    ),
+    CheckConstraint(
+        "db_version IS NULL OR db_version >= 1",
+        name="a_sync_conflict_db_version_is_positive",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "sync_target_id"],
+        [
+            f"{SCHEMA}.constraint_sync_targets.principal_id",
+            f"{SCHEMA}.constraint_sync_targets.sync_target_id",
+        ],
+        name="a_sync_conflict_belongs_to_a_target_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "sync_run_id"],
+        [
+            f"{SCHEMA}.constraint_sync_runs.principal_id",
+            f"{SCHEMA}.constraint_sync_runs.sync_run_id",
+        ],
+        name="a_sync_conflict_names_a_run_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "constraint_id"],
+        [
+            f"{SCHEMA}.project_constraints.principal_id",
+            f"{SCHEMA}.project_constraints.constraint_id",
+        ],
+        name="a_sync_conflict_names_a_constraint_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "baseline_revision_id"],
+        [
+            f"{SCHEMA}.project_constraint_revisions.principal_id",
+            f"{SCHEMA}.project_constraint_revisions.revision_id",
+        ],
+        name="a_sync_conflict_names_a_revision_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "resolution_history_id"],
+        [
+            f"{SCHEMA}.project_constraint_history.principal_id",
+            f"{SCHEMA}.project_constraint_history.history_id",
+        ],
+        name="a_sync_conflict_names_a_receipt_of_its_principal",
+    ),
+    #: One open conflict per Constraint and kind: a second row for the same
+    #: disagreement would make "how many conflicts are open" a count of runs.
+    Index(
+        "one_open_constraint_sync_conflict_per_kind",
+        "sync_target_id",
+        "constraint_id",
+        "conflict_kind",
+        unique=True,
+        postgresql_where=text("state = 'open' AND constraint_id IS NOT NULL"),
+    ),
+    Index(
+        "constraint_sync_conflicts_by_principal_target_state",
+        "principal_id",
+        "sync_target_id",
+        "state",
     ),
 )

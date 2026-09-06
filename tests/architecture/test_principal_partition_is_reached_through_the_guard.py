@@ -125,6 +125,15 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         "infrastructure/persistence/apple_bridge_credentials.py",
         "infrastructure/persistence/capture_search.py",
         "infrastructure/persistence/continuity_read.py",
+        # PC-CM-IMP-WP02's Constraint Management plane. Every statement it builds
+        # -- the settings, category, constraint, party, revision and two receipt
+        # tables -- composes `_mine` (a one-line wrapper over
+        # `partition_criterion`, used by every SELECT through `principal_scoped`
+        # and by every UPDATE and DELETE directly) or `_bound` (a one-line
+        # wrapper over `principal_bound_values`). It writes no hand-written
+        # partition comparison at all, which is why it is absent from
+        # `HAND_WRITTEN_COMPARISONS`.
+        "infrastructure/persistence/constraints.py",
         # The generalized entity plane. Every statement it builds — four reads,
         # four writes, and the entity-reference guard the writes call first —
         # goes through `partition_criterion` or `principal_bound_values`, so it
@@ -397,6 +406,13 @@ PER_MODULE_ONLY: Final = {
         "all reads use the shared partition criterion and receipt/association "
         "inserts use principal_bound_values; helper-built predicates consume "
         "those calls."
+    ),
+    "infrastructure/persistence/constraints.py": (
+        "every read composes `principal_scoped` and every UPDATE and DELETE "
+        "`partition_criterion`, both through the one-line `_mine` wrapper; every "
+        "insert composes `principal_bound_values` through `_bound`, so the "
+        "authenticated Principal is stamped rather than taken from the record. "
+        "The module has not yet joined a dedicated statement-level scanner."
     ),
     "infrastructure/persistence/continuity_read.py": (
         "one helper applies partition_criterion to every read-model table; the "

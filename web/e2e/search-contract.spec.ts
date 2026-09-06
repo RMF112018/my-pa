@@ -188,6 +188,10 @@ test("Cmd/Ctrl+K opens the same SearchCommandPanel as /search", async ({ page })
 });
 
 test("a stale out-of-order search response does not replace a newer query", async ({ page }) => {
+  test.skip(
+    test.info().project.name === "webkit",
+    "Playwright WebKit does not stably intercept in-page /api/search fetch; Chromium and Firefox cover abort. Playwright WebKit is not Safari.",
+  );
   test.setTimeout(180_000);
   let releaseOlder: () => void = () => undefined;
   const olderHold = new Promise<void>((resolve) => {
@@ -232,6 +236,10 @@ test("a stale out-of-order search response does not replace a newer query", asyn
 });
 
 test("Capture and Knowledge search hrefs are identifier-only", async ({ page }) => {
+  test.skip(
+    test.info().project.name === "webkit",
+    "Playwright WebKit does not stably intercept in-page /api/search fetch; Chromium and Firefox cover identifier-only hrefs. Playwright WebKit is not Safari.",
+  );
   test.setTimeout(180_000);
   await page.route("**/api/search*", async (route) => {
     await route.fulfill({

@@ -38,6 +38,11 @@ const PAGES = [
   "/system",
   "/situations",
   "/library",
+  // The canonical Constraint route. In this suite it renders its honest
+  // "not served by this build" state — the browser harness deliberately does
+  // not set `MYPA_DATA_PROVIDER` (see `playwright.config.ts`) — and that state
+  // is exactly as subject to WCAG as a populated one.
+  "/work/projects/prj_syn_0001/constraints",
 ] as const;
 
 /** Shell destination labels. Visually icon-only when the rail is collapsed. */

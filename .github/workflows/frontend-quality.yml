@@ -305,6 +305,110 @@ jobs:
           test -x "${python_bin}"
           MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/work-acceptance.spec.ts e2e/journeys.spec.ts e2e/intelligence-journey.spec.ts --project=desktop --project=tablet
 
+  pwa-offline:
+    name: frontend / pwa-offline
+    needs: classify
+    if: needs.classify.outputs.applicable == 'true'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: my_pa
+          POSTGRES_PASSWORD: ci_throwaway_not_a_secret
+          POSTGRES_DB: my_pa_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username my_pa --dbname my_pa_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+        working-directory: .
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npx playwright install chromium
+      - name: Run Chromium desktop PWA/offline e2e (INTRODUCED / ADVISORY)
+        env:
+          MYPA_E2E_PYTHON: python
+          MYPA_E2E_ADMIN_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/postgres
+          MYPA_E2E_DATABASE_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/my_pa_wp13_e2e
+        run: |
+          set -euo pipefail
+          python_bin="$(command -v python)"
+          test -x "${python_bin}"
+          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/pwa.spec.ts e2e/offline.spec.ts --project=desktop
+
+  browsers:
+    name: frontend / browsers
+    needs: classify
+    if: needs.classify.outputs.applicable == 'true'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: my_pa
+          POSTGRES_PASSWORD: ci_throwaway_not_a_secret
+          POSTGRES_DB: my_pa_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username my_pa --dbname my_pa_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+        working-directory: .
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps firefox webkit
+      - name: Run Firefox/WebKit critical-path e2e (INTRODUCED / ADVISORY)
+        env:
+          MYPA_E2E_PYTHON: python
+          MYPA_E2E_ADMIN_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/postgres
+          MYPA_E2E_DATABASE_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/my_pa_wp13_e2e
+        run: |
+          set -euo pipefail
+          python_bin="$(command -v python)"
+          test -x "${python_bin}"
+          # Origin/CSRF plus Search BFF smoke. WebAuthn virtual authenticator is
+          # Chromium CDP only (HARVEST_CANNOT_PROVE). Playwright WebKit is not Safari.
+          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/browser-security.spec.ts e2e/search-contract.spec.ts --project=firefox --project=webkit
+
   required:
     name: frontend / required
     needs: [classify, static, unit, production-build, contract, security, e2e-critical, accessibility, responsive]

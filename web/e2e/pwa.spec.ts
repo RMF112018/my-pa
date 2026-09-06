@@ -128,3 +128,29 @@ test("the worker never caches a principal-bound response", async ({ page }) => {
   // And the allowlist is not satisfied by caching nothing at all.
   expect(cached.some((url) => url.endsWith("/manifest.webmanifest"))).toBe(true);
 });
+
+test("the System page shows this-browser PWA observations, not server-invented SW state", async ({
+  page,
+}) => {
+  await signIn(page);
+  await page.waitForFunction(async () => (await navigator.serviceWorker.ready) !== undefined);
+  await page.reload();
+  await page.goto("/system");
+
+  await expect(page.getByTestId("system-pwa-client-side")).toBeVisible();
+  await expect(page.getByTestId("system-pwa-client-side")).toContainText(/this browser/i);
+  await expect(page.getByTestId("system-pwa-client-side")).toContainText(/client-side/i);
+  await expect(page.getByTestId("system-pwa-client-side")).not.toContainText(
+    "PWA_FIELDS_PENDING_WP26",
+  );
+  await expect(page.getByTestId("system-pwa-this-browser")).toBeVisible();
+  await expect(page.getByTestId("system-pwa-queue")).toBeVisible();
+  await expect(page.getByTestId("system-pwa-online")).toContainText(/this browser/i);
+  await expect(page.getByTestId("system-pwa-sw")).toContainText(/controlling this page/i);
+  await expect(page.getByTestId("system-pwa-caches")).toContainText("mypa-static-v2");
+  await expect(page.getByTestId("system-pwa-queue")).toContainText(/this browser/i);
+  await expect(page.getByTestId("system-pwa-queue")).toContainText(/not the server/i);
+  await expect(page.getByTestId("system-pwa-limits")).toContainText(/no Background Sync/i);
+  await expect(page.getByTestId("system-pwa-limits")).toContainText(/cold start/i);
+  await expect(page.getByText("PWA_FIELDS_PENDING_WP26")).toHaveCount(0);
+});

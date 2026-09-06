@@ -852,8 +852,15 @@ describe("System reports what is off as off", () => {
     const cookie = await signIn();
     stubGatewayByCapability();
     const body = await (await system(get(cookie, "/api/system"))).json();
-    expect(body.pwa.fields).toBe("PWA_FIELDS_PENDING_WP26");
+    expect(body.pwa.observation).toBe("client_side");
+    expect(body.pwa).not.toHaveProperty("controller");
+    expect(body.pwa).not.toHaveProperty("cacheNames");
+    expect(body.pwa).not.toHaveProperty("online");
+    expect(body.pwa).not.toHaveProperty("queue");
+    expect(JSON.stringify(body.pwa)).not.toMatch(/PWA_FIELDS_PENDING_WP26/);
     expect(JSON.stringify(body.pwa)).not.toMatch(/cacheIdentity|updateChannel|offlineSync/);
+    expect(body.disclosure.limitations.join(" ")).toMatch(/PWA observation is client-side/);
+    expect(body.disclosure.limitations.join(" ")).not.toMatch(/PWA_FIELDS_PENDING_WP26/);
     expect(body.backend.workerPlanes[0].last_heartbeat_at).toBeNull();
     expect(body.backend.intelligence.state).toBe("resolved");
     expect(body.backend.intelligence.result.aggregate).toBe("BLOCKED");
@@ -875,7 +882,9 @@ describe("System reports what is off as off", () => {
     const body = await (await system(get(cookie, "/api/system"))).json();
     expect(body.backend).toBeNull();
     expect(body.intelligence).toBeUndefined();
-    expect(body.pwa.fields).toBe("PWA_FIELDS_PENDING_WP26");
+    expect(body.pwa.observation).toBe("client_side");
+    expect(body.pwa).not.toHaveProperty("controller");
+    expect(JSON.stringify(body)).not.toMatch(/PWA_FIELDS_PENDING_WP26/);
   });
 });
 

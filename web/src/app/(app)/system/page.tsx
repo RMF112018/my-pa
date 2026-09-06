@@ -34,7 +34,7 @@
  * `cycle_run_id` is taken from the first `reports.list` item, the same discovery
  * WP11 uses. Aggregate and per-member states stay visible. READY is not "the
  * system is healthy". A missing worker heartbeat is unknown, never healthy.
- * PWA fields are labelled `PWA_FIELDS_PENDING_WP26`.
+ * PWA live fields are this-browser observations, not server truth.
  */
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
@@ -48,6 +48,7 @@ import { SurfaceState } from "@/components/ui/surface-state";
 import type { ReportsResolveSetResult } from "@/lib/api/decode/capabilities/reports.resolve_set";
 import type { PrincipalSession } from "@/contracts/identity";
 import { SystemRefresh } from "./system-refresh";
+import { ThisBrowserPwaStatus } from "./this-browser-pwa";
 
 export const metadata = { title: "System — my-pa" };
 
@@ -237,14 +238,17 @@ export default async function SystemPage() {
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle>Progressive web app</CardTitle>
-          <Badge tone="gold">PWA_FIELDS_PENDING_WP26</Badge>
+          <Badge tone="neutral">This browser</Badge>
         </div>
         <CardBody>
-          <p data-testid="system-pwa-pending">
-            PWA fields are <strong>PWA_FIELDS_PENDING_WP26</strong>. Service-worker cache identity,
-            update channel, and offline/sync status are not reported here. They belong to WP26 and
-            are not invented.
+          <p data-testid="system-pwa-client-side">
+            PWA observation is <strong>client-side</strong> and describes{" "}
+            <strong>this browser</strong>, not server truth.{" "}
+            <code>GET /api/system</code> does not report this browser&rsquo;s service-worker
+            controller, Cache Storage, online bit, or IndexedDB queue counts — those are
+            per-browser observations the server cannot know.
           </p>
+          <ThisBrowserPwaStatus />
         </CardBody>
       </Card>
 

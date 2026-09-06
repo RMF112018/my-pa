@@ -127,4 +127,17 @@ test.describe("offline capture and reconnect", () => {
     await page.reload();
     await expect(page.getByTestId("offline-queue-status")).toHaveCount(0, { timeout: 40_000 });
   });
+
+  test("System reports held-queue counts as this-browser observations", async ({ page }) => {
+    await signIn(page);
+    await page.goto("/system");
+    await expect(page.getByTestId("system-pwa-this-browser")).toBeVisible();
+    await expect(page.getByTestId("system-pwa-queue")).toBeVisible();
+    await expect(page.getByTestId("system-pwa-queue")).toContainText(/this browser/i);
+    await expect(page.getByTestId("system-pwa-queue")).toContainText(/not the server/i);
+    await expect(page.getByTestId("system-pwa-limits")).toContainText(/cold start/i);
+    await expect(page.getByTestId("system-pwa-client-side")).not.toContainText(
+      "PWA_FIELDS_PENDING_WP26",
+    );
+  });
 });

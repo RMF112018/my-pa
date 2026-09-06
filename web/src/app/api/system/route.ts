@@ -30,8 +30,9 @@
  * per-member states are returned as the handler emitted them. READY is not
  * mapped to a healthy system. A missing heartbeat is unknown, never healthy.
  *
- * **PWA fields are labelled pending WP26.** Cache identity, update channel, and
- * offline/sync status are not invented. Git SHA / deployed artifact identity is
+ * **PWA observation is client-side.** This route does not report this browser's
+ * service-worker controller, Cache Storage, online bit, or IndexedDB queue
+ * counts — the server cannot know them. Git SHA / deployed artifact identity is
  * not restated (WP29).
  */
 import { NextResponse, type NextRequest } from "next/server";
@@ -59,16 +60,16 @@ const SOURCES_UNKNOWN =
   "Connected sources cannot be enumerated: no v1 capability lists a principal's " +
   "configured sources, so this build reports them as unknown rather than as none.";
 
-const PWA_PENDING = {
-  fields: "PWA_FIELDS_PENDING_WP26",
+const PWA_CLIENT_SIDE = {
+  observation: "client_side",
   detail:
-    "Service-worker cache identity, update channel, and offline/sync status are not " +
-    "reported. Those fields belong to UI-IMP-WP26 and are not invented here.",
+    "Service-worker controller, Cache Storage, online bit, and IndexedDB queue counts " +
+    "are per-browser observations this server cannot know. They are not reported on this route.",
 } as const;
 
 const PWA_LIMITATION =
-  "PWA_FIELDS_PENDING_WP26: service-worker cache identity, update channel, and " +
-  "offline/sync status are not reported on this route.";
+  "PWA observation is client-side: this route does not report this browser's " +
+  "service-worker controller, Cache Storage, online bit, or IndexedDB queue counts.";
 
 type IntelligenceTruth =
   | { state: "resolved"; result: ReportsResolveSetResult }
@@ -128,7 +129,7 @@ export async function GET(request: NextRequest) {
       principalId: guard.principal.principalId,
       upn: guard.principal.upn,
     },
-    pwa: PWA_PENDING,
+    pwa: PWA_CLIENT_SIDE,
   };
 
   if (serving.kind === "synthetic") {

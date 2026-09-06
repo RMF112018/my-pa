@@ -342,6 +342,23 @@ Conservative dispositions for extending `/system` and `GET /api/system`. This pa
 - Connected sources remain unknown (FBCG-007 residual). No source enumeration.
 - Runtime git SHA / deployed artifact identity remain unreported (WP29 residual).
 
+## UI-IMP-WP26 / UI-CI-WP05 CI note
+
+Advisory-only CI introduction on this PR. Not WP28/WP30. Not `VALIDATED`. Not `PROMOTED_REQUIRED`. `frontend / required` needs/list is unchanged.
+
+- `frontend / pwa-offline` starts `INTRODUCED` / `ADVISORY` (`continue-on-error: true`): Chromium desktop `web/e2e/pwa.spec.ts` and `web/e2e/offline.spec.ts`. This is not real Safari / iOS Safari / Android-device install evidence.
+- `frontend / browsers` starts `INTRODUCED` / `ADVISORY` (`continue-on-error: true`): Playwright Firefox + WebKit `web/e2e/browser-security.spec.ts` (Origin/CSRF) and `web/e2e/search-contract.spec.ts`. Ubuntu runners install those engines with `--with-deps` (WebKit needs GTK/GStreamer libraries the image does not ship). Playwright WebKit is not Safari. Chromium Origin/CSRF remains on `frontend / e2e-critical`; `localhost` vs `127.0.0.1` is not relaxed.
+- **HARVEST_CANNOT_PROVE:** `web/e2e/webauthn.spec.ts` (Chromium CDP `WebAuthn.enable` / virtual authenticator — Chromium-only); `web/e2e/visual.spec.ts` (not this job); real Safari / iOS Safari / Android-device install.
+
+## UI-IMP-WP26 PWA / Offline Validation-First notes
+
+Conservative dispositions for replacing `PWA_FIELDS_PENDING_WP26` with a truthful System vs `/api/system` split. This is not a dedicated WP-08 audit, not production activation, and never `PASS_VERIFIED`.
+
+- **PFE-AC-106..113 and PFE-AC-135:** at most `VALIDATION_REQUIRED`. Never `PASS_VERIFIED`. `WP08_PWA_OFFLINE_AUDIT_MISSING` remains.
+- `GET /api/system` reports `pwa.observation = client_side` and a matching limitation. It does not report this browser's service-worker controller, Cache Storage, online bit, or IndexedDB queue counts.
+- The System page may show those as **this-browser** observations via a client component. They are labelled as this browser, not server truth.
+- Existing static-only service worker (`web/public/sw.js`, cache `mypa-static-v2`) was validated and left in place: no `/api` caching, no navigation/RSC/query/redirect caching, no Background Sync, no cold-start offline. Encrypted QC queue remains page JS (`web/src/lib/offline/`).
+
 ## Known evidence limitations / record overrides
 
 These limitations are additive to the default `FINAL_WP02_RECONCILIATION_MISSING` status and do not create a pass:

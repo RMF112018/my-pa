@@ -117,6 +117,14 @@ export default defineConfig({
       // A real mobile emulation profile: 390x844, touch, and a mobile UA.
       use: { ...devices["Pixel 7"] },
     },
+    {
+      name: "firefox",
+      use: { ...devices["Desktop Firefox"], viewport: { width: 1280, height: 800 } },
+    },
+    {
+      name: "webkit",
+      use: { ...devices["Desktop Safari"], viewport: { width: 1280, height: 800 } },
+    },
   ],
   webServer: [
     {

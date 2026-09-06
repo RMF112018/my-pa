@@ -30,7 +30,7 @@ from my_pa.application.goodnotes_pull_orchestration import (
 )
 from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.gateway import local_principal
-from my_pa.contracts.ports import ReviewDecisionRequest
+from my_pa.contracts.ports import GoodNotesPullWorkStateRecord, ReviewDecisionRequest
 from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.domain.capture.review import Disposition, ReviewConflictError, ReviewDecision
 from my_pa.domain.goodnotes.models import GoodNotesSemanticReviewCase
@@ -1130,3 +1130,76 @@ def test_session_lease_validation_and_status_do_not_create_session(engine: Engin
                 repository.lock_session(
                     PRINCIPAL, "a", context, max_attempts=3, lease_seconds=lease
                 )
+
+
+@pytest.mark.parametrize("create_before_read", [True, False])
+@pytest.mark.parametrize(
+    ("context", "maximum", "lease"),
+    [("ctx-a", 1, 60), ("ctx-wrong", 1, 900), ("ctx-a", 2, 900), ("ctx-a", 1, 900)],
+)
+def test_status_revalidates_a_session_created_during_absent_session_read(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    create_before_read: bool,
+    context: str,
+    maximum: int,
+    lease: int,
+) -> None:
+    with engine.begin() as connection:
+        _seed_resume_work(connection)
+    original = SqlGoodNotesPullRepository._work_states
+    events: list[str] = []
+    with engine.begin() as connection:
+        repository = SqlGoodNotesPullRepository(
+            connection,
+            clock=lambda: events.append("clock") or WHEN + timedelta(seconds=120),
+        )
+
+        def create_session() -> None:
+            with engine.begin() as creator:
+                _claim(SqlGoodNotesPullRepository(creator, clock=lambda: WHEN), "a", maximum=1)
+
+        def interleaved_read(
+            self: SqlGoodNotesPullRepository, principal_id: str, *, client_id: str
+        ) -> tuple[GoodNotesPullWorkStateRecord, ...]:
+            if self is not repository:
+                return original(self, principal_id, client_id=client_id)
+            events.append("read")
+            if events.count("read") == 1:
+                if create_before_read:
+                    create_session()
+                result = original(self, principal_id, client_id=client_id)
+                if not create_before_read:
+                    create_session()
+                return result
+            # A matching newly visible session must be locked before its state is reread.
+            with engine.connect() as contender:
+                transaction = contender.begin()
+                contender.execute(text("SET LOCAL lock_timeout = '200ms'"))
+                with pytest.raises(DBAPIError, match="lock timeout"):
+                    SqlGoodNotesPullRepository(contender, clock=lambda: WHEN).lock_session(
+                        PRINCIPAL, "a", "ctx-a", max_attempts=1, lease_seconds=900
+                    )
+                transaction.rollback()
+            return original(self, principal_id, client_id=client_id)
+
+        monkeypatch.setattr(SqlGoodNotesPullRepository, "_work_states", interleaved_read)
+        if (context, maximum, lease) != ("ctx-a", 1, 900):
+            with pytest.raises(PullRepositoryConflictError):
+                repository.status(
+                    PRINCIPAL, "a", context_id=context, max_attempts=maximum, lease_seconds=lease
+                )
+        else:
+            status = repository.status(
+                PRINCIPAL, "a", context_id=context, max_attempts=maximum, lease_seconds=lease
+            )
+            assert (status.pending, status.assigned, status.completed, status.exhausted) == (
+                0,
+                1,
+                0,
+                0,
+            )
+            assert events == ["read", "read", "clock"]
+        assert (
+            connection.scalar(text("SELECT count(*) FROM knowledge.goodnotes_pull_sessions")) == 1
+        )

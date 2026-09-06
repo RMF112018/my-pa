@@ -922,22 +922,29 @@ class SqlGoodNotesPullRepository:
         lease_seconds: int,
     ) -> GoodNotesPullStatus:
         self._validate_policy(max_attempts, lease_seconds)
-        session = self._connection.execute(
+        session_query = (
             select(goodnotes_pull_sessions)
             .where(
                 _mine(goodnotes_pull_sessions, principal_id),
                 goodnotes_pull_sessions.c.client_id == client_id,
             )
             .with_for_update()
-        ).one_or_none()
+        )
+        session = self._connection.execute(session_query).one_or_none()
+        if session is None:
+            states = self._work_states(principal_id, client_id=client_id)
+            # A creator can commit after the first absent-session lookup. Recheck
+            # after reading work so every visible assignment has validated policy.
+            session = self._connection.execute(session_query).one_or_none()
         if session is not None and (
             session.context_id != context_id
             or session.max_attempts != max_attempts
             or session.lease_seconds != lease_seconds
         ):
             raise PullRepositoryConflictError
+        if session is not None:
+            states = self._work_states(principal_id, client_id=client_id)
         now = self._clock()
-        states = self._work_states(principal_id, client_id=client_id)
         expired = {
             _work_key(state.work)
             for state in states

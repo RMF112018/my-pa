@@ -952,6 +952,19 @@ class ConstraintManagementService:
             _validate_idempotency_key(idempotency_key)
 
         with self._unit_of_work() as uow:
+            # The predecessor's row lock comes first and the replay gate sits
+            # behind it, for the reason `_mutate` states. This composite names a
+            # row it can lock, so it must: two requests carrying one key would
+            # otherwise both read an empty ledger, and the loser — whose inner
+            # `close` replays rather than closing again — would still fall
+            # through the remaining five steps to a duplicate `FOLLOW_UP_OF`
+            # edge, which the stored uniqueness on that edge refuses. The
+            # transaction would roll back whole, but the caller would receive a
+            # driver integrity error where CM-BE-AC-065 requires `REPLAYED`.
+            # Locking first makes the loser wait and then read the ledger the
+            # winner committed; `close` re-locks the same row inside the same
+            # transaction, which costs nothing.
+            uow.constraints.get_for_update(principal_id, constraint_id)
             if idempotency_key is not None:
                 prior = uow.constraints.find_history_by_idempotency_key(
                     principal_id, idempotency_key
@@ -976,6 +989,14 @@ class ConstraintManagementService:
                 active_uow=uow,
                 digest_override=digest,
             )
+            if closed.disposition is ConstraintMutationDisposition.REPLAYED:
+                # The second guard behind the same fact: `close`'s own gate found
+                # a receipt under this request's key, so the whole composite has
+                # already been applied and the remaining five steps must not run
+                # again. Reachable only if the lock above were ever removed, and
+                # kept because falling through here is what turned a replay into
+                # an integrity error.
+                return self._replayed_follow_up(uow, principal_id, closed.receipt, successor_key)
             predecessor = closed.record
             if predecessor.project_id is None:
                 raise ConstraintOperationError(
@@ -1245,17 +1266,6 @@ class ConstraintManagementService:
             _validate_idempotency_key(idempotency_key)
 
         with self._unit_of_work() as uow:
-            if idempotency_key is not None:
-                prior = uow.constraints.find_category_history_by_idempotency_key(
-                    principal_id, idempotency_key
-                )
-                if prior is not None:
-                    if prior.request_digest != digest:
-                        raise ConstraintIdempotencyConflictError(
-                            "the idempotency key was used for different normalized content"
-                        )
-                    return self._replayed_reorder(uow, principal_id, project_id, wanted, prior)
-
             self._require_project(uow, principal_id, project_id)
             known = {
                 row.category_id: row
@@ -1268,14 +1278,32 @@ class ConstraintManagementService:
                     "constraint_category_reorder_is_not_the_whole_project",
                     "a reorder names every category of the project, exactly once each",
                 )
-            now = self._clock()
             # Locked in a stable identifier order rather than the caller's, so
             # two concurrent reorders of the same Project queue instead of
-            # deadlocking on each other's second row.
+            # deadlocking on each other's second row. The locks are taken before
+            # the replay gate below, for the reason `_mutate` states: this
+            # operation names every row it touches, so two requests carrying one
+            # key must not both read an empty ledger and both proceed — the
+            # loser would write a second receipt under a key the stored partial
+            # unique index reserves, turning an accepted replay into an
+            # integrity error. Holding the rows first makes it wait and read the
+            # ledger the winner committed.
             locked = {
                 category_id: self._locked_category_row(uow, principal_id, category_id)
                 for category_id in sorted(wanted)
             }
+            if idempotency_key is not None:
+                prior = uow.constraints.find_category_history_by_idempotency_key(
+                    principal_id, idempotency_key
+                )
+                if prior is not None:
+                    if prior.request_digest != digest:
+                        raise ConstraintIdempotencyConflictError(
+                            "the idempotency key was used for different normalized content"
+                        )
+                    return self._replayed_reorder(uow, principal_id, project_id, wanted, prior)
+
+            now = self._clock()
             records: list[ConstraintCategory] = []
             receipts: list[ConstraintCategoryHistoryEntry] = []
             rejected = tuple(

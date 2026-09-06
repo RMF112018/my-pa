@@ -619,10 +619,16 @@ def test_an_induced_failure_in_close_with_follow_up_leaves_zero_partial_state(
 ) -> None:
     """Any failure: no closure, no successor, no consumed number, no edge.
 
-    Each case fails at a different stage of the operation — before the close,
-    before the successor is created, and after the predecessor has already been
-    closed inside the transaction — so the guarantee being measured is the
-    transaction's rather than the order of the writes.
+    The three cases do not all exercise the same mechanism, and saying so is
+    part of the measurement. The blank successor description is refused by the
+    argument check at the top of the method, before the unit of work is ever
+    opened, so that case proves the refusal happens and nothing more. The other
+    two do open the transaction and fail inside it — one on the predecessor's
+    version comparison, before any successor exists, and one after the
+    predecessor has already been closed within the transaction — and those two
+    are what measure the rollback. All three are asserted against the same zero
+    state, including the two ledgers, which is why the case that never opens a
+    transaction is kept rather than deleted.
     """
     category_id = _category(staged)
     published = _published(staged, category_id, bic=(PRINCIPAL_PARTY,))
@@ -650,6 +656,12 @@ def test_an_induced_failure_in_close_with_follow_up_leaves_zero_partial_state(
     assert _count(staged, project_constraints) == 1
     assert _count(staged, project_constraint_relationships) == 0
     assert (allocator._mapping["next_sequence"], allocator._mapping["issued_count"]) == (2, 1)
+    # The two ledgers, as `test_a_refused_publish_leaves_no_trace_in_the_database`
+    # measures them: the staging Draft and its Publish, and nothing this refused
+    # request wrote. Without these the rollback claim covers the record tables
+    # only, and a receipt or a revision surviving a refusal would go unseen.
+    assert _count(staged, project_constraint_history) == 2
+    assert _count(staged, project_constraint_revisions) == 2
 
 
 def test_close_with_follow_up_replays_without_a_second_successor(staged: Engine) -> None:

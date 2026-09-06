@@ -113,7 +113,8 @@ function answerGraph(
   disclosure: unknown = whole(),
   workspace: unknown = emptyWorkspace(),
 ) {
-  const spy = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
+  const spy = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    void init;
     const href = String(url);
     const body = href.includes("/v1/canvas.workspace.get")
       ? { result: workspace, disclosure }
@@ -291,7 +292,11 @@ describe("Canvas page", () => {
   });
 
   it("says not found when the seed is unknown", async () => {
-    const fetchSpy = vi.fn(async () => gatewayNotFound());
+    const fetchSpy = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      void url;
+      void init;
+      return gatewayNotFound();
+    });
     vi.stubGlobal("fetch", fetchSpy);
     await renderServerPage(() => CanvasPage({ searchParams: seededParams() }));
     expect(String(fetchSpy.mock.calls[0]?.[0])).toContain("/v1/entities.graph");

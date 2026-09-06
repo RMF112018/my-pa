@@ -40,7 +40,13 @@ No accepted numeric budgets. WP27 protects typed failures and production-build e
 
 - Playwright `retries: 0`. No pytest reruns.
 - No `test.only` / `describe.only` / `test.fixme` / pytest `xfail`.
-- Conditional `test.skip` remaining: GoodNotes mobile overflow (measured on mobile/390 in other specs); journeys tablet inspector orientation. Accessibility touch targets now run on the desktop CI project via an explicit 412×839 touch viewport.
+- Conditional skips that remain:
+  - `web/e2e/webauthn.spec.ts` — Chromium-only virtual authenticator (not Firefox/WebKit; Playwright WebKit is not Safari).
+  - `web/e2e/goodnotes.spec.ts` — mobile overflow measured on mobile/390 elsewhere.
+  - `web/e2e/journeys.spec.ts` — tablet inspector orientation.
+  - `web/e2e/system.spec.ts` — desktop-only (still runs in `e2e-critical` desktop).
+  - `web/e2e/review-decisions.spec.ts` contextual Review handoff — skips when the empty e2e catalog has no pending/Evidence control (explicit reason; not a silent pass).
+- Accessibility touch targets now run on the desktop CI project via an explicit 412×839 touch viewport.
 - `continue-on-error` remains only on `pwa-offline` and `browsers`.
 
 ## Recommended WP28 first slice

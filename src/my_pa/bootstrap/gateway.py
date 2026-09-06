@@ -76,7 +76,7 @@ principal is the only principal; no credential is issued, read, or required.
 `OPERATOR` rather than `GATEWAY` because the process *is* the operator's local
 transport — a `GATEWAY` principal cannot invoke `sources.enroll`, so the choice
 is between naming what this is and shipping a transport that cannot reach one of
-the 136 capabilities.
+the 142 capabilities.
 
 `entra` composes `entra_authenticator` instead and issues **no** process
 principal. Every request presents a bearer token, the token's validated
@@ -222,6 +222,9 @@ from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.capture_clients import authenticate_client, clients_of
 from my_pa.infrastructure.persistence.commitment_management import (
     SqlAlchemyCommitmentManagementUnitOfWork,
+)
+from my_pa.infrastructure.persistence.constraints import (
+    SqlAlchemyConstraintManagementUnitOfWork,
 )
 from my_pa.infrastructure.persistence.entity_reenrichment import (
     ReenrichmentTables,
@@ -970,6 +973,15 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
     def commitment_management_unit_of_work() -> SqlAlchemyCommitmentManagementUnitOfWork:
         return SqlAlchemyCommitmentManagementUnitOfWork(work_engine)
 
+    def constraint_management_unit_of_work() -> SqlAlchemyConstraintManagementUnitOfWork:
+        # PC-CM-IMP-WP04. Unconditional, exactly as the two factories above are:
+        # there is no settings flag that withholds the Constraint read plane, so
+        # a composed gateway always serves the six reads and
+        # `available_capabilities` has no gate to apply. The unit of work is
+        # built per invocation, as `ApplicationService` requires -- one
+        # transaction per request, never a shared open one.
+        return SqlAlchemyConstraintManagementUnitOfWork(work_engine)
+
     entra = settings.auth_mode is AuthMode.ENTRA
     principal = None if entra else local_principal()
     producer_origins = relationship_producer_origins(principal)
@@ -1000,6 +1012,7 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
             managed_store=managed_byte_store(settings, work_engine),
             task_management_unit_of_work=task_management_unit_of_work,
             commitment_management_unit_of_work=commitment_management_unit_of_work,
+            constraint_management_unit_of_work=constraint_management_unit_of_work,
             relationship_intelligence_enabled=settings.relationship_intelligence_enabled,
             relationship_intelligence_writes_enabled=(
                 settings.relationship_intelligence_writes_enabled

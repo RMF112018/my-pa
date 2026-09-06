@@ -44,14 +44,18 @@ import pytest
 from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.settings import ENV_PREFIX, Settings
 
-#: The two attributes `available_capabilities` branches on that are composed
+#: The three attributes `available_capabilities` branches on that are composed
 #: dependencies rather than boolean settings. The managed byte store comes from
 #: the configured root. Producer origins come from the authenticated local
 #: Principal in `build_gateway_runtime`; an Entra composition deliberately gets
-#: an empty registry and withholds producer tools. Neither is a switch that the
-#: name-for-name setting derivation below should treat as an omitted flag.
+#: an empty registry and withholds producer tools. The Constraint unit-of-work
+#: factory (PC-CM-IMP-WP04) is the third and is the plainest of them: it is a
+#: transaction factory `build_gateway_runtime` hands over unconditionally, and
+#: there is no `MY_PA_` variable that turns the Constraint read plane off. None
+#: of the three is a switch that the name-for-name setting derivation below
+#: should treat as an omitted flag.
 _COMPOSED_DEPENDENCY_ATTRIBUTES: Final[frozenset[str]] = frozenset(
-    {"_managed_store_or_none", "_producer_origins"}
+    {"_managed_store_or_none", "_producer_origins", "_constraint_management_unit_of_work"}
 )
 
 _MANAGED_ROOT_VARIABLE: Final = f"{ENV_PREFIX}MANAGED_DOCUMENT_ROOT"

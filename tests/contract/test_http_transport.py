@@ -2,10 +2,10 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the one hundred and thirty-six capabilities is addressable
+**Reachability.** Every one of the one hundred and forty-two capabilities is addressable
 over HTTP and answers. Parametrised over `Capability` rather than over a list
 written here, so the next capability added to the domain arrives as
-a failing row instead of as an untested one. Fourteen of the one hundred and thirty-six answer a
+a failing row instead of as an untested one. Fourteen of the one hundred and forty-two answer a
 well-formed `501 unsupported` rather than a result — `_UNCOMPOSED_CAPABILITIES`,
 the plane this harness does not switch on — and one, `tasks.bulk_confirm`,
 answers a well-formed `404 not_found`, because a confirm names a preview this
@@ -46,6 +46,7 @@ from tests.conftest import (
     DEFAULT_LIMITS,
     WHEN,
     FakeCommitmentManagementUnitOfWork,
+    FakeConstraintManagementUnitOfWork,
     FakeProviders,
     FakeTaskManagementUnitOfWork,
     FakeUnitOfWork,
@@ -143,6 +144,8 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListConstraintCategories,
+    ListConstraints,
     ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
@@ -173,6 +176,9 @@ from my_pa.application.commands import (
     PutCanvasWorkspace,
     ReadCapture,
     ReadCommitment,
+    ReadConstraint,
+    ReadConstraintHistory,
+    ReadConstraintOverview,
     ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadKnowledge,
@@ -205,6 +211,7 @@ from my_pa.application.commands import (
     ReviseRelationshipMemory,
     SearchCaptures,
     SearchCommitments,
+    SearchConstraints,
     SearchEntities,
     SearchGoodNotes,
     SearchIntelligenceArtifacts,
@@ -768,6 +775,17 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         # No arguments: the queue is every unplaced mention in the Principal's
         # own partition, so there is nothing to name.
         Capability.ENTITIES_UNRESOLVED_MENTIONS: {},
+        # PC-CM-IMP-WP04's six Constraint Management reads, naming the scene's own
+        # seeded Project and Constraint so each answers rather than refuses.
+        Capability.CONSTRAINTS_READ: {"constraint_id": scene.constraint_id},
+        Capability.CONSTRAINTS_LIST: {"project_id": scene.constraint_project_id},
+        Capability.CONSTRAINTS_SEARCH: {
+            "project_id": scene.constraint_project_id,
+            "query": "synthetic",
+        },
+        Capability.CONSTRAINTS_HISTORY: {"constraint_id": scene.constraint_id},
+        Capability.CONSTRAINTS_OVERVIEW: {"project_id": scene.constraint_project_id},
+        Capability.CONSTRAINT_CATEGORIES_LIST: {"project_id": scene.constraint_project_id},
         # The entity plane's authoring half (`WP-RI-A-02`), staged so each of the
         # twelve answers rather than refuses: the subject is the same `person`
         # the reads above name, the child records are its staged binding and
@@ -1553,6 +1571,19 @@ def commands_for(
             focus_entity_id=person.entity_id,
         ),
         Capability.ENTITIES_UNRESOLVED_MENTIONS: ListUnresolvedMentions(),
+        # PC-CM-IMP-WP04's six Constraint Management reads, as commands.
+        Capability.CONSTRAINTS_READ: ReadConstraint(constraint_id=scene.constraint_id),
+        Capability.CONSTRAINTS_LIST: ListConstraints(project_id=scene.constraint_project_id),
+        Capability.CONSTRAINTS_SEARCH: SearchConstraints(
+            project_id=scene.constraint_project_id, query="synthetic"
+        ),
+        Capability.CONSTRAINTS_HISTORY: ReadConstraintHistory(constraint_id=scene.constraint_id),
+        Capability.CONSTRAINTS_OVERVIEW: ReadConstraintOverview(
+            project_id=scene.constraint_project_id
+        ),
+        Capability.CONSTRAINT_CATEGORIES_LIST: ListConstraintCategories(
+            project_id=scene.constraint_project_id
+        ),
         # The entity plane's authoring half, written as the commands the payload
         # table above must normalise to. The vocabulary members and the datetime
         # are spelled here as domain values because that is what the caller's
@@ -1963,6 +1994,11 @@ class RecordingService(ApplicationService):
             managed_store=world.managed_store,
             task_management_unit_of_work=lambda: FakeTaskManagementUnitOfWork(world),
             commitment_management_unit_of_work=lambda: FakeCommitmentManagementUnitOfWork(world),
+            # Composed on the same argument again (PC-CM-IMP-WP04): this suite
+            # quantifies over every `Capability` and asserts each is reachable, so a
+            # service composed without the Constraint unit of work would have it
+            # asserting reachability for the `constraints.` names it withholds.
+            constraint_management_unit_of_work=lambda: FakeConstraintManagementUnitOfWork(world),
             # Composed, for the same reason the managed store above is: this
             # suite quantifies over every `Capability` and asserts each is
             # reachable, so a service composed *without* the relationship plane

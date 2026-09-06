@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes one hundred and thirty-six capability names and none of them
+  ends: the transport routes one hundred and forty-two capability names and none of them
   mutates a source, and every capability driven over the wire is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -675,6 +675,19 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "positions": {person.entity_id: {"x": 10.0, "y": 20.0}},
         },
         Capability.ENTITIES_UNRESOLVED_MENTIONS: {},
+        # PC-CM-IMP-WP04's six Constraint Management reads, naming the scene's own
+        # seeded Project and Constraint so a `not_found` cannot stand in for an
+        # answer. No marker in any payload: every field is an opaque identifier,
+        # a closed vocabulary member or a bounded count.
+        Capability.CONSTRAINTS_READ: {"constraint_id": marked.constraint_id},
+        Capability.CONSTRAINTS_LIST: {"project_id": marked.constraint_project_id},
+        Capability.CONSTRAINTS_SEARCH: {
+            "project_id": marked.constraint_project_id,
+            "query": "synthetic",
+        },
+        Capability.CONSTRAINTS_HISTORY: {"constraint_id": marked.constraint_id},
+        Capability.CONSTRAINTS_OVERVIEW: {"project_id": marked.constraint_project_id},
+        Capability.CONSTRAINT_CATEGORIES_LIST: {"project_id": marked.constraint_project_id},
         # The entity plane's authoring half (`WP-RI-A-02`), and its payloads carry
         # no marker for the reason the reads above carry none: every field is an
         # identifier, a closed vocabulary value, a name or a reason the *caller*
@@ -1657,6 +1670,18 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_SPLIT_PREVIEW,
         Capability.ENTITIES_SPLIT,
         Capability.RELATIONSHIP_MEMORY_PROPOSE,
+        # PC-CM-IMP-WP04's six Constraint Management reads join them for the same
+        # reason: a Constraint names a Project in the acting Principal's own
+        # partition, never a `src_...` or an `enr_...`. All six are in
+        # `domain.policy.decision._SCOPELESS`, and leaving them in would make this
+        # rule assert that a stranger is denied a scope neither the request nor
+        # the plane has.
+        Capability.CONSTRAINTS_READ,
+        Capability.CONSTRAINTS_LIST,
+        Capability.CONSTRAINTS_SEARCH,
+        Capability.CONSTRAINTS_HISTORY,
+        Capability.CONSTRAINTS_OVERVIEW,
+        Capability.CONSTRAINT_CATEGORIES_LIST,
     }
 ]
 

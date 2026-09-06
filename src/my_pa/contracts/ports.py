@@ -44,7 +44,7 @@ import json
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from hashlib import sha256
 from types import TracebackType
 from typing import Any, ClassVar, Protocol
@@ -95,11 +95,23 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesSemanticReviewCase,
 )
 from my_pa.domain.policy.decision import validate_policy_version
-from my_pa.domain.project_controls.category import ConstraintCategory
+from my_pa.domain.project_controls.category import ConstraintCategory, ConstraintCategoryState
 from my_pa.domain.project_controls.constraint import ProjectConstraint
 from my_pa.domain.project_controls.history import (
     ConstraintCategoryHistoryEntry,
     ConstraintHistoryEntry,
+)
+from my_pa.domain.project_controls.read_models import (
+    ConstraintCategoryRow,
+    ConstraintEvidenceLinkRow,
+    ConstraintHistoryPosition,
+    ConstraintHistoryRow,
+    ConstraintListSpec,
+    ConstraintOverviewFacts,
+    ConstraintPartyRow,
+    ConstraintRelationshipRow,
+    ConstraintSyncFacts,
+    PersistedConstraintRecord,
 )
 from my_pa.domain.project_controls.revision import ConstraintRevision
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
@@ -6508,11 +6520,18 @@ class CommitmentManagementUnitOfWork(ABC):
 #    aggregate it is handed; here the partition is the authenticated caller's
 #    and is never taken from the payload, so a record built with another
 #    Principal's identifier cannot re-home itself by being written.
-# 2. **There is no listing, search, history page, or overview.** Those are the
-#    read plane's (WP03), and a repository that could answer them would be a
-#    disclosure surface WP02 has no capability declared for. Likewise there is
-#    no allocation, publish, close, void, or reopen: the persistence seam
-#    stores what a service decided (WP06), and decides nothing itself.
+# 2. **Listing, search, the history page and the overview arrived with WP03.**
+#    WP02 deliberately shipped none of them, because a repository that could
+#    answer them would have been a disclosure surface WP02 had no read service
+#    to bound. The ten read methods at the end of the repository below are that
+#    plane, and every one of them is called by `application.constraints.
+#    ConstraintReadService`. They are read-only in the strict sense: none takes
+#    a row lock, none writes, and none exists for the relationship, evidence or
+#    sync families beyond reading what is already stored.
+#
+#    Still absent, and still deliberately: there is no allocation, publish,
+#    close, void, or reopen. The persistence seam stores what a service decided
+#    (WP06), and decides nothing itself.
 
 
 class ConstraintManagementRepository(ABC):
@@ -6654,6 +6673,148 @@ class ConstraintManagementRepository(ABC):
         self, principal_id: str, entry: ConstraintCategoryHistoryEntry
     ) -> None:
         """Append one Category mutation receipt. Never updated, never deleted."""
+
+    # PC-CM-IMP-WP03: the read plane. Every method below returns a plain row
+    # picture rather than an aggregate, and every one of them is called by
+    # `ConstraintReadService`. Two rules hold across all ten: the statement
+    # composes the Principal partition guard, and the bound on how much work it
+    # does is in the SQL rather than applied to a result afterwards.
+
+    @abstractmethod
+    def list_categories(
+        self,
+        principal_id: str,
+        project_id: str,
+        *,
+        include_states: frozenset[ConstraintCategoryState] | None = None,
+    ) -> tuple[ConstraintCategoryRow, ...]:
+        """This Principal's Categories for one Project, in display order.
+
+        `include_states` of `None` means every state, which is what a Register
+        filter list needs: an `INACTIVE` Category still names the codes it
+        issued. Ordered by `display_order` then `category_id`, so the order is
+        total and a reader sees the same list twice.
+        """
+
+    @abstractmethod
+    def read_constraint(
+        self, principal_id: str, constraint_id: str
+    ) -> PersistedConstraintRecord | None:
+        """One Constraint as a read record, parties included, or `None`.
+
+        The read sibling of `get`. It hydrates the row without the aggregate
+        constructor, so a legally persisted legacy import — closed, with no
+        public code and no completion date — is readable here while remaining
+        unconstructible as a write aggregate. That asymmetry is the point:
+        `get` stays strict and this method stays faithful.
+
+        A Constraint belonging to another Principal is `None`, exactly as an
+        absent one is (CM-BE-AC-132).
+        """
+
+    @abstractmethod
+    def list_constraints(
+        self, principal_id: str, project_id: str, *, spec: ConstraintListSpec
+    ) -> tuple[PersistedConstraintRecord, ...]:
+        """One page of Register rows, resolved filters and keyset applied in SQL.
+
+        Returns up to `spec.fetch_limit` records — the caller's limit plus one,
+        whose presence is what says the page was truncated. Party filters are
+        `EXISTS` subqueries so the row set is never multiplied by a Constraint's
+        parties, and the returned records carry no party references: a page's
+        parties are read once through `parties_for` rather than once per row.
+        """
+
+    @abstractmethod
+    def parties_for(
+        self, principal_id: str, constraint_ids: Collection[str]
+    ) -> tuple[ConstraintPartyRow, ...]:
+        """Every BIC and Responsible row for the named Constraints, in stored order.
+
+        One statement for a whole page. The per-record alternative is an N+1
+        that grows with the Register, which is the difference between a bounded
+        page and a page whose cost the data decides.
+        """
+
+    @abstractmethod
+    def entity_labels(self, principal_id: str, entity_ids: Collection[str]) -> Mapping[str, str]:
+        """Display names for the named Entities in this Principal's partition.
+
+        Called only when an ENTITY party has no stored display label of its own.
+        An Entity belonging to another Principal is simply absent from the
+        mapping, so the party falls back to its preserved wording and the
+        foreign Entity is never named.
+        """
+
+    @abstractmethod
+    def list_history(
+        self,
+        principal_id: str,
+        constraint_id: str,
+        *,
+        limit: int,
+        after: ConstraintHistoryPosition | None = None,
+    ) -> tuple[ConstraintHistoryRow, ...]:
+        """One page of mutation receipts, newest first, keyset-continued.
+
+        Ordered by `occurred_at DESC, history_id DESC`, which is total because
+        the identifier breaks an instant tie. The rows carry only the safe
+        columns: no request digest, idempotency key, client context or
+        correlation identifier is selected.
+        """
+
+    @abstractmethod
+    def relationships_for(
+        self, principal_id: str, constraint_id: str
+    ) -> tuple[ConstraintRelationshipRow, ...]:
+        """Every relationship this Constraint is either end of, with the far end joined.
+
+        The join onto the related Constraint carries the same Principal
+        predicate, so a relationship whose other end is not readable in this
+        partition is not returned at all rather than returned with a gap a
+        reader could infer something from.
+        """
+
+    @abstractmethod
+    def evidence_links_for(
+        self, principal_id: str, constraint_id: str
+    ) -> tuple[ConstraintEvidenceLinkRow, ...]:
+        """Every evidence citation on one Constraint, as references and never as content."""
+
+    @abstractmethod
+    def sync_summary(
+        self, principal_id: str, project_id: str, constraint_ids: Collection[str]
+    ) -> ConstraintSyncFacts:
+        """The stored facts the four derivable sync states are read from.
+
+        Bounded and read-only: the Project's sync target, the sync baselines for
+        the named Constraints, and their open conflict counts. It starts no run,
+        takes no lease, reads no workbook, and compares nothing against a
+        provider — those are WP11's behavior, and a read plane that performed
+        them would be doing sync rather than reporting it.
+        """
+
+    @abstractmethod
+    def overview_facts(
+        self,
+        principal_id: str,
+        project_id: str,
+        *,
+        as_of: datetime,
+        project_today: date,
+        due_soon_through: date,
+    ) -> ConstraintOverviewFacts:
+        """Every overview count for one Project, from one aggregate statement.
+
+        The three temporal arguments are the service's already-resolved values
+        rather than anything this method computes: the counts and the rendered
+        rows are then generated from the same instant and the same two Project
+        dates, so an overview cannot disagree with the list it summarises.
+
+        The open-age numerator and denominator are returned separately so that
+        "nothing qualifies" stays a zero denominator rather than becoming an
+        average of zero.
+        """
 
 
 class ConstraintManagementUnitOfWork(ABC):

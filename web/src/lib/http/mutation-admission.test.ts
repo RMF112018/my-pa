@@ -116,4 +116,36 @@ describe("admitBrowserMutation", () => {
     });
     expect(admitBrowserMutation(request)).toBeNull();
   });
+
+  it("refuses a wrong Origin on Work PATCH with the same envelope as Capture", async () => {
+    const request = new Request("http://localhost:3000/api/tasks/tsk_synthetic", {
+      method: "PATCH",
+      headers: { origin: "https://attacker.example", "sec-fetch-site": "same-origin" },
+    });
+    await expectCrossSiteRefusal(admitBrowserMutation(request));
+  });
+
+  it("refuses a wrong Origin on Review decide with the same envelope as Capture", async () => {
+    const request = new Request("http://localhost:3000/api/review/rev_synthetic/decide", {
+      method: "POST",
+      headers: { origin: "https://attacker.example", "sec-fetch-site": "same-origin" },
+    });
+    await expectCrossSiteRefusal(admitBrowserMutation(request));
+  });
+
+  it("does not treat 127.0.0.1 Origin as localhost", async () => {
+    const request = new Request("http://localhost:3000/api/tasks/tsk_synthetic", {
+      method: "PATCH",
+      headers: { origin: "http://127.0.0.1:3000", "sec-fetch-site": "same-origin" },
+    });
+    await expectCrossSiteRefusal(admitBrowserMutation(request));
+  });
+
+  it("does not treat localhost Origin as 127.0.0.1", async () => {
+    const request = new Request("http://127.0.0.1:3000/api/review/rev_synthetic/decide", {
+      method: "POST",
+      headers: { origin: "http://localhost:3000", "sec-fetch-site": "same-origin" },
+    });
+    await expectCrossSiteRefusal(admitBrowserMutation(request));
+  });
 });

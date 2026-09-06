@@ -48,6 +48,56 @@ test("Review accept persists a decision and does not invent proposal text", asyn
   expect(versionBefore).toBeGreaterThanOrEqual(0);
 });
 
+test("stale expectedReviewVersion conflict is visible and does not fabricate a decision", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await page.goto("/review");
+  await expect(page.getByRole("heading", { name: "Review", level: 1 })).toBeVisible();
+  const first = await openCase(page, "review-accept");
+  await page.route("**/api/review/*/decide", async (route) => {
+    await route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({
+        error: {
+          errorClass: "conflict",
+          code: "conflict",
+          message: "stale expected_review_version",
+        },
+      }),
+    });
+  });
+  await first.getByTestId("review-accept").click();
+  await expect(first.getByTestId("review-conflict")).toBeVisible();
+  await expect(first.getByTestId("review-conflict")).toContainText(/Not decided/i);
+  await expect(first.getByTestId("review-decided")).toHaveCount(0);
+  await expect(first.getByTestId("review-not-persisted")).toHaveCount(0);
+  await expect(first.getByTestId("review-accept")).toBeVisible();
+});
+
+test("contextual Review handoff is used when GoodNotes pending or Evidence exposes it", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await page.goto("/knowledge/goodnotes");
+  const pending = page.getByTestId("goodnotes-pending-review");
+  const evidenceReview = page.getByTestId("goodnotes-evidence").getByRole("link", { name: "Review" });
+  const pendingCount = await pending.count();
+  const evidenceCount = await evidenceReview.count();
+  test.skip(
+    pendingCount === 0 && evidenceCount === 0,
+    "GoodNotes pending and Evidence Review controls are not on the empty e2e catalog",
+  );
+  if (pendingCount > 0) {
+    await pending.first().getByRole("link", { name: "Review" }).click();
+  } else {
+    await evidenceReview.first().click();
+  }
+  await expect(page).toHaveURL(/\/review$/);
+  await expect(page.getByRole("heading", { name: "Review", level: 1 })).toBeVisible();
+});
+
 test("Review correct-and-accept requires a value and persists the correction", async ({ page }) => {
   test.setTimeout(180_000);
   await page.goto("/review");

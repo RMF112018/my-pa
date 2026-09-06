@@ -379,7 +379,17 @@ These limitations are additive to the default `FINAL_WP02_RECONCILIATION_MISSING
 - **All records:** final post-workstream WP-02 acceptance reconciliation is missing.
 - **PFE-AC-106..113 and related PWA evidence:** `WP08_PWA_OFFLINE_AUDIT_MISSING`; WP26 is validation-first.
 - **PFE-AC-077..082 and GoodNotes-related evidence:** `WP14_KNOWLEDGE_LIBRARY_GOODNOTES_AUDIT_MISSING` remains; WP21 is merged on main (`3f5c80f9` / #212) and WP22 UI is implemented on this branch. Do not mark 077..082 or `PFE-AC-132` `NOT_APPLICABLE` / `JUSTIFIED_NA`. Never `PASS_VERIFIED`.
-- **Cross-cutting test/protection records, including PFE-AC-130..139, PFE-AC-193..198, PFE-AC-226, PFE-AC-240, PFE-AC-250:** `WP16_TEST_QUALITY_AUDIT_INCOMPLETE` until the applicable protection ledger is completed by WP27.
+- **Cross-cutting test/protection records, including PFE-AC-130..139, PFE-AC-193..198, PFE-AC-226, PFE-AC-240, PFE-AC-250:** protection rigor is recorded in [`frontend-protection-ledger.json`](frontend-protection-ledger.json), machine-checked by `tests/unit/test_frontend_protection_ledger.py`. That companion does **not** change acceptance dispositions. Historical `WP16_TEST_QUALITY_AUDIT_INCOMPLETE` remains as the reason WP27 exists; WP28/WP30 still own gate promotion and runtime proof. Never `PASS_VERIFIED` from the protection ledger alone.
+
+## UI-IMP-WP27 protection ledger pointer
+
+WP27 adds an orthogonal all-250 protection mapping. Acceptance vocabulary in this file is unchanged.
+
+- Canonical protection records: [`frontend-protection-ledger.json`](frontend-protection-ledger.json)
+- WP28 handoff: [`frontend-protection-wp28-handoff.md`](frontend-protection-wp28-handoff.md)
+- WP30 handoff: [`frontend-protection-wp30-handoff.md`](frontend-protection-wp30-handoff.md)
+
+Do not treat a populated protection record as `PASS_VERIFIED`. Do not treat `frontend / required` green as terminal frontend acceptance.
 
 ### PFE-AC-123..139 discrepancy
 

@@ -4,6 +4,17 @@ import { ADMISSIBLE_PRINCIPAL, signIn } from "./fixtures";
 
 const OPAQUE_SID = /^[0-9a-f]{64}$/;
 
+/**
+ * Chromium-only. The virtual authenticator uses CDP `WebAuthn.enable`.
+ * Do not add this file to Playwright firefox/webkit projects. Playwright's
+ * WebKit engine is not Safari; real Safari / iOS Safari remain MANUAL/RUNTIME
+ * (HARVEST_CANNOT_PROVE).
+ */
+test.skip(
+  ({ browserName }) => browserName !== "chromium",
+  "WebAuthn virtual authenticator is Chromium-only; Playwright WebKit is not Safari",
+);
+
 async function sessionCookie(page: import("@playwright/test").Page, origin: string) {
   const cookies = await page.context().cookies(origin);
   return cookies.find((cookie) => cookie.name === "mypa_session");
@@ -11,7 +22,8 @@ async function sessionCookie(page: import("@playwright/test").Page, origin: stri
 
 test.describe("WebAuthn virtual authenticator", () => {
   // Chromium CDP only (`WebAuthn.enable` / addVirtualAuthenticator). Playwright
-  // Firefox/WebKit cannot prove this path; UI-CI-WP05 classifies it HARVEST_CANNOT_PROVE.
+  // Firefox/WebKit cannot prove this path. Playwright WebKit is not Safari;
+  // real Safari remains MANUAL/RUNTIME (HARVEST_CANNOT_PROVE).
   test("registers a passkey through the real browser API", async ({ page }) => {
     const client = await page.context().newCDPSession(page);
     await client.send("WebAuthn.enable");
@@ -45,6 +57,33 @@ test.describe("opaque session cookie", () => {
     expect(cookie!.value).toMatch(OPAQUE_SID);
     expect(cookie!.value).not.toContain(".");
     expect(cookie!.value.split(".")).toHaveLength(1);
+
+    await page.goto("/today");
+    await expect(page.getByTestId("capture-button")).toBeVisible();
+    const sid = cookie!.value;
+    const visibleCookie = await page.evaluate(() => document.cookie);
+    expect(visibleCookie, "HttpOnly SID must not appear on document.cookie").not.toContain(
+      "mypa_session",
+    );
+    expect(visibleCookie).not.toContain(sid);
+
+    const storage = await page.evaluate(() => {
+      const dump = (store: Storage) => {
+        const entries: Record<string, string> = {};
+        for (let index = 0; index < store.length; index += 1) {
+          const key = store.key(index);
+          if (key !== null) entries[key] = store.getItem(key) ?? "";
+        }
+        return entries;
+      };
+      return { local: dump(localStorage), session: dump(sessionStorage) };
+    });
+    const blob = JSON.stringify(storage).toLowerCase();
+    expect(blob, "no bearer token in web storage").not.toContain("bearer ");
+    expect(blob).not.toContain("authorization");
+    expect(blob).not.toContain("mypa_session");
+    expect(blob).not.toContain(sid.toLowerCase());
+    expect(blob).not.toMatch(/eyj[a-z0-9_-]+\.[a-z0-9_-]+\./i);
   });
 
   test("sign-out revokes the SID so the same cookie value cannot replay", async ({

@@ -127,7 +127,10 @@ describe("POST /api/canvas/relationships/revise", () => {
     const cookie = await signIn();
     const response = await reviseRelationship(mutatingPost(cookie, VALID_BODY, ORIGIN));
     expect(response.status).toBe(409);
-    expect((await response.json()).error.errorClass).toBe("conflict");
+    const body = await response.json();
+    expect(body.error.errorClass).toBe("conflict");
+    expect(body).not.toHaveProperty("record_id");
+    expect(body).not.toHaveProperty("receipt_id");
     expect(sent[0].url).toContain("/v1/entities.relationships.revise");
   });
 
@@ -155,14 +158,26 @@ describe("POST /api/canvas/relationships/revise", () => {
     { name: "zero", value: 0 },
     { name: "negative", value: -1 },
     { name: "missing", value: undefined },
+    { name: "string", value: "1" },
+    { name: "float", value: 1.5 },
+    { name: "null", value: null },
+    { name: "boolean", value: true },
+    { name: "object", value: {} },
   ])("refuses $name expected_version before the gateway", async ({ value }) => {
     const cookie = await signIn();
-    const body =
+    const body: Record<string, unknown> =
       value === undefined
-        ? { relationship_id: VALID_BODY.relationship_id, idempotency_key: VALID_BODY.idempotency_key }
+        ? {
+            relationship_id: VALID_BODY.relationship_id,
+            idempotency_key: VALID_BODY.idempotency_key,
+            evidence_refs: VALID_BODY.evidence_refs,
+          }
         : { ...VALID_BODY, expected_version: value };
     const response = await reviseRelationship(mutatingPost(cookie, body, ORIGIN));
     expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { errorClass: "validation", code: "invalid_expected_version" },
+    });
     expect(sent).toEqual([]);
   });
 

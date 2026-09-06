@@ -113,7 +113,8 @@ function answerGraph(
   disclosure: unknown = whole(),
   workspace: unknown = emptyWorkspace(),
 ) {
-  const spy = vi.fn(async (url: string | URL | Request, _init?: RequestInit) => {
+  const spy = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    void init;
     const href = String(url);
     const body = href.includes("/v1/canvas.workspace.get")
       ? { result: workspace, disclosure }
@@ -188,10 +189,24 @@ describe("Canvas page", () => {
     const fetchSpy = socketFails();
     await renderServerPage(() => CanvasPage({ searchParams: Promise.resolve({}) }));
     expect(screen.getByTestId("canvas-seed-required")).toHaveAttribute("data-state", "empty");
+    expect(screen.getByText("A seed is required")).toBeTruthy();
+    expect(screen.getByTestId("canvas-seed-required").textContent).toMatch(
+      /Provide focusEntityId or scopeEntityId/,
+    );
+    expect(screen.getByTestId("canvas-seed-required").textContent).toMatch(
+      /empty URL is not an empty neighborhood/,
+    );
+    expect(screen.getByTestId("canvas-seed-required").textContent).toMatch(
+      /not a directory of everyone/,
+    );
     const search = screen.getByRole("link", { name: "Search People" });
     expect(search).toHaveAttribute("href", "/people");
     expect(fetchSpy).not.toHaveBeenCalled();
+    expect(fetchUrls(fetchSpy).some((url) => url.includes("entities.graph"))).toBe(false);
+    expect(fetchUrls(fetchSpy).some((url) => url.includes("entities.list"))).toBe(false);
     expect(fetchUrls(fetchSpy).some((url) => url.includes("canvas.workspace.get"))).toBe(false);
+    expect(screen.queryByTestId("canvas-empty")).toBeNull();
+    expect(screen.queryByTestId("canvas-directory")).toBeNull();
     expect(screen.queryByTestId("canvas-arrange-toggle")).toBeNull();
     expect(screen.queryByTestId("canvas-relationship-edit-toggle")).toBeNull();
     expect(screen.queryByTestId("canvas-as-of")).toBeNull();
@@ -225,8 +240,17 @@ describe("Canvas page", () => {
       const fetchSpy = socketFails();
       await renderServerPage(() => CanvasPage({ searchParams: seededParams({ asOf }) }));
       expect(screen.getByTestId("canvas-unavailable")).toHaveAttribute("data-state", "unavailable");
+      expect(screen.getByText("That map query was not valid")).toBeTruthy();
+      expect(screen.getByTestId("surface-state-detail").textContent).toBe(
+        "asOf must be an RFC 3339 timestamp with an explicit timezone.",
+      );
       expect(fetchSpy).not.toHaveBeenCalled();
+      expect(fetchUrls(fetchSpy).some((url) => url.includes("entities.graph"))).toBe(false);
       expect(fetchUrls(fetchSpy).some((url) => url.includes("canvas.workspace.get"))).toBe(false);
+      expect(screen.queryByTestId("canvas-empty")).toBeNull();
+      expect(screen.queryByTestId("canvas-seed-required")).toBeNull();
+      expect(screen.queryByTestId("canvas-not-found")).toBeNull();
+      expect(screen.queryByTestId("canvas-directory")).toBeNull();
       expect(screen.queryByTestId("canvas-arrange-toggle")).toBeNull();
       expect(screen.queryByTestId("canvas-relationship-edit-toggle")).toBeNull();
       expect(screen.queryByTestId("canvas-as-of")).toBeNull();
@@ -268,16 +292,29 @@ describe("Canvas page", () => {
   });
 
   it("says not found when the seed is unknown", async () => {
-    const fetchSpy = vi.fn(async () => gatewayNotFound());
+    const fetchSpy = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      void url;
+      void init;
+      return gatewayNotFound();
+    });
     vi.stubGlobal("fetch", fetchSpy);
     await renderServerPage(() => CanvasPage({ searchParams: seededParams() }));
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toContain("/v1/entities.graph");
+    expect(payloadOf(fetchSpy, 0).payload).toEqual({ focus_entity_id: FOCUS });
+    expect(payloadOf(fetchSpy, 0).payload).not.toHaveProperty("focusEntityId");
     expect(screen.getByTestId("canvas-not-found")).toHaveAttribute("data-state", "unavailable");
+    expect(screen.getByText("That neighborhood was not found")).toBeTruthy();
+    expect(screen.getByTestId("canvas-not-found").textContent).toMatch(
+      /Nothing is claimed about other seeds or other principals/,
+    );
     expect(screen.queryByTestId("canvas-empty")).toBeNull();
+    expect(screen.queryByTestId("canvas-seed-required")).toBeNull();
     expect(screen.queryByTestId("canvas-directory")).toBeNull();
     expect(screen.queryByTestId("canvas-arrange-toggle")).toBeNull();
     expect(screen.queryByTestId("canvas-relationship-edit-toggle")).toBeNull();
     expect(screen.queryByTestId("canvas-as-of")).toBeNull();
     expect(fetchUrls(fetchSpy).some((url) => url.includes("canvas.workspace.get"))).toBe(false);
+    expect(fetchUrls(fetchSpy).some((url) => url.includes("entities.list"))).toBe(false);
   });
 
   it("says unavailable when the socket never answered", async () => {
@@ -457,5 +494,11 @@ describe("Canvas page", () => {
     const source = readFileSync("src/app/(app)/canvas/canvas-page.tsx", "utf8");
     expect(source).toContain("md:grid-cols-2");
     expect(source).toContain('data-testid="canvas-continue"');
+    expect(source).not.toContain("entities.list");
+    expect(source).toContain('oneParam(params, "focusEntityId")');
+    expect(source).toContain('errorClass === "not_found"');
+    expect(source).toContain('testId="canvas-not-found"');
+    expect(source).toContain("focus_entity_id");
+    expect(source).not.toMatch(/MossAIc|ChatLLM|<iframe\b/i);
   });
 });

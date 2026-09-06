@@ -19,6 +19,7 @@ test.describe("an unauthenticated visitor reaches no destination", () => {
       "/people",
       "/canvas",
       "/knowledge",
+      "/knowledge/goodnotes",
       "/review",
       "/search",
       "/system",

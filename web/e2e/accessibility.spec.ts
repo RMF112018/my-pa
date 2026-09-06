@@ -31,6 +31,7 @@ const PAGES = [
   "/people",
   "/canvas",
   "/knowledge",
+  "/knowledge/goodnotes",
   "/review",
   "/search",
   "/system",

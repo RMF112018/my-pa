@@ -11,6 +11,7 @@ Use these repository-controlled sources for frontend implementation:
 4. [`../decisions/ADR-004-mossaic-frontend-nextjs-app-router.md`](../decisions/ADR-004-mossaic-frontend-nextjs-app-router.md) — retained Next.js/BFF/PWA architecture with the conflicting authentication/session provisions explicitly superseded by ADR-011.
 5. [`../decisions/ADR-008-nas-runtime-topology.md`](../decisions/ADR-008-nas-runtime-topology.md) — retained NAS/runtime topology with its Entra browser-auth selection explicitly superseded by ADR-011.
 6. [`frontend-auth-persistence.md`](frontend-auth-persistence.md) — WP02 durable credential/challenge/recovery/session substrate, plus the WP04 opaque-SID cookie cutover on this PR. Does not claim production activation.
+7. [`frontend-release-gates.md`](frontend-release-gates.md) — WP28 required vs advisory CI membership, browser matrix, visual/performance policy. Not WP29/WP30.
 
 ## Execution order
 
@@ -26,7 +27,7 @@ The controlling post-audit sequence is `UI-IMP-WP01..WP30`. Older `WP-FE-*` orde
 
 `UI-IMP-WP06` typed BFF success, error, receipt, and degraded contracts are implemented on this PR. That is not production activation, not `PASS_VERIFIED` of the whole frontend, and not Wave 1 closure until post-merge audit.
 
-`NEXT_EXECUTABLE_PACKAGE: UI-IMP-WP27 Cross-Cutting Test Protection Hardening is implementing on this branch over current main (`21b39739` / PC-CM-IMP-WP03 #213, which includes merged WP21–WP26). WP22 is on main (`7d29d9ae` / #214). This package does not implement WP28 gate promotion, WP29 deployment, or WP30 runtime acceptance. WP14_KNOWLEDGE_LIBRARY_GOODNOTES_AUDIT_MISSING and WP08_PWA_OFFLINE_AUDIT_MISSING remain evidence limitations. gsqs.start remains not browser-admitted. frontend / pwa-offline and frontend / browsers remain ADVISORY.`
+`NEXT_EXECUTABLE_PACKAGE: UI-IMP-WP28 CI, Browser Matrix, Security, and Performance Gates is implementing on this branch over current main (`8995cc4c` / WP27 #215). This package does not implement WP29 deployment or WP30 runtime acceptance. GitHub rulesets are not mutated. frontend / pwa-offline, browsers, visual, performance, and degraded-gateway remain ADVISORY. gsqs.start remains not browser-admitted.`
 
 ## Evidence limitations
 

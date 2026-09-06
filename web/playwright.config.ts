@@ -150,6 +150,8 @@ export default defineConfig({
       env: {
         ...baseEnv,
         MYPA_GATEWAY_URL: "http://127.0.0.1:1",
+        MYPA_SESSION_SERVICE_URL: GATEWAY_URL,
+        MYPA_CANONICAL_ORIGIN: DEAD_GATEWAY_URL,
         MYPA_NEXT_DIST_DIR: ".next/e2e-dead",
       },
     },

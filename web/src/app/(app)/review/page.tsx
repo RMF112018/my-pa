@@ -31,8 +31,7 @@ import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { ReviewWorkbench } from "@/components/review/review-workbench";
 import { BackendReviewWorkbench } from "@/components/review/backend-review-workbench";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
-import type { ReviewCase } from "@/lib/api/decode/capabilities/review.list";
-import type { BackendReviewCase } from "@/contracts/views";
+import { toBackendReviewCase } from "@/components/review/to-backend-case";
 
 export const metadata = { title: "Review — my-pa" };
 
@@ -44,25 +43,6 @@ const SCOPE = "review";
 const BLURB =
   "Proposals wait here for your disposition. Nothing is asserted on your behalf — a captured " +
   "item becomes a canonical record only when you accept or correct-and-accept it.";
-
-function toCase(row: ReviewCase): BackendReviewCase {
-  const captureId = row.subject_kind === "capture_proposal" ? row.capture_id : row.review_case_id;
-  const versionId = row.subject_kind === "capture_proposal" ? row.version_id : row.proposal_id;
-  const proposalType =
-    row.subject_kind === "capture_proposal" ? row.proposal_type : row.subject_kind;
-  return {
-    reviewCaseId: row.review_case_id,
-    proposalId: row.proposal_id,
-    captureId,
-    versionId,
-    proposalType,
-    proposalState: row.proposal_state,
-    riskClass: row.risk_class,
-    openedAt: row.opened_at,
-    reviewVersion: row.review_version,
-    latestDisposition: row.latest_disposition,
-  };
-}
 
 export default async function ReviewPage() {
   const cookieStore = await cookies();
@@ -148,13 +128,13 @@ export default async function ReviewPage() {
             testId="review-queue-degraded-empty"
           />
         ) : (
-          <BackendReviewWorkbench cases={answer.result.review_cases.map(toCase)} />
+          <BackendReviewWorkbench cases={answer.result.review_cases.map(toBackendReviewCase)} />
         )}
       </>,
     );
   }
 
   return frame(
-    <BackendReviewWorkbench cases={answer.result.review_cases.map(toCase)} />,
+    <BackendReviewWorkbench cases={answer.result.review_cases.map(toBackendReviewCase)} />,
   );
 }

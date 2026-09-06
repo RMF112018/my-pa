@@ -2,6 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ReviewWorkbench } from "@/components/review/review-workbench";
+import { BackendReviewWorkbench } from "@/components/review/backend-review-workbench";
+import type {
+  CaptureBackendReviewCase,
+  GoodNotesRegionBackendReviewCase,
+  GoodNotesSemanticBackendReviewCase,
+} from "@/contracts/views";
 import {
   syntheticReviewCases,
   syntheticDecisionReceipt,
@@ -197,5 +203,132 @@ describe("review workbench", () => {
       expect(within(card).getByRole("alert")).toHaveTextContent("no such review case"),
     );
     expect(screen.queryByTestId(`receipt-${first.reviewCaseId}`)).not.toBeInTheDocument();
+  });
+});
+
+describe("backend review workbench GoodNotes cases", () => {
+  const CAPTURE_CASE: CaptureBackendReviewCase = {
+    reviewCaseId: "rvc_aaaa0001aaaa0001aaaa0001",
+    proposalId: "prop_aaaa0001aaaa0001aaaa0001",
+    subjectKind: "capture_proposal",
+    captureId: "cap_aaaa0001aaaa0001aaaa0001",
+    versionId: "capver_aaaa0001aaaa0001aaaa0001",
+    proposalType: "commitment",
+    proposalState: "proposed",
+    riskClass: "high",
+    openedAt: "2026-01-01T00:00:00Z",
+    reviewVersion: 3,
+    latestDisposition: null,
+  };
+
+  const SEMANTIC_CASE: GoodNotesSemanticBackendReviewCase = {
+    reviewCaseId: "rvc_cccc0001cccc0001cccc0001",
+    proposalId: "prop_cccc0001cccc0001cccc0001",
+    subjectKind: "goodnotes_semantic",
+    runId: "gnrun_aaaaaaaaaaaaaaaaaaaaaaaa",
+    pageVersionId: "gnver_aaaaaaaaaaaaaaaaaaaaaaaa",
+    proposalType: "goodnotes_semantic",
+    proposalState: "proposed",
+    riskClass: "moderate",
+    openedAt: "2026-01-01T00:00:00Z",
+    reviewVersion: 4,
+    latestDisposition: null,
+  };
+
+  const REGION_CASE: GoodNotesRegionBackendReviewCase = {
+    reviewCaseId: "rvc_dddd0001dddd0001dddd0001",
+    proposalId: "prop_dddd0001dddd0001dddd0001",
+    subjectKind: "goodnotes_region",
+    regionId: "gnreg_aaaaaaaaaaaaaaaaaaaaaaaa",
+    pageVersionId: "gnver_bbbbbbbbbbbbbbbbbbbbbbbb",
+    confidence: 0.82,
+    proposalType: "goodnotes_region",
+    proposalState: "needs_review",
+    riskClass: "low",
+    openedAt: "2026-01-01T00:00:00Z",
+    reviewVersion: 2,
+    latestDisposition: null,
+  };
+
+  it("still renders a capture case as capture and version identifiers with Reveal", () => {
+    render(<BackendReviewWorkbench cases={[CAPTURE_CASE]} />);
+    const card = screen.getByTestId("backend-review-case");
+    expect(card).toHaveAttribute("data-subject-kind", "capture_proposal");
+    expect(within(card).getByTestId("review-capture-id")).toHaveTextContent(CAPTURE_CASE.captureId);
+    expect(within(card).getByTestId("review-version-id")).toHaveTextContent(CAPTURE_CASE.versionId);
+    expect(within(card).getByTestId("review-reveal")).toBeInTheDocument();
+    expect(within(card).queryByTestId("review-goodnotes-link")).not.toBeInTheDocument();
+    expect(within(card).queryByTestId("review-run-id")).not.toBeInTheDocument();
+    expect(screen.queryByText(/proposal summary/i)).not.toBeInTheDocument();
+  });
+
+  it("does not render a goodnotes_semantic row as capture identifiers", () => {
+    render(<BackendReviewWorkbench cases={[SEMANTIC_CASE]} />);
+    const card = screen.getByTestId("backend-review-case");
+    expect(within(card).getByTestId("review-subject-kind")).toHaveTextContent("goodnotes_semantic");
+    expect(within(card).getByTestId("review-run-id")).toHaveTextContent(SEMANTIC_CASE.runId);
+    expect(within(card).getByTestId("review-page-version-id")).toHaveTextContent(
+      SEMANTIC_CASE.pageVersionId,
+    );
+    expect(within(card).queryByTestId("review-capture-id")).not.toBeInTheDocument();
+    expect(within(card).queryByTestId("review-version-id")).not.toBeInTheDocument();
+    expect(within(card).queryByTestId("review-reveal")).not.toBeInTheDocument();
+    const href = within(card).getByTestId("review-goodnotes-link").getAttribute("href");
+    expect(href).toBe(
+      "/knowledge/goodnotes?runId=gnrun_aaaaaaaaaaaaaaaaaaaaaaaa&pageVersionId=gnver_aaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+    expect(href).not.toContain("captureId=");
+    expect(href).not.toContain("notebookId=");
+    expect(href).not.toContain(SEMANTIC_CASE.reviewCaseId);
+  });
+
+  it("links a goodnotes_region row by pageVersionId only and lists the stated confidence", () => {
+    render(<BackendReviewWorkbench cases={[REGION_CASE]} />);
+    const card = screen.getByTestId("backend-review-case");
+    expect(within(card).getByTestId("review-subject-kind")).toHaveTextContent("goodnotes_region");
+    expect(within(card).getByTestId("review-region-id")).toHaveTextContent(REGION_CASE.regionId);
+    expect(within(card).getByTestId("review-page-version-id")).toHaveTextContent(
+      REGION_CASE.pageVersionId,
+    );
+    expect(within(card).getByTestId("review-confidence")).toHaveTextContent("0.82");
+    expect(within(card).queryByTestId("review-capture-id")).not.toBeInTheDocument();
+    expect(within(card).queryByTestId("review-run-id")).not.toBeInTheDocument();
+    expect(within(card).queryByTestId("review-reveal")).not.toBeInTheDocument();
+    const href = within(card).getByTestId("review-goodnotes-link").getAttribute("href");
+    expect(href).toBe("/knowledge/goodnotes?pageVersionId=gnver_bbbbbbbbbbbbbbbbbbbbbbbb");
+    expect(href).not.toContain("runId=");
+    expect(href).not.toContain("captureId=");
+  });
+
+  it("decides a pending GoodNotes case with expectedReviewVersion from the row", async () => {
+    const user = userEvent.setup();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          status: "persisted",
+          receipt: {
+            decisionId: "rvd_aaaaaaaaaaaaaaaaaaaaaaaa",
+            reviewVersion: 5,
+            proposalState: "accepted",
+            assertionId: null,
+            receiptId: null,
+          },
+        }),
+        { status: 200 },
+      ),
+    );
+
+    render(<BackendReviewWorkbench cases={[SEMANTIC_CASE]} />);
+    await user.click(screen.getByTestId("review-accept"));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    expect(fetchSpy.mock.calls[0]?.[0]).toBe(
+      `/api/review/${SEMANTIC_CASE.reviewCaseId}/decide`,
+    );
+    const body = JSON.parse((fetchSpy.mock.calls[0]?.[1] as RequestInit).body as string);
+    expect(body).toEqual({
+      disposition: "accept",
+      expectedReviewVersion: SEMANTIC_CASE.reviewVersion,
+    });
+    expect(body).not.toHaveProperty("principalId");
   });
 });

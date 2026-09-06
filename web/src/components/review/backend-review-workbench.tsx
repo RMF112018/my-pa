@@ -11,13 +11,10 @@
  * surface can have — worse than showing nothing, because the person would act on
  * it.
  *
- * So this component shows exactly what the listing carries — which case, which
- * proposal, which capture and version, the proposal type and state, the risk
- * class, when it opened, the review version, and any disposition already
- * recorded — and states plainly, once and prominently, that the listing carries
- * no content. Reveal is offered on every row so the evidence behind a case can be
- * opened before it is decided; that is a separate, audited read
- * (`knowledge.reveal`) rather than content smuggled into a listing.
+ * So this component shows exactly what the listing carries — identifiers, types
+ * and states, and no invented proposal text. Capture rows still offer Reveal
+ * (`knowledge.reveal`), which is capture-oriented. GoodNotes rows link to the
+ * notebook page by the identifiers the listing returned and do not call Reveal.
  *
  * **`expectedReviewVersion` is sent from the row, never defaulted.**
  * `review.decide` runs under optimistic concurrency: a decision made against a
@@ -32,6 +29,7 @@
  * are four different rendered states, in the direction that understates.
  */
 import { useState } from "react";
+import Link from "next/link";
 import type { BackendReviewCase } from "@/contracts/views";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -96,6 +94,74 @@ function moment(value: string): string {
 
 function isTerminalDisposition(value: string | null): boolean {
   return value === "accept" || value === "correct_and_accept";
+}
+
+function isGoodNotesCase(
+  row: BackendReviewCase,
+): row is Extract<BackendReviewCase, { subjectKind: "goodnotes_semantic" | "goodnotes_region" }> {
+  return row.subjectKind === "goodnotes_semantic" || row.subjectKind === "goodnotes_region";
+}
+
+function goodnotesKnowledgeHref(
+  row: Extract<BackendReviewCase, { subjectKind: "goodnotes_semantic" | "goodnotes_region" }>,
+): string {
+  const params = new URLSearchParams();
+  if (row.subjectKind === "goodnotes_semantic") {
+    params.set("runId", row.runId);
+    params.set("pageVersionId", row.pageVersionId);
+  } else {
+    params.set("pageVersionId", row.pageVersionId);
+  }
+  return `/knowledge/goodnotes?${params.toString()}`;
+}
+
+function IdentityFields({ row }: { row: BackendReviewCase }) {
+  if (row.subjectKind === "goodnotes_semantic") {
+    return (
+      <>
+        <dt className="text-muted">subject</dt>
+        <dd data-testid="review-subject-kind">{row.subjectKind}</dd>
+        <dt className="text-muted">run</dt>
+        <dd className="font-mono text-xs break-all" data-testid="review-run-id">
+          {row.runId}
+        </dd>
+        <dt className="text-muted">page version</dt>
+        <dd className="font-mono text-xs break-all" data-testid="review-page-version-id">
+          {row.pageVersionId}
+        </dd>
+      </>
+    );
+  }
+  if (row.subjectKind === "goodnotes_region") {
+    return (
+      <>
+        <dt className="text-muted">subject</dt>
+        <dd data-testid="review-subject-kind">{row.subjectKind}</dd>
+        <dt className="text-muted">region</dt>
+        <dd className="font-mono text-xs break-all" data-testid="review-region-id">
+          {row.regionId}
+        </dd>
+        <dt className="text-muted">page version</dt>
+        <dd className="font-mono text-xs break-all" data-testid="review-page-version-id">
+          {row.pageVersionId}
+        </dd>
+        <dt className="text-muted">confidence</dt>
+        <dd data-testid="review-confidence">{String(row.confidence)}</dd>
+      </>
+    );
+  }
+  return (
+    <>
+      <dt className="text-muted">capture</dt>
+      <dd className="font-mono text-xs break-all" data-testid="review-capture-id">
+        {row.captureId}
+      </dd>
+      <dt className="text-muted">version</dt>
+      <dd className="font-mono text-xs break-all" data-testid="review-version-id">
+        {row.versionId}
+      </dd>
+    </>
+  );
 }
 
 export function BackendReviewWorkbench({ cases }: { cases: readonly BackendReviewCase[] }) {
@@ -177,8 +243,9 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
       >
         <strong>This listing carries no proposal text.</strong> The backend&rsquo;s review listing
         returns identifiers, types and states and no content, so nothing below summarises what a
-        proposal says — that would have to be invented. Open <em>Reveal</em> on a case to read the
-        evidence behind it before you decide.
+        proposal says — that would have to be invented. Open <em>Reveal</em> on a capture case to
+        read the evidence behind it before you decide. GoodNotes cases link to the notebook page by
+        identifier only.
       </p>
       <ul className="flex flex-col gap-3" data-testid="backend-review-list">
         {cases.map((row) => {
@@ -187,7 +254,11 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
             state.phase === "decided" || isTerminalDisposition(row.latestDisposition);
           return (
             <li key={row.reviewCaseId}>
-              <Card data-testid="backend-review-case" data-review-case-id={row.reviewCaseId}>
+              <Card
+                data-testid="backend-review-case"
+                data-review-case-id={row.reviewCaseId}
+                data-subject-kind={row.subjectKind}
+              >
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <CardTitle>
                     <span className="font-mono text-sm break-all">{row.proposalId}</span>
@@ -203,10 +274,7 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
                   <dl className="grid grid-cols-[9rem_1fr] gap-x-2 gap-y-1">
                     <dt className="text-muted">case</dt>
                     <dd className="font-mono text-xs break-all">{row.reviewCaseId}</dd>
-                    <dt className="text-muted">capture</dt>
-                    <dd className="font-mono text-xs break-all">{row.captureId}</dd>
-                    <dt className="text-muted">version</dt>
-                    <dd className="font-mono text-xs break-all">{row.versionId}</dd>
+                    <IdentityFields row={row} />
                     <dt className="text-muted">proposal state</dt>
                     <dd>{row.proposalState}</dd>
                     <dt className="text-muted">opened</dt>
@@ -319,14 +387,24 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
                             {option.label}
                           </Button>
                         ))}
-                    <Button
-                      variant="ghost"
-                      aria-haspopup="dialog"
-                      onClick={() => setRevealSubject(row.captureId)}
-                      data-testid="review-reveal"
-                    >
-                      Reveal
-                    </Button>
+                    {isGoodNotesCase(row) ? (
+                      <Link
+                        href={goodnotesKnowledgeHref(row)}
+                        className="inline-flex min-h-[var(--control-height)] items-center text-sm font-medium text-moss-green underline decoration-moss-green/40 underline-offset-2"
+                        data-testid="review-goodnotes-link"
+                      >
+                        Open GoodNotes page
+                      </Link>
+                    ) : (
+                      <Button
+                        variant="ghost"
+                        aria-haspopup="dialog"
+                        onClick={() => setRevealSubject(row.captureId)}
+                        data-testid="review-reveal"
+                      >
+                        Reveal
+                      </Button>
+                    )}
                   </div>
                 </CardBody>
               </Card>

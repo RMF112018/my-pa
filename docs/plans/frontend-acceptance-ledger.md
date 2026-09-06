@@ -325,7 +325,7 @@ Conservative dispositions for Search/Command UX over the WP23 BFF. This is not W
 
 ## UI-IMP-WP21 GoodNotes / GSQS browser contract notes
 
-`UI-IMP-WP21 ACTIVATED` (operator). Contract implemented on this branch. Not WP22 UI. Not production activation. Never `PASS_VERIFIED` of `PFE-AC-077..082`. `WP14_KNOWLEDGE_LIBRARY_GOODNOTES_AUDIT_MISSING` remains.
+`UI-IMP-WP21 ACTIVATED` (operator). Merged on main (`3f5c80f9` / #212). Not this package's UI. WP22 owns `/knowledge/goodnotes`. Not production activation. Never `PASS_VERIFIED` of `PFE-AC-077..082`. `WP14_KNOWLEDGE_LIBRARY_GOODNOTES_AUDIT_MISSING` remains.
 
 - Browser-admitted: `goodnotes.notebooks.list`, `goodnotes.pages.list`, `goodnotes.runs.list`, `goodnotes.read`, `goodnotes.search`, `goodnotes.correct`, `goodnotes.work`, `goodnotes.content`.
 - Not browser-admitted: `goodnotes.propose`, `goodnotes.pull`, `goodnotes.complete`, `goodnotes.status`, `gsqs.start`, `gsqs.status`.
@@ -333,6 +333,16 @@ Conservative dispositions for Search/Command UX over the WP23 BFF. This is not W
 - Correction: pending cases remain `review.decide`; canonical occurrences use `goodnotes.correct` (`canonical_revision_appended`). `goodnotes.propose` stays analyzer-only.
 - Federated Search invokes `goodnotes.search`. Hits deep-link `/knowledge/goodnotes?` with IDs only. WP22 owns that page.
 - Classifier treats GoodNotes Python/identity/normalization/migration paths as frontend-applicable.
+
+## UI-IMP-WP22 Knowledge / GoodNotes Evidence and Correction UI notes
+
+`UI-IMP-WP22 ACTIVATED` (operator). Knowledge / GoodNotes evidence and correction UI is implemented on this branch over merged WP21 contracts (`3f5c80f9` / #212). Not production activation. Not WP26+ assurance. `gsqs.start` / `gsqs.status` remain not browser-admitted. Never `PASS_VERIFIED` of `PFE-AC-077..082` or `PFE-AC-132`. Never `NOT_APPLICABLE` / `JUSTIFIED_NA`. `WP14_KNOWLEDGE_LIBRARY_GOODNOTES_AUDIT_MISSING` remains.
+
+- **PFE-AC-077..082:** `implementation_disposition = VALIDATION_REQUIRED`. `implementation_evidence` is `/knowledge/goodnotes` over WP21 BFF routes (`GET /api/goodnotes/notebooks`, `GET /api/goodnotes/pages`, `GET /api/goodnotes/runs`, `GET /api/goodnotes/item`, `GET /api/goodnotes/raster`, `POST /api/goodnotes/correct`), Search deep links (`/knowledge/goodnotes?` with IDs only from `goodnotes.search`), and Review handoff (pending cases remain `review.decide` / `/review`; canonical occurrences use `goodnotes.correct`). Not `PASS_VERIFIED`. Not `NOT_APPLICABLE` / `JUSTIFIED_NA`.
+- **PFE-AC-132:** at most `VALIDATION_REQUIRED` for the same `/knowledge/goodnotes` surface, WP21 BFF routes, Search deep links, and Review handoff. Not WP27–WP30 delivery assurance. The `PFE-AC-123..139` mapping discrepancy remains `UNRECONCILED` for the rest of that band. Never `PASS_VERIFIED`. Never `NOT_APPLICABLE` / `JUSTIFIED_NA`.
+- Raster and catalog remain WP21: `GET /api/goodnotes/raster` is `image/png` with `Cache-Control: private, no-store`; catalog `liveness` is `unknown`. No filesystem paths in the UI.
+- Not browser-admitted: `goodnotes.propose`, `goodnotes.pull`, `goodnotes.complete`, `goodnotes.status`, `gsqs.start`, `gsqs.status`.
+- This package does not claim the dedicated WP-14 Knowledge/Library/GoodNotes audit, production activation, or WP26+ assurance.
 
 ## UI-IMP-WP25 System / Health Runtime Truth notes
 
@@ -368,7 +378,7 @@ These limitations are additive to the default `FINAL_WP02_RECONCILIATION_MISSING
 
 - **All records:** final post-workstream WP-02 acceptance reconciliation is missing.
 - **PFE-AC-106..113 and related PWA evidence:** `WP08_PWA_OFFLINE_AUDIT_MISSING`; WP26 is validation-first.
-- **PFE-AC-077..082 and GoodNotes-related evidence:** `WP14_KNOWLEDGE_LIBRARY_GOODNOTES_AUDIT_MISSING` remains; WP21 contract is activated/implemented and WP22 UI is next. Do not mark 077..082 `NOT_APPLICABLE`.
+- **PFE-AC-077..082 and GoodNotes-related evidence:** `WP14_KNOWLEDGE_LIBRARY_GOODNOTES_AUDIT_MISSING` remains; WP21 is merged on main (`3f5c80f9` / #212) and WP22 UI is implemented on this branch. Do not mark 077..082 or `PFE-AC-132` `NOT_APPLICABLE` / `JUSTIFIED_NA`. Never `PASS_VERIFIED`.
 - **Cross-cutting test/protection records, including PFE-AC-130..139, PFE-AC-193..198, PFE-AC-226, PFE-AC-240, PFE-AC-250:** `WP16_TEST_QUALITY_AUDIT_INCOMPLETE` until the applicable protection ledger is completed by WP27.
 
 ### PFE-AC-123..139 discrepancy

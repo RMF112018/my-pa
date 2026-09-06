@@ -33,8 +33,8 @@ Execution is organized as `UI-IMP-WP01..WP30`. Older `WP-FE-*` sequencing is his
 - `UI-IMP-WP18` — Canvas Canonical Relationship Editing.
 - `UI-IMP-WP19` — Canvas Temporal, Inspector, Provenance, and Changes Semantics.
 - `UI-IMP-WP20` — Canvas Accessibility, Responsive Fallback, and Scale.
-- `UI-IMP-WP21` — GoodNotes / GSQS Browser Contract — **ACTIVATED**. Operator activation supersedes the missing WP-14 audit as a scope blocker; that audit remains a later evidence-reconciliation obligation (WP27/WP30).
-- `UI-IMP-WP22` — Knowledge / GoodNotes Evidence and Correction UI — **ACTIVATED_REQUIRED**. UI follows merged WP21 contracts; it is not this package.
+- `UI-IMP-WP21` — GoodNotes / GSQS Browser Contract — **ACTIVATED**. Merged on main (`3f5c80f9` / #212). Operator activation supersedes the missing WP-14 audit as a scope blocker; that audit remains a later evidence-reconciliation obligation (WP27/WP30).
+- `UI-IMP-WP22` — Knowledge / GoodNotes Evidence and Correction UI — **ACTIVATED**. Implemented on this branch over merged WP21 contracts.
 - `UI-IMP-WP23` — Federated Search Service and BFF.
 - `UI-IMP-WP24` — Global Search / Command UX.
 - `UI-IMP-WP25` — System / Health Runtime Truth.
@@ -46,7 +46,7 @@ Execution is organized as `UI-IMP-WP01..WP30`. Older `WP-FE-*` sequencing is his
 
 WP02 persistence substrate exists (`identity.webauthn_credentials`, `identity.webauthn_challenges`, `identity.recovery_code_sets`, `identity.recovery_codes`, `identity.auth_sessions`; see [frontend-auth-persistence.md](frontend-auth-persistence.md)). The production browser cookie and session registry remain the legacy HMAC + process-local map. WP02 does not activate WebAuthn.
 
-`UI-IMP-WP21 — GoodNotes / GSQS Browser Contract` is implemented on this branch. Wave 5 Canvas and WP23–WP26 remain on main. `UI-IMP-WP22` is activated and is the next executable package after this merge. `gsqs.start` / `gsqs.status` are not browser-admitted. This is not production activation, not a dedicated WP-14 audit, and never `PASS_VERIFIED` of `PFE-AC-077..082`.
+`UI-IMP-WP22 — Knowledge / GoodNotes Evidence and Correction UI` is implemented on this branch over merged WP21 contracts (`3f5c80f9` / #212). Wave 5 Canvas and WP23–WP26 remain on main. This merge does not name or activate a further executable package; WP23+ are not activated here. `gsqs.start` / `gsqs.status` remain not browser-admitted. This is not production activation, not WP26+ assurance, not a dedicated WP-14 audit, and never `PASS_VERIFIED` of `PFE-AC-077..082` or `PFE-AC-132`.
 
 WP11 Reports/Morning Intelligence BFF on this PR is contract substrate, not WP12 Morning Brief UI, production activation, or `PASS_VERIFIED` of `PFE-AC-048..057`.
 

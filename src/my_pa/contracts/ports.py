@@ -95,6 +95,14 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesSemanticReviewCase,
 )
 from my_pa.domain.policy.decision import validate_policy_version
+from my_pa.domain.project_controls.category import ConstraintCategory
+from my_pa.domain.project_controls.constraint import ProjectConstraint
+from my_pa.domain.project_controls.history import (
+    ConstraintCategoryHistoryEntry,
+    ConstraintHistoryEntry,
+)
+from my_pa.domain.project_controls.revision import ConstraintRevision
+from my_pa.domain.project_controls.settings import ConstraintProjectSettings
 from my_pa.domain.relationship.authoring import (
     MAX_EVIDENCE_REFERENCES,
     MAX_INITIAL_ALIASES,
@@ -280,6 +288,8 @@ __all__ = [
     "CaptureSummary",
     "CommitmentManagementRepository",
     "CommitmentManagementUnitOfWork",
+    "ConstraintManagementRepository",
+    "ConstraintManagementUnitOfWork",
     "ContextPreferenceRepository",
     "ContextRunRepository",
     "ContinuityAuthoringRepository",
@@ -6486,3 +6496,186 @@ class CommitmentManagementUnitOfWork(ABC):
     @abstractmethod
     def commitments(self) -> CommitmentManagementRepository:
         """The commitment-management repository, inside this transaction."""
+
+
+# PC-CM-IMP-WP02. `ConstraintManagementRepository`/`ConstraintManagementUnitOfWork`
+# mirror the commitment pair above over the Project Controls Constraint plane.
+# Two differences are deliberate and are the reason this is a separate seam
+# rather than a widening of an existing one:
+#
+# 1. **Every method names `principal_id` as its own first argument**, writes
+#    included. The commitment adapter reads `commitment.principal_id` off the
+#    aggregate it is handed; here the partition is the authenticated caller's
+#    and is never taken from the payload, so a record built with another
+#    Principal's identifier cannot re-home itself by being written.
+# 2. **There is no listing, search, history page, or overview.** Those are the
+#    read plane's (WP03), and a repository that could answer them would be a
+#    disclosure surface WP02 has no capability declared for. Likewise there is
+#    no allocation, publish, close, void, or reopen: the persistence seam
+#    stores what a service decided (WP06), and decides nothing itself.
+
+
+class ConstraintManagementRepository(ABC):
+    """The Constraint Management tables, inside one transaction.
+
+    `principal_id` is the authenticated caller's partition on every method: a
+    Constraint, Category, revision, or receipt belonging to another Principal is
+    answered as an absent one, never as a refusal that would disclose it exists
+    (CM-BE-AC-132).
+    """
+
+    @abstractmethod
+    def get_project_settings(
+        self, principal_id: str, project_id: str
+    ) -> ConstraintProjectSettings | None:
+        """This Principal's Constraint settings for one Project, or `None`."""
+
+    @abstractmethod
+    def insert_project_settings(
+        self, principal_id: str, settings: ConstraintProjectSettings
+    ) -> None:
+        """Insert the one settings row for a Project. `(principal_id, project_id)` is its key."""
+
+    @abstractmethod
+    def update_project_settings(
+        self, principal_id: str, settings: ConstraintProjectSettings
+    ) -> None:
+        """Overwrite the mutable columns of an existing settings row."""
+
+    @abstractmethod
+    def get_category(self, principal_id: str, category_id: str) -> ConstraintCategory | None:
+        """One Constraint Category in this Principal's partition, unlocked, or `None`."""
+
+    @abstractmethod
+    def get_category_for_update(
+        self, principal_id: str, category_id: str
+    ) -> ConstraintCategory | None:
+        """The same row, `SELECT ... FOR UPDATE`, or `None`.
+
+        The lock primitive a code allocator needs (CM-BE-AC-024/025). This
+        method takes the lock and returns the row; it allocates nothing.
+        """
+
+    @abstractmethod
+    def insert_category(
+        self,
+        principal_id: str,
+        category: ConstraintCategory,
+        *,
+        next_sequence: int = 1,
+        issued_count: int = 0,
+        version: int = 1,
+    ) -> None:
+        """Insert one Category, with its allocator columns exactly as given.
+
+        The allocator columns are not part of `ConstraintCategory` because
+        allocation is not a domain rule of the Category — it is what a service
+        does *to* one. They default to an unused allocator here because that is
+        what a newly created Category has.
+        """
+
+    @abstractmethod
+    def update_category(
+        self,
+        principal_id: str,
+        category: ConstraintCategory,
+        *,
+        next_sequence: int,
+        issued_count: int,
+        version: int,
+    ) -> None:
+        """Overwrite the mutable columns of an existing Category, allocator columns included.
+
+        The three allocator values are required rather than defaulted, so an
+        update that says nothing about them cannot silently reset a counter that
+        public codes have already been issued from.
+        """
+
+    @abstractmethod
+    def get(self, principal_id: str, constraint_id: str) -> ProjectConstraint | None:
+        """One Constraint in this Principal's partition, with its ordered parties, or `None`."""
+
+    @abstractmethod
+    def get_for_update(self, principal_id: str, constraint_id: str) -> ProjectConstraint | None:
+        """The same aggregate, `SELECT ... FOR UPDATE`, or `None`.
+
+        The row lock an optimistic-concurrency write takes before it compares
+        versions (CM-BE-AC-060). The comparison itself is the service's.
+        """
+
+    @abstractmethod
+    def insert_constraint(
+        self,
+        principal_id: str,
+        constraint: ProjectConstraint,
+        *,
+        current_revision_id: str | None = None,
+    ) -> None:
+        """Insert one Constraint row and its party rows, in the order given."""
+
+    @abstractmethod
+    def update_constraint(
+        self,
+        principal_id: str,
+        constraint: ProjectConstraint,
+        *,
+        current_revision_id: str | None = None,
+    ) -> None:
+        """Rewrite one Constraint's scalars and replace its party rows.
+
+        The caller supplies the already-incremented `version`; this method does
+        not increment one. `current_revision_id`, when given, re-points the row
+        at its newest snapshot; `None` leaves the existing link untouched,
+        because a Constraint that has had a revision never stops having one.
+        """
+
+    @abstractmethod
+    def insert_revision(self, principal_id: str, revision: ConstraintRevision) -> None:
+        """Append one immutable revision and its ordered party snapshot rows."""
+
+    @abstractmethod
+    def get_revision(
+        self, principal_id: str, constraint_id: str, version: int
+    ) -> ConstraintRevision | None:
+        """One Constraint's snapshot at one version, parties included, or `None`."""
+
+    @abstractmethod
+    def insert_history(self, principal_id: str, entry: ConstraintHistoryEntry) -> None:
+        """Append one Constraint mutation receipt. Never updated, never deleted."""
+
+    @abstractmethod
+    def find_history_by_idempotency_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> ConstraintHistoryEntry | None:
+        """The one prior Constraint receipt recorded under this key, or `None`."""
+
+    @abstractmethod
+    def insert_category_history(
+        self, principal_id: str, entry: ConstraintCategoryHistoryEntry
+    ) -> None:
+        """Append one Category mutation receipt. Never updated, never deleted."""
+
+
+class ConstraintManagementUnitOfWork(ABC):
+    """One transaction over the Constraint Management tables, and the repository inside it.
+
+    The identical shape `CommitmentManagementUnitOfWork` establishes.
+    """
+
+    @abstractmethod
+    def __enter__(self) -> ConstraintManagementUnitOfWork:
+        """Begin the transaction and return the unit of work it belongs to."""
+
+    @abstractmethod
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Commit when the block succeeded, roll back when it did not."""
+
+    @property
+    @abstractmethod
+    def constraints(self) -> ConstraintManagementRepository:
+        """The constraint-management repository, inside this transaction."""

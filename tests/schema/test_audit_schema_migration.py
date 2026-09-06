@@ -298,6 +298,22 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "canvas_workspaces",
         # R8 receipt is also removed when downgrading from the current head.
         "goodnotes_semantic_promotion_receipts",
+        # PC-CM-IMP-WP02's Constraint-management plane, likewise removed when
+        # downgrading from the current head.
+        "constraint_project_settings",
+        "constraint_categories",
+        "project_constraints",
+        "project_constraint_parties",
+        "project_constraint_revisions",
+        "project_constraint_revision_parties",
+        "project_constraint_history",
+        "constraint_category_history",
+        "project_constraint_relationships",
+        "project_constraint_evidence_links",
+        "constraint_sync_targets",
+        "constraint_sync_runs",
+        "constraint_sync_baselines",
+        "constraint_sync_conflicts",
     }
 )
 

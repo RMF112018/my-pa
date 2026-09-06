@@ -63,7 +63,7 @@ HEAD_REVISION: Final = "b8e4d1a6c073"
 GRAPH_REVISION: Final = "c3f8a1d07e94"
 PULL_REVISION: Final = "6a2f9d1c4b80"
 PROMOTION_REVISION: Final = "a4d8e31b2c90"
-CURRENT_HEAD_REVISION: Final = "e8f2a6c9d104"
+CURRENT_HEAD_REVISION: Final = "2774329487be"
 #: What was head until `HEAD_REVISION` stacked on it (RI-ENT-WP-10/11, widening
 #: three closed-set CHECKs to admit that phase's capability names and record
 #: families, creating and altering no table).
@@ -207,7 +207,8 @@ def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> N
     assert heads == [CURRENT_HEAD_REVISION], (
         f"expected exactly {CURRENT_HEAD_REVISION}, found {heads}"
     )
-    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "d4e8b1c7a902"
+    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "e8f2a6c9d104"
+    assert script.get_revision("e8f2a6c9d104").down_revision == "d4e8b1c7a902"
     assert script.get_revision("d4e8b1c7a902").down_revision == "a4d8e31b2c90"
     assert script.get_revision("a4d8e31b2c90").down_revision == "6a2f9d1c4b80"
     assert script.get_revision("6a2f9d1c4b80").down_revision == GRAPH_REVISION

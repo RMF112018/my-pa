@@ -189,6 +189,18 @@ def test_contract_prefixes_are_stable() -> None:
         # Neither is a Task, a Commitment, or a third Project identity.
         "cst",
         "ccat",
+        # PC-CM-IMP-WP02: the Project Controls persistence records addressed
+        # as rows of their own (parties, revisions, history receipts,
+        # relationships, evidence links, sync targets/runs/conflicts).
+        "cpty",
+        "crev",
+        "chst",
+        "cchst",
+        "crel",
+        "cevd",
+        "csyt",
+        "csyr",
+        "csyc",
     }
 
 
@@ -256,15 +268,40 @@ def test_identifier_does_not_carry_path_or_host_shape() -> None:
 
 
 def test_project_controls_prefixes_are_unique_across_every_kind() -> None:
-    # PC-CM-IMP-WP01 added `cst` and `ccat`; the whole enum must still be
-    # collision-free, not just those two against each other.
+    # PC-CM-IMP-WP01 added `cst` and `ccat`, PC-CM-IMP-WP02 added the nine
+    # persistence-record kinds; the whole enum must still be collision-free,
+    # not just those against each other.
     values = [kind.value for kind in IdKind]
     assert len(set(values)) == len(IdKind)
     assert IdKind.PROJECT_CONSTRAINT.value == "cst"
     assert IdKind.CONSTRAINT_CATEGORY.value == "ccat"
+    assert IdKind.CONSTRAINT_PARTY_ASSIGNMENT.value == "cpty"
+    assert IdKind.PROJECT_CONSTRAINT_REVISION.value == "crev"
+    assert IdKind.PROJECT_CONSTRAINT_HISTORY.value == "chst"
+    assert IdKind.CONSTRAINT_CATEGORY_HISTORY.value == "cchst"
+    assert IdKind.PROJECT_CONSTRAINT_RELATIONSHIP.value == "crel"
+    assert IdKind.PROJECT_CONSTRAINT_EVIDENCE_LINK.value == "cevd"
+    assert IdKind.CONSTRAINT_SYNC_TARGET.value == "csyt"
+    assert IdKind.CONSTRAINT_SYNC_RUN.value == "csyr"
+    assert IdKind.CONSTRAINT_SYNC_CONFLICT.value == "csyc"
 
 
-@pytest.mark.parametrize("kind", [IdKind.PROJECT_CONSTRAINT, IdKind.CONSTRAINT_CATEGORY])
+@pytest.mark.parametrize(
+    "kind",
+    [
+        IdKind.PROJECT_CONSTRAINT,
+        IdKind.CONSTRAINT_CATEGORY,
+        IdKind.CONSTRAINT_PARTY_ASSIGNMENT,
+        IdKind.PROJECT_CONSTRAINT_REVISION,
+        IdKind.PROJECT_CONSTRAINT_HISTORY,
+        IdKind.CONSTRAINT_CATEGORY_HISTORY,
+        IdKind.PROJECT_CONSTRAINT_RELATIONSHIP,
+        IdKind.PROJECT_CONSTRAINT_EVIDENCE_LINK,
+        IdKind.CONSTRAINT_SYNC_TARGET,
+        IdKind.CONSTRAINT_SYNC_RUN,
+        IdKind.CONSTRAINT_SYNC_CONFLICT,
+    ],
+)
 def test_project_controls_identifiers_round_trip_and_reject_wrong_kind(kind: IdKind) -> None:
     suffix = "0123456789abcdef"
     value = make_identifier(kind, suffix)

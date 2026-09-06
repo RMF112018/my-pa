@@ -183,6 +183,7 @@ DECLARATION = "my_pa.infrastructure.persistence.tables"
 #: A callable is what a revision uses when it freezes something — it returns
 #: copies with the derived constraints replaced. `_TABLES` is the plain case.
 _EMISSION_CALLABLES: Final = (
+    "_historical_constraint_management_tables",
     "_historical_knowledge_tables",
     "_historical_audit_events",
     "_historical_capture_tables",
@@ -275,6 +276,75 @@ ALLOWED: Final[frozenset[tuple[str, str, str, str, tuple[str, ...]]]] = frozense
 #: `FROZEN_CAPABILITIES` in `test_capture_schema_migration.py` gives: a test that
 #: read the revision's own literal would pass however that literal changed.
 FROZEN: Final[dict[str, dict[str, tuple[str, ...]]]] = {
+    "2774329487be": {
+        "a_constraint_category_state_is_known": ("active", "archived", "inactive"),
+        "a_project_constraint_lifecycle_state_is_known": (
+            "closed",
+            "draft",
+            "identified",
+            "in_progress",
+            "on_hold",
+            "pending",
+            "void",
+        ),
+        "a_project_constraint_record_quality_is_known": ("legacy_incomplete", "normal"),
+        "a_project_constraint_origin_is_known": ("legacy_workbook_import", "product"),
+        "an_active_constraint_carries_no_terminal_fields": ("closed", "void"),
+        "a_constraint_party_role_is_known": ("bic", "responsible"),
+        "a_constraint_party_kind_is_known": ("entity", "principal", "unresolved"),
+        "a_constraint_revision_lifecycle_state_is_known": (
+            "closed",
+            "draft",
+            "identified",
+            "in_progress",
+            "on_hold",
+            "pending",
+            "void",
+        ),
+        "a_constraint_revision_record_quality_is_known": ("legacy_incomplete", "normal"),
+        "a_constraint_revision_origin_is_known": ("legacy_workbook_import", "product"),
+        "a_constraint_revision_party_role_is_known": ("bic", "responsible"),
+        "a_constraint_revision_party_kind_is_known": ("entity", "principal", "unresolved"),
+        "a_constraint_history_operation_is_known": (
+            "close",
+            "create",
+            "publish",
+            "reopen",
+            "transition",
+            "update",
+            "void",
+        ),
+        "a_constraint_history_actor_is_known": ("assistant", "principal", "system"),
+        "a_constraint_history_outcome_is_known": ("applied", "no_op", "rejected"),
+        "a_constraint_category_history_operation_is_known": ("archive", "create", "update"),
+        "a_constraint_category_history_actor_is_known": ("assistant", "principal", "system"),
+        "a_constraint_category_history_outcome_is_known": ("applied", "no_op", "rejected"),
+        "a_constraint_relationship_type_is_known": ("follow_up_of",),
+        "a_constraint_evidence_kind_is_known": (
+            "capture",
+            "capture_assertion",
+            "managed_document",
+            "managed_document_version",
+        ),
+        "a_constraint_evidence_role_is_known": ("closure", "reference"),
+        "a_constraint_sync_external_kind_is_known": ("excel_workbook",),
+        "a_constraint_sync_run_state_is_known": (
+            "acknowledged",
+            "applied",
+            "failed",
+            "previewed",
+            "started",
+        ),
+        "a_constraint_sync_run_outcome_is_known": ("applied", "failed", "no_change"),
+        "a_finished_sync_run_records_when_it_finished": ("acknowledged", "applied", "failed"),
+        "a_constraint_sync_conflict_kind_is_known": (
+            "both_changed",
+            "deleted_in_canonical",
+            "deleted_in_external",
+            "new_in_external",
+        ),
+        "a_constraint_sync_conflict_state_is_known": ("open", "resolved", "superseded"),
+    },
     "7e5a1fb93d62": {
         "provider_kind_is_known": ("fixture",),
         "classification_is_known": (
@@ -753,8 +823,8 @@ def test_the_chain_is_readable_and_non_empty() -> None:
     # (RULING-M2). This is a derived fact about the tree; the deny rule, the
     # allowlist and the freeze ledger are untouched.
     # R8 adds immutable promotion receipts as revision92 on the existing head.
-    assert len(revisions) == 94
-    assert len({revision for revision, _ in revisions}) == 94
+    assert len(revisions) == 95
+    assert len({revision for revision, _ in revisions}) == 95
     assert {
         "9c6b4a18ed72",
         "1a4c9e77b2d5",

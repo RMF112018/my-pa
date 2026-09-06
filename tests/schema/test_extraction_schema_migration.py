@@ -442,6 +442,27 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     ),
     "a4d8e31b2c90": frozenset({"goodnotes_semantic_promotion_receipts"}),
     "e8f2a6c9d104": frozenset(),
+    # PC-CM-IMP-WP02's Constraint-management plane: the record, its categories
+    # and project settings, the revision and receipt ledgers, party rows on
+    # both, relationship and evidence links, and the four workbook-sync tables.
+    "2774329487be": frozenset(
+        {
+            "constraint_project_settings",
+            "constraint_categories",
+            "project_constraints",
+            "project_constraint_parties",
+            "project_constraint_revisions",
+            "project_constraint_revision_parties",
+            "project_constraint_history",
+            "constraint_category_history",
+            "project_constraint_relationships",
+            "project_constraint_evidence_links",
+            "constraint_sync_targets",
+            "constraint_sync_runs",
+            "constraint_sync_baselines",
+            "constraint_sync_conflicts",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

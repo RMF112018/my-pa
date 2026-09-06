@@ -4915,7 +4915,6 @@
         "production-build job exists"
       ],
       "ci_jobs": [
-        "frontend / e2e-critical",
         "frontend / production-build"
       ],
       "assertion_quality": "Semantic assertions exist in the listed families; not every criterion has a dedicated named test.",
@@ -4926,7 +4925,7 @@
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
       "known_gaps": "UNRECONCILED_ACCEPTANCE_MAPPING_123_139. Published wording preserved. UNRECONCILED_ACCEPTANCE_MAPPING_123_139. No accepted CWV/route budgets. No frontend / performance job. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
-      "wp28_action": "Define budgets from evidence; do not invent thresholds in WP27.",
+      "wp28_action": "Do not list frontend / e2e-critical until failure-states is independently reachable. Define budgets from evidence; do not invent thresholds in WP27.",
       "wp30_action": "Real Core Web Vitals on production origin."
     },
     {
@@ -4953,7 +4952,6 @@
         "production-build job exists"
       ],
       "ci_jobs": [
-        "frontend / e2e-critical",
         "frontend / production-build"
       ],
       "assertion_quality": "Semantic assertions exist in the listed families; not every criterion has a dedicated named test.",
@@ -4964,7 +4962,7 @@
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
       "known_gaps": "UNRECONCILED_ACCEPTANCE_MAPPING_123_139. Published wording preserved. UNRECONCILED_ACCEPTANCE_MAPPING_123_139. No accepted CWV/route budgets. No frontend / performance job. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
-      "wp28_action": "Define budgets from evidence; do not invent thresholds in WP27.",
+      "wp28_action": "Do not list frontend / e2e-critical until failure-states is independently reachable. Define budgets from evidence; do not invent thresholds in WP27.",
       "wp30_action": "Real Core Web Vitals on production origin."
     },
     {
@@ -4991,7 +4989,6 @@
         "production-build job exists"
       ],
       "ci_jobs": [
-        "frontend / e2e-critical",
         "frontend / production-build"
       ],
       "assertion_quality": "Semantic assertions exist in the listed families; not every criterion has a dedicated named test.",
@@ -5002,7 +4999,7 @@
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
       "known_gaps": "UNRECONCILED_ACCEPTANCE_MAPPING_123_139. Published wording preserved. UNRECONCILED_ACCEPTANCE_MAPPING_123_139. No accepted CWV/route budgets. No frontend / performance job. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
-      "wp28_action": "Define budgets from evidence; do not invent thresholds in WP27.",
+      "wp28_action": "Do not list frontend / e2e-critical until failure-states is independently reachable. Define budgets from evidence; do not invent thresholds in WP27.",
       "wp30_action": "Real Core Web Vitals on production origin."
     },
     {
@@ -5029,7 +5026,6 @@
         "production-build job exists"
       ],
       "ci_jobs": [
-        "frontend / e2e-critical",
         "frontend / production-build"
       ],
       "assertion_quality": "Semantic assertions exist in the listed families; not every criterion has a dedicated named test.",
@@ -5040,7 +5036,7 @@
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
       "known_gaps": "UNRECONCILED_ACCEPTANCE_MAPPING_123_139. Published wording preserved. UNRECONCILED_ACCEPTANCE_MAPPING_123_139. No accepted CWV/route budgets. No frontend / performance job. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
-      "wp28_action": "Define budgets from evidence; do not invent thresholds in WP27.",
+      "wp28_action": "Do not list frontend / e2e-critical until failure-states is independently reachable. Define budgets from evidence; do not invent thresholds in WP27.",
       "wp30_action": "Real Core Web Vitals on production origin."
     },
     {
@@ -5067,7 +5063,6 @@
         "production-build job exists"
       ],
       "ci_jobs": [
-        "frontend / e2e-critical",
         "frontend / production-build"
       ],
       "assertion_quality": "Semantic assertions exist in the listed families; not every criterion has a dedicated named test.",
@@ -5078,7 +5073,7 @@
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
       "known_gaps": "UNRECONCILED_ACCEPTANCE_MAPPING_123_139. Published wording preserved. UNRECONCILED_ACCEPTANCE_MAPPING_123_139. No accepted CWV/route budgets. No frontend / performance job. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
-      "wp28_action": "Define budgets from evidence; do not invent thresholds in WP27.",
+      "wp28_action": "Do not list frontend / e2e-critical until failure-states is independently reachable. Define budgets from evidence; do not invent thresholds in WP27.",
       "wp30_action": "Real Core Web Vitals on production origin."
     },
     {
@@ -5105,7 +5100,6 @@
         "production-build job exists"
       ],
       "ci_jobs": [
-        "frontend / e2e-critical",
         "frontend / production-build"
       ],
       "assertion_quality": "Semantic assertions exist in the listed families; not every criterion has a dedicated named test.",
@@ -5116,7 +5110,7 @@
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
       "known_gaps": "UNRECONCILED_ACCEPTANCE_MAPPING_123_139. Published wording preserved. UNRECONCILED_ACCEPTANCE_MAPPING_123_139. No accepted CWV/route budgets. No frontend / performance job. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
-      "wp28_action": "Define budgets from evidence; do not invent thresholds in WP27.",
+      "wp28_action": "Do not list frontend / e2e-critical until failure-states is independently reachable. Define budgets from evidence; do not invent thresholds in WP27.",
       "wp30_action": "Real Core Web Vitals on production origin."
     },
     {
@@ -5143,7 +5137,6 @@
         "production-build job exists"
       ],
       "ci_jobs": [
-        "frontend / e2e-critical",
         "frontend / production-build"
       ],
       "assertion_quality": "Semantic assertions exist in the listed families; not every criterion has a dedicated named test.",
@@ -5154,7 +5147,7 @@
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
       "known_gaps": "UNRECONCILED_ACCEPTANCE_MAPPING_123_139. Published wording preserved. UNRECONCILED_ACCEPTANCE_MAPPING_123_139. No accepted CWV/route budgets. No frontend / performance job. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
-      "wp28_action": "Define budgets from evidence; do not invent thresholds in WP27.",
+      "wp28_action": "Do not list frontend / e2e-critical until failure-states is independently reachable. Define budgets from evidence; do not invent thresholds in WP27.",
       "wp30_action": "Real Core Web Vitals on production origin."
     },
     {

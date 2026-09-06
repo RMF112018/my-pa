@@ -15,6 +15,7 @@ It does not prove the listed tests are strong. That remains a review claim.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 LEDGER = Path(__file__).resolve().parents[2] / "docs/plans/frontend-protection-ledger.json"
@@ -144,3 +145,45 @@ def test_no_unknown_or_duplicate_ids_in_meta() -> None:
     assert payload["schema_version"] == 1
     assert payload["universe"] == "PFE-AC-001..250"
     assert int(payload["record_count"]) == 250
+
+
+def _e2e_critical_specs() -> set[str]:
+    """Specs named on the required e2e-critical npm command, as web/ paths."""
+    workflow = REPO / ".github" / "workflows" / "frontend-quality.yml"
+    text = workflow.read_text(encoding="utf-8")
+    match = re.search(
+        r"name: frontend / e2e-critical[\s\S]*?npm run e2e -- ([^\n]+)",
+        text,
+    )
+    assert match is not None, "could not read the frontend / e2e-critical command"
+    return {
+        f"web/{token}"
+        for token in match.group(1).split()
+        if token.startswith("e2e/") and token.endswith(".spec.ts")
+    }
+
+
+def test_e2e_critical_ci_jobs_name_a_spec_that_job_runs() -> None:
+    """A criterion must not claim the required e2e job for a spec that job excludes.
+
+    PFE-AC-123..129 listed failure-states.spec.ts and frontend / e2e-critical
+    after that spec was kept off the required gate. known_gaps is not a
+    substitute for an honest ci_jobs list.
+    """
+    required = _e2e_critical_specs()
+    assert required, "e2e-critical command named no specs"
+    dishonest: list[str] = []
+    for row in _load()["records"]:
+        if "frontend / e2e-critical" not in row["ci_jobs"]:
+            continue
+        e2e_files = [
+            path
+            for path in row["test_files"]
+            if path.startswith("web/e2e/") and path.endswith(".spec.ts")
+        ]
+        if e2e_files and not any(path in required for path in e2e_files):
+            dishonest.append(row["criterion_id"])
+    assert dishonest == [], (
+        "ci_jobs lists frontend / e2e-critical but none of the listed e2e specs "
+        f"are in that job: {dishonest}"
+    )

@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import { LIVE_URL } from "../playwright.config";
-import { EMPTINESS_CLAIMS, expectState, signIn } from "./fixtures";
+import { expectState, signIn } from "./fixtures";
 
 const UNKNOWN_FOCUS = "ent_aaaaaaaa11111111";
 const ATTACKER_ORIGIN = "https://attacker.example";
@@ -114,10 +114,10 @@ test("unseeded /canvas is instructional seed-required, not empty-success and not
   );
   await expect(page.getByRole("link", { name: "Search People" })).toHaveAttribute("href", "/people");
   await expectNoNeighborhood(page);
-  const text = (await page.getByTestId("canvas-seed-required").textContent()) ?? "";
-  for (const claim of EMPTINESS_CLAIMS) {
-    expect(text, "unseeded Map must not claim a successful empty neighborhood").not.toMatch(claim);
-  }
+  // Instructional seed-required copy uses the empty SurfaceState kind to
+  // contrast a successful empty neighborhood. Do not apply EMPTINESS_CLAIMS to
+  // that contrast sentence; the dedicated canvas-empty region must stay absent.
+  await expect(page.getByTestId("canvas-empty")).toHaveCount(0);
 });
 
 test("invalid asOf fail-closes without treating it as an empty graph", async ({ page }) => {

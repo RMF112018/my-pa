@@ -8,7 +8,8 @@
   "notes": [
     "Orthogonal to acceptance dispositions. Green CI is not PASS_VERIFIED.",
     "WP26 pwa-offline and browsers remain INTRODUCED/ADVISORY with continue-on-error.",
-    "Historical missing WP-02/WP-08/WP-14 audits are not invented here."
+    "Historical missing WP-02/WP-08/WP-14 audits are not invented here.",
+    "web/e2e/failure-states.spec.ts exists but is not in frontend / e2e-critical; session-service shares MYPA_GATEWAY_URL with the application gateway so the dead Next server cannot sign in in CI. Specialized/local until WP28 splits topology."
   ],
   "records": [
     {
@@ -1148,7 +1149,7 @@
       "concurrency_idempotency": "n/a-or-indirect",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -1189,7 +1190,7 @@
       "concurrency_idempotency": "n/a-or-indirect",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -1230,7 +1231,7 @@
       "concurrency_idempotency": "n/a-or-indirect",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -1271,7 +1272,7 @@
       "concurrency_idempotency": "n/a-or-indirect",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -1312,7 +1313,7 @@
       "concurrency_idempotency": "n/a-or-indirect",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -1353,7 +1354,7 @@
       "concurrency_idempotency": "n/a-or-indirect",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -1392,7 +1393,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -1431,7 +1432,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -1470,7 +1471,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -1509,7 +1510,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -1548,7 +1549,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -1587,7 +1588,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -1626,7 +1627,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -1665,7 +1666,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -1704,7 +1705,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -1743,7 +1744,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -1782,7 +1783,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -1821,7 +1822,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -2260,7 +2261,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -2299,7 +2300,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -2338,7 +2339,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -2377,7 +2378,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -2416,7 +2417,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -2455,7 +2456,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -2494,7 +2495,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -2533,7 +2534,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -2572,7 +2573,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -2611,7 +2612,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -2650,7 +2651,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -2689,7 +2690,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -2728,7 +2729,7 @@
       "concurrency_idempotency": "applies",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -2766,7 +2767,7 @@
       "concurrency_idempotency": "n/a-or-indirect",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -2804,7 +2805,7 @@
       "concurrency_idempotency": "n/a-or-indirect",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -2842,7 +2843,7 @@
       "concurrency_idempotency": "n/a-or-indirect",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -2880,7 +2881,7 @@
       "concurrency_idempotency": "n/a-or-indirect",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -2918,7 +2919,7 @@
       "concurrency_idempotency": "n/a-or-indirect",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -2956,7 +2957,7 @@
       "concurrency_idempotency": "n/a-or-indirect",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -3249,7 +3250,7 @@
       "concurrency_idempotency": "n/a-or-indirect",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -3290,7 +3291,7 @@
       "concurrency_idempotency": "n/a-or-indirect",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -3331,7 +3332,7 @@
       "concurrency_idempotency": "n/a-or-indirect",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record.",
+      "known_gaps": "FINAL_WP02_RECONCILIATION_MISSING. Do not infer PASS_VERIFIED from this protection record. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Consider listed CI jobs for required-gate promotion only with stability evidence. Do not invent budgets.",
       "wp30_action": "Manual/runtime remainder listed in docs/plans/frontend-protection-wp30-handoff.md."
     },
@@ -4924,7 +4925,7 @@
       "concurrency_idempotency": "n/a-or-indirect",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "UNRECONCILED_ACCEPTANCE_MAPPING_123_139. Published wording preserved. UNRECONCILED_ACCEPTANCE_MAPPING_123_139. No accepted CWV/route budgets. No frontend / performance job.",
+      "known_gaps": "UNRECONCILED_ACCEPTANCE_MAPPING_123_139. Published wording preserved. UNRECONCILED_ACCEPTANCE_MAPPING_123_139. No accepted CWV/route budgets. No frontend / performance job. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Define budgets from evidence; do not invent thresholds in WP27.",
       "wp30_action": "Real Core Web Vitals on production origin."
     },
@@ -4962,7 +4963,7 @@
       "concurrency_idempotency": "n/a-or-indirect",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "UNRECONCILED_ACCEPTANCE_MAPPING_123_139. Published wording preserved. UNRECONCILED_ACCEPTANCE_MAPPING_123_139. No accepted CWV/route budgets. No frontend / performance job.",
+      "known_gaps": "UNRECONCILED_ACCEPTANCE_MAPPING_123_139. Published wording preserved. UNRECONCILED_ACCEPTANCE_MAPPING_123_139. No accepted CWV/route budgets. No frontend / performance job. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Define budgets from evidence; do not invent thresholds in WP27.",
       "wp30_action": "Real Core Web Vitals on production origin."
     },
@@ -5000,7 +5001,7 @@
       "concurrency_idempotency": "n/a-or-indirect",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "UNRECONCILED_ACCEPTANCE_MAPPING_123_139. Published wording preserved. UNRECONCILED_ACCEPTANCE_MAPPING_123_139. No accepted CWV/route budgets. No frontend / performance job.",
+      "known_gaps": "UNRECONCILED_ACCEPTANCE_MAPPING_123_139. Published wording preserved. UNRECONCILED_ACCEPTANCE_MAPPING_123_139. No accepted CWV/route budgets. No frontend / performance job. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Define budgets from evidence; do not invent thresholds in WP27.",
       "wp30_action": "Real Core Web Vitals on production origin."
     },
@@ -5038,7 +5039,7 @@
       "concurrency_idempotency": "n/a-or-indirect",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "UNRECONCILED_ACCEPTANCE_MAPPING_123_139. Published wording preserved. UNRECONCILED_ACCEPTANCE_MAPPING_123_139. No accepted CWV/route budgets. No frontend / performance job.",
+      "known_gaps": "UNRECONCILED_ACCEPTANCE_MAPPING_123_139. Published wording preserved. UNRECONCILED_ACCEPTANCE_MAPPING_123_139. No accepted CWV/route budgets. No frontend / performance job. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Define budgets from evidence; do not invent thresholds in WP27.",
       "wp30_action": "Real Core Web Vitals on production origin."
     },
@@ -5076,7 +5077,7 @@
       "concurrency_idempotency": "n/a-or-indirect",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "UNRECONCILED_ACCEPTANCE_MAPPING_123_139. Published wording preserved. UNRECONCILED_ACCEPTANCE_MAPPING_123_139. No accepted CWV/route budgets. No frontend / performance job.",
+      "known_gaps": "UNRECONCILED_ACCEPTANCE_MAPPING_123_139. Published wording preserved. UNRECONCILED_ACCEPTANCE_MAPPING_123_139. No accepted CWV/route budgets. No frontend / performance job. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Define budgets from evidence; do not invent thresholds in WP27.",
       "wp30_action": "Real Core Web Vitals on production origin."
     },
@@ -5114,7 +5115,7 @@
       "concurrency_idempotency": "n/a-or-indirect",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "UNRECONCILED_ACCEPTANCE_MAPPING_123_139. Published wording preserved. UNRECONCILED_ACCEPTANCE_MAPPING_123_139. No accepted CWV/route budgets. No frontend / performance job.",
+      "known_gaps": "UNRECONCILED_ACCEPTANCE_MAPPING_123_139. Published wording preserved. UNRECONCILED_ACCEPTANCE_MAPPING_123_139. No accepted CWV/route budgets. No frontend / performance job. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Define budgets from evidence; do not invent thresholds in WP27.",
       "wp30_action": "Real Core Web Vitals on production origin."
     },
@@ -5152,7 +5153,7 @@
       "concurrency_idempotency": "n/a-or-indirect",
       "manual_evidence_remaining": "Screen-reader, real-device, and production-origin evidence remain WP30 where the criterion is user-visible.",
       "runtime_evidence_remaining": "Production activation, Cloudflare/NAS origin, and real WebAuthn/PWA install remain WP29/WP30.",
-      "known_gaps": "UNRECONCILED_ACCEPTANCE_MAPPING_123_139. Published wording preserved. UNRECONCILED_ACCEPTANCE_MAPPING_123_139. No accepted CWV/route budgets. No frontend / performance job.",
+      "known_gaps": "UNRECONCILED_ACCEPTANCE_MAPPING_123_139. Published wording preserved. UNRECONCILED_ACCEPTANCE_MAPPING_123_139. No accepted CWV/route budgets. No frontend / performance job. DEAD_GATEWAY_SUITE_NOT_IN_E2E_CRITICAL: web/e2e/failure-states.spec.ts exists but is not a required e2e-critical member; session-service shares MYPA_GATEWAY_URL so the dead Next server cannot sign in in CI.",
       "wp28_action": "Define budgets from evidence; do not invent thresholds in WP27.",
       "wp30_action": "Real Core Web Vitals on production origin."
     },

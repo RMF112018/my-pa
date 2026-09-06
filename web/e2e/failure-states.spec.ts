@@ -13,6 +13,11 @@
  * unreachable backend must not render as an empty record.** A person who reads
  * "you have not captured anything yet" when the truth is "we could not ask"
  * has been told a fact about their own record that nothing established.
+ *
+ * Not a required e2e-critical member: session-service and application gateway
+ * share MYPA_GATEWAY_URL, so this second Next server cannot complete synthetic
+ * sign-in in CI (waitForURL /today times out). Run locally / as specialized
+ * until WP28 splits that topology.
  */
 import { test, expect } from "@playwright/test";
 import { DEAD_GATEWAY_URL } from "../playwright.config";

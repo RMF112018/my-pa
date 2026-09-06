@@ -6,7 +6,9 @@ WP27 does **not** implement release-gate architecture. This file is the promotio
 
 `frontend / classify`, `static`, `unit`, `production-build`, `contract`, `security`, `e2e-critical`, `accessibility`, `responsive`, and the aggregate `frontend / required`.
 
-WP27 added `failure-states.spec.ts`, `canvas.spec.ts`, and `system.spec.ts` to **e2e-critical**. That is missing-protection wiring, not a new job.
+WP27 added `canvas.spec.ts` and `system.spec.ts` to **e2e-critical**. That is missing-protection wiring, not a new job.
+
+`web/e2e/failure-states.spec.ts` (dead-gateway second Next server) is **not** in `e2e-critical`. Sign-in shares `MYPA_GATEWAY_URL` with session-service, so the dead server cannot complete synthetic sign-in in CI (90s `waitForURL /today`). WP28 may promote that suite only after session-service is independently reachable.
 
 ## Advisory — keep ADVISORY until WP28 decides
 
@@ -45,6 +47,7 @@ No accepted numeric budgets. WP27 protects typed failures and production-build e
   - `web/e2e/goodnotes.spec.ts` — mobile overflow measured on mobile/390 elsewhere.
   - `web/e2e/journeys.spec.ts` — tablet inspector orientation.
   - `web/e2e/system.spec.ts` — desktop-only (still runs in `e2e-critical` desktop).
+  - `web/e2e/review-decisions.spec.ts` contextual Review handoff — skips when the empty e2e catalog has no pending/Evidence control (explicit reason; not a silent pass).
   - `web/e2e/search-contract.spec.ts` — two `page.route` intercept tests skip Playwright WebKit (not Safari); Chromium and Firefox still run them.
 - Accessibility touch targets now run on the desktop CI project via an explicit 412×839 touch viewport.
 - `continue-on-error` remains only on `pwa-offline` and `browsers`.

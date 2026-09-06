@@ -11,6 +11,7 @@ import type { CanvasWorkspacePutResult } from "./capabilities/canvas.workspace.p
 import type { CapabilitiesGetResult } from "./capabilities/capabilities.get";
 import type { CaptureCreateResult } from "./capabilities/capture.create";
 import type { CaptureListResult } from "./capabilities/capture.list";
+import type { CaptureReadResult } from "./capabilities/capture.read";
 import type { CaptureSearchResult } from "./capabilities/capture.search";
 import type { CommitmentsCloseResult } from "./capabilities/commitments.close";
 import type { CommitmentsCreateResult } from "./capabilities/commitments.create";
@@ -77,6 +78,7 @@ export type CapabilityResults = {
   readonly "capabilities.get": CapabilitiesGetResult;
   readonly "capture.create": CaptureCreateResult;
   readonly "capture.list": CaptureListResult;
+  readonly "capture.read": CaptureReadResult;
   readonly "capture.search": CaptureSearchResult;
   readonly "commitments.close": CommitmentsCloseResult;
   readonly "commitments.create": CommitmentsCreateResult;

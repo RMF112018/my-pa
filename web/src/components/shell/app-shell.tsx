@@ -4,7 +4,7 @@
  * AppShell — persistent chrome around every signed-in destination.
  * Landmarks: banner (header), navigation, main. Capture is always reachable.
  */
-import { useState, type ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 import { Command, Moon, PanelRightOpen, Sun } from "lucide-react";
 import type { PrincipalSession } from "@/contracts/identity";
 import { ContextHeader } from "@/components/shell/context-header";
@@ -18,6 +18,14 @@ import { UtilityRegion } from "@/components/shell/utility-region";
 import { InspectorSelectionProvider } from "@/components/shell/inspector-selection";
 import { useShellPreferences } from "@/components/shell/shell-preferences";
 
+const OpenCaptureContext = createContext<() => void>(() => {
+  throw new Error("useOpenCapture is only valid inside AppShell");
+});
+
+export function useOpenCapture(): () => void {
+  return useContext(OpenCaptureContext);
+}
+
 export function AppShell({
   principal,
   children,
@@ -30,7 +38,10 @@ export function AppShell({
   const [utilityOpen, setUtilityOpen] = useState(false);
   const { preferences, update } = useShellPreferences();
 
+  const openCapture = () => setCaptureOpen(true);
+
   return (
+    <OpenCaptureContext.Provider value={openCapture}>
     <InspectorSelectionProvider onSelectionPublished={() => setUtilityOpen(true)}>
       <div className="flex min-h-screen flex-col">
       <ContextHeader principal={principal} />
@@ -53,9 +64,10 @@ export function AppShell({
         onClose={() => setCaptureOpen(false)}
         principalId={principal.principalId}
       />
-      <CommandPalette open={commandOpen} onOpenChange={setCommandOpen} onCapture={() => setCaptureOpen(true)} />
+      <CommandPalette open={commandOpen} onOpenChange={setCommandOpen} onCapture={openCapture} />
       <OfflineQueueStatus principalId={principal.principalId} />
       </div>
     </InspectorSelectionProvider>
+    </OpenCaptureContext.Provider>
   );
 }

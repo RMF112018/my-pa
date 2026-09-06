@@ -310,8 +310,18 @@ Conservative dispositions for Canvas accessibility, responsive fallback, scale, 
 This is Search BFF substrate, not Command UX, not `PASS_VERIFIED` of `PFE-AC-083..085`, and not a claim against the full 250-criterion ledger.
 
 - **PFE-AC-083:** at most `VALIDATION_REQUIRED` for typed federated hits and per-domain coverage. `GET /api/search?q=` fans out to admitted `*.search` capabilities; report hits remain `ReportSearchMatch`; entity hits remain `EntitySummary` without `entities.resolve` / `entities.list`. Coverage never reports a silently omitted domain as searched with `hitCount` 0.
-- **PFE-AC-084 / 085:** remain `IMPLEMENTATION_REQUIRED` (WP24 Command / Cmd+K).
+- **PFE-AC-084 / 085:** Command UX is WP24 (this package). Remain at most `VALIDATION_REQUIRED` after UX; never `PASS_VERIFIED` from one Chromium run.
 - **UI-IMP-WP22 remains `PROVISIONAL_NOT_ACTIVATED`** (same as WP21; no `goodnotes.*` in `gateway.json`; federated coverage omits GoodNotes as not activated). Correct non-activation does not block Wave 4.
+
+## UI-IMP-WP24 Global Search / Command UX notes
+
+Conservative dispositions for Search/Command UX over the WP23 BFF. This is not WP26, not production activation, and never `PASS_VERIFIED` of `PFE-AC-083..085`.
+
+- **PFE-AC-007 / 083 / 084 / 085:** `implementation_disposition = VALIDATION_REQUIRED`. Cmd/Ctrl+K and `/search` share one panel over `GET /api/search`. Empty query lists destinations and Quick Capture. Typed federation preserves BFF domain order and per-domain upstream order; no client relevance score. Knowledge `rank` is display-only inside the Knowledge group.
+- **Mobile IA:** primary destinations are Today / Work / Review / Search / More. People, Intelligence, Knowledge, Map, and System are under More. People does not replace Review.
+- **Capture deep link:** `capture.read` is browser-admitted (`CAPTURE_REVIEW`, Principal-scoped). Search hits stay metadata-only. Item href is `/knowledge?captureId=&versionId=` (IDs only; no body in the URL). Canonical text is shown only on the `capture.read` item projection.
+- **Knowledge deep link:** `/knowledge?knowledgeId=&enrollmentId=` threads the federated request enrollment; enrollment is never guessed. Missing enrollment fails closed without a gateway call.
+- **PFE-AC-089 / 090** remain `SUPERSEDED`. WP21/WP22 remain `PROVISIONAL_NOT_ACTIVATED`. WP26 is not this package.
 
 ## UI-IMP-WP21 disposition (docs only; recorded with WP25)
 

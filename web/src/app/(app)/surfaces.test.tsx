@@ -298,6 +298,144 @@ describe("Library reaches the record instead of asserting about it", () => {
   });
 });
 
+const CAPTURE_VERSION = {
+  capture_id: CAPTURE.capture_id,
+  version_id: CAPTURE.latest_version_id,
+  version_number: 1,
+  supersedes_version_id: null,
+  is_current: true,
+  owner_principal_id: CAPTURE.owner_principal_id,
+  classification: "synthetic_test",
+  processing_policy: "local_only",
+  content_sha256: "a".repeat(64),
+  character_count: 22,
+  text: "synthetic capture body",
+  is_truncated: false,
+  client_created_at: null,
+  server_received_at: "2026-01-01T00:00:00Z",
+  occurred_at: null,
+  accepted_at: "2026-01-01T00:00:00Z",
+  recorded_at: "2026-01-01T00:00:00Z",
+};
+
+const KNOWLEDGE_RECORD = {
+  knowledge_id: "kn_aaaa0001aaaa0001aaaa0001",
+  label: "text/plain",
+  media_type: "text/plain",
+  character_count: 12,
+  metadata_only: false,
+  is_truncated: false,
+  provenance: {
+    source_id: "src_aaaa0001aaaa0001aaaa0001",
+    source_object_id: "sobj_aaaa0001aaaa0001aaaa0001",
+    version_id: "ver_aaaa0001aaaa0001aaaa0001",
+    extractor: "plain_text",
+    extractor_version: "1",
+    trust_level: "source_original",
+    observed_at: "2026-01-01T00:00:00Z",
+    processed_at: "2026-01-01T00:00:00Z",
+  },
+  text: "hello world",
+};
+
+const ENROLLMENT_ID = "enr_aaaa0001aaaa0001aaaa0001";
+
+function recordedAnswer(result: unknown, disclosure: unknown = whole()) {
+  const fetchMock = vi.fn(async (url: unknown, init?: RequestInit) => {
+    if (url == null) throw new Error("missing gateway url");
+    void init;
+    return new Response(JSON.stringify({ result, disclosure }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+describe("Library identity projections invoke the matching capability", () => {
+  it("invokes capture.read for captureId and may show canonical text", async () => {
+    const fetchMock = recordedAnswer(CAPTURE_VERSION);
+    await renderServerPage(() =>
+      LibraryPage({
+        searchParams: Promise.resolve({
+          captureId: CAPTURE.capture_id,
+          versionId: CAPTURE.latest_version_id,
+        }),
+      }),
+    );
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/v1/capture.read");
+    const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.body ?? "{}"));
+    expect(body.payload).toEqual({
+      capture_id: CAPTURE.capture_id,
+      version_id: CAPTURE.latest_version_id,
+    });
+    expect(screen.getByTestId("library-capture-item")).toBeTruthy();
+    expect(screen.getByTestId("library-capture-text").textContent).toBe("synthetic capture body");
+    expect(screen.queryByTestId("library-listing")).toBeNull();
+  });
+
+  it("captureId beats q and does not search", async () => {
+    const fetchMock = recordedAnswer(CAPTURE_VERSION);
+    await renderServerPage(() =>
+      LibraryPage({
+        searchParams: Promise.resolve({ captureId: CAPTURE.capture_id, q: "slab" }),
+      }),
+    );
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/v1/capture.read");
+    expect(String(fetchMock.mock.calls[0]?.[0])).not.toContain("/v1/capture.search");
+    const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.body ?? "{}"));
+    expect(body.payload).toEqual({ capture_id: CAPTURE.capture_id });
+  });
+
+  it("invokes knowledge.read when knowledgeId and enrollmentId are both present", async () => {
+    const fetchMock = recordedAnswer(KNOWLEDGE_RECORD);
+    await renderServerPage(() =>
+      LibraryPage({
+        searchParams: Promise.resolve({
+          knowledgeId: KNOWLEDGE_RECORD.knowledge_id,
+          enrollmentId: ENROLLMENT_ID,
+        }),
+      }),
+    );
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/v1/knowledge.read");
+    const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.body ?? "{}"));
+    expect(body.payload).toEqual({
+      knowledge_id: KNOWLEDGE_RECORD.knowledge_id,
+      enrollment_id: ENROLLMENT_ID,
+    });
+    expect(screen.getByTestId("library-knowledge-item")).toBeTruthy();
+    expect(screen.getByTestId("library-knowledge-text").textContent).toBe("hello world");
+  });
+
+  it("fails closed when knowledgeId is present without enrollmentId", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error("gateway must not be called without enrollmentId");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    await renderServerPage(() =>
+      LibraryPage({
+        searchParams: Promise.resolve({ knowledgeId: KNOWLEDGE_RECORD.knowledge_id }),
+      }),
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+    const state = screen.getByTestId("library-knowledge-missing-enrollment");
+    expect(state).toHaveAttribute("data-state", "unavailable");
+    expect(state.textContent).toMatch(/enrollmentId/i);
+    expect(screen.queryByTestId("library-knowledge-item")).toBeNull();
+    expect(screen.queryByTestId("library-listing")).toBeNull();
+  });
+
+  it("still does not render capture body on listing cards", async () => {
+    answerWith({ captures: [{ ...CAPTURE, text: "SECRET BODY TEXT" }] }, whole());
+    await renderServerPage(() => LibraryPage({ searchParams: NO_PARAMS }));
+    expect(screen.getByTestId("library-listing")).toBeTruthy();
+    expect(screen.queryByText("SECRET BODY TEXT")).toBeNull();
+    expect(screen.queryByTestId("library-capture-text")).toBeNull();
+    expect(screen.queryByTestId("library-capture-item")).toBeNull();
+  });
+});
+
 describe("Review distinguishes an empty queue from an unread one", () => {
   it("renders the backend's cases and states that they carry no text", async () => {
     answerWith({ review_cases: [REVIEW_CASE] }, whole());

@@ -27,7 +27,7 @@ from my_pa.contracts.v1.canvas_workspace import (
     CanvasWorkspaceView,
 )
 from my_pa.contracts.v1.capabilities import EffectiveLimits, ReadinessReport, ReadinessState
-from my_pa.contracts.v1.capture import CaptureListEntry, CaptureReceiptView
+from my_pa.contracts.v1.capture import CaptureListEntry, CaptureReceiptView, CaptureVersionView
 from my_pa.contracts.v1.commitments import (
     CommitmentHistoryEntryView,
     CommitmentListEntry,
@@ -39,6 +39,7 @@ from my_pa.contracts.v1.tasks import TaskHistoryEntryView, TaskListEntry, TaskVi
 from my_pa.domain.capture.proposal import ProposalState, ProposalType, RiskClass
 from my_pa.domain.capture.reveal import EvidenceGap, EvidenceState
 from my_pa.domain.capture.review import ReviewCase, ReviewSubjectKind
+from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.provenance import Provenance, TrustLevel
 from my_pa.domain.common.time import format_rfc3339
 from my_pa.domain.extraction.text import EXTRACTOR, EXTRACTOR_VERSION
@@ -80,6 +81,30 @@ def _capture_create() -> dict[str, Any]:
         issued_at=AT,
         created=True,
     ).model_dump(mode="json")
+
+
+def _capture_read() -> dict[str, Any]:
+    """`CaptureVersionView.to_canonical_dict()` as `_capture_read` publishes it."""
+    text = "a synthetic capture"
+    return CaptureVersionView(
+        capture_id="cap_aaaaaaaa11111111",
+        version_id="capver_aaaaaaaa11111111",
+        version_number=1,
+        supersedes_version_id=None,
+        is_current=True,
+        owner_principal_id="prn_aaaaaaaa11111111",
+        classification=Classification.SYNTHETIC_TEST,
+        processing_policy="local_only",
+        content_sha256=DIGEST,
+        character_count=len(text),
+        text=text,
+        is_truncated=False,
+        client_created_at=None,
+        server_received_at=AT,
+        occurred_at=None,
+        accepted_at=AT,
+        recorded_at=AT,
+    ).to_canonical_dict()
 
 
 def _task_view(
@@ -1056,6 +1081,7 @@ def python_success_payloads() -> dict[str, dict[str, Any]]:
     return {
         "capture.create": _capture_create(),
         "capture.list": _capture_list(),
+        "capture.read": _capture_read(),
         "capture.search": _capture_search(),
         "tasks.read": {"task": _task_view()},
         "tasks.list": {"tasks": [_task_list_entry()]},

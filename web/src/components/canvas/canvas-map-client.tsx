@@ -5,10 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { GraphMap } from "@/components/canvas/graph-map";
+import { useInspectorSelection } from "@/components/shell/inspector-selection";
 import { apiGet, apiPost } from "@/lib/api/client";
 import { RELATIONSHIP_TYPES } from "@/lib/api/decode/capabilities/_entity-read-helpers";
 import { decodeEntitiesGet } from "@/lib/api/decode/capabilities/entities.get";
 import { decodeEntitiesGraph, type GraphEdge, type GraphNode } from "@/lib/api/decode/capabilities/entities.graph";
+import { decodeEntitiesRelationships } from "@/lib/api/decode/capabilities/entities.relationships";
 import type { CanvasPositions } from "@/lib/api/decode/capabilities/canvas.workspace.get";
 import type { CanvasMapQuery } from "@/lib/routes/canvas";
 import {
@@ -173,10 +175,39 @@ export function CanvasMapClient({
   const [relationshipSaveError, setRelationshipSaveError] = useState<string | null>(null);
   const [relationshipBusy, setRelationshipBusy] = useState(false);
   const [, setSaving] = useState(false);
+  const { selection, setSelection } = useInspectorSelection();
 
   useEffect(() => {
     relationshipEditRef.current = relationshipEdit;
   }, [relationshipEdit]);
+
+  useEffect(() => {
+    if (!selectedEdgeId) return;
+    const edge = mapEdges.find(
+      (item) => item.edge_kind === "relationship" && item.edge_id === selectedEdgeId,
+    );
+    if (!edge) return;
+    let cancelled = false;
+    void (async () => {
+      const response = await apiGet(
+        SESSION,
+        `/api/people/${encodeURIComponent(edge.from_entity_id)}/relationships`,
+      );
+      if (cancelled) return;
+      if (!response.ok || response.data === null) return;
+      const decoded = decodeEntitiesRelationships(response.data);
+      if (!decoded.ok) return;
+      const row = decoded.value.relationships.find(
+        (item) => item.relationship_id === edge.edge_id,
+      );
+      if (!row) return;
+      setEffectiveFrom((current) => (current === "" ? (row.effective_from ?? "") : current));
+      setEffectiveTo((current) => (current === "" ? (row.effective_to ?? "") : current));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedEdgeId, mapEdges]);
 
   useEffect(() => {
     if (relationshipEditRef.current) return;
@@ -313,8 +344,18 @@ export function CanvasMapClient({
     void persist(nextDraft);
   }
 
+  function clearReviseForm() {
+    setEffectiveFrom("");
+    setEffectiveTo("");
+    setClearFrom(false);
+    setClearTo(false);
+    setEvidenceRefs("");
+    setClearEvidence(false);
+  }
+
   function turnOnArrange() {
     setRelationshipEdit(false);
+    clearReviseForm();
     setSelectedEdgeId(null);
     setArrange(true);
   }
@@ -323,6 +364,23 @@ export function CanvasMapClient({
     setArrange(false);
     drag.current = null;
     setRelationshipEdit(true);
+  }
+
+  function publishInspectNode(entityId: string) {
+    const node = mapNodes.find((item) => item.entity_id === entityId);
+    if (!node) return;
+    setSelection({ kind: "node", node });
+  }
+
+  function publishInspectEdge(edgeId: string) {
+    const edge = mapEdges.find((item) => item.edge_id === edgeId);
+    if (!edge) return;
+    const from = mapNodes.find((item) => item.entity_id === edge.from_entity_id);
+    const to =
+      edge.to_entity_id === null
+        ? undefined
+        : mapNodes.find((item) => item.entity_id === edge.to_entity_id);
+    setSelection({ kind: "edge", edge, ...(from ? { from } : {}), ...(to ? { to } : {}) });
   }
 
   function onNodeSelect(entityId: string) {
@@ -341,9 +399,11 @@ export function CanvasMapClient({
   function onEdgeSelect(edgeId: string) {
     const edge = mapEdges.find((item) => item.edge_id === edgeId);
     if (!edge || edge.edge_kind !== "relationship") return;
+    clearReviseForm();
     setSelectedEdgeId(edge.edge_id);
     setRelationshipConflict(null);
     setRelationshipSaveError(null);
+    publishInspectEdge(edge.edge_id);
   }
 
   async function reloadGraph(): Promise<boolean> {
@@ -377,6 +437,7 @@ export function CanvasMapClient({
     setRelationshipSaveError(null);
     const reloaded = await reloadGraph();
     if (reloaded) {
+      clearReviseForm();
       setSelectedEdgeId(null);
     }
   }
@@ -431,7 +492,7 @@ export function CanvasMapClient({
     if (!clearEvidence && refs.length === 0) {
       setRelationshipConflict(null);
       setRelationshipSaveError(
-        "This Map cannot display current citations; a window-only revise would clear them. State a replacement set, or use inspector later (WP19).",
+        "This Map cannot display current citations. The inspector cannot read evidence_refs from the frozen graph or RelationshipView; a window-only revise would clear them. State a replacement set, or explicitly clear citations.",
       );
       return;
     }
@@ -521,6 +582,7 @@ export function CanvasMapClient({
           onClick={() => {
             if (relationshipEdit) {
               setRelationshipEdit(false);
+              clearReviseForm();
               setSelectedEdgeId(null);
               return;
             }
@@ -604,6 +666,7 @@ export function CanvasMapClient({
               onChange={(event) => {
                 const next = event.target.value;
                 if (!next) {
+                  clearReviseForm();
                   setSelectedEdgeId(null);
                   return;
                 }
@@ -772,12 +835,16 @@ export function CanvasMapClient({
         relationshipEdit={relationshipEdit}
         selectedEntityId={selectedEntityId}
         selectedEdgeId={selectedEdgeId}
+        inspectEntityId={selection?.kind === "node" ? selection.node.entity_id : null}
+        inspectEdgeId={selection?.kind === "edge" ? selection.edge.edge_id : null}
         svgRef={svgRef}
         onNodePointerDown={onNodePointerDown}
         onSvgPointerMove={onSvgPointerMove}
         onSvgPointerUp={onSvgPointerUp}
         onNodeSelect={onNodeSelect}
         onEdgeSelect={onEdgeSelect}
+        onInspectNode={publishInspectNode}
+        onInspectEdge={publishInspectEdge}
       />
     </div>
   );

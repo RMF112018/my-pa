@@ -47,7 +47,7 @@ The browser must not supply a Principal or Python gateway bearer.
 
 ## Contract synchronization
 
-`web/src/contracts/gateway.json` is a generated/checked frontend contract boundary. Follow `web/src/contracts/README.md` and its parity tests when backend contract shapes change. Do not hand-maintain a divergent browser model to make a UI compile.
+[`web/src/contracts/gateway.json`](../../web/src/contracts/gateway.json) is the generated/checked frontend contract boundary. Follow the [frontend contract boundary README](../../web/src/contracts/README.md) and its parity tests when backend contract shapes change. Do not hand-maintain a divergent browser model to make a UI compile.
 
 ## Optimistic concurrency and idempotency
 

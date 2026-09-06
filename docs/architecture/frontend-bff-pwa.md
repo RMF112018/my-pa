@@ -39,7 +39,7 @@ A BFF route should:
 5. preserve typed conflicts/refusals rather than converting them into empty success;
 6. never accept caller-supplied Principal identity.
 
-`web/README.md` is the detailed current route-to-capability inventory.
+The [web implementation README](../../web/README.md) is the detailed current route-to-capability inventory.
 
 ## Contract boundary
 

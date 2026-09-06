@@ -194,6 +194,10 @@ from my_pa.domain.extraction.corpus import CorpusCoverage
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
 from my_pa.domain.goodnotes.models import (
+    GoodNotesIdentityStatus,
+    GoodNotesNoteClass,
+    GoodNotesNoteOccurrence,
+    GoodNotesNoteRevision,
     GoodNotesPageRaster,
     GoodNotesPageWork,
     GoodNotesReviewCase,
@@ -7233,6 +7237,112 @@ class _WriteRequests(WriteRequestRepository):
         self._world.relationship_write_requests[key] = (request_digest, result)
 
 
+class _GoodNotesDurableNotes:
+    """Principal-partitioned GoodNotes browse/correct store for FAST worlds."""
+
+    def __init__(self) -> None:
+        self._occurrences: dict[tuple[str, str], GoodNotesNoteOccurrence] = {}
+        self._revisions: dict[tuple[str, str], GoodNotesNoteRevision] = {}
+        self._by_revision: dict[tuple[str, str], GoodNotesNoteRevision] = {}
+
+    def notebook(self, principal_id: str, notebook_id: str) -> object | None:
+        return None
+
+    def run(self, principal_id: str, run_id: str) -> object | None:
+        return None
+
+    def occurrence(self, principal_id: str, occurrence_id: str) -> GoodNotesNoteOccurrence | None:
+        return self._ensure(principal_id, occurrence_id)[0]
+
+    def latest_revision_for_occurrence(
+        self, principal_id: str, occurrence_id: str
+    ) -> GoodNotesNoteRevision | None:
+        return self._ensure(principal_id, occurrence_id)[1]
+
+    def revision(self, principal_id: str, revision_id: str) -> GoodNotesNoteRevision | None:
+        return self._by_revision.get((principal_id, revision_id))
+
+    def store_revision(self, revision: GoodNotesNoteRevision) -> GoodNotesNoteRevision:
+        key = (revision.principal_id, revision.occurrence_id)
+        self._revisions[key] = revision
+        self._by_revision[(revision.principal_id, revision.revision_id)] = revision
+        return revision
+
+    def store_note_link(self, link: object) -> object:
+        return link
+
+    def browse_notebooks(
+        self, principal_id: str, *, limit: int, after: object
+    ) -> tuple[object, ...]:
+        return ()
+
+    def browse_pages(
+        self, principal_id: str, notebook_id: str, *, limit: int, after: object
+    ) -> tuple[object, ...]:
+        return ()
+
+    def browse_runs(
+        self,
+        principal_id: str,
+        *,
+        notebook_id: str | None,
+        page_version_id: str | None,
+        limit: int,
+        after: object,
+    ) -> tuple[object, ...]:
+        return ()
+
+    def browse_search(
+        self, principal_id: str, query: str, *, limit: int, after: object
+    ) -> tuple[object, ...]:
+        return ()
+
+    def browse_interpretation(
+        self, principal_id: str, run_id: str, page_version_id: str
+    ) -> list[dict[str, object]]:
+        return []
+
+    def _ensure(
+        self, principal_id: str, occurrence_id: str
+    ) -> tuple[GoodNotesNoteOccurrence, GoodNotesNoteRevision]:
+        key = (principal_id, occurrence_id)
+        held = self._occurrences.get(key)
+        if held is not None:
+            revision = self._revisions[key]
+            return held, revision
+        when = datetime(2026, 8, 2, 12, tzinfo=UTC)
+        occurrence = GoodNotesNoteOccurrence(
+            occurrence_id=occurrence_id,
+            principal_id=principal_id,
+            note_id=issue_stable_id("gnnt", principal_id, occurrence_id),
+            logical_page_id=issue_stable_id("gnlp", principal_id, occurrence_id),
+            x_min=0.1,
+            y_min=0.2,
+            width=0.2,
+            height=0.1,
+            identity_status=GoodNotesIdentityStatus.ACTIVE,
+            created_at=when,
+            last_seen_at=when,
+            crop_sha256="a" * 64,
+        )
+        revision = GoodNotesNoteRevision(
+            revision_id=issue_stable_id("gnrev", principal_id, occurrence_id),
+            principal_id=principal_id,
+            note_id=occurrence.note_id,
+            schema_version="note-unit.v1",
+            analyzer_name="synthetic",
+            analyzer_version="1",
+            transcription="synthetic note",
+            created_at=when,
+            occurrence_id=occurrence_id,
+            primary_class=GoodNotesNoteClass.MEETING,
+        )
+        self._occurrences[key] = occurrence
+        self._revisions[key] = revision
+        self._by_revision[(principal_id, revision.revision_id)] = revision
+        return occurrence, revision
+
+
 class FakeUnitOfWork(UnitOfWork):
     """One transaction over a `World`, counting how it ended."""
 
@@ -7333,6 +7443,11 @@ class FakeUnitOfWork(UnitOfWork):
     def goodnotes_semantics(self) -> GoodNotesSemanticRepository:
         """Immutable page-version work and semantic proposal receipts over this `World`."""
         return _GoodNotesSemantics(self._world)
+
+    @property
+    def goodnotes_durable_notes(self) -> object:
+        """Empty browse/correct surface for FAST worlds with no Postgres partition."""
+        return _GoodNotesDurableNotes()
 
     @property
     def canvas_workspaces(self) -> CanvasWorkspaceRepository:

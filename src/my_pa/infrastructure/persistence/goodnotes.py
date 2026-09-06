@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
@@ -19,6 +20,7 @@ from sqlalchemy import (
     or_,
     select,
     text,
+    true,
     update,
 )
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -92,6 +94,7 @@ from my_pa.infrastructure.persistence.tables import (
     goodnotes_review_decisions,
     goodnotes_run_note_changes,
     goodnotes_semantic_proposals,
+    goodnotes_semantic_review_decisions,
     goodnotes_source_snapshots,
     source_object_versions,
     source_objects,
@@ -112,6 +115,48 @@ def _stable_canonical_id(kind: IdKind, principal_id: str, region_id: str) -> str
         f"goodnotes\x1f{kind.value}\x1f{principal_id}\x1f{region_id}".encode()
     ).hexdigest()[:24]
     return make_identifier(kind, suffix)
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesNotebookBrowseRow:
+    notebook_id: str
+    title: str
+    updated_at: datetime
+    page_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesPageBrowseRow:
+    logical_page_id: str
+    page_version_id: str
+    run_id: str | None
+    content_sha256: str
+    is_latest: bool
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesRunBrowseRow:
+    run_id: str
+    state: str
+    failure_class: str | None
+    started_at: datetime
+    completed_at: datetime | None
+    page_version_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class GoodNotesSearchHit:
+    kind: str
+    id: str
+    title: str
+    snippet: str
+    notebook_id: str | None
+    logical_page_id: str | None
+    page_version_id: str | None
+    run_id: str | None
+    freshness: str
+    rank: int
 
 
 class PostgresGoodNotesRepository:
@@ -1661,6 +1706,431 @@ class PostgresGoodNotesRepository:
         extra = func.coalesce(func.sum(grouped.c.n - 1), 0)
         count = self.connection.execute(select(extra)).scalar()
         return int(count or 0)
+
+    def browse_notebooks(
+        self,
+        principal_id: str,
+        *,
+        limit: int,
+        after: tuple[datetime, str] | None,
+    ) -> tuple[GoodNotesNotebookBrowseRow, ...]:
+        page_count = (
+            select(func.count())
+            .select_from(goodnotes_logical_pages)
+            .where(
+                _mine(goodnotes_logical_pages, principal_id),
+                goodnotes_logical_pages.c.notebook_id == goodnotes_notebooks.c.notebook_id,
+            )
+            .scalar_subquery()
+        )
+        criteria = [_mine(goodnotes_notebooks, principal_id)]
+        if after is not None:
+            stamp, identity = after
+            criteria.append(
+                or_(
+                    goodnotes_notebooks.c.last_observed_at < stamp,
+                    and_(
+                        goodnotes_notebooks.c.last_observed_at == stamp,
+                        goodnotes_notebooks.c.notebook_id < identity,
+                    ),
+                )
+            )
+        rows = (
+            self.connection.execute(
+                select(
+                    goodnotes_notebooks.c.notebook_id,
+                    goodnotes_notebooks.c.label,
+                    goodnotes_notebooks.c.last_observed_at,
+                    page_count.label("page_count"),
+                )
+                .where(*criteria)
+                .order_by(
+                    goodnotes_notebooks.c.last_observed_at.desc(),
+                    goodnotes_notebooks.c.notebook_id.desc(),
+                )
+                .limit(limit)
+            )
+            .mappings()
+            .all()
+        )
+        return tuple(
+            GoodNotesNotebookBrowseRow(
+                notebook_id=str(row["notebook_id"]),
+                title="" if row["label"] is None else str(row["label"]),
+                updated_at=row["last_observed_at"],
+                page_count=int(row["page_count"] or 0),
+            )
+            for row in rows
+        )
+
+    def browse_pages(
+        self,
+        principal_id: str,
+        notebook_id: str,
+        *,
+        limit: int,
+        after: tuple[datetime, str] | None,
+    ) -> tuple[GoodNotesPageBrowseRow, ...]:
+        run_ids = (
+            select(
+                goodnotes_page_positions.c.page_version_id,
+                func.max(goodnotes_source_snapshots.c.run_id).label("run_id"),
+            )
+            .select_from(
+                goodnotes_page_positions.outerjoin(
+                    goodnotes_source_snapshots,
+                    _mine(goodnotes_source_snapshots, principal_id)
+                    & (
+                        goodnotes_source_snapshots.c.snapshot_id
+                        == goodnotes_page_positions.c.snapshot_id
+                    ),
+                )
+            )
+            .where(_mine(goodnotes_page_positions, principal_id))
+            .group_by(goodnotes_page_positions.c.page_version_id)
+            .subquery()
+        )
+        latest_rank = func.row_number().over(
+            partition_by=goodnotes_page_versions.c.logical_page_id,
+            order_by=(
+                goodnotes_page_versions.c.observed_at.desc(),
+                goodnotes_page_versions.c.page_version_id.desc(),
+            ),
+        )
+        ranked = (
+            select(
+                goodnotes_logical_pages.c.logical_page_id,
+                goodnotes_page_versions.c.page_version_id,
+                run_ids.c.run_id,
+                goodnotes_page_versions.c.content_sha256,
+                goodnotes_page_versions.c.observed_at,
+                latest_rank.label("latest_rank"),
+            )
+            .select_from(
+                goodnotes_logical_pages.join(
+                    goodnotes_page_versions,
+                    _mine(goodnotes_page_versions, principal_id)
+                    & (
+                        goodnotes_page_versions.c.logical_page_id
+                        == goodnotes_logical_pages.c.logical_page_id
+                    ),
+                ).outerjoin(
+                    run_ids,
+                    run_ids.c.page_version_id == goodnotes_page_versions.c.page_version_id,
+                )
+            )
+            .where(
+                _mine(goodnotes_logical_pages, principal_id),
+                goodnotes_logical_pages.c.notebook_id == notebook_id,
+            )
+            .subquery()
+        )
+        criteria: list[ColumnElement[bool]] = [true()]
+        if after is not None:
+            stamp, identity = after
+            criteria.append(
+                or_(
+                    ranked.c.observed_at < stamp,
+                    and_(ranked.c.observed_at == stamp, ranked.c.page_version_id < identity),
+                )
+            )
+        rows = (
+            self.connection.execute(
+                select(ranked)
+                .where(*criteria)
+                .order_by(ranked.c.observed_at.desc(), ranked.c.page_version_id.desc())
+                .limit(limit)
+            )
+            .mappings()
+            .all()
+        )
+        return tuple(
+            GoodNotesPageBrowseRow(
+                logical_page_id=str(row["logical_page_id"]),
+                page_version_id=str(row["page_version_id"]),
+                run_id=None if row["run_id"] is None else str(row["run_id"]),
+                content_sha256=str(row["content_sha256"]),
+                is_latest=int(row["latest_rank"]) == 1,
+                updated_at=row["observed_at"],
+            )
+            for row in rows
+        )
+
+    def browse_runs(
+        self,
+        principal_id: str,
+        *,
+        notebook_id: str | None,
+        page_version_id: str | None,
+        limit: int,
+        after: tuple[datetime, str] | None,
+    ) -> tuple[GoodNotesRunBrowseRow, ...]:
+        criteria = [_mine(goodnotes_ingestion_runs, principal_id)]
+        if notebook_id is not None:
+            criteria.append(
+                goodnotes_ingestion_runs.c.run_id.in_(
+                    select(goodnotes_source_snapshots.c.run_id).where(
+                        _mine(goodnotes_source_snapshots, principal_id),
+                        goodnotes_source_snapshots.c.notebook_id == notebook_id,
+                    )
+                )
+            )
+        if page_version_id is not None:
+            criteria.append(
+                goodnotes_ingestion_runs.c.run_id.in_(
+                    select(goodnotes_source_snapshots.c.run_id)
+                    .select_from(
+                        goodnotes_source_snapshots.join(
+                            goodnotes_page_positions,
+                            _mine(goodnotes_page_positions, principal_id)
+                            & (
+                                goodnotes_page_positions.c.snapshot_id
+                                == goodnotes_source_snapshots.c.snapshot_id
+                            ),
+                        )
+                    )
+                    .where(
+                        _mine(goodnotes_source_snapshots, principal_id),
+                        goodnotes_page_positions.c.page_version_id == page_version_id,
+                    )
+                )
+            )
+        if after is not None:
+            stamp, identity = after
+            criteria.append(
+                or_(
+                    goodnotes_ingestion_runs.c.started_at < stamp,
+                    and_(
+                        goodnotes_ingestion_runs.c.started_at == stamp,
+                        goodnotes_ingestion_runs.c.run_id < identity,
+                    ),
+                )
+            )
+        rows = (
+            self.connection.execute(
+                select(
+                    goodnotes_ingestion_runs.c.run_id,
+                    goodnotes_ingestion_runs.c.status,
+                    goodnotes_ingestion_runs.c.error_class,
+                    goodnotes_ingestion_runs.c.started_at,
+                    goodnotes_ingestion_runs.c.ended_at,
+                )
+                .where(*criteria)
+                .order_by(
+                    goodnotes_ingestion_runs.c.started_at.desc(),
+                    goodnotes_ingestion_runs.c.run_id.desc(),
+                )
+                .limit(limit)
+            )
+            .mappings()
+            .all()
+        )
+        return tuple(
+            GoodNotesRunBrowseRow(
+                run_id=str(row["run_id"]),
+                state=str(row["status"]),
+                failure_class=None if row["error_class"] is None else str(row["error_class"]),
+                started_at=row["started_at"],
+                completed_at=row["ended_at"],
+                page_version_id=page_version_id,
+            )
+            for row in rows
+        )
+
+    def browse_search(
+        self,
+        principal_id: str,
+        query: str,
+        *,
+        limit: int,
+        after: tuple[int, str] | None,
+    ) -> tuple[GoodNotesSearchHit, ...]:
+        from my_pa.domain.common.time import format_rfc3339
+
+        pattern = f"%{query}%"
+        prefix = f"{query}%"
+        rank = case(
+            (goodnotes_notebooks.c.label.ilike(prefix), 2),
+            (goodnotes_notebooks.c.notebook_id.ilike(prefix), 2),
+            else_=1,
+        )
+        notebook_hits = select(
+            literal("notebook").label("kind"),
+            goodnotes_notebooks.c.notebook_id.label("id"),
+            func.coalesce(goodnotes_notebooks.c.label, "").label("title"),
+            func.left(
+                func.coalesce(goodnotes_notebooks.c.label, goodnotes_notebooks.c.notebook_id),
+                80,
+            ).label("snippet"),
+            goodnotes_notebooks.c.notebook_id.label("notebook_id"),
+            literal(None).label("logical_page_id"),
+            literal(None).label("page_version_id"),
+            literal(None).label("run_id"),
+            goodnotes_notebooks.c.last_observed_at.label("fresh_at"),
+            rank.label("rank"),
+        ).where(
+            _mine(goodnotes_notebooks, principal_id),
+            or_(
+                goodnotes_notebooks.c.label.ilike(pattern),
+                goodnotes_notebooks.c.notebook_id.ilike(pattern),
+            ),
+        )
+        page_rank = case((goodnotes_logical_pages.c.logical_page_id.ilike(prefix), 2), else_=1)
+        page_hits = (
+            select(
+                literal("page").label("kind"),
+                goodnotes_logical_pages.c.logical_page_id.label("id"),
+                func.coalesce(
+                    goodnotes_notebooks.c.label,
+                    goodnotes_logical_pages.c.logical_page_id,
+                ).label("title"),
+                func.left(goodnotes_logical_pages.c.logical_page_id, 80).label("snippet"),
+                goodnotes_logical_pages.c.notebook_id.label("notebook_id"),
+                goodnotes_logical_pages.c.logical_page_id.label("logical_page_id"),
+                literal(None).label("page_version_id"),
+                literal(None).label("run_id"),
+                goodnotes_logical_pages.c.last_seen_at.label("fresh_at"),
+                page_rank.label("rank"),
+            )
+            .select_from(
+                goodnotes_logical_pages.join(
+                    goodnotes_notebooks,
+                    _mine(goodnotes_notebooks, principal_id)
+                    & (goodnotes_notebooks.c.notebook_id == goodnotes_logical_pages.c.notebook_id),
+                )
+            )
+            .where(
+                _mine(goodnotes_logical_pages, principal_id),
+                goodnotes_logical_pages.c.logical_page_id.ilike(pattern),
+            )
+        )
+        run_rank = case((goodnotes_ingestion_runs.c.run_id.ilike(prefix), 2), else_=1)
+        run_hits = select(
+            literal("run").label("kind"),
+            goodnotes_ingestion_runs.c.run_id.label("id"),
+            goodnotes_ingestion_runs.c.run_id.label("title"),
+            func.left(goodnotes_ingestion_runs.c.run_id, 80).label("snippet"),
+            literal(None).label("notebook_id"),
+            literal(None).label("logical_page_id"),
+            literal(None).label("page_version_id"),
+            goodnotes_ingestion_runs.c.run_id.label("run_id"),
+            goodnotes_ingestion_runs.c.started_at.label("fresh_at"),
+            run_rank.label("rank"),
+        ).where(
+            _mine(goodnotes_ingestion_runs, principal_id),
+            goodnotes_ingestion_runs.c.run_id.ilike(pattern),
+        )
+        hits = notebook_hits.union_all(page_hits, run_hits).subquery()
+        criteria: list[ColumnElement[bool]] = [true()]
+        if after is not None:
+            cursor_rank, identity = after
+            criteria.append(
+                or_(
+                    hits.c.rank < cursor_rank,
+                    and_(hits.c.rank == cursor_rank, hits.c.id < identity),
+                )
+            )
+        rows = (
+            self.connection.execute(
+                select(hits)
+                .where(*criteria)
+                .order_by(hits.c.rank.desc(), hits.c.id.desc())
+                .limit(limit)
+            )
+            .mappings()
+            .all()
+        )
+        return tuple(
+            GoodNotesSearchHit(
+                kind=str(row["kind"]),
+                id=str(row["id"]),
+                title=str(row["title"]),
+                snippet=str(row["snippet"]),
+                notebook_id=None if row["notebook_id"] is None else str(row["notebook_id"]),
+                logical_page_id=None
+                if row["logical_page_id"] is None
+                else str(row["logical_page_id"]),
+                page_version_id=None
+                if row["page_version_id"] is None
+                else str(row["page_version_id"]),
+                run_id=None if row["run_id"] is None else str(row["run_id"]),
+                freshness=format_rfc3339(row["fresh_at"]),
+                rank=int(row["rank"]),
+            )
+            for row in rows
+        )
+
+    def browse_interpretation(
+        self, principal_id: str, run_id: str, page_version_id: str
+    ) -> list[dict[str, object]]:
+        proposals = (
+            self.connection.execute(
+                select(
+                    goodnotes_semantic_proposals.c.proposal_id,
+                    goodnotes_semantic_proposals.c.analyzer_name,
+                    goodnotes_semantic_proposals.c.analyzer_version,
+                    goodnotes_semantic_proposals.c.schema_version,
+                    goodnotes_semantic_review_decisions.c.action,
+                    goodnotes_semantic_review_decisions.c.decision_id,
+                )
+                .select_from(
+                    goodnotes_semantic_proposals.outerjoin(
+                        goodnotes_semantic_review_decisions,
+                        _mine(goodnotes_semantic_review_decisions, principal_id)
+                        & (
+                            goodnotes_semantic_review_decisions.c.proposal_id
+                            == goodnotes_semantic_proposals.c.proposal_id
+                        )
+                        & (goodnotes_semantic_review_decisions.c.run_id == run_id),
+                    )
+                )
+                .where(
+                    _mine(goodnotes_semantic_proposals, principal_id),
+                    goodnotes_semantic_proposals.c.run_id == run_id,
+                    goodnotes_semantic_proposals.c.page_version_id == page_version_id,
+                )
+                .order_by(
+                    goodnotes_semantic_proposals.c.created_at.desc(),
+                    goodnotes_semantic_proposals.c.proposal_id.desc(),
+                )
+            )
+            .mappings()
+            .all()
+        )
+        items: list[dict[str, object]] = []
+        for row in proposals:
+            item: dict[str, object] = {
+                "proposal_id": str(row["proposal_id"]),
+                "analyzer_name": str(row["analyzer_name"]),
+                "analyzer_version": str(row["analyzer_version"]),
+                "schema_version": str(row["schema_version"]),
+                "disposition": None if row["action"] is None else str(row["action"]),
+            }
+            if row["decision_id"] is not None:
+                item["review_case_id"] = str(row["decision_id"])
+            items.append(item)
+        occurrences = (
+            self.connection.execute(
+                select(goodnotes_note_occurrences).where(
+                    _mine(goodnotes_note_occurrences, principal_id),
+                    goodnotes_note_occurrences.c.page_version_id == page_version_id,
+                )
+            )
+            .mappings()
+            .all()
+        )
+        for occurrence in occurrences:
+            occurrence_id = str(occurrence["occurrence_id"])
+            revision = self.latest_revision_for_occurrence(principal_id, occurrence_id)
+            item = {
+                "occurrence_id": occurrence_id,
+                "revision_id": None if revision is None else revision.revision_id,
+                "analyzer_name": None if revision is None else revision.analyzer_name,
+                "analyzer_version": None if revision is None else revision.analyzer_version,
+                "schema_version": None if revision is None else revision.schema_version,
+            }
+            items.append(item)
+        return items
 
 
 def _require_identical(

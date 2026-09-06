@@ -2,10 +2,10 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the one hundred and thirty capabilities is addressable
+**Reachability.** Every one of the one hundred and thirty-six capabilities is addressable
 over HTTP and answers. Parametrised over `Capability` rather than over a list
 written here, so the next capability added to the domain arrives as
-a failing row instead of as an untested one. Fourteen of the one hundred and thirty answer a
+a failing row instead of as an untested one. Fourteen of the one hundred and thirty-six answer a
 well-formed `501 unsupported` rather than a result — `_UNCOMPOSED_CAPABILITIES`,
 the plane this harness does not switch on — and one, `tasks.bulk_confirm`,
 answers a well-formed `404 not_found`, because a confirm names a preview this
@@ -99,6 +99,7 @@ from my_pa.application.commands import (
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
+    CorrectGoodNotes,
     CreateCapture,
     CreateCommitment,
     CreateEntity,
@@ -150,6 +151,9 @@ from my_pa.application.commands import (
     ListEntityNames,
     ListEntityObservations,
     ListEntityParticipations,
+    ListGoodNotesNotebooks,
+    ListGoodNotesPages,
+    ListGoodNotesRuns,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
@@ -169,6 +173,7 @@ from my_pa.application.commands import (
     PutCanvasWorkspace,
     ReadCapture,
     ReadCommitment,
+    ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadKnowledge,
     ReadManagedDocument,
@@ -201,6 +206,7 @@ from my_pa.application.commands import (
     SearchCaptures,
     SearchCommitments,
     SearchEntities,
+    SearchGoodNotes,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
     SearchRelationshipMemories,
@@ -342,6 +348,13 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
 #: the two distinct reasons above. Only the second contributes today, because
 #: WP-FE-03 implemented the two placeholders the first used to hold.
 _UNSUPPORTED_CAPABILITIES = _UNIMPLEMENTED_CAPABILITIES | _UNCOMPOSED_CAPABILITIES
+_NOT_FOUND_ON_EMPTY_WORLD = frozenset(
+    {
+        Capability.TASKS_BULK_CONFIRM,
+    }
+)
+_SYNTHETIC_NOTEBOOK_ID = "gnnb_" + "a" * 24
+_SYNTHETIC_OCCURRENCE_ID = "gnocc_" + "b" * 24
 
 #: The memory the payload table and the command table below both name. Derived
 #: from a fixed suffix rather than minted, because the two tables are compared
@@ -660,6 +673,18 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.GOODNOTES_PULL: {"batch_size": 1},
         Capability.GOODNOTES_COMPLETE: {"assignment_ids": ["a" * 64]},
         Capability.GOODNOTES_STATUS: {},
+        Capability.GOODNOTES_NOTEBOOKS_LIST: {},
+        Capability.GOODNOTES_PAGES_LIST: {"notebook_id": _SYNTHETIC_NOTEBOOK_ID},
+        Capability.GOODNOTES_RUNS_LIST: {},
+        Capability.GOODNOTES_READ: {
+            "run_id": work.run_id,
+            "page_version_id": work.page_version_id,
+        },
+        Capability.GOODNOTES_SEARCH: {"query": "synthetic"},
+        Capability.GOODNOTES_CORRECT: {
+            "occurrence_id": _SYNTHETIC_OCCURRENCE_ID,
+            "transcription": "synthetic correction",
+        },
         Capability.GSQS_START: {
             "authorization_id": "synthetic-b0-commissioning",
             "campaign_class": "SYNTHETIC",
@@ -1440,6 +1465,18 @@ def commands_for(
         Capability.GOODNOTES_PULL: PullGoodNotesWork(batch_size=1),
         Capability.GOODNOTES_COMPLETE: CompleteGoodNotesPull(assignment_ids=("a" * 64,)),
         Capability.GOODNOTES_STATUS: GetGoodNotesPullStatus(),
+        Capability.GOODNOTES_NOTEBOOKS_LIST: ListGoodNotesNotebooks(),
+        Capability.GOODNOTES_PAGES_LIST: ListGoodNotesPages(notebook_id=_SYNTHETIC_NOTEBOOK_ID),
+        Capability.GOODNOTES_RUNS_LIST: ListGoodNotesRuns(),
+        Capability.GOODNOTES_READ: ReadGoodNotes(
+            run_id=work.run_id,
+            page_version_id=work.page_version_id,
+        ),
+        Capability.GOODNOTES_SEARCH: SearchGoodNotes(query="synthetic"),
+        Capability.GOODNOTES_CORRECT: CorrectGoodNotes(
+            occurrence_id=_SYNTHETIC_OCCURRENCE_ID,
+            transcription="synthetic correction",
+        ),
         Capability.GSQS_START: StartGsqsB0(
             authorization_id="synthetic-b0-commissioning",
             campaign_class="SYNTHETIC",
@@ -1984,7 +2021,7 @@ def test_every_capability_is_reachable_over_http(
     payload = payloads_for(scene, record)[capability]
     reply = wire.send(capability.value, document_for(capability, scene, payload))
     envelope = reply.document()
-    if capability is Capability.TASKS_BULK_CONFIRM:
+    if capability in _NOT_FOUND_ON_EMPTY_WORLD:
         assert reply.status == 404, reply.body
         assert envelope["error"]["code"] == "not_found"
         return
@@ -2852,7 +2889,7 @@ def test_the_body_is_the_envelope_the_application_produced(
     assert len(service.envelopes) == 1, "one request reached the application once"
     produced = service.envelopes[0]
     assert reply.body == produced.to_canonical_json()
-    if capability is Capability.TASKS_BULK_CONFIRM:
+    if capability in _NOT_FOUND_ON_EMPTY_WORLD:
         expected_status = 404
     elif capability in _UNSUPPORTED_CAPABILITIES:
         expected_status = 501

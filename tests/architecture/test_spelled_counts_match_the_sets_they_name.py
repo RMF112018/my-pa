@@ -406,18 +406,23 @@ _ORDINAL_UNITS = (
     "hundred-twenty-third",
     "hundred-twenty-fourth",
     "hundred-twenty-fifth",
-    # GoodNotes pull and the graph read took the capability set to one hundred and twenty-eight;
-    # UI-IMP-WP17 takes it to one hundred and thirty.
+    # UI-IMP-WP21 takes the public set past one hundred and thirty.
     # so the green-half plant needs the next ordinal. Keep this tuple dense: a
     # gap makes a readable compound ordinal fall back to its final unit.
     "hundred-twenty-sixth",
     "hundred-twenty-seventh",
     "hundred-twenty-eighth",
     "hundred-twenty-ninth",
-    # UI-IMP-WP17 admits canvas.workspace get/put and takes the public set to
-    # one hundred and thirty, so the green-half plant indexes one past the set.
+    # UI-IMP-WP21 admits the six browser contracts and takes the public set to
+    # one hundred and thirty-six, so the green-half plant indexes one past the set.
     "hundred-thirtieth",
     "hundred-thirty-first",
+    "hundred-thirty-second",
+    "hundred-thirty-third",
+    "hundred-thirty-fourth",
+    "hundred-thirty-fifth",
+    "hundred-thirty-sixth",
+    "hundred-thirty-seventh",
 )
 
 
@@ -924,27 +929,27 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
     # records what deriving it would cost.
     (
         "ops/runbooks/mcp-and-cli-operations.md",
-        "**sixty**",
+        "**sixty-six**",
         "A default process publishes",
         "the count a default composition publishes — `Capability` less the six "
         "`documents.`, fifty-five `entities.` and nine `relationship_memory.` names it "
         "withholds — not the size of `Capability`, which the same block states "
-        "correctly as one hundred and thirty",
+        "correctly as one hundred and thirty-six",
     ),
     (
         "ops/runbooks/mcp-and-cli-operations.md",
-        "**sixty**",
+        "**sixty-six**",
         "none beginning `documents.`",
         "the same default-publication count, in the line naming the test that measures it",
     ),
     (
         "README.md",
-        "sixty tools",
-        "process publishes sixty tools",
+        "sixty-six tools",
+        "process publishes sixty-six tools",
         "the same default-publication count, in the bullet describing the MCP "
         "adapter; the tool list is derived from `available_capabilities`, not "
         "from `Capability`, which the same bullet states correctly as "
-        "one hundred and thirty",
+        "one hundred and thirty-six",
     ),
     # --- the Intelligence Artifact plane, newly swept --------------------------
     #

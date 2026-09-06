@@ -163,6 +163,8 @@ class SafeDetail(StrEnum):
     SEGMENTS = "segments"
     GEOMETRY = "geometry"
     TRANSCRIPTION = "transcription"
+    OCCURRENCE_ID = "occurrence_id"
+    NOTEBOOK_ID = "notebook_id"
     CANDIDATE_TAGS = "candidate_tags"
     RANKED_CANDIDATES = "ranked_candidates"
     CONFIDENCE = "confidence"

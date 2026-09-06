@@ -184,6 +184,7 @@ __all__ = [
     "Command",
     "CommitIntelligenceArtifact",
     "CompleteGoodNotesPull",
+    "CorrectGoodNotes",
     "CreateCapture",
     "CreateCommitment",
     "CreateEntity",
@@ -218,6 +219,9 @@ __all__ = [
     "ListEntityIdentifiers",
     "ListEntityNames",
     "ListEntityParticipations",
+    "ListGoodNotesNotebooks",
+    "ListGoodNotesPages",
+    "ListGoodNotesRuns",
     "ListIntelligenceArtifacts",
     "ListManagedDocuments",
     "ListManagedDocumentsCommand",
@@ -232,6 +236,7 @@ __all__ = [
     "PutCanvasWorkspace",
     "ReadCapture",
     "ReadCommitment",
+    "ReadGoodNotes",
     "ReadIntelligenceArtifact",
     "ReadKnowledge",
     "ReadManagedDocument",
@@ -254,6 +259,7 @@ __all__ = [
     "ReviseManagedDocumentCommand",
     "SearchCaptures",
     "SearchCommitments",
+    "SearchGoodNotes",
     "SearchIntelligenceArtifacts",
     "SearchKnowledge",
     "SearchTasks",
@@ -371,6 +377,25 @@ def _text(value: str, detail: SafeDetail) -> str:
     """
     if not isinstance(value, str):
         raise InvalidRequestError(detail)
+    return value
+
+
+_GOODNOTES_BROWSER_MAX_PAGE_SIZE = 100
+
+
+def _goodnotes_browser_page_size(value: int | None) -> int | None:
+    sized = _positive(value, SafeDetail.PAGE_SIZE)
+    if sized is not None and sized > _GOODNOTES_BROWSER_MAX_PAGE_SIZE:
+        raise InvalidRequestError(SafeDetail.PAGE_SIZE)
+    return sized
+
+
+def _optional_cursor(value: str | None) -> str | None:
+    if value is None:
+        return None
+    _text(value, SafeDetail.CURSOR)
+    if not value or len(value) > 512:
+        raise InvalidRequestError(SafeDetail.CURSOR)
     return value
 
 
@@ -2646,6 +2671,164 @@ class GetGoodNotesContent:
         _goodnotes_id(self.run_id, "gnrun", SafeDetail.RUN_ID)
         _goodnotes_id(self.page_version_id, "gnver", SafeDetail.PAGE_VERSION_ID)
         _sha256_digest(self.content_sha256, SafeDetail.CONTENT_SHA256)
+
+
+@dataclass(frozen=True, slots=True)
+class ListGoodNotesNotebooks:
+    """`goodnotes.notebooks.list`: one bounded page of Principal-owned notebooks."""
+
+    capability: ClassVar[Capability] = Capability.GOODNOTES_NOTEBOOKS_LIST
+
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _goodnotes_browser_page_size(self.page_size)
+        _optional_cursor(self.cursor)
+
+
+ListGoodNotesNotebooks.__doc__ = (
+    "`goodnotes.notebooks.list`: return one bounded page of notebooks in the "
+    "acting Principal's partition. Call this to browse notebook titles and "
+    "page counts. This does not return filesystem paths and does not mutate "
+    "source notebooks.\n"
+    "\n"
+    "The principal is not here. Authority comes from authenticated context."
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ListGoodNotesPages:
+    """`goodnotes.pages.list`: one bounded page of versions for one notebook."""
+
+    capability: ClassVar[Capability] = Capability.GOODNOTES_PAGES_LIST
+
+    notebook_id: str
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _goodnotes_id(self.notebook_id, "gnnb", SafeDetail.NOTEBOOK_ID)
+        _goodnotes_browser_page_size(self.page_size)
+        _optional_cursor(self.cursor)
+
+
+ListGoodNotesPages.__doc__ = (
+    "`goodnotes.pages.list`: return one bounded page of page versions for one "
+    "notebook in the acting Principal's partition. Call this after listing "
+    "notebooks. A missing notebook is not_found. This does not return raster "
+    "bytes or filesystem paths.\n"
+    "\n"
+    "The principal is not here. Authority comes from authenticated context."
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ListGoodNotesRuns:
+    """`goodnotes.runs.list`: one bounded page of ingestion runs."""
+
+    capability: ClassVar[Capability] = Capability.GOODNOTES_RUNS_LIST
+
+    notebook_id: str | None = None
+    page_version_id: str | None = None
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.notebook_id is not None:
+            _goodnotes_id(self.notebook_id, "gnnb", SafeDetail.NOTEBOOK_ID)
+        if self.page_version_id is not None:
+            _goodnotes_id(self.page_version_id, "gnver", SafeDetail.PAGE_VERSION_ID)
+        _goodnotes_browser_page_size(self.page_size)
+        _optional_cursor(self.cursor)
+
+
+ListGoodNotesRuns.__doc__ = (
+    "`goodnotes.runs.list`: return one bounded page of ingestion runs in the "
+    "acting Principal's partition. Call this to inspect pipeline progress. "
+    "Optionally filter by notebook or page version. This does not mutate runs.\n"
+    "\n"
+    "The principal is not here. Authority comes from authenticated context."
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadGoodNotes:
+    """`goodnotes.read`: one page-version interpretation without raster bytes."""
+
+    capability: ClassVar[Capability] = Capability.GOODNOTES_READ
+
+    run_id: str
+    page_version_id: str
+    content_sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        _goodnotes_id(self.run_id, "gnrun", SafeDetail.RUN_ID)
+        _goodnotes_id(self.page_version_id, "gnver", SafeDetail.PAGE_VERSION_ID)
+        if self.content_sha256 is not None:
+            _sha256_digest(self.content_sha256, SafeDetail.CONTENT_SHA256)
+
+
+ReadGoodNotes.__doc__ = (
+    "`goodnotes.read`: return raster metadata and interpretation for one run "
+    "and page version. Call this after listing pages or search. This does not "
+    "return PNG bytes or filesystem paths.\n"
+    "\n"
+    "The principal is not here. Authority comes from authenticated context."
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SearchGoodNotes:
+    """`goodnotes.search`: Principal-scoped metadata search without body dump."""
+
+    capability: ClassVar[Capability] = Capability.GOODNOTES_SEARCH
+
+    query: str = field(repr=False)
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.query, str):
+            raise InvalidRequestError(SafeDetail.QUERY)
+        if not self.query.strip():
+            raise InvalidRequestError(SafeDetail.QUERY)
+        _text(self.query, SafeDetail.QUERY)
+        _goodnotes_browser_page_size(self.page_size)
+        _optional_cursor(self.cursor)
+
+
+SearchGoodNotes.__doc__ = (
+    "`goodnotes.search`: return one bounded page of metadata hits in the "
+    "acting Principal's partition. Call this to find notebooks, pages, or "
+    "runs by label or identifier. This does not return handwriting bodies.\n"
+    "\n"
+    "The principal is not here. Authority comes from authenticated context."
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CorrectGoodNotes:
+    """`goodnotes.correct`: append one operator transcription revision."""
+
+    capability: ClassVar[Capability] = Capability.GOODNOTES_CORRECT
+
+    occurrence_id: str
+    transcription: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        _goodnotes_id(self.occurrence_id, "gnocc", SafeDetail.OCCURRENCE_ID)
+        if not self.transcription:
+            raise InvalidRequestError(SafeDetail.TRANSCRIPTION)
+
+
+CorrectGoodNotes.__doc__ = (
+    "`goodnotes.correct`: append one operator-owned canonical revision for a "
+    "stored note occurrence. Call this to correct a transcription. This does "
+    "not overwrite the source raster and does not invent a new occurrence.\n"
+    "\n"
+    "The principal is not here. Authority comes from authenticated context."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -7646,6 +7829,12 @@ type Command = (
     | GetGoodNotesWork
     | SubmitGoodNotesProposal
     | GetGoodNotesContent
+    | ListGoodNotesNotebooks
+    | ListGoodNotesPages
+    | ListGoodNotesRuns
+    | ReadGoodNotes
+    | SearchGoodNotes
+    | CorrectGoodNotes
     | StartGsqsB0
     | GetGsqsB0Status
     | BeginIntelligenceCycle

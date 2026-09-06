@@ -29,7 +29,7 @@ this one exists.
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
 emits what it emitted on the day it merged, with one hundred one capabilities and
-thirty-eight purposes now declared in the domain. If this reddens, the freeze has been undone
+forty-one purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
 
@@ -242,9 +242,14 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "goodnotes.pull",
         "goodnotes.complete",
         "goodnotes.status",
-        # UI-IMP-WP17. `d4e8b1c7a902` admits the canvas overlay pair.
         "canvas.workspace.get",
         "canvas.workspace.put",
+        "goodnotes.notebooks.list",
+        "goodnotes.pages.list",
+        "goodnotes.runs.list",
+        "goodnotes.read",
+        "goodnotes.search",
+        "goodnotes.correct",
         "reports.begin_cycle",
         "reports.commit",
         "reports.latest",

@@ -463,6 +463,7 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "constraint_sync_conflicts",
         }
     ),
+    "a1c9e4b72f80": frozenset(),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

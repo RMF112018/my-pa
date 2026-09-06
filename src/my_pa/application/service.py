@@ -118,6 +118,7 @@ from types import MappingProxyType
 from typing import Any, Final, NoReturn, assert_never, cast
 from zoneinfo import ZoneInfo
 
+from my_pa.application import goodnotes_browse
 from my_pa.application.authorization import Authorization, authorize
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
 from my_pa.application.commands import (
@@ -137,6 +138,7 @@ from my_pa.application.commands import (
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
+    CorrectGoodNotes,
     CreateCapture,
     CreateCommitment,
     CreateEntity,
@@ -189,6 +191,9 @@ from my_pa.application.commands import (
     ListEntityNames,
     ListEntityObservations,
     ListEntityParticipations,
+    ListGoodNotesNotebooks,
+    ListGoodNotesPages,
+    ListGoodNotesRuns,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListManagedDocumentsCommand,
@@ -209,6 +214,7 @@ from my_pa.application.commands import (
     PutCanvasWorkspace,
     ReadCapture,
     ReadCommitment,
+    ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadKnowledge,
     ReadManagedDocument,
@@ -244,6 +250,7 @@ from my_pa.application.commands import (
     SearchCaptures,
     SearchCommitments,
     SearchEntities,
+    SearchGoodNotes,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
     SearchRelationshipMemories,
@@ -8738,6 +8745,84 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
         )
 
+    def _goodnotes_notebooks_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListGoodNotesNotebooks,
+    ) -> _Result:
+        with _translated():
+            payload = goodnotes_browse.list_notebooks(unit_of_work, authorization, command)
+        return _Result(
+            payload=payload,
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
+        )
+
+    def _goodnotes_pages_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListGoodNotesPages,
+    ) -> _Result:
+        with _translated():
+            payload = goodnotes_browse.list_pages(unit_of_work, authorization, command)
+        return _Result(
+            payload=payload,
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
+        )
+
+    def _goodnotes_runs_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListGoodNotesRuns,
+    ) -> _Result:
+        with _translated():
+            payload = goodnotes_browse.list_runs(unit_of_work, authorization, command)
+        return _Result(
+            payload=payload,
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
+        )
+
+    def _goodnotes_read(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadGoodNotes,
+    ) -> _Result:
+        with _translated():
+            payload = goodnotes_browse.read_page(unit_of_work, authorization, command)
+        return _Result(
+            payload=payload,
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
+        )
+
+    def _goodnotes_search(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: SearchGoodNotes,
+    ) -> _Result:
+        with _translated():
+            payload = goodnotes_browse.search(unit_of_work, authorization, command)
+        return _Result(
+            payload=payload,
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
+        )
+
+    def _goodnotes_correct(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CorrectGoodNotes,
+    ) -> _Result:
+        with _translated():
+            payload = goodnotes_browse.correct(unit_of_work, authorization, command)
+        return _Result(
+            payload=payload,
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
+        )
+
     def _goodnotes_propose(
         self,
         unit_of_work: UnitOfWork,
@@ -10524,6 +10609,12 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.GOODNOTES_WORK: ApplicationService._goodnotes_work,
         Capability.GOODNOTES_CONTENT: ApplicationService._goodnotes_content,
         Capability.GOODNOTES_PROPOSE: ApplicationService._goodnotes_propose,
+        Capability.GOODNOTES_NOTEBOOKS_LIST: ApplicationService._goodnotes_notebooks_list,
+        Capability.GOODNOTES_PAGES_LIST: ApplicationService._goodnotes_pages_list,
+        Capability.GOODNOTES_RUNS_LIST: ApplicationService._goodnotes_runs_list,
+        Capability.GOODNOTES_READ: ApplicationService._goodnotes_read,
+        Capability.GOODNOTES_SEARCH: ApplicationService._goodnotes_search,
+        Capability.GOODNOTES_CORRECT: ApplicationService._goodnotes_correct,
         Capability.GOODNOTES_PULL: ApplicationService._goodnotes_pull,
         Capability.GOODNOTES_COMPLETE: ApplicationService._goodnotes_complete,
         Capability.GOODNOTES_STATUS: ApplicationService._goodnotes_status,

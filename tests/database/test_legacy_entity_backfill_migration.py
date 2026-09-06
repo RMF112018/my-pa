@@ -68,7 +68,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "b8e4d1a6c073"
 PULL_REVISION: Final = "6a2f9d1c4b80"
 PROMOTION_REVISION: Final = "a4d8e31b2c90"
-HEAD_REVISION: Final = "2774329487be"
+HEAD_REVISION: Final = "a1c9e4b72f80"
 CURRENT_HEAD_REVISION: Final = HEAD_REVISION
 GRAPH_REVISION: Final = "c3f8a1d07e94"
 #: What was head until `REVISION` stacked on it, and therefore the revision
@@ -435,7 +435,7 @@ def test_the_revision_is_the_single_head_and_revises_the_prior_head() -> None:
     """One head through the additive successors, retaining every prior edge."""
     script = ScriptDirectory.from_config(_config())
     assert list(script.get_heads()) == [CURRENT_HEAD_REVISION]
-    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "e8f2a6c9d104"
+    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "2774329487be"
     assert script.get_revision("e8f2a6c9d104").down_revision == "d4e8b1c7a902"
     assert script.get_revision("d4e8b1c7a902").down_revision == "a4d8e31b2c90"
     assert script.get_revision("a4d8e31b2c90").down_revision == "6a2f9d1c4b80"

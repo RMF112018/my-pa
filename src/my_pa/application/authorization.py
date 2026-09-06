@@ -64,6 +64,7 @@ from my_pa.application.commands import (
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
+    CorrectGoodNotes,
     CreateCapture,
     CreateCommitment,
     CreateEntity,
@@ -115,6 +116,9 @@ from my_pa.application.commands import (
     ListEntityNames,
     ListEntityObservations,
     ListEntityParticipations,
+    ListGoodNotesNotebooks,
+    ListGoodNotesPages,
+    ListGoodNotesRuns,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
@@ -134,6 +138,7 @@ from my_pa.application.commands import (
     PutCanvasWorkspace,
     ReadCapture,
     ReadCommitment,
+    ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadKnowledge,
     ReadManagedDocument,
@@ -165,6 +170,7 @@ from my_pa.application.commands import (
     SearchCaptures,
     SearchCommitments,
     SearchEntities,
+    SearchGoodNotes,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
     SearchRelationshipMemories,
@@ -362,6 +368,12 @@ def _requested_scope(
             | RecordContextFeedback()
             | GetGoodNotesWork()
             | GetGoodNotesContent()
+            | ListGoodNotesNotebooks()
+            | ListGoodNotesPages()
+            | ListGoodNotesRuns()
+            | ReadGoodNotes()
+            | SearchGoodNotes()
+            | CorrectGoodNotes()
             | SubmitGoodNotesProposal()
             | PullGoodNotesWork()
             | CompleteGoodNotesPull()

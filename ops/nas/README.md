@@ -64,8 +64,29 @@ The checked-in example refuses, and numeric PostgreSQL tuning remains absent
 until CPU, memory, free storage, and filesystem type are measured on that NAS.
 Migration is never an application startup side effect; canonical migration also
 requires a recent backup receipt. Backups are custom-format, integrity-listed,
-owner-only artifacts outside the repository. Restore accepts only a new
+owner-only artifacts outside every current or preserved repository involved.
+The destination itself must be an existing unlinked physical directory owned
+by the effective operator with exact mode `0700`; backup partials are created
+atomically with no-clobber and never replace a pre-existing regular file or
+symlink.
+Restore accepts only a new
 `my_pa_scratch_*` database and retains a failed scratch target for diagnosis.
+During a live-main smoke upgrade, current `backup.sh` has an explicit
+preserved-runtime mode: the old checkout remains authoritative for its
+manifest, Compose, runtime/bootstrap admissions, PostgreSQL resource, and live
+container identity, while the exact clean current checkout is authenticated by
+its deployable manifest plus the existing root-owned current operator admission,
+whose complete authoritative schema binds the same source, engine, operator
+image, externally staged candidate/archive/metadata paths and byte digests,
+Python, Git, OpenSSL, and Compose identities. Canonical Docker runs the
+standalone gate baked into that exact admitted operator image with no network
+and a read-only filesystem. External inputs use distinct fixed
+`/run/my-pa-input/` mount destinations and cannot shadow `/usr/local` tooling
+or the baked gate. That gate validates the external artifacts and the
+authoritative full image-manifest shape before any current-checkout path is
+executed; truncated, extra-field, moved, or byte-mismatched artifacts refuse.
+The mode refuses missing, dirty, linked, reused, or drifted source identities;
+it does not copy firewall logic or permit a direct `pg_dump` escape hatch.
 The gated two-phase bootstrap first issues a separate root-owned PostgreSQL
 bootstrap admission from the selected canonical Compose service. This admission
 requires no application, web, Entra, or edge credentials; fixed invalid values

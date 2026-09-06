@@ -11,6 +11,7 @@ import socket
 import subprocess
 import tarfile
 import tempfile
+import tomllib
 from pathlib import Path
 from types import ModuleType
 
@@ -75,6 +76,8 @@ def test_operator_runtime_is_separate_hardened_and_nonpersistent() -> None:
     assert "python@sha256:" in dockerfile
     assert 'test "${TARGETPLATFORM}" = "linux/amd64"' in dockerfile
     assert "git --version" in dockerfile and "/usr/bin/openssl version" in dockerfile
+    assert "operator_pre_source_gate.py" in dockerfile
+    assert "my-pa-operator-pre-source-gate.py" in dockerfile
     assert "operator:" not in compose
     for script in (bootstrap, wrapper):
         assert "--rm" in script
@@ -102,7 +105,8 @@ def test_operator_admission_is_exclusive_and_engine_bound() -> None:
     assert '"--profile"' in source and '"nas-01-contract-only"' in source
     assert "COMPOSE_SENTINEL_ENVIRONMENT" in source
     assert '"--no-interpolate"' not in source
-    assert 'f"compose_version = ' in source
+    assert '"compose_version": compose_version' in source
+    assert "admission_shape_errors(admission)" in source
 
 
 def _operator_artifacts(tmp_path: Path) -> tuple[Path, Path, Path, str]:
@@ -164,6 +168,7 @@ def test_operator_admission_refuses_undiscoverable_compose_plugin(
                         "Config": {
                             "Labels": {
                                 "org.opencontainers.image.revision": "a" * 40,
+                                "org.opencontainers.image.created": "2026-08-14T00:00:00Z",
                                 "io.my-pa.repository-tree": "c" * 40,
                                 "io.my-pa.target-platform": "linux/amd64",
                                 "io.my-pa.operator-runtime": "python-3.12",
@@ -203,6 +208,7 @@ def test_operator_admission_renders_with_closed_nonsecret_sentinels(
                         "Config": {
                             "Labels": {
                                 "org.opencontainers.image.revision": "a" * 40,
+                                "org.opencontainers.image.created": "2026-08-14T00:00:00Z",
                                 "io.my-pa.repository-tree": "c" * 40,
                                 "io.my-pa.target-platform": "linux/amd64",
                                 "io.my-pa.operator-runtime": "python-3.12",
@@ -235,6 +241,24 @@ def test_operator_admission_renders_with_closed_nonsecret_sentinels(
     output = tmp_path / "admission.toml"
     assert module.admit(candidate, archive, metadata, output) == []
     assert 'compose_version = "2.20.1-6047-g6817716"' in output.read_text(encoding="utf-8")
+    admission = tomllib.loads(output.read_text(encoding="utf-8"))
+    assert admission["operator_archive_path"] == str(archive.resolve())
+    assert admission["repository_source_path"] == str(ROOT.resolve())
+    assert admission["operator_candidate_path"] == str(candidate.resolve())
+    assert admission["operator_metadata_path"] == str(metadata.resolve())
+    assert (
+        admission["operator_candidate_sha256"] == hashlib.sha256(candidate.read_bytes()).hexdigest()
+    )
+    assert (
+        admission["operator_metadata_sha256"] == hashlib.sha256(metadata.read_bytes()).hexdigest()
+    )
+    assert module.admission_shape_errors(admission) == []
+    assert "operator_admission_shape" in module.admission_shape_errors(
+        {key: value for key, value in admission.items() if key != "operator_archive_sha256"}
+    )
+    assert "operator_admission_shape" in module.admission_shape_errors(
+        {**admission, "unexpected": "refuse"}
+    )
 
 
 def test_container_python_preserves_stdin_compose_plugin_and_closed_environment(

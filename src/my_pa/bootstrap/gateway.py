@@ -1023,6 +1023,9 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
                 if settings.goodnotes_pull_enabled
                 else None
             ),
+            goodnotes_pull_assignment_lease_seconds=(
+                settings.goodnotes_pull_assignment_lease_seconds
+            ),
         ),
         principal=principal,
         authenticate=entra_authenticator(settings, work_engine) if entra else None,

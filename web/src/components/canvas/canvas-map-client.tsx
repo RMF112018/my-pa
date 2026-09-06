@@ -5,10 +5,18 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { GraphMap } from "@/components/canvas/graph-map";
+import {
+  downloadTextFile,
+  serializeNeighborhoodText,
+  serializeSvgMarkup,
+  shouldOmitVisualMap,
+} from "@/components/canvas/neighborhood-export";
+import { useInspectorSelection } from "@/components/shell/inspector-selection";
 import { apiGet, apiPost } from "@/lib/api/client";
 import { RELATIONSHIP_TYPES } from "@/lib/api/decode/capabilities/_entity-read-helpers";
 import { decodeEntitiesGet } from "@/lib/api/decode/capabilities/entities.get";
 import { decodeEntitiesGraph, type GraphEdge, type GraphNode } from "@/lib/api/decode/capabilities/entities.graph";
+import { decodeEntitiesRelationships } from "@/lib/api/decode/capabilities/entities.relationships";
 import type { CanvasPositions } from "@/lib/api/decode/capabilities/canvas.workspace.get";
 import type { CanvasMapQuery } from "@/lib/routes/canvas";
 import {
@@ -173,10 +181,39 @@ export function CanvasMapClient({
   const [relationshipSaveError, setRelationshipSaveError] = useState<string | null>(null);
   const [relationshipBusy, setRelationshipBusy] = useState(false);
   const [, setSaving] = useState(false);
+  const { selection, setSelection } = useInspectorSelection();
 
   useEffect(() => {
     relationshipEditRef.current = relationshipEdit;
   }, [relationshipEdit]);
+
+  useEffect(() => {
+    if (!selectedEdgeId) return;
+    const edge = mapEdges.find(
+      (item) => item.edge_kind === "relationship" && item.edge_id === selectedEdgeId,
+    );
+    if (!edge) return;
+    let cancelled = false;
+    void (async () => {
+      const response = await apiGet(
+        SESSION,
+        `/api/people/${encodeURIComponent(edge.from_entity_id)}/relationships`,
+      );
+      if (cancelled) return;
+      if (!response.ok || response.data === null) return;
+      const decoded = decodeEntitiesRelationships(response.data);
+      if (!decoded.ok) return;
+      const row = decoded.value.relationships.find(
+        (item) => item.relationship_id === edge.edge_id,
+      );
+      if (!row) return;
+      setEffectiveFrom((current) => (current === "" ? (row.effective_from ?? "") : current));
+      setEffectiveTo((current) => (current === "" ? (row.effective_to ?? "") : current));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedEdgeId, mapEdges]);
 
   useEffect(() => {
     if (relationshipEditRef.current) return;
@@ -185,6 +222,8 @@ export function CanvasMapClient({
   }, [nodes, edges]);
 
   const overlay: SavedPositions = { ...stored, ...draft };
+  const omitVisualMap = shouldOmitVisualMap(mapNodes, focusEntityId);
+  const arrangeActive = arrange && !omitVisualMap;
   const selectedEdge = mapEdges.find(
     (edge) => edge.edge_kind === "relationship" && edge.edge_id === selectedEdgeId,
   );
@@ -290,7 +329,7 @@ export function CanvasMapClient({
   }
 
   function onNudge(event: KeyboardEvent<HTMLDivElement>) {
-    if (!arrange || !selectedEntityId) return;
+    if (!arrangeActive || !selectedEntityId) return;
     const delta =
       event.key === "ArrowLeft"
         ? { x: -NUDGE, y: 0 }
@@ -313,8 +352,18 @@ export function CanvasMapClient({
     void persist(nextDraft);
   }
 
+  function clearReviseForm() {
+    setEffectiveFrom("");
+    setEffectiveTo("");
+    setClearFrom(false);
+    setClearTo(false);
+    setEvidenceRefs("");
+    setClearEvidence(false);
+  }
+
   function turnOnArrange() {
     setRelationshipEdit(false);
+    clearReviseForm();
     setSelectedEdgeId(null);
     setArrange(true);
   }
@@ -323,6 +372,43 @@ export function CanvasMapClient({
     setArrange(false);
     drag.current = null;
     setRelationshipEdit(true);
+  }
+
+  function publishInspectNode(entityId: string) {
+    const node = mapNodes.find((item) => item.entity_id === entityId);
+    if (!node) return;
+    setSelection({ kind: "node", node });
+  }
+
+  function publishInspectEdge(edgeId: string) {
+    const edge = mapEdges.find((item) => item.edge_id === edgeId);
+    if (!edge) return;
+    const from = mapNodes.find((item) => item.entity_id === edge.from_entity_id);
+    const to =
+      edge.to_entity_id === null
+        ? undefined
+        : mapNodes.find((item) => item.entity_id === edge.to_entity_id);
+    setSelection({ kind: "edge", edge, ...(from ? { from } : {}), ...(to ? { to } : {}) });
+  }
+
+  function onArrangeSelect(entityId: string) {
+    setSelectedEntityId(entityId);
+  }
+
+  function onExportText() {
+    downloadTextFile(
+      "neighborhood.txt",
+      serializeNeighborhoodText(mapNodes, mapEdges),
+      "text/plain",
+    );
+  }
+
+  function onExportSvg() {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const markup = serializeSvgMarkup(svg);
+    if (!markup) return;
+    downloadTextFile("neighborhood.svg", markup, "image/svg+xml");
   }
 
   function onNodeSelect(entityId: string) {
@@ -341,9 +427,11 @@ export function CanvasMapClient({
   function onEdgeSelect(edgeId: string) {
     const edge = mapEdges.find((item) => item.edge_id === edgeId);
     if (!edge || edge.edge_kind !== "relationship") return;
+    clearReviseForm();
     setSelectedEdgeId(edge.edge_id);
     setRelationshipConflict(null);
     setRelationshipSaveError(null);
+    publishInspectEdge(edge.edge_id);
   }
 
   async function reloadGraph(): Promise<boolean> {
@@ -377,6 +465,7 @@ export function CanvasMapClient({
     setRelationshipSaveError(null);
     const reloaded = await reloadGraph();
     if (reloaded) {
+      clearReviseForm();
       setSelectedEdgeId(null);
     }
   }
@@ -431,7 +520,7 @@ export function CanvasMapClient({
     if (!clearEvidence && refs.length === 0) {
       setRelationshipConflict(null);
       setRelationshipSaveError(
-        "This Map cannot display current citations; a window-only revise would clear them. State a replacement set, or use inspector later (WP19).",
+        "This Map cannot display current citations. The inspector cannot read evidence_refs from the frozen graph or RelationshipView; a window-only revise would clear them. State a replacement set, or explicitly clear citations.",
       );
       return;
     }
@@ -498,19 +587,21 @@ export function CanvasMapClient({
       <div className="mb-3 flex flex-wrap gap-2">
         <Button
           type="button"
-          variant={arrange ? "primary" : "secondary"}
+          variant={arrangeActive ? "primary" : "secondary"}
           size="sm"
-          aria-pressed={arrange}
+          aria-pressed={arrangeActive}
           data-testid="canvas-arrange-toggle"
+          disabled={omitVisualMap}
           onClick={() => {
-            if (arrange) {
+            if (omitVisualMap) return;
+            if (arrangeActive) {
               setArrange(false);
               return;
             }
             turnOnArrange();
           }}
         >
-          {arrange ? "Done arranging" : "Arrange"}
+          {arrangeActive ? "Done arranging" : "Arrange"}
         </Button>
         <Button
           type="button"
@@ -521,6 +612,7 @@ export function CanvasMapClient({
           onClick={() => {
             if (relationshipEdit) {
               setRelationshipEdit(false);
+              clearReviseForm();
               setSelectedEdgeId(null);
               return;
             }
@@ -529,6 +621,26 @@ export function CanvasMapClient({
         >
           {relationshipEdit ? "Done editing relationships" : "Edit relationships"}
         </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          data-testid="canvas-export-text"
+          onClick={onExportText}
+        >
+          Export text
+        </Button>
+        {omitVisualMap ? null : (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            data-testid="canvas-export-svg"
+            onClick={onExportSvg}
+          >
+            Export SVG
+          </Button>
+        )}
       </div>
       {relationshipEdit ? (
         <div className="mb-3 grid gap-3 rounded-lg border border-border bg-surface p-3 text-sm">
@@ -604,6 +716,7 @@ export function CanvasMapClient({
               onChange={(event) => {
                 const next = event.target.value;
                 if (!next) {
+                  clearReviseForm();
                   setSelectedEdgeId(null);
                   return;
                 }
@@ -763,22 +876,40 @@ export function CanvasMapClient({
           {relationshipSaveError}
         </p>
       ) : null}
-      <GraphMap
-        nodes={mapNodes}
-        edges={mapEdges}
-        focusEntityId={focusEntityId}
-        savedPositions={overlay}
-        arrange={arrange}
-        relationshipEdit={relationshipEdit}
-        selectedEntityId={selectedEntityId}
-        selectedEdgeId={selectedEdgeId}
-        svgRef={svgRef}
-        onNodePointerDown={onNodePointerDown}
-        onSvgPointerMove={onSvgPointerMove}
-        onSvgPointerUp={onSvgPointerUp}
-        onNodeSelect={onNodeSelect}
-        onEdgeSelect={onEdgeSelect}
-      />
+      {omitVisualMap ? (
+        <p
+          role="status"
+          data-testid="canvas-map-fallback"
+          className="rounded-lg border border-moss-gold/40 border-l-4 border-l-moss-gold bg-moss-gold/10 p-3 text-sm text-moss-slate"
+        >
+          The visual map is omitted for this page size. Ring nodes on the radial
+          layout would overlap their diameters. Directory still lists this returned
+          page. Arrange is unavailable while the map is omitted; relationship edit
+          still uses this page.
+        </p>
+      ) : (
+        <GraphMap
+          nodes={mapNodes}
+          edges={mapEdges}
+          focusEntityId={focusEntityId}
+          savedPositions={overlay}
+          arrange={arrangeActive}
+          relationshipEdit={relationshipEdit}
+          selectedEntityId={selectedEntityId}
+          selectedEdgeId={selectedEdgeId}
+          inspectEntityId={selection?.kind === "node" ? selection.node.entity_id : null}
+          inspectEdgeId={selection?.kind === "edge" ? selection.edge.edge_id : null}
+          svgRef={svgRef}
+          onNodePointerDown={onNodePointerDown}
+          onSvgPointerMove={onSvgPointerMove}
+          onSvgPointerUp={onSvgPointerUp}
+          onNodeSelect={onNodeSelect}
+          onArrangeSelect={onArrangeSelect}
+          onEdgeSelect={onEdgeSelect}
+          onInspectNode={publishInspectNode}
+          onInspectEdge={publishInspectEdge}
+        />
+      )}
     </div>
   );
 }

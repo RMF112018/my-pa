@@ -4,6 +4,7 @@ import { useSyncExternalStore } from "react";
 import { PanelRightClose, PanelRightOpen, Pin, PinOff } from "lucide-react";
 import { IconButton } from "@/components/ui/icon-button";
 import { Sheet } from "@/components/ui/sheet";
+import { CanvasInspector } from "@/components/canvas/canvas-inspector";
 
 const MOBILE_QUERY = "(max-width: 767px)";
 
@@ -36,10 +37,7 @@ function InspectorContent({
           {pinned ? <PinOff size={18} /> : <Pin size={18} />}
         </IconButton>
       </div>
-      <p className="mt-3 text-sm text-text-secondary">
-        Select supported evidence to inspect source, freshness, provenance, and limitations.
-        Nothing sensitive is persisted here.
-      </p>
+      <CanvasInspector />
     </div>
   );
 }
@@ -78,7 +76,9 @@ export function UtilityRegion({
         >
           {open ? <PanelRightClose size={18} /> : <PanelRightOpen size={18} />}
         </IconButton>
-        {open ? (
+        {/* Aside stays in the tree for desktop chrome; hide its inspector body on
+            mobile so CanvasInspector (and its GETs) mount once — Sheet owns mobile. */}
+        {open && !mobile ? (
           <div className="p-4">
             <InspectorContent pinned={pinned} onPinnedChange={onPinnedChange} />
             <label className="mt-6 block text-xs text-text-muted">

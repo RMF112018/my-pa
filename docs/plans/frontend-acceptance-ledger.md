@@ -278,6 +278,32 @@ Conservative dispositions for relationship-edit mode on the seeded Map. Relation
 - After success, reload `entities.graph` / GET `/api/people/graph`; never fabricate edges; receipts from backend; `admitBrowserMutation`; fail-closed expected versions; synthetic `not_implemented`.
 - This package does not claim inspector/temporal/provenance/changes (WP19), a11y/scale/export (WP20), Wave 5 complete, or production activation.
 - UI-IMP-WP21 and UI-IMP-WP22 remain `PROVISIONAL_NOT_ACTIVATED`. UI-IMP-WP24 is not this package.
+- Inspector/temporal/provenance/changes is now UI-IMP-WP19 on this branch; WP18 remains relationship-edit mode only.
+
+## UI-IMP-WP19 Canvas Temporal, Inspector, Provenance, and Changes Semantics notes
+
+Conservative dispositions for Map as-of, Inspector binding, identity-history Changes, and citation residuals on the WP16 Map. This is not a11y/scale/export (WP20), not Wave 5 complete, and not `PASS_VERIFIED` for `PFE-AC-140..184`.
+
+- **Temporal / inspector / changes band:** at most `VALIDATION_REQUIRED`. Do not mark `PFE-AC-140..184` `PASS_VERIFIED`.
+- Temporal: seeded Map GET as-of is URL `asOf` (RFC 3339 with timezone). Invalid `asOf` fail-closes without gateway, same as invalid hops. `is_current` is server-computed when `as_of` is supplied, otherwise null. The browser does not compute currentness. GraphMap edges expose `is_current` true/false/null as `data-is-current` true/false/unspecified; nodes have no `is_current`. Unseeded Map has no as-of UI.
+- Inspector: Map node/edge selection binds to the WP08 UtilityRegion Inspector via React context. Fields are product-owned graph/relationship values only (node: `display_label`, `entity_type`, `status`, `superseded_by_entity_id`, `entity_id` plus People link; edge: `type`, `edge_kind`, state/status, `is_current` as current / not current / unspecified, version, from/to, scope). Empty selection keeps honest stub copy. Inspector selection is not persisted and does not add an ADR-003 table.
+- Changes: a selected entity loads existing `GET /api/people/[id]/identity-history` with a fail-closed decoder. The list shows `occurred_at`, `operation`, and `history_id`, and continues via `after` when a cursor is disclosed. Do not scrape source systems. A selected relationship edge may load `GET /api/people/[id]/relationships` for `effective_from` / `effective_to`; the revise form may prefill those window fields.
+- **Citations residual:** frozen `entities.graph` and `RelationshipView` do not publish `evidence_refs`. Window-only revise remains refused unless replacement refs are stated or citations are explicitly cleared. This package does not widen the WP15 graph contract.
+- This package does not claim a11y/scale/export (WP20), Wave 5 complete, or production activation.
+- UI-IMP-WP21 and UI-IMP-WP22 remain `PROVISIONAL_NOT_ACTIVATED`. UI-IMP-WP24 is not this package.
+- Accessibility, responsive fallback, scale, and smallest client-side export are now UI-IMP-WP20 on this branch; WP19 remains inspector/temporal only.
+
+## UI-IMP-WP20 Canvas Accessibility, Responsive Fallback, and Scale notes
+
+Conservative dispositions for Canvas accessibility, responsive fallback, scale, and smallest client-side export on the WP16 Map. This is not Wave 5 complete as `PASS_VERIFIED`, not WP21/WP22, not WP24, not production activation, and not `PASS_VERIFIED` for `PFE-AC-140..184` or `PFE-AC-191..198`.
+
+- **a11y / responsive / scale / export band:** at most `VALIDATION_REQUIRED`. Never `PASS_VERIFIED` for `PFE-AC-140..184` or `PFE-AC-191..198`.
+- Keyboard/AT: seeded Map is usable without a pointer. Tab reaches nodes and relationship edges. Enter/Space opens Inspector and relationship-edit. Arrange keyboard select is sufficient for arrow-nudge. Focus rings are visible. SVG is not `role="presentation"` hiding operable controls.
+- Responsive: the directory is the primary neighborhood surface on narrow viewports (`md:` like WP08). SVG is not the only membership surface. Truncation/`after` continue remains visible.
+- Scale: show the returned `entities.graph` page only and disclose continue. If SVG would be unusable at the returned size, use directory-first fallback without dropping the page. No unbounded fetch, no React Flow, no graph database, and no raising page size.
+- Export: client-side visible neighborhood only (SVG and/or text list). No new backend. `PFE-AC-185..190` remain `SUPERSEDED` (no MossAIc/ChatLLM). This package does not claim visual-regression or performance gates (WP28) and does not claim the WP27 test-quality audit.
+- This package does not claim Wave 5 complete as `PASS_VERIFIED`, WP21/WP22, WP24, or production activation.
+- UI-IMP-WP21 and UI-IMP-WP22 remain `PROVISIONAL_NOT_ACTIVATED`. UI-IMP-WP24 is not this package.
 
 ## UI-IMP-WP23 Federated Search BFF notes
 

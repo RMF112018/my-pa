@@ -36,6 +36,17 @@ GoodNotes local-source handling is a filesystem and subprocess security boundary
 
 The current implementation details are documented in the [GoodNotes local-source contract](../operations/goodnotes-local-source.md) and enforced by the corresponding architecture/security/unit tests. A future unmerged hardening change is candidate evidence until merged; current documentation must follow the authenticated repository tree.
 
+## Durable pull resumability
+
+GoodNotes pull orchestration is durable and client-scoped as well as Principal/source-scoped. Preserve these current behaviors when extending the pull path:
+
+- a stable client identity plus matching source/lineage may resume the existing open pull run instead of creating a competing run;
+- a latest failed or stale run is not silently retried as a new operation; retry of failed work must be explicit;
+- a failed reuse/resume check must not silently supersede the prior durable run identity or erase its history;
+- resumability and retry semantics do not authorize live source activation, crawling, watching, external model disclosure, or production operation.
+
+The exact schema revision that supports this behavior is executable migration history, not durable prose. Determine it from the current Alembic chain when doing migration work.
+
 ## Semantics and review
 
 GoodNotes-derived semantic material should preserve notebook/page/note-unit lineage and evidence. Model/derived proposals are not silently canonical; review/promotion receipts and human disposition govern promotion where implemented.

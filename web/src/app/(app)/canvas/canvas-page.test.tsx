@@ -6,6 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
+import { readFileSync } from "node:fs";
 import type { PrincipalSession } from "@/contracts/identity";
 import { canvasMap } from "@/lib/routes/canvas";
 
@@ -180,6 +181,7 @@ describe("Canvas page", () => {
     expect(fetchUrls(fetchSpy).some((url) => url.includes("canvas.workspace.get"))).toBe(false);
     expect(screen.queryByTestId("canvas-arrange-toggle")).toBeNull();
     expect(screen.queryByTestId("canvas-relationship-edit-toggle")).toBeNull();
+    expect(screen.queryByTestId("canvas-as-of")).toBeNull();
   });
 
   it("requires a seed and does not invent a directory of everyone", async () => {
@@ -192,6 +194,7 @@ describe("Canvas page", () => {
     expect(fetchUrls(fetchSpy).some((url) => url.includes("canvas.workspace.get"))).toBe(false);
     expect(screen.queryByTestId("canvas-arrange-toggle")).toBeNull();
     expect(screen.queryByTestId("canvas-relationship-edit-toggle")).toBeNull();
+    expect(screen.queryByTestId("canvas-as-of")).toBeNull();
   });
 
   it("refuses invalid hops without calling the gateway", async () => {
@@ -204,6 +207,7 @@ describe("Canvas page", () => {
     expect(fetchUrls(fetchSpy).some((url) => url.includes("canvas.workspace.get"))).toBe(false);
     expect(screen.queryByTestId("canvas-arrange-toggle")).toBeNull();
     expect(screen.queryByTestId("canvas-relationship-edit-toggle")).toBeNull();
+    expect(screen.queryByTestId("canvas-as-of")).toBeNull();
   });
 
   it("refuses invalid pageSize without calling the gateway", async () => {
@@ -214,6 +218,20 @@ describe("Canvas page", () => {
     expect(screen.getByTestId("canvas-unavailable")).toHaveAttribute("data-state", "unavailable");
     expect(fetchSpy).not.toHaveBeenCalled();
   });
+
+  it.each(["yesterday", "not-a-date", "2026-01-01T00:00:00", "12345", "2026-01-01"])(
+    "refuses invalid asOf %s without calling the gateway",
+    async (asOf) => {
+      const fetchSpy = socketFails();
+      await renderServerPage(() => CanvasPage({ searchParams: seededParams({ asOf }) }));
+      expect(screen.getByTestId("canvas-unavailable")).toHaveAttribute("data-state", "unavailable");
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(fetchUrls(fetchSpy).some((url) => url.includes("canvas.workspace.get"))).toBe(false);
+      expect(screen.queryByTestId("canvas-arrange-toggle")).toBeNull();
+      expect(screen.queryByTestId("canvas-relationship-edit-toggle")).toBeNull();
+      expect(screen.queryByTestId("canvas-as-of")).toBeNull();
+    },
+  );
 
   it("posts entities.graph with a snake_case payload", async () => {
     const fetchSpy = answerGraph(TWO_NODES);
@@ -258,6 +276,7 @@ describe("Canvas page", () => {
     expect(screen.queryByTestId("canvas-directory")).toBeNull();
     expect(screen.queryByTestId("canvas-arrange-toggle")).toBeNull();
     expect(screen.queryByTestId("canvas-relationship-edit-toggle")).toBeNull();
+    expect(screen.queryByTestId("canvas-as-of")).toBeNull();
     expect(fetchUrls(fetchSpy).some((url) => url.includes("canvas.workspace.get"))).toBe(false);
   });
 
@@ -275,6 +294,7 @@ describe("Canvas page", () => {
     expect(screen.queryByTestId("canvas-directory")).toBeNull();
     expect(screen.queryByTestId("canvas-arrange-toggle")).toBeNull();
     expect(screen.queryByTestId("canvas-relationship-edit-toggle")).toBeNull();
+    expect(screen.queryByTestId("canvas-as-of")).toBeNull();
     expect(fetchUrls(fetchSpy).some((url) => url.includes("canvas.workspace.get"))).toBe(false);
   });
 
@@ -288,6 +308,68 @@ describe("Canvas page", () => {
     expect(screen.queryByTestId("canvas-continue")).toBeNull();
     expect(screen.getByTestId("canvas-arrange-toggle")).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByTestId("canvas-relationship-edit-toggle")).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByTestId("canvas-as-of")).toBeTruthy();
+    expect(screen.getByTestId("canvas-as-of").textContent).not.toMatch(/current now/i);
+  });
+
+  it("applies as-of as a GET that preserves the seed and drops after", async () => {
+    answerGraph(TWO_NODES);
+    await renderServerPage(() =>
+      CanvasPage({
+        searchParams: seededParams({
+          hops: "2",
+          relationshipTypes: "works_for",
+          pageSize: "25",
+          after: CURSOR,
+        }),
+      }),
+    );
+    const form = screen.getByTestId("canvas-as-of").querySelector("form");
+    expect(form).not.toBeNull();
+    expect(form).toHaveAttribute("method", "get");
+    expect(form).toHaveAttribute("action", "/canvas");
+    const asOfInput = screen.getByLabelText("As of");
+    expect(asOfInput).toHaveAttribute("name", "asOf");
+    expect(asOfInput).toHaveAttribute("placeholder", "2026-01-01T00:00:00Z");
+    expect(asOfInput).not.toHaveAttribute("type", "datetime-local");
+    expect(screen.getByTestId("canvas-as-of-apply")).toHaveAttribute("type", "submit");
+    const fields = new URLSearchParams();
+    for (const input of form!.querySelectorAll("input")) {
+      const name = input.getAttribute("name");
+      if (!name) continue;
+      if (name === "asOf") {
+        fields.set("asOf", "2026-01-01T00:00:00Z");
+        continue;
+      }
+      if (input.value) fields.set(name, input.value);
+    }
+    expect(fields.has("after")).toBe(false);
+    const applied = canvasMap({
+      focusEntityId: FOCUS,
+      hops: 2,
+      relationshipTypes: ["works_for"],
+      pageSize: 25,
+      asOf: "2026-01-01T00:00:00Z",
+    });
+    expect(applied.startsWith("/canvas?")).toBe(true);
+    expect(applied).toContain("asOf=2026-01-01T00%3A00%3A00Z");
+    const expected = new URL(applied, "http://canvas.test").searchParams;
+    expect(fields.get("focusEntityId")).toBe(expected.get("focusEntityId"));
+    expect(fields.get("hops")).toBe(expected.get("hops"));
+    expect(fields.get("relationshipTypes")).toBe(expected.get("relationshipTypes"));
+    expect(fields.get("pageSize")).toBe(expected.get("pageSize"));
+    expect(fields.get("asOf")).toBe(expected.get("asOf"));
+  });
+
+  it("states that is_current is server-supplied for a valid as-of slice", async () => {
+    answerGraph(TWO_NODES);
+    await renderServerPage(() =>
+      CanvasPage({ searchParams: seededParams({ asOf: "2026-01-01T00:00:00Z" }) }),
+    );
+    expect(screen.getByTestId("canvas-as-of").textContent).toMatch(/server/i);
+    expect(screen.getByTestId("canvas-as-of").textContent).toMatch(/as-of slice/i);
+    expect(screen.getByTestId("canvas-as-of").textContent).not.toMatch(/current now/i);
+    expect(screen.getByLabelText("As of")).toHaveValue("2026-01-01T00:00:00Z");
   });
 
   it("still shows the graph when workspace get is unavailable", async () => {
@@ -349,5 +431,31 @@ describe("Canvas page", () => {
     expect(screen.getByTestId("degraded-banner")).toBeTruthy();
     expect(screen.getByTestId("degraded-banner").textContent).toMatch(/less than the whole/i);
     expect(screen.getByTestId("degraded-banner").textContent).not.toMatch(/complete coverage/i);
+  });
+
+  it("keeps the unseeded seed-required instructional surface readable", async () => {
+    const fetchSpy = socketFails();
+    await renderServerPage(() => CanvasPage({ searchParams: Promise.resolve({}) }));
+    const required = screen.getByTestId("canvas-seed-required");
+    expect(required).toBeTruthy();
+    expect(required).toHaveAttribute("data-state", "empty");
+    expect(screen.getByText("A seed is required")).toBeTruthy();
+    expect(required.textContent).toMatch(/seed/i);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("places Directory before Neighborhood in a md two-column grid", async () => {
+    answerGraph(TWO_NODES);
+    await renderServerPage(() => CanvasPage({ searchParams: seededParams() }));
+    const directoryHeading = screen.getByRole("heading", { name: "Directory", level: 2 });
+    const mapHeading = screen.getByRole("heading", { name: "Neighborhood", level: 2 });
+    expect(directoryHeading.compareDocumentPosition(mapHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    const grid = directoryHeading.closest("div");
+    expect(grid?.className).toContain("md:grid-cols-2");
+    const source = readFileSync("src/app/(app)/canvas/canvas-page.tsx", "utf8");
+    expect(source).toContain("md:grid-cols-2");
+    expect(source).toContain('data-testid="canvas-continue"');
   });
 });

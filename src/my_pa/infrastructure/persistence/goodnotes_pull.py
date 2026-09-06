@@ -6,7 +6,7 @@ import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import Table, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -440,12 +440,10 @@ class SqlGoodNotesPullRepository:
         )
         return receipt_id
 
-    def work_states(self, principal_id: str) -> tuple[PullWorkState, ...]:
-        return self._work_states(principal_id)
+    def work_states(self, principal_id: str, client_id: str) -> tuple[PullWorkState, ...]:
+        return self._work_states(principal_id, client_id=client_id)
 
-    def _work_states(
-        self, principal_id: str, *, client_id: str | None = None
-    ) -> tuple[PullWorkState, ...]:
+    def _work_states(self, principal_id: str, *, client_id: str) -> tuple[PullWorkState, ...]:
         eligible = (
             select(
                 goodnotes_ingestion_runs.c.run_id,
@@ -523,9 +521,8 @@ class SqlGoodNotesPullRepository:
         )
         assignment_partition = [_mine(goodnotes_pull_assignments, principal_id)]
         completion_partition = [_mine(goodnotes_pull_completions, principal_id)]
-        if client_id is not None:
-            assignment_partition.append(goodnotes_pull_assignments.c.client_id == client_id)
-            completion_partition.append(goodnotes_pull_completions.c.client_id == client_id)
+        assignment_partition.append(goodnotes_pull_assignments.c.client_id == client_id)
+        completion_partition.append(goodnotes_pull_completions.c.client_id == client_id)
         attempt_rows = self._connection.execute(
             select(
                 goodnotes_pull_assignments.c.run_id,
@@ -563,11 +560,21 @@ class SqlGoodNotesPullRepository:
                 )
             )
         }
+        latest = {}
+        for row in self._connection.execute(
+            self._assignment_select()
+            .where(*assignment_partition)
+            .order_by(goodnotes_pull_assignments.c.attempt)
+        ):
+            assignment = _assignment_from_row(row)
+            latest[_work_key(assignment.work)] = (assignment, row.created_at)
         return tuple(
             PullWorkState(
                 work=work,
                 attempts=attempts.get(_work_key(work), 0),
                 completed=_work_key(work) in completed_work,
+                latest_assignment=latest[_work_key(work)][0] if _work_key(work) in latest else None,
+                assigned_at=latest[_work_key(work)][1] if _work_key(work) in latest else None,
             )
             for work in works
         )
@@ -581,7 +588,15 @@ class SqlGoodNotesPullRepository:
         expected_attempts: tuple[int, ...],
         *,
         max_attempts: int,
+        lease_seconds: int,
     ) -> tuple[PullAssignment, ...]:
+        now = self.lock_session(
+            principal_id,
+            client_id,
+            context_id,
+            max_attempts=max_attempts,
+            lease_seconds=lease_seconds,
+        )
         fingerprint = _digest(
             [
                 principal_id,
@@ -608,7 +623,9 @@ class SqlGoodNotesPullRepository:
                 return self._assignments_for_claim(principal_id, claim_id)
             if len(assignments) != len(expected_attempts):
                 raise PullRepositoryConflictError
-            states = {_work_key(state.work): state for state in self.work_states(principal_id)}
+            states = {
+                _work_key(state.work): state for state in self.work_states(principal_id, client_id)
+            }
             for assignment, expected in zip(assignments, expected_attempts, strict=True):
                 state = states.get(_work_key(assignment.work))
                 if (
@@ -616,14 +633,16 @@ class SqlGoodNotesPullRepository:
                     or state.completed
                     or state.attempts != expected
                     or expected >= max_attempts
+                    or (
+                        state.assigned_at is not None
+                        and now < state.assigned_at + timedelta(seconds=lease_seconds)
+                    )
                     or assignment.attempt != expected + 1
                     or assignment.client_id != client_id
                     or assignment.context_id != context_id
                     or assignment.work.principal_id != principal_id
                 ):
                     raise PullRepositoryConflictError
-            self._ensure_session(principal_id, client_id, context_id, max_attempts)
-            now = self._clock()
             self._connection.execute(
                 goodnotes_pull_claims.insert().values(
                     _bound(
@@ -803,11 +822,23 @@ class SqlGoodNotesPullRepository:
         context_id: str,
         admissions: tuple[PullCompletionAdmission, ...],
     ) -> tuple[PullCompletionReceipt, ...]:
+        session = self._connection.execute(
+            select(goodnotes_pull_sessions)
+            .where(
+                _mine(goodnotes_pull_sessions, principal_id),
+                goodnotes_pull_sessions.c.client_id == client_id,
+            )
+            .with_for_update()
+        ).one_or_none()
+        if session is None or session.context_id != context_id:
+            raise PullRepositoryConflictError
         for run_id in sorted({item.completion.run_id for item in admissions}):
             if not self._lock_run(principal_id, run_id):
                 raise PullRepositoryConflictError
         prior: list[PullCompletionReceipt] = []
-        states = {_work_key(state.work): state for state in self.work_states(principal_id)}
+        states = {
+            _work_key(state.work): state for state in self.work_states(principal_id, client_id)
+        }
         for admission in admissions:
             completion = admission.completion
             assignment = self.assignment(principal_id, client_id, completion.assignment_id)
@@ -831,7 +862,7 @@ class SqlGoodNotesPullRepository:
             if material is None or material.result_sha256 != completion.result_sha256:
                 raise PullRepositoryConflictError
             stored = self._completion_for(principal_id, completion.assignment_id)
-            keyed = self._completion_for_key(principal_id, completion.idempotency_key)
+            keyed = self._completion_for_key(principal_id, client_id, completion.idempotency_key)
             existing = stored or keyed
             if existing is not None:
                 if (
@@ -881,20 +912,63 @@ class SqlGoodNotesPullRepository:
             raise PullRepositoryConflictError from None
         return tuple(receipts)
 
-    def status(self, principal_id: str, client_id: str) -> GoodNotesPullStatus:
-        session = self._connection.execute(
-            select(goodnotes_pull_sessions.c.max_attempts).where(
+    def status(
+        self,
+        principal_id: str,
+        client_id: str,
+        *,
+        context_id: str,
+        max_attempts: int,
+        lease_seconds: int,
+    ) -> GoodNotesPullStatus:
+        self._validate_policy(max_attempts, lease_seconds)
+        session_query = (
+            select(goodnotes_pull_sessions)
+            .where(
                 _mine(goodnotes_pull_sessions, principal_id),
                 goodnotes_pull_sessions.c.client_id == client_id,
             )
-        ).one_or_none()
-        states = self._work_states(principal_id, client_id=client_id)
-        maximum = 10 if session is None else int(session.max_attempts)
+            .with_for_update()
+        )
+        session = self._connection.execute(session_query).one_or_none()
+        if session is None:
+            states = self._work_states(principal_id, client_id=client_id)
+            # A creator can commit after the first absent-session lookup. Recheck
+            # after reading work so every visible assignment has validated policy.
+            session = self._connection.execute(session_query).one_or_none()
+        if session is not None and (
+            session.context_id != context_id
+            or session.max_attempts != max_attempts
+            or session.lease_seconds != lease_seconds
+        ):
+            raise PullRepositoryConflictError
+        if session is not None:
+            states = self._work_states(principal_id, client_id=client_id)
+        now = self._clock()
+        expired = {
+            _work_key(state.work)
+            for state in states
+            if state.assigned_at is not None
+            and now >= state.assigned_at + timedelta(seconds=lease_seconds)
+        }
         return GoodNotesPullStatus(
-            pending=sum(not state.completed and state.attempts == 0 for state in states),
-            assigned=sum(not state.completed and 0 < state.attempts < maximum for state in states),
+            pending=sum(
+                not state.completed
+                and state.attempts < max_attempts
+                and (state.attempts == 0 or _work_key(state.work) in expired)
+                for state in states
+            ),
+            assigned=sum(
+                not state.completed and state.attempts > 0 and _work_key(state.work) not in expired
+                for state in states
+            ),
             completed=sum(state.completed for state in states),
-            exhausted=sum(not state.completed and state.attempts >= maximum for state in states),
+            exhausted=sum(
+                not state.completed
+                and state.attempts >= max_attempts
+                and _work_key(state.work) in expired
+                for state in states
+            ),
         )
 
     def semantic_review_cases(
@@ -1266,9 +1340,28 @@ class SqlGoodNotesPullRepository:
         }
         return tuple(found[digest] for digest in proposal_sha256s if digest in found)
 
-    def _ensure_session(
-        self, principal_id: str, client_id: str, context_id: str, max_attempts: int
-    ) -> None:
+    @staticmethod
+    def _validate_policy(max_attempts: object, lease_seconds: object) -> None:
+        if (
+            isinstance(max_attempts, bool)
+            or not isinstance(max_attempts, int)
+            or not 1 <= max_attempts <= 10
+            or isinstance(lease_seconds, bool)
+            or not isinstance(lease_seconds, int)
+            or not 60 <= lease_seconds <= 86400
+        ):
+            raise PullRepositoryConflictError
+
+    def lock_session(
+        self,
+        principal_id: str,
+        client_id: str,
+        context_id: str,
+        *,
+        max_attempts: int,
+        lease_seconds: int,
+    ) -> datetime:
+        self._validate_policy(max_attempts, lease_seconds)
         self._connection.execute(
             pg_insert(goodnotes_pull_sessions)
             .values(
@@ -1279,11 +1372,12 @@ class SqlGoodNotesPullRepository:
                         "context_id": context_id,
                         "client_id": client_id,
                         "max_attempts": max_attempts,
+                        "lease_seconds": lease_seconds,
                         "created_at": self._clock(),
                     },
                 )
             )
-            .on_conflict_do_nothing(constraint="one_goodnotes_pull_session_per_client")
+            .on_conflict_do_nothing()
         )
         session = self._connection.execute(
             select(goodnotes_pull_sessions)
@@ -1297,8 +1391,13 @@ class SqlGoodNotesPullRepository:
             session is None
             or session.context_id != context_id
             or session.max_attempts != max_attempts
+            or session.lease_seconds != lease_seconds
         ):
             raise PullRepositoryConflictError
+        now = self._clock()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise PullRepositoryConflictError
+        return now
 
     def _assignment_select(self) -> Select[tuple[object, ...]]:
         return select(
@@ -1341,12 +1440,13 @@ class SqlGoodNotesPullRepository:
         return None if row is None else self._completion_from_row(row)
 
     def _completion_for_key(
-        self, principal_id: str, idempotency_key: str
+        self, principal_id: str, client_id: str, idempotency_key: str
     ) -> PullCompletionReceipt | None:
         row = self._connection.execute(
             select(goodnotes_pull_completions).where(
                 _mine(goodnotes_pull_completions, principal_id),
                 goodnotes_pull_completions.c.idempotency_key == idempotency_key,
+                goodnotes_pull_completions.c.client_id == client_id,
             )
         ).one_or_none()
         return None if row is None else self._completion_from_row(row)

@@ -387,6 +387,30 @@ def test_goodnotes_pull_key_is_optional_while_disabled_and_hidden() -> None:
     assert settings.goodnotes_pull_enabled is False
     assert settings.goodnotes_pull_cursor_signing_key == ""
     assert "goodnotes_pull_cursor_signing_key" not in repr(settings)
+    assert settings.goodnotes_pull_assignment_lease_seconds == 900
+
+
+@pytest.mark.parametrize("seconds", [60, 900, 86400])
+def test_goodnotes_pull_assignment_lease_accepts_bounded_seconds(seconds: int) -> None:
+    settings = load_settings(
+        {
+            DATABASE_URL: _A_URL,
+            f"{ENV_PREFIX}GOODNOTES_PULL_ASSIGNMENT_LEASE_SECONDS": str(seconds),
+        }
+    )
+    assert settings.goodnotes_pull_assignment_lease_seconds == seconds
+    assert settings.goodnotes_pull_enabled is False
+
+
+@pytest.mark.parametrize("value", ["59", "86401", "900.5", "true", "", "invalid"])
+def test_goodnotes_pull_assignment_lease_refuses_invalid_seconds(value: str) -> None:
+    with pytest.raises(SettingsError):
+        load_settings(
+            {
+                DATABASE_URL: _A_URL,
+                f"{ENV_PREFIX}GOODNOTES_PULL_ASSIGNMENT_LEASE_SECONDS": value,
+            }
+        )
 
 
 def test_an_absent_database_url_is_refused_rather_than_defaulted() -> None:

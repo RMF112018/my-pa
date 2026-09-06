@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import axe from "axe-core";
 import { CanvasMapClient } from "./canvas-map-client";
+import { CanvasInspector } from "./canvas-inspector";
+import { InspectorSelectionProvider } from "@/components/shell/inspector-selection";
+import { IDENTITY_HISTORY_ENTRY } from "@/lib/api/decode/capabilities/_entity-fixtures";
 import type { GraphEdge, GraphNode } from "@/lib/api/decode/capabilities/entities.graph";
 
 const FOCUS = "ent_aaaaaaaa11111111";
@@ -55,6 +59,12 @@ const ASSIGNMENT_EDGE: GraphEdge = {
   version: 1,
 };
 
+const SECOND_EDGE: GraphEdge = {
+  ...RELATIONSHIP_EDGE,
+  edge_id: "erel_bbbbbbbb22222222",
+  type: "reports_to",
+};
+
 const EDGES: readonly GraphEdge[] = [RELATIONSHIP_EDGE, ASSIGNMENT_EDGE];
 
 const NEW_EDGE: GraphEdge = {
@@ -63,11 +73,11 @@ const NEW_EDGE: GraphEdge = {
   type: "reports_to",
 };
 
-function mount(scopeEntityId = "") {
+function mount(scopeEntityId = "", edges: readonly GraphEdge[] = EDGES) {
   return render(
     <CanvasMapClient
       nodes={NODES}
-      edges={EDGES}
+      edges={edges}
       focusEntityId={FOCUS}
       scopeEntityId={scopeEntityId}
       savedPositions={{}}
@@ -76,6 +86,25 @@ function mount(scopeEntityId = "") {
         scopeEntityId ? { focusEntityId: FOCUS, scopeEntityId } : { focusEntityId: FOCUS }
       }
     />,
+  );
+}
+
+function mountWithInspector(scopeEntityId = "") {
+  return render(
+    <InspectorSelectionProvider>
+      <CanvasMapClient
+        nodes={NODES}
+        edges={EDGES}
+        focusEntityId={FOCUS}
+        scopeEntityId={scopeEntityId}
+        savedPositions={{}}
+        version={0}
+        graphQuery={
+          scopeEntityId ? { focusEntityId: FOCUS, scopeEntityId } : { focusEntityId: FOCUS }
+        }
+      />
+      <CanvasInspector />
+    </InspectorSelectionProvider>,
   );
 }
 
@@ -165,15 +194,59 @@ function fetchMeta(url: string, init?: RequestInit) {
   return { href: String(url), method: String(init?.method ?? "GET") };
 }
 
+function relationshipsBody(overrides: Record<string, unknown> = {}) {
+  return {
+    relationships: [
+      {
+        relationship_id: RELATIONSHIP_EDGE.edge_id,
+        is_current: true,
+        from_entity_id: FOCUS,
+        relationship_type: "works_for",
+        to_entity_id: NEIGHBOR,
+        scope_entity_id: null,
+        state: "active",
+        effective_from: null,
+        effective_to: null,
+        version: 1,
+        ...overrides,
+      },
+    ],
+  };
+}
+
+function isRelationshipsGet(href: string, method: string) {
+  return method === "GET" && /\/api\/people\/[^/]+\/relationships$/.test(href);
+}
+
+function postBodyFor(fetchSpy: ReturnType<typeof vi.fn>, href: string) {
+  const call = fetchSpy.mock.calls.find(
+    ([url, init]) => fetchMeta(String(url), init).href === href,
+  );
+  return JSON.parse(String(call?.[1]?.body ?? "{}")) as Record<string, unknown>;
+}
+
+function identityHistoryBody(overrides: Record<string, unknown> = {}) {
+  return {
+    entity_id: FOCUS,
+    entries: [IDENTITY_HISTORY_ENTRY],
+    is_truncated: false,
+    next_cursor: null,
+    audit_id: "audit_aaaaaaaa11111111",
+    shape: "backend",
+    disclosure: { limitations: [] },
+    ...overrides,
+  };
+}
+
 function fillCreateForm() {
   fireEvent.change(screen.getByLabelText("From"), { target: { value: FOCUS } });
   fireEvent.change(screen.getByLabelText("To"), { target: { value: NEIGHBOR } });
   fireEvent.change(screen.getByLabelText("Relationship type"), { target: { value: "reports_to" } });
 }
 
-function selectRelationshipEdge() {
+function selectRelationshipEdge(edgeId = RELATIONSHIP_EDGE.edge_id) {
   fireEvent.change(screen.getByLabelText("Selected relationship"), {
-    target: { value: RELATIONSHIP_EDGE.edge_id },
+    target: { value: edgeId },
   });
 }
 
@@ -188,15 +261,46 @@ afterEach(() => {
 });
 
 describe("CanvasMapClient", () => {
-  it("defaults to read Map with People links and Arrange off", () => {
+  it("defaults to inspectable Map without People wrappers on the graph", () => {
     mount();
     expect(screen.getByTestId("canvas-arrange-toggle")).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByTestId("canvas-relationship-edit-toggle")).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByRole("link", { name: "Pat Synthetic" })).toBeNull();
+    expect(screen.getByTestId(`canvas-node-${FOCUS}`)).toBeTruthy();
+    expect(screen.queryByTestId("canvas-relationship-create-form")).toBeNull();
+  });
+
+  it("publishes node fields to the inspector and keeps the People link there", async () => {
+    const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
+      const { href, method } = fetchMeta(String(url), init);
+      if (method === "GET" && href.startsWith(`/api/people/${FOCUS}/identity-history`)) {
+        return jsonResponse(identityHistoryBody());
+      }
+      throw new Error(`unexpected ${method} ${href}`);
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    mountWithInspector();
+    expect(screen.queryByRole("link", { name: "Pat Synthetic" })).toBeNull();
+    fireEvent.click(screen.getByTestId(`canvas-node-${FOCUS}`));
+    const panel = await screen.findByTestId("inspector-node");
+    expect(panel).toHaveTextContent("Pat Synthetic");
+    expect(panel).toHaveTextContent("person");
+    expect(panel).toHaveTextContent("active");
+    expect(panel).toHaveTextContent(FOCUS);
     expect(screen.getByRole("link", { name: "Pat Synthetic" })).toHaveAttribute(
       "href",
       `/people/${FOCUS}`,
     );
-    expect(screen.queryByTestId("canvas-relationship-create-form")).toBeNull();
+    expect(await screen.findByTestId("inspector-changes")).toHaveTextContent(
+      IDENTITY_HISTORY_ENTRY.operation,
+    );
+    expect(screen.getByTestId("inspector-changes")).toHaveTextContent(
+      IDENTITY_HISTORY_ENTRY.history_id,
+    );
+    expect(screen.getByTestId("inspector-changes")).toHaveTextContent(
+      IDENTITY_HISTORY_ENTRY.occurred_at,
+    );
+    expect(screen.getByTestId("inspector-changes")).not.toHaveTextContent("direct_mutation");
   });
 
   it("disables People links while arranging", () => {
@@ -421,6 +525,7 @@ describe("CanvasMapClient", () => {
   it("shows a truthful conflict on revise and does not treat it as success", async () => {
     const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
       const { href, method } = fetchMeta(String(url), init);
+      if (isRelationshipsGet(href, method)) return jsonResponse(relationshipsBody());
       if (method === "POST" && href === "/api/canvas/relationships/revise") {
         return jsonResponse(conflictBody(), 409);
       }
@@ -440,10 +545,7 @@ describe("CanvasMapClient", () => {
     expect(await screen.findByTestId("canvas-relationship-conflict")).toHaveTextContent(
       /relationship version changed/i,
     );
-    const reviseBody = JSON.parse(String(fetchSpy.mock.calls[0][1]?.body ?? "{}")) as Record<
-      string,
-      unknown
-    >;
+    const reviseBody = postBodyFor(fetchSpy, "/api/canvas/relationships/revise");
     expect(reviseBody).toMatchObject({
       relationship_id: RELATIONSHIP_EDGE.edge_id,
       expected_version: 1,
@@ -458,6 +560,7 @@ describe("CanvasMapClient", () => {
   it("does not POST a window-only revise that would clear citations", async () => {
     const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
       const { href, method } = fetchMeta(String(url), init);
+      if (isRelationshipsGet(href, method)) return jsonResponse(relationshipsBody());
       throw new Error(`unexpected ${method} ${href}`);
     });
     vi.stubGlobal("fetch", fetchSpy);
@@ -471,6 +574,9 @@ describe("CanvasMapClient", () => {
     expect(screen.getByTestId("canvas-relationship-save-error")).toHaveTextContent(
       /cannot display current citations/i,
     );
+    expect(screen.getByTestId("canvas-relationship-save-error")).toHaveTextContent(
+      /inspector cannot read evidence_refs/i,
+    );
     expect(
       fetchSpy.mock.calls.some(
         ([url, init]) => fetchMeta(String(url), init).href === "/api/canvas/relationships/revise",
@@ -478,9 +584,123 @@ describe("CanvasMapClient", () => {
     ).toBe(false);
   });
 
+  it("prefills the revise window from entities.relationships and still refuses window-only revise", async () => {
+    const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
+      const { href, method } = fetchMeta(String(url), init);
+      if (isRelationshipsGet(href, method)) {
+        return jsonResponse(
+          relationshipsBody({
+            effective_from: "2026-01-01T00:00:00Z",
+            effective_to: "2026-12-31T00:00:00Z",
+          }),
+        );
+      }
+      throw new Error(`unexpected ${method} ${href}`);
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    mount();
+    openRelationshipEdit();
+    selectRelationshipEdge();
+    await waitFor(() => {
+      expect(screen.getByLabelText("Effective from")).toHaveValue("2026-01-01T00:00:00Z");
+    });
+    expect(screen.getByLabelText("Effective to")).toHaveValue("2026-12-31T00:00:00Z");
+    fireEvent.click(screen.getByTestId("canvas-relationship-revise-submit"));
+    expect(screen.getByTestId("canvas-relationship-save-error")).toHaveTextContent(
+      /cannot display current citations/i,
+    );
+    expect(screen.getByTestId("canvas-relationship-save-error")).toHaveTextContent(
+      /inspector cannot read evidence_refs/i,
+    );
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) => fetchMeta(String(url), init).href === "/api/canvas/relationships/revise",
+      ),
+    ).toBe(false);
+  });
+
+  it("does not revise the newly selected edge with the prior edge window", async () => {
+    const twoEdges = [RELATIONSHIP_EDGE, SECOND_EDGE, ASSIGNMENT_EDGE];
+    const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
+      const { href, method } = fetchMeta(String(url), init);
+      if (isRelationshipsGet(href, method)) {
+        return jsonResponse({
+          relationships: [
+            {
+              relationship_id: RELATIONSHIP_EDGE.edge_id,
+              is_current: true,
+              from_entity_id: FOCUS,
+              relationship_type: "works_for",
+              to_entity_id: NEIGHBOR,
+              scope_entity_id: null,
+              state: "active",
+              effective_from: "2026-01-01T00:00:00Z",
+              effective_to: "2026-06-01T00:00:00Z",
+              version: 1,
+            },
+            {
+              relationship_id: SECOND_EDGE.edge_id,
+              is_current: true,
+              from_entity_id: FOCUS,
+              relationship_type: "reports_to",
+              to_entity_id: NEIGHBOR,
+              scope_entity_id: null,
+              state: "active",
+              effective_from: "2026-07-01T00:00:00Z",
+              effective_to: "2026-12-01T00:00:00Z",
+              version: 1,
+            },
+          ],
+        });
+      }
+      if (method === "POST" && href === "/api/canvas/relationships/revise") {
+        return jsonResponse(receipt(SECOND_EDGE.edge_id));
+      }
+      if (method === "GET" && href.startsWith("/api/people/graph")) {
+        return jsonResponse({ nodes: NODES, edges: twoEdges, next_cursor: null });
+      }
+      throw new Error(`unexpected ${method} ${href}`);
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    mount("", twoEdges);
+    openRelationshipEdit();
+    selectRelationshipEdge(RELATIONSHIP_EDGE.edge_id);
+    await waitFor(() => {
+      expect(screen.getByLabelText("Effective from")).toHaveValue("2026-01-01T00:00:00Z");
+    });
+    expect(screen.getByLabelText("Effective to")).toHaveValue("2026-06-01T00:00:00Z");
+    selectRelationshipEdge(SECOND_EDGE.edge_id);
+    await waitFor(() => {
+      expect(screen.getByLabelText("Effective from")).toHaveValue("2026-07-01T00:00:00Z");
+    });
+    expect(screen.getByLabelText("Effective to")).toHaveValue("2026-12-01T00:00:00Z");
+    fireEvent.change(screen.getByLabelText("Evidence refs"), {
+      target: { value: "ev_stated" },
+    });
+    fireEvent.click(screen.getByTestId("canvas-relationship-revise-submit"));
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.some(
+          ([url, init]) => fetchMeta(String(url), init).href === "/api/canvas/relationships/revise",
+        ),
+      ).toBe(true);
+    });
+    const reviseBody = postBodyFor(fetchSpy, "/api/canvas/relationships/revise");
+    expect(reviseBody).toMatchObject({
+      relationship_id: SECOND_EDGE.edge_id,
+      expected_version: 1,
+      effective_from: "2026-07-01T00:00:00Z",
+      effective_to: "2026-12-01T00:00:00Z",
+      evidence_refs: ["ev_stated"],
+    });
+    expect(reviseBody.effective_from).not.toBe("2026-01-01T00:00:00Z");
+    expect(reviseBody.effective_to).not.toBe("2026-06-01T00:00:00Z");
+  });
+
   it("POSTs stated evidence_refs on revise", async () => {
     const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
       const { href, method } = fetchMeta(String(url), init);
+      if (isRelationshipsGet(href, method)) return jsonResponse(relationshipsBody());
       if (method === "POST" && href === "/api/canvas/relationships/revise") {
         return jsonResponse(receipt(RELATIONSHIP_EDGE.edge_id));
       }
@@ -514,6 +734,7 @@ describe("CanvasMapClient", () => {
   it("shows a truthful conflict on end, never DELETE", async () => {
     const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
       const { href, method } = fetchMeta(String(url), init);
+      if (isRelationshipsGet(href, method)) return jsonResponse(relationshipsBody());
       if (method === "POST" && href === "/api/canvas/relationships/end") {
         return jsonResponse(conflictBody(), 409);
       }
@@ -531,12 +752,9 @@ describe("CanvasMapClient", () => {
       /relationship version changed/i,
     );
     const methods = fetchSpy.mock.calls.map(([, init]) => String(init?.method ?? "GET"));
-    expect(methods).toEqual(["POST"]);
+    expect(methods.includes("POST")).toBe(true);
     expect(methods.includes("DELETE")).toBe(false);
-    const endBody = JSON.parse(String(fetchSpy.mock.calls[0][1]?.body ?? "{}")) as Record<
-      string,
-      unknown
-    >;
+    const endBody = postBodyFor(fetchSpy, "/api/canvas/relationships/end");
     expect(endBody).toMatchObject({
       relationship_id: RELATIONSHIP_EDGE.edge_id,
       expected_version: 1,
@@ -617,6 +835,8 @@ describe("CanvasMapClient", () => {
 
   it("does not POST end when end_now is false and effective_end is empty", async () => {
     const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
+      const { href, method } = fetchMeta(String(url), init);
+      if (isRelationshipsGet(href, method)) return jsonResponse(relationshipsBody());
       throw new Error(`unexpected ${fetchMeta(String(url), init).method} ${String(url)}`);
     });
     vi.stubGlobal("fetch", fetchSpy);
@@ -632,12 +852,17 @@ describe("CanvasMapClient", () => {
     expect(await screen.findByTestId("canvas-relationship-save-error")).toHaveTextContent(
       /end needs end_now or an effective end/i,
     );
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(
+      fetchSpy.mock.calls.some(
+        ([url, init]) => fetchMeta(String(url), init).href === "/api/canvas/relationships/end",
+      ),
+    ).toBe(false);
   });
 
   it("ends with effective_end and never sends end_now beside it", async () => {
     const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
       const { href, method } = fetchMeta(String(url), init);
+      if (isRelationshipsGet(href, method)) return jsonResponse(relationshipsBody());
       if (method === "POST" && href === "/api/canvas/relationships/end") {
         return jsonResponse(conflictBody(), 409);
       }
@@ -658,10 +883,7 @@ describe("CanvasMapClient", () => {
     expect(await screen.findByTestId("canvas-relationship-conflict")).toHaveTextContent(
       /relationship version changed/i,
     );
-    const endBody = JSON.parse(String(fetchSpy.mock.calls[0][1]?.body ?? "{}")) as Record<
-      string,
-      unknown
-    >;
+    const endBody = postBodyFor(fetchSpy, "/api/canvas/relationships/end");
     expect(endBody).toMatchObject({
       relationship_id: RELATIONSHIP_EDGE.edge_id,
       expected_version: 1,
@@ -693,5 +915,165 @@ describe("CanvasMapClient", () => {
         ([url, init]) => fetchMeta(String(url), init).href === "/api/canvas/relationships",
       ),
     ).toBe(false);
+  });
+
+  it("publishes relationship edge fields and window without inventing citations", async () => {
+    const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
+      const { href, method } = fetchMeta(String(url), init);
+      if (isRelationshipsGet(href, method)) {
+        return jsonResponse(
+          relationshipsBody({
+            effective_from: "2026-02-01T00:00:00Z",
+            effective_to: null,
+          }),
+        );
+      }
+      throw new Error(`unexpected ${method} ${href}`);
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    mountWithInspector();
+    fireEvent.click(screen.getByTestId(`canvas-edge-${RELATIONSHIP_EDGE.edge_id}`));
+    const panel = await screen.findByTestId("inspector-edge");
+    expect(panel).toHaveTextContent("works_for");
+    expect(panel).toHaveTextContent("relationship");
+    expect(panel).toHaveTextContent("active");
+    expect(panel).toHaveTextContent("unspecified");
+    expect(panel).toHaveTextContent(FOCUS);
+    expect(panel).toHaveTextContent(NEIGHBOR);
+    await waitFor(() => {
+      expect(panel).toHaveTextContent("2026-02-01T00:00:00Z");
+    });
+    expect(panel).not.toHaveTextContent("evidence_refs");
+  });
+});
+
+function syntheticNode(index: number): GraphNode {
+  const entityId = index === 0 ? FOCUS : `ent_${index.toString(16).padStart(16, "0")}`;
+  return {
+    entity_id: entityId,
+    projection_id: `gprj_${entityId}`,
+    entity_type: "person",
+    display_label: `Synthetic ${index}`,
+    status: "active",
+    superseded_by_entity_id: null,
+  };
+}
+
+function neighborhoodWithRing(ringCount: number): GraphNode[] {
+  return [syntheticNode(0), ...Array.from({ length: ringCount }, (_, index) => syntheticNode(index + 1))];
+}
+
+function mountRing(ringCount: number) {
+  const nodes = neighborhoodWithRing(ringCount);
+  return render(
+    <CanvasMapClient
+      nodes={nodes}
+      edges={[]}
+      focusEntityId={FOCUS}
+      scopeEntityId=""
+      savedPositions={{}}
+      version={0}
+      graphQuery={{ focusEntityId: FOCUS }}
+    />,
+  );
+}
+
+describe("CanvasMapClient keyboard Arrange, axe, scale, and export", () => {
+  it("is axe-clean for inspectable Map controls including Arrange and export", async () => {
+    const { container } = render(
+      <main>
+        <InspectorSelectionProvider>
+          <CanvasMapClient
+            nodes={NODES}
+            edges={EDGES}
+            focusEntityId={FOCUS}
+            scopeEntityId=""
+            savedPositions={{}}
+            version={0}
+            graphQuery={{ focusEntityId: FOCUS }}
+          />
+        </InspectorSelectionProvider>
+      </main>,
+    );
+    expect(screen.getByTestId("canvas-arrange-toggle")).toBeTruthy();
+    expect(screen.getByTestId("canvas-export-text")).toBeTruthy();
+    expect(screen.getByTestId("canvas-export-svg")).toBeTruthy();
+    expect((await axe.run(container)).violations).toEqual([]);
+  });
+
+  it("nudges an Arrange node selected by focus without pointerDown", async () => {
+    const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
+      void url;
+      const body = putBody(init);
+      return jsonResponse({
+        version: (body.expected_version ?? 0) + 1,
+        updated_at: "2026-09-05T17:00:00.000Z",
+        positions: body.positions ?? {},
+      });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    mount();
+    fireEvent.click(screen.getByTestId("canvas-arrange-toggle"));
+    const node = screen.getByTestId(`canvas-node-${FOCUS}`);
+    fireEvent.focus(node);
+    fireEvent.keyDown(node, { key: "ArrowRight" });
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    const calls = fetchSpy.mock.calls.map(([url, init]) => fetchMeta(String(url), init));
+    expect(calls.every((call) => call.href === "/api/canvas/workspace" && call.method === "POST")).toBe(
+      true,
+    );
+    expect(putBody(fetchSpy.mock.calls[0][1]).positions?.[FOCUS]).toEqual(
+      expect.objectContaining({ x: expect.any(Number), y: expect.any(Number) }),
+    );
+  });
+
+  it("nudges an Arrange node selected by Enter without pointerDown", async () => {
+    const fetchSpy = vi.fn(async (url: string, init?: RequestInit) => {
+      void url;
+      const body = putBody(init);
+      return jsonResponse({
+        version: (body.expected_version ?? 0) + 1,
+        updated_at: "2026-09-05T17:00:00.000Z",
+        positions: body.positions ?? {},
+      });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    mount();
+    fireEvent.click(screen.getByTestId("canvas-arrange-toggle"));
+    const node = screen.getByTestId(`canvas-node-${FOCUS}`);
+    fireEvent.keyDown(node, { key: "Enter" });
+    fireEvent.keyDown(node, { key: "ArrowLeft" });
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+    const calls = fetchSpy.mock.calls.map(([url, init]) => fetchMeta(String(url), init));
+    expect(calls.every((call) => call.href === "/api/canvas/workspace" && call.method === "POST")).toBe(
+      true,
+    );
+  });
+
+  it("keeps the visual map and both export actions at 35 ring nodes", () => {
+    mountRing(35);
+    expect(screen.getByTestId("canvas-map")).toBeTruthy();
+    expect(screen.queryByTestId("canvas-map-fallback")).toBeNull();
+    expect(screen.getByTestId("canvas-export-text")).toBeTruthy();
+    expect(screen.getByTestId("canvas-export-svg")).toBeTruthy();
+  });
+
+  it("omits the visual map and SVG export at 36 ring nodes", () => {
+    mountRing(36);
+    expect(screen.getByTestId("canvas-map-fallback")).toBeTruthy();
+    expect(screen.queryByTestId("canvas-map")).toBeNull();
+    expect(screen.getByTestId("canvas-export-text")).toBeTruthy();
+    expect(screen.queryByTestId("canvas-export-svg")).toBeNull();
+  });
+
+  it("downloads neighborhood text without throwing", () => {
+    const createObjectURL = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:synthetic-neighborhood");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    mount();
+    expect(screen.getByTestId("canvas-export-svg")).toBeTruthy();
+    expect(() => fireEvent.click(screen.getByTestId("canvas-export-text"))).not.toThrow();
+    expect(createObjectURL).toHaveBeenCalled();
+    expect(click).toHaveBeenCalled();
   });
 });

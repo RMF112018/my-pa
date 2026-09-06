@@ -48,8 +48,13 @@ Accepted product and UX intent is owned by the cleaned MY-PA Drive library. Use 
 - [`operations/observability.md`](operations/observability.md)
 - [`operations/troubleshooting.md`](operations/troubleshooting.md)
 - [`operations/recovery.md`](operations/recovery.md)
+- [`operations/mcv-limitations.md`](operations/mcv-limitations.md) — evidence-bound current MCV limitations and the repository evidence that bounds them.
 
 Detailed executed procedures remain under [`../ops/runbooks/`](../ops/runbooks/README.md).
+
+## Platform mechanisms
+
+- [`../native/apple-source-host/README.md`](../native/apple-source-host/README.md) — current read-only Apple host transport, including the Swift/AppleScript mechanism and TCC/activation boundary.
 
 ## Reference
 

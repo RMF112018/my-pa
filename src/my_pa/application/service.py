@@ -409,6 +409,7 @@ from my_pa.contracts.ports import (
     EntityMutationAdmission,
     EntitySummary,
     EvidenceUnavailableError,
+    GoodNotesPullRepositoryConflictError,
     ManagedByteStore,
     MemoryDetail,
     MemoryListingFacts,
@@ -2868,6 +2869,7 @@ class ApplicationService:
         goodnotes_pull_enabled: bool = False,
         goodnotes_canonical_semantic_writes_enabled: bool = False,
         goodnotes_pull_cursor_signing_key: bytes | None = None,
+        goodnotes_pull_assignment_lease_seconds: int = 900,
     ) -> None:
         self._unit_of_work = unit_of_work
         self._limits = _effective_limits(limits)
@@ -2915,6 +2917,14 @@ class ApplicationService:
             goodnotes_canonical_semantic_writes_enabled
         )
         self._goodnotes_pull_cursor_signing_key = goodnotes_pull_cursor_signing_key
+        raw_assignment_lease_seconds: object = goodnotes_pull_assignment_lease_seconds
+        if (
+            isinstance(raw_assignment_lease_seconds, bool)
+            or not isinstance(raw_assignment_lease_seconds, int)
+            or not 60 <= goodnotes_pull_assignment_lease_seconds <= 86400
+        ):
+            raise ValueError("GoodNotes pull assignment lease must be 60 to 86400 seconds")
+        self._goodnotes_pull_assignment_lease_seconds = goodnotes_pull_assignment_lease_seconds
         if goodnotes_pull_enabled and goodnotes_pull_cursor_signing_key is None:
             raise ValueError("enabled GoodNotes pull requires a signing key")
         #: Explicit production composition of the optional proposal plane. The
@@ -8794,6 +8804,7 @@ class ApplicationService:
                 max_batch_size=MAX_PULL_BATCH_SIZE,
                 max_attempts=MAX_PULL_RETRIES,
                 cursor_signing_key=cast(bytes, self._goodnotes_pull_cursor_signing_key),
+                assignment_lease_seconds=self._goodnotes_pull_assignment_lease_seconds,
             ).discover(
                 context,
                 PullRequest(batch_size=command.batch_size, cursor=command.cursor),
@@ -8849,6 +8860,7 @@ class ApplicationService:
                 max_batch_size=MAX_PULL_BATCH_SIZE,
                 max_attempts=MAX_PULL_RETRIES,
                 cursor_signing_key=cast(bytes, self._goodnotes_pull_cursor_signing_key),
+                assignment_lease_seconds=self._goodnotes_pull_assignment_lease_seconds,
             ).complete(context, tuple(completions))
             if self._goodnotes_canonical_semantic_writes_enabled:
                 store = cast(GoodNotesOccurrenceRepository, unit_of_work.goodnotes_durable_notes)
@@ -8876,11 +8888,17 @@ class ApplicationService:
         command: GetGoodNotesPullStatus,
     ) -> _Result:
         del command
-        repository, _context = self._goodnotes_pull_plane(unit_of_work, authorization)
-        status = repository.status(
-            authorization.principal.principal_id,
-            cast(str, authorization.authenticated_client_id),
-        )
+        repository, context = self._goodnotes_pull_plane(unit_of_work, authorization)
+        try:
+            status = repository.status(
+                authorization.principal.principal_id,
+                cast(str, authorization.authenticated_client_id),
+                context_id=context.context_id,
+                max_attempts=MAX_PULL_RETRIES,
+                lease_seconds=self._goodnotes_pull_assignment_lease_seconds,
+            )
+        except GoodNotesPullRepositoryConflictError:
+            raise ConflictError() from None
         return _Result(
             payload=asdict(status),
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),

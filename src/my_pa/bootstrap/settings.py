@@ -483,6 +483,7 @@ class Settings(StrictModel):
     goodnotes_self_improving_optimizer_enabled: bool = False
     goodnotes_pull_enabled: bool = False
     goodnotes_pull_cursor_signing_key: str = Field(default="", repr=False)
+    goodnotes_pull_assignment_lease_seconds: int = Field(default=900, ge=60, le=86400)
     goodnotes_rollout_stage: GoodNotesRolloutStage = GoodNotesRolloutStage.OBSERVE_ONLY
     remote_mcp_public_host: str = ""
     #: Isolated GSQS ChatLLM remote-eval MCP process. Not production MCP.

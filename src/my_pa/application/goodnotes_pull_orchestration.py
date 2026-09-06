@@ -19,6 +19,7 @@ import hmac
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from my_pa.application.goodnotes_occurrences import GoodNotesSemanticPromotionEvidence
@@ -137,6 +138,8 @@ class PullWorkState:
     work: GoodNotesPageWork
     attempts: int = 0
     completed: bool = False
+    latest_assignment: PullAssignment | None = None
+    assigned_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.attempts, bool) or not isinstance(self.attempts, int):
@@ -276,7 +279,18 @@ def public_completion_receipts(
 class GoodNotesPullRepository(Protocol):
     """Principal-partitioned orchestration ledger; never a source-provider port."""
 
-    def work_states(self, principal_id: str) -> tuple[PullWorkState, ...]: ...
+    def work_states(self, principal_id: str, client_id: str) -> tuple[PullWorkState, ...]: ...
+
+    def lock_session(
+        self,
+        principal_id: str,
+        client_id: str,
+        context_id: str,
+        *,
+        max_attempts: int,
+        lease_seconds: int,
+    ) -> datetime:
+        """Lock immutable session policy and return repository time."""
 
     def claim_batch(
         self,
@@ -287,6 +301,7 @@ class GoodNotesPullRepository(Protocol):
         expected_attempts: tuple[int, ...],
         *,
         max_attempts: int,
+        lease_seconds: int,
     ) -> tuple[PullAssignment, ...]:
         """Atomically increment exact expected attempts and store assignments."""
 
@@ -316,7 +331,15 @@ class GoodNotesPullRepository(Protocol):
     ) -> tuple[PullCompletionReceipt, ...]:
         """Atomically store all completions, replay all, or reject without writes."""
 
-    def status(self, principal_id: str, client_id: str) -> GoodNotesPullStatus:
+    def status(
+        self,
+        principal_id: str,
+        client_id: str,
+        *,
+        context_id: str,
+        max_attempts: int,
+        lease_seconds: int,
+    ) -> GoodNotesPullStatus:
         """Return content-free durable counts for this exact client partition."""
 
     def record_semantic_review(self, decision: SemanticReviewDecision) -> SemanticReviewDecision:
@@ -329,7 +352,7 @@ class GoodNotesPullRepository(Protocol):
 
 
 class GoodNotesPullOrchestrator:
-    """Deterministic pull policy with configurable non-time retry and batch bounds."""
+    """Deterministic pull policy with durable assignment leases and bounded retries."""
 
     def __init__(
         self,
@@ -338,6 +361,7 @@ class GoodNotesPullOrchestrator:
         max_batch_size: int,
         max_attempts: int,
         cursor_signing_key: bytes,
+        assignment_lease_seconds: int = 900,
     ) -> None:
         raw_max_batch_size: object = max_batch_size
         if (
@@ -361,6 +385,14 @@ class GoodNotesPullOrchestrator:
             <= MAX_CURSOR_SIGNING_KEY_BYTES
         ):
             raise GoodNotesPullError(ERROR_INVALID_REQUEST)
+        raw_lease: object = assignment_lease_seconds
+        if (
+            isinstance(raw_lease, bool)
+            or not isinstance(raw_lease, int)
+            or not 60 <= assignment_lease_seconds <= 86400
+        ):
+            raise GoodNotesPullError(ERROR_INVALID_REQUEST)
+        self._assignment_lease_seconds = assignment_lease_seconds
         self._repository = repository
         self._max_batch_size = max_batch_size
         self._max_attempts = max_attempts
@@ -369,7 +401,8 @@ class GoodNotesPullOrchestrator:
     def discover(self, context: AuthenticatedPullContext, request: PullRequest) -> PullBatch:
         if request.batch_size > self._max_batch_size:
             raise GoodNotesPullError(ERROR_INVALID_REQUEST)
-        states = self._validated_states(context)
+        now = self._lock_session(context)
+        states = self._validated_states(context, now)
         snapshot = _snapshot_digest(tuple(state.work for state in states))
         after = (
             _decode_cursor(request.cursor, context, snapshot, self._cursor_signing_key)
@@ -377,62 +410,62 @@ class GoodNotesPullOrchestrator:
             else None
         )
         start = _resume_index(states, after)
-        chosen: list[tuple[PullWorkState, PullAssignment]] = []
-        for state in states[start:]:
-            if state.completed or state.attempts >= self._max_attempts:
-                continue
-            attempt = state.attempts + 1
-            assignment = PullAssignment(
-                assignment_id=_assignment_id(context, state.work, attempt),
+        outstanding = sorted(
+            (
+                state
+                for state in states
+                if not state.completed
+                and state.assigned_at is not None
+                and now - state.assigned_at < timedelta(seconds=self._assignment_lease_seconds)
+            ),
+            key=lambda state: (state.assigned_at or now, _work_key(state.work)),
+        )
+        resumed = tuple(
+            state.latest_assignment
+            for state in outstanding[: request.batch_size]
+            if state.latest_assignment is not None
+        )
+        outstanding_keys = {_work_key(state.work) for state in outstanding}
+        candidates = [
+            state
+            for state in states[start:]
+            if not state.completed
+            and state.attempts < self._max_attempts
+            and _work_key(state.work) not in outstanding_keys
+        ]
+        chosen = candidates[: request.batch_size - len(resumed)]
+        assignments = tuple(
+            PullAssignment(
+                assignment_id=_assignment_id(context, state.work, state.attempts + 1),
                 client_id=context.client_id,
                 context_id=context.context_id,
                 work=state.work,
-                attempt=attempt,
+                attempt=state.attempts + 1,
             )
-            chosen.append((state, assignment))
-            if len(chosen) == request.batch_size:
-                break
-        if not chosen:
-            try:
-                claimed = self._repository.claim_batch(
-                    context.principal.principal_id,
-                    context.client_id,
-                    context.context_id,
-                    (),
-                    (),
-                    max_attempts=self._max_attempts,
-                )
-            except PullRepositoryConflictError:
-                raise GoodNotesPullError(ERROR_REPOSITORY_CONFLICT) from None
-            if claimed:
-                raise GoodNotesPullError(ERROR_REPOSITORY_CONFLICT)
-            return PullBatch(assignments=(), next_cursor=None)
-        assignments = tuple(item[1] for item in chosen)
-        expected = tuple(item[0].attempts for item in chosen)
+            for state in chosen
+        )
         try:
             claimed = self._repository.claim_batch(
                 context.principal.principal_id,
                 context.client_id,
                 context.context_id,
                 assignments,
-                expected,
+                tuple(state.attempts for state in chosen),
                 max_attempts=self._max_attempts,
+                lease_seconds=self._assignment_lease_seconds,
             )
         except PullRepositoryConflictError:
             raise GoodNotesPullError(ERROR_REPOSITORY_CONFLICT) from None
         if claimed != assignments:
             raise GoodNotesPullError(ERROR_REPOSITORY_CONFLICT)
-        last_key = _work_key(assignments[-1].work)
-        has_more = any(
-            not state.completed and state.attempts < self._max_attempts
-            for state in states[_resume_index(states, last_key) :]
-        )
+        # Cursor progress never hides outstanding assignments before the cursor.
+        last_key = _work_key(assignments[-1].work) if assignments else after
         next_cursor = (
             _encode_cursor(context, snapshot, last_key, self._cursor_signing_key)
-            if has_more
+            if len(candidates) > len(chosen) and last_key is not None
             else None
         )
-        return PullBatch(assignments=assignments, next_cursor=next_cursor)
+        return PullBatch(assignments=resumed + assignments, next_cursor=next_cursor)
 
     def complete(
         self,
@@ -446,7 +479,8 @@ class GoodNotesPullOrchestrator:
             raise GoodNotesPullError(ERROR_INVALID_REQUEST)
         if len({item.idempotency_key for item in values}) != len(values):
             raise GoodNotesPullError(ERROR_INVALID_REQUEST)
-        states = {_work_key(item.work): item for item in self._validated_states(context)}
+        now = self._lock_session(context)
+        states = {_work_key(item.work): item for item in self._validated_states(context, now)}
         admissions: list[PullCompletionAdmission] = []
         for completion in values:
             assignment = self._repository.assignment(
@@ -475,6 +509,7 @@ class GoodNotesPullOrchestrator:
                 or assignment.attempt < 1
                 or assignment.attempt > self._max_attempts
                 or state.attempts != assignment.attempt
+                or state.latest_assignment != assignment
             ):
                 raise GoodNotesPullError(ERROR_STALE_ASSIGNMENT)
             admissions.append(
@@ -505,9 +540,30 @@ class GoodNotesPullOrchestrator:
             raise GoodNotesPullError(ERROR_REPOSITORY_CONFLICT)
         return receipts
 
-    def _validated_states(self, context: AuthenticatedPullContext) -> tuple[PullWorkState, ...]:
+    def _lock_session(self, context: AuthenticatedPullContext) -> datetime:
+        try:
+            now = self._repository.lock_session(
+                context.principal.principal_id,
+                context.client_id,
+                context.context_id,
+                max_attempts=self._max_attempts,
+                lease_seconds=self._assignment_lease_seconds,
+            )
+        except PullRepositoryConflictError:
+            raise GoodNotesPullError(ERROR_REPOSITORY_CONFLICT) from None
+        raw_now: object = now
+        if not isinstance(raw_now, datetime) or raw_now.utcoffset() is None:
+            raise GoodNotesPullError(ERROR_REPOSITORY_CONFLICT)
+        return now
+
+    def _validated_states(
+        self, context: AuthenticatedPullContext, now: datetime
+    ) -> tuple[PullWorkState, ...]:
         states = tuple(
-            sorted(self._repository.work_states(context.principal.principal_id), key=_state_key)
+            sorted(
+                self._repository.work_states(context.principal.principal_id, context.client_id),
+                key=_state_key,
+            )
         )
         keys = tuple(_work_key(item.work) for item in states)
         if len(set(keys)) != len(keys):
@@ -517,6 +573,28 @@ class GoodNotesPullOrchestrator:
             for state in states
         ):
             raise GoodNotesPullError(ERROR_REPOSITORY_CONFLICT)
+        for state in states:
+            assignment, when = state.latest_assignment, state.assigned_at
+            raw_completed: object = state.completed
+            if not isinstance(raw_completed, bool) or state.attempts > self._max_attempts:
+                raise GoodNotesPullError(ERROR_REPOSITORY_CONFLICT)
+            if state.attempts == 0:
+                if assignment is not None or when is not None or state.completed:
+                    raise GoodNotesPullError(ERROR_REPOSITORY_CONFLICT)
+                continue
+            if (
+                assignment is None
+                or not isinstance(when, datetime)
+                or when.utcoffset() is None
+                or when > now
+                or isinstance(assignment.attempt, bool)
+                or assignment.work != state.work
+                or assignment.attempt != state.attempts
+                or assignment.client_id != context.client_id
+                or assignment.context_id != context.context_id
+                or assignment.assignment_id != _assignment_id(context, state.work, state.attempts)
+            ):
+                raise GoodNotesPullError(ERROR_REPOSITORY_CONFLICT)
         return states
 
 

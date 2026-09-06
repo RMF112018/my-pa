@@ -4550,6 +4550,8 @@ class GoodNotesPullWorkStateRecord:
     work: GoodNotesPageWork
     attempts: int = 0
     completed: bool = False
+    latest_assignment: GoodNotesPullAssignmentRecord | None = None
+    assigned_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

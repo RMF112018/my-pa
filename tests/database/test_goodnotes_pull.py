@@ -5,28 +5,32 @@ from __future__ import annotations
 import hashlib
 import hmac
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
-from datetime import UTC, datetime
+from dataclasses import asdict, replace
+from datetime import UTC, datetime, timedelta
 from threading import Barrier
 from typing import Final
 
 import pytest
-from sqlalchemy import Engine, func, select, text
+from sqlalchemy import Connection, Engine, func, select, text
 from sqlalchemy.exc import DBAPIError
 
 from my_pa.application.commands import CompleteGoodNotesPull
 from my_pa.application.goodnotes_occurrences import semantic_proposal_sha256
 from my_pa.application.goodnotes_pull_orchestration import (
+    GoodNotesPullOrchestrator,
     PullAssignment,
     PullCompletion,
     PullCompletionAdmission,
     PullRepositoryConflictError,
+    PullRequest,
     SemanticReviewConflictError,
     SemanticReviewDecision,
+    _assignment_id,
+    stamp_authenticated_pull_context,
 )
 from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.gateway import local_principal
-from my_pa.contracts.ports import ReviewDecisionRequest
+from my_pa.contracts.ports import GoodNotesPullWorkStateRecord, ReviewDecisionRequest
 from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.domain.capture.review import Disposition, ReviewConflictError, ReviewDecision
 from my_pa.domain.goodnotes.models import GoodNotesSemanticReviewCase
@@ -72,16 +76,22 @@ def test_empty_claim_replays_after_restart_and_status_is_content_free(
     with engine.begin() as connection:
         repository = SqlGoodNotesPullRepository(connection)
         assert (
-            repository.claim_batch(PRINCIPAL, "scheduler-a", "ctx-stable-a", (), (), max_attempts=3)
+            repository.claim_batch(
+                PRINCIPAL, "scheduler-a", "ctx-stable-a", (), (), max_attempts=3, lease_seconds=900
+            )
             == ()
         )
     with engine.begin() as connection:
         restarted = SqlGoodNotesPullRepository(connection)
         assert (
-            restarted.claim_batch(PRINCIPAL, "scheduler-a", "ctx-stable-a", (), (), max_attempts=3)
+            restarted.claim_batch(
+                PRINCIPAL, "scheduler-a", "ctx-stable-a", (), (), max_attempts=3, lease_seconds=900
+            )
             == ()
         )
-        status = restarted.status(PRINCIPAL, "scheduler-a")
+        status = restarted.status(
+            PRINCIPAL, "scheduler-a", context_id="ctx-stable-a", max_attempts=3, lease_seconds=900
+        )
         assert (status.pending, status.assigned, status.completed, status.exhausted) == (
             0,
             0,
@@ -102,11 +112,17 @@ def test_empty_claim_replays_after_restart_and_status_is_content_free(
 def test_session_identity_and_retry_policy_fail_closed(engine: Engine) -> None:
     with engine.begin() as connection:
         repository = SqlGoodNotesPullRepository(connection)
-        repository.claim_batch(PRINCIPAL, "scheduler-a", "ctx-stable-a", (), (), max_attempts=3)
+        repository.claim_batch(
+            PRINCIPAL, "scheduler-a", "ctx-stable-a", (), (), max_attempts=3, lease_seconds=900
+        )
         with pytest.raises(PullRepositoryConflictError):
-            repository.claim_batch(PRINCIPAL, "scheduler-a", "ctx-other", (), (), max_attempts=3)
+            repository.claim_batch(
+                PRINCIPAL, "scheduler-a", "ctx-other", (), (), max_attempts=3, lease_seconds=900
+            )
         with pytest.raises(PullRepositoryConflictError):
-            repository.claim_batch(PRINCIPAL, "scheduler-a", "ctx-stable-a", (), (), max_attempts=4)
+            repository.claim_batch(
+                PRINCIPAL, "scheduler-a", "ctx-stable-a", (), (), max_attempts=4, lease_seconds=900
+            )
 
 
 @pytest.mark.parametrize("canonical_enabled", [False, True])
@@ -295,10 +311,16 @@ def test_semantic_review_exact_replay_conflict_projection_and_client_status_isol
             )
         )
         repository = SqlGoodNotesPullRepository(connection)
-        states = repository.work_states(PRINCIPAL)
+        states = repository.work_states(PRINCIPAL, "scheduler-a")
         assert len(states) == 1
         assignment = PullAssignment(
-            assignment_id="3" * 64,
+            assignment_id=_assignment_id(
+                stamp_authenticated_pull_context(
+                    principal=local_principal(), client_id="scheduler-a", context_id=context_id
+                ),
+                states[0].work,
+                1,
+            ),
             client_id="scheduler-a",
             context_id=context_id,
             work=states[0].work,
@@ -310,13 +332,19 @@ def test_semantic_review_exact_replay_conflict_projection_and_client_status_isol
             context_id,
             (assignment,),
             (0,),
-            max_attempts=3,
+            max_attempts=10,
+            lease_seconds=900,
         ) == (assignment,)
-        material = repository.completion_material(PRINCIPAL, "scheduler-a", "3" * 64)
+        material = repository.completion_material(
+            PRINCIPAL, "scheduler-a", assignment.assignment_id
+        )
         assert material is not None
         assert material.proposal_id == proposal_id
         assert material.result_sha256 == original_result_sha256
-        assert repository.completion_material(PRINCIPAL, "scheduler-b", "3" * 64) is None
+        assert (
+            repository.completion_material(PRINCIPAL, "scheduler-b", assignment.assignment_id)
+            is None
+        )
         assert repository.completion_material(PRINCIPAL, "scheduler-a", "4" * 64) is None
         review_case_id = _semantic_review_case_id(PRINCIPAL, proposal_id)
         monkeypatch.setattr(
@@ -340,7 +368,9 @@ def test_semantic_review_exact_replay_conflict_projection_and_client_status_isol
                 )
         assert repository.record_semantic_review(decision).replayed is False
         assert repository.record_semantic_review(decision).replayed is True
-        corrected_material = repository.completion_material(PRINCIPAL, "scheduler-a", "3" * 64)
+        corrected_material = repository.completion_material(
+            PRINCIPAL, "scheduler-a", assignment.assignment_id
+        )
         assert corrected_material is not None
         assert corrected_material.proposal_sha256 == proposal_sha256
         assert corrected_material.result_sha256 == corrected_result_sha256
@@ -444,8 +474,12 @@ def test_semantic_review_exact_replay_conflict_projection_and_client_status_isol
             )
         )
         assert accepted.sequence == 3
-        scheduler_a = repository.status(PRINCIPAL, "scheduler-a")
-        scheduler_b = repository.status(PRINCIPAL, "scheduler-b")
+        scheduler_a = repository.status(
+            PRINCIPAL, "scheduler-a", context_id=context_id, max_attempts=10, lease_seconds=900
+        )
+        scheduler_b = repository.status(
+            PRINCIPAL, "scheduler-b", context_id="ctx-stable-b", max_attempts=10, lease_seconds=900
+        )
         assert (
             scheduler_a.pending,
             scheduler_a.assigned,
@@ -526,8 +560,12 @@ def test_semantic_review_exact_replay_conflict_projection_and_client_status_isol
 
     with engine.begin() as connection:
         repository = SqlGoodNotesPullRepository(connection)
-        scheduler_a = repository.status(PRINCIPAL, "scheduler-a")
-        scheduler_b = repository.status(PRINCIPAL, "scheduler-b")
+        scheduler_a = repository.status(
+            PRINCIPAL, "scheduler-a", context_id=context_id, max_attempts=10, lease_seconds=900
+        )
+        scheduler_b = repository.status(
+            PRINCIPAL, "scheduler-b", context_id="ctx-stable-b", max_attempts=10, lease_seconds=900
+        )
         assert (
             scheduler_a.pending,
             scheduler_a.assigned,
@@ -691,4 +729,477 @@ def test_semantic_review_exact_replay_conflict_projection_and_client_status_isol
                 )
             )
             == 1
+        )
+
+
+def _seed_resume_work(connection: Connection, suffix: str = "0123456789abcdef01234567") -> None:
+    run_id = f"gnrun_{suffix}"
+    proposal_id = f"gnprp_{suffix}"
+    notebook_id = f"gnnb_{suffix}"
+    logical_page_id = f"gnlp_{suffix}"
+    snapshot_id = f"gnsnap_{suffix}"
+    page_version_id = f"gnver_{suffix}"
+    payload = {"segments": [], "candidate_tags": [], "ranked_candidates": [], "confidence": None}
+    original_result_sha256 = _corrected_result_sha256(payload)
+    connection.execute(
+        goodnotes_notebooks.insert().values(
+            principal_id=PRINCIPAL,
+            notebook_id=notebook_id,
+            source_root_id="synthetic",
+            identity_status="ACTIVE",
+            created_at=WHEN,
+            last_observed_at=WHEN,
+        )
+    )
+    connection.execute(
+        goodnotes_ingestion_runs.insert().values(
+            principal_id=PRINCIPAL,
+            run_id=run_id,
+            source_root_id="synthetic",
+            trigger_type="SCHEDULED",
+            request_id=f"request-{suffix}",
+            idempotency_key=f"run-{suffix}",
+            request_fingerprint="b" * 64,
+            started_at=WHEN,
+            status="SUCCEEDED",
+        )
+    )
+    connection.execute(
+        goodnotes_ingestion_run_stages.insert().values(
+            principal_id=PRINCIPAL,
+            run_id=run_id,
+            stage="CONTENT_READY",
+            status="SUCCEEDED",
+            attempt=1,
+            started_at=WHEN,
+            ended_at=WHEN,
+        )
+    )
+    connection.execute(
+        goodnotes_logical_pages.insert().values(
+            principal_id=PRINCIPAL,
+            logical_page_id=logical_page_id,
+            notebook_id=notebook_id,
+            created_at=WHEN,
+            last_seen_at=WHEN,
+            identity_status="ACTIVE",
+        )
+    )
+    connection.execute(
+        goodnotes_semantic_proposals.insert().values(
+            principal_id=PRINCIPAL,
+            proposal_id=proposal_id,
+            run_id=run_id,
+            page_version_id=page_version_id,
+            content_sha256="c" * 64,
+            schema_version="v1",
+            analyzer_name="test",
+            analyzer_version="1",
+            idempotency_key=f"proposal-{suffix}",
+            request_fingerprint="d" * 64,
+            payload_sha256=original_result_sha256,
+            payload=payload,
+            created_at=WHEN,
+            correlation_id=f"corr_{suffix}",
+            request_id=f"proposal-request-{suffix}",
+        )
+    )
+    connection.execute(
+        goodnotes_source_snapshots.insert().values(
+            principal_id=PRINCIPAL,
+            snapshot_id=snapshot_id,
+            notebook_id=notebook_id,
+            source_object_id=f"obj_{suffix}",
+            observed_path="synthetic.pdf",
+            raw_sha256="8" * 64,
+            size_bytes=1,
+            page_count=1,
+            observed_at=WHEN,
+            settled_at=WHEN,
+            run_id=run_id,
+        )
+    )
+    connection.execute(
+        goodnotes_pages.insert().values(
+            principal_id=PRINCIPAL,
+            page_id=f"gnpg_{suffix}",
+            source_id=f"src_{suffix}",
+            source_object_id=f"obj_{suffix}",
+            page_number=1,
+        )
+    )
+    connection.execute(
+        goodnotes_page_versions.insert().values(
+            principal_id=PRINCIPAL,
+            page_version_id=page_version_id,
+            page_id=f"gnpg_{suffix}",
+            source_version_id=f"ver_{suffix}",
+            content_sha256="c" * 64,
+            observed_at=WHEN,
+            logical_page_id=logical_page_id,
+            exact_render_sha256="9" * 64,
+            renderer_name="synthetic",
+            renderer_version="1",
+            render_profile_version="v1",
+        )
+    )
+    connection.execute(
+        goodnotes_page_positions.insert().values(
+            principal_id=PRINCIPAL,
+            snapshot_id=snapshot_id,
+            page_number=1,
+            logical_page_id=logical_page_id,
+            page_version_id=page_version_id,
+            match_method="ORDINAL_WEAK",
+            created_at=WHEN,
+        )
+    )
+    connection.execute(
+        goodnotes_page_rasters.insert().values(
+            principal_id=PRINCIPAL,
+            page_version_id=page_version_id,
+            run_id=run_id,
+            exact_render_sha256="9" * 64,
+            png_sha256=hashlib.sha256(b"x").hexdigest(),
+            media_type="image/png",
+            byte_length=1,
+            png_bytes=b"x",
+            renderer_name="synthetic",
+            renderer_version="1",
+            render_profile_version="v1",
+            created_at=WHEN,
+        )
+    )
+    SqlGoodNotesPullRepository(connection).record_semantic_review(
+        SemanticReviewDecision(
+            decision_id=f"gnsrd_{suffix}",
+            principal_id=PRINCIPAL,
+            run_id=run_id,
+            proposal_id=proposal_id,
+            proposal_sha256=semantic_proposal_sha256(page_version_id, "v1", "test", "1", payload),
+            action="accept",
+            request_fingerprint=hashlib.sha256(suffix.encode()).hexdigest(),
+            decided_at=WHEN,
+        )
+    )
+
+
+def _resume_assignment(
+    repository: SqlGoodNotesPullRepository, client: str, attempt: int = 1
+) -> PullAssignment:
+    state = repository.work_states(PRINCIPAL, client)[0]
+    return PullAssignment(
+        assignment_id=_assignment_id(
+            stamp_authenticated_pull_context(
+                principal=local_principal(), client_id=client, context_id=f"ctx-{client}"
+            ),
+            state.work,
+            attempt,
+        ),
+        client_id=client,
+        context_id=f"ctx-{client}",
+        work=state.work,
+        attempt=attempt,
+    )
+
+
+def _claim(
+    repository: SqlGoodNotesPullRepository, client: str, attempt: int = 1, maximum: int = 3
+) -> PullAssignment:
+    assignment = _resume_assignment(repository, client, attempt)
+    result = repository.claim_batch(
+        PRINCIPAL,
+        client,
+        f"ctx-{client}",
+        (assignment,),
+        (attempt - 1,),
+        max_attempts=maximum,
+        lease_seconds=900,
+    )
+    assert len(result) == 1 and asdict(result[0]) == asdict(assignment)
+    return assignment
+
+
+def _admission(
+    repository: SqlGoodNotesPullRepository, assignment: PullAssignment
+) -> PullCompletionAdmission:
+    material = repository.completion_material(
+        PRINCIPAL, assignment.client_id, assignment.assignment_id
+    )
+    assert material is not None
+    return PullCompletionAdmission(
+        completion=PullCompletion(
+            assignment_id=assignment.assignment_id,
+            run_id=assignment.work.run_id,
+            page_version_id=assignment.work.page_version_id,
+            content_sha256=assignment.work.content_sha256,
+            result_sha256=material.result_sha256,
+            idempotency_key="same-key",
+        ),
+        request_fingerprint=hashlib.sha256(assignment.assignment_id.encode()).hexdigest(),
+    )
+
+
+def test_clients_have_independent_attempts_completion_keys_and_restart_state(
+    engine: Engine,
+) -> None:
+    with engine.begin() as connection:
+        _seed_resume_work(connection)
+        repository = SqlGoodNotesPullRepository(connection, clock=lambda: WHEN)
+        first, second = _claim(repository, "a"), _claim(repository, "b")
+        for assignment in (first, second):
+            admission = _admission(repository, assignment)
+            receipt = repository.complete_batch(
+                PRINCIPAL, assignment.client_id, assignment.context_id, (admission,)
+            )
+            replay = repository.complete_batch(
+                PRINCIPAL, assignment.client_id, assignment.context_id, (admission,)
+            )
+            assert receipt[0].completion_id == replay[0].completion_id
+            assert replay[0].replayed
+    with engine.begin() as connection:
+        repository = SqlGoodNotesPullRepository(connection, clock=lambda: WHEN)
+        for assignment in (first, second):
+            state = repository.work_states(PRINCIPAL, assignment.client_id)[0]
+            assert state.attempts == 1 and state.completed
+            assert state.latest_assignment is not None
+            assert (
+                asdict(state.latest_assignment) == asdict(assignment) and state.assigned_at == WHEN
+            )
+        assert repository.work_states(PRINCIPAL, "c")[0].attempts == 0
+
+
+def test_claim_lease_and_final_attempt_status_survive_restart(engine: Engine) -> None:
+    with engine.begin() as connection:
+        _seed_resume_work(connection)
+        repository = SqlGoodNotesPullRepository(connection, clock=lambda: WHEN)
+        first = _claim(repository, "a", maximum=2)
+    with engine.begin() as connection:
+        repository = SqlGoodNotesPullRepository(
+            connection, clock=lambda: WHEN + timedelta(seconds=899)
+        )
+        latest = repository.work_states(PRINCIPAL, "a")[0].latest_assignment
+        assert latest is not None and asdict(latest) == asdict(first)
+        with pytest.raises(PullRepositoryConflictError):
+            _claim(repository, "a", 2, 2)
+    with engine.begin() as connection:
+        repository = SqlGoodNotesPullRepository(
+            connection, clock=lambda: WHEN + timedelta(seconds=900)
+        )
+        state = repository.status(
+            PRINCIPAL, "a", context_id="ctx-a", max_attempts=2, lease_seconds=900
+        )
+        assert state.pending == 1 and state.assigned == 0
+        second = _claim(repository, "a", 2, 2)
+        assert asdict(_claim(repository, "a", 2, 2)) == asdict(second)
+        state = repository.status(
+            PRINCIPAL, "a", context_id="ctx-a", max_attempts=2, lease_seconds=900
+        )
+        assert state.assigned == 1 and state.exhausted == 0
+    with engine.begin() as connection:
+        repository = SqlGoodNotesPullRepository(
+            connection, clock=lambda: WHEN + timedelta(seconds=1800)
+        )
+        state = repository.status(
+            PRINCIPAL, "a", context_id="ctx-a", max_attempts=2, lease_seconds=900
+        )
+        assert state.exhausted == 1 and state.assigned == 0
+        repository.complete_batch(PRINCIPAL, "a", "ctx-a", (_admission(repository, second),))
+        assert repository.work_states(PRINCIPAL, "a")[0].completed
+
+
+@pytest.mark.parametrize("completion_first", [True, False])
+def test_expired_completion_and_successor_serialize_in_both_orders(
+    engine: Engine, completion_first: bool
+) -> None:
+    with engine.begin() as connection:
+        _seed_resume_work(connection)
+        repository = SqlGoodNotesPullRepository(connection, clock=lambda: WHEN)
+        original = _claim(repository, "a")
+        admission = _admission(repository, original)
+    with engine.connect() as winner, engine.connect() as loser:
+        winning_transaction = winner.begin()
+        losing_transaction = loser.begin()
+        first = SqlGoodNotesPullRepository(winner, clock=lambda: WHEN + timedelta(seconds=900))
+        second = SqlGoodNotesPullRepository(loser, clock=lambda: WHEN + timedelta(seconds=900))
+        if completion_first:
+            first.complete_batch(PRINCIPAL, "a", "ctx-a", (admission,))
+        else:
+            _claim(first, "a", 2)
+        loser.execute(text("SET LOCAL lock_timeout = '200ms'"))
+        with pytest.raises(DBAPIError, match="lock timeout"):
+            if completion_first:
+                _claim(second, "a", 2)
+            else:
+                second.complete_batch(PRINCIPAL, "a", "ctx-a", (admission,))
+        losing_transaction.rollback()
+        winning_transaction.commit()
+    with engine.begin() as connection:
+        repository = SqlGoodNotesPullRepository(
+            connection, clock=lambda: WHEN + timedelta(seconds=900)
+        )
+        with pytest.raises(PullRepositoryConflictError):
+            if completion_first:
+                _claim(repository, "a", 2)
+            else:
+                repository.complete_batch(PRINCIPAL, "a", "ctx-a", (admission,))
+        state = repository.work_states(PRINCIPAL, "a")[0]
+        assert state.attempts == (1 if completion_first else 2)
+        assert state.completed is completion_first
+
+
+def _discover(repository: SqlGoodNotesPullRepository, client: str) -> PullAssignment:
+    context = stamp_authenticated_pull_context(
+        principal=local_principal(), client_id=client, context_id=f"ctx-{client}"
+    )
+    orchestrator = GoodNotesPullOrchestrator(
+        repository=repository, max_batch_size=1, max_attempts=3, cursor_signing_key=b"k" * 32
+    )
+    return orchestrator.discover(context, PullRequest(batch_size=1)).assignments[0]
+
+
+def test_simultaneous_discovery_converges_and_restart_resumes(engine: Engine) -> None:
+    with engine.begin() as connection:
+        _seed_resume_work(connection)
+    ready = Barrier(2)
+
+    def discover() -> PullAssignment:
+        with engine.begin() as connection:
+            repository = SqlGoodNotesPullRepository(connection, clock=lambda: WHEN)
+            ready.wait(timeout=5)
+            return _discover(repository, "a")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(discover) for _ in range(2)]
+        assignments = [future.result(timeout=10) for future in futures]
+    assert assignments[0].assignment_id == assignments[1].assignment_id
+    with engine.begin() as connection:
+        repository = SqlGoodNotesPullRepository(
+            connection, clock=lambda: WHEN + timedelta(seconds=899)
+        )
+        resumed = _discover(repository, "a")
+        assert resumed.assignment_id == assignments[0].assignment_id and resumed.attempt == 1
+        assert (
+            connection.scalar(text("SELECT count(*) FROM knowledge.goodnotes_pull_assignments"))
+            == 1
+        )
+    with engine.begin() as connection:
+        repository = SqlGoodNotesPullRepository(
+            connection, clock=lambda: WHEN + timedelta(seconds=900)
+        )
+        successor = _discover(repository, "a")
+        assert successor.assignment_id != resumed.assignment_id and successor.attempt == 2
+    with engine.begin() as connection:
+        repository = SqlGoodNotesPullRepository(
+            connection, clock=lambda: WHEN + timedelta(seconds=900)
+        )
+        assert _discover(repository, "a").assignment_id == successor.assignment_id
+        assert (
+            connection.scalar(text("SELECT count(*) FROM knowledge.goodnotes_pull_assignments"))
+            == 2
+        )
+
+
+def test_session_lease_validation_and_status_do_not_create_session(engine: Engine) -> None:
+    with engine.begin() as connection:
+        repository = SqlGoodNotesPullRepository(connection, clock=lambda: WHEN)
+        repository.status(PRINCIPAL, "a", context_id="ctx-a", max_attempts=3, lease_seconds=900)
+        assert (
+            connection.scalar(text("SELECT count(*) FROM knowledge.goodnotes_pull_sessions")) == 0
+        )
+        for lease in (True, 59, 86401):
+            with pytest.raises(PullRepositoryConflictError):
+                repository.lock_session(
+                    PRINCIPAL, "a", "ctx-a", max_attempts=3, lease_seconds=lease
+                )
+        assert (
+            repository.lock_session(PRINCIPAL, "a", "ctx-a", max_attempts=3, lease_seconds=900)
+            == WHEN
+        )
+        with pytest.raises(PullRepositoryConflictError):
+            repository.lock_session(PRINCIPAL, "b", "ctx-a", max_attempts=3, lease_seconds=900)
+        assert (
+            connection.scalar(text("SELECT count(*) FROM knowledge.goodnotes_pull_sessions")) == 1
+        )
+        for context, lease in (("ctx-other", 900), ("ctx-a", 901)):
+            with pytest.raises(PullRepositoryConflictError):
+                repository.status(
+                    PRINCIPAL, "a", context_id=context, max_attempts=3, lease_seconds=lease
+                )
+            with pytest.raises(PullRepositoryConflictError):
+                repository.lock_session(
+                    PRINCIPAL, "a", context, max_attempts=3, lease_seconds=lease
+                )
+
+
+@pytest.mark.parametrize("create_before_read", [True, False])
+@pytest.mark.parametrize(
+    ("context", "maximum", "lease"),
+    [("ctx-a", 1, 60), ("ctx-wrong", 1, 900), ("ctx-a", 2, 900), ("ctx-a", 1, 900)],
+)
+def test_status_revalidates_a_session_created_during_absent_session_read(
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    create_before_read: bool,
+    context: str,
+    maximum: int,
+    lease: int,
+) -> None:
+    with engine.begin() as connection:
+        _seed_resume_work(connection)
+    original = SqlGoodNotesPullRepository._work_states
+    events: list[str] = []
+    with engine.begin() as connection:
+        repository = SqlGoodNotesPullRepository(
+            connection,
+            clock=lambda: events.append("clock") or WHEN + timedelta(seconds=120),
+        )
+
+        def create_session() -> None:
+            with engine.begin() as creator:
+                _claim(SqlGoodNotesPullRepository(creator, clock=lambda: WHEN), "a", maximum=1)
+
+        def interleaved_read(
+            self: SqlGoodNotesPullRepository, principal_id: str, *, client_id: str
+        ) -> tuple[GoodNotesPullWorkStateRecord, ...]:
+            if self is not repository:
+                return original(self, principal_id, client_id=client_id)
+            events.append("read")
+            if events.count("read") == 1:
+                if create_before_read:
+                    create_session()
+                result = original(self, principal_id, client_id=client_id)
+                if not create_before_read:
+                    create_session()
+                return result
+            # A matching newly visible session must be locked before its state is reread.
+            with engine.connect() as contender:
+                transaction = contender.begin()
+                contender.execute(text("SET LOCAL lock_timeout = '200ms'"))
+                with pytest.raises(DBAPIError, match="lock timeout"):
+                    SqlGoodNotesPullRepository(contender, clock=lambda: WHEN).lock_session(
+                        PRINCIPAL, "a", "ctx-a", max_attempts=1, lease_seconds=900
+                    )
+                transaction.rollback()
+            return original(self, principal_id, client_id=client_id)
+
+        monkeypatch.setattr(SqlGoodNotesPullRepository, "_work_states", interleaved_read)
+        if (context, maximum, lease) != ("ctx-a", 1, 900):
+            with pytest.raises(PullRepositoryConflictError):
+                repository.status(
+                    PRINCIPAL, "a", context_id=context, max_attempts=maximum, lease_seconds=lease
+                )
+        else:
+            status = repository.status(
+                PRINCIPAL, "a", context_id=context, max_attempts=maximum, lease_seconds=lease
+            )
+            assert (status.pending, status.assigned, status.completed, status.exhausted) == (
+                0,
+                1,
+                0,
+                0,
+            )
+            assert events == ["read", "read", "clock"]
+        assert (
+            connection.scalar(text("SELECT count(*) FROM knowledge.goodnotes_pull_sessions")) == 1
         )

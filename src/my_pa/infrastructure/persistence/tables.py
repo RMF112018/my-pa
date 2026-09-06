@@ -8596,6 +8596,10 @@ goodnotes_pull_sessions = Table(
     Column("context_id", String(128), primary_key=True),
     Column("client_id", String(128), nullable=False),
     Column("max_attempts", Integer, nullable=False),
+    Column("lease_seconds", Integer, nullable=False, server_default="900"),
+    CheckConstraint(
+        "lease_seconds BETWEEN 60 AND 86400", name="goodnotes_pull_session_lease_is_bounded"
+    ),
     Column("created_at", DateTime(timezone=True), nullable=False),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     CheckConstraint(
@@ -8677,6 +8681,7 @@ goodnotes_pull_assignments = Table(
     ),
     UniqueConstraint(
         "principal_id",
+        "client_id",
         "run_id",
         "page_version_id",
         "content_sha256",
@@ -8750,7 +8755,9 @@ goodnotes_pull_completions = Table(
     UniqueConstraint(
         "principal_id", "assignment_id", name="one_goodnotes_pull_completion_per_assignment"
     ),
-    UniqueConstraint("principal_id", "idempotency_key", name="one_goodnotes_pull_completion_key"),
+    UniqueConstraint(
+        "principal_id", "client_id", "idempotency_key", name="one_goodnotes_pull_completion_key"
+    ),
     ForeignKeyConstraint(
         ["principal_id", "assignment_id"],
         [

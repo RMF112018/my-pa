@@ -51,8 +51,12 @@ comment, a docstring or a line continuation changes nothing about what is seen �
 and the vocabulary rules deliberately ignore docstrings, because these modules
 *explain* in prose the very things they must not *do* in code, and a text grep
 would report those explanations as violations. The two pins against the base
-commit are read with `git show`, not from a recorded constant, so they cannot go
-stale silently.
+commit are stated as recorded constants: CI clones at `fetch-depth: 1`, so the
+base commit is not an object the runner holds, and reading it back through `git
+show` fails the run rather than proving anything. Skipping when the object is
+absent would be worse — a guard that passes because it could not look is not a
+guard — so the values are measured once and written down, where changing them is
+a reviewable edit to the very file whose job is to notice the change.
 
 Nothing here opens a connection, reaches a database, imports `alembic`, or
 executes a statement.
@@ -63,16 +67,15 @@ from __future__ import annotations
 import ast
 import hashlib
 import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import Final
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 
-#: The commit this work package branched from. The schema pins below are stated
-#: against it rather than against a hash typed into this file, so they keep
-#: meaning after any commit that does not touch the pinned paths.
+#: The commit this work package branched from. Named so the failure messages can
+#: say what the pins below were measured against; nothing here reads it back out
+#: of the object store.
 BASE_COMMIT: Final = "a222ce0f04f7bed8bec33b38338c87a6733034d4"
 
 APPLICATION_MODULE: Final = ROOT / "src" / "my_pa" / "application" / "constraints.py"
@@ -87,6 +90,19 @@ MIGRATIONS: Final = ROOT / "migrations" / "versions"
 
 #: The single Alembic head at `BASE_COMMIT`, which WP03 does not move.
 EXPECTED_HEAD: Final = "2774329487be"
+
+#: What `migrations/versions/` and `tables.py` held at `BASE_COMMIT`, pinned
+#: rather than read back through git. CI checks out at `actions/checkout`'s
+#: default `fetch-depth: 1` and the workflow sets no depth, so the base commit is
+#: not an object the runner has; a guard that asked for it would error there, and
+#: one that skipped when it was missing would pass without looking. Measured on
+#: the base tree, the name digest over the same sorted, newline-joined list this
+#: guard builds, so the two cannot disagree about their own encoding.
+BASE_REVISION_COUNT: Final = 95
+BASE_REVISION_NAMES_SHA256: Final = (
+    "bb095b2320994b692ca421c0c3a64ace4233473eb1e7d4a3b81d246e92798fff"
+)
+BASE_TABLES_SHA256: Final = "1b9057105a54c84248ecd4f704f1b723e0dac408a97797656cd7da52ee6d1c80"
 
 #: Package roots the application read service may never reach. `infrastructure`
 #: is the layering rule; the rest are the transport and authorisation edges WP04
@@ -260,15 +276,6 @@ def _dataclass_fields(tree: ast.Module) -> dict[str, list[str]]:
         for node in ast.walk(tree)
         if isinstance(node, ast.ClassDef)
     }
-
-
-def _git_show(path: str) -> bytes:
-    """The bytes of one path at `BASE_COMMIT`, read from the object store."""
-    return subprocess.run(  # noqa: S603
-        ["git", "-C", str(ROOT), "show", f"{BASE_COMMIT}:{path}"],  # noqa: S607
-        capture_output=True,
-        check=True,
-    ).stdout
 
 
 def _revision_parents(value: ast.expr | None) -> tuple[str, ...]:
@@ -578,33 +585,30 @@ def test_the_read_plane_names_no_lease_workbook_or_external_connector() -> None:
 def test_wp03_adds_no_migration_file() -> None:
     """The set of revisions is exactly the base commit's set.
 
-    Stated as set equality in both directions: an added revision reddens, and so
-    does a deleted one, because a read package that removed a migration would be
-    a far stranger event than one that added it.
+    Stated as a count and a digest over the sorted names, so an added revision
+    reddens and so does a deleted one — a read package that *removed* a migration
+    would be a far stranger event than one that added it.
+
+    Pinned rather than read from git history. `actions/checkout` clones at
+    `fetch-depth: 1` and `.github/workflows/repository-checks.yml` sets no depth,
+    so the base commit is simply not an object CI has: asking git for it fails
+    the run rather than proving anything. Skipping when the object is missing
+    would be worse still — a guard that passes because it could not look is not a
+    guard. The two values below were measured on the base tree and are what makes
+    this assertion mean something; changing either one is a visible edit to a
+    guard file and is exactly the signal WP03 was not supposed to produce.
     """
-    at_base = {
-        line.strip()
-        for line in subprocess.run(  # noqa: S603
-            [  # noqa: S607
-                "git",
-                "-C",
-                str(ROOT),
-                "ls-tree",
-                "--name-only",
-                f"{BASE_COMMIT}:migrations/versions",
-            ],
-            capture_output=True,
-            check=True,
-            text=True,
-        ).stdout.splitlines()
-        if line.strip().endswith(".py")
-    }
-    assert at_base, "no revision files were found at the base commit"
-    now = {path.name for path in MIGRATIONS.glob("*.py")}
-    assert now == at_base, (
-        f"migrations/versions/ changed: added {sorted(now - at_base)}, removed "
-        f"{sorted(at_base - now)}. WP03 is a read plane over the schema WP02 "
-        "already installed; it adds no revision and moves no head"
+    now = sorted(path.name for path in MIGRATIONS.glob("*.py"))
+    assert len(now) == BASE_REVISION_COUNT, (
+        f"migrations/versions/ holds {len(now)} revisions, not the "
+        f"{BASE_REVISION_COUNT} the base commit left. WP03 is a read plane over "
+        "the schema WP02 already installed; it adds no revision and moves no head"
+    )
+    digest = hashlib.sha256("\n".join(now).encode("utf-8")).hexdigest()
+    assert digest == BASE_REVISION_NAMES_SHA256, (
+        "the set of revision filenames differs from the base commit's while "
+        "holding the same count, so one revision was swapped for another. WP03 "
+        "adds, removes and renames no migration"
     )
 
 
@@ -633,16 +637,18 @@ def test_the_alembic_head_is_still_the_single_revision_wp02_left() -> None:
 def test_the_table_declarations_are_byte_identical_to_the_base_commit() -> None:
     """WP03 edits no table declaration: no column, no index, no constraint.
 
-    Compared by digest against `git show` at the base commit rather than against a
-    hash typed into this file, so the pin cannot quietly describe a stale
-    expectation, and the failure message can say what to do about it.
+    Pinned to the digest the base tree carries, for the same reason the revision
+    guard above is pinned: CI clones shallow, so `git show <base>` is not a
+    question this repository can answer there. A digest typed into a guard file
+    can only go stale by someone editing this line, which is a reviewable diff in
+    a test whose whole purpose is to notice that edit.
     """
     path = "src/my_pa/infrastructure/persistence/tables.py"
-    at_base = hashlib.sha256(_git_show(path)).hexdigest()
     now = hashlib.sha256(TABLES_MODULE.read_bytes()).hexdigest()
-    assert now == at_base, (
-        f"{path} differs from {BASE_COMMIT[:12]} (base {at_base[:16]}, now "
-        f"{now[:16]}). A read plane needs no schema change: WP03's plan states it "
-        "adds no migration and edits no declaration. If an index is genuinely "
-        "needed, it is a schema change and belongs in its own reviewed migration"
+    assert now == BASE_TABLES_SHA256, (
+        f"{path} differs from {BASE_COMMIT[:12]} (base "
+        f"{BASE_TABLES_SHA256[:16]}, now {now[:16]}). A read plane needs no schema "
+        "change: WP03's plan states it adds no migration and edits no "
+        "declaration. If an index is genuinely needed, it is a schema change and "
+        "belongs in its own reviewed migration"
     )

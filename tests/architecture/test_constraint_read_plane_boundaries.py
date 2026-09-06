@@ -30,11 +30,15 @@ Each rule below is one of those clauses, and each names the defect it forecloses
   would arrive by the most ordinary route there is: copying a persisted record's
   field list into the view that renders it. `PersistedConstraintRecord` is the one
   exemption, and this module requires it to be the *only* one.
-* **No new migration, and `tables.py` unchanged.** WP03's plan states it moves no
-  Alembic head and edits no table declaration (plan §A). A read plane that quietly
-  added an index or a column would be a schema change delivered under a read
-  package's review, and the head it moved would collide with whatever WP04 writes
-  next. Both are pinned against the base commit rather than described.
+* **No Constraint migration, and the Constraint declarations unchanged.** WP03's
+  plan states it adds no migration and edits no table declaration (plan §A). A
+  read plane that quietly added an index or a column would be a schema change
+  delivered under a read package's review. Both rules are scoped to the Constraint
+  tables rather than to the repository: an earlier draft froze the whole revision
+  set and the whole of `tables.py`, and an unrelated GoodNotes revision landing on
+  `main` turned it red — this guard reporting another team's migration as a WP03
+  defect. A tripwire that fires on work it does not govern teaches people to
+  re-pin it without reading, which is how a guard stops guarding.
 * **Sync read boundary.** WP02 shipped the sync tables; WP11 will ship the sync
   behaviour. WP03 reads four of those columns to derive four states and does
   nothing else — no run, no lease, no baseline write, no workbook, no connector.
@@ -50,13 +54,13 @@ Each rule below is one of those clauses, and each names the defect it forecloses
 comment, a docstring or a line continuation changes nothing about what is seen —
 and the vocabulary rules deliberately ignore docstrings, because these modules
 *explain* in prose the very things they must not *do* in code, and a text grep
-would report those explanations as violations. The two pins against the base
-commit are stated as recorded constants: CI clones at `fetch-depth: 1`, so the
+would report those explanations as violations. The one digest taken against the
+base tree is stated as a recorded constant: CI clones at `fetch-depth: 1`, so the
 base commit is not an object the runner holds, and reading it back through `git
 show` fails the run rather than proving anything. Skipping when the object is
 absent would be worse — a guard that passes because it could not look is not a
-guard — so the values are measured once and written down, where changing them is
-a reviewable edit to the very file whose job is to notice the change.
+guard — so the value is measured once and written down, where changing it is a
+reviewable edit to the very file whose job is to notice the change.
 
 Nothing here opens a connection, reaches a database, imports `alembic`, or
 executes a statement.
@@ -88,21 +92,42 @@ PERSISTENCE_MODULE: Final = (
 TABLES_MODULE: Final = ROOT / "src" / "my_pa" / "infrastructure" / "persistence" / "tables.py"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 
-#: The single Alembic head at `BASE_COMMIT`, which WP03 does not move.
-EXPECTED_HEAD: Final = "2774329487be"
+#: The revision that installed the Constraint tables. WP03 queries what it built
+#: and adds nothing beside it, so it is the one revision permitted to name a
+#: Constraint table and the one that must stay on the path to head.
+WP02_CONSTRAINT_REVISION: Final = "2774329487be"
 
-#: What `migrations/versions/` and `tables.py` held at `BASE_COMMIT`, pinned
-#: rather than read back through git. CI checks out at `actions/checkout`'s
-#: default `fetch-depth: 1` and the workflow sets no depth, so the base commit is
-#: not an object the runner has; a guard that asked for it would error there, and
-#: one that skipped when it was missing would pass without looking. Measured on
-#: the base tree, the name digest over the same sorted, newline-joined list this
-#: guard builds, so the two cannot disagree about their own encoding.
-BASE_REVISION_COUNT: Final = 95
-BASE_REVISION_NAMES_SHA256: Final = (
-    "bb095b2320994b692ca421c0c3a64ace4233473eb1e7d4a3b81d246e92798fff"
+#: The fourteen tables WP02 installed. Named here rather than derived from
+#: `tables.py`, so that deleting a declaration cannot quietly shrink the set this
+#: module claims to cover.
+CONSTRAINT_TABLES: Final = frozenset(
+    {
+        "constraint_categories",
+        "constraint_category_history",
+        "constraint_project_settings",
+        "constraint_sync_baselines",
+        "constraint_sync_conflicts",
+        "constraint_sync_runs",
+        "constraint_sync_targets",
+        "project_constraint_evidence_links",
+        "project_constraint_history",
+        "project_constraint_parties",
+        "project_constraint_relationships",
+        "project_constraint_revision_parties",
+        "project_constraint_revisions",
+        "project_constraints",
+    }
 )
-BASE_TABLES_SHA256: Final = "1b9057105a54c84248ecd4f704f1b723e0dac408a97797656cd7da52ee6d1c80"
+
+#: The digest of those fourteen declarations on the base tree, built exactly the
+#: way the guard rebuilds it. Pinned rather than read back through git: CI checks
+#: out at `actions/checkout`'s default `fetch-depth: 1` and the workflow sets no
+#: depth, so the base commit is not an object the runner has. A guard that asked
+#: for it would error there, and one that skipped when it was missing would pass
+#: without looking.
+BASE_CONSTRAINT_TABLES_SHA256: Final = (
+    "f05660848766e21ae5bb11a6e134ff0fc464c15974d4413aa8cb64a11ecaed0a"
+)
 
 #: Package roots the application read service may never reach. `infrastructure`
 #: is the layering rule; the rest are the transport and authorisation edges WP04
@@ -295,6 +320,66 @@ def _revision_parents(value: ast.expr | None) -> tuple[str, ...]:
             if isinstance(element, ast.Constant) and isinstance(element.value, str)
         )
     return ()
+
+
+def _code_strings(tree: ast.Module) -> set[str]:
+    """Every live string literal in the module, docstrings excluded.
+
+    A migration names its tables as strings — `op.create_table("…")`,
+    `sa.Column`'s foreign-key targets, raw DDL text — so string literals are
+    where a revision's subject shows. Docstrings are excluded for the reason they
+    are excluded everywhere in this module: a revision that *mentions* the
+    Constraint tables in prose while touching none of them is not a violation.
+    """
+    docstrings = _docstring_nodes(tree)
+    return {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and id(node) not in docstrings
+    }
+
+
+def _declared_revision(path: Path) -> str | None:
+    """The `revision` a migration file declares, or `None` if it declares none."""
+    for statement in _tree(path).body:
+        target: ast.expr | None = None
+        if isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name):
+            target = statement.target
+        elif (
+            isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name)
+        ):
+            target = statement.targets[0]
+        if target is not None and target.id == "revision":
+            value = statement.value
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                return value.value
+    return None
+
+
+def _constraint_table_declarations(path: Path) -> dict[str, str]:
+    """The source of each `<name> = Table(...)` whose name is a Constraint table.
+
+    Sliced from the module rather than digesting the whole file, so an unrelated
+    plane's table can change without implicating this work package.
+    """
+    source = path.read_text(encoding="utf-8")
+    lines = source.splitlines(keepends=True)
+    declarations: dict[str, str] = {}
+    for node in ast.parse(source).body:
+        if not (isinstance(node, ast.Assign) and isinstance(node.value, ast.Call)):
+            continue
+        if getattr(node.value.func, "id", None) != "Table":
+            continue
+        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
+            continue
+        name = node.targets[0].id
+        if name in CONSTRAINT_TABLES and node.end_lineno is not None:
+            declarations[name] = "".join(lines[node.lineno - 1 : node.end_lineno])
+    return declarations
 
 
 def _revision_graph(directory: Path) -> dict[str, tuple[str, ...]]:
@@ -582,43 +667,57 @@ def test_the_read_plane_names_no_lease_workbook_or_external_connector() -> None:
     )
 
 
-def test_wp03_adds_no_migration_file() -> None:
-    """The set of revisions is exactly the base commit's set.
+def test_no_revision_but_wp02_s_touches_a_constraint_table() -> None:
+    """WP03 ships no Constraint migration.
 
-    Stated as a count and a digest over the sorted names, so an added revision
-    reddens and so does a deleted one — a read package that *removed* a migration
-    would be a far stranger event than one that added it.
+    Stated as what WP03 actually promised rather than as a frozen snapshot of
+    `migrations/versions/`. An earlier draft of this guard pinned the revision
+    count and a digest of the filenames, and an unrelated GoodNotes revision
+    landing on `main` turned it red — a guard named for this work package
+    reporting another team's migration as a WP03 defect. A tripwire that fires on
+    work it does not govern trains people to re-pin it without reading, which is
+    how a guard stops guarding.
 
-    Pinned rather than read from git history. `actions/checkout` clones at
-    `fetch-depth: 1` and `.github/workflows/repository-checks.yml` sets no depth,
-    so the base commit is simply not an object CI has: asking git for it fails
-    the run rather than proving anything. Skipping when the object is missing
-    would be worse still — a guard that passes because it could not look is not a
-    guard. The two values below were measured on the base tree and are what makes
-    this assertion mean something; changing either one is a visible edit to a
-    guard file and is exactly the signal WP03 was not supposed to produce.
+    So the question asked here is the narrow one: does any revision other than
+    WP02's own perform DDL that names a Constraint table? Unrelated migrations
+    are invisible to it, and a WP03 migration could not be.
     """
-    now = sorted(path.name for path in MIGRATIONS.glob("*.py"))
-    assert len(now) == BASE_REVISION_COUNT, (
-        f"migrations/versions/ holds {len(now)} revisions, not the "
-        f"{BASE_REVISION_COUNT} the base commit left. WP03 is a read plane over "
-        "the schema WP02 already installed; it adds no revision and moves no head"
+    offenders: dict[str, list[str]] = {}
+    for path in sorted(MIGRATIONS.glob("*.py")):
+        revision = _declared_revision(path)
+        if revision == WP02_CONSTRAINT_REVISION:
+            continue
+        named = sorted(
+            {table for table in CONSTRAINT_TABLES if table in _code_strings(_tree(path))}
+        )
+        if named:
+            offenders[path.name] = named
+    assert offenders == {}, (
+        f"revisions outside WP02's {WP02_CONSTRAINT_REVISION} name Constraint "
+        f"tables: {offenders}. WP03 is a read plane over the schema WP02 already "
+        "installed. If an index or a column is genuinely needed, it is a schema "
+        "change and belongs in its own reviewed migration, not in a read package"
     )
-    digest = hashlib.sha256("\n".join(now).encode("utf-8")).hexdigest()
-    assert digest == BASE_REVISION_NAMES_SHA256, (
-        "the set of revision filenames differs from the base commit's while "
-        "holding the same count, so one revision was swapped for another. WP03 "
-        "adds, removes and renames no migration"
+    assert any(
+        _declared_revision(path) == WP02_CONSTRAINT_REVISION for path in MIGRATIONS.glob("*.py")
+    ), (
+        f"WP02's revision {WP02_CONSTRAINT_REVISION} is not in "
+        "migrations/versions/, so the loop above skipped nothing and proved nothing"
     )
 
 
-def test_the_alembic_head_is_still_the_single_revision_wp02_left() -> None:
-    """One head, and it is the one the plan pinned.
+def test_the_migration_graph_has_exactly_one_head_descending_from_wp02() -> None:
+    """One head, and WP02's Constraint revision is still on the way to it.
 
     Derived from the `revision`/`down_revision` graph over the committed files —
-    the node no other revision descends from — rather than by importing alembic
-    or asking a database, so it is a fact about the repository rather than about
-    an environment.
+    rather than by importing alembic or asking a database — so it is a fact about
+    the repository rather than about an environment.
+
+    Two claims, and neither pins a head *value*: a pinned value would go stale on
+    the next unrelated migration, for the same reason the guard above no longer
+    pins a filename set. What matters is that `alembic upgrade head` stays
+    unambiguous, and that nobody rewrote or orphaned the revision that installed
+    the Constraint tables underneath this read plane.
     """
     graph = _revision_graph(MIGRATIONS)
     assert len(graph) > 50, f"the revision walk found only {len(graph)} migrations"
@@ -626,29 +725,59 @@ def test_the_alembic_head_is_still_the_single_revision_wp02_left() -> None:
     unknown = sorted(descended - set(graph))
     assert unknown == [], f"a migration descends from revisions no file declares: {unknown}"
     heads = sorted(revision for revision in graph if revision not in descended)
-    assert heads == [EXPECTED_HEAD], (
-        f"the migration graph has heads {heads}; exactly [{EXPECTED_HEAD!r}] is "
-        "expected. More than one head means two revisions branched from the same "
-        "parent and `alembic upgrade head` is ambiguous; a different single head "
-        "means a revision was added after the base commit"
+    assert len(heads) == 1, (
+        f"the migration graph has heads {heads}; exactly one is expected. More "
+        "than one means two revisions branched from the same parent and "
+        "`alembic upgrade head` is ambiguous"
+    )
+    ancestors: set[str] = set()
+    frontier = [heads[0]]
+    while frontier:
+        revision = frontier.pop()
+        for parent in graph.get(revision, ()):
+            if parent not in ancestors:
+                ancestors.add(parent)
+                frontier.append(parent)
+    assert WP02_CONSTRAINT_REVISION in ancestors, (
+        f"WP02's revision {WP02_CONSTRAINT_REVISION} is not an ancestor of the "
+        f"single head {heads[0]}. The Constraint tables this read plane queries "
+        "are installed by that revision; if it is no longer on the path to head, "
+        "either it was rewritten or the head is on a branch that never applied it"
     )
 
 
-def test_the_table_declarations_are_byte_identical_to_the_base_commit() -> None:
-    """WP03 edits no table declaration: no column, no index, no constraint.
+def test_the_constraint_table_declarations_are_unchanged() -> None:
+    """WP03 edits no Constraint table: no column, no index, no constraint.
 
-    Pinned to the digest the base tree carries, for the same reason the revision
-    guard above is pinned: CI clones shallow, so `git show <base>` is not a
-    question this repository can answer there. A digest typed into a guard file
-    can only go stale by someone editing this line, which is a reviewable diff in
-    a test whose whole purpose is to notice that edit.
+    Digested over the fourteen Constraint `Table(...)` declarations only, not over
+    the whole of `tables.py`. The file is twelve thousand lines shared by every
+    plane in the repository, so a whole-file digest would redden on any unrelated
+    table's change — the same false-positive shape the revision guard above was
+    rewritten to shed. Slicing to the declarations WP03 actually claims not to
+    have touched keeps the assertion narrow and true.
+
+    Pinned rather than read back through git: CI clones at `fetch-depth: 1` and
+    the workflow sets no depth, so the base commit is not an object the runner
+    holds. Asking git for it fails the run; skipping when it is absent would be
+    worse still, because a guard that passes because it could not look is not a
+    guard. A digest written down can only go stale through an edit to this line,
+    which is a reviewable diff in the file whose job is to notice that edit.
     """
-    path = "src/my_pa/infrastructure/persistence/tables.py"
-    now = hashlib.sha256(TABLES_MODULE.read_bytes()).hexdigest()
-    assert now == BASE_TABLES_SHA256, (
-        f"{path} differs from {BASE_COMMIT[:12]} (base "
-        f"{BASE_TABLES_SHA256[:16]}, now {now[:16]}). A read plane needs no schema "
-        "change: WP03's plan states it adds no migration and edits no "
-        "declaration. If an index is genuinely needed, it is a schema change and "
-        "belongs in its own reviewed migration"
+    declarations = _constraint_table_declarations(TABLES_MODULE)
+    missing = sorted(CONSTRAINT_TABLES - set(declarations))
+    assert missing == [], (
+        f"tables.py declares no Table for {missing}, so the digest below would "
+        "describe a smaller set than this guard claims to cover"
+    )
+    digest = hashlib.sha256()
+    for name in sorted(declarations):
+        digest.update(name.encode("utf-8"))
+        digest.update(declarations[name].encode("utf-8"))
+    assert digest.hexdigest() == BASE_CONSTRAINT_TABLES_SHA256, (
+        "the Constraint table declarations in "
+        "src/my_pa/infrastructure/persistence/tables.py differ from the base "
+        f"tree (base {BASE_CONSTRAINT_TABLES_SHA256[:16]}, now "
+        f"{digest.hexdigest()[:16]}). A read plane needs no schema change: WP03 "
+        "adds no migration and edits no declaration. If an index is genuinely "
+        "needed, it is a schema change and belongs in its own reviewed migration"
     )

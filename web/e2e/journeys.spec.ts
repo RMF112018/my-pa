@@ -432,6 +432,7 @@ test.describe("the page body reflows rather than scrolling sideways", () => {
       "/system",
       "/situations",
       "/library",
+      "/work/projects/prj_syn_0001/constraints",
     ]) {
       await page.goto(path);
       const overflow = await page.evaluate(
@@ -449,3 +450,41 @@ test.describe("the page body reflows rather than scrolling sideways", () => {
 // vocabulary check against a gateway that is genuinely unreachable, where the
 // failure states really are on the page — the assertion has something to bite
 // on there and nothing to bite on here, so it is kept there and only there.
+
+test.describe("the canonical Constraint route", () => {
+  /**
+   * The route, the Project context, and the answer a build with no Constraint
+   * capability behind it must give.
+   *
+   * This suite runs a default build — `playwright.config.ts` deliberately does
+   * not set `MYPA_DATA_PROVIDER`, so no fixture can reach a page here. What is
+   * provable in a real browser is therefore the part that matters most: the
+   * address is the one the accepted package froze, the Project stays visible,
+   * and the surface says it cannot ask rather than showing an empty Register.
+   */
+  test("resolves, keeps the Project visible, and states that it cannot ask", async ({ page }) => {
+    await signIn(page);
+    await page.goto("/work/projects/prj_syn_0001/constraints");
+    await expect(page).toHaveURL(/\/work\/projects\/prj_syn_0001\/constraints$/);
+    await expect(page.getByRole("heading", { level: 1, name: "Constraints" })).toBeVisible();
+    await expect(page.getByText("Project Controls · prj_syn_0001")).toBeVisible();
+    await expectState(page, "constraints-not-implemented", "not_implemented");
+    // Never an empty Register in place of a capability that does not exist.
+    await expect(page.getByTestId("register-table")).toHaveCount(0);
+  });
+
+  test("adds no top-level destination of its own", async ({ page }) => {
+    await signIn(page);
+    await page.goto("/work/projects/prj_syn_0001/constraints");
+    await expect(page.getByRole("link", { name: "Constraints" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Work" }).first()).toBeVisible();
+  });
+
+  test("a deep-linked view state does not change the address it resolves to", async ({ page }) => {
+    await signIn(page);
+    await page.goto("/work/projects/prj_syn_0001/constraints?view=register&scope=open&overdue=1");
+    await expect(page).toHaveURL(/view=register/);
+    await expect(page).toHaveURL(/overdue=1/);
+    await expectState(page, "constraints-not-implemented", "not_implemented");
+  });
+});

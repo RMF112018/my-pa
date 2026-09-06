@@ -382,6 +382,59 @@
         "expected_version": 0,
         "positions": { "ent_aaaaaaaa11111111": { "x": 12.5, "y": 40.25 } }
       }
+    },
+    "goodnotes.notebooks.list": {
+      "purpose": "goodnotes_browse",
+      "payloadFields": ["page_size", "cursor"],
+      "probe": {}
+    },
+    "goodnotes.pages.list": {
+      "purpose": "goodnotes_browse",
+      "payloadFields": ["notebook_id", "page_size", "cursor"],
+      "probe": { "notebook_id": "gnnb_aaaaaaaaaaaaaaaaaaaaaaaa" }
+    },
+    "goodnotes.runs.list": {
+      "purpose": "goodnotes_browse",
+      "payloadFields": ["notebook_id", "page_version_id", "page_size", "cursor"],
+      "probe": {}
+    },
+    "goodnotes.read": {
+      "purpose": "goodnotes_read",
+      "payloadFields": ["run_id", "page_version_id", "content_sha256"],
+      "probe": {
+        "run_id": "gnrun_aaaaaaaaaaaaaaaaaaaaaaaa",
+        "page_version_id": "gnver_aaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    "goodnotes.search": {
+      "purpose": "goodnotes_read",
+      "payloadFields": ["query", "page_size", "cursor"],
+      "probe": { "query": "synthetic notebook" }
+    },
+    "goodnotes.correct": {
+      "purpose": "goodnotes_correction",
+      "payloadFields": ["occurrence_id", "transcription"],
+      "probe": {
+        "occurrence_id": "gnocc_bbbbbbbbbbbbbbbbbbbbbbbb",
+        "transcription": "synthetic correction"
+      }
+    },
+    "goodnotes.work": {
+      "purpose": "goodnotes_work",
+      "payloadFields": ["run_id", "page_version_id"],
+      "probe": {
+        "run_id": "gnrun_aaaaaaaaaaaaaaaaaaaaaaaa",
+        "page_version_id": "gnver_aaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    "goodnotes.content": {
+      "purpose": "goodnotes_content",
+      "payloadFields": ["run_id", "page_version_id", "content_sha256"],
+      "probe": {
+        "run_id": "gnrun_aaaaaaaaaaaaaaaaaaaaaaaa",
+        "page_version_id": "gnver_aaaaaaaaaaaaaaaaaaaaaaaa",
+        "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
     }
   },
   "_dispositionComment": [

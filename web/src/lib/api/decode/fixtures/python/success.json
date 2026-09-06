@@ -722,6 +722,42 @@
           "operator_only": false
         },
         {
+          "name": "goodnotes.notebooks.list",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "goodnotes.pages.list",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "goodnotes.runs.list",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "goodnotes.read",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "goodnotes.search",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "goodnotes.correct",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
           "name": "gsqs.start",
           "version": "v1",
           "availability": "available",
@@ -1202,11 +1238,11 @@
     "readiness": {
       "state": "degraded",
       "contract_version": "v1",
-      "implemented_capabilities": 130,
-      "total_capabilities": 130,
+      "implemented_capabilities": 136,
+      "total_capabilities": 136,
       "limitations": [
         "Content types awaiting an operator decision: application/pdf. They are reported rather than silently skipped.",
-        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.graph, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, goodnotes.pull, knowledge.search, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
+        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.graph, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, goodnotes.notebooks.list, goodnotes.pages.list, goodnotes.pull, goodnotes.runs.list, goodnotes.search, knowledge.search, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
         "Model proposals and semantic retrieval are disabled; deterministic lexical retrieval remains active.",
         "Worker-plane health is unavailable, stale, absent for queued work, or reports dead-lettered work; inspect worker_planes."
       ]
@@ -1974,5 +2010,124 @@
       }
     },
     "updated_at": "2026-08-09T12:00:00.000Z"
+  },
+  "goodnotes.notebooks.list": {
+    "notebooks": [
+      {
+        "notebook_id": "gnnb_aaaaaaaaaaaaaaaaaaaaaaaa",
+        "title": "Synthetic notebook",
+        "updated_at": "2026-08-09T12:00:00.000Z",
+        "page_count": 2,
+        "liveness": "unknown"
+      }
+    ],
+    "next_cursor": "cursor"
+  },
+  "goodnotes.pages.list": {
+    "pages": [
+      {
+        "logical_page_id": "gnlp_aaaaaaaaaaaaaaaaaaaaaaaa",
+        "page_version_id": "gnver_aaaaaaaaaaaaaaaaaaaaaaaa",
+        "run_id": "gnrun_aaaaaaaaaaaaaaaaaaaaaaaa",
+        "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "is_latest": true,
+        "updated_at": "2026-08-09T12:00:00.000Z"
+      }
+    ]
+  },
+  "goodnotes.runs.list": {
+    "runs": [
+      {
+        "run_id": "gnrun_aaaaaaaaaaaaaaaaaaaaaaaa",
+        "state": "succeeded",
+        "failure_class": null,
+        "started_at": "2026-08-09T12:00:00.000Z",
+        "completed_at": "2026-08-09T12:00:00.000Z"
+      }
+    ]
+  },
+  "goodnotes.read": {
+    "run_id": "gnrun_aaaaaaaaaaaaaaaaaaaaaaaa",
+    "page_version_id": "gnver_aaaaaaaaaaaaaaaaaaaaaaaa",
+    "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "exact_render_sha256": "674c643b2f9b08c165966be0fb297abedfb212e5eeeefac548d88bbc63fcfa23",
+    "raster_digest": "064b66188821584121784c30ca28eadbc5f265e025c6dd9eeed64cf1ef8e1f46",
+    "media_type": "image/png",
+    "renderer_name": "synthetic",
+    "renderer_version": "1",
+    "render_profile_version": "v1",
+    "interpretation": {
+      "authority": "interpretation",
+      "items": [
+        {
+          "proposal_id": "gnprp_aaaaaaaaaaaaaaaaaaaaaaaa",
+          "analyzer_name": "synthetic",
+          "analyzer_version": "1",
+          "schema_version": "note-unit.v1",
+          "disposition": null
+        },
+        {
+          "occurrence_id": "gnocc_bbbbbbbbbbbbbbbbbbbbbbbb",
+          "revision_id": "gnrev_aaaaaaaaaaaaaaaaaaaaaaaa",
+          "analyzer_name": "synthetic",
+          "analyzer_version": "1",
+          "schema_version": "note-unit.v1",
+          "transcription": "synthetic note"
+        }
+      ]
+    },
+    "provenance": {
+      "run_id": "gnrun_aaaaaaaaaaaaaaaaaaaaaaaa",
+      "page_version_id": "gnver_aaaaaaaaaaaaaaaaaaaaaaaa",
+      "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "processing": {
+      "run_status": null,
+      "failure_class": null
+    }
+  },
+  "goodnotes.search": {
+    "hits": [
+      {
+        "kind": "notebook",
+        "id": "gnnb_aaaaaaaaaaaaaaaaaaaaaaaa",
+        "title": "Synthetic notebook",
+        "snippet": "synthetic notebook",
+        "notebook_id": "gnnb_aaaaaaaaaaaaaaaaaaaaaaaa",
+        "logical_page_id": null,
+        "page_version_id": null,
+        "run_id": null,
+        "freshness": "2026-08-09T12:00:00.000Z"
+      }
+    ]
+  },
+  "goodnotes.correct": {
+    "occurrence_id": "gnocc_bbbbbbbbbbbbbbbbbbbbbbbb",
+    "revision_id": "gnrev_aaaaaaaaaaaaaaaaaaaaaaaa",
+    "prior_revision_id": "gnrev_bbbbbbbbbbbbbbbbbbbbbbbb",
+    "replayed": false,
+    "disposition": "canonical_revision_appended"
+  },
+  "goodnotes.work": {
+    "run_id": "gnrun_aaaaaaaaaaaaaaaaaaaaaaaa",
+    "page_version_id": "gnver_aaaaaaaaaaaaaaaaaaaaaaaa",
+    "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "logical_page_id": "gnlp_aaaaaaaaaaaaaaaaaaaaaaaa",
+    "renderer_name": "synthetic",
+    "renderer_version": "1",
+    "render_profile_version": "v1"
+  },
+  "goodnotes.content": {
+    "run_id": "gnrun_aaaaaaaaaaaaaaaaaaaaaaaa",
+    "page_version_id": "gnver_aaaaaaaaaaaaaaaaaaaaaaaa",
+    "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "exact_render_sha256": "674c643b2f9b08c165966be0fb297abedfb212e5eeeefac548d88bbc63fcfa23",
+    "media_type": "image/png",
+    "byte_length": 67,
+    "digest": "064b66188821584121784c30ca28eadbc5f265e025c6dd9eeed64cf1ef8e1f46",
+    "content_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR42mP4DwABAQEAHLCMmQAAAABJRU5ErkJggg==",
+    "renderer_name": "synthetic",
+    "renderer_version": "1",
+    "render_profile_version": "v1"
   }
 }

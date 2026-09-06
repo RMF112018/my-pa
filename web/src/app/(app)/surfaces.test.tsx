@@ -734,7 +734,13 @@ describe("System reports what it was told, and says so when it was told nothing"
     expect(screen.getByTestId("system-intelligence-not-system-health").textContent).toMatch(
       /not a claim that the system is healthy/,
     );
-    expect(screen.getByTestId("system-pwa-pending").textContent).toMatch(/PWA_FIELDS_PENDING_WP26/);
+    expect(screen.getByTestId("system-pwa-client-side").textContent).toMatch(/this browser/);
+    expect(screen.getByTestId("system-pwa-client-side").textContent).toMatch(/client-side/);
+    expect(screen.getByTestId("system-pwa-client-side").textContent).not.toMatch(
+      /PWA_FIELDS_PENDING_WP26/,
+    );
+    expect(screen.queryByTestId("system-pwa-pending")).toBeNull();
+    expect(screen.getByTestId("system-pwa-this-browser").textContent).toMatch(/This browser/);
     expect(screen.getByTestId("system-sources-unknown").textContent).toMatch(/cannot list/);
     expect(screen.getByTestId("system-refresh")).toBeTruthy();
   });

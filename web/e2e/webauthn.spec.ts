@@ -10,6 +10,8 @@ async function sessionCookie(page: import("@playwright/test").Page, origin: stri
 }
 
 test.describe("WebAuthn virtual authenticator", () => {
+  // Chromium CDP only (`WebAuthn.enable` / addVirtualAuthenticator). Playwright
+  // Firefox/WebKit cannot prove this path; UI-CI-WP05 classifies it HARVEST_CANNOT_PROVE.
   test("registers a passkey through the real browser API", async ({ page }) => {
     const client = await page.context().newCDPSession(page);
     await client.send("WebAuthn.enable");

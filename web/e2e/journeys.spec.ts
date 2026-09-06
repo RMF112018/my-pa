@@ -226,8 +226,10 @@ test.describe("the signed-in surfaces", () => {
     expect(memberStates.some((state) => state === "MISSING")).toBe(true);
     const aggregate = (await page.getByTestId("system-intelligence-aggregate").textContent()) ?? "";
     expect(memberStates).not.toEqual([aggregate]);
-    // PWA fields are pending WP26, not invented.
-    await expect(page.getByTestId("system-pwa-pending")).toContainText("PWA_FIELDS_PENDING_WP26");
+    // PWA observation is client-side, not invented server fields.
+    await expect(page.getByTestId("system-pwa-client-side")).toContainText(/client-side/i);
+    await expect(page.getByTestId("system-pwa-this-browser")).toBeVisible();
+    await expect(page.getByText("PWA_FIELDS_PENDING_WP26")).toHaveCount(0);
     await expect(page.getByTestId("system-refresh")).toBeVisible();
   });
 

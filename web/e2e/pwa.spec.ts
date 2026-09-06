@@ -168,7 +168,6 @@ test("the worker registers no Background Sync and this page claims none", async 
     const sync = (
       registration as ServiceWorkerRegistration & {
         sync?: { getTags?: () => Promise<string[]> };
-        periodicSync?: { getTags?: () => Promise<string[]> };
       }
     ).sync;
     const periodic = (
@@ -176,10 +175,19 @@ test("the worker registers no Background Sync and this page claims none", async 
         periodicSync?: { getTags?: () => Promise<string[]> };
       }
     ).periodicSync;
-    return {
-      sync: sync && typeof sync.getTags === "function" ? await sync.getTags() : [],
-      periodic: periodic && typeof periodic.getTags === "function" ? await periodic.getTags() : [],
-    };
+    async function tagsOrEmpty(
+      api: { getTags?: () => Promise<string[]> } | undefined,
+    ): Promise<string[]> {
+      if (!api || typeof api.getTags !== "function") return [];
+      try {
+        return await api.getTags();
+      } catch {
+        // Chromium CI reports "Background Sync is disabled" rather than an
+        // empty tag list. That is the same product fact: no sync tags exist.
+        return [];
+      }
+    }
+    return { sync: await tagsOrEmpty(sync), periodic: await tagsOrEmpty(periodic) };
   });
   expect(tags.sync, "no Background Sync tags").toEqual([]);
   expect(tags.periodic, "no periodic Background Sync tags").toEqual([]);

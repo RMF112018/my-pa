@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import axe from "axe-core";
 import { readFileSync } from "node:fs";
 import { GraphMap } from "./graph-map";
 import type { GraphEdge, GraphNode } from "@/lib/api/decode/capabilities/entities.graph";
@@ -231,5 +232,61 @@ describe("GraphMap inspect-selection API", () => {
     const circle = screen.getByTestId(`canvas-node-${NEIGHBOR}`).querySelector("circle");
     expect(circle).toHaveAttribute("stroke-width", "3");
     expect(visibleLine(REL_EDGE).getAttribute("stroke-width")).toBe("3");
+  });
+});
+
+describe("GraphMap keyboard, focus, and axe", () => {
+  it("is axe-clean for a seeded inspectable neighborhood", async () => {
+    const { container } = render(
+      <main>
+        <GraphMap
+          nodes={NODES}
+          edges={[relationshipEdge(null)]}
+          focusEntityId={FOCUS}
+          onInspectNode={vi.fn()}
+          onInspectEdge={vi.fn()}
+        />
+      </main>,
+    );
+    expect((await axe.run(container)).violations).toEqual([]);
+  });
+
+  it("makes inspectable nodes and relationship edges tab-focusable buttons", () => {
+    render(
+      <GraphMap
+        nodes={NODES}
+        edges={[relationshipEdge(null)]}
+        focusEntityId={FOCUS}
+        onInspectNode={vi.fn()}
+        onInspectEdge={vi.fn()}
+      />,
+    );
+    const node = screen.getByRole("button", { name: "Pat Synthetic" });
+    expect(node).toHaveAttribute("tabindex", "0");
+    const edge = screen.getByRole("button", {
+      name: `works_for relationship from ${FOCUS} to ${NEIGHBOR}`,
+    });
+    expect(edge).toHaveAttribute("tabindex", "0");
+    const svg = screen.getByTestId("canvas-map").querySelector("svg");
+    expect(svg).not.toBeNull();
+    expect(svg).not.toHaveAttribute("role", "presentation");
+  });
+
+  it("applies visible focus classes on operable node and edge groups", () => {
+    render(
+      <GraphMap
+        nodes={NODES}
+        edges={[relationshipEdge(null)]}
+        focusEntityId={FOCUS}
+        onInspectNode={vi.fn()}
+        onInspectEdge={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId(`canvas-node-${FOCUS}`).getAttribute("class")).toContain(
+      "focus-visible:[&>circle]:stroke-moss-gold",
+    );
+    expect(screen.getByTestId(`canvas-edge-${REL_EDGE}`).getAttribute("class")).toContain(
+      "focus-visible:[&>line:last-of-type]:stroke-moss-gold",
+    );
   });
 });

@@ -10,6 +10,8 @@ import {
 
 const NODE_R = 16;
 const FOCUS_R = 22;
+const OPERABLE_NODE_FOCUS = "outline-none focus-visible:[&>circle]:stroke-moss-gold";
+const OPERABLE_EDGE_FOCUS = "outline-none focus-visible:[&>line:last-of-type]:stroke-moss-gold";
 
 function shortLabel(label: string): string {
   return label.length > 22 ? `${label.slice(0, 21)}…` : label;
@@ -54,6 +56,7 @@ export function GraphMap({
   onSvgPointerMove,
   onSvgPointerUp,
   onNodeSelect,
+  onArrangeSelect,
   onEdgeSelect,
   onInspectNode,
   onInspectEdge,
@@ -73,6 +76,7 @@ export function GraphMap({
   onSvgPointerMove?: (event: ReactPointerEvent<SVGSVGElement>) => void;
   onSvgPointerUp?: (event: ReactPointerEvent<SVGSVGElement>) => void;
   onNodeSelect?: (entityId: string) => void;
+  onArrangeSelect?: (entityId: string) => void;
   onEdgeSelect?: (edgeId: string) => void;
   onInspectNode?: (entityId: string) => void;
   onInspectEdge?: (edgeId: string) => void;
@@ -88,7 +92,6 @@ export function GraphMap({
         ref={svgRef}
         viewBox={`0 0 ${CANVAS_MAP_WIDTH} ${CANVAS_MAP_HEIGHT}`}
         className="h-auto w-full rounded-lg border border-border bg-surface"
-        role="presentation"
         onPointerMove={drag ? onSvgPointerMove : undefined}
         onPointerUp={drag ? onSvgPointerUp : undefined}
         onPointerCancel={drag ? onSvgPointerUp : undefined}
@@ -112,6 +115,7 @@ export function GraphMap({
               data-is-current={currentness}
               tabIndex={interactive ? 0 : undefined}
               role={interactive ? "button" : undefined}
+              className={interactive ? OPERABLE_EDGE_FOCUS : undefined}
               aria-label={
                 interactive
                   ? `${edge.type} ${edge.edge_kind} from ${edge.from_entity_id} to ${edge.to_entity_id}`
@@ -195,8 +199,18 @@ export function GraphMap({
                 data-testid={`canvas-node-${node.entity_id}`}
                 data-entity-id={node.entity_id}
                 tabIndex={0}
+                role="button"
                 aria-label={node.display_label}
+                className={OPERABLE_NODE_FOCUS}
                 style={{ cursor: drag ? "grab" : "pointer", touchAction: drag ? "none" : undefined }}
+                onFocus={
+                  drag
+                    ? () => {
+                        onArrangeSelect?.(node.entity_id);
+                        onInspectNode?.(node.entity_id);
+                      }
+                    : undefined
+                }
                 onPointerDown={
                   drag
                     ? (event) => {
@@ -214,11 +228,12 @@ export function GraphMap({
                     : undefined
                 }
                 onKeyDown={
-                  relationshipEdit
+                  drag || relationshipEdit
                     ? (event) => {
                         if (!activateKey(event)) return;
                         event.preventDefault();
-                        onNodeSelect?.(node.entity_id);
+                        if (drag) onArrangeSelect?.(node.entity_id);
+                        if (relationshipEdit) onNodeSelect?.(node.entity_id);
                         onInspectNode?.(node.entity_id);
                       }
                     : undefined
@@ -238,6 +253,7 @@ export function GraphMap({
                 role="button"
                 aria-label={node.display_label}
                 aria-pressed={inspectSelected}
+                className={OPERABLE_NODE_FOCUS}
                 style={{ cursor: "pointer" }}
                 onClick={() => onInspectNode?.(node.entity_id)}
                 onKeyDown={(event) => {
@@ -255,7 +271,7 @@ export function GraphMap({
               key={node.entity_id}
               href={peopleEntity(node.entity_id)}
               aria-label={node.display_label}
-              className="outline-none focus-visible:[&>circle]:stroke-moss-gold"
+              className={OPERABLE_NODE_FOCUS}
             >
               {mark}
             </a>

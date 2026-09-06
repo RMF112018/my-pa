@@ -291,6 +291,19 @@ Conservative dispositions for Map as-of, Inspector binding, identity-history Cha
 - **Citations residual:** frozen `entities.graph` and `RelationshipView` do not publish `evidence_refs`. Window-only revise remains refused unless replacement refs are stated or citations are explicitly cleared. This package does not widen the WP15 graph contract.
 - This package does not claim a11y/scale/export (WP20), Wave 5 complete, or production activation.
 - UI-IMP-WP21 and UI-IMP-WP22 remain `PROVISIONAL_NOT_ACTIVATED`. UI-IMP-WP24 is not this package.
+- Accessibility, responsive fallback, scale, and smallest client-side export are now UI-IMP-WP20 on this branch; WP19 remains inspector/temporal only.
+
+## UI-IMP-WP20 Canvas Accessibility, Responsive Fallback, and Scale notes
+
+Conservative dispositions for Canvas accessibility, responsive fallback, scale, and smallest client-side export on the WP16 Map. This is not Wave 5 complete as `PASS_VERIFIED`, not WP21/WP22, not WP24, not production activation, and not `PASS_VERIFIED` for `PFE-AC-140..184` or `PFE-AC-191..198`.
+
+- **a11y / responsive / scale / export band:** at most `VALIDATION_REQUIRED`. Never `PASS_VERIFIED` for `PFE-AC-140..184` or `PFE-AC-191..198`.
+- Keyboard/AT: seeded Map is usable without a pointer. Tab reaches nodes and relationship edges. Enter/Space opens Inspector and relationship-edit. Arrange keyboard select is sufficient for arrow-nudge. Focus rings are visible. SVG is not `role="presentation"` hiding operable controls.
+- Responsive: the directory is the primary neighborhood surface on narrow viewports (`md:` like WP08). SVG is not the only membership surface. Truncation/`after` continue remains visible.
+- Scale: show the returned `entities.graph` page only and disclose continue. If SVG would be unusable at the returned size, use directory-first fallback without dropping the page. No unbounded fetch, no React Flow, no graph database, and no raising page size.
+- Export: client-side visible neighborhood only (SVG and/or text list). No new backend. `PFE-AC-185..190` remain `SUPERSEDED` (no MossAIc/ChatLLM). This package does not claim visual-regression or performance gates (WP28) and does not claim the WP27 test-quality audit.
+- This package does not claim Wave 5 complete as `PASS_VERIFIED`, WP21/WP22, WP24, or production activation.
+- UI-IMP-WP21 and UI-IMP-WP22 remain `PROVISIONAL_NOT_ACTIVATED`. UI-IMP-WP24 is not this package.
 
 ## UI-IMP-WP23 Federated Search BFF notes
 

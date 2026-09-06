@@ -6,6 +6,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
+import { readFileSync } from "node:fs";
 import type { PrincipalSession } from "@/contracts/identity";
 import { canvasMap } from "@/lib/routes/canvas";
 
@@ -430,5 +431,31 @@ describe("Canvas page", () => {
     expect(screen.getByTestId("degraded-banner")).toBeTruthy();
     expect(screen.getByTestId("degraded-banner").textContent).toMatch(/less than the whole/i);
     expect(screen.getByTestId("degraded-banner").textContent).not.toMatch(/complete coverage/i);
+  });
+
+  it("keeps the unseeded seed-required instructional surface readable", async () => {
+    const fetchSpy = socketFails();
+    await renderServerPage(() => CanvasPage({ searchParams: Promise.resolve({}) }));
+    const required = screen.getByTestId("canvas-seed-required");
+    expect(required).toBeTruthy();
+    expect(required).toHaveAttribute("data-state", "empty");
+    expect(screen.getByText("A seed is required")).toBeTruthy();
+    expect(required.textContent).toMatch(/seed/i);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("places Directory before Neighborhood in a md two-column grid", async () => {
+    answerGraph(TWO_NODES);
+    await renderServerPage(() => CanvasPage({ searchParams: seededParams() }));
+    const directoryHeading = screen.getByRole("heading", { name: "Directory", level: 2 });
+    const mapHeading = screen.getByRole("heading", { name: "Neighborhood", level: 2 });
+    expect(directoryHeading.compareDocumentPosition(mapHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    const grid = directoryHeading.closest("div");
+    expect(grid?.className).toContain("md:grid-cols-2");
+    const source = readFileSync("src/app/(app)/canvas/canvas-page.tsx", "utf8");
+    expect(source).toContain("md:grid-cols-2");
+    expect(source).toContain('data-testid="canvas-continue"');
   });
 });

@@ -27,29 +27,9 @@ import { backendDisclosure, invokeGateway, transportLimitations } from "@/lib/ap
 import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
 import { syntheticReviewCases } from "@/lib/fixtures/review";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
-import type { ReviewCase } from "@/lib/api/decode/capabilities/review.list";
-import type { BackendReviewCase } from "@/contracts/views";
+import { toBackendReviewCase } from "@/components/review/to-backend-case";
 
 const SCOPE = "review";
-
-function toBackendCase(row: ReviewCase): BackendReviewCase {
-  const captureId = row.subject_kind === "capture_proposal" ? row.capture_id : row.review_case_id;
-  const versionId = row.subject_kind === "capture_proposal" ? row.version_id : row.proposal_id;
-  const proposalType =
-    row.subject_kind === "capture_proposal" ? row.proposal_type : row.subject_kind;
-  return {
-    reviewCaseId: row.review_case_id,
-    proposalId: row.proposal_id,
-    captureId,
-    versionId,
-    proposalType,
-    proposalState: row.proposal_state,
-    riskClass: row.risk_class,
-    openedAt: row.opened_at,
-    reviewVersion: row.review_version,
-    latestDisposition: row.latest_disposition,
-  };
-}
 
 export async function GET(request: NextRequest) {
   const guard = await requirePrincipal(request);
@@ -72,7 +52,7 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     shape: "backend",
-    cases: result.review_cases.map(toBackendCase),
+    cases: result.review_cases.map(toBackendReviewCase),
     disclosure: backendDisclosure(SCOPE, outcome.disclosure, transportLimitations()),
   });
 }

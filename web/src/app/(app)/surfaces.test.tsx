@@ -70,6 +70,7 @@ vi.mock("next/navigation", async (importOriginal) => {
 });
 
 import LibraryPage from "@/app/(app)/library/page";
+import KnowledgePage from "@/app/(app)/knowledge/page";
 import PeoplePage from "@/app/(app)/people/page";
 import PeopleEntityPage from "@/app/(app)/people/[entityId]/page";
 import ReviewPage from "@/app/(app)/review/page";
@@ -199,6 +200,33 @@ const REVIEW_CASE = {
   opened_at: "2026-01-01T00:00:00Z",
   review_version: 3,
   latest_disposition: null,
+};
+
+const GOODNOTES_SEMANTIC_CASE = {
+  review_case_id: "rvc_cccc0001cccc0001cccc0001",
+  proposal_id: "prop_cccc0001cccc0001cccc0001",
+  proposal_state: "proposed",
+  risk_class: "moderate",
+  opened_at: "2026-01-01T00:00:00Z",
+  review_version: 1,
+  latest_disposition: null,
+  subject_kind: "goodnotes_semantic",
+  run_id: "gnrun_aaaaaaaaaaaaaaaaaaaaaaaa",
+  page_version_id: "gnver_aaaaaaaaaaaaaaaaaaaaaaaa",
+};
+
+const GOODNOTES_REGION_CASE = {
+  review_case_id: "rvc_dddd0001dddd0001dddd0001",
+  proposal_id: "prop_dddd0001dddd0001dddd0001",
+  proposal_state: "needs_review",
+  risk_class: "low",
+  opened_at: "2026-01-01T00:00:00Z",
+  review_version: 2,
+  latest_disposition: null,
+  subject_kind: "goodnotes_region",
+  region_id: "gnreg_aaaaaaaaaaaaaaaaaaaaaaaa",
+  page_version_id: "gnver_bbbbbbbbbbbbbbbbbbbbbbbb",
+  confidence: 0.82,
 };
 
 const PULSE_ITEM = {
@@ -446,6 +474,40 @@ describe("Review distinguishes an empty queue from an unread one", () => {
     expect(screen.getByTestId("review-version").textContent).toBe("3");
     expect(screen.getByTestId("review-listing-limitation").textContent).toMatch(
       /carries no proposal text/i,
+    );
+    expect(screen.getByTestId("review-capture-id").textContent).toBe(CAPTURE.capture_id);
+    expect(screen.getByTestId("review-version-id").textContent).toBe(CAPTURE.latest_version_id);
+    expect(screen.getByTestId("review-reveal")).toBeTruthy();
+    expect(screen.queryByTestId("review-goodnotes-link")).toBeNull();
+  });
+
+  it("does not render a GoodNotes semantic case as a capture identifier", async () => {
+    answerWith({ review_cases: [GOODNOTES_SEMANTIC_CASE] }, whole());
+    await renderServerPage(() => ReviewPage());
+    const card = screen.getByTestId("backend-review-case");
+    expect(card).toHaveAttribute("data-subject-kind", "goodnotes_semantic");
+    expect(screen.getByTestId("review-run-id").textContent).toBe(GOODNOTES_SEMANTIC_CASE.run_id);
+    expect(screen.getByTestId("review-page-version-id").textContent).toBe(
+      GOODNOTES_SEMANTIC_CASE.page_version_id,
+    );
+    expect(screen.queryByTestId("review-capture-id")).toBeNull();
+    expect(screen.queryByTestId("review-reveal")).toBeNull();
+    expect(screen.getByTestId("review-goodnotes-link")).toHaveAttribute(
+      "href",
+      "/knowledge/goodnotes?runId=gnrun_aaaaaaaaaaaaaaaaaaaaaaaa&pageVersionId=gnver_aaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+  });
+
+  it("links a GoodNotes region case by pageVersionId only", async () => {
+    answerWith({ review_cases: [GOODNOTES_REGION_CASE] }, whole());
+    await renderServerPage(() => ReviewPage());
+    expect(screen.getByTestId("review-region-id").textContent).toBe(GOODNOTES_REGION_CASE.region_id);
+    expect(screen.getByTestId("review-confidence").textContent).toBe("0.82");
+    expect(screen.queryByTestId("review-run-id")).toBeNull();
+    expect(screen.queryByTestId("review-capture-id")).toBeNull();
+    expect(screen.getByTestId("review-goodnotes-link")).toHaveAttribute(
+      "href",
+      "/knowledge/goodnotes?pageVersionId=gnver_bbbbbbbbbbbbbbbbbbbbbbbb",
     );
   });
 
@@ -941,5 +1003,27 @@ describe("People reaches search, resolve, and profile instead of a directory", (
     } finally {
       if (saved) Object.defineProperty(globalThis, "window", saved);
     }
+  });
+});
+
+describe("Knowledge offers a GoodNotes entry without claiming notebooks exist", () => {
+  it("links to /knowledge/goodnotes beside an unchanged capture library", async () => {
+    answerWith({ captures: [CAPTURE] }, whole());
+    await renderServerPage(() => KnowledgePage({ searchParams: NO_PARAMS }));
+    const entry = screen.getByTestId("knowledge-goodnotes-entry");
+    expect(entry.textContent).toMatch(/does not mean notebooks are present/i);
+    expect(screen.getByRole("link", { name: "Open GoodNotes" })).toHaveAttribute(
+      "href",
+      "/knowledge/goodnotes",
+    );
+    expect(screen.getByTestId("library-listing")).toBeTruthy();
+    expect(screen.queryByTestId("goodnotes-notebooks")).toBeNull();
+  });
+
+  it("still offers the entry when Library has nothing to serve synthetically", async () => {
+    vi.stubEnv("MYPA_DATA_PROVIDER", "synthetic");
+    await renderServerPage(() => KnowledgePage({ searchParams: NO_PARAMS }));
+    expect(screen.getByTestId("knowledge-goodnotes-entry")).toBeTruthy();
+    expect(screen.getByTestId("library-synthetic")).toHaveAttribute("data-state", "not_implemented");
   });
 });

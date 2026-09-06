@@ -65,12 +65,15 @@ export interface ReviewCase {
  * and empty arrays would report "no evidence" where the truth is "not returned
  * by this capability", so the shapes stay distinct and `/api/review` says which
  * one it is returning.
+ *
+ * Capture cases keep `captureId` / `versionId`. GoodNotes cases do not pretend
+ * those fields exist: a semantic row carries `runId` and `pageVersionId`, and a
+ * region row carries `regionId`, `pageVersionId`, and `confidence`. None of the
+ * variants invent proposal text.
  */
-export interface BackendReviewCase {
+interface BackendReviewCaseCommon {
   readonly reviewCaseId: OpaqueId;
   readonly proposalId: OpaqueId;
-  readonly captureId: OpaqueId;
-  readonly versionId: OpaqueId;
   readonly proposalType: string;
   readonly proposalState: string;
   readonly riskClass: string;
@@ -79,6 +82,37 @@ export interface BackendReviewCase {
   readonly reviewVersion: number;
   readonly latestDisposition: string | null;
 }
+
+export interface CaptureBackendReviewCase extends BackendReviewCaseCommon {
+  readonly subjectKind: "capture_proposal";
+  readonly captureId: OpaqueId;
+  readonly versionId: OpaqueId;
+}
+
+export interface GoodNotesSemanticBackendReviewCase extends BackendReviewCaseCommon {
+  readonly subjectKind: "goodnotes_semantic";
+  readonly runId: OpaqueId;
+  readonly pageVersionId: OpaqueId;
+}
+
+export interface GoodNotesRegionBackendReviewCase extends BackendReviewCaseCommon {
+  readonly subjectKind: "goodnotes_region";
+  readonly regionId: OpaqueId;
+  readonly pageVersionId: OpaqueId;
+  readonly confidence: number;
+}
+
+export interface GenericBackendReviewCase extends BackendReviewCaseCommon {
+  readonly subjectKind: "relationship_memory" | "entity_proposal";
+  readonly captureId: OpaqueId;
+  readonly versionId: OpaqueId;
+}
+
+export type BackendReviewCase =
+  | CaptureBackendReviewCase
+  | GoodNotesSemanticBackendReviewCase
+  | GoodNotesRegionBackendReviewCase
+  | GenericBackendReviewCase;
 
 /**
  * The immutable receipt a real disposition produced, as `review.decide` emits it.

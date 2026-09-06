@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-one hundred and thirty-six capabilities. There are two ways to prove that and only one stays
+one hundred and forty-two capabilities. There are two ways to prove that and only one stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -1204,6 +1204,17 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         # No arguments: the queue is every unplaced mention in the Principal's
         # own partition, so there is nothing to name.
         Capability.ENTITIES_UNRESOLVED_MENTIONS: {},
+        # PC-CM-IMP-WP04's six Constraint Management reads, naming the scene's own
+        # seeded Project and Constraint so each answers rather than refuses.
+        Capability.CONSTRAINTS_READ: {"constraint_id": scene.constraint_id},
+        Capability.CONSTRAINTS_LIST: {"project_id": scene.constraint_project_id},
+        Capability.CONSTRAINTS_SEARCH: {
+            "project_id": scene.constraint_project_id,
+            "query": "synthetic",
+        },
+        Capability.CONSTRAINTS_HISTORY: {"constraint_id": scene.constraint_id},
+        Capability.CONSTRAINTS_OVERVIEW: {"project_id": scene.constraint_project_id},
+        Capability.CONSTRAINT_CATEGORIES_LIST: {"project_id": scene.constraint_project_id},
         # The entity plane's authoring half (`WP-RI-A-02`). Every one of the
         # twelve is executed here rather than refused, which is what makes this
         # a comparison of answers rather than of refusals -- so each names the
@@ -1778,7 +1789,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 137, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 143, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))

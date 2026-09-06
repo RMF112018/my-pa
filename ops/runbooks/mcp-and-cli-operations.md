@@ -76,7 +76,7 @@ All three transports call one function — `adapters/normalization.normalize` �
 and none of them can build a request value of its own. A request that HTTP
 refuses, MCP and the CLI refuse, with the same code, the same message, the same
 `safe_details`, and the same audit event. That is `SPEC-AC-001`, and
-`tests/contract/test_transport_parity.py` holds it over all one hundred and thirty-six capabilities.
+`tests/contract/test_transport_parity.py` holds it over all one hundred and forty-two capabilities.
 
 Practically: **there is no capability reachable from a shell that is not
 reachable over HTTP, and no authority that comes with being local.** The CLI is
@@ -181,7 +181,7 @@ one declared capability, `tools`, and nothing else.
 ## The tool list
 
 `tools/list` returns the tools **this process can serve**, and that is not the
-same as the tools this build implements. The build implements one hundred and thirty-six, one
+same as the tools this build implements. The build implements one hundred and forty-two, one
 per capability name. A default process publishes **sixty-six**. That is one
 hundred and thirty-six, less the six `documents.` names, the fifty-five `entities.`
 names, and the nine `relationship_memory.` names a default composition withholds.
@@ -191,14 +191,14 @@ configured**, and nothing else gates them. There is no default location and no
 inference: with the variable unset the composition root builds no managed byte
 store, `capabilities.get` omits those names, `tools/list` omits those tools, and
 a `tools/call` naming one is refused `unsupported`. Set the variable and the
-same child publishes those six, reaching seventy of the one hundred and thirty-six. The
+same child publishes those six, reaching seventy of the one hundred and forty-two. The
 remaining sixty-three are the fifty-five `entities.` names, which `D-RI-20`
 gates behind `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` on exactly the same terms
 — and whose thirty-eight writes need
 `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` beside it, so a process with
 the plane switch alone publishes eighty — and the nine
 `relationship_memory.` names, which need the plane variable *and*
-`MY_PA_RELATIONSHIP_MEMORY_ENABLED`; a child publishing all one hundred and thirty-six has
+`MY_PA_RELATIONSHIP_MEMORY_ENABLED`; a child publishing all one hundred and forty-two has
 all required feature gates and composition dependencies satisfied. An operator who expects `documents.create`
 on the list and does not find it should look at that variable first — it is the
 only thing that decides it. (Pointing the plane at real storage is `EXT-10` and
@@ -270,8 +270,8 @@ that names it again is refused.
 ## Calling a tool
 
 **Current-state correction (2026-08-28):** the tool list is derived from all
-**one hundred and thirty-six** current capabilities, and the schema has
-**ninety-six** revisions at head `a1c9e4b72f80` (`a1c9e4b72f80` is additive on `2774329487be` and admits `goodnotes.notebooks.list`, `goodnotes.pages.list`, `goodnotes.runs.list`, `goodnotes.read`, `goodnotes.search`, and `goodnotes.correct` together with `goodnotes_browse`, `goodnotes_read`, and `goodnotes_correction`; `2774329487be` is additive on `e8f2a6c9d104` and adds the fourteen-table Constraint-management plane (PC-CM-IMP-WP02); `e8f2a6c9d104` is additive on `d4e8b1c7a902` and adds immutable GoodNotes client lease policy and client-scoped attempt/completion uniqueness; `d4e8b1c7a902` is additive on `a4d8e31b2c90` and adds the Principal-partitioned canvas workspace overlay; `6a2f9d1c4b80` is additive on `c3f8a1d07e94` and adds five Principal-partitioned, content-free GoodNotes pull and semantic-review ledger tables while admitting `goodnotes.pull`, `goodnotes.complete`, and `goodnotes.status` to the frozen audit vocabulary; `c3f8a1d07e94` admits `entities.graph` on `b8e4d1a6c073`; corrected 2026-09-03 from
+**one hundred and forty-two** current capabilities, and the schema has
+**ninety-seven** revisions at head `c5b71e0a8d43` (`c5b71e0a8d43` is additive on `a1c9e4b72f80` and admits the six Constraint Management read capabilities `constraints.read`, `constraints.list`, `constraints.search`, `constraints.history`, `constraints.overview`, and `constraint_categories.list` together with the single `constraint_read` purpose, and no Constraint authoring or synchronisation vocabulary (PC-CM-IMP-WP04); `a1c9e4b72f80` is additive on `2774329487be` and admits `goodnotes.notebooks.list`, `goodnotes.pages.list`, `goodnotes.runs.list`, `goodnotes.read`, `goodnotes.search`, and `goodnotes.correct` together with `goodnotes_browse`, `goodnotes_read`, and `goodnotes_correction`; `2774329487be` is additive on `e8f2a6c9d104` and adds the fourteen-table Constraint-management plane (PC-CM-IMP-WP02); `e8f2a6c9d104` is additive on `d4e8b1c7a902` and adds immutable GoodNotes client lease policy and client-scoped attempt/completion uniqueness; `d4e8b1c7a902` is additive on `a4d8e31b2c90` and adds the Principal-partitioned canvas workspace overlay; `6a2f9d1c4b80` is additive on `c3f8a1d07e94` and adds five Principal-partitioned, content-free GoodNotes pull and semantic-review ledger tables while admitting `goodnotes.pull`, `goodnotes.complete`, and `goodnotes.status` to the frozen audit vocabulary; `c3f8a1d07e94` admits `entities.graph` on `b8e4d1a6c073`; corrected 2026-09-03 from
 eighty-eight at `16f05c46b8c3`, on which `b8e4d1a6c073` is additive and
 backfills one `display`-typed `entity_names` row per active `entities` row --
 `display_value` from `entities.display_name`, `normalized_value` from

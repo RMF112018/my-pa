@@ -367,6 +367,16 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         # `entity_read`/`entity_authoring` or `capture_authoring`.
         (Capability.CANVAS_WORKSPACE_GET, Purpose.CANVAS_WORKSPACE_READ),
         (Capability.CANVAS_WORKSPACE_PUT, Purpose.CANVAS_WORKSPACE_AUTHORING),
+        # PC-CM-IMP-WP04's Constraint Management reads. One purpose across the
+        # family and no authoring or synchronisation purpose beside it: the
+        # read/authoring separation is proved by the absence plus the deny-all
+        # default, not by a purpose nothing yet grants.
+        (Capability.CONSTRAINTS_READ, Purpose.CONSTRAINT_READ),
+        (Capability.CONSTRAINTS_LIST, Purpose.CONSTRAINT_READ),
+        (Capability.CONSTRAINTS_SEARCH, Purpose.CONSTRAINT_READ),
+        (Capability.CONSTRAINTS_HISTORY, Purpose.CONSTRAINT_READ),
+        (Capability.CONSTRAINTS_OVERVIEW, Purpose.CONSTRAINT_READ),
+        (Capability.CONSTRAINT_CATEGORIES_LIST, Purpose.CONSTRAINT_READ),
     }
 )
 
@@ -426,9 +436,14 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # `UI-IMP-WP15` adds `entities.graph` under `entity_read`.
     # `UI-IMP-WP17` adds `canvas.workspace.get`/`canvas.workspace.put` under
     # `canvas_workspace_read`/`canvas_workspace_authoring`.
-    # Unioned: 136 capabilities, 41 purposes, 138 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 138
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 138 == 5438
+    # `PC-CM-IMP-WP04` adds the six Constraint Management reads and the one
+    # `constraint_read` purpose, each read mapped to that purpose and to nothing
+    # else, so it contributes six pairs rather than the forty-two a cross
+    # product would give -- and no authoring or synchronisation purpose, so the
+    # plane's writes have no permitted pair at all.
+    # Unioned: 142 capabilities, 42 purposes, 144 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 144
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 144 == 5820
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

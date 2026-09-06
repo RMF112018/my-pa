@@ -39,7 +39,7 @@ import re
 import sys
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Final
@@ -79,6 +79,8 @@ from my_pa.contracts.ports import (
     CaptureSummary,
     CommitmentManagementRepository,
     CommitmentManagementUnitOfWork,
+    ConstraintManagementRepository,
+    ConstraintManagementUnitOfWork,
     ContextPreferenceRepository,
     ContextRunRepository,
     ContinuityAuthoringRepository,
@@ -208,6 +210,24 @@ from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.identity.user_account import CallerSuppliedPrincipalError
+from my_pa.domain.project_controls.category import ConstraintCategoryState
+from my_pa.domain.project_controls.constraint import (
+    ConstraintLifecycleState,
+    ConstraintOrigin,
+    ConstraintRecordQuality,
+)
+from my_pa.domain.project_controls.read_models import (
+    ConstraintCategoryRow,
+    ConstraintEvidenceLinkRow,
+    ConstraintHistoryRow,
+    ConstraintListSpec,
+    ConstraintOverviewFacts,
+    ConstraintPartyRow,
+    ConstraintRelationshipRow,
+    ConstraintSyncFacts,
+    PersistedConstraintRecord,
+)
+from my_pa.domain.project_controls.settings import ConstraintProjectSettings
 from my_pa.domain.relationship.authoring import (
     ConflictedIdentifierError,
     DuplicateEntityFactError,
@@ -481,6 +501,23 @@ class World:
     capture_proposals: dict[str, tuple[RevealedProposal, ...]] = field(default_factory=dict)
     capture_assertions: dict[str, tuple[RevealedAssertion, ...]] = field(default_factory=dict)
     derivation_states: dict[str, ProcessingState] = field(default_factory=dict)
+    #: PC-CM-IMP-WP04's Constraint Management read plane, as the three
+    #: collections the six reads traverse. Keyed by the pair the real statements
+    #: are partitioned by, so a Project or a Constraint another Principal owns is
+    #: answered exactly as an absent one -- which is the whole of what this fake
+    #: exists to make reachable. Nothing here derives a flag: Overdue, Due Soon,
+    #: In My Court, the recent windows, the grouping and the overview formulas
+    #: are `application.constraints`'s, and a fake that computed one would let a
+    #: test prove something the read service does not do.
+    constraint_settings: dict[tuple[str, str], ConstraintProjectSettings] = field(
+        default_factory=dict
+    )
+    project_constraints: dict[tuple[str, str], PersistedConstraintRecord] = field(
+        default_factory=dict
+    )
+    constraint_categories: dict[tuple[str, str], tuple[ConstraintCategoryRow, ...]] = field(
+        default_factory=dict
+    )
     review_cases: list[ReviewCase] = field(default_factory=list)
     review_decisions: list[ReviewDecision] = field(default_factory=list)
     #: The managed-document plane (WP-27, reachable behind a capability seat since
@@ -2889,6 +2926,161 @@ class FakeCommitmentManagementUnitOfWork(CommitmentManagementUnitOfWork):
     @property
     def commitments(self) -> CommitmentManagementRepository:
         return _CommitmentsWrite(self._world)
+
+
+class _ConstraintReads:
+    """The Constraint read plane over the `World`, partition predicate written out.
+
+    Structural rather than a subclass of `ConstraintManagementRepository`, and
+    deliberately: that port is an ABC whose write half belongs to a later work
+    package, and a subclass would have to stub twenty methods this harness has no
+    behaviour for. What the read service takes is the locally declared
+    `ConstraintReadRepository` Protocol, which this satisfies by shape. Reaching
+    a method it does not carry raises, so a write is a loud failure rather than a
+    silent empty answer.
+
+    Nothing here derives anything. The rows go out as stored and
+    `application.constraints` decides every flag, count, group and cursor.
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def __getattr__(self, name: str) -> object:
+        raise NotImplementedError(
+            f"the synthetic Constraint plane implements the reads only; {name} is a write"
+        )
+
+    def get_project_settings(
+        self, principal_id: str, project_id: str
+    ) -> ConstraintProjectSettings | None:
+        return self._world.constraint_settings.get((principal_id, project_id))
+
+    def list_categories(
+        self,
+        principal_id: str,
+        project_id: str,
+        *,
+        include_states: object = None,
+    ) -> tuple[ConstraintCategoryRow, ...]:
+        rows = self._world.constraint_categories.get((principal_id, project_id), ())
+        if include_states is None:
+            return rows
+        return tuple(row for row in rows if row.state in include_states)
+
+    def read_constraint(
+        self, principal_id: str, constraint_id: str
+    ) -> PersistedConstraintRecord | None:
+        return self._world.project_constraints.get((principal_id, constraint_id))
+
+    def list_constraints(
+        self, principal_id: str, project_id: str, *, spec: ConstraintListSpec
+    ) -> tuple[PersistedConstraintRecord, ...]:
+        found = tuple(
+            record
+            for (owner, _identifier), record in self._world.project_constraints.items()
+            if owner == principal_id and record.project_id == project_id
+        )
+        return found[: spec.fetch_limit]
+
+    def parties_for(
+        self, principal_id: str, constraint_ids: object
+    ) -> tuple[ConstraintPartyRow, ...]:
+        del principal_id, constraint_ids
+        return ()
+
+    def entity_labels(self, principal_id: str, entity_ids: object) -> dict[str, str]:
+        del principal_id, entity_ids
+        return {}
+
+    def list_history(
+        self,
+        principal_id: str,
+        constraint_id: str,
+        *,
+        limit: int,
+        after: object = None,
+    ) -> tuple[ConstraintHistoryRow, ...]:
+        del principal_id, constraint_id, limit, after
+        return ()
+
+    def relationships_for(
+        self, principal_id: str, constraint_id: str
+    ) -> tuple[ConstraintRelationshipRow, ...]:
+        del principal_id, constraint_id
+        return ()
+
+    def evidence_links_for(
+        self, principal_id: str, constraint_id: str
+    ) -> tuple[ConstraintEvidenceLinkRow, ...]:
+        del principal_id, constraint_id
+        return ()
+
+    def sync_summary(
+        self, principal_id: str, project_id: str, constraint_ids: object
+    ) -> ConstraintSyncFacts:
+        del principal_id, project_id, constraint_ids
+        return ConstraintSyncFacts(
+            has_target=False,
+            last_verified_at=None,
+            baseline_versions={},
+            open_conflict_counts={},
+        )
+
+    def overview_facts(
+        self,
+        principal_id: str,
+        project_id: str,
+        *,
+        as_of: datetime,
+        project_today: date,
+        due_soon_through: date,
+    ) -> ConstraintOverviewFacts:
+        del as_of, project_today, due_soon_through
+        open_states = {
+            ConstraintLifecycleState.IDENTIFIED,
+            ConstraintLifecycleState.PENDING,
+            ConstraintLifecycleState.IN_PROGRESS,
+            ConstraintLifecycleState.ON_HOLD,
+        }
+        mine = [
+            record
+            for (owner, _identifier), record in self._world.project_constraints.items()
+            if owner == principal_id and record.project_id == project_id
+        ]
+        return ConstraintOverviewFacts(
+            total_open=len([r for r in mine if r.lifecycle_state in open_states]),
+            overdue=0,
+            due_soon=0,
+            in_my_court=0,
+            on_hold=len([r for r in mine if r.lifecycle_state is ConstraintLifecycleState.ON_HOLD]),
+            recently_changed=0,
+            recently_closed=0,
+            draft=len([r for r in mine if r.lifecycle_state is ConstraintLifecycleState.DRAFT]),
+            needs_attention=0,
+            open_age_business_day_sum=0,
+            open_age_denominator=0,
+        )
+
+
+class FakeConstraintManagementUnitOfWork(ConstraintManagementUnitOfWork):
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def __enter__(self) -> ConstraintManagementUnitOfWork:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        pass
+
+    @property
+    def constraints(self) -> ConstraintManagementRepository:
+        return _ConstraintReads(self._world)
 
 
 class _Situations(SituationRepository):
@@ -7655,6 +7847,60 @@ class Scene:
             ),
         )
         self.providers = FakeProviders({self.source.source_id: self.provider})
+        # PC-CM-IMP-WP04's synthetic Constraint plane: one Project with a
+        # configured calendar and one Constraint filed under one Category. Seeded
+        # here beside the enrollment for the reason that one is seeded here --
+        # every sweep that quantifies over `Capability` and drives each name
+        # needs a well-formed request to make, and a `not_found` standing in for
+        # an answer would prove nothing about the capability. The timezone is
+        # explicit because the read plane fails closed without one, which is the
+        # behaviour under test elsewhere rather than a default to paper over.
+        self.constraint_project_id = issue_identifier(IdKind.PROJECT)
+        self.constraint_category_id = issue_identifier(IdKind.CONSTRAINT_CATEGORY)
+        self.constraint_id = issue_identifier(IdKind.PROJECT_CONSTRAINT)
+        world.constraint_settings[(self.principal.principal_id, self.constraint_project_id)] = (
+            ConstraintProjectSettings(
+                principal_id=self.principal.principal_id,
+                project_id=self.constraint_project_id,
+                timezone_name="UTC",
+                version=1,
+                created_at=WHEN,
+                updated_at=WHEN,
+            )
+        )
+        world.constraint_categories[(self.principal.principal_id, self.constraint_project_id)] = (
+            ConstraintCategoryRow(
+                category_id=self.constraint_category_id,
+                project_id=self.constraint_project_id,
+                prefix="GEN",
+                title="General",
+                description=None,
+                display_order=1,
+                state=ConstraintCategoryState.ACTIVE,
+                next_sequence=2,
+                issued_count=1,
+                version=1,
+                prefix_locked_at=WHEN,
+            ),
+        )
+        world.project_constraints[(self.principal.principal_id, self.constraint_id)] = (
+            PersistedConstraintRecord(
+                constraint_id=self.constraint_id,
+                principal_id=self.principal.principal_id,
+                lifecycle_state=ConstraintLifecycleState.IDENTIFIED,
+                record_quality=ConstraintRecordQuality.NORMAL,
+                origin=ConstraintOrigin.PRODUCT,
+                version=1,
+                created_at=WHEN,
+                updated_at=WHEN,
+                project_id=self.constraint_project_id,
+                category_id=self.constraint_category_id,
+                constraint_code="GEN-001",
+                description="A synthetic Project control.",
+                date_identified=WHEN.date(),
+                published_at=WHEN,
+            )
+        )
 
 
 def build_service(
@@ -7693,6 +7939,12 @@ def build_service(
         # names its own service refuses.
         task_management_unit_of_work=lambda: FakeTaskManagementUnitOfWork(world),
         commitment_management_unit_of_work=lambda: FakeCommitmentManagementUnitOfWork(world),
+        # Composed by the same default reasoning again (PC-CM-IMP-WP04): a service
+        # composed without this factory withholds the whole `constraints.` family,
+        # and a suite that quantifies over `Capability` would be quantifying over
+        # names its own service refuses. A test about the *uncomposed* build passes
+        # `None` explicitly and says so.
+        constraint_management_unit_of_work=(lambda: FakeConstraintManagementUnitOfWork(world)),
         # Enabled by the same default reasoning: the fifty-five `entities.` names are
         # withheld from a build that has not turned the plane on, and a suite
         # that quantifies over `Capability` would be quantifying over names its

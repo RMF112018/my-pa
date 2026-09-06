@@ -104,6 +104,7 @@ class SafeDetail(StrEnum):
     TITLE = "title"
     NAME = "name"
     PROJECT_ID = "project_id"
+    CONSTRAINT_ID = "constraint_id"
     SITUATION_ID = "situation_id"
     DUE_AT = "due_at"
     MEDIA_TYPE = "media_type"

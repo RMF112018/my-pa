@@ -108,6 +108,8 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListConstraintCategories,
+    ListConstraints,
     ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
@@ -138,6 +140,9 @@ from my_pa.application.commands import (
     PutCanvasWorkspace,
     ReadCapture,
     ReadCommitment,
+    ReadConstraint,
+    ReadConstraintHistory,
+    ReadConstraintOverview,
     ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadKnowledge,
@@ -169,6 +174,7 @@ from my_pa.application.commands import (
     ReviseRelationshipMemory,
     SearchCaptures,
     SearchCommitments,
+    SearchConstraints,
     SearchEntities,
     SearchGoodNotes,
     SearchIntelligenceArtifacts,
@@ -361,6 +367,19 @@ def _requested_scope(
             | CreateCommitment()
             | UpdateCommitment()
             | CloseCommitment()
+            # The Constraint Management reads (PC-CM-IMP-WP04) name a Project,
+            # not a source, for the identical reason the task and commitment
+            # planes do: a Constraint is a Project control in the acting
+            # Principal's own partition, and its rows carry no `source_id` and no
+            # `enrollment_id` for a scope to be compared against. The empty set
+            # is a measurement, and `domain.policy.decision._SCOPELESS` is where
+            # it is read as one rather than as a failed lookup.
+            | ReadConstraint()
+            | ListConstraints()
+            | SearchConstraints()
+            | ReadConstraintHistory()
+            | ReadConstraintOverview()
+            | ListConstraintCategories()
             # `context.prepare` names a query, not a source. The requested scope
             # is empty as a measurement: the request does not name a grant, and
             # `_SCOPELESS` is where that empty set is read that way.

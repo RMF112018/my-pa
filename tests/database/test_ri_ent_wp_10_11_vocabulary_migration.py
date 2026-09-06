@@ -88,7 +88,7 @@ HEAD_REVISION: Final = "b8e4d1a6c073"
 GRAPH_REVISION: Final = "c3f8a1d07e94"
 PULL_REVISION: Final = "6a2f9d1c4b80"
 PROMOTION_REVISION: Final = "a4d8e31b2c90"
-CURRENT_HEAD_REVISION: Final = "a1c9e4b72f80"
+CURRENT_HEAD_REVISION: Final = "c5b71e0a8d43"
 #: What was head until `REVISION` stacked on it, and therefore the revision
 #: this module downgrades to. This revision was written against `c99cd8ed8d1c`
 #: and re-parented onto `UI-IMP-WP02`'s `2c00c9ac64bc` when `origin/main` merged
@@ -339,7 +339,7 @@ def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> N
     assert heads == [CURRENT_HEAD_REVISION], (
         f"expected exactly {CURRENT_HEAD_REVISION}, found {heads}"
     )
-    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "2774329487be"
+    assert script.get_revision("a1c9e4b72f80").down_revision == "2774329487be"
     assert script.get_revision("e8f2a6c9d104").down_revision == "d4e8b1c7a902"
     assert script.get_revision("d4e8b1c7a902").down_revision == "a4d8e31b2c90"
     assert script.get_revision("a4d8e31b2c90").down_revision == "6a2f9d1c4b80"
@@ -475,7 +475,7 @@ def test_the_stored_vocabularies_are_missing_nothing_the_domain_declares(
     names are stored and are not in `Capability`, and they predate all of this.
     The direction that breaks a request is a name the domain declares and the
     database has never heard of, and the only way to be sure of it for all one
-    hundred and thirty-six is to try all one hundred and thirty-six.
+    hundred and forty-two is to try all one hundred and forty-two.
 
     `Purpose` is driven for the same reason and not because this revision
     touched it: it deliberately does not widen `purpose_is_known`, because

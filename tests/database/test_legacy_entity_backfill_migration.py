@@ -68,7 +68,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "b8e4d1a6c073"
 PULL_REVISION: Final = "6a2f9d1c4b80"
 PROMOTION_REVISION: Final = "a4d8e31b2c90"
-HEAD_REVISION: Final = "a1c9e4b72f80"
+HEAD_REVISION: Final = "c5b71e0a8d43"
 CURRENT_HEAD_REVISION: Final = HEAD_REVISION
 GRAPH_REVISION: Final = "c3f8a1d07e94"
 #: What was head until `REVISION` stacked on it, and therefore the revision
@@ -84,7 +84,7 @@ PREVIOUS_REVISION: Final = "16f05c46b8c3"
 #: Counted on the merged tree after the re-parent (RULING-M2): 88 on
 #: `origin/main` at `16f05c46b8c3` plus this revision, graph vocabulary,
 #: GoodNotes pull, promotion receipt, and canvas overlay successors.
-REVISION_FILE_COUNT: Final = 96
+REVISION_FILE_COUNT: Final = 97
 
 #: The revision's frozen salt, restated. If this and the revision ever disagree
 #: the expectations below stop matching, which is the point of restating it.

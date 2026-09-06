@@ -29,18 +29,44 @@ const SURFACES = [
   { path: "/today", testId: "today-unavailable", heading: "Today" },
   { path: "/review", testId: "review-queue-unavailable", heading: "Review" },
   { path: "/work", testId: "state-unavailable", heading: "Work" },
+  { path: "/intelligence", testId: "intelligence-unavailable", heading: "Intelligence" },
+  // People without `q` is the idle prompt, not a search. The unresolved-mentions
+  // panel swallows a failed read, so the dead-gateway search path is `?q=`.
+  { path: "/people?q=synthetic-dead-gateway", testId: "people-search-unavailable", heading: "People" },
+  // Search is a client fetch after paint; the gateway timeout is 10s per fan-out.
+  {
+    path: "/search?q=synthetic-dead-gateway",
+    testId: "search-unavailable",
+    heading: "Search",
+    visibleTimeout: 45_000,
+  },
+  // `/canvas` without a seed is `canvas-seed-required` and never asks the gateway.
+  {
+    path: "/canvas?focusEntityId=ent_syntheticdeadgw01",
+    testId: "canvas-unavailable",
+    heading: "Map",
+  },
+  { path: "/knowledge/goodnotes", testId: "goodnotes-notebooks-unavailable", heading: "GoodNotes" },
 ] as const;
 
 for (const surface of SURFACES) {
   test(`${surface.heading} states the failure and claims nothing`, async ({ page }) => {
+    if ("visibleTimeout" in surface) test.setTimeout(180_000);
     await page.goto(surface.path);
     await expect(page.getByRole("heading", { name: surface.heading, level: 1 })).toBeVisible();
+    const timeout = "visibleTimeout" in surface ? surface.visibleTimeout : undefined;
+    await expect(page.getByTestId(surface.testId)).toBeVisible({ timeout });
     await expectState(page, surface.testId, "unavailable");
 
     const region = page.getByTestId(surface.testId);
-    // The transport's own words, surfaced rather than swallowed.
-    await expect(region).toContainText(/did not answer/i);
-    await expect(region).toContainText(/nothing was retrieved/i);
+    if (surface.heading === "Search") {
+      // Federated Search still returns HTTP 200 with per-domain unavailable
+      // coverage when the gateway is down. The panel must not call that empty.
+      await expect(region).toContainText(/could not be searched|could not be read/i);
+    } else {
+      await expect(region).toContainText(/did not answer/i);
+      await expect(region).toContainText(/nothing was retrieved/i);
+    }
 
     const text = (await region.textContent()) ?? "";
     for (const claim of EMPTINESS_CLAIMS) {

@@ -33,7 +33,7 @@ jobs:
           git merge-base origin/main HEAD >/dev/null
           mapfile -t changed < <(git diff --name-only origin/main...HEAD)
           printf '%s\n' "${changed[@]}"
-          if printf '%s\n' "${changed[@]}" | grep -Eq '^(web/|src/my_pa/contracts/|src/my_pa/application/capabilities\.py|tests/contract/|src/my_pa/.*/webauthn|src/my_pa/application/webauthn|src/my_pa/adapters/http/webauthn|src/my_pa/domain/identity/webauthn|src/my_pa/application/session_service|src/my_pa/adapters/http/auth_sessions|src/my_pa/bootstrap/settings.py|src/my_pa/bootstrap/gateway.py|src/my_pa/adapters/http/app.py|apps/gateway.py|pyproject.toml|web/package-lock.json|src/my_pa/application/goodnotes|src/my_pa/application/goodnotes_|src/my_pa/domain/goodnotes|src/my_pa/infrastructure/persistence/goodnotes|src/my_pa/domain/identity/operation\.py|src/my_pa/domain/identity/purpose\.py|src/my_pa/adapters/normalization\.py|migrations/versions/)'; then
+          if printf '%s\n' "${changed[@]}" | grep -Eq '^(web/|src/my_pa/contracts/|src/my_pa/application/capabilities\.py|tests/contract/|src/my_pa/.*/webauthn|src/my_pa/application/webauthn|src/my_pa/adapters/http/webauthn|src/my_pa/domain/identity/webauthn|src/my_pa/application/session_service|src/my_pa/adapters/http/auth_sessions|src/my_pa/bootstrap/settings.py|src/my_pa/bootstrap/gateway.py|src/my_pa/adapters/http/app.py|apps/gateway.py|pyproject.toml|web/package-lock.json|src/my_pa/application/goodnotes|src/my_pa/application/goodnotes_|src/my_pa/domain/goodnotes|src/my_pa/infrastructure/persistence/goodnotes|src/my_pa/domain/identity/operation\.py|src/my_pa/domain/identity/purpose\.py|src/my_pa/adapters/normalization\.py|migrations/versions/|src/my_pa/application/tasks\.py|src/my_pa/application/commitments\.py|src/my_pa/application/intelligence\.py|src/my_pa/application/relationships\.py|src/my_pa/application/identity_history\.py|src/my_pa/application/entity_|src/my_pa/infrastructure/persistence/canvas_workspace\.py|src/my_pa/infrastructure/persistence/task_management\.py|src/my_pa/infrastructure/persistence/entity\.py|src/my_pa/infrastructure/persistence/review\.py|src/my_pa/infrastructure/persistence/search\.py|src/my_pa/infrastructure/persistence/intelligence\.py|src/my_pa/infrastructure/persistence/capture\.py|src/my_pa/domain/task/|src/my_pa/domain/relationship/|src/my_pa/domain/search/|src/my_pa/domain/intelligence/)'; then
             echo "applicable=true" >> "$GITHUB_OUTPUT"
           else
             echo "applicable=false" >> "$GITHUB_OUTPUT"
@@ -203,7 +203,7 @@ jobs:
           # so resolve the setup-python interpreter rather than the bare name.
           python_bin="$(command -v python)"
           test -x "${python_bin}"
-          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/webauthn.spec.ts e2e/browser-security.spec.ts e2e/work-mutations.spec.ts e2e/review-decisions.spec.ts e2e/journeys.spec.ts e2e/reports-contract.spec.ts e2e/people-contract.spec.ts e2e/intelligence-journey.spec.ts e2e/search-contract.spec.ts e2e/goodnotes.spec.ts --project=desktop
+          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/webauthn.spec.ts e2e/browser-security.spec.ts e2e/work-mutations.spec.ts e2e/review-decisions.spec.ts e2e/journeys.spec.ts e2e/reports-contract.spec.ts e2e/people-contract.spec.ts e2e/intelligence-journey.spec.ts e2e/search-contract.spec.ts e2e/goodnotes.spec.ts e2e/failure-states.spec.ts e2e/canvas.spec.ts e2e/system.spec.ts --project=desktop
 
   accessibility:
     name: frontend / accessibility

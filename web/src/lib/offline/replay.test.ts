@@ -144,6 +144,29 @@ describe("control 2 — a queued entry never rebinds Principal", () => {
     expect(await payloadPresent(db, entry.entryId)).toBe(true);
   });
 
+  it("session expiry does not quarantine, rebind, or drop the owning principal's ciphertext", async () => {
+    const { db, key, entry } = await queueOne(PRINCIPAL_A);
+    const decrypt = vi.spyOn(crypto.subtle, "decrypt");
+    const transport = vi.fn<ReplayTransport>();
+
+    const summary = await replayQueuedCaptures(db, PRINCIPAL_A, key, transport, async () => null);
+
+    expect(decrypt).not.toHaveBeenCalled();
+    expect(transport).not.toHaveBeenCalled();
+    expect(summary).toMatchObject({
+      attempted: 0,
+      quarantined: 0,
+      replayed: 0,
+      needsReauth: 1,
+      stoppedForReauth: true,
+    });
+    const folded = (await queueSnapshot(db))[0];
+    expect(folded.principalId).toBe(PRINCIPAL_A);
+    expect(folded.state).toBe("needs_reauth");
+    expect(folded.state).not.toBe("quarantined");
+    expect(await payloadPresent(db, entry.entryId)).toBe(true);
+  });
+
   it("quarantines a foreign entry, never sends it, and never decrypts it", async () => {
     const { db, entry } = await queueOne(PRINCIPAL_A);
     const keyB = await principalContentKey(db, PRINCIPAL_B);
@@ -442,6 +465,27 @@ describe("control 5 — the local payload is deleted only for a verified receipt
     const summary = await replayQueuedCaptures(db, PRINCIPAL_A, key, transport, sessionFor(PRINCIPAL_A));
     expect(summary).toMatchObject({ replayed: 0, failed: 1 });
     expect(await payloadPresent(db, entry.entryId)).toBe(true);
+  });
+
+  it("keeps ciphertext when a 200 body is lost, then deletes on a later matching receipt", async () => {
+    const { db, key, entry } = await queueOne(PRINCIPAL_A);
+    const lost: ReplayTransport = async () => ({ status: 200, body: null });
+    const first = await replayQueuedCaptures(db, PRINCIPAL_A, key, lost, sessionFor(PRINCIPAL_A));
+    expect(first).toMatchObject({ replayed: 0, failed: 1 });
+    expect(await payloadPresent(db, entry.entryId)).toBe(true);
+    expect((await queueSnapshot(db))[0].idempotencyKey).toBe("cap-synthetic-0001");
+
+    const matched: ReplayTransport = async (req) => goodReceipt(req.text, req.idempotencyKey, false);
+    const second = await replayQueuedCaptures(
+      db,
+      PRINCIPAL_A,
+      key,
+      matched,
+      sessionFor(PRINCIPAL_A),
+    );
+    expect(second).toMatchObject({ replayed: 1, failed: 0 });
+    expect(await payloadPresent(db, entry.entryId)).toBe(false);
+    expect((await queueSnapshot(db))[0].state).toBe("replayed");
   });
 
   it("leaves the payload intact on a 5xx", async () => {

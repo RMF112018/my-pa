@@ -128,8 +128,30 @@ describe("POST /api/canvas/workspace", () => {
       mutatingPost(cookie, { ...VALID_BODY, expected_version: 0 }, ORIGIN),
     );
     expect(response.status).toBe(409);
-    expect((await response.json()).error.errorClass).toBe("conflict");
+    const body = await response.json();
+    expect(body.error.errorClass).toBe("conflict");
+    expect(body.error.code).toBe("conflict");
+    expect(body).not.toHaveProperty("positions");
+    expect(body).not.toHaveProperty("version");
     expect(sent[0].url).toContain("/v1/canvas.workspace.put");
+  });
+
+  it.each([
+    { name: "string", value: "0" },
+    { name: "float", value: 0.5 },
+    { name: "null", value: null },
+    { name: "boolean", value: true },
+    { name: "object", value: {} },
+  ])("refuses malformed expected_version ($name) before the gateway", async ({ value }) => {
+    const cookie = await signIn();
+    const response = await putWorkspace(
+      mutatingPost(cookie, { ...VALID_BODY, expected_version: value }, ORIGIN),
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { errorClass: "validation", code: "invalid_expected_version" },
+    });
+    expect(sent).toEqual([]);
   });
 
   it("refuses a body that names a principal", async () => {

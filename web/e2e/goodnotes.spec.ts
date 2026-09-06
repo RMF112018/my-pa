@@ -222,6 +222,82 @@ test("desktop and tablet catalog layout keep the evidence split as md:grid-cols-
   );
 });
 
+test("Search GoodNotes hits deep-link identifier-only and never call gsqs.start", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+
+  const forbidden: string[] = [];
+  page.on("request", (request) => {
+    if (/gsqs\.start/i.test(request.url())) forbidden.push(request.url());
+  });
+
+  const search = await api<SearchBody>(page, "/api/search?q=goodnotes");
+  expect(search.status).toBe(200);
+  const goodnotes = (search.body.coverage ?? []).find((row) => row.domain === "goodnotes");
+  expect(goodnotes).toBeDefined();
+  expect(goodnotes?.state).not.toBe("omitted");
+
+  await page.goto("/search");
+  await page.getByRole("searchbox", { name: "Search" }).fill("goodnotes");
+  await expect(
+    page
+      .locator(
+        "[data-testid='search-coverage'], [data-testid='search-not-implemented'], [data-testid='search-unavailable']",
+      )
+      .first(),
+  ).toBeVisible({ timeout: 30_000 });
+
+  const goodnotesLinks = page.locator('a[href*="/knowledge/goodnotes"]');
+  const goodnotesCount = await goodnotesLinks.count();
+  if ((search.body.hits ?? []).some((hit) => hit.domain === "goodnotes")) {
+    expect(goodnotesCount).toBeGreaterThan(0);
+  }
+  for (let index = 0; index < goodnotesCount; index += 1) {
+    const href = (await goodnotesLinks.nth(index).getAttribute("href")) ?? "";
+    expect(href).toMatch(/^\/knowledge\/goodnotes\?/);
+    const target = new URL(href, "http://example.invalid");
+    for (const key of target.searchParams.keys()) {
+      expect(IDENTIFIER_QUERY_KEYS.has(key), `unexpected GoodNotes search param ${key}`).toBe(true);
+    }
+    expect(target.searchParams.has("pageVersionId") || target.searchParams.has("runId")).toBe(true);
+    expect(href).not.toMatch(/transcription=/);
+    expect(href).not.toMatch(/snippet=/);
+    expect(href).not.toMatch(/body=/);
+  }
+  expect(forbidden, "browser must not call gsqs.start").toEqual([]);
+});
+
+test("pending review and canonical correction paths stay distinct", async ({ page }) => {
+  test.setTimeout(180_000);
+  const source = readFileSync(
+    path.join(__dirname, "../src/components/goodnotes/interpretation-panel.tsx"),
+    "utf8",
+  );
+  expect(source).toMatch(/data-testid="goodnotes-pending-review"/);
+  expect(source).toMatch(/href="\/review"/);
+  expect(source).toMatch(/A GoodNotes correction is not submitted while review is pending/);
+  expect(source).toMatch(/<CorrectionForm/);
+  expect(source).toMatch(/hasReviewCase\(item\)/);
+
+  await page.goto("/knowledge/goodnotes");
+  await expectCatalogWithoutEvidence(page);
+
+  const items = page.getByTestId("goodnotes-interpretation-item");
+  const itemCount = await items.count();
+  for (let index = 0; index < itemCount; index += 1) {
+    const item = items.nth(index);
+    const pending = await item.getByTestId("goodnotes-pending-review").count();
+    const form = await item.getByTestId("goodnotes-correction-form").count();
+    expect(pending > 0 && form > 0, "pending review must not offer goodnotes.correct").toBe(false);
+  }
+  if ((await page.getByTestId("goodnotes-pending-review").count()) > 0) {
+    await expect(
+      page.getByTestId("goodnotes-pending-review").first().getByRole("link", { name: "Review" }),
+    ).toHaveAttribute("href", "/review");
+  }
+});
+
 test("mobile catalog does not overflow when evidence is not shown", async ({ page }) => {
   test.setTimeout(180_000);
   await page.setViewportSize({ width: 390, height: 844 });

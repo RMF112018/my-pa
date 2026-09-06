@@ -323,3 +323,31 @@ describe("an account switch quarantines rather than replays, deletes, or rebinds
     });
   });
 });
+
+describe("durability across a database reopen", () => {
+  it("keeps ciphertext and the principal binding after close and reopen", async () => {
+    const { db, key } = await fresh();
+    const note = "synthetic note that must survive a reload";
+    const entry = await enqueueCapture(db, key, {
+      principalId: PRINCIPAL_A,
+      text: note,
+      captureKind: "quick_note",
+      idempotencyKey: "cap-synthetic-reload",
+    });
+    db.close();
+
+    const reopened = await openOfflineDatabase();
+    const sameKey = await principalContentKey(reopened, PRINCIPAL_A);
+    await expect(readPayloadText(reopened, sameKey, entry.entryId)).resolves.toBe(note);
+
+    const payload = await rawPayload(reopened, entry.entryId);
+    expect(payload).toBeDefined();
+    const asText = new TextDecoder().decode(new Uint8Array(payload!.ciphertext as ArrayBuffer));
+    expect(asText).not.toContain(note);
+    expect(JSON.stringify(await rawEvents(reopened))).not.toContain(note);
+
+    const folded = (await queueSnapshot(reopened))[0];
+    expect(folded.principalId).toBe(PRINCIPAL_A);
+    expect(folded.state).toBe("pending");
+  });
+});

@@ -196,6 +196,41 @@ describe("mutation receipts refuse synthesized fields", () => {
   });
 });
 
+describe("stale expectedReviewVersion does not fabricate a decision", () => {
+  it("POST decide 409 conflict is conflict, not a persisted receipt", async () => {
+    const cookie = await signIn();
+    vi.stubGlobal(
+      "fetch",
+      withSessionServiceFetch(async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              code: "conflict",
+              message: "stale expected_review_version",
+              correlation_id: "corr_x",
+            },
+          }),
+          { status: 409, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    const response = await reviewDecide(
+      post(cookie, "/api/review/rvw_aaaaaaaa11111111/decide", {
+        disposition: "accept",
+        expectedReviewVersion: 0,
+      }),
+      { params: Promise.resolve({ id: "rvw_aaaaaaaa11111111" }) },
+    );
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body.error.errorClass).toBe("conflict");
+    expect(body.status).not.toBe("persisted");
+    expect(body.receipt).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain("rdec_");
+    expect(JSON.stringify(body)).not.toContain("decisionId");
+  });
+});
+
 describe("partial disclosure is not rewritten as complete", () => {
   it("a valid empty pulse with partial_result and partially_processed is coverage partial", async () => {
     const cookie = await signIn();

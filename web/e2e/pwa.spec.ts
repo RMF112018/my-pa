@@ -127,6 +127,62 @@ test("the worker never caches a principal-bound response", async ({ page }) => {
   expect(disallowed, "the worker cached something outside its declared allowlist").toEqual([]);
   // And the allowlist is not satisfied by caching nothing at all.
   expect(cached.some((url) => url.endsWith("/manifest.webmanifest"))).toBe(true);
+
+  expect(
+    cached.filter((url) => {
+      const parsed = new URL(url);
+      return parsed.pathname === "/api" || parsed.pathname.startsWith("/api/");
+    }),
+    "no /api response may be cached",
+  ).toEqual([]);
+  expect(
+    cached.filter((url) => new URL(url).searchParams.has("_rsc")),
+    "no RSC flight payload may be cached",
+  ).toEqual([]);
+  expect(
+    cached.filter((url) => {
+      const parsed = new URL(url);
+      return parsed.pathname === "/today" || parsed.pathname === "/library" || parsed.pathname === "/";
+    }),
+    "no navigation document may be cached",
+  ).toEqual([]);
+});
+
+test("the worker registers no Background Sync and this page claims none", async ({
+  page,
+  request,
+  baseURL,
+}) => {
+  // Replay is a foreground mount/`online` path. This test does not claim
+  // cold-start offline navigation and does not introduce Background Sync.
+  await signIn(page);
+  await page.waitForFunction(async () => (await navigator.serviceWorker.ready) !== undefined);
+
+  const source = await (await request.get(new URL("/sw.js", baseURL as string).toString())).text();
+  expect(source).not.toMatch(/addEventListener\(\s*["']sync["']/);
+  expect(source).not.toContain("periodicsync");
+  expect(source).not.toMatch(/\.sync\.register\s*\(/);
+
+  const tags = await page.evaluate(async () => {
+    const registration = await navigator.serviceWorker.ready;
+    const sync = (
+      registration as ServiceWorkerRegistration & {
+        sync?: { getTags?: () => Promise<string[]> };
+        periodicSync?: { getTags?: () => Promise<string[]> };
+      }
+    ).sync;
+    const periodic = (
+      registration as ServiceWorkerRegistration & {
+        periodicSync?: { getTags?: () => Promise<string[]> };
+      }
+    ).periodicSync;
+    return {
+      sync: sync && typeof sync.getTags === "function" ? await sync.getTags() : [],
+      periodic: periodic && typeof periodic.getTags === "function" ? await periodic.getTags() : [],
+    };
+  });
+  expect(tags.sync, "no Background Sync tags").toEqual([]);
+  expect(tags.periodic, "no periodic Background Sync tags").toEqual([]);
 });
 
 test("the System page shows this-browser PWA observations, not server-invented SW state", async ({

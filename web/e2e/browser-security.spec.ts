@@ -57,11 +57,21 @@ async function inPageCapture(
 }
 
 function expectCrossSiteRefusal(status: number, body: CaptureEnvelope): void {
-  expect(status, "cross-site Capture must be 403").toBe(403);
+  expect(status, "cross-site mutation must be 403").toBe(403);
   expect(body.error?.code).toBe("cross_site_request");
   if (body.error?.errorClass !== undefined) {
     expect(body.error.errorClass).toBe("authorization");
   }
+}
+
+/** Attacker Origin on loopback: `localhost` and `127.0.0.1` are different origins. */
+function loopbackAliasOrigin(canonical: string): string {
+  const url = new URL(canonical);
+  expect(url.hostname, "LIVE_URL must stay localhost so this mismatch stays load-bearing").toBe(
+    "localhost",
+  );
+  url.hostname = "127.0.0.1";
+  return url.origin;
 }
 
 test.describe("browser mutation admission", () => {
@@ -129,6 +139,65 @@ test.describe("browser mutation admission", () => {
       body: JSON.stringify({
         title: syntheticNote("wp05-work-patch"),
         expectedVersion: 1,
+        idempotencyKey: crypto.randomUUID(),
+      }),
+    });
+    expectCrossSiteRefusal(response.status, (await response.json()) as CaptureEnvelope);
+  });
+
+  test("missing Origin Work PATCH is 403", async ({ page }) => {
+    await signIn(page);
+    const sid = await sessionSid(page, LIVE_URL);
+    const response = await fetch(`${LIVE_URL}/api/tasks/tsk_e2e_wp27_missing_origin`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        cookie: `mypa_session=${sid}`,
+      },
+      body: JSON.stringify({
+        title: syntheticNote("wp27-work-missing-origin"),
+        expectedVersion: 1,
+        idempotencyKey: crypto.randomUUID(),
+      }),
+    });
+    expectCrossSiteRefusal(response.status, (await response.json()) as CaptureEnvelope);
+  });
+
+  test("127.0.0.1 Origin against localhost Work PATCH is 403", async ({ page }) => {
+    // Do not relax this: Origin equality is the CSRF check. Playwright drives
+    // `localhost` because Next reports that name; 127.0.0.1 is a different
+    // origin and must stay refused.
+    await signIn(page);
+    const sid = await sessionSid(page, LIVE_URL);
+    const response = await fetch(`${LIVE_URL}/api/tasks/tsk_e2e_wp27_loopback_alias`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        origin: loopbackAliasOrigin(LIVE_URL),
+        cookie: `mypa_session=${sid}`,
+      },
+      body: JSON.stringify({
+        title: syntheticNote("wp27-work-loopback-alias"),
+        expectedVersion: 1,
+        idempotencyKey: crypto.randomUUID(),
+      }),
+    });
+    expectCrossSiteRefusal(response.status, (await response.json()) as CaptureEnvelope);
+  });
+
+  test("cross-origin Review decide POST is 403", async ({ page }) => {
+    await signIn(page);
+    const sid = await sessionSid(page, LIVE_URL);
+    const response = await fetch(`${LIVE_URL}/api/review/rev_e2e_wp27_not_a_real_case/decide`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: ATTACKER_ORIGIN,
+        cookie: `mypa_session=${sid}`,
+      },
+      body: JSON.stringify({
+        disposition: "accept",
+        expectedReviewVersion: 1,
         idempotencyKey: crypto.randomUUID(),
       }),
     });

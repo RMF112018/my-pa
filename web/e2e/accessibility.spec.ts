@@ -4,19 +4,20 @@
  * `@axe-core/playwright` runs axe-core **inside the browser**, against the DOM
  * and the computed accessibility tree that Chromium actually built — not against
  * a jsdom approximation of it. The tag set is `wcag2a`, `wcag2aa`, `wcag21a`,
- * `wcag21aa` and `wcag22aa`, which is the WCAG 2.2 AA target stated as a machine
- * check rather than an aspiration.
+ * `wcag21aa` and `wcag22aa`. That is a machine-checkable subset of those rule
+ * packs, not a WCAG 2.2 AA claim.
  *
  * **What an automated pass does and does not establish.** axe finds a subset of
  * WCAG failures — roughly the machine-checkable third. A clean run means no
  * *detectable* violation of those rules on the pages scanned; it does not mean
- * the surface is conformant, and this file does not claim it does. What it is
- * worth is that a regression in the checkable third reddens, which is the part a
- * human review reliably misses.
+ * the surface is conformant, and this file does not claim it does. Automation
+ * here is not screen-reader proof: it does not operate a screen reader, does
+ * not prove announcement quality, and does not replace WP30's screen-reader,
+ * 200%/400% zoom, or real-device checks.
  *
- * Landmarks, headings, and live regions are asserted separately below, because
- * their *correctness* — is this the right landmark, does the state change
- * announce — is not something axe can decide.
+ * Landmarks, headings, keyboard/focus, named dialogs, named icon-only
+ * controls, and live regions are asserted separately below, because their
+ * *correctness* is not something axe can decide.
  */
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
@@ -37,6 +38,19 @@ const PAGES = [
   "/system",
   "/situations",
   "/library",
+] as const;
+
+/** Shell destination labels. Visually icon-only when the rail is collapsed. */
+const SHELL_DESTINATIONS = [
+  "Today",
+  "Work",
+  "Intelligence",
+  "People",
+  "Map",
+  "Knowledge",
+  "Review",
+  "Search",
+  "System",
 ] as const;
 
 /**
@@ -158,14 +172,69 @@ test.describe("what axe cannot decide", () => {
     await expect(opener).toBeFocused();
   });
 
+  test("Search Cmd/K dialog restores focus on close", async ({ page }) => {
+    // Native <dialog> returns focus to the invoking element. Control+K is the
+    // chord the overlay listens for (meta or ctrl); this is not screen-reader
+    // proof and does not claim WCAG 2.2 AA.
+    const opener = page.getByRole("button", { name: /Commands/ });
+    await opener.focus();
+    await expect(opener).toBeFocused();
+    await page.keyboard.press("Control+K");
+    const dialog = page.getByRole("dialog", { name: "Command menu" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("searchbox", { name: "Search" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(opener).toBeFocused();
+  });
+
+  test("shell dialogs expose an accessible name", async ({ page }) => {
+    await page.getByTestId("capture-button").click();
+    await expect(page.getByRole("dialog", { name: "Capture" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog", { name: "Capture" })).toHaveCount(0);
+
+    await page.keyboard.press("Control+K");
+    await expect(page.getByRole("dialog", { name: "Command menu" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog", { name: "Command menu" })).toHaveCount(0);
+  });
+
+  test("icon-only shell chrome and collapsed destinations have accessible names", async ({
+    page,
+  }) => {
+    await expect(page.getByRole("button", { name: "Use dark theme" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open Inspector" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Collapse navigation" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Collapse navigation" }).click();
+    await expect(page.getByRole("button", { name: "Expand navigation" })).toBeVisible();
+    const rail = page.getByRole("navigation", { name: "Primary" });
+    for (const name of SHELL_DESTINATIONS) {
+      await expect(rail.getByRole("link", { name })).toBeVisible();
+    }
+  });
+
   test("a state change is announced, not merely rendered", async ({ page }) => {
     await page.getByTestId("capture-button").click();
     await page.getByTestId("capture-field").fill("E2E synthetic note — announcement check.");
     await page.getByRole("button", { name: "Save" }).click();
-    // The outcome carries a live-region role so a screen reader is told, rather
-    // than a person having to go and look.
+    // Live-region role is what automation can see. That is not screen-reader
+    // proof: WP30 owns actual screen-reader announcement quality.
     const outcome = page.locator('[data-testid^="capture-"][role="status"], [data-testid^="capture-"][role="alert"]');
     await expect(outcome.first()).toBeVisible();
+  });
+});
+
+test.describe("touch targets at a phone viewport", () => {
+  // CI's accessibility job is `--project=desktop` only. Skipping unless
+  // `project.name === "mobile"` would mean this never ran in CI. Force a
+  // touch viewport onto whichever project executes the file — including
+  // that desktop job — rather than changing the workflow.
+  test.use({ viewport: { width: 412, height: 839 }, hasTouch: true });
+
+  test.beforeEach(async ({ page }) => {
+    await signIn(page);
   });
 
   // **44px tall, 24px wide, and the two numbers are not the same rule.** WCAG
@@ -175,9 +244,9 @@ test.describe("what axe cannot decide", () => {
   // shell's own layout makes it free: the rail links and the capture button are
   // full-width rows whose height is the only dimension a regression can shrink,
   // so 44px there is a real floor rather than an aspiration. The title says both
-  // numbers so that neither can drift away from what is measured below.
-  test("interactive targets are 44px tall and clear WCAG 2.5.8's 24px width", async ({ page }, testInfo) => {
-    test.skip(testInfo.project.name !== "mobile", "the touch target rule is measured on mobile");
+  // numbers so that neither can drift away from what is measured below. This is
+  // a bounding-box check, not a screen-reader proof and not a WCAG 2.2 AA claim.
+  test("interactive targets are 44px tall and clear WCAG 2.5.8's 24px width", async ({ page }) => {
     await page.goto("/knowledge");
     // Scoped to the application's own landmarks, which excludes the Next.js dev
     // overlay button — framework development chrome that ships in no build (see
@@ -202,6 +271,11 @@ test.describe("what axe cannot decide", () => {
       }
     }
     expect(undersized, "targets below 44px tall or below WCAG 2.5.8's 24px wide").toEqual([]);
+  });
+
+  test("the Inspector sheet is a named dialog at a phone viewport", async ({ page }) => {
+    await page.getByRole("button", { name: "Open Inspector" }).click();
+    await expect(page.getByRole("dialog", { name: "Inspector" })).toBeVisible();
   });
 });
 

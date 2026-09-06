@@ -150,6 +150,26 @@ class Purpose(StrEnum):
     # wide enough to cover both the handle and the handwriting raster is a
     # purpose that grants both.
     GOODNOTES_CONTENT = "goodnotes_content"
+    # Browser listing is a purpose of its own rather than a reuse of
+    # `goodnotes_work` or `knowledge_search`. `D-91`'s test: would reuse widen
+    # the grant? Yes. `goodnotes_work` returns one page-version handle.
+    # `knowledge_search` is one enrollment's extraction plane. Admitting a
+    # notebook/page/run listing under either would let a grant issued to fetch
+    # one handle or search extracted text also enumerate the Principal's
+    # GoodNotes partition.
+    GOODNOTES_BROWSE = "goodnotes_browse"
+    # Page read and metadata search share one authority: both disclose
+    # Principal-owned GoodNotes interpretation and identifiers without raster
+    # bytes. Separate from `goodnotes_work` (handle only), `goodnotes_content`
+    # (pixels), and `goodnotes_browse` (listings). A purpose wide enough to
+    # cover listing and reading would grant both.
+    GOODNOTES_READ = "goodnotes_read"
+    # Operator correction is a purpose of its own rather than a reuse of
+    # `goodnotes_proposal` or `review_disposition`. `goodnotes_proposal` admits
+    # an analyzer submission. `review_disposition` decides a review case.
+    # Admitting an append-only canonical revision under either would let a
+    # grant issued to propose or decide also rewrite a note.
+    GOODNOTES_CORRECTION = "goodnotes_correction"
     # Scheduled-client pull and completion share one authority: both advance
     # the authenticated client's bounded assignment ledger. Observation is
     # separate so a grant to inspect progress cannot claim or complete work.

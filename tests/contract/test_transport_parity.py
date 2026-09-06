@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-one hundred and thirty capabilities. There are two ways to prove that and only one stays
+one hundred and thirty-six capabilities. There are two ways to prove that and only one stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -1092,6 +1092,18 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.GOODNOTES_PULL: {"batch_size": 1},
         Capability.GOODNOTES_COMPLETE: {"assignment_ids": ["a" * 64]},
         Capability.GOODNOTES_STATUS: {},
+        Capability.GOODNOTES_NOTEBOOKS_LIST: {},
+        Capability.GOODNOTES_PAGES_LIST: {"notebook_id": "gnnb_" + "a" * 24},
+        Capability.GOODNOTES_RUNS_LIST: {},
+        Capability.GOODNOTES_READ: {
+            "run_id": work.run_id,
+            "page_version_id": work.page_version_id,
+        },
+        Capability.GOODNOTES_SEARCH: {"query": "synthetic"},
+        Capability.GOODNOTES_CORRECT: {
+            "occurrence_id": "gnocc_" + "b" * 24,
+            "transcription": "synthetic correction",
+        },
         Capability.GSQS_START: {
             "authorization_id": "synthetic-b0-commissioning",
             "campaign_class": "SYNTHETIC",
@@ -1766,7 +1778,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 131, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 137, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))

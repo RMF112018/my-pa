@@ -373,6 +373,19 @@ class Capability(StrEnum):
     GOODNOTES_PULL = "goodnotes.pull"
     GOODNOTES_COMPLETE = "goodnotes.complete"
     GOODNOTES_STATUS = "goodnotes.status"
+    # Browser query/read/correct contracts (UI-IMP-WP21). Separate names rather
+    # than a widening of `goodnotes.work`, `goodnotes.content`, or
+    # `goodnotes.propose` (`D-91`): a grant issued to fetch a page-version
+    # handle, retrieve raster bytes, or submit an analyzer proposal must not
+    # also list notebooks, search metadata, or append an operator correction.
+    # Lists and search are reads. `goodnotes.correct` is an additive
+    # product-owned revision write and does not overwrite the source raster.
+    GOODNOTES_NOTEBOOKS_LIST = "goodnotes.notebooks.list"
+    GOODNOTES_PAGES_LIST = "goodnotes.pages.list"
+    GOODNOTES_RUNS_LIST = "goodnotes.runs.list"
+    GOODNOTES_READ = "goodnotes.read"
+    GOODNOTES_SEARCH = "goodnotes.search"
+    GOODNOTES_CORRECT = "goodnotes.correct"
     # Connected-MCP B0 prediction-acquisition workflow. A pair of names rather than a
     # widening of `goodnotes.work` / `goodnotes.content` (`D-91`): those remain
     # the stdio-isolated analyzer plane. ChatLLM initiates a repetition through
@@ -1033,6 +1046,12 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.GOODNOTES_WORK: frozenset({Purpose.GOODNOTES_WORK}),
         Capability.GOODNOTES_PROPOSE: frozenset({Purpose.GOODNOTES_PROPOSAL}),
         Capability.GOODNOTES_CONTENT: frozenset({Purpose.GOODNOTES_CONTENT}),
+        Capability.GOODNOTES_NOTEBOOKS_LIST: frozenset({Purpose.GOODNOTES_BROWSE}),
+        Capability.GOODNOTES_PAGES_LIST: frozenset({Purpose.GOODNOTES_BROWSE}),
+        Capability.GOODNOTES_RUNS_LIST: frozenset({Purpose.GOODNOTES_BROWSE}),
+        Capability.GOODNOTES_READ: frozenset({Purpose.GOODNOTES_READ}),
+        Capability.GOODNOTES_SEARCH: frozenset({Purpose.GOODNOTES_READ}),
+        Capability.GOODNOTES_CORRECT: frozenset({Purpose.GOODNOTES_CORRECTION}),
         Capability.GOODNOTES_PULL: frozenset({Purpose.GOODNOTES_PULL}),
         Capability.GOODNOTES_COMPLETE: frozenset({Purpose.GOODNOTES_PULL}),
         Capability.GOODNOTES_STATUS: frozenset({Purpose.GOODNOTES_PULL_OBSERVATION}),
@@ -1243,6 +1262,7 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.COMMITMENTS_CLOSE,
         Capability.CONTEXT_FEEDBACK,
         Capability.GOODNOTES_PROPOSE,
+        Capability.GOODNOTES_CORRECT,
         Capability.GOODNOTES_PULL,
         Capability.GOODNOTES_COMPLETE,
         Capability.GSQS_START,
@@ -1333,6 +1353,7 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.TASKS_BULK_PREVIEW,
         Capability.COMMITMENTS_CREATE,
         Capability.GOODNOTES_PROPOSE,
+        Capability.GOODNOTES_CORRECT,
         Capability.GSQS_START,
         Capability.REPORTS_BEGIN_CYCLE,
         Capability.REPORTS_RECORD_RUN_STATE,

@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes one hundred and thirty capability names and none of them
+  ends: the transport routes one hundred and thirty-six capability names and none of them
   mutates a source, and every capability driven over the wire is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -576,6 +576,18 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         Capability.GOODNOTES_PULL: {"batch_size": 1},
         Capability.GOODNOTES_COMPLETE: {"assignment_ids": ["a" * 64]},
         Capability.GOODNOTES_STATUS: {},
+        Capability.GOODNOTES_NOTEBOOKS_LIST: {},
+        Capability.GOODNOTES_PAGES_LIST: {"notebook_id": "gnnb_" + "a" * 24},
+        Capability.GOODNOTES_RUNS_LIST: {},
+        Capability.GOODNOTES_READ: {
+            "run_id": work.run_id,
+            "page_version_id": work.page_version_id,
+        },
+        Capability.GOODNOTES_SEARCH: {"query": "synthetic"},
+        Capability.GOODNOTES_CORRECT: {
+            "occurrence_id": "gnocc_" + "b" * 24,
+            "transcription": "synthetic correction",
+        },
         Capability.GSQS_START: {
             "authorization_id": "synthetic-b0-commissioning",
             "campaign_class": "SYNTHETIC",
@@ -1524,6 +1536,12 @@ SCOPED_CAPABILITIES = [
         Capability.GOODNOTES_PULL,
         Capability.GOODNOTES_COMPLETE,
         Capability.GOODNOTES_STATUS,
+        Capability.GOODNOTES_NOTEBOOKS_LIST,
+        Capability.GOODNOTES_PAGES_LIST,
+        Capability.GOODNOTES_RUNS_LIST,
+        Capability.GOODNOTES_READ,
+        Capability.GOODNOTES_SEARCH,
+        Capability.GOODNOTES_CORRECT,
         Capability.GSQS_START,
         Capability.GSQS_STATUS,
         Capability.REPORTS_BEGIN_CYCLE,

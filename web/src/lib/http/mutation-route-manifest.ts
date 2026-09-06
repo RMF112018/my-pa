@@ -93,6 +93,11 @@ export const MUTATION_ROUTE_MANIFEST: readonly MutationRouteManifestEntry[] = [
   },
   {
     method: "POST",
+    path: "src/app/api/goodnotes/correct/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
     path: "src/app/api/session/route.ts",
     classification: "PRE_AUTH_BROWSER_MUTATION",
   },

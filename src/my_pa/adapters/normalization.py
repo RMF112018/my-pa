@@ -73,6 +73,7 @@ from my_pa.application.commands import (
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
+    CorrectGoodNotes,
     CreateCapture,
     CreateCommitment,
     CreateEntity,
@@ -124,6 +125,9 @@ from my_pa.application.commands import (
     ListEntityNames,
     ListEntityObservations,
     ListEntityParticipations,
+    ListGoodNotesNotebooks,
+    ListGoodNotesPages,
+    ListGoodNotesRuns,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
@@ -143,6 +147,7 @@ from my_pa.application.commands import (
     PutCanvasWorkspace,
     ReadCapture,
     ReadCommitment,
+    ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadKnowledge,
     ReadManagedDocument,
@@ -175,6 +180,7 @@ from my_pa.application.commands import (
     SearchCaptures,
     SearchCommitments,
     SearchEntities,
+    SearchGoodNotes,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
     SearchRelationshipMemories,
@@ -826,6 +832,30 @@ def _record_context_feedback(payload: Mapping[str, Any]) -> Command:
 
 def _get_goodnotes_work(payload: Mapping[str, Any]) -> Command:
     return GetGoodNotesWork(**payload)
+
+
+def _list_goodnotes_notebooks(payload: Mapping[str, Any]) -> Command:
+    return ListGoodNotesNotebooks(**payload)
+
+
+def _list_goodnotes_pages(payload: Mapping[str, Any]) -> Command:
+    return ListGoodNotesPages(**payload)
+
+
+def _list_goodnotes_runs(payload: Mapping[str, Any]) -> Command:
+    return ListGoodNotesRuns(**payload)
+
+
+def _read_goodnotes(payload: Mapping[str, Any]) -> Command:
+    return ReadGoodNotes(**payload)
+
+
+def _search_goodnotes(payload: Mapping[str, Any]) -> Command:
+    return SearchGoodNotes(**payload)
+
+
+def _correct_goodnotes(payload: Mapping[str, Any]) -> Command:
+    return CorrectGoodNotes(**payload)
 
 
 def _pull_goodnotes_work(payload: Mapping[str, Any]) -> Command:
@@ -1862,6 +1892,12 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.GOODNOTES_WORK: _get_goodnotes_work,
         Capability.GOODNOTES_CONTENT: _get_goodnotes_content,
         Capability.GOODNOTES_PROPOSE: _submit_goodnotes_proposal,
+        Capability.GOODNOTES_NOTEBOOKS_LIST: _list_goodnotes_notebooks,
+        Capability.GOODNOTES_PAGES_LIST: _list_goodnotes_pages,
+        Capability.GOODNOTES_RUNS_LIST: _list_goodnotes_runs,
+        Capability.GOODNOTES_READ: _read_goodnotes,
+        Capability.GOODNOTES_SEARCH: _search_goodnotes,
+        Capability.GOODNOTES_CORRECT: _correct_goodnotes,
         Capability.GSQS_START: _start_gsqs_b0,
         Capability.GSQS_STATUS: _get_gsqs_b0_status,
         Capability.REPORTS_BEGIN_CYCLE: _begin_intelligence_cycle,

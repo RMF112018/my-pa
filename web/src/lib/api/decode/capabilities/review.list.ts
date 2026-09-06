@@ -14,6 +14,7 @@ import {
 export const REVIEW_SUBJECT_KINDS = [
   "capture_proposal",
   "goodnotes_region",
+  "goodnotes_semantic",
   "relationship_memory",
   "entity_proposal",
 ] as const;
@@ -114,6 +115,12 @@ export interface GoodNotesReviewCase extends ReviewCaseCommon {
   readonly confidence: number;
 }
 
+export interface GoodNotesSemanticReviewCase extends ReviewCaseCommon {
+  readonly subject_kind: "goodnotes_semantic";
+  readonly run_id: string;
+  readonly page_version_id: string;
+}
+
 export interface RelationshipMemoryReviewCase extends ReviewCaseCommon {
   readonly subject_kind: "relationship_memory";
   readonly subject_entity_id: string;
@@ -134,6 +141,7 @@ export interface EntityProposalReviewCase extends ReviewCaseCommon {
 export type ReviewCase =
   | CaptureProposalReviewCase
   | GoodNotesReviewCase
+  | GoodNotesSemanticReviewCase
   | RelationshipMemoryReviewCase
   | EntityProposalReviewCase;
 
@@ -201,6 +209,7 @@ function decodeCase(input: unknown): DecodeResult<ReviewCase> {
     "proposal_type",
     "region_id",
     "page_version_id",
+    "run_id",
     "confidence",
     "subject_entity_id",
     "proposed_kind",
@@ -243,6 +252,18 @@ function decodeCase(input: unknown): DecodeResult<ReviewCase> {
       region_id: regionId.value,
       page_version_id: pageVersionId.value,
       confidence: confidence.value,
+    });
+  }
+  if (kind.value === "goodnotes_semantic") {
+    const runId = requiredString(known.value.run_id);
+    if (!runId.ok) return runId;
+    const pageVersionId = requiredString(known.value.page_version_id);
+    if (!pageVersionId.ok) return pageVersionId;
+    return ok({
+      ...common.value,
+      subject_kind: "goodnotes_semantic",
+      run_id: runId.value,
+      page_version_id: pageVersionId.value,
     });
   }
   if (kind.value === "relationship_memory") {

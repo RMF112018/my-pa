@@ -61,6 +61,14 @@ import { decodeEntitiesCommunicationList } from "./capabilities/entities.communi
 import { decodeEntitiesParticipationsList } from "./capabilities/entities.participations.list";
 import { decodeCanvasWorkspaceGet } from "./capabilities/canvas.workspace.get";
 import { decodeCanvasWorkspacePut } from "./capabilities/canvas.workspace.put";
+import { decodeGoodNotesNotebooksList } from "./capabilities/goodnotes.notebooks.list";
+import { decodeGoodNotesPagesList } from "./capabilities/goodnotes.pages.list";
+import { decodeGoodNotesRunsList } from "./capabilities/goodnotes.runs.list";
+import { decodeGoodNotesRead } from "./capabilities/goodnotes.read";
+import { decodeGoodNotesSearch } from "./capabilities/goodnotes.search";
+import { decodeGoodNotesCorrect } from "./capabilities/goodnotes.correct";
+import { decodeGoodNotesWork } from "./capabilities/goodnotes.work";
+import { decodeGoodNotesContent } from "./capabilities/goodnotes.content";
 import type { CapabilityResults, Decoder, GatewayCapability } from "./types";
 
 export type { CapabilityResults, DecodeResult, Decoder } from "./types";
@@ -127,6 +135,14 @@ export const DECODERS = {
   "entities.participations.list": decodeEntitiesParticipationsList,
   "canvas.workspace.get": decodeCanvasWorkspaceGet,
   "canvas.workspace.put": decodeCanvasWorkspacePut,
+  "goodnotes.notebooks.list": decodeGoodNotesNotebooksList,
+  "goodnotes.pages.list": decodeGoodNotesPagesList,
+  "goodnotes.runs.list": decodeGoodNotesRunsList,
+  "goodnotes.read": decodeGoodNotesRead,
+  "goodnotes.search": decodeGoodNotesSearch,
+  "goodnotes.correct": decodeGoodNotesCorrect,
+  "goodnotes.work": decodeGoodNotesWork,
+  "goodnotes.content": decodeGoodNotesContent,
 } satisfies { [K in GatewayCapability]: Decoder<CapabilityResults[K]> };
 
 /**

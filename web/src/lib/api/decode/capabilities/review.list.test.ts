@@ -16,6 +16,19 @@ const CAPTURE_CASE = {
   proposal_type: "commitment",
 };
 
+const SEMANTIC_CASE = {
+  review_case_id: "rvc_cccc0001cccc0001cccc0001",
+  proposal_id: "prop_cccc0001cccc0001cccc0001",
+  proposal_state: "proposed",
+  risk_class: "moderate",
+  opened_at: "2026-01-01T00:00:00Z",
+  review_version: 1,
+  latest_disposition: null,
+  subject_kind: "goodnotes_semantic",
+  run_id: "gnrun_aaaaaaaaaaaaaaaaaaaaaaaa",
+  page_version_id: "gnver_aaaaaaaaaaaaaaaaaaaaaaaa",
+};
+
 const MEMORY_CASE = {
   review_case_id: "rvc_bbbb0001bbbb0001bbbb0001",
   proposal_id: "prop_bbbb0001bbbb0001bbbb0001",
@@ -36,6 +49,23 @@ describe("decodeReviewList", () => {
     const decoded = decodeReviewList({ review_cases: [CAPTURE_CASE, MEMORY_CASE] });
     expect(decoded.ok).toBe(true);
     if (decoded.ok) expect(decoded.value.review_cases).toHaveLength(2);
+  });
+
+  it("accepts a goodnotes_semantic case with run_id and page_version_id", () => {
+    const decoded = decodeReviewList({ review_cases: [SEMANTIC_CASE] });
+    expect(decoded.ok).toBe(true);
+    if (decoded.ok) {
+      expect(decoded.value.review_cases[0]).toMatchObject({
+        subject_kind: "goodnotes_semantic",
+        run_id: "gnrun_aaaaaaaaaaaaaaaaaaaaaaaa",
+        page_version_id: "gnver_aaaaaaaaaaaaaaaaaaaaaaaa",
+      });
+    }
+  });
+
+  it("fails closed when a goodnotes_semantic case omits run_id", () => {
+    const { run_id: _, ...rest } = SEMANTIC_CASE;
+    expect(decodeReviewList({ review_cases: [rest] }).ok).toBe(false);
   });
 
   it("ignores unknown extra fields", () => {

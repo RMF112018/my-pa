@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import type { CaptureSearchMatch } from "@/lib/api/decode/capabilities/capture.search";
 import type { CommitmentListEntry } from "@/lib/api/decode/capabilities/commitments.search";
 import type { EntitySummary } from "@/lib/api/decode/capabilities/entities.search";
+import type { GoodNotesSearchHit } from "@/lib/api/decode/capabilities/goodnotes.search";
 import type { KnowledgeSearchMatch } from "@/lib/api/decode/capabilities/knowledge.search";
 import type { ReportSearchMatch } from "@/lib/api/decode/capabilities/reports.search";
 import type { TaskListEntry } from "@/lib/api/decode/capabilities/tasks.search";
 import {
   captureSearchHref,
+  goodnotesSearchHref,
   knowledgeSearchHref,
   presentFederatedHits,
   SEARCH_DOMAIN_ORDER,
@@ -84,6 +86,18 @@ const KNOWLEDGE: KnowledgeSearchMatch = {
   version_id: "kver_aaaaaaaa11111111",
 };
 
+const GOODNOTES: GoodNotesSearchHit = {
+  kind: "page",
+  id: "gnver_aaaaaaaaaaaaaaaaaaaaaaaa",
+  title: "Staff meeting page",
+  snippet: "SECRET_TRANSCRIPTION_MUST_NOT_LEAK",
+  notebook_id: "gnnb_aaaaaaaaaaaaaaaaaaaaaaaa",
+  logical_page_id: "gnlp_aaaaaaaaaaaaaaaaaaaaaaaa",
+  page_version_id: "gnver_aaaaaaaaaaaaaaaaaaaaaaaa",
+  run_id: "gnrun_aaaaaaaaaaaaaaaaaaaaaaaa",
+  freshness: "2026-08-09T12:00:00.000Z",
+};
+
 describe("federated search presentation", () => {
   it("groups in deterministic domain order and preserves per-domain upstream order", () => {
     const hits: FederatedHit[] = [
@@ -91,6 +105,7 @@ describe("federated search presentation", () => {
       { domain: "tasks", item: TASK_B },
       { domain: "knowledge", item: KNOWLEDGE },
       { domain: "tasks", item: TASK_A },
+      { domain: "goodnotes", item: GOODNOTES },
       { domain: "commitments", item: COMMITMENT },
       { domain: "capture", item: CAPTURE },
       { domain: "reports", item: REPORT },
@@ -169,5 +184,42 @@ describe("federated search presentation", () => {
     const knowledge = presentFederatedHits([{ domain: "knowledge", item: KNOWLEDGE }]);
     expect(knowledge[0]?.hits[0]?.href).toBeNull();
     expect(knowledge[0]?.hits[0]?.detail).toBe(KNOWLEDGE.snippet);
+  });
+
+  it("builds a GoodNotes href from IDs only and skips hits that cannot form an authoritative link", () => {
+    const expected =
+      "/knowledge/goodnotes?notebookId=gnnb_aaaaaaaaaaaaaaaaaaaaaaaa&logicalPageId=gnlp_aaaaaaaaaaaaaaaaaaaaaaaa&pageVersionId=gnver_aaaaaaaaaaaaaaaaaaaaaaaa&runId=gnrun_aaaaaaaaaaaaaaaaaaaaaaaa";
+    expect(goodnotesSearchHref(GOODNOTES)).toBe(expected);
+    const groups = presentFederatedHits([{ domain: "goodnotes", item: GOODNOTES }]);
+    expect(groups[0]?.domain).toBe("goodnotes");
+    expect(groups[0]?.heading).toBe("GoodNotes");
+    expect(groups[0]?.hits[0]?.href).toBe(expected);
+    expect(groups[0]?.hits[0]?.href).toMatch(/^\/knowledge\/goodnotes\?/);
+    expect(groups[0]?.hits[0]?.href).toContain("notebookId=");
+    expect(groups[0]?.hits[0]?.href).toContain("logicalPageId=");
+    expect(groups[0]?.hits[0]?.href).toContain("pageVersionId=");
+    expect(groups[0]?.hits[0]?.href).toContain("runId=");
+    expect(groups[0]?.hits[0]?.href).not.toContain("transcription");
+    expect(groups[0]?.hits[0]?.href).not.toContain("snippet");
+    expect(groups[0]?.hits[0]?.href).not.toContain("body");
+    expect(groups[0]?.hits[0]?.href).not.toContain("SECRET_TRANSCRIPTION");
+    expect(groups[0]?.hits[0]?.href).not.toContain(GOODNOTES.snippet);
+
+    const runOnly = presentFederatedHits([
+      {
+        domain: "goodnotes",
+        item: { ...GOODNOTES, page_version_id: null, notebook_id: null, logical_page_id: null },
+      },
+    ]);
+    expect(runOnly[0]?.hits[0]?.href).toBe("/knowledge/goodnotes?runId=gnrun_aaaaaaaaaaaaaaaaaaaaaaaa");
+
+    const skipped = presentFederatedHits([
+      {
+        domain: "goodnotes",
+        item: { ...GOODNOTES, page_version_id: null, run_id: null },
+      },
+    ]);
+    expect(skipped).toEqual([]);
+    expect(goodnotesSearchHref({ ...GOODNOTES, page_version_id: null, run_id: null })).toBeNull();
   });
 });

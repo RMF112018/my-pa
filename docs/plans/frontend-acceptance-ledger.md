@@ -323,13 +323,16 @@ Conservative dispositions for Search/Command UX over the WP23 BFF. This is not W
 - **Knowledge deep link:** `/knowledge?knowledgeId=&enrollmentId=` threads the federated request enrollment; enrollment is never guessed. Missing enrollment fails closed without a gateway call.
 - **PFE-AC-089 / 090** remain `SUPERSEDED`. WP21/WP22 remain `PROVISIONAL_NOT_ACTIVATED`. WP26 is not this package.
 
-## UI-IMP-WP21 disposition (docs only; recorded with WP25)
+## UI-IMP-WP21 GoodNotes / GSQS browser contract notes
 
-`UI-IMP-WP21 PROVISIONAL_NOT_ACTIVATED`
+`UI-IMP-WP21 ACTIVATED` (operator). Contract implemented on this branch. Not WP22 UI. Not production activation. Never `PASS_VERIFIED` of `PFE-AC-077..082`. `WP14_KNOWLEDGE_LIBRARY_GOODNOTES_AUDIT_MISSING` remains.
 
-Authority: [`frontend-implementation-authority.md`](frontend-implementation-authority.md) (dedicated WP-14 audit missing); ledger flag `WP14_KNOWLEDGE_LIBRARY_GOODNOTES_AUDIT_MISSING`.
-
-This PR does not add `goodnotes.*` or `gsqs.*` to `gateway.json` and does not add WP21 UI. Correct non-activation does not block Wave 3.
+- Browser-admitted: `goodnotes.notebooks.list`, `goodnotes.pages.list`, `goodnotes.runs.list`, `goodnotes.read`, `goodnotes.search`, `goodnotes.correct`, `goodnotes.work`, `goodnotes.content`.
+- Not browser-admitted: `goodnotes.propose`, `goodnotes.pull`, `goodnotes.complete`, `goodnotes.status`, `gsqs.start`, `gsqs.status`.
+- Raster: `GET /api/goodnotes/raster` returns `image/png` with `Cache-Control: private, no-store`. No filesystem paths. Catalog `liveness` is `unknown` (not a NAS probe).
+- Correction: pending cases remain `review.decide`; canonical occurrences use `goodnotes.correct` (`canonical_revision_appended`). `goodnotes.propose` stays analyzer-only.
+- Federated Search invokes `goodnotes.search`. Hits deep-link `/knowledge/goodnotes?` with IDs only. WP22 owns that page.
+- Classifier treats GoodNotes Python/identity/normalization/migration paths as frontend-applicable.
 
 ## UI-IMP-WP25 System / Health Runtime Truth notes
 
@@ -365,7 +368,7 @@ These limitations are additive to the default `FINAL_WP02_RECONCILIATION_MISSING
 
 - **All records:** final post-workstream WP-02 acceptance reconciliation is missing.
 - **PFE-AC-106..113 and related PWA evidence:** `WP08_PWA_OFFLINE_AUDIT_MISSING`; WP26 is validation-first.
-- **PFE-AC-077..082 and GoodNotes-related evidence:** `WP14_KNOWLEDGE_LIBRARY_GOODNOTES_AUDIT_MISSING`; WP21/WP22 remain provisional.
+- **PFE-AC-077..082 and GoodNotes-related evidence:** `WP14_KNOWLEDGE_LIBRARY_GOODNOTES_AUDIT_MISSING` remains; WP21 contract is activated/implemented and WP22 UI is next. Do not mark 077..082 `NOT_APPLICABLE`.
 - **Cross-cutting test/protection records, including PFE-AC-130..139, PFE-AC-193..198, PFE-AC-226, PFE-AC-240, PFE-AC-250:** `WP16_TEST_QUALITY_AUDIT_INCOMPLETE` until the applicable protection ledger is completed by WP27.
 
 ### PFE-AC-123..139 discrepancy

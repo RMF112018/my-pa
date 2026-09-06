@@ -62,9 +62,26 @@ test("Federated Search BFF keeps typed hits and honest omitted coverage", async 
 
   const coverage = search.body.coverage ?? [];
   const goodnotes = coverage.find((row) => row.domain === "goodnotes");
-  expect(goodnotes?.state).toBe("omitted");
-  expect(goodnotes?.reason).toBe("goodnotes_not_activated");
-  expect(goodnotes).not.toEqual(expect.objectContaining({ state: "searched", hitCount: 0 }));
+  expect(goodnotes).toBeDefined();
+  expect(goodnotes?.state).not.toBe("omitted");
+  expect(goodnotes?.reason).not.toBe("goodnotes_not_activated");
+  if (goodnotes?.state === "searched") {
+    expect(goodnotes.hitCount).toBeGreaterThanOrEqual(0);
+  } else {
+    expect(["unavailable", "degraded"]).toContain(goodnotes?.state);
+    expect(goodnotes?.hitCount).toBe(0);
+    expect(goodnotes).not.toEqual(expect.objectContaining({ state: "searched", hitCount: 0 }));
+  }
+
+  for (const domain of ["tasks", "commitments", "capture", "reports", "entities"]) {
+    const row = coverage.find((entry) => entry.domain === domain);
+    expect(row).toBeDefined();
+    expect(row?.state).not.toBe("omitted");
+  }
+  expect(coverage.find((row) => row.domain === "meetings")?.state).toBe("omitted");
+  expect(coverage.find((row) => row.domain === "projects")?.state).toBe("omitted");
+  expect(coverage.find((row) => row.domain === "canvas")?.state).toBe("omitted");
+  expect(coverage.find((row) => row.domain === "relationship_memory")?.state).toBe("omitted");
 
   const knowledge = coverage.find((row) => row.domain === "knowledge");
   expect(knowledge?.state).toBe("knowledge_not_enrolled");
@@ -104,6 +121,17 @@ test("Search UX maps federated hits to honest hrefs without capture text", async
     expect(href).toMatch(/captureId=cap_/);
     expect(href).toMatch(/versionId=/);
     expect(href).not.toMatch(/text=/);
+  }
+
+  const goodnotesLinks = page.locator('a[href*="/knowledge/goodnotes"]');
+  const goodnotesCount = await goodnotesLinks.count();
+  for (let index = 0; index < goodnotesCount; index += 1) {
+    const href = (await goodnotesLinks.nth(index).getAttribute("href")) ?? "";
+    expect(href).toMatch(/\/knowledge\/goodnotes\?/);
+    expect(href).toMatch(/pageVersionId=|runId=/);
+    expect(href).not.toMatch(/transcription=/);
+    expect(href).not.toMatch(/snippet=/);
+    expect(href).not.toMatch(/body=/);
   }
 
   await expect(page.locator('a[href*="knowledgeId="]')).toHaveCount(0);

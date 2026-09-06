@@ -118,7 +118,7 @@ describe("app shell", () => {
           ],
           coverage: [
             { domain: "tasks", state: "searched", hitCount: 1 },
-            { domain: "goodnotes", state: "omitted", hitCount: 0, reason: "goodnotes_not_activated" },
+            { domain: "goodnotes", state: "searched", hitCount: 0 },
             { domain: "knowledge", state: "knowledge_not_enrolled", hitCount: 0 },
           ],
         }),
@@ -132,7 +132,9 @@ describe("app shell", () => {
     await user.type(screen.getByRole("searchbox", { name: "Search" }), "morning");
 
     expect(await screen.findByTestId("search-group-tasks")).toHaveTextContent("Morning task");
-    expect(screen.getByTestId("search-coverage")).toHaveTextContent("goodnotes: omitted");
+    expect(screen.getByTestId("search-coverage")).toHaveTextContent("goodnotes: searched");
+    expect(screen.getByTestId("search-coverage")).not.toHaveTextContent("goodnotes: omitted");
+    expect(screen.getByTestId("search-coverage")).not.toHaveTextContent("goodnotes_not_activated");
     expect(screen.getByTestId("search-coverage")).toHaveTextContent("knowledge_not_enrolled");
     expect(screen.getByRole("dialog", { name: "Command menu" })).not.toHaveTextContent(
       /cross-feature search is not available/i,

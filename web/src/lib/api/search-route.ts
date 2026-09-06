@@ -14,6 +14,7 @@ import type { PrincipalSession } from "@/contracts/identity";
 import type { CaptureSearchMatch } from "@/lib/api/decode/capabilities/capture.search";
 import type { CommitmentListEntry } from "@/lib/api/decode/capabilities/commitments.search";
 import type { EntitySummary } from "@/lib/api/decode/capabilities/entities.search";
+import type { GoodNotesSearchHit } from "@/lib/api/decode/capabilities/goodnotes.search";
 import type { KnowledgeSearchMatch } from "@/lib/api/decode/capabilities/knowledge.search";
 import type { ReportSearchMatch } from "@/lib/api/decode/capabilities/reports.search";
 import type { TaskListEntry } from "@/lib/api/decode/capabilities/tasks.search";
@@ -30,9 +31,17 @@ type SearchCapability = Extract<
   | "reports.search"
   | "entities.search"
   | "knowledge.search"
+  | "goodnotes.search"
 >;
 
-type CalledDomain = "tasks" | "commitments" | "capture" | "reports" | "entities" | "knowledge";
+type CalledDomain =
+  | "tasks"
+  | "commitments"
+  | "capture"
+  | "reports"
+  | "entities"
+  | "knowledge"
+  | "goodnotes";
 
 export type FederatedSearchHit =
   | { readonly domain: "tasks"; readonly capability: "tasks.search"; readonly item: TaskListEntry }
@@ -48,16 +57,15 @@ export type FederatedSearchHit =
       readonly domain: "knowledge";
       readonly capability: "knowledge.search";
       readonly item: KnowledgeSearchMatch;
+    }
+  | {
+      readonly domain: "goodnotes";
+      readonly capability: "goodnotes.search";
+      readonly item: GoodNotesSearchHit;
     };
 
 export type DomainCoverage = {
-  readonly domain:
-    | CalledDomain
-    | "goodnotes"
-    | "meetings"
-    | "projects"
-    | "canvas"
-    | "relationship_memory";
+  readonly domain: CalledDomain | "meetings" | "projects" | "canvas" | "relationship_memory";
   readonly capability?: SearchCapability;
   readonly state: "searched" | "degraded" | "unavailable" | "knowledge_not_enrolled" | "omitted";
   readonly hitCount: number;
@@ -71,7 +79,6 @@ type CalledSpec = {
 };
 
 const OMITTED: readonly DomainCoverage[] = [
-  { domain: "goodnotes", state: "omitted", hitCount: 0, reason: "goodnotes_not_activated" },
   { domain: "meetings", state: "omitted", hitCount: 0, reason: "no_search_capability" },
   { domain: "projects", state: "omitted", hitCount: 0, reason: "no_search_capability" },
   { domain: "canvas", state: "omitted", hitCount: 0, reason: "no_search_capability" },
@@ -119,6 +126,7 @@ function hitItems(
   if (capability === "commitments.search" && "commitments" in result) return result.commitments;
   if (capability === "entities.search" && "entities" in result) return result.entities;
   if (capability === "reports.search" && "items" in result) return result.items;
+  if (capability === "goodnotes.search" && "hits" in result) return result.hits;
   if (
     (capability === "capture.search" || capability === "knowledge.search") &&
     "matches" in result
@@ -248,6 +256,7 @@ export async function searchGet(request: NextRequest): Promise<NextResponse> {
     { domain: "capture", capability: "capture.search", payload: { query, page_size: PAGE_SIZE } },
     { domain: "reports", capability: "reports.search", payload: { query, page_size: PAGE_SIZE } },
     { domain: "entities", capability: "entities.search", payload: { query, page_size: PAGE_SIZE } },
+    { domain: "goodnotes", capability: "goodnotes.search", payload: { query, page_size: PAGE_SIZE } },
   ];
   if (enrollmentRaw) {
     invoked.push({

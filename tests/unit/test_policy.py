@@ -262,6 +262,12 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.GOODNOTES_COMPLETE, Purpose.GOODNOTES_PULL),
         (Capability.GOODNOTES_STATUS, Purpose.GOODNOTES_PULL_OBSERVATION),
         (Capability.GOODNOTES_PROPOSE, Purpose.GOODNOTES_PROPOSAL),
+        (Capability.GOODNOTES_NOTEBOOKS_LIST, Purpose.GOODNOTES_BROWSE),
+        (Capability.GOODNOTES_PAGES_LIST, Purpose.GOODNOTES_BROWSE),
+        (Capability.GOODNOTES_RUNS_LIST, Purpose.GOODNOTES_BROWSE),
+        (Capability.GOODNOTES_READ, Purpose.GOODNOTES_READ),
+        (Capability.GOODNOTES_SEARCH, Purpose.GOODNOTES_READ),
+        (Capability.GOODNOTES_CORRECT, Purpose.GOODNOTES_CORRECTION),
         (Capability.GSQS_START, Purpose.GSQS_B0_EXECUTION),
         (Capability.GSQS_STATUS, Purpose.GSQS_B0_OBSERVATION),
         (Capability.REPORTS_BEGIN_CYCLE, Purpose.REPORT_AUTHORING),
@@ -420,9 +426,9 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # `UI-IMP-WP15` adds `entities.graph` under `entity_read`.
     # `UI-IMP-WP17` adds `canvas.workspace.get`/`canvas.workspace.put` under
     # `canvas_workspace_read`/`canvas_workspace_authoring`.
-    # Unioned: 130 capabilities, 38 purposes, 132 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 132
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 132 == 4808
+    # Unioned: 136 capabilities, 41 purposes, 138 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 138
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 138 == 5438
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)
@@ -461,6 +467,12 @@ def test_goodnotes_capabilities_are_not_operator_only() -> None:
     assert not is_operator_only(Capability.GOODNOTES_WORK)
     assert not is_operator_only(Capability.GOODNOTES_CONTENT)
     assert not is_operator_only(Capability.GOODNOTES_PROPOSE)
+    assert not is_operator_only(Capability.GOODNOTES_NOTEBOOKS_LIST)
+    assert not is_operator_only(Capability.GOODNOTES_PAGES_LIST)
+    assert not is_operator_only(Capability.GOODNOTES_RUNS_LIST)
+    assert not is_operator_only(Capability.GOODNOTES_READ)
+    assert not is_operator_only(Capability.GOODNOTES_SEARCH)
+    assert not is_operator_only(Capability.GOODNOTES_CORRECT)
 
 
 def test_decision_cannot_be_allowed_with_a_reason() -> None:

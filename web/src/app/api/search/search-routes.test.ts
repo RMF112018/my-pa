@@ -29,6 +29,18 @@ const REPORT_MATCH = {
   artifact_kind: "collector_candidates",
 };
 
+const GOODNOTES_PAGE_HIT = {
+  kind: "page",
+  id: "gnver_aaaaaaaaaaaaaaaaaaaaaaaa",
+  title: "Synthetic page",
+  snippet: "synthetic page transcription must not leak into href",
+  notebook_id: "gnnb_aaaaaaaaaaaaaaaaaaaaaaaa",
+  logical_page_id: "gnlp_aaaaaaaaaaaaaaaaaaaaaaaa",
+  page_version_id: "gnver_aaaaaaaaaaaaaaaaaaaaaaaa",
+  run_id: "gnrun_aaaaaaaaaaaaaaaaaaaaaaaa",
+  freshness: "2026-08-09T12:00:00.000Z",
+};
+
 const EMPTY = {
   "tasks.search": { tasks: [] },
   "commitments.search": {
@@ -40,6 +52,7 @@ const EMPTY = {
   "reports.search": { items: [] },
   "entities.search": { entities: [] },
   "knowledge.search": { matches: [] },
+  "goodnotes.search": { hits: [] },
 } as const;
 
 function gatewayOk(result: unknown, coverageState = "not_enrolled") {
@@ -128,7 +141,7 @@ describe("Federated Search BFF", () => {
     expect(gateway).not.toHaveBeenCalled();
   });
 
-  it("fans out to the five admitted search capabilities and does not call knowledge.search", async () => {
+  it("fans out to the six admitted search capabilities and does not call knowledge.search", async () => {
     const gateway = emptyFanout();
     const response = await searchGet(request(await cookie(), "/api/search?q=morning%20brief"));
     expect(response.status).toBe(200);
@@ -138,11 +151,16 @@ describe("Federated Search BFF", () => {
     expect(urls.filter((url) => url.includes("/v1/capture.search"))).toHaveLength(1);
     expect(urls.filter((url) => url.includes("/v1/reports.search"))).toHaveLength(1);
     expect(urls.filter((url) => url.includes("/v1/entities.search"))).toHaveLength(1);
+    expect(urls.filter((url) => url.includes("/v1/goodnotes.search"))).toHaveLength(1);
     expect(urls.some((url) => url.includes("/v1/knowledge.search"))).toBe(false);
     expect(urls.some((url) => url.includes("/v1/entities.resolve"))).toBe(false);
     expect(urls.some((url) => url.includes("/v1/entities.list"))).toBe(false);
     expect(urls.some((url) => url.includes("/v1/tasks.list"))).toBe(false);
     expect(urls.some((url) => url.includes("/v1/capture.list"))).toBe(false);
+    expect(payloadOf(gateway, "goodnotes.search").payload).toEqual({
+      query: "morning brief",
+      page_size: 10,
+    });
   });
 
   it("adds knowledge.search with enrollment_id when enrollmentId is well-formed", async () => {
@@ -153,7 +171,8 @@ describe("Federated Search BFF", () => {
     expect(response.status).toBe(200);
     const urls = searchUrls(gateway);
     expect(urls.filter((url) => url.endsWith("/v1/knowledge.search"))).toHaveLength(1);
-    expect(urls).toHaveLength(6);
+    expect(urls.filter((url) => url.endsWith("/v1/goodnotes.search"))).toHaveLength(1);
+    expect(urls).toHaveLength(7);
     expect(payloadOf(gateway, "knowledge.search").payload).toMatchObject({
       enrollment_id: ENROLLMENT_ID,
       query: "morning brief",
@@ -186,14 +205,13 @@ describe("Federated Search BFF", () => {
         (row) => [row.domain, row],
       ),
     );
-    for (const domain of ["tasks", "commitments", "capture", "reports", "entities"]) {
+    for (const domain of ["tasks", "commitments", "capture", "reports", "entities", "goodnotes"]) {
       expect(byDomain[domain]).toMatchObject({ state: "searched", hitCount: 0 });
     }
     expect(byDomain.knowledge).toMatchObject({ state: "knowledge_not_enrolled", hitCount: 0 });
-    expect(byDomain.goodnotes).toMatchObject({
+    expect(byDomain.goodnotes).not.toMatchObject({
       state: "omitted",
       reason: "goodnotes_not_activated",
-      hitCount: 0,
     });
     expect(byDomain.meetings).toMatchObject({ state: "omitted", reason: "no_search_capability" });
     expect(byDomain.projects).toMatchObject({ state: "omitted", reason: "no_search_capability" });
@@ -202,7 +220,7 @@ describe("Federated Search BFF", () => {
       state: "omitted",
       reason: "not_browser_admitted",
     });
-    for (const domain of ["goodnotes", "meetings", "projects", "canvas", "relationship_memory"]) {
+    for (const domain of ["meetings", "projects", "canvas", "relationship_memory"]) {
       expect(byDomain[domain].state).not.toBe("searched");
     }
   });
@@ -223,7 +241,90 @@ describe("Federated Search BFF", () => {
     expect(byDomain.commitments).toMatchObject({ state: "searched", hitCount: 0 });
     expect(byDomain.capture).toMatchObject({ state: "searched", hitCount: 0 });
     expect(byDomain.entities).toMatchObject({ state: "searched", hitCount: 0 });
+    expect(byDomain.goodnotes).toMatchObject({ state: "searched", hitCount: 0 });
     expect(body.hits).toEqual([]);
+  });
+
+  it("returns searched GoodNotes hits without substituting knowledge.search", async () => {
+    const gateway = emptyFanout({ "goodnotes.search": { hits: [GOODNOTES_PAGE_HIT] } });
+    const response = await searchGet(request(await cookie(), "/api/search?q=synthetic%20page"));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    const byDomain = Object.fromEntries(
+      (body.coverage as Array<{ domain: string; state: string; hitCount?: number; reason?: string }>).map(
+        (row) => [row.domain, row],
+      ),
+    );
+    expect(byDomain.goodnotes).toMatchObject({
+      state: "searched",
+      hitCount: 1,
+      capability: "goodnotes.search",
+    });
+    expect(byDomain.goodnotes.state).not.toBe("omitted");
+    const goodnotesHits = (body.hits as Array<{ domain: string; capability?: string; item: unknown }>).filter(
+      (hit) => hit.domain === "goodnotes",
+    );
+    expect(goodnotesHits).toHaveLength(1);
+    expect(goodnotesHits[0]?.capability).toBe("goodnotes.search");
+    expect(goodnotesHits[0]?.item).toEqual(GOODNOTES_PAGE_HIT);
+    expect(searchUrls(gateway).some((url) => url.includes("/v1/knowledge.search"))).toBe(false);
+  });
+
+  it("keeps other domains usable when GoodNotes is unavailable, and never uses searched hitCount 0 as failure", async () => {
+    emptyFanout({}, { "goodnotes.search": "unavailable" });
+    const response = await searchGet(request(await cookie(), "/api/search?q=morning%20brief"));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    const byDomain = Object.fromEntries(
+      (body.coverage as Array<{ domain: string; state: string; hitCount?: number; reason?: string }>).map(
+        (row) => [row.domain, row],
+      ),
+    );
+    expect(byDomain.goodnotes).toMatchObject({ state: "unavailable", hitCount: 0 });
+    expect(byDomain.goodnotes.state).not.toBe("searched");
+    expect(byDomain.goodnotes).not.toEqual(expect.objectContaining({ state: "searched", hitCount: 0 }));
+    expect(byDomain.tasks).toMatchObject({ state: "searched", hitCount: 0 });
+    expect(byDomain.commitments).toMatchObject({ state: "searched", hitCount: 0 });
+    expect(byDomain.capture).toMatchObject({ state: "searched", hitCount: 0 });
+    expect(byDomain.reports).toMatchObject({ state: "searched", hitCount: 0 });
+    expect(byDomain.entities).toMatchObject({ state: "searched", hitCount: 0 });
+    expect(body.disclosure.coverage).toBe("partial");
+    expect((body.hits as Array<{ domain: string }>).some((hit) => hit.domain === "goodnotes")).toBe(false);
+  });
+
+  it("treats a GoodNotes contract failure as unavailable without blanking other domains", async () => {
+    emptyFanout({ "goodnotes.search": { leaked: "must-not-dump" } });
+    const response = await searchGet(request(await cookie(), "/api/search?q=morning%20brief"));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(JSON.stringify(body)).not.toContain("must-not-dump");
+    const byDomain = Object.fromEntries(
+      (body.coverage as Array<{ domain: string; state: string; hitCount?: number; reason?: string }>).map(
+        (row) => [row.domain, row],
+      ),
+    );
+    expect(byDomain.goodnotes).toMatchObject({
+      state: "unavailable",
+      reason: "upstream_contract_invalid",
+      hitCount: 0,
+    });
+    expect(byDomain.goodnotes).not.toEqual(expect.objectContaining({ state: "searched", hitCount: 0 }));
+    expect(byDomain.tasks).toMatchObject({ state: "searched", hitCount: 0 });
+    expect(byDomain.entities).toMatchObject({ state: "searched", hitCount: 0 });
+  });
+
+  it("counts a successful empty GoodNotes result as searched hitCount 0", async () => {
+    emptyFanout({ "goodnotes.search": { hits: [] } });
+    const response = await searchGet(request(await cookie(), "/api/search?q=morning%20brief"));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    const byDomain = Object.fromEntries(
+      (body.coverage as Array<{ domain: string; state: string; hitCount?: number; reason?: string }>).map(
+        (row) => [row.domain, row],
+      ),
+    );
+    expect(byDomain.goodnotes).toMatchObject({ state: "searched", hitCount: 0 });
+    expect(byDomain.goodnotes.reason).toBeUndefined();
   });
 
   it("fails closed on an omitted tasks array without blanking other domains or leaking extras", async () => {

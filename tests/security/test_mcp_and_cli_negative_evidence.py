@@ -11,7 +11,7 @@ The five, over both:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — proved from both ends: the tool list and the option
-  surface route one hundred and thirty capability names and none of them mutates a
+  surface route one hundred and thirty-six capability names and none of them mutates a
   source, and every capability driven over both transports is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -355,6 +355,12 @@ SCOPED_CAPABILITIES = [
         Capability.GOODNOTES_PULL,
         Capability.GOODNOTES_COMPLETE,
         Capability.GOODNOTES_STATUS,
+        Capability.GOODNOTES_NOTEBOOKS_LIST,
+        Capability.GOODNOTES_PAGES_LIST,
+        Capability.GOODNOTES_RUNS_LIST,
+        Capability.GOODNOTES_READ,
+        Capability.GOODNOTES_SEARCH,
+        Capability.GOODNOTES_CORRECT,
         Capability.GSQS_START,
         Capability.GSQS_STATUS,
         Capability.REPORTS_BEGIN_CYCLE,

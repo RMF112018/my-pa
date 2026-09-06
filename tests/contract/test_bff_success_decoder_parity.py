@@ -14,12 +14,16 @@ Identifiers are synthetic and follow `IdKind` shape only.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import zlib
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
+from my_pa.application.goodnotes_content import content_payload
+from my_pa.application.goodnotes_semantics import work_payload
 from my_pa.contracts.ports import CaptureSearchMatch, DirectedReceipt, MutationRecordFamily
 from my_pa.contracts.v1.canvas_workspace import (
     CanvasPointView,
@@ -43,6 +47,7 @@ from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.provenance import Provenance, TrustLevel
 from my_pa.domain.common.time import format_rfc3339
 from my_pa.domain.extraction.text import EXTRACTOR, EXTRACTOR_VERSION
+from my_pa.domain.goodnotes.models import GoodNotesPageRaster, GoodNotesPageWork
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.modeling.gate import ModelRoutePolicy
 from my_pa.domain.relationship.entity import RelationshipState
@@ -768,6 +773,187 @@ def _canvas_workspace_put() -> dict[str, object]:
     ).model_dump(mode="json")
 
 
+_GN_RUN = "gnrun_" + "a" * 24
+_GN_VER = "gnver_" + "a" * 24
+_GN_PAGE = "gnlp_" + "a" * 24
+_GN_NB = "gnnb_" + "a" * 24
+_GN_OCC = "gnocc_" + "b" * 24
+_GN_REV = "gnrev_" + "a" * 24
+_GN_PRIOR = "gnrev_" + "b" * 24
+_GN_PRP = "gnprp_" + "a" * 24
+_GN_PRINCIPAL = "prn_aaaaaaaa11111111"
+
+
+def _gray_png() -> bytes:
+    """One-pixel grayscale PNG. Synthetic, never live handwriting."""
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(tag + data) & 0xFFFFFFFF
+        return len(data).to_bytes(4, "big") + tag + data + crc.to_bytes(4, "big")
+
+    ihdr = (1).to_bytes(4, "big") + (1).to_bytes(4, "big") + bytes([8, 0, 0, 0, 0])
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(b"\x00\xff", 9))
+        + chunk(b"IEND", b"")
+    )
+
+
+def _goodnotes_work_row() -> GoodNotesPageWork:
+    return GoodNotesPageWork(
+        run_id=_GN_RUN,
+        page_version_id=_GN_VER,
+        principal_id=_GN_PRINCIPAL,
+        content_sha256=DIGEST,
+        logical_page_id=_GN_PAGE,
+        renderer_name="synthetic",
+        renderer_version="1",
+        render_profile_version="v1",
+    )
+
+
+def _goodnotes_notebooks_list() -> dict[str, Any]:
+    """Handler-identical `list_notebooks` page."""
+    return {
+        "notebooks": [
+            {
+                "notebook_id": _GN_NB,
+                "title": "Synthetic notebook",
+                "updated_at": format_rfc3339(AT),
+                "page_count": 2,
+                "liveness": "unknown",
+            }
+        ],
+        "next_cursor": "cursor",
+    }
+
+
+def _goodnotes_pages_list() -> dict[str, Any]:
+    """Handler-identical `list_pages` page."""
+    return {
+        "pages": [
+            {
+                "logical_page_id": _GN_PAGE,
+                "page_version_id": _GN_VER,
+                "run_id": _GN_RUN,
+                "content_sha256": DIGEST,
+                "is_latest": True,
+                "updated_at": format_rfc3339(AT),
+            }
+        ]
+    }
+
+
+def _goodnotes_runs_list() -> dict[str, Any]:
+    """Handler-identical `list_runs` page."""
+    return {
+        "runs": [
+            {
+                "run_id": _GN_RUN,
+                "state": "succeeded",
+                "failure_class": None,
+                "started_at": format_rfc3339(AT),
+                "completed_at": format_rfc3339(AT),
+            }
+        ]
+    }
+
+
+def _goodnotes_read() -> dict[str, Any]:
+    """Handler-identical `read_page` payload without raster bytes."""
+    return {
+        "run_id": _GN_RUN,
+        "page_version_id": _GN_VER,
+        "content_sha256": DIGEST,
+        "exact_render_sha256": hashlib.sha256(b"synthetic-goodnotes-raster").hexdigest(),
+        "raster_digest": hashlib.sha256(_gray_png()).hexdigest(),
+        "media_type": "image/png",
+        "renderer_name": "synthetic",
+        "renderer_version": "1",
+        "render_profile_version": "v1",
+        "interpretation": {
+            "authority": "interpretation",
+            "items": [
+                {
+                    "proposal_id": _GN_PRP,
+                    "analyzer_name": "synthetic",
+                    "analyzer_version": "1",
+                    "schema_version": "note-unit.v1",
+                    "disposition": None,
+                },
+                {
+                    "occurrence_id": _GN_OCC,
+                    "revision_id": _GN_REV,
+                    "analyzer_name": "synthetic",
+                    "analyzer_version": "1",
+                    "schema_version": "note-unit.v1",
+                    "transcription": "synthetic note",
+                },
+            ],
+        },
+        "provenance": {
+            "run_id": _GN_RUN,
+            "page_version_id": _GN_VER,
+            "content_sha256": DIGEST,
+        },
+        "processing": {"run_status": None, "failure_class": None},
+    }
+
+
+def _goodnotes_search() -> dict[str, Any]:
+    """Handler-identical `search` page."""
+    return {
+        "hits": [
+            {
+                "kind": "notebook",
+                "id": _GN_NB,
+                "title": "Synthetic notebook",
+                "snippet": "synthetic notebook",
+                "notebook_id": _GN_NB,
+                "logical_page_id": None,
+                "page_version_id": None,
+                "run_id": None,
+                "freshness": format_rfc3339(AT),
+            }
+        ]
+    }
+
+
+def _goodnotes_correct() -> dict[str, Any]:
+    """Handler-identical `correct` receipt."""
+    return {
+        "occurrence_id": _GN_OCC,
+        "revision_id": _GN_REV,
+        "prior_revision_id": _GN_PRIOR,
+        "replayed": False,
+        "disposition": "canonical_revision_appended",
+    }
+
+
+def _goodnotes_work() -> dict[str, Any]:
+    return work_payload(_goodnotes_work_row())
+
+
+def _goodnotes_content() -> dict[str, Any]:
+    png = _gray_png()
+    work = _goodnotes_work_row()
+    raster = GoodNotesPageRaster(
+        principal_id=_GN_PRINCIPAL,
+        page_version_id=_GN_VER,
+        run_id=_GN_RUN,
+        exact_render_sha256=hashlib.sha256(b"synthetic-goodnotes-raster").hexdigest(),
+        png_sha256=hashlib.sha256(png).hexdigest(),
+        byte_length=len(png),
+        png_bytes=png,
+        renderer_name="synthetic",
+        renderer_version="1",
+        render_profile_version="v1",
+        created_at=AT,
+    )
+    return content_payload(work, raster)
+
+
 def _entities_relationships_write() -> dict[str, Any]:
     """The directed-receipt dict `_directed_receipt` publishes for relationship writes."""
     receipt = DirectedReceipt(
@@ -1200,6 +1386,14 @@ def python_success_payloads() -> dict[str, dict[str, Any]]:
         },
         "canvas.workspace.get": _canvas_workspace_get(),
         "canvas.workspace.put": _canvas_workspace_put(),
+        "goodnotes.notebooks.list": _goodnotes_notebooks_list(),
+        "goodnotes.pages.list": _goodnotes_pages_list(),
+        "goodnotes.runs.list": _goodnotes_runs_list(),
+        "goodnotes.read": _goodnotes_read(),
+        "goodnotes.search": _goodnotes_search(),
+        "goodnotes.correct": _goodnotes_correct(),
+        "goodnotes.work": _goodnotes_work(),
+        "goodnotes.content": _goodnotes_content(),
     }
 
 

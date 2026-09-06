@@ -7,6 +7,7 @@
 import type { CaptureSearchMatch } from "@/lib/api/decode/capabilities/capture.search";
 import type { CommitmentListEntry } from "@/lib/api/decode/capabilities/commitments.search";
 import type { EntitySummary } from "@/lib/api/decode/capabilities/entities.search";
+import type { GoodNotesSearchHit } from "@/lib/api/decode/capabilities/goodnotes.search";
 import type {
   KnowledgeRank,
   KnowledgeSearchMatch,
@@ -21,6 +22,7 @@ export const SEARCH_DOMAIN_ORDER = [
   "reports",
   "entities",
   "knowledge",
+  "goodnotes",
 ] as const;
 
 export type SearchDomain = (typeof SEARCH_DOMAIN_ORDER)[number];
@@ -31,7 +33,8 @@ export type FederatedHit =
   | { readonly domain: "capture"; readonly item: CaptureSearchMatch }
   | { readonly domain: "reports"; readonly item: ReportSearchMatch }
   | { readonly domain: "entities"; readonly item: EntitySummary }
-  | { readonly domain: "knowledge"; readonly item: KnowledgeSearchMatch };
+  | { readonly domain: "knowledge"; readonly item: KnowledgeSearchMatch }
+  | { readonly domain: "goodnotes"; readonly item: GoodNotesSearchHit };
 
 export type SearchCoverage = {
   readonly domain: string;
@@ -62,6 +65,7 @@ export const DOMAIN_HEADINGS: Record<SearchDomain, string> = {
   reports: "Reports",
   entities: "People",
   knowledge: "Knowledge",
+  goodnotes: "GoodNotes",
 };
 
 function identityHref(path: string, id: string): string | null {
@@ -91,6 +95,28 @@ export function knowledgeSearchHref(
   params.set("knowledgeId", knowledge);
   params.set("enrollmentId", enrollment);
   return `/knowledge?${params.toString()}`;
+}
+
+function identifierParam(value: string | null | undefined): string {
+  return value?.trim() ?? "";
+}
+
+/**
+ * Contract href for WP22. Identifiers only — never transcription or body.
+ * An authoritative link requires pageVersionId and/or runId.
+ */
+export function goodnotesSearchHref(hit: GoodNotesSearchHit): string | null {
+  const notebookId = identifierParam(hit.notebook_id);
+  const logicalPageId = identifierParam(hit.logical_page_id);
+  const pageVersionId = identifierParam(hit.page_version_id);
+  const runId = identifierParam(hit.run_id);
+  if (!pageVersionId && !runId) return null;
+  const params = new URLSearchParams();
+  if (notebookId) params.set("notebookId", notebookId);
+  if (logicalPageId) params.set("logicalPageId", logicalPageId);
+  if (pageVersionId) params.set("pageVersionId", pageVersionId);
+  if (runId) params.set("runId", runId);
+  return `/knowledge/goodnotes?${params.toString()}`;
 }
 
 function presentHit(hit: FederatedHit, enrollmentId: string | undefined): PresentedHit {
@@ -144,6 +170,14 @@ function presentHit(hit: FederatedHit, enrollmentId: string | undefined): Presen
         href: knowledgeSearchHref(hit.item.knowledge_id, enrollmentId),
         rank: hit.item.rank,
       };
+    case "goodnotes":
+      return {
+        domain: "goodnotes",
+        key: hit.item.id,
+        label: hit.item.title,
+        detail: hit.item.snippet,
+        href: goodnotesSearchHref(hit.item),
+      };
   }
 }
 
@@ -158,7 +192,8 @@ export function presentFederatedHits(
   return SEARCH_DOMAIN_ORDER.flatMap((domain) => {
     const presented = hits
       .filter((hit) => hit.domain === domain)
-      .map((hit) => presentHit(hit, enrollmentId));
+      .map((hit) => presentHit(hit, enrollmentId))
+      .filter((row) => domain !== "goodnotes" || row.href !== null);
     if (presented.length === 0) return [];
     return [{ domain, heading: DOMAIN_HEADINGS[domain], hits: presented }];
   });

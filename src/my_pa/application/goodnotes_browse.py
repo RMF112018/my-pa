@@ -33,7 +33,9 @@ from my_pa.domain.common.time import format_rfc3339
 from my_pa.domain.goodnotes.models import GoodNotesIngestionRun, GoodNotesIngestionStatus
 
 DEFAULT_PAGE_SIZE = 25
-_UNAVAILABLE_LIVENESS = "unavailable"
+# Catalog presence is not a NAS liveness probe. Do not claim the source is
+# unavailable merely because this read did not re-check the filesystem.
+_CATALOGUE_LIVENESS = "unknown"
 _OPERATOR_CORRECTION = "operator-correction"
 _PROCESSING_STATUSES = frozenset(
     {GoodNotesIngestionStatus.PENDING, GoodNotesIngestionStatus.RUNNING}
@@ -196,7 +198,7 @@ def list_notebooks(
                 "title": row.title,
                 "updated_at": format_rfc3339(row.updated_at),
                 "page_count": row.page_count,
-                "liveness": _UNAVAILABLE_LIVENESS,
+                "liveness": _CATALOGUE_LIVENESS,
             }
             for row in page
         ]

@@ -247,7 +247,7 @@ def test_browser_lists_are_principal_bound_ordered_and_paginated(engine: Engine)
         page = list_notebooks(uow, _Auth(A), ListGoodNotesNotebooks(page_size=1))
         assert [row["notebook_id"] for row in page["notebooks"]] == [third.notebook_id]
         assert page["notebooks"][0]["title"] == "charlie-book"
-        assert page["notebooks"][0]["liveness"] == "unavailable"
+        assert page["notebooks"][0]["liveness"] == "unknown"
         assert "next_cursor" in page
         next_page = list_notebooks(
             uow, _Auth(A), ListGoodNotesNotebooks(page_size=1, cursor=page["next_cursor"])

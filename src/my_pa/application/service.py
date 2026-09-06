@@ -8804,7 +8804,7 @@ class ApplicationService:
         command: SearchGoodNotes,
     ) -> _Result:
         with _translated():
-            payload = goodnotes_browse.search(unit_of_work, authorization, command)
+            payload = goodnotes_browse.search_catalog(unit_of_work, authorization, command)
         return _Result(
             payload=payload,
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),

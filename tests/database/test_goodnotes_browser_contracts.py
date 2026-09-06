@@ -23,7 +23,7 @@ from my_pa.application.goodnotes_browse import (
     list_notebooks,
     list_pages,
     list_runs,
-    search,
+    search_catalog,
 )
 from my_pa.domain.goodnotes.models import (
     GoodNotesIdentityStatus,
@@ -258,9 +258,9 @@ def test_browser_lists_are_principal_bound_ordered_and_paginated(engine: Engine)
         assert list_pages(uow, _Auth(B), ListGoodNotesPages(notebook_id=first.notebook_id)) == {
             "pages": []
         }
-        hits = search(uow, _Auth(A), SearchGoodNotes(query="alpha-book"))
+        hits = search_catalog(uow, _Auth(A), SearchGoodNotes(query="alpha-book"))
         assert {hit["notebook_id"] for hit in hits["hits"]} == {first.notebook_id}
-        assert search(uow, _Auth(B), SearchGoodNotes(query=first.notebook_id))["hits"] == []
+        assert search_catalog(uow, _Auth(B), SearchGoodNotes(query=first.notebook_id))["hits"] == []
 
 
 def test_pages_mark_latest_and_runs_stay_principal_bound(engine: Engine) -> None:

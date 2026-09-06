@@ -341,7 +341,7 @@ def read_page(
     }
 
 
-def search(
+def search_catalog(
     unit_of_work: UnitOfWork,
     authorization: Authorization,
     command: SearchGoodNotes,

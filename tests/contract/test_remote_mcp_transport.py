@@ -304,6 +304,7 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.COMMITMENTS_CLOSE,
         Capability.CONTEXT_FEEDBACK,
         Capability.GOODNOTES_PROPOSE,
+        Capability.GOODNOTES_CORRECT,
         Capability.GSQS_START,
         Capability.REPORTS_BEGIN_CYCLE,
         Capability.REPORTS_COMMIT,

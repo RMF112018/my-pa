@@ -157,9 +157,32 @@ export async function KnowledgePage({
     </>
   );
 
+  const goodnotesEntry = (
+    <nav
+      aria-labelledby="knowledge-goodnotes-heading"
+      className="mb-6 rounded-lg border border-border bg-surface p-4"
+      data-testid="knowledge-goodnotes-entry"
+    >
+      <h2 id="knowledge-goodnotes-heading" className="text-base font-semibold text-moss-slate">
+        GoodNotes
+      </h2>
+      <p className="mt-1 text-sm text-muted">
+        Handwritten notebooks are read on a separate page when their identifiers are known.
+        This entry is a way to open that page. It does not mean notebooks are present.
+      </p>
+      <a
+        href="/knowledge/goodnotes"
+        className="mt-3 inline-flex min-h-11 items-center rounded-md bg-moss-green px-4 py-2 text-sm font-medium text-on-interactive hover:bg-moss-everglade"
+      >
+        Open GoodNotes
+      </a>
+    </nav>
+  );
+
   const frame = (children: React.ReactNode) => (
     <section aria-labelledby="knowledge-heading" className="mx-auto max-w-2xl">
       {heading}
+      {goodnotesEntry}
       {children}
     </section>
   );

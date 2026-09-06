@@ -70,6 +70,7 @@ vi.mock("next/navigation", async (importOriginal) => {
 });
 
 import LibraryPage from "@/app/(app)/library/page";
+import KnowledgePage from "@/app/(app)/knowledge/page";
 import PeoplePage from "@/app/(app)/people/page";
 import PeopleEntityPage from "@/app/(app)/people/[entityId]/page";
 import ReviewPage from "@/app/(app)/review/page";
@@ -1002,5 +1003,27 @@ describe("People reaches search, resolve, and profile instead of a directory", (
     } finally {
       if (saved) Object.defineProperty(globalThis, "window", saved);
     }
+  });
+});
+
+describe("Knowledge offers a GoodNotes entry without claiming notebooks exist", () => {
+  it("links to /knowledge/goodnotes beside an unchanged capture library", async () => {
+    answerWith({ captures: [CAPTURE] }, whole());
+    await renderServerPage(() => KnowledgePage({ searchParams: NO_PARAMS }));
+    const entry = screen.getByTestId("knowledge-goodnotes-entry");
+    expect(entry.textContent).toMatch(/does not mean notebooks are present/i);
+    expect(screen.getByRole("link", { name: "Open GoodNotes" })).toHaveAttribute(
+      "href",
+      "/knowledge/goodnotes",
+    );
+    expect(screen.getByTestId("library-listing")).toBeTruthy();
+    expect(screen.queryByTestId("goodnotes-notebooks")).toBeNull();
+  });
+
+  it("still offers the entry when Library has nothing to serve synthetically", async () => {
+    vi.stubEnv("MYPA_DATA_PROVIDER", "synthetic");
+    await renderServerPage(() => KnowledgePage({ searchParams: NO_PARAMS }));
+    expect(screen.getByTestId("knowledge-goodnotes-entry")).toBeTruthy();
+    expect(screen.getByTestId("library-synthetic")).toHaveAttribute("data-state", "not_implemented");
   });
 });

@@ -15,7 +15,7 @@ An explicitly enabled synthetic provider remains available for development and
 is refused when `NODE_ENV=production`. It does not silently replace an
 unconfigured or unavailable backend.
 
-The Python contract contains one hundred and thirty capability names. The System route reads
+The Python contract contains one hundred and thirty-six capability names. The System route reads
 the live `capabilities.get` manifest, including each capability's runtime
 availability, instead of restating an availability count in this tier. Six of
 those names are the managed-document lifecycle (`documents.create`,
@@ -35,6 +35,13 @@ All application pages require a verified session. `/sign-in` is public.
 | `GET /api/projects` | `continuity.projects` | Principal-scoped Project list used by the Situation surface |
 | `/relationships/:personId`, `GET /api/relationships/:personId/timeline` | `continuity.situations` | Filters the accepted relationship events returned by the continuity read model for that person |
 | `/library`, `GET /api/library` | `knowledge.read`, `knowledge.search`, `capture.search`, or `capture.list` | Chooses one capability from the request shape; no synthetic Library fixture is invented |
+| `GET /api/goodnotes/notebooks` | `goodnotes.notebooks.list` | Principal-scoped notebook catalog; no filesystem paths |
+| `GET /api/goodnotes/pages` | `goodnotes.pages.list` | Page versions for one notebook; `is_latest` is server-owned |
+| `GET /api/goodnotes/runs` | `goodnotes.runs.list` | Ingestion/processing history |
+| `GET /api/goodnotes/item` | `goodnotes.read` | Interpretation and provenance without raster bytes |
+| `GET /api/goodnotes/raster` | `goodnotes.content` | Exact-handle PNG; `private, no-store`; not JSON base64 |
+| `POST /api/goodnotes/correct` | `goodnotes.correct` | Append-only canonical revision; Origin-admitted; does not overwrite source |
+| `GET /api/search` | federated `*.search` including `goodnotes.search` | GoodNotes is searched or typed unavailable/degraded; never omitted as not activated |
 | `POST /api/reveal` | `knowledge.reveal` | Preserves `evidence`, `no_evidence`, and `unavailable` as distinct answers |
 | `/review`, `GET /api/review` | `review.list` | Lists the acting Principal's review cases |
 | `/intelligence`, `GET /api/intelligence` | `reports.list`, `reports.search` | Lists or searches Principal-scoped Intelligence artifacts; `structured_content` is persisted opaque JSON, not scraped from markdown |

@@ -13,7 +13,12 @@ RUN test "${TARGETPLATFORM}" = "linux/amd64" \
  && python -c 'import sys, tomllib; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' \
  && git --version \
  && /usr/bin/openssl version \
- && mkdir -p /usr/local/lib/docker/cli-plugins
+ && mkdir -p /usr/local/lib/docker/cli-plugins /run/my-pa-input
+
+COPY --chmod=0555 ops/nas/operator_pre_source_gate.py /usr/local/libexec/my-pa-operator-pre-source-gate.py
+COPY --chmod=0444 ops/nas/image_gate.py ops/nas/nas_tools.py /usr/local/libexec/
+
+ENV PYTHONPATH=/usr/local/libexec
 
 LABEL org.opencontainers.image.revision="${SOURCE_COMMIT}" \
       io.my-pa.repository-tree="${SOURCE_TREE}" \

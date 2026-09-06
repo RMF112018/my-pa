@@ -42,6 +42,25 @@ Read [references/workflow.md](references/workflow.md) before any build or NAS ac
 - every `ops/nas/*.sh` script that will be invoked.
 
 The checked-in scripts are authoritative over copied commands, remembered hashes, and historical transcripts. Never carry forward a stored migration head, commit, tree, image ID, engine ID, archive digest, admission digest, network ID, bridge name, temporary path, or session token.
+For a pre-migration backup of a preserved older runtime, use the current
+checkout's documented preserved-runtime mode. That mode keeps every old
+runtime, PostgreSQL resource, and admission gate in the preserved checkout but
+requires the firewall check to execute from the exact current checkout. Do not
+run an old `backup.sh` whose bundled firewall contract has been superseded. The
+current checkout and manifest are accepted only when the existing root-owned
+current operator admission passes its complete authoritative schema and binds
+the source, engine, operator image, externally staged candidate, archive,
+metadata and their byte digests, Python, Git, OpenSSL, and Compose identities.
+Before any current-checkout path executes, `backup.sh` uses canonical Docker to
+run the standalone gate baked into that exact admitted operator image with no
+network and a read-only filesystem. Every external input is mounted at a fixed,
+dedicated `/run/my-pa-input/` destination, never at its caller-selected host
+path or over immutable `/usr/local` tooling. The current image manifest must satisfy the
+authoritative full deployable-manifest schema in that gate; source-plus-manifest
+self-consistency is not authentication.
+The backup destination must be an existing unlinked physical directory owned
+by the effective operator with exact mode `0700`; partial dumps are opened
+atomically with no-clobber before any bytes are written.
 Some runbooks preserve chronological evidence and superseded statements. Use
 their explicit current-state corrections and current executable contracts; do
 not treat an older transcript or scaffold-era description as present truth.

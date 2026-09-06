@@ -322,6 +322,24 @@ Every other libpq parameter is still accepted in the URL — `sslmode`,
 
 ## Back up
 
+The generic historical commands below describe the local development
+container. For a canonical NAS live-main smoke upgrade, use the current
+checkout's `ops/nas/backup.sh` preserved-runtime mode documented in
+[`nas-lifecycle.md`](nas-lifecycle.md). It binds the admitted old runtime and
+database to their preserved checkout while enforcing the exact current
+checkout's firewall contract. The current checkout and manifest must also pass
+the existing root-owned current operator admission's complete authoritative
+schema and match its source, engine, operator-image, externally staged
+candidate/archive/metadata paths and byte digests, Python, Git, OpenSSL, and
+Compose identities. Canonical Docker runs the standalone gate baked into that
+exact admitted image with external inputs at fixed `/run/my-pa-input/`
+destinations that cannot shadow `/usr/local` tooling, before any
+current-checkout path executes; do not
+substitute a direct `pg_dump` command.
+Its destination must already be an unlinked physical directory owned by the
+effective operator with exact mode `0700`; partial creation is atomic and
+no-clobber.
+
 ```sh
 mkdir -p ~/local-sensitive/my-pa-backups
 

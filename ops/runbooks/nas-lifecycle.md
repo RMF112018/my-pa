@@ -195,6 +195,45 @@ ops/nas/migrate.sh
 Migration derives the repository's single Alembic head at execution time; no
 revision is copied into deployment state.
 
+For a live-main smoke upgrade whose running database is still admitted by a
+preserved older checkout, do not invoke that checkout's `backup.sh`: its
+historical firewall gate may no longer describe the admitted current firewall.
+Keep the old protected environment, manifest, Compose, bootstrap admission, and
+resource artifact selected, then run the current checkout's byte-verifying
+backup path with the additional source identities and the existing root-owned
+current operator admission at its canonical path. The existing owner-only
+backup directory must be outside both the current and preserved repositories:
+it must already exist as an unlinked physical directory owned by the effective
+operator with exact mode `0700`. The backup script atomically opens a unique
+no-clobber partial and refuses a pre-existing regular file or symlink.
+
+```sh
+export MY_PA_PRESERVED_RUNTIME_SOURCE=/absolute/path/to/preserved-clean-old-checkout
+export MY_PA_CURRENT_GATE_SOURCE=/absolute/path/to/current-clean-checkout
+export MY_PA_CURRENT_GATE_IMAGE_MANIFEST=/absolute/path/to/current-deployable-manifest.toml
+export MY_PA_NAS_OPERATOR_ADMISSION=/etc/my-pa/operator-runtime.toml
+initial_receipt=$(ops/nas/backup.sh EXISTING_OWNER_ONLY_BACKUP_DIRECTORY)
+ops/nas/verify-backup-receipt.sh "$initial_receipt"
+unset MY_PA_PRESERVED_RUNTIME_SOURCE MY_PA_CURRENT_GATE_SOURCE
+unset MY_PA_CURRENT_GATE_IMAGE_MANIFEST
+```
+
+This mode first requires the root-owned mode-0400 operator admission to pass
+its complete authoritative schema and match the current source, engine,
+operator image, externally staged candidate/archive/metadata paths and byte
+digests, Python, Git, OpenSSL, and Compose identities. Canonical Docker first
+runs the standalone gate baked into that exact admitted image with no network
+and a read-only filesystem. Each external input is mounted at a distinct fixed
+`/run/my-pa-input/` destination and cannot shadow `/usr/local` tooling or the
+baked gate. It validates those external artifacts and the
+authoritative full deployable image-manifest shape before executing any current
+checkout path, then validates both
+clean commit/tree identities, uses the preserved
+checkout's lifecycle, runtime-admission, bootstrap-admission, and PostgreSQL
+resource gates, and invokes the current checkout's firewall script in `check`
+mode. Any missing or mismatched identity, gate refusal, or firewall failure
+stops before `pg_dump`.
+
 7. Take a post-migration backup and restore it into a new scratch database.
    Before entering the ordinary six-service lifecycle, provision every real
    application/web value and generate the ordinary runtime admission:

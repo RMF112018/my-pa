@@ -10,6 +10,7 @@ import { decodeKnowledgeRead } from "./capabilities/knowledge.read";
 import { decodeKnowledgeReveal } from "./capabilities/knowledge.reveal";
 import { decodeCaptureCreate } from "./capabilities/capture.create";
 import { decodeCaptureList } from "./capabilities/capture.list";
+import { decodeCaptureRead } from "./capabilities/capture.read";
 import { decodeCaptureSearch } from "./capabilities/capture.search";
 import { decodeReviewList } from "./capabilities/review.list";
 import { decodeReviewDecide } from "./capabilities/review.decide";
@@ -75,6 +76,7 @@ export const DECODERS = {
   "knowledge.reveal": decodeKnowledgeReveal,
   "capture.create": decodeCaptureCreate,
   "capture.list": decodeCaptureList,
+  "capture.read": decodeCaptureRead,
   "capture.search": decodeCaptureSearch,
   "review.list": decodeReviewList,
   "review.decide": decodeReviewDecide,

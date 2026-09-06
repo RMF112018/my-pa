@@ -11,11 +11,16 @@
  * `knowledge.read` since WP-11). A person holding a hundred stored captures was
  * being told they had none.
  *
+ * **Identity selectors beat list.** `captureId` reads one capture through
+ * `capture.read` (optional `versionId`); `knowledgeId` reads one knowledge
+ * record through `knowledge.read` and requires `enrollmentId` from the federated
+ * request — it is never guessed. Otherwise `q` searches and an empty query lists.
+ *
  * **The four answers this page can give are four different things**, decided by
  * `lib/api/surface-answer.ts` and never by counting rows first:
  *
  * * **records** — `capture.list` (or `capture.search`, when the reader searched)
- *   returned rows, and they are shown;
+ *   returned rows, and they are shown — or one identity read returned a record;
  * * **empty** — the read succeeded and carried nothing. The only state here that
  *   asserts anything about what the Principal holds;
  * * **unavailable** — the gateway refused, was unreachable, or answered with
@@ -41,7 +46,12 @@ import { invokeGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
-import { CaptureListing, CaptureMatches } from "@/components/library/library-records";
+import {
+  CaptureItem,
+  CaptureListing,
+  CaptureMatches,
+  KnowledgeItem,
+} from "@/components/library/library-records";
 import type { CaptureListEntry } from "@/lib/api/decode/capabilities/capture.list";
 import type { CaptureSearchMatch } from "@/lib/api/decode/capabilities/capture.search";
 import type { BackendCaptureEntry, BackendCaptureMatch } from "@/contracts/views";
@@ -74,6 +84,14 @@ function toMatch(row: CaptureSearchMatch): BackendCaptureMatch {
     characterCount: row.character_count,
     recordedAt: row.recorded_at,
   };
+}
+
+function firstParam(
+  params: Record<string, string | string[] | undefined>,
+  key: string,
+): string {
+  const raw = params[key];
+  return (Array.isArray(raw) ? raw[0] : raw)?.trim() ?? "";
 }
 
 /**
@@ -124,8 +142,11 @@ export async function KnowledgePage({
   if (!principal) redirect("/sign-in");
 
   const params = await searchParams;
-  const rawQuery = params["q"];
-  const query = (Array.isArray(rawQuery) ? rawQuery[0] : rawQuery)?.trim() ?? "";
+  const captureId = firstParam(params, "captureId");
+  const versionId = firstParam(params, "versionId");
+  const knowledgeId = firstParam(params, "knowledgeId");
+  const enrollmentId = firstParam(params, "enrollmentId");
+  const query = firstParam(params, "q");
 
   const heading = (
     <>
@@ -154,6 +175,101 @@ export async function KnowledgePage({
         }
         testId="library-synthetic"
       />,
+    );
+  }
+
+  if (captureId) {
+    const payload: Record<string, unknown> = { capture_id: captureId };
+    if (versionId) payload.version_id = versionId;
+    const answer = surfaceAnswer(
+      `${SCOPE}:capture.read`,
+      await invokeGateway(principal, "capture.read", payload),
+      () => 1,
+    );
+
+    return frame(
+      answer.kind === "unavailable" ? (
+        <SurfaceState
+          kind="unavailable"
+          title="This capture could not be read"
+          detail={answer.error.message}
+          limitations={answer.disclosure.limitations}
+          testId="library-capture-unavailable"
+        />
+      ) : answer.kind === "degraded" ? (
+        <>
+          <DegradedBanner
+            scope="this capture"
+            limitations={answer.disclosure.limitations}
+            truncated={answer.disclosure.truncated}
+          />
+          <CaptureItem version={answer.result} />
+        </>
+      ) : answer.kind === "records" ? (
+        <CaptureItem version={answer.result} />
+      ) : (
+        <SurfaceState
+          kind="unavailable"
+          title="This capture could not be read"
+          detail="The read succeeded but carried no record, so nothing is claimed."
+          testId="library-capture-unavailable"
+        />
+      ),
+    );
+  }
+
+  if (knowledgeId) {
+    if (!enrollmentId) {
+      return frame(
+        <SurfaceState
+          kind="unavailable"
+          title="This knowledge record could not be read"
+          detail={
+            "reading a knowledge record requires the enrollmentId whose grant it was " +
+            "stored under; a record written under one grant is not readable through another"
+          }
+          testId="library-knowledge-missing-enrollment"
+        />,
+      );
+    }
+
+    const answer = surfaceAnswer(
+      `${SCOPE}:knowledge.read`,
+      await invokeGateway(principal, "knowledge.read", {
+        knowledge_id: knowledgeId,
+        enrollment_id: enrollmentId,
+      }),
+      () => 1,
+    );
+
+    return frame(
+      answer.kind === "unavailable" ? (
+        <SurfaceState
+          kind="unavailable"
+          title="This knowledge record could not be read"
+          detail={answer.error.message}
+          limitations={answer.disclosure.limitations}
+          testId="library-knowledge-unavailable"
+        />
+      ) : answer.kind === "degraded" ? (
+        <>
+          <DegradedBanner
+            scope="this knowledge record"
+            limitations={answer.disclosure.limitations}
+            truncated={answer.disclosure.truncated}
+          />
+          <KnowledgeItem record={answer.result} />
+        </>
+      ) : answer.kind === "records" ? (
+        <KnowledgeItem record={answer.result} />
+      ) : (
+        <SurfaceState
+          kind="unavailable"
+          title="This knowledge record could not be read"
+          detail="The read succeeded but carried no record, so nothing is claimed."
+          testId="library-knowledge-unavailable"
+        />
+      ),
     );
   }
 

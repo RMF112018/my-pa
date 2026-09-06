@@ -20,6 +20,7 @@ test.describe("an unauthenticated visitor reaches no destination", () => {
       "/canvas",
       "/knowledge",
       "/review",
+      "/search",
       "/system",
       "/situations",
       "/library",
@@ -120,10 +121,37 @@ test.describe("the signed-in surfaces", () => {
   });
 
   test("command menu and Inspector expose only the bounded shell behavior", async ({ page }, testInfo) => {
+    await expect(page.getByRole("link", { name: "Search" }).first()).toBeVisible();
+    if (testInfo.project.name === "mobile") {
+      const nav = page.getByRole("navigation", { name: "Primary" });
+      await expect(nav.getByRole("link", { name: "Today" })).toBeVisible();
+      await expect(nav.getByRole("link", { name: "Work" })).toBeVisible();
+      await expect(nav.getByRole("link", { name: "Review" })).toBeVisible();
+      await expect(nav.getByRole("link", { name: "Search" })).toBeVisible();
+      await expect(nav.getByRole("button", { name: "More" })).toBeVisible();
+      await expect(nav.getByRole("link", { name: "People" })).toHaveCount(0);
+      await page.getByRole("button", { name: "More" }).click();
+      await expect(page.getByRole("link", { name: "People" }).first()).toBeVisible();
+      await page.getByRole("button", { name: "Close panel" }).click();
+    }
+
     await page.keyboard.press("Control+K");
     const commands = page.getByRole("dialog", { name: "Command menu" });
     await expect(commands).toBeVisible();
-    await expect(commands).toContainText(/cross-feature search is not available/i);
+    await expect(commands).not.toContainText(/cross-feature search is not available/i);
+    const searchbox = commands.getByRole("searchbox", { name: "Search" });
+    await expect(searchbox).toBeVisible();
+    await searchbox.fill("morning brief");
+    await expect(
+      commands.locator(
+        "[data-testid='search-coverage'], [data-testid='search-not-implemented'], [data-testid='search-unavailable']",
+      ).first(),
+    ).toBeVisible({ timeout: 30_000 });
+    const coverage = commands.getByTestId("search-coverage");
+    if ((await coverage.count()) > 0) {
+      await expect(coverage).toContainText("omitted");
+    }
+    await searchbox.fill("");
     await commands.getByRole("button", { name: "Knowledge" }).click();
     await page.waitForURL("**/knowledge");
 
@@ -397,6 +425,7 @@ test.describe("the page body reflows rather than scrolling sideways", () => {
       "/people",
       "/knowledge",
       "/review",
+      "/search",
       "/system",
       "/situations",
       "/library",

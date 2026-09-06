@@ -46,7 +46,7 @@ Execution is organized as `UI-IMP-WP01..WP30`. Older `WP-FE-*` sequencing is his
 
 WP02 persistence substrate exists (`identity.webauthn_credentials`, `identity.webauthn_challenges`, `identity.recovery_code_sets`, `identity.recovery_codes`, `identity.auth_sessions`; see [frontend-auth-persistence.md](frontend-auth-persistence.md)). The production browser cookie and session registry remain the legacy HMAC + process-local map. WP02 does not activate WebAuthn.
 
-`UI-IMP-WP20 — Canvas Accessibility, Responsive Fallback, and Scale` is implemented on this branch. Wave 5 Canvas `UI-IMP-WP15`–`UI-IMP-WP20` is implemented on main. `UI-IMP-WP21` and `UI-IMP-WP22` remain `PROVISIONAL_NOT_ACTIVATED`. `UI-IMP-WP24` is not this package. This is not production activation and is not Wave 5 complete as `PASS_VERIFIED`.
+`UI-IMP-WP24 — Global Search / Command UX` is implemented on this branch. Wave 5 Canvas `UI-IMP-WP15`–`UI-IMP-WP20` remains implemented on main. `UI-IMP-WP21` and `UI-IMP-WP22` remain `PROVISIONAL_NOT_ACTIVATED`. `UI-IMP-WP26` is not this package. This is not production activation and is not Wave 6 complete as `PASS_VERIFIED`.
 
 WP11 Reports/Morning Intelligence BFF on this PR is contract substrate, not WP12 Morning Brief UI, production activation, or `PASS_VERIFIED` of `PFE-AC-048..057`.
 

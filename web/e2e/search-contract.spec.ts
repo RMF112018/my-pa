@@ -84,3 +84,27 @@ test("Federated Search BFF keeps typed hits and honest omitted coverage", async 
   }
   expect(JSON.stringify(entityHits)).not.toMatch(/resolution/);
 });
+
+test("Search UX maps federated hits to honest hrefs without capture text", async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.goto("/search");
+  await expect(page.getByRole("heading", { name: "Search", level: 1 })).toBeVisible();
+  await page.getByRole("searchbox", { name: "Search" }).fill("morning brief");
+  await expect(
+    page.locator(
+      "[data-testid='search-coverage'], [data-testid='search-not-implemented'], [data-testid='search-unavailable']",
+    ).first(),
+  ).toBeVisible({ timeout: 30_000 });
+
+  const captureLinks = page.locator('a[href*="captureId="]');
+  const captureCount = await captureLinks.count();
+  for (let index = 0; index < captureCount; index += 1) {
+    const href = (await captureLinks.nth(index).getAttribute("href")) ?? "";
+    expect(href).toMatch(/\/knowledge\?/);
+    expect(href).toMatch(/captureId=cap_/);
+    expect(href).toMatch(/versionId=/);
+    expect(href).not.toMatch(/text=/);
+  }
+
+  await expect(page.locator('a[href*="knowledgeId="]')).toHaveCount(0);
+});

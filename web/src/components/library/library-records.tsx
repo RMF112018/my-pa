@@ -1,18 +1,11 @@
 /**
  * The Library's records, in the two shapes the backend actually produces.
  *
- * Two components rather than one, because a listing entry and a search match are
- * two different rows and merging them would mean inventing the fields each one
- * lacks — the same argument `BackendReviewCase` makes against merging with the
- * fixture `ReviewCase`.
- *
- * **Neither renders capture text, because neither answer carries any.** The
- * Python listing and search shapes have no field content could occupy
- * (`QC-AC-041`), so there is nothing to omit here and nothing to summarise. What
- * is shown instead is what a person can actually act on: which capture, how many
- * versions it has, when it was recorded, and — for a search — how long the
- * matching version is. A preview would have to be fabricated, and fabricating
- * one is the specific thing this surface exists not to do.
+ * Listing and search-match cards remain two components rather than one, because
+ * merging them would invent the fields each lacks. **Those cards still render no
+ * capture text** (`QC-AC-041`): list/search have no content field. Canonical
+ * `text` appears only on `CaptureItem` / `KnowledgeItem`, which are the
+ * `capture.read` / `knowledge.read` item projections Search deep-links into.
  *
  * **Empty is not rendered here.** A component that drew its own "nothing found"
  * line could not know whether the read succeeded; that decision belongs to
@@ -20,6 +13,8 @@
  * components are given rows and render rows.
  */
 import type { BackendCaptureEntry, BackendCaptureMatch } from "@/contracts/views";
+import type { CaptureReadResult } from "@/lib/api/decode/capabilities/capture.read";
+import type { KnowledgeReadResult } from "@/lib/api/decode/capabilities/knowledge.read";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
@@ -98,5 +93,87 @@ export function CaptureMatches({ matches }: { matches: readonly BackendCaptureMa
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * One capture version from `capture.read`. This is the only Library renderer
+ * that may show capture `text`: listing and search cards have no such field.
+ */
+export function CaptureItem({ version }: { version: CaptureReadResult }) {
+  return (
+    <article data-testid="library-capture-item">
+      <Card>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <CardTitle>
+            <span className="font-mono text-sm break-all">{version.capture_id}</span>
+          </CardTitle>
+          <Badge tone={version.is_current ? "gold" : "neutral"}>
+            {version.is_current ? "current version" : `version ${version.version_number}`}
+          </Badge>
+        </div>
+        <CardBody>
+          <dl className="grid grid-cols-[9rem_1fr] gap-x-2 gap-y-1">
+            <dt className="text-muted">version</dt>
+            <dd className="font-mono text-xs break-all">
+              #{version.version_number} · {version.version_id}
+            </dd>
+            <dt className="text-muted">recorded</dt>
+            <dd>{moment(version.recorded_at)}</dd>
+            <dt className="text-muted">length</dt>
+            <dd>{version.character_count} characters</dd>
+            <dt className="text-muted">classification</dt>
+            <dd>{version.classification}</dd>
+          </dl>
+          <p
+            className="mt-3 whitespace-pre-wrap text-sm text-moss-slate"
+            data-testid="library-capture-text"
+          >
+            {version.text}
+          </p>
+        </CardBody>
+      </Card>
+    </article>
+  );
+}
+
+/**
+ * One knowledge record from `knowledge.read`. Renders the capability's own
+ * `text` field when present and invents no second snippet.
+ */
+export function KnowledgeItem({ record }: { record: KnowledgeReadResult }) {
+  return (
+    <article data-testid="library-knowledge-item">
+      <Card>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <CardTitle>
+            <span className="font-mono text-sm break-all">{record.knowledge_id}</span>
+          </CardTitle>
+          <Badge tone="neutral">{record.label}</Badge>
+        </div>
+        <CardBody>
+          <dl className="grid grid-cols-[9rem_1fr] gap-x-2 gap-y-1">
+            <dt className="text-muted">media type</dt>
+            <dd>{record.media_type}</dd>
+            <dt className="text-muted">length</dt>
+            <dd>{record.character_count} characters</dd>
+            <dt className="text-muted">source</dt>
+            <dd className="font-mono text-xs break-all">{record.provenance.source_id}</dd>
+          </dl>
+          {record.text !== undefined ? (
+            <p
+              className="mt-3 whitespace-pre-wrap text-sm text-moss-slate"
+              data-testid="library-knowledge-text"
+            >
+              {record.text}
+            </p>
+          ) : (
+            <p className="mt-3 text-xs" data-testid="library-knowledge-metadata-only">
+              This record was returned without text. No snippet is invented in its place.
+            </p>
+          )}
+        </CardBody>
+      </Card>
+    </article>
   );
 }

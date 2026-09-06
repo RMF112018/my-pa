@@ -22,6 +22,25 @@
       }
     ]
   },
+  "capture.read": {
+    "capture_id": "cap_aaaaaaaa11111111",
+    "version_id": "capver_aaaaaaaa11111111",
+    "version_number": 1,
+    "supersedes_version_id": null,
+    "is_current": true,
+    "owner_principal_id": "prn_aaaaaaaa11111111",
+    "classification": "synthetic_test",
+    "processing_policy": "local_only",
+    "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "character_count": 19,
+    "text": "a synthetic capture",
+    "is_truncated": false,
+    "client_created_at": null,
+    "server_received_at": "2026-08-09T12:00:00.000Z",
+    "occurred_at": null,
+    "accepted_at": "2026-08-09T12:00:00.000Z",
+    "recorded_at": "2026-08-09T12:00:00.000Z"
+  },
   "capture.search": {
     "matches": [
       {

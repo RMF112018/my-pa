@@ -32,6 +32,7 @@ const PAGES = [
   "/canvas",
   "/knowledge",
   "/review",
+  "/search",
   "/system",
   "/situations",
   "/library",
@@ -143,6 +144,17 @@ test.describe("what axe cannot decide", () => {
       await page.goto(path);
       await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
     }
+  });
+
+  test("command palette search takes focus and restores it on Escape", async ({ page }) => {
+    const opener = page.getByRole("button", { name: /Commands/ });
+    await opener.click();
+    const dialog = page.getByRole("dialog", { name: "Command menu" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("searchbox", { name: "Search" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(opener).toBeFocused();
   });
 
   test("a state change is announced, not merely rendered", async ({ page }) => {

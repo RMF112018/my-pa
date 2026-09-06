@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AppShell } from "@/components/shell/app-shell";
-import { DESTINATIONS } from "@/components/shell/destinations";
+import { DESTINATIONS, MOBILE_MORE, MOBILE_PRIMARY } from "@/components/shell/destinations";
 import type { PrincipalSession } from "@/contracts/identity";
 
 const navigation = vi.hoisted(() => ({ push: vi.fn() }));
@@ -28,8 +28,21 @@ afterEach(() => {
 });
 
 describe("app shell", () => {
-  it("renders the seven primary destinations in successor order and System as utility", () => {
+  it("renders desktop destinations and mobile primary Today, Work, Review, Search", () => {
     render(<AppShell principal={PRINCIPAL}>content</AppShell>);
+    expect(MOBILE_PRIMARY.map(({ label }) => label)).toEqual([
+      "Today",
+      "Work",
+      "Review",
+      "Search",
+    ]);
+    expect(MOBILE_MORE.map(({ label }) => label)).toEqual([
+      "People",
+      "Intelligence",
+      "Knowledge",
+      "Map",
+      "System",
+    ]);
     expect(DESTINATIONS.map(({ label }) => label)).toEqual([
       "Today",
       "Work",
@@ -38,14 +51,15 @@ describe("app shell", () => {
       "Map",
       "Knowledge",
       "Review",
+      "Search",
     ]);
-    for (const [index, destination] of DESTINATIONS.entries()) {
-      // The first four appear in both desktop and mobile primary navigation;
-      // Map, Knowledge and Review move under mobile More.
-      expect(screen.getAllByRole("link", { name: destination.label })).toHaveLength(
-        index < 4 ? 2 : 1,
+    for (const destination of MOBILE_PRIMARY) {
+      expect(screen.getAllByRole("link", { name: destination.label }).length).toBeGreaterThanOrEqual(
+        2,
       );
     }
+    // People is in More, not the mobile primary bar, so only the desktop rail link is mounted.
+    expect(screen.getAllByRole("link", { name: "People" })).toHaveLength(1);
     expect(screen.getAllByRole("link", { name: "System" }).length).toBeGreaterThanOrEqual(1);
   });
 
@@ -67,11 +81,92 @@ describe("app shell", () => {
     render(<AppShell principal={PRINCIPAL}>content</AppShell>);
 
     fireEvent.keyDown(window, { key: "k", metaKey: true });
-    expect(await screen.findByRole("dialog", { name: "Command menu" })).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: "Command menu" });
+    expect(dialog).toBeInTheDocument();
+    expect(dialog).not.toHaveTextContent(/cross-feature search is not available/i);
+    expect(screen.getByRole("searchbox", { name: "Search" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Knowledge" }));
 
     expect(navigation.push).toHaveBeenCalledWith("/knowledge");
     expect(screen.queryByRole("dialog", { name: "Command menu" })).toBeNull();
+  });
+
+  it("federates a typed query through GET /api/search and keeps omitted coverage honest", async () => {
+    const user = userEvent.setup();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          shape: "backend",
+          query: "morning",
+          hits: [
+            {
+              domain: "tasks",
+              item: {
+                task_id: "tsk_aaaaaaaa11111111",
+                title: "Morning task",
+                lifecycle_state: "open",
+                priority: null,
+                due_at: null,
+                scheduled_at: null,
+                deferred_until: null,
+                archived_at: null,
+                created_at: "2026-01-01T00:00:00Z",
+                updated_at: "2026-01-01T00:00:00Z",
+                version: 1,
+              },
+            },
+          ],
+          coverage: [
+            { domain: "tasks", state: "searched", hitCount: 1 },
+            { domain: "goodnotes", state: "omitted", hitCount: 0, reason: "goodnotes_not_activated" },
+            { domain: "knowledge", state: "knowledge_not_enrolled", hitCount: 0 },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    render(<AppShell principal={PRINCIPAL}>content</AppShell>);
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    await screen.findByRole("dialog", { name: "Command menu" });
+    await user.type(screen.getByRole("searchbox", { name: "Search" }), "morning");
+
+    expect(await screen.findByTestId("search-group-tasks")).toHaveTextContent("Morning task");
+    expect(screen.getByTestId("search-coverage")).toHaveTextContent("goodnotes: omitted");
+    expect(screen.getByTestId("search-coverage")).toHaveTextContent("knowledge_not_enrolled");
+    expect(screen.getByRole("dialog", { name: "Command menu" })).not.toHaveTextContent(
+      /cross-feature search is not available/i,
+    );
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/search?q=morning",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("maps synthetic 501 search to not-implemented rather than empty success", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          state: "not_implemented",
+          error: {
+            errorClass: "unavailable",
+            code: "not_implemented",
+            message: "The synthetic provider has no federated search fixture.",
+          },
+        }),
+        { status: 501, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    render(<AppShell principal={PRINCIPAL}>content</AppShell>);
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    await screen.findByRole("dialog", { name: "Command menu" });
+    await user.type(screen.getByRole("searchbox", { name: "Search" }), "morning");
+
+    expect(await screen.findByTestId("search-not-implemented")).toBeInTheDocument();
+    expect(screen.queryByTestId("search-empty")).toBeNull();
+    expect(screen.queryByTestId("search-group-tasks")).toBeNull();
   });
 
   it("opens Capture, focuses the field, and sends one attempt-keyed submission", async () => {

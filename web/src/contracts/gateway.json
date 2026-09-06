@@ -56,6 +56,11 @@
       ],
       "probe": { "text": "a synthetic capture", "idempotency_key": "idem-probe-0001" }
     },
+    "capture.read": {
+      "purpose": "capture_review",
+      "payloadFields": ["capture_id", "version_id"],
+      "probe": { "capture_id": "cap_aaaaaaaa11111111" }
+    },
     "capture.list": {
       "purpose": "capture_review",
       "payloadFields": ["page_size"],

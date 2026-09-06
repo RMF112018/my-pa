@@ -1,10 +1,12 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  InvalidSessionServiceUrlError,
   MissingSessionServiceSecretError,
   SESSION_SERVICE_HEADER,
   callSessionService,
   issueSessionServiceToken,
+  sessionServiceBaseUrl,
   issueSyntheticSession,
   rotateSid,
   revokeSid,
@@ -79,6 +81,24 @@ describe("callSessionService", () => {
     expect(headers.get(SESSION_SERVICE_HEADER)).toMatch(/^[A-Za-z0-9_-]+\.[0-9a-f]+$/);
     expect(headers.get("x-my-pa-webauthn-attestation")).toBeNull();
     expect(JSON.parse(String(init.body))).toEqual({ sid: SID });
+  });
+
+  it("uses MYPA_GATEWAY_URL when MYPA_SESSION_SERVICE_URL is unset", () => {
+    vi.stubEnv("MYPA_SESSION_SERVICE_URL", "");
+    expect(sessionServiceBaseUrl()).toBe("http://127.0.0.1:8000");
+  });
+
+  it("POSTs session-service to MYPA_SESSION_SERVICE_URL when set", async () => {
+    vi.stubEnv("MYPA_SESSION_SERVICE_URL", "http://127.0.0.1:9099");
+    const fetchStub = stubFetch(200, { principal: PRINCIPAL });
+    await callSessionService("sessions/touch", { sid: SID });
+    const [url] = fetchStub.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:9099/webauthn/v1/sessions/touch");
+  });
+
+  it("refuses a non-http MYPA_SESSION_SERVICE_URL", () => {
+    vi.stubEnv("MYPA_SESSION_SERVICE_URL", "file:///etc/passwd");
+    expect(() => sessionServiceBaseUrl()).toThrow(InvalidSessionServiceUrlError);
   });
 });
 

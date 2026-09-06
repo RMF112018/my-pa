@@ -86,6 +86,39 @@ export function issueSessionServiceToken(now = Date.now()): string {
   return `${payload}.${signature}`;
 }
 
+export class InvalidSessionServiceUrlError extends Error {
+  constructor(detail: string) {
+    super(
+      `MYPA_SESSION_SERVICE_URL ${detail}. When set, it must be an absolute http(s) URL ` +
+        "naming the session-service. Unset means the BFF uses MYPA_GATEWAY_URL.",
+    );
+    this.name = "InvalidSessionServiceUrlError";
+  }
+}
+
+/**
+ * Session-service base URL.
+ *
+ * Unset `MYPA_SESSION_SERVICE_URL` keeps the historical coupling to
+ * `MYPA_GATEWAY_URL`. CI may point session-service at a live gateway while the
+ * application gateway is unreachable so unavailable-page assertions can still
+ * complete synthetic sign-in. Production does not need the override.
+ */
+export function sessionServiceBaseUrl(): string {
+  const configured = process.env.MYPA_SESSION_SERVICE_URL?.trim();
+  if (!configured) return gatewayBaseUrl();
+  let parsed: URL;
+  try {
+    parsed = new URL(configured);
+  } catch {
+    throw new InvalidSessionServiceUrlError("is not a URL");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new InvalidSessionServiceUrlError("does not name an http(s) endpoint");
+  }
+  return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`;
+}
+
 export async function callSessionService(
   action: SessionServiceAction,
   body: Record<string, unknown>,
@@ -94,8 +127,9 @@ export async function callSessionService(
   const token = issueSessionServiceToken();
   let base: string;
   try {
-    base = gatewayBaseUrl();
-  } catch {
+    base = sessionServiceBaseUrl();
+  } catch (error) {
+    if (error instanceof InvalidSessionServiceUrlError) throw error;
     throw new SessionServiceUnavailableError();
   }
   const origin = sessionCallOrigin(request);

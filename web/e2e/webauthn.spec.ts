@@ -160,9 +160,11 @@ test.describe("dead gateway session-service", () => {
     page,
     playwright,
   }) => {
-    // 503 authority_unavailable for a cookie-shaped SID when the gateway port
-    // answers nothing. Guard tests already pin the mapping; this is the browser
-    // path. If the dead Next cannot be reached, fail rather than skip.
+    // Dead Next has live session-service (WP28 split) and a refused application
+    // gateway. Pulse must still be 503, not 401: a signed-in principal whose
+    // backend did not answer is not a missing login. The typed code is
+    // gateway_unreachable. authority_unavailable is the session-service-down
+    // mapping, covered by unit guards, not this topology.
     await signIn(page);
     const cookie = await sessionCookie(page, page.url());
     expect(cookie?.value).toMatch(OPAQUE_SID);
@@ -175,7 +177,7 @@ test.describe("dead gateway session-service", () => {
       const response = await dead.get("/api/pulse");
       expect(response.status(), "gateway outage must not look like a missing login").toBe(503);
       await expect(response.json()).resolves.toMatchObject({
-        error: { code: "authority_unavailable" },
+        error: { code: "gateway_unreachable" },
       });
     } finally {
       await dead.dispose();

@@ -387,9 +387,14 @@ WP27 adds an orthogonal all-250 protection mapping. Acceptance vocabulary in thi
 
 - Canonical protection records: [`frontend-protection-ledger.json`](frontend-protection-ledger.json)
 - WP28 handoff: [`frontend-protection-wp28-handoff.md`](frontend-protection-wp28-handoff.md)
+- WP28 release-gate architecture: [`frontend-release-gates.md`](frontend-release-gates.md)
 - WP30 handoff: [`frontend-protection-wp30-handoff.md`](frontend-protection-wp30-handoff.md)
 
 Do not treat a populated protection record as `PASS_VERIFIED`. Do not treat `frontend / required` green as terminal frontend acceptance.
+
+## UI-IMP-WP28 release-gate notes
+
+WP28 introduces advisory `frontend / visual`, `frontend / performance`, and `frontend / degraded-gateway`. `pwa-offline` and `browsers` remain `continue-on-error`. `frontend / required` child membership is unchanged. GitHub rulesets are not mutated. No numeric performance budget is accepted. Linux visual baselines are not claimed. Playwright WebKit is not Safari. Never `PASS_VERIFIED`. Not WP29 deployment. Not WP30 runtime acceptance.
 
 ### PFE-AC-123..139 discrepancy
 

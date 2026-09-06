@@ -142,6 +142,7 @@ values out of band and never commit them.
 | `MYPA_WEBAUTHN_BFF_SECRET` | At least 32 characters; WebAuthn BFF ceremony HMAC; distinct from the session-service secret |
 | `MYPA_AUTH_MODE` | `synthetic` or `passkey`; no default |
 | `MYPA_GATEWAY_URL` | Absolute HTTP(S) URL for the Python gateway; no default |
+| `MYPA_SESSION_SERVICE_URL` | Optional absolute HTTP(S) URL for session-service; unset uses `MYPA_GATEWAY_URL` |
 | `MYPA_GATEWAY_AUTH_MODE` | `local_operator` or `entra`; must match the Python gateway plane |
 | `MYPA_DATA_PROVIDER` | Optional explicit `synthetic` fixture switch; unset means off |
 | `MYPA_ENTRA_HOME_TENANT_ID` | Optional home tenant when configured; not a browser MSAL client id |

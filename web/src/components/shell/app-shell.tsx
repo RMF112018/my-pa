@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { CommandPalette } from "@/components/shell/command-palette";
 import { UtilityRegion } from "@/components/shell/utility-region";
+import { InspectorSelectionProvider } from "@/components/shell/inspector-selection";
 import { useShellPreferences } from "@/components/shell/shell-preferences";
 
 export function AppShell({
@@ -30,7 +31,8 @@ export function AppShell({
   const { preferences, update } = useShellPreferences();
 
   return (
-    <div className="flex min-h-screen flex-col">
+    <InspectorSelectionProvider onSelectionPublished={() => setUtilityOpen(true)}>
+      <div className="flex min-h-screen flex-col">
       <ContextHeader principal={principal} />
       <div className="flex flex-1">
         <NavRail collapsed={preferences.navCollapsed} onCollapsedChange={(navCollapsed) => update({ navCollapsed })} />
@@ -53,6 +55,7 @@ export function AppShell({
       />
       <CommandPalette open={commandOpen} onOpenChange={setCommandOpen} onCapture={() => setCaptureOpen(true)} />
       <OfflineQueueStatus principalId={principal.principalId} />
-    </div>
+      </div>
+    </InspectorSelectionProvider>
   );
 }

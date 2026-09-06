@@ -118,11 +118,63 @@ describe("utility region", () => {
     );
     await user.click(screen.getByRole("button", { name: "Pin Inspector" }));
     expect(onPinnedChange).toHaveBeenCalledWith(true);
+    expect(screen.getByTestId("inspector-empty")).toHaveTextContent(
+      /Select supported evidence to inspect source, freshness, provenance, and limitations/,
+    );
     fireEvent.change(screen.getByRole("slider", { name: "Inspector width" }), {
       target: { value: "420" },
     });
     expect(onWidthChange).toHaveBeenCalledWith(420);
     await user.click(screen.getByRole("button", { name: "Collapse Inspector" }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("keeps the honest empty inspector copy and does not persist a selection", async () => {
+    render(
+      <UtilityRegion
+        open
+        onOpenChange={vi.fn()}
+        pinned={false}
+        onPinnedChange={vi.fn()}
+        width={360}
+        onWidthChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("heading", { name: "Inspector" })).toBeTruthy();
+    expect(screen.getAllByTestId("inspector-empty")).toHaveLength(1);
+    expect(screen.getByTestId("inspector-empty")).toHaveTextContent(
+      "Select supported evidence to inspect source, freshness, provenance, and limitations. Nothing sensitive is persisted here.",
+    );
+    expect(localStorage.getItem("my-pa:inspector-selection")).toBeNull();
+  });
+
+  it("mounts inspector content once on a mobile viewport", () => {
+    const previous = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query === "(max-width: 767px)",
+      media: query,
+      onchange: null,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+    try {
+      render(
+        <UtilityRegion
+          open
+          onOpenChange={vi.fn()}
+          pinned={false}
+          onPinnedChange={vi.fn()}
+          width={360}
+          onWidthChange={vi.fn()}
+        />,
+      );
+      expect(screen.getAllByTestId("inspector-empty")).toHaveLength(1);
+      expect(screen.queryByRole("slider", { name: "Inspector width" })).toBeNull();
+    } finally {
+      window.matchMedia = previous;
+    }
   });
 });

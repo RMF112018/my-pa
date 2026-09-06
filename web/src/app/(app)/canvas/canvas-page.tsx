@@ -17,7 +17,9 @@ import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
 import { DirectoryList } from "@/components/canvas/directory-list";
 import { CanvasMapClient } from "@/components/canvas/canvas-map-client";
-import { canvasMap, type CanvasMapQuery } from "@/lib/routes/canvas";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { canvasHome, canvasMap, type CanvasMapQuery } from "@/lib/routes/canvas";
 import { peopleHome } from "@/lib/routes/people";
 import type { DisclosureEnvelope } from "@/contracts/envelope";
 import type { PrincipalSession } from "@/contracts/identity";
@@ -59,6 +61,92 @@ function parseOptionalInteger(
     if (Number.isSafeInteger(value)) return { kind: "ok", value };
   }
   return { kind: "invalid" };
+}
+
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) {
+    const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+    return leap ? 29 : 28;
+  }
+  return [31, 0, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1] ?? 0;
+}
+
+/**
+ * Empty asOf is absent. A non-empty value must be RFC 3339 / ISO-8601 with an
+ * explicit timezone (`Z` or `±HH:MM`). Naive datetimes and free text fail closed.
+ * This does not consult the browser clock.
+ */
+function parseAsOf(
+  raw: string,
+): { readonly kind: "absent" } | { readonly kind: "ok"; readonly value: string } | { readonly kind: "invalid" } {
+  if (raw === "") return { kind: "absent" };
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.exec(raw);
+  if (!match) return { kind: "invalid" };
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  if (month < 1 || month > 12 || day < 1 || day > daysInMonth(year, month)) return { kind: "invalid" };
+  if (hour > 23 || minute > 59 || second > 60) return { kind: "invalid" };
+  if (match[8] !== "Z") {
+    const offsetHour = Number(match[8].slice(1, 3));
+    const offsetMinute = Number(match[8].slice(4, 6));
+    if (offsetHour > 23 || offsetMinute > 59) return { kind: "invalid" };
+  }
+  return { kind: "ok", value: raw };
+}
+
+function joinedRelationshipTypes(query: CanvasMapQuery): string {
+  if (query.relationshipTypes === undefined) return "";
+  return typeof query.relationshipTypes === "string"
+    ? query.relationshipTypes
+    : query.relationshipTypes.join(",");
+}
+
+function AsOfControl({ query }: { query: CanvasMapQuery }) {
+  const types = joinedRelationshipTypes(query);
+  return (
+    <div data-testid="canvas-as-of" className="mb-3">
+      <form method="get" action={canvasHome()} className="flex flex-wrap items-end gap-2">
+        {query.focusEntityId ? (
+          <input type="hidden" name="focusEntityId" value={query.focusEntityId} />
+        ) : null}
+        {query.scopeEntityId ? (
+          <input type="hidden" name="scopeEntityId" value={query.scopeEntityId} />
+        ) : null}
+        {query.hops !== undefined ? <input type="hidden" name="hops" value={String(query.hops)} /> : null}
+        {types ? <input type="hidden" name="relationshipTypes" value={types} /> : null}
+        {query.pageSize !== undefined ? (
+          <input type="hidden" name="pageSize" value={String(query.pageSize)} />
+        ) : null}
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <label htmlFor="canvas-as-of-input" className="text-sm font-medium text-moss-slate">
+            As of
+          </label>
+          <Input
+            id="canvas-as-of-input"
+            name="asOf"
+            type="text"
+            defaultValue={query.asOf ?? ""}
+            placeholder="2026-01-01T00:00:00Z"
+            aria-label="As of"
+            autoComplete="off"
+          />
+        </div>
+        <Button type="submit" size="sm" data-testid="canvas-as-of-apply">
+          Apply as of
+        </Button>
+      </form>
+      {query.asOf ? (
+        <p className="mt-2 text-xs text-muted">
+          Edge is_current on this map is the server&apos;s answer for this as-of slice. The
+          browser did not compute it.
+        </p>
+      ) : null}
+    </div>
+  );
 }
 
 function splitTypes(raw: string): readonly string[] {
@@ -116,6 +204,7 @@ async function neighborhood(
           <h2 id="canvas-map-heading" className="mb-3 text-base font-semibold text-moss-slate">
             Neighborhood
           </h2>
+          <AsOfControl query={query} />
           <CanvasMapClient
             nodes={result.nodes}
             edges={result.edges}
@@ -190,13 +279,16 @@ export async function CanvasPage({
 
   const hops = parseOptionalInteger(hopsRaw);
   const pageSize = parseOptionalInteger(pageSizeRaw);
-  if (hops.kind === "invalid" || pageSize.kind === "invalid") {
+  const asOfParsed = parseAsOf(asOf);
+  if (hops.kind === "invalid" || pageSize.kind === "invalid" || asOfParsed.kind === "invalid") {
     const detail =
       hops.kind === "invalid" && pageSize.kind === "invalid"
         ? "hops and pageSize must be integers."
         : hops.kind === "invalid"
           ? "hops must be an integer."
-          : "pageSize must be an integer.";
+          : pageSize.kind === "invalid"
+            ? "pageSize must be an integer."
+            : "asOf must be an RFC 3339 timestamp with an explicit timezone.";
     return frame(
       <SurfaceState
         kind="unavailable"
@@ -213,7 +305,7 @@ export async function CanvasPage({
     ...(scopeEntityId ? { scope_entity_id: scopeEntityId } : {}),
     ...(hops.kind === "ok" ? { hops: hops.value } : {}),
     ...(relationshipTypes.length > 0 ? { relationship_types: relationshipTypes } : {}),
-    ...(asOf ? { as_of: asOf } : {}),
+    ...(asOfParsed.kind === "ok" ? { as_of: asOfParsed.value } : {}),
     ...(pageSize.kind === "ok" ? { page_size: pageSize.value } : {}),
     ...(after ? { after } : {}),
   };
@@ -223,7 +315,7 @@ export async function CanvasPage({
     ...(scopeEntityId ? { scopeEntityId } : {}),
     ...(hops.kind === "ok" ? { hops: hops.value } : {}),
     ...(relationshipTypes.length > 0 ? { relationshipTypes } : {}),
-    ...(asOf ? { asOf } : {}),
+    ...(asOfParsed.kind === "ok" ? { asOf: asOfParsed.value } : {}),
     ...(pageSize.kind === "ok" ? { pageSize: pageSize.value } : {}),
     ...(after ? { after } : {}),
   };

@@ -49,10 +49,11 @@ def verify_webauthn_attestation(secret: str, token: str, *, now: datetime) -> UU
         raise AttestationError("malformed attestation")
     try:
         attested = _decode(payload)
-        principal_id = UUID(attested["pid"])
+        pid_raw = attested["pid"]
         issued_raw = attested["iat"]
-        if not isinstance(issued_raw, int):
+        if not isinstance(pid_raw, str) or not isinstance(issued_raw, int):
             raise AttestationError("malformed attestation")
+        principal_id = UUID(pid_raw)
         issued_at = issued_raw
     except (KeyError, TypeError, ValueError) as error:
         raise AttestationError("malformed attestation") from error

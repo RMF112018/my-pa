@@ -61,6 +61,9 @@ from my_pa.domain.identity.webauthn_credentials import (
     WebAuthnChallengePurpose,
     WebAuthnCredential,
 )
+
+# Register the grant table on IDENTITY_METADATA before resolving challenge FKs.
+from my_pa.infrastructure.persistence.auth_grants import AuthGrantStore
 from my_pa.infrastructure.persistence.user_accounts import IDENTITY_METADATA
 
 __all__ = [
@@ -80,7 +83,8 @@ __all__ = [
 #: the Table copies the same frozen list so runtime metadata matches DDL).
 _CHALLENGE_PURPOSE_CHECK: Final = (
     "purpose IN ('registration', 'authentication', 'credential_administration', "
-    "'recovery', 'step_up')"
+    "'recovery', 'step_up', 'bootstrap_registration', 'credential_registration', "
+    "'operator_recovery_registration')"
 )
 
 webauthn_credentials = Table(
@@ -123,6 +127,12 @@ webauthn_challenges = Table(
         "credential_record_id",
         Uuid(as_uuid=True),
         ForeignKey("identity.webauthn_credentials.id"),
+    ),
+    Column(
+        "auth_grant_id",
+        Uuid(as_uuid=True),
+        ForeignKey("identity.auth_grants.id"),
+        unique=True,
     ),
     Column("rp_id", String(253), nullable=False),
     Column("origin", String(512), nullable=False),
@@ -234,6 +244,7 @@ def _challenge(row: Row[tuple[object, ...]]) -> WebAuthnChallenge:
         purpose=WebAuthnChallengePurpose(mapping["purpose"]),
         principal_id=mapping["principal_id"],
         credential_record_id=mapping["credential_record_id"],
+        auth_grant_id=mapping["auth_grant_id"],
         rp_id=mapping["rp_id"],
         origin=mapping["origin"],
         created_at=mapping["created_at"],
@@ -400,6 +411,7 @@ class WebAuthnChallengeStore:
         now: datetime,
         principal_id: UUID | None = None,
         credential_record_id: UUID | None = None,
+        auth_grant_id: UUID | None = None,
         ttl: timedelta = WEBAUTHN_CHALLENGE_TTL,
         challenge_bytes: bytes | None = None,
     ) -> IssuedWebAuthnChallenge:
@@ -416,6 +428,7 @@ class WebAuthnChallengeStore:
                 purpose=purpose.value,
                 principal_id=principal_id,
                 credential_record_id=credential_record_id,
+                auth_grant_id=auth_grant_id,
                 rp_id=rp_id,
                 origin=origin,
                 created_at=instant,
@@ -765,6 +778,7 @@ class WebAuthnAuthPersistence:
     """One-connection façade over the four stores for multi-instance tests."""
 
     def __init__(self, connection: Connection) -> None:
+        self.grants = AuthGrantStore(connection)
         self.credentials = WebAuthnCredentialStore(connection)
         self.challenges = WebAuthnChallengeStore(connection)
         self.recovery = RecoveryCodeStore(connection)

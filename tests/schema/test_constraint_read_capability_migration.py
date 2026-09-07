@@ -3,7 +3,7 @@
 `c5b71e0a8d43` widens both closed-set CHECKs on `knowledge.audit_events` and
 touches nothing else. Four things are asserted and they fail in different ways.
 
-**The graph.** One head, and it is this revision, descending from `a1c9e4b72f80`.
+**The graph.** One head (`4e9a1c7b2d60`), with this revision as its predecessor descending from `a1c9e4b72f80`.
 A second head makes `alembic upgrade head` ambiguous.
 
 **The freeze.** The revision imports no domain enum and no declaration module,
@@ -49,6 +49,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "c5b71e0a8d43"
 PREVIOUS: Final = "a1c9e4b72f80"
+CURRENT_HEAD: Final = "4e9a1c7b2d60"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20260906_c5b71e0a8d43_admit_the_constraint_read_capabilities.py"
 PREVIOUS_MIGRATION: Final = (
@@ -154,9 +155,10 @@ def _literals(block: str) -> list[str]:
 # ---- the graph --------------------------------------------------------------
 
 
-def test_revision_is_the_only_linear_head() -> None:
+def test_revision_sits_on_the_single_head_chain() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [REVISION]
+    assert script.get_heads() == [CURRENT_HEAD]
+    assert script.get_revision(CURRENT_HEAD).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 
 

@@ -33,6 +33,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     Connection,
     DateTime,
@@ -43,16 +44,21 @@ from sqlalchemy import (
     Table,
     UniqueConstraint,
     Uuid,
+    or_,
     select,
 )
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from my_pa.domain.identity.user_account import (
+    LOCAL_ACCOUNT_SUBJECT,
+    SYNTHETIC_TENANT_ID,
+    AccountIdentityProvider,
     ConsentState,
     EntraTokenClaims,
     PrincipalScopeGrant,
     UserAccount,
     UserLifecycleState,
+    local_user_account,
 )
 from my_pa.infrastructure.persistence.principal_scope import (
     PrincipalContext,
@@ -69,8 +75,10 @@ user_accounts = Table(
     IDENTITY_METADATA,
     Column("id", Uuid(as_uuid=True), primary_key=True),
     Column("principal_id", Uuid(as_uuid=True), nullable=False, unique=True),
-    Column("tid", String(64), nullable=False),
-    Column("oid", String(64), nullable=False),
+    Column("identity_provider", String(32), nullable=False),
+    Column("identity_subject", String(192), nullable=False),
+    Column("tid", String(64)),
+    Column("oid", String(64)),
     Column("upn", String(320)),
     Column("display_name", String(256)),
     Column("first_seen_at", DateTime(timezone=True), nullable=False),
@@ -78,6 +86,32 @@ user_accounts = Table(
     Column("consent_state", String(32), nullable=False, default=ConsentState.PENDING.value),
     Column("lifecycle_state", String(32), nullable=False, default=UserLifecycleState.INVITED.value),
     Column("home_tenant_verified", Boolean, nullable=False, default=False),
+    CheckConstraint(
+        "identity_provider IN ('entra', 'synthetic', 'local')",
+        name="user_account_identity_provider_is_known",
+    ),
+    CheckConstraint(
+        "length(trim(identity_subject)) > 0",
+        name="user_account_identity_subject_is_present",
+    ),
+    CheckConstraint(
+        "(identity_provider IN ('entra', 'synthetic') "
+        "AND tid IS NOT NULL AND length(trim(tid)) > 0 "
+        "AND oid IS NOT NULL AND length(trim(oid)) > 0) "
+        "OR (identity_provider = 'local' AND tid IS NULL AND oid IS NULL)",
+        name="user_account_provider_claim_shape",
+    ),
+    CheckConstraint(
+        "identity_provider <> 'local' OR "
+        "(identity_subject = 'local-operator' AND "
+        "principal_id = '24abf5d2-d0c2-5e1c-82f6-e72425e9ed37'::uuid)",
+        name="user_account_local_binding_is_fixed",
+    ),
+    UniqueConstraint(
+        "identity_provider",
+        "identity_subject",
+        name="one_user_account_per_provider_subject",
+    ),
     UniqueConstraint("tid", "oid", name="one_user_account_per_entra_identity"),
 )
 
@@ -102,6 +136,8 @@ def _account(row: Row[tuple]) -> UserAccount:  # type: ignore[type-arg]
     return UserAccount(
         id=row.id,
         principal_id=row.principal_id,
+        identity_provider=AccountIdentityProvider(row.identity_provider),
+        identity_subject=row.identity_subject,
         tid=row.tid,
         oid=row.oid,
         upn=row.upn,
@@ -138,9 +174,16 @@ class UserAccountRepository:
         and the same `principal_id`. The conflict arm refreshes the mutable
         observations and the authentication timestamp only.
         """
+        provider = (
+            AccountIdentityProvider.SYNTHETIC
+            if claims.tid == SYNTHETIC_TENANT_ID
+            else AccountIdentityProvider.ENTRA
+        )
         insert = pg_insert(user_accounts).values(
             id=uuid4(),
             principal_id=uuid4(),
+            identity_provider=provider.value,
+            identity_subject=f"{claims.tid}:{claims.oid}",
             tid=claims.tid,
             oid=claims.oid,
             upn=claims.upn,
@@ -162,6 +205,57 @@ class UserAccountRepository:
         ).returning(*user_accounts.c)
         row = self._connection.execute(resolved).one()
         return _account(row)
+
+    def resolve_or_create_local(self, *, now: datetime) -> UserAccount:
+        """Return the exact fixed local account, creating it only when absent.
+
+        Both possible durable uniqueness keys are inspected after a conflict;
+        an inconsistent pre-existing row is refused rather than repaired.
+        """
+        candidate = local_user_account(account_id=uuid4(), now=now)
+        row = self._connection.execute(
+            pg_insert(user_accounts)
+            .values(
+                id=candidate.id,
+                principal_id=candidate.principal_id,
+                identity_provider=candidate.identity_provider.value,
+                identity_subject=candidate.identity_subject,
+                tid=None,
+                oid=None,
+                upn=None,
+                display_name=candidate.display_name,
+                first_seen_at=now,
+                last_authenticated_at=now,
+                consent_state=candidate.consent_state.value,
+                lifecycle_state=candidate.lifecycle_state.value,
+                home_tenant_verified=False,
+            )
+            .on_conflict_do_nothing()
+            .returning(*user_accounts.c)
+        ).one_or_none()
+        if row is not None:
+            return _account(row)
+        existing = self._connection.execute(
+            select(*user_accounts.c).where(
+                or_(
+                    user_accounts.c.principal_id == candidate.principal_id,
+                    (user_accounts.c.identity_provider == AccountIdentityProvider.LOCAL.value)
+                    & (user_accounts.c.identity_subject == LOCAL_ACCOUNT_SUBJECT),
+                )
+            )
+        ).one_or_none()
+        if existing is None:
+            raise ValueError("local account creation conflicted")
+        account = _account(existing)
+        if (
+            account.principal_id != candidate.principal_id
+            or account.identity_provider is not AccountIdentityProvider.LOCAL
+            or account.identity_subject != LOCAL_ACCOUNT_SUBJECT
+            or account.tid is not None
+            or account.oid is not None
+        ):
+            raise ValueError("stored local account binding is inconsistent")
+        return account
 
     def get(self, principal_id: UUID) -> UserAccount | None:
         """The account for this durable UUID, or `None`."""

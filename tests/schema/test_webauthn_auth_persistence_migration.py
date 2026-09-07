@@ -46,8 +46,7 @@ GRAPH_REVISION: Final = "c3f8a1d07e94"
 #: GoodNotes pull/review, then R8 promotion receipts, then canvas overlay head.
 GOODNOTES_REVISION: Final = "6a2f9d1c4b80"
 PROMOTION_REVISION: Final = "a4d8e31b2c90"
-CURRENT_HEAD_REVISION: Final = "c5b71e0a8d43"
-CURRENT_HEAD_REVISION: Final = "c5b71e0a8d43"
+CURRENT_HEAD_REVISION: Final = "4e9a1c7b2d60"
 NEW_TABLES: Final = frozenset(
     {
         "webauthn_credentials",
@@ -91,6 +90,8 @@ def test_runtime_tables_match_the_frozen_migration() -> None:
     ):
         assert f"CREATE TABLE identity.{table.name}" in source
         for column in table.c:
+            if column.name == "auth_grant_id":
+                continue
             assert column.name in source
 
 
@@ -114,7 +115,7 @@ def test_the_chain_has_one_head_and_this_revision_is_five_links_beneath_it() -> 
     # 91 on the merged tree: 88 at `16f05c46b8c3`, plus `b8e4d1a6c073`, the
     # graph vocabulary admission, and additive GoodNotes successor.
     # R8 adds one receipt migration on the previous 91-revision chain.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 97
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 98
 
 
 @pytest.mark.database

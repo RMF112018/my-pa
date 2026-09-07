@@ -88,7 +88,7 @@ HEAD_REVISION: Final = "b8e4d1a6c073"
 GRAPH_REVISION: Final = "c3f8a1d07e94"
 PULL_REVISION: Final = "6a2f9d1c4b80"
 PROMOTION_REVISION: Final = "a4d8e31b2c90"
-CURRENT_HEAD_REVISION: Final = "c5b71e0a8d43"
+CURRENT_HEAD_REVISION: Final = "4e9a1c7b2d60"
 #: What was head until `REVISION` stacked on it, and therefore the revision
 #: this module downgrades to. This revision was written against `c99cd8ed8d1c`
 #: and re-parented onto `UI-IMP-WP02`'s `2c00c9ac64bc` when `origin/main` merged

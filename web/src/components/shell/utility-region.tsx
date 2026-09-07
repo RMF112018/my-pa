@@ -5,6 +5,7 @@ import { PanelRightClose, PanelRightOpen, Pin, PinOff } from "lucide-react";
 import { IconButton } from "@/components/ui/icon-button";
 import { Sheet } from "@/components/ui/sheet";
 import { CanvasInspector } from "@/components/canvas/canvas-inspector";
+import { useInspectorSelection } from "@/components/shell/inspector-selection";
 
 const MOBILE_QUERY = "(max-width: 767px)";
 
@@ -26,10 +27,21 @@ function InspectorContent({
   pinned: boolean;
   onPinnedChange: (value: boolean) => void;
 }) {
+  /**
+   * The one region, with one body slot.
+   *
+   * `inspectorContent` is whatever feature currently owns the selection kind
+   * that is selected — nothing, unless a feature route registered one and the
+   * reader has picked something of that kind. When it is absent, which is every
+   * case that existed before this slot did, the region renders the heading and
+   * `CanvasInspector` exactly as it always has. That is the whole of the
+   * generalization: one added branch, no change to the branch that was here.
+   */
+  const { inspectorContent } = useInspectorSelection();
   return (
     <div>
       <div className="flex items-center justify-between">
-        <h2 className="font-semibold">Inspector</h2>
+        <h2 className="font-semibold">{inspectorContent?.title ?? "Inspector"}</h2>
         <IconButton
           label={pinned ? "Unpin Inspector" : "Pin Inspector"}
           onClick={() => onPinnedChange(!pinned)}
@@ -37,7 +49,7 @@ function InspectorContent({
           {pinned ? <PinOff size={18} /> : <Pin size={18} />}
         </IconButton>
       </div>
-      <CanvasInspector />
+      {inspectorContent ? inspectorContent.render() : <CanvasInspector />}
     </div>
   );
 }

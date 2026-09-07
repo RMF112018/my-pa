@@ -16,6 +16,7 @@ from sqlalchemy.exc import IntegrityError
 
 from my_pa.domain.identity.recovery_codes import normalize_recovery_code
 from my_pa.domain.identity.secret_digests import digest_text
+from my_pa.domain.identity.user_account import SYNTHETIC_TENANT_ID
 from my_pa.domain.identity.webauthn_credentials import WebAuthnChallengePurpose
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.webauthn_auth import (
@@ -57,18 +58,22 @@ def engine(disposable_database: str) -> Iterator[Engine]:
 
 def _seed_principal(engine: Engine, principal_id: UUID | None = None) -> UUID:
     identifier = principal_id or uuid4()
+    oid = f"oid-{identifier}"
     with engine.begin() as connection:
         connection.execute(
             text(
                 "INSERT INTO identity.user_accounts "
-                "(id, principal_id, tid, oid, first_seen_at, consent_state, lifecycle_state) "
-                "VALUES (:id, :principal_id, :tid, :oid, :now, 'granted', 'active')"
+                "(id, principal_id, identity_provider, identity_subject, tid, oid, "
+                " first_seen_at, consent_state, lifecycle_state) "
+                "VALUES (:id, :principal_id, 'synthetic', :subject, :tid, :oid, "
+                " :now, 'granted', 'active')"
             ),
             {
                 "id": uuid4(),
                 "principal_id": identifier,
-                "tid": f"tid-{identifier}",
-                "oid": f"oid-{identifier}",
+                "subject": f"{SYNTHETIC_TENANT_ID}:{oid}",
+                "tid": SYNTHETIC_TENANT_ID,
+                "oid": oid,
                 "now": WHEN,
             },
         )

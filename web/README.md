@@ -87,6 +87,11 @@ All application pages require a verified session. `/sign-in`, `/setup`, and
 | `POST /api/commitments/:commitmentId/close` | `commitments.close` | Closes a Commitment explicitly with validated closure evidence |
 | `/system`, `GET /api/system` | `capabilities.get`, `reports.list`, `reports.resolve_set` | Reports the runtime manifest, readiness, worker planes, and `runtimeIdentity` from image labels (unknown when unset); Morning Intelligence is resolver aggregate and members (READY is not system health); PWA observation is client-side; connected sources remain unknown |
 | `GET /api/health` | none | Unauthenticated liveness. `{ ok: true, status: "live" }` when `NODE_ENV` parses and `MYPA_AUTH_MODE` is a usable web value; otherwise 503 `misconfigured` with no env echo |
+| `GET /api/project-controls/projects/:projectId/constraints` | `constraints.list`, `constraints.search` | One Project's Register; a non-empty `q` selects search and applies that command's narrower allowlist, so a filter, sort or grouping sent with a term is refused rather than dropped |
+| `GET /api/project-controls/projects/:projectId/constraints/overview` | `constraints.overview` | The Project's Constraint position on its own calendar; `averageOpenAgeBusinessDays` and `syncHealth` are the canonical names and the aliases are refused |
+| `GET /api/project-controls/projects/:projectId/constraints/:constraintId` | `constraints.read` | One same-Principal Constraint in full, including its relationships and evidence links; there are no separate routes for those |
+| `GET /api/project-controls/projects/:projectId/constraints/:constraintId/history` | `constraints.history` | The Constraint's append-only mutation receipts, page size and opaque cursor only |
+| `GET /api/project-controls/projects/:projectId/constraint-categories` | `constraint_categories.list` | The Project's Category scheme in display order; readable when the Register is empty |
 | `/sign-in` | none | Production passkey sign-in; public |
 | `/setup` | none | One-time operator bootstrap grant plus WebAuthn; public; first-user path |
 | `/recover/operator` | none | One-time operator recovery grant plus WebAuthn; public |

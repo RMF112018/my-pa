@@ -2165,5 +2165,249 @@
     "renderer_name": "synthetic",
     "renderer_version": "1",
     "render_profile_version": "v1"
+  },
+  "constraints.read": {
+    "constraint": {
+      "constraint_id": "cst_aaaaaaaa11111111",
+      "project_id": "prj_aaaaaaaa11111111",
+      "constraint_code": "2.01",
+      "description": "Synthetic access constraint",
+      "category": {
+        "category_id": "ccat_aaaaaaaa11111111",
+        "prefix": "2",
+        "title": "Site access"
+      },
+      "status": "in_progress",
+      "date_identified": "2026-07-28",
+      "due_date": "2026-08-14",
+      "bic": [
+        {
+          "kind": "principal",
+          "party_ref_id": "principal",
+          "display_label": "You",
+          "entity_id": null
+        },
+        {
+          "kind": "entity",
+          "party_ref_id": "ent_aaaaaaaa11111111",
+          "display_label": "Pat Synthetic",
+          "entity_id": "ent_aaaaaaaa11111111"
+        }
+      ],
+      "responsible": [
+        {
+          "kind": "unresolved",
+          "party_ref_id": null,
+          "display_label": "Steel subcontractor",
+          "entity_id": null
+        }
+      ],
+      "reference": "RFI-014",
+      "days_elapsed": 8,
+      "version": 3,
+      "created_at": "2026-08-09T12:00:00+00:00",
+      "updated_at": "2026-08-09T12:00:00+00:00",
+      "is_overdue": false,
+      "is_due_soon": true,
+      "in_my_court": true,
+      "record_quality": "legacy_incomplete",
+      "needs_attention": true,
+      "needs_attention_reasons": [
+        "legacy_incomplete"
+      ],
+      "missing_fields": [
+        "description"
+      ],
+      "is_published": true,
+      "published_at": "2026-08-09T12:00:00+00:00",
+      "current_update": "Awaiting a confirmed delivery date",
+      "completion": null,
+      "void": null,
+      "sync": {
+        "state": "never_synced",
+        "last_verified_at": null,
+        "conflict_count": 0
+      },
+      "relationships": [
+        {
+          "relationship_id": "crel_aaaaaaaa11111111",
+          "relationship_type": "blocks",
+          "direction": "outgoing",
+          "related_constraint_id": "cst_bbbbbbbb22222222",
+          "related_constraint_code": "2.10",
+          "related_status": "identified"
+        }
+      ],
+      "evidence_links": [
+        {
+          "evidence_link_id": "cevd_aaaaaaaa11111111",
+          "evidence_kind": "capture",
+          "evidence_ref": "cap_aaaaaaaa11111111",
+          "role": "origin"
+        }
+      ]
+    }
+  },
+  "constraints.list": {
+    "constraints": [
+      {
+        "constraint_id": "cst_aaaaaaaa11111111",
+        "project_id": "prj_aaaaaaaa11111111",
+        "constraint_code": "2.01",
+        "description": "Synthetic access constraint",
+        "category": {
+          "category_id": "ccat_aaaaaaaa11111111",
+          "prefix": "2",
+          "title": "Site access"
+        },
+        "status": "in_progress",
+        "date_identified": "2026-07-28",
+        "due_date": "2026-08-14",
+        "bic": [
+          {
+            "kind": "principal",
+            "party_ref_id": "principal",
+            "display_label": "You",
+            "entity_id": null
+          },
+          {
+            "kind": "entity",
+            "party_ref_id": "ent_aaaaaaaa11111111",
+            "display_label": "Pat Synthetic",
+            "entity_id": "ent_aaaaaaaa11111111"
+          }
+        ],
+        "responsible": [
+          {
+            "kind": "unresolved",
+            "party_ref_id": null,
+            "display_label": "Steel subcontractor",
+            "entity_id": null
+          }
+        ],
+        "reference": "RFI-014",
+        "days_elapsed": 8,
+        "version": 3,
+        "updated_at": "2026-08-09T12:00:00+00:00",
+        "is_overdue": false,
+        "is_due_soon": true,
+        "in_my_court": true,
+        "record_quality": "normal",
+        "needs_attention": false,
+        "sync_state": "never_synced",
+        "group_keys": [
+          "ccat_aaaaaaaa11111111"
+        ]
+      }
+    ]
+  },
+  "constraints.search": {
+    "constraints": [
+      {
+        "constraint_id": "cst_aaaaaaaa11111111",
+        "project_id": "prj_aaaaaaaa11111111",
+        "constraint_code": "2.01",
+        "description": "Synthetic access constraint",
+        "category": {
+          "category_id": "ccat_aaaaaaaa11111111",
+          "prefix": "2",
+          "title": "Site access"
+        },
+        "status": "in_progress",
+        "date_identified": "2026-07-28",
+        "due_date": "2026-08-14",
+        "bic": [
+          {
+            "kind": "principal",
+            "party_ref_id": "principal",
+            "display_label": "You",
+            "entity_id": null
+          },
+          {
+            "kind": "entity",
+            "party_ref_id": "ent_aaaaaaaa11111111",
+            "display_label": "Pat Synthetic",
+            "entity_id": "ent_aaaaaaaa11111111"
+          }
+        ],
+        "responsible": [
+          {
+            "kind": "unresolved",
+            "party_ref_id": null,
+            "display_label": "Steel subcontractor",
+            "entity_id": null
+          }
+        ],
+        "reference": "RFI-014",
+        "days_elapsed": 8,
+        "version": 3,
+        "updated_at": "2026-08-09T12:00:00+00:00",
+        "is_overdue": false,
+        "is_due_soon": true,
+        "in_my_court": true,
+        "record_quality": "normal",
+        "needs_attention": false,
+        "sync_state": "never_synced",
+        "group_keys": [
+          "ccat_aaaaaaaa11111111"
+        ]
+      }
+    ]
+  },
+  "constraints.history": {
+    "history": [
+      {
+        "history_id": "chst_aaaaaaaa11111111",
+        "operation": "transition",
+        "actor": "principal",
+        "outcome": "applied",
+        "before_version": 2,
+        "after_version": 3,
+        "occurred_at": "2026-08-09T12:00:00+00:00",
+        "revision_id": "crev_aaaaaaaa11111111",
+        "safe_failure_reason": null
+      }
+    ]
+  },
+  "constraints.overview": {
+    "overview": {
+      "project_id": "prj_aaaaaaaa11111111",
+      "project_today": "2026-08-09",
+      "project_timezone": "America/New_York",
+      "total_open": 4,
+      "overdue": 1,
+      "due_soon": 2,
+      "due_soon_through": "2026-08-16",
+      "average_open_age_business_days": 6.5,
+      "in_my_court": 2,
+      "on_hold": 1,
+      "recently_changed": 3,
+      "recently_closed": 1,
+      "draft": 1,
+      "needs_attention": 1,
+      "sync_health": {
+        "state": "never_synced",
+        "open_conflict_count": 0,
+        "last_verified_at": null
+      },
+      "as_of": "2026-08-09T12:00:00+00:00"
+    }
+  },
+  "constraint_categories.list": {
+    "categories": [
+      {
+        "category_id": "ccat_aaaaaaaa11111111",
+        "project_id": "prj_aaaaaaaa11111111",
+        "prefix": "2",
+        "title": "Site access",
+        "description": "Access, egress and laydown",
+        "display_order": 2,
+        "state": "active",
+        "next_sequence": 3,
+        "issued_count": 2,
+        "version": 1,
+        "prefix_locked": true
+      }
+    ]
   }
 }

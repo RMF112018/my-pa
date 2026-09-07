@@ -99,6 +99,7 @@ from my_pa.domain.project_controls.constraint import (
 )
 from my_pa.domain.project_controls.history import (
     ConstraintCategoryHistoryEntry,
+    ConstraintCategoryMutationOperation,
     ConstraintHistoryEntry,
     ConstraintMutationActor,
     ConstraintMutationOperation,
@@ -127,6 +128,7 @@ from my_pa.domain.project_controls.read_models import (
     RelationshipDirection,
     SortDirection,
 )
+from my_pa.domain.project_controls.relationship import ConstraintRelationship
 from my_pa.domain.project_controls.revision import ConstraintRevision
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
 from my_pa.infrastructure.persistence.principal_scope import (
@@ -317,6 +319,28 @@ def _to_history(row: Row[Any]) -> ConstraintHistoryEntry:
         recorded_at=mapping["recorded_at"],
         project_id=mapping["project_id"],
         revision_id=mapping["revision_id"],
+        idempotency_key=mapping["idempotency_key"],
+        request_digest=mapping["request_digest"],
+        client_context=mapping["client_context"],
+        correlation_id=mapping["correlation_id"],
+        safe_failure_reason=mapping["safe_failure_reason"],
+    )
+
+
+def _to_category_history(row: Row[Any]) -> ConstraintCategoryHistoryEntry:
+    mapping = row._mapping
+    return ConstraintCategoryHistoryEntry(
+        history_id=mapping["history_id"],
+        principal_id=mapping["principal_id"],
+        project_id=mapping["project_id"],
+        category_id=mapping["category_id"],
+        operation=ConstraintCategoryMutationOperation(mapping["operation"]),
+        actor=ConstraintMutationActor(mapping["actor"]),
+        outcome=ConstraintMutationOutcome(mapping["outcome"]),
+        before_version=mapping["before_version"],
+        after_version=mapping["after_version"],
+        occurred_at=mapping["occurred_at"],
+        recorded_at=mapping["recorded_at"],
         idempotency_key=mapping["idempotency_key"],
         request_digest=mapping["request_digest"],
         client_context=mapping["client_context"],
@@ -1321,6 +1345,46 @@ class SqlConstraintManagementRepository(ConstraintManagementRepository):
             )
         )
 
+    def find_category_history_by_idempotency_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> ConstraintCategoryHistoryEntry | None:
+        row = self._connection.execute(
+            principal_scoped(
+                select(*constraint_category_history.c),
+                constraint_category_history,
+                capture_context(principal_id),
+            ).where(constraint_category_history.c.idempotency_key == idempotency_key)
+        ).one_or_none()
+        return None if row is None else _to_category_history(row)
+
+    # --- Relationships (PC-CM-IMP-WP06) ----------------------------------
+
+    def insert_relationship(self, principal_id: str, relationship: ConstraintRelationship) -> None:
+        """Append one `FOLLOW_UP_OF` edge. Insert only; nothing here updates or deletes.
+
+        `_bound` stamps the authenticated partition, so an edge cannot be
+        re-homed by being handed a record built with another Principal's
+        identifier; the stored composite foreign keys then require both ends
+        and the citing receipt to be that same Principal's.
+        """
+        self._connection.execute(
+            insert(project_constraint_relationships).values(
+                _bound(
+                    project_constraint_relationships,
+                    principal_id,
+                    {
+                        "relationship_id": relationship.relationship_id,
+                        "project_id": relationship.project_id,
+                        "source_constraint_id": relationship.source_constraint_id,
+                        "target_constraint_id": relationship.target_constraint_id,
+                        "relationship_type": relationship.relationship_type.value,
+                        "created_by_history_id": relationship.created_by_history_id,
+                        "created_at": relationship.created_at,
+                    },
+                )
+            )
+        )
+
     # --- The read plane (PC-CM-IMP-WP03) ---------------------------------
 
     def list_categories(
@@ -1693,10 +1757,13 @@ class SqlConstraintManagementRepository(ConstraintManagementRepository):
     ) -> ConstraintSyncFacts:
         """P9. The stored facts the four derivable sync states read from. Two statements.
 
-        The first joins the Project's sync targets to their baselines, so target
-        existence, the last verified instant and every baseline version arrive
-        together rather than as three questions. The second counts open
-        conflicts per Constraint. An empty `constraint_ids` means the whole
+        The first reads the Project's sync target, and joins it to the sync
+        baselines *only when a bounded set of Constraints was named* — so for a
+        caller that named some, target existence, the last verified instant and
+        every baseline version arrive together rather than as three questions,
+        and for a caller that named none the target is read on its own rather
+        than fanned out across every baseline in the Project. The second counts
+        open conflicts per Constraint. An empty `constraint_ids` means the whole
         Project, which is what the overview roll-up asks for.
 
         **Read-only in the strict sense.** No statement here writes, and nothing

@@ -113,6 +113,7 @@ from my_pa.domain.project_controls.read_models import (
     ConstraintSyncFacts,
     PersistedConstraintRecord,
 )
+from my_pa.domain.project_controls.relationship import ConstraintRelationship
 from my_pa.domain.project_controls.revision import ConstraintRevision
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
 from my_pa.domain.relationship.authoring import (
@@ -6673,6 +6674,34 @@ class ConstraintManagementRepository(ABC):
         self, principal_id: str, entry: ConstraintCategoryHistoryEntry
     ) -> None:
         """Append one Category mutation receipt. Never updated, never deleted."""
+
+    @abstractmethod
+    def find_category_history_by_idempotency_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> ConstraintCategoryHistoryEntry | None:
+        """The one prior Category receipt recorded under this key, or `None`.
+
+        The Category-plane sibling of `find_history_by_idempotency_key`.
+        `constraint_category_history` carries its own partial unique index on
+        `(principal_id, idempotency_key)`, so without this read a reused key is
+        an integrity error at insert time rather than the accepted replay, and
+        the two ledgers would enforce the same rule with two different answers.
+        """
+
+    # PC-CM-IMP-WP06: the one relationship write. There is no general
+    # relationship or evidence authoring surface here and dispatch §9.16
+    # forbids one; this method exists because Close + Follow-up must record
+    # that the successor follows up the predecessor, inside the same
+    # transaction that closed one and published the other.
+
+    @abstractmethod
+    def insert_relationship(self, principal_id: str, relationship: ConstraintRelationship) -> None:
+        """Append one typed relationship edge between two of this Principal's Constraints.
+
+        Insert only: v1 edits and deletes no relationship. `relationship`
+        already names the receipt that created it, so an edge and the mutation
+        that made it are written in the same transaction or neither is.
+        """
 
     # PC-CM-IMP-WP03: the read plane. Every method below returns a plain row
     # picture rather than an aggregate, and every one of them is called by

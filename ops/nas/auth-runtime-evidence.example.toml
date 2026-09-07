@@ -1,0 +1,107 @@
+# Inert, non-secret template for operator-gated authentication commissioning.
+# This example records no runtime result and can never establish PASS_VERIFIED.
+# Copy it outside Git only after separate operator authorization. Never record
+# grants, recovery codes, cookies, challenges, credential IDs, or credentials.
+
+schema = "my-pa.auth-runtime-evidence.v1"
+status = "NOT_PERFORMED_OPERATOR_GATED"
+repository_commit = "REQUIRED_FULL_COMMIT_SHA"
+repository_tree = "REQUIRED_FULL_TREE_SHA"
+reviewed_commit = "REQUIRED_FULL_COMMIT_SHA"
+reviewed_tree = "REQUIRED_FULL_TREE_SHA"
+migration_head = "REQUIRED_ALEMBIC_REVISION"
+deployment_manifest_sha256 = "REQUIRED_64_HEX"
+deployed_at = "REQUIRED_RFC3339_UTC"
+validated_at = "REQUIRED_RFC3339_UTC"
+canonical_origin = "https://pa.bobby-fetting.me"
+webauthn_rp_id = "pa.bobby-fetting.me"
+
+[device]
+kind = "REQUIRED_PHYSICAL_DEVICE_KIND"
+platform = "REQUIRED_PLATFORM"
+os_version = "REQUIRED_OS_VERSION"
+browser = "REQUIRED_BROWSER"
+browser_version = "REQUIRED_BROWSER_VERSION"
+installed_pwa = false
+
+[rollback]
+status = "NOT_PERFORMED_OPERATOR_GATED"
+evidence_sha256 = "REQUIRED_64_HEX"
+validated_at = "REQUIRED_RFC3339_UTC"
+
+[[case]]
+id = "bootstrap"
+status = "NOT_PERFORMED_OPERATOR_GATED"
+evidence_sha256 = "REQUIRED_64_HEX"
+executed_at = "REQUIRED_RFC3339_UTC"
+notes = "Operator-gated; not executed."
+
+[[case]]
+id = "physical_safari_passkey"
+status = "NOT_PERFORMED_OPERATOR_GATED"
+evidence_sha256 = "REQUIRED_64_HEX"
+executed_at = "REQUIRED_RFC3339_UTC"
+notes = "A Playwright or virtual-authenticator result cannot satisfy this case."
+
+[[case]]
+id = "installed_pwa_sign_in"
+status = "NOT_PERFORMED_OPERATOR_GATED"
+evidence_sha256 = "REQUIRED_64_HEX"
+executed_at = "REQUIRED_RFC3339_UTC"
+notes = "Operator-gated; not executed."
+
+[[case]]
+id = "fresh_step_up_second_passkey"
+status = "NOT_PERFORMED_OPERATOR_GATED"
+evidence_sha256 = "REQUIRED_64_HEX"
+executed_at = "REQUIRED_RFC3339_UTC"
+notes = "Validate fresh step-up and a second passkey when supported by the commissioned device set."
+
+[[case]]
+id = "ordinary_recovery"
+status = "NOT_PERFORMED_OPERATOR_GATED"
+evidence_sha256 = "REQUIRED_64_HEX"
+executed_at = "REQUIRED_RFC3339_UTC"
+notes = "Operator-gated; not executed."
+
+[[case]]
+id = "operator_recovery"
+status = "NOT_PERFORMED_OPERATOR_GATED"
+evidence_sha256 = "REQUIRED_64_HEX"
+executed_at = "REQUIRED_RFC3339_UTC"
+notes = "Operator-gated; not executed."
+
+[[case]]
+id = "session_revocation"
+status = "NOT_PERFORMED_OPERATOR_GATED"
+evidence_sha256 = "REQUIRED_64_HEX"
+executed_at = "REQUIRED_RFC3339_UTC"
+notes = "Operator-gated; not executed."
+
+[[case]]
+id = "grant_expiry"
+status = "NOT_PERFORMED_OPERATOR_GATED"
+evidence_sha256 = "REQUIRED_64_HEX"
+executed_at = "REQUIRED_RFC3339_UTC"
+notes = "Record only the result and a redacted evidence digest."
+
+[[case]]
+id = "restart_persistence"
+status = "NOT_PERFORMED_OPERATOR_GATED"
+evidence_sha256 = "REQUIRED_64_HEX"
+executed_at = "REQUIRED_RFC3339_UTC"
+notes = "Operator-gated; not executed."
+
+[[case]]
+id = "wrong_origin_refusal"
+status = "NOT_PERFORMED_OPERATOR_GATED"
+evidence_sha256 = "REQUIRED_64_HEX"
+executed_at = "REQUIRED_RFC3339_UTC"
+notes = "Record refusal only; do not record request authentication material."
+
+[[case]]
+id = "rollback"
+status = "NOT_PERFORMED_OPERATOR_GATED"
+evidence_sha256 = "REQUIRED_64_HEX"
+executed_at = "REQUIRED_RFC3339_UTC"
+notes = "Dry-run rehearsal does not establish a live rollback result."

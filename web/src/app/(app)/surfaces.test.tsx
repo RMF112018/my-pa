@@ -42,7 +42,9 @@ import { cleanup, render, screen } from "@testing-library/react";
 import type { PrincipalSession } from "@/contracts/identity";
 
 const PRINCIPAL: PrincipalSession = {
-  principalId: "syn-aaaa0001",
+  principalId: "aaaa0001-0000-0000-0000-000000000001",
+  identityProvider: "synthetic",
+  identitySubject: "11111111-2222-3333-4444-555555555555:aaaa0001-0000-0000-0000-000000000001",
   tid: "11111111-2222-3333-4444-555555555555",
   oid: "aaaa0001-0000-0000-0000-000000000001",
   upn: "synthetic.a@moss.example",

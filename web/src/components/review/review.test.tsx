@@ -16,7 +16,9 @@ import {
 import type { PrincipalSession } from "@/contracts/identity";
 
 const PRINCIPAL: PrincipalSession = {
-  principalId: "syn-aaaa0001",
+  principalId: "aaaa0001-0000-0000-0000-000000000001",
+  identityProvider: "synthetic",
+  identitySubject: "11111111-2222-3333-4444-555555555555:aaaa0001-0000-0000-0000-000000000001",
   tid: "11111111-2222-3333-4444-555555555555",
   oid: "aaaa0001-0000-0000-0000-000000000001",
   upn: "synthetic.a@moss.example",
@@ -25,7 +27,7 @@ const PRINCIPAL: PrincipalSession = {
   synthetic: true,
 };
 
-const OTHER: PrincipalSession = { ...PRINCIPAL, principalId: "syn-bbbb0002" };
+const OTHER: PrincipalSession = { ...PRINCIPAL, principalId: "bbbb0002-0000-0000-0000-000000000002" };
 
 function receiptResponse(receiptId: string, transition: string) {
   return new Response(

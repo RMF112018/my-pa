@@ -15,6 +15,25 @@ export class ForeignTenantError extends TokenClaimsError {}
 export class CallerSuppliedPrincipalError extends TokenClaimsError {}
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_HEX_PATTERN = /^[0-9a-f]{32}$/i;
+
+export class InvalidPrincipalIdError extends TokenClaimsError {
+  constructor() {
+    super("principalId is not a UUID");
+    this.name = "InvalidPrincipalIdError";
+  }
+}
+
+/** Parse and canonicalize a durable principal UUID. Fail closed on malformed IDs. */
+export function canonicalPrincipalUuid(value: string): string {
+  const trimmed = value.trim();
+  if (UUID_PATTERN.test(trimmed)) return trimmed.toLowerCase();
+  if (UUID_HEX_PATTERN.test(trimmed)) {
+    const hex = trimmed.toLowerCase();
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  throw new InvalidPrincipalIdError();
+}
 
 /** Validate Entra-shaped claims against the configured home tenant. Fail closed. */
 export function validateTokenClaims(

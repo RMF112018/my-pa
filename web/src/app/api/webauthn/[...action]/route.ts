@@ -21,12 +21,24 @@ const PUBLIC_ACTIONS = new Set([
   "authentication/options",
   "authentication/complete",
   "recovery/consume",
+  "auth-state",
+  "bootstrap/registration/options",
+  "bootstrap/registration/complete",
+  "operator-recovery/registration/options",
+  "operator-recovery/registration/complete",
 ]);
 
-const SESSION_ISSUE_ACTIONS = new Set(["authentication/complete", "recovery/consume"]);
+const SESSION_ISSUE_ACTIONS = new Set([
+  "authentication/complete",
+  "recovery/consume",
+  "bootstrap/registration/complete",
+  "operator-recovery/registration/complete",
+]);
 
 function refuse(code: string, status: number): NextResponse {
-  return NextResponse.json({ error: { code } }, { status });
+  const response = NextResponse.json({ error: { code } }, { status });
+  response.headers.set("cache-control", "no-store");
+  return response;
 }
 
 function authorityUnavailable(): NextResponse {
@@ -72,7 +84,22 @@ export async function attachIssuedSidCookie(
 }
 
 function jsonResponse(payload: Record<string, unknown>, status: number): NextResponse {
-  return NextResponse.json(browserPayload(payload), { status });
+  const response = NextResponse.json(browserPayload(payload), { status });
+  response.headers.set("cache-control", "no-store");
+  return response;
+}
+
+function authStateResponse(payload: Record<string, unknown>, status: number): NextResponse {
+  const state =
+    typeof payload.state === "string"
+      ? payload.state
+      : typeof payload.kind === "string"
+        ? payload.kind
+        : null;
+  if (state === null) return jsonResponse(payload, status);
+  const response = NextResponse.json({ state }, { status });
+  response.headers.set("cache-control", "no-store");
+  return response;
 }
 
 export async function POST(
@@ -114,6 +141,11 @@ export async function POST(
       status: upstream.status,
       headers: { "content-type": "application/json", "cache-control": "no-store" },
     });
+  }
+
+  if (joined === "auth-state" && payload) {
+    if (payload.error) return jsonResponse(payload, upstream.status);
+    return authStateResponse(payload, upstream.status);
   }
 
   if (upstream.ok && joined === "step-up/complete") {

@@ -127,6 +127,9 @@ describe("no /api response is ever cached, stored, or served from a cache", () =
     "/api/capture",
     "/api/library",
     "/api/session",
+    "/api/webauthn/auth-state",
+    "/api/webauthn/bootstrap/registration/options",
+    "/api/webauthn/operator-recovery/registration/complete",
     "/api/review/synthetic-1/decide",
     "/api/capture?since=1",
     "/api",
@@ -186,6 +189,24 @@ describe("no /api response is ever cached, stored, or served from a cache", () =
     },
   );
 
+  it("does not cache sign-in, setup, recover, or admin HTML or RSC", async () => {
+    for (const pathname of [
+      "/sign-in",
+      "/setup",
+      "/recover/operator",
+      "/system",
+      "/system/security",
+      "/setup?_rsc=1",
+      "/sign-in?_rsc=1",
+    ]) {
+      const { calls, responses } = await dispatchFetch(
+        requestFor(pathname, { destination: pathname.includes("_rsc") ? "empty" : "document" }),
+      );
+      expect(responses, pathname).toHaveLength(0);
+      expect(calls, pathname).toEqual([]);
+    }
+  });
+
   it("does not cache a navigation, by either signal the platform gives", async () => {
     for (const request of [
       requestFor("/today", { destination: "document" }),
@@ -198,7 +219,17 @@ describe("no /api response is ever cached, stored, or served from a cache", () =
   });
 
   it("caches nothing outside the static allow-list, however innocent it looks", async () => {
-    for (const pathname of ["/", "/today", "/sign-in", "/favicon.ico", "/some/new/route"]) {
+    for (const pathname of [
+      "/",
+      "/today",
+      "/sign-in",
+      "/setup",
+      "/recover/operator",
+      "/system",
+      "/system/security",
+      "/favicon.ico",
+      "/some/new/route",
+    ]) {
       const { calls, responses } = await dispatchFetch(requestFor(pathname));
       expect(responses, `${pathname} must reach the network untouched`).toHaveLength(0);
       expect(calls).toEqual([]);

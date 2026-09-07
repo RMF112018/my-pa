@@ -271,9 +271,7 @@ def test_no_historical_revision_was_edited() -> None:
         pytest.skip("no merge base available in this checkout")
     historical = {line for line in listed.stdout.splitlines() if line.strip()}
     edited_historical = touched & historical
-    assert not edited_historical, (
-        f"a historical revision was edited: {sorted(edited_historical)}"
-    )
+    assert not edited_historical, f"a historical revision was edited: {sorted(edited_historical)}"
 
 
 # ---- the database -----------------------------------------------------------

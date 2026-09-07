@@ -632,9 +632,7 @@ HAND_WRITTEN_COMPARISONS: Final = {
     ),
     # WP04 bootstrap registration binds the challenge to the fixed local
     # operator. The UUID is the repository constant, never a request field.
-    "infrastructure/security/webauthn_ceremony.py": (
-        ("webauthn_challenges", "principal_id"),
-    ),
+    "infrastructure/security/webauthn_ceremony.py": (("webauthn_challenges", "principal_id"),),
     "infrastructure/persistence/enrollment.py": (
         ("enrollments", "principal_id"),
         ("enrollments", "principal_id"),

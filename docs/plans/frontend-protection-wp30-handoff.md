@@ -1,6 +1,18 @@
-# WP30 handoff from UI-IMP-WP27
+# WP30 handoff from UI-IMP-WP29
 
-Automation cannot close these evidence classes. WP27 records them; it does not perform them.
+WP29 records the production public-browser contract. It does not activate
+production and does not mark the 250-criterion ledger `PASS_VERIFIED`.
+
+## Public origin (repository contract; not live)
+
+- Hostname: `pa.bobby-fetting.me`
+- Canonical origin: `https://pa.bobby-fetting.me`
+- WebAuthn RP ID: `pa.bobby-fetting.me`
+- Allowed origin: exactly `https://pa.bobby-fetting.me`
+- Expected HSTS (public reverse proxy): `Strict-Transport-Security: max-age=31536000` with no `includeSubDomains` and no preload
+- Health: unauthenticated `GET /api/health` → `{ ok: true, status: "live" }` when production passkey config parses; otherwise 503 `misconfigured` with no env echo
+- Reserved path refusals on the public origin: `/v1/*`, `/remote/*`, `/apple/*`, `/mcp`, `/mcp/*`
+- `PRODUCTION_ACTIVATION_NOT_PERFORMED`. Cloudflare DNS/tunnel routing is not claimed.
 
 ## Devices and engines
 
@@ -18,15 +30,14 @@ Automation cannot close these evidence classes. WP27 records them; it does not p
 ## Visual and performance
 
 - Subjective visual quality against the product, not Darwin PNG equality
-- Real Core Web Vitals on the production origin
+- Real Core Web Vitals on `https://pa.bobby-fetting.me`
 - Canvas terminal reconciliation (`PFE-AC-226`)
 
-## Runtime / delivery (WP29 then WP30)
+## Runtime / delivery remainder
 
-- Production headers / origin (`pa.bobby-fetting.me`)
-- Cloudflare Tunnel and NAS runtime identity
-- Deployment and rollback rehearsal
+- Live public smoke on `pa.bobby-fetting.me` after operator `PRODUCTION_ACTIVATION_APPROVED`
 - Connected-source truth still unknown (System must not invent it)
+- `PASS_VERIFIED` of `PFE-AC-001..250`
 
 ## Historical audits WP27 did not invent
 
@@ -37,4 +48,6 @@ Automation cannot close these evidence classes. WP27 records them; it does not p
 
 ## Acceptance
 
-Do not mark the 250-criterion ledger `PASS_VERIFIED` from WP27. Do not treat `frontend / required` green as terminal frontend acceptance.
+Do not mark the 250-criterion ledger `PASS_VERIFIED` from WP29. Do not treat
+`frontend / required` green as terminal frontend acceptance. Real Safari, iOS,
+Android, platform WebAuthn, CWV, and `PASS_VERIFIED` remain WP30.

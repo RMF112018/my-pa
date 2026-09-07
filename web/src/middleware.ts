@@ -19,6 +19,7 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   if (
     PUBLIC_PATHS.has(pathname) ||
+    pathname === "/api/health" ||
     pathname.startsWith("/api/session") ||
     pathname.startsWith("/api/webauthn/authentication/") ||
     pathname === "/api/webauthn/recovery/consume"

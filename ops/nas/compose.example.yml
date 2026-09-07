@@ -56,6 +56,12 @@ services:
       postgres:
         condition: service_healthy
     networks: [data-plane, ingress-plane]
+    healthcheck:
+      test: [CMD, python, apps/cli/health.py]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   worker-enrollment:
     profiles: [nas-01-contract-only]
@@ -105,10 +111,11 @@ services:
     env_file: ["${MY_PA_WEB_ENV_FILE:?owner-only web env file required}"]
     environment:
       NODE_ENV: production
-      MYPA_AUTH_MODE: local_operator
+      MYPA_AUTH_MODE: passkey
       MYPA_GATEWAY_URL: http://gateway:8765
       MYPA_GATEWAY_AUTH_MODE: local_operator
-      MYPA_CANONICAL_ORIGIN: "${MYPA_CANONICAL_ORIGIN:?exact private HTTPS origin required}"
+      MYPA_CANONICAL_ORIGIN: "${MYPA_CANONICAL_ORIGIN:?exact HTTPS origin required}"
+      MYPA_SESSION_SERVICE_SECRET: "${MYPA_SESSION_SERVICE_SECRET:?session-service secret required}"
     expose: ["3000"]
     networks: [ingress-plane]
 

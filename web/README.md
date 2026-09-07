@@ -27,6 +27,7 @@ does not currently expose a managed-document screen or API route.
 ## Routes and capability mapping
 
 All application pages require a verified session. `/sign-in` is public.
+`GET /api/health` is unauthenticated and carries no Principal or PII.
 
 | UI or BFF route | Backend capability | Current behavior |
 |---|---|---|
@@ -83,7 +84,8 @@ All application pages require a verified session. `/sign-in` is public.
 | `PATCH /api/commitments/:commitmentId` | `commitments.update` | Applies one expected-version bounded Commitment update |
 | `GET /api/commitments/:commitmentId/history` | `commitments.history` | Reads the Commitment's append-only history |
 | `POST /api/commitments/:commitmentId/close` | `commitments.close` | Closes a Commitment explicitly with validated closure evidence |
-| `/system`, `GET /api/system` | `capabilities.get`, `reports.list`, `reports.resolve_set` | Reports the runtime manifest, readiness, and worker planes; Morning Intelligence is resolver aggregate and members (READY is not system health); PWA fields are `PWA_FIELDS_PENDING_WP26`; connected sources remain unknown |
+| `/system`, `GET /api/system` | `capabilities.get`, `reports.list`, `reports.resolve_set` | Reports the runtime manifest, readiness, worker planes, and `runtimeIdentity` from image labels (unknown when unset); Morning Intelligence is resolver aggregate and members (READY is not system health); PWA observation is client-side; connected sources remain unknown |
+| `GET /api/health` | none | Unauthenticated liveness. `{ ok: true, status: "live" }` when `NODE_ENV` parses and `MYPA_AUTH_MODE` is a usable web value; otherwise 503 `misconfigured` with no env echo |
 | `POST /api/session` | none | Synthetic development sign-in only; refused in passkey mode and in production |
 | `POST /api/webauthn` | none | Passkey ceremony BFF; Python issues the opaque SID cookie after authentication or recovery |
 
@@ -141,8 +143,11 @@ values out of band and never commit them.
 | `MYPA_SESSION_SERVICE_SECRET` | At least 32 characters; BFF→Python session-service HMAC; distinct from the WebAuthn BFF secret |
 | `MYPA_WEBAUTHN_BFF_SECRET` | At least 32 characters; WebAuthn BFF ceremony HMAC; distinct from the session-service secret |
 | `MYPA_AUTH_MODE` | `synthetic` or `passkey`; no default |
+| `MYPA_CANONICAL_ORIGIN` | Browser origin the BFF treats as canonical; production is `https://pa.bobby-fetting.me` |
 | `MYPA_GATEWAY_URL` | Absolute HTTP(S) URL for the Python gateway; no default |
-| `MYPA_SESSION_SERVICE_URL` | Optional absolute HTTP(S) URL for session-service; unset uses `MYPA_GATEWAY_URL` |
+| `MYPA_SESSION_SERVICE_URL` | Optional absolute HTTP(S) URL for session-service; unset uses `MYPA_GATEWAY_URL`. Production leaves this unset |
+| `MYPA_SOURCE_COMMIT` | Optional 40–64 hex source commit from the image label; unset or invalid reports as `unknown` |
+| `MYPA_SOURCE_TREE` | Optional 40-hex source tree from the image label; unset or invalid reports as `unknown` |
 | `MYPA_GATEWAY_AUTH_MODE` | `local_operator` or `entra`; must match the Python gateway plane |
 | `MYPA_DATA_PROVIDER` | Optional explicit `synthetic` fixture switch; unset means off |
 | `MYPA_ENTRA_HOME_TENANT_ID` | Optional home tenant when configured; not a browser MSAL client id |
@@ -161,6 +166,22 @@ npm run dev
 
 The placeholders above are documentation, not acceptable shared or deployed
 secrets. Generate local values out of band.
+
+## Production configuration
+
+Production web authentication is passkey at the public browser origin. Do not
+put secrets in this file or in image labels.
+
+```sh
+export MYPA_AUTH_MODE=passkey
+export MYPA_CANONICAL_ORIGIN=https://pa.bobby-fetting.me
+# Leave MYPA_SESSION_SERVICE_URL unset: session-service is MYPA_GATEWAY_URL.
+# MYPA_SOURCE_COMMIT and MYPA_SOURCE_TREE come from the image labels
+# (40–64 hex commit; 40 hex tree). Unset or invalid values report as unknown.
+```
+
+`synthetic` is refused when `NODE_ENV=production`. This README does not authorize
+live activation.
 
 ## Offline Quick Capture
 

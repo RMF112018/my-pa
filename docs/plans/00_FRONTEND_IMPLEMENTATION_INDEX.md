@@ -9,9 +9,10 @@ Use these repository-controlled sources for frontend implementation:
 2. [`frontend-acceptance-ledger.md`](frontend-acceptance-ledger.md) — complete `PFE-AC-001..250` implementation/acceptance universe and conservative current dispositions.
 3. [`../decisions/ADR-011-passkey-webauthn-authentication-and-opaque-server-sessions.md`](../decisions/ADR-011-passkey-webauthn-authentication-and-opaque-server-sessions.md) — accepted production browser authentication/session target.
 4. [`../decisions/ADR-004-mossaic-frontend-nextjs-app-router.md`](../decisions/ADR-004-mossaic-frontend-nextjs-app-router.md) — retained Next.js/BFF/PWA architecture with the conflicting authentication/session provisions explicitly superseded by ADR-011.
-5. [`../decisions/ADR-008-nas-runtime-topology.md`](../decisions/ADR-008-nas-runtime-topology.md) — retained NAS/runtime topology with its Entra browser-auth selection explicitly superseded by ADR-011.
-6. [`frontend-auth-persistence.md`](frontend-auth-persistence.md) — WP02 durable credential/challenge/recovery/session substrate, plus the WP04 opaque-SID cookie cutover on this PR. Does not claim production activation.
-7. [`frontend-release-gates.md`](frontend-release-gates.md) — WP28 required vs advisory CI membership, browser matrix, visual/performance policy. Not WP29/WP30.
+5. [`../decisions/ADR-008-nas-runtime-topology.md`](../decisions/ADR-008-nas-runtime-topology.md) — retained NAS/runtime topology with its Entra browser-auth selection explicitly superseded by ADR-011 and its production public-browser ingress selection superseded by ADR-012.
+6. [`../decisions/ADR-012-public-browser-cloudflare-tunnel.md`](../decisions/ADR-012-public-browser-cloudflare-tunnel.md) — production public origin `https://pa.bobby-fetting.me` via a dedicated Cloudflare Tunnel. Live activation is not performed by accepting this ADR.
+7. [`frontend-auth-persistence.md`](frontend-auth-persistence.md) — WP02 durable credential/challenge/recovery/session substrate, plus the WP04 opaque-SID cookie cutover on this PR. Does not claim production activation.
+8. [`frontend-release-gates.md`](frontend-release-gates.md) — WP28 required vs advisory CI membership, browser matrix, visual/performance policy, plus the WP29 `frontend / delivery-config` required child. Not WP30. Not a GitHub ruleset mutation.
 
 ## Execution order
 
@@ -27,7 +28,7 @@ The controlling post-audit sequence is `UI-IMP-WP01..WP30`. Older `WP-FE-*` orde
 
 `UI-IMP-WP06` typed BFF success, error, receipt, and degraded contracts are implemented on this PR. That is not production activation, not `PASS_VERIFIED` of the whole frontend, and not Wave 1 closure until post-merge audit.
 
-`NEXT_EXECUTABLE_PACKAGE: UI-IMP-WP28 CI, Browser Matrix, Security, and Performance Gates is implementing on this branch over current main (`8995cc4c` / WP27 #215). This package does not implement WP29 deployment or WP30 runtime acceptance. GitHub rulesets are not mutated. frontend / pwa-offline, browsers, visual, performance, and degraded-gateway remain ADVISORY. gsqs.start remains not browser-admitted.`
+`NEXT_EXECUTABLE_PACKAGE: UI-IMP-WP29 Deployment, Rollback, Environment, and Observability Contract is implementing on this branch over current main (`f2d72f50`). This package does not implement WP30 runtime acceptance. Production activation is not performed. GitHub rulesets are not mutated. frontend / delivery-config is a required child of frontend / required. frontend / pwa-offline, browsers, visual, performance, and degraded-gateway remain ADVISORY.`
 
 ## Evidence limitations
 

@@ -840,12 +840,47 @@ describe("System reports what is off as off", () => {
   });
 
   it("no longer restates a schema head the web tier cannot check", async () => {
+    vi.stubEnv("MYPA_SOURCE_COMMIT", "");
+    vi.stubEnv("MYPA_SOURCE_TREE", "");
     const cookie = await signIn();
     stubGateway(CAPABILITIES_GET);
     const raw = await (await system(get(cookie, "/api/system"))).text();
     expect(raw).not.toContain("schemaHead");
     expect(raw).not.toContain("gitSha");
     expect(raw).not.toContain("commitSha");
+    const body = JSON.parse(raw) as {
+      runtimeIdentity?: { sourceCommit?: string; sourceTree?: string };
+    };
+    expect(body.runtimeIdentity).toEqual({ sourceCommit: "unknown", sourceTree: "unknown" });
+  });
+
+  it("reports labelled source commit and tree when they are hex", async () => {
+    const commit = `${"a".repeat(40)}`;
+    const tree = `${"b".repeat(40)}`;
+    vi.stubEnv("MYPA_SOURCE_COMMIT", commit);
+    vi.stubEnv("MYPA_SOURCE_TREE", tree);
+    const cookie = await signIn();
+    stubGateway(CAPABILITIES_GET);
+    const body = await (await system(get(cookie, "/api/system"))).json();
+    expect(body.runtimeIdentity).toEqual({ sourceCommit: commit, sourceTree: tree });
+    const raw = JSON.stringify(body);
+    expect(raw).not.toContain("schemaHead");
+    expect(raw).not.toContain("gitSha");
+    expect(raw).not.toContain("commitSha");
+  });
+
+  it("reports invalid source identity as unknown, never a branch or path", async () => {
+    vi.stubEnv("MYPA_SOURCE_COMMIT", "main");
+    vi.stubEnv("MYPA_SOURCE_TREE", process.cwd());
+    const cookie = await signIn();
+    stubGateway(CAPABILITIES_GET);
+    const body = await (await system(get(cookie, "/api/system"))).json();
+    expect(body.runtimeIdentity).toEqual({ sourceCommit: "unknown", sourceTree: "unknown" });
+    expect(JSON.stringify(body.runtimeIdentity)).not.toContain("main");
+    expect(JSON.stringify(body.runtimeIdentity)).not.toContain(process.cwd());
+    expect(JSON.stringify(body)).not.toContain("schemaHead");
+    expect(JSON.stringify(body)).not.toContain("gitSha");
+    expect(JSON.stringify(body)).not.toContain("commitSha");
   });
 
   it("passes through worker heartbeats and does not invent PWA identity", async () => {

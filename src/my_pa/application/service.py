@@ -136,12 +136,16 @@ from my_pa.application.commands import (
     BulkConfirmTasks,
     BulkPreviewTasks,
     CloseCommitment,
+    CloseConstraint,
+    CloseConstraintWithFollowUp,
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
     CorrectGoodNotes,
     CreateCapture,
     CreateCommitment,
+    CreateConstraintCategory,
+    CreateConstraintDraft,
     CreateEntity,
     CreateEntityAffiliation,
     CreateEntityAssignment,
@@ -154,6 +158,7 @@ from my_pa.application.commands import (
     CreateRelationshipMemory,
     CreateSituation,
     CreateTask,
+    DeactivateConstraintCategory,
     DecideReviewCase,
     EndEntityAffiliation,
     EndEntityAssignment,
@@ -213,6 +218,7 @@ from my_pa.application.commands import (
     PreviewEntityMerge,
     PreviewEntitySplit,
     ProposeRelationshipMemory,
+    PublishConstraint,
     PullGoodNotesWork,
     PutCanvasWorkspace,
     ReadCapture,
@@ -229,6 +235,8 @@ from my_pa.application.commands import (
     RecordContextFeedback,
     RecordIntelligenceRunState,
     RecordTask,
+    ReopenConstraint,
+    ReorderConstraintCategories,
     Representation,
     ResolveEntity,
     ResolveIntelligenceSet,
@@ -268,13 +276,31 @@ from my_pa.application.commands import (
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
     SupersedeEntityName,
+    TransitionConstraint,
     TransitionTask,
     UpdateCommitment,
+    UpdateConstraint,
+    UpdateConstraintCategory,
     UpdateEntity,
     UpdateTask,
+    VoidConstraint,
     WaitingOn,
 )
 from my_pa.application.commitments import CommitmentManagementService
+from my_pa.application.constraint_management import (
+    ConstraintCategoryMutationResult,
+    ConstraintCategoryNotFoundError,
+    ConstraintCategoryVersionConflictError,
+    ConstraintIdempotencyConflictError,
+    ConstraintManagementService,
+    ConstraintMutationResult,
+    ConstraintNotFoundError,
+    ConstraintOperationError,
+    ConstraintPartyError,
+    ConstraintProjectUnavailableError,
+    ConstraintReorderError,
+    ConstraintVersionConflictError,
+)
 from my_pa.application.constraints import ConstraintReadService
 from my_pa.application.context import ContextPreparationService
 from my_pa.application.disclosure import (
@@ -508,11 +534,20 @@ from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.policy.decision import POLICY_VERSION
+from my_pa.domain.project_controls.category import ConstraintCategoryError
+from my_pa.domain.project_controls.constraint import (
+    ConstraintInvariantError,
+    ConstraintLifecycleError,
+    ConstraintPublishError,
+)
+from my_pa.domain.project_controls.history import ConstraintMutationActor
+from my_pa.domain.project_controls.party import PartyRefError
 from my_pa.domain.project_controls.read_models import (
     ConstraintCursorError,
     ConstraintListQuery,
     ConstraintQueryError,
 )
+from my_pa.domain.project_controls.relationship import ConstraintRelationshipError
 from my_pa.domain.relationship.authoring import (
     AmbiguousEntityError,
     ConflictedIdentifierError,
@@ -2767,6 +2802,69 @@ def _constraint_payload(value: object) -> object:
     return value
 
 
+#: The nine settable fields of `UpdateConstraint`, in the spelling
+#: `ConstraintManagementService.update` takes them. Held as one tuple so the
+#: handler builds its patch by iterating a stated list rather than by naming
+#: fields inline nine times; `UPDATABLE_FIELDS` remains the authority on which
+#: names an update may touch and this is checked against it by
+#: `tests/unit/test_constraint_authoring_commands.py`.
+_CONSTRAINT_UPDATE_FIELDS: Final[tuple[str, ...]] = (
+    "description",
+    "date_identified",
+    "due_date",
+    "reference",
+    "current_update",
+    "bic",
+    "responsible",
+    "project_id",
+    "category_id",
+)
+
+
+@contextmanager
+def _constraint_mutation_translated() -> Iterator[None]:
+    """Classify what the WP06 mutation plane refuses, into the public taxonomy.
+
+    Every one of these is already a decided refusal carrying the plane's own
+    stable code; what is added here is the public classification, and nothing
+    here reads a message. Absent and foreign are the same `not_found` on both
+    Constraint and Category, which is what makes a foreign identifier
+    nondisclosing on every authoring capability (`CM-BE-AC-078`). A version or idempotency
+    disagreement is a `conflict` the caller can retry after refreshing, and an
+    operation's own field rule is an `invalid_request` naming a request field.
+
+    The conflict errors carry the `REJECTED` receipt the attempt wrote. It is
+    deliberately not rendered into the public error: a receipt is read back
+    through `constraints.history`, which is an authorized read, and putting one
+    into an error payload would be a second disclosure path with no purpose gate.
+    """
+    failure: ApplicationError | None = None
+    try:
+        yield
+    except (ConstraintNotFoundError, ConstraintProjectUnavailableError):
+        failure = NotFoundError(SafeDetail.CONSTRAINT_ID)
+    except ConstraintCategoryNotFoundError:
+        failure = NotFoundError(SafeDetail.SELECTOR)
+    except (ConstraintVersionConflictError, ConstraintCategoryVersionConflictError):
+        failure = ConflictError(SafeDetail.EXPECTED_VERSION)
+    except ConstraintIdempotencyConflictError:
+        failure = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+    except (ConstraintPartyError, PartyRefError):
+        failure = InvalidRequestError(SafeDetail.SELECTOR)
+    except (ConstraintLifecycleError, ConstraintPublishError):
+        failure = InvalidRequestError(SafeDetail.LIFECYCLE_STATE)
+    except (
+        ConstraintOperationError,
+        ConstraintReorderError,
+        ConstraintCategoryError,
+        ConstraintInvariantError,
+        ConstraintRelationshipError,
+    ):
+        failure = InvalidRequestError(SafeDetail.SELECTOR)
+    if failure is not None:
+        raise failure
+
+
 #: The entity plane reads the acting Principal's own partition and nothing else,
 #: so its trust basis is the partition, exactly as the task plane's is.
 _ENTITY_TRUST_BASIS: Final = ("principal_partition",)
@@ -3073,6 +3171,19 @@ class ApplicationService:
         #: would say it held something. Every derived flag, count, group and
         #: cursor the six reads return is decided in there and nowhere here.
         self._constraint_reads = ConstraintReadService()
+        #: PC-CM-IMP-WP07. WP06's one canonical mutation entry point, built from
+        #: the same factory the reads use and held for the same reason the
+        #: commitment plane holds its service: it is what a composed build has
+        #: and a build without the factory does not. `None` here is exactly the
+        #: condition `available_capabilities` withholds the twelve authoring
+        #: names under, so `tools/list` and `tools/call` cannot disagree.
+        self._constraint_mutation_service = (
+            ConstraintManagementService(
+                unit_of_work=constraint_management_unit_of_work, clock=clock
+            )
+            if constraint_management_unit_of_work is not None
+            else None
+        )
 
     @property
     def available_capabilities(self) -> frozenset[Capability]:
@@ -3128,6 +3239,12 @@ class ApplicationService:
         # handed over or did not.
         if self._constraint_management_unit_of_work is None:
             served -= _CONSTRAINT_CAPABILITIES
+            # The authoring half, subtracted beside the read half and under the
+            # same condition rather than folded into it: the two are separate
+            # sets because they are separate grants, and a later build that
+            # composes one without the other must be able to say so here rather
+            # than by editing a single fused constant (PC-CM-IMP-WP07).
+            served -= _CONSTRAINT_AUTHORING_CAPABILITIES
         return served
 
     def invoke(
@@ -8824,6 +8941,407 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CONSTRAINT_TRUST_BASIS),
         )
 
+    # --- Constraint Management authoring (PC-CM-IMP-WP07) ---------------------
+    #
+    # Twelve handlers, each exactly three statements' worth of work: resolve the
+    # WP06 mutation service through the composition seam below, call the one
+    # `ConstraintManagementService` method that serves the capability with the
+    # *authenticated* Principal, and render the authoritative result it returns.
+    #
+    # **Nothing about a mutation is decided in this file.** No lifecycle rule, no
+    # allocator arithmetic, no version arithmetic, no idempotency comparison, no
+    # receipt synthesis, no persistence call: disposition, record, receipt,
+    # before/after version, public code, successor, relationship and final
+    # ordering are all decided in `application.constraint_management` and are
+    # only shaped into JSON here. A handler that reconstructed one would be a
+    # second answer able to disagree with the ledger it is reporting, and
+    # `tests/architecture/test_constraint_authoring_dispatch_is_thin.py` is what
+    # keeps that true after the next edit.
+    #
+    # `authorization.principal.principal_id` and never a field of the command:
+    # no Constraint command carries a principal, and no envelope field reaches
+    # here at all.
+
+    def _constraint_mutations(self) -> ConstraintManagementService:
+        """The WP06 mutation service this build composes, or a refusal.
+
+        `UnsupportedError` rather than `internal_error`, on `_constraint_work()`'s
+        own terms: a process handed no Constraint unit-of-work factory does not
+        serve the Constraint authoring plane at all, which is a fact about the
+        build rather than a fault in the request, and `available_capabilities`
+        withholds the whole Constraint authoring set from such a process. This is
+        the floor beneath that rather than the only thing standing between a
+        caller and an unwired plane.
+
+        The service opens its own transaction per mutation -- that is where the
+        row lock, the allocator and the receipt live -- so no unit of work is
+        opened here and none is passed in.
+        """
+        service = self._constraint_mutation_service
+        if service is None:
+            raise UnsupportedError()
+        return service
+
+    @staticmethod
+    def _constraint_mutation_result(result: ConstraintMutationResult) -> dict[str, Any]:
+        """One Constraint mutation's authoritative result, as the envelope carries it."""
+        return {
+            "disposition": result.disposition.value,
+            "constraint": _constraint_payload(result.record),
+            "receipt": _constraint_payload(result.receipt),
+        }
+
+    @staticmethod
+    def _constraint_category_result(result: ConstraintCategoryMutationResult) -> dict[str, Any]:
+        """One Category mutation's authoritative result, as the envelope carries it."""
+        return {
+            "disposition": result.disposition.value,
+            "category": _constraint_payload(result.record),
+            "receipt": _constraint_payload(result.receipt),
+        }
+
+    def _constraint_authoring_result(
+        self, authorization: Authorization, payload: dict[str, Any]
+    ) -> _Result:
+        """The envelope every authoring answer carries. One trust basis, no page."""
+        return _Result(
+            payload=payload,
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CONSTRAINT_TRUST_BASIS),
+        )
+
+    def _constraints_create(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: CreateConstraintDraft
+    ) -> _Result:
+        """`constraints.create`: mint one Draft. WP06 decides everything about it."""
+        del unit_of_work
+        with _translated(), _constraint_mutation_translated():
+            result = self._constraint_mutations().create_draft(
+                principal_id=authorization.principal.principal_id,
+                actor=ConstraintMutationActor.PRINCIPAL,
+                project_id=command.project_id,
+                category_id=command.category_id,
+                description=command.description,
+                date_identified=command.date_identified,
+                due_date=command.due_date,
+                reference=command.reference,
+                current_update=command.current_update,
+                bic=command.bic,
+                responsible=command.responsible,
+                idempotency_key=command.idempotency_key,
+                client_context=command.client_context,
+                correlation_id=command.correlation_id,
+            )
+        return self._constraint_authoring_result(
+            authorization, self._constraint_mutation_result(result)
+        )
+
+    def _constraints_publish(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: PublishConstraint
+    ) -> _Result:
+        """`constraints.publish`: WP06 issues the public code under the Category lock."""
+        del unit_of_work
+        with _translated(), _constraint_mutation_translated():
+            result = self._constraint_mutations().publish(
+                principal_id=authorization.principal.principal_id,
+                constraint_id=command.constraint_id,
+                expected_version=command.expected_version,
+                actor=ConstraintMutationActor.PRINCIPAL,
+                target_state=command.to_state,
+                category_id=command.category_id,
+                date_identified=command.date_identified,
+                due_date=command.due_date,
+                bic=command.bic,
+                responsible=command.responsible,
+                idempotency_key=command.idempotency_key,
+                client_context=command.client_context,
+                correlation_id=command.correlation_id,
+            )
+        return self._constraint_authoring_result(
+            authorization, self._constraint_mutation_result(result)
+        )
+
+    def _constraints_update(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: UpdateConstraint
+    ) -> _Result:
+        """`constraints.update`: the command's named fields, as WP06's bounded patch.
+
+        The `values` mapping is built here from fields the command already
+        enumerated and validated -- it is the WP06 method's parameter shape, not
+        a caller's document. Each key is written out rather than read off the
+        command with a computed attribute name, which
+        `tests/architecture/test_every_capability_reaching_a_memory_row_is_declared.py`
+        forbids in a module holding a port: a reach named by a string is one no
+        static walk can follow. `_CONSTRAINT_UPDATE_FIELDS` states the same set
+        once, and a test holds the two to `UPDATABLE_FIELDS`.
+        """
+        del unit_of_work
+        supplied: dict[str, object] = {
+            "description": command.description,
+            "date_identified": command.date_identified,
+            "due_date": command.due_date,
+            "reference": command.reference,
+            "current_update": command.current_update,
+            "bic": command.bic,
+            "responsible": command.responsible,
+            "project_id": command.project_id,
+            "category_id": command.category_id,
+        }
+        values = {name: value for name, value in supplied.items() if value is not None}
+        with _translated(), _constraint_mutation_translated():
+            result = self._constraint_mutations().update(
+                principal_id=authorization.principal.principal_id,
+                constraint_id=command.constraint_id,
+                expected_version=command.expected_version,
+                actor=ConstraintMutationActor.PRINCIPAL,
+                values=values,
+                clear_fields=frozenset(member.value for member in command.clear_fields),
+                idempotency_key=command.idempotency_key,
+                client_context=command.client_context,
+                correlation_id=command.correlation_id,
+            )
+        return self._constraint_authoring_result(
+            authorization, self._constraint_mutation_result(result)
+        )
+
+    def _constraints_transition(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: TransitionConstraint
+    ) -> _Result:
+        """`constraints.transition`: WP06 decides which moves the lifecycle admits."""
+        del unit_of_work
+        with _translated(), _constraint_mutation_translated():
+            result = self._constraint_mutations().transition_active(
+                principal_id=authorization.principal.principal_id,
+                constraint_id=command.constraint_id,
+                target_state=command.to_state,
+                expected_version=command.expected_version,
+                actor=ConstraintMutationActor.PRINCIPAL,
+                idempotency_key=command.idempotency_key,
+                client_context=command.client_context,
+                correlation_id=command.correlation_id,
+            )
+        return self._constraint_authoring_result(
+            authorization, self._constraint_mutation_result(result)
+        )
+
+    def _constraints_close(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: CloseConstraint
+    ) -> _Result:
+        """`constraints.close`: close one Constraint. WP06 writes the receipt."""
+        del unit_of_work
+        with _translated(), _constraint_mutation_translated():
+            result = self._constraint_mutations().close(
+                principal_id=authorization.principal.principal_id,
+                constraint_id=command.constraint_id,
+                expected_version=command.expected_version,
+                actor=ConstraintMutationActor.PRINCIPAL,
+                completion_date=command.completion_date,
+                closure_commentary=command.closure_commentary,
+                idempotency_key=command.idempotency_key,
+                client_context=command.client_context,
+                correlation_id=command.correlation_id,
+            )
+        return self._constraint_authoring_result(
+            authorization, self._constraint_mutation_result(result)
+        )
+
+    def _constraints_close_follow_up(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CloseConstraintWithFollowUp,
+    ) -> _Result:
+        """`constraints.close_follow_up`: one operation, both receipts, the edge.
+
+        The result carries the predecessor, the successor, both receipts and the
+        `FOLLOW_UP_OF` relationship identifier exactly as WP06 returned them.
+        Nothing here splits the pair into two answers, and nothing here could:
+        there is one call and one atomic result.
+        """
+        del unit_of_work
+        with _translated(), _constraint_mutation_translated():
+            result = self._constraint_mutations().close_with_follow_up(
+                principal_id=authorization.principal.principal_id,
+                constraint_id=command.constraint_id,
+                expected_version=command.expected_version,
+                actor=ConstraintMutationActor.PRINCIPAL,
+                successor_description=command.successor_description,
+                completion_date=command.completion_date,
+                closure_commentary=command.closure_commentary,
+                successor_category_id=command.successor_category_id,
+                successor_due_date=command.successor_due_date,
+                successor_state=command.successor_state,
+                successor_bic=command.successor_bic,
+                successor_responsible=command.successor_responsible,
+                idempotency_key=command.idempotency_key,
+                client_context=command.client_context,
+                correlation_id=command.correlation_id,
+            )
+        return self._constraint_authoring_result(
+            authorization,
+            {
+                "disposition": result.disposition.value,
+                "predecessor": _constraint_payload(result.predecessor),
+                "successor": _constraint_payload(result.successor),
+                "predecessor_receipt": _constraint_payload(result.predecessor_receipt),
+                "successor_receipt": _constraint_payload(result.successor_receipt),
+                "relationship_id": result.relationship_id,
+            },
+        )
+
+    def _constraints_void(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: VoidConstraint
+    ) -> _Result:
+        """`constraints.void`: withdraw one Constraint. Nothing is deleted."""
+        del unit_of_work
+        with _translated(), _constraint_mutation_translated():
+            result = self._constraint_mutations().void(
+                principal_id=authorization.principal.principal_id,
+                constraint_id=command.constraint_id,
+                expected_version=command.expected_version,
+                actor=ConstraintMutationActor.PRINCIPAL,
+                void_reason=command.void_reason,
+                voided_date=command.voided_date,
+                idempotency_key=command.idempotency_key,
+                client_context=command.client_context,
+                correlation_id=command.correlation_id,
+            )
+        return self._constraint_authoring_result(
+            authorization, self._constraint_mutation_result(result)
+        )
+
+    def _constraints_reopen(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReopenConstraint
+    ) -> _Result:
+        """`constraints.reopen`: return one closed or void Constraint to an active state."""
+        del unit_of_work
+        with _translated(), _constraint_mutation_translated():
+            result = self._constraint_mutations().reopen(
+                principal_id=authorization.principal.principal_id,
+                constraint_id=command.constraint_id,
+                target_state=command.to_state,
+                expected_version=command.expected_version,
+                actor=ConstraintMutationActor.PRINCIPAL,
+                reason=command.reason,
+                idempotency_key=command.idempotency_key,
+                client_context=command.client_context,
+                correlation_id=command.correlation_id,
+            )
+        return self._constraint_authoring_result(
+            authorization, self._constraint_mutation_result(result)
+        )
+
+    def _constraint_categories_create(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CreateConstraintCategory,
+    ) -> _Result:
+        """`constraint_categories.create`: one new Category in the Project's scheme."""
+        del unit_of_work
+        with _translated(), _constraint_mutation_translated():
+            result = self._constraint_mutations().create_category(
+                principal_id=authorization.principal.principal_id,
+                project_id=command.project_id,
+                prefix=command.code_segment,
+                title=command.title,
+                actor=ConstraintMutationActor.PRINCIPAL,
+                description=command.description,
+                display_order=command.display_order,
+                state=command.state,
+                idempotency_key=command.idempotency_key,
+                client_context=command.client_context,
+                correlation_id=command.correlation_id,
+            )
+        return self._constraint_authoring_result(
+            authorization, self._constraint_category_result(result)
+        )
+
+    def _constraint_categories_update(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: UpdateConstraintCategory,
+    ) -> _Result:
+        """`constraint_categories.update`: revise one Category. WP06 decides the lock rule."""
+        del unit_of_work
+        supplied: dict[str, object] = {
+            "prefix": command.code_segment,
+            "title": command.title,
+            "description": command.description,
+            "display_order": command.display_order,
+        }
+        values = {name: value for name, value in supplied.items() if value is not None}
+        with _translated(), _constraint_mutation_translated():
+            result = self._constraint_mutations().update_category(
+                principal_id=authorization.principal.principal_id,
+                category_id=command.category_id,
+                expected_version=command.expected_version,
+                actor=ConstraintMutationActor.PRINCIPAL,
+                values=values,
+                idempotency_key=command.idempotency_key,
+                client_context=command.client_context,
+                correlation_id=command.correlation_id,
+            )
+        return self._constraint_authoring_result(
+            authorization, self._constraint_category_result(result)
+        )
+
+    def _constraint_categories_deactivate(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: DeactivateConstraintCategory,
+    ) -> _Result:
+        """`constraint_categories.deactivate`: retire one Category from new Publishes."""
+        del unit_of_work
+        with _translated(), _constraint_mutation_translated():
+            result = self._constraint_mutations().deactivate_category(
+                principal_id=authorization.principal.principal_id,
+                category_id=command.category_id,
+                expected_version=command.expected_version,
+                actor=ConstraintMutationActor.PRINCIPAL,
+                idempotency_key=command.idempotency_key,
+                client_context=command.client_context,
+                correlation_id=command.correlation_id,
+            )
+        return self._constraint_authoring_result(
+            authorization, self._constraint_category_result(result)
+        )
+
+    def _constraint_categories_reorder(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReorderConstraintCategories,
+    ) -> _Result:
+        """`constraint_categories.reorder`: one atomic reorder, the whole scheme back.
+
+        The two parallel arrays the command validated become the mapping WP06
+        takes. The final ordering in the answer is the one WP06 wrote, every
+        Category of it, and no part of it is recomputed here.
+        """
+        del unit_of_work
+        expected = dict(zip(command.ordered_category_ids, command.expected_versions, strict=True))
+        with _translated(), _constraint_mutation_translated():
+            result = self._constraint_mutations().reorder_categories(
+                principal_id=authorization.principal.principal_id,
+                project_id=command.project_id,
+                ordered_category_ids=command.ordered_category_ids,
+                expected_versions=expected,
+                actor=ConstraintMutationActor.PRINCIPAL,
+                idempotency_key=command.idempotency_key,
+                client_context=command.client_context,
+                correlation_id=command.correlation_id,
+            )
+        return self._constraint_authoring_result(
+            authorization,
+            {
+                "disposition": result.disposition.value,
+                "categories": _constraint_payload(result.records),
+                "receipts": _constraint_payload(result.receipts),
+            },
+        )
+
     @staticmethod
     def _constraint_query(
         command: ListConstraints | SearchConstraints, *, search_text: str | None = None
@@ -10952,6 +11470,20 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.CONSTRAINTS_HISTORY: ApplicationService._constraints_history,
         Capability.CONSTRAINTS_OVERVIEW: ApplicationService._constraints_overview,
         Capability.CONSTRAINT_CATEGORIES_LIST: ApplicationService._constraint_categories_list,
+        Capability.CONSTRAINTS_CREATE: ApplicationService._constraints_create,
+        Capability.CONSTRAINTS_PUBLISH: ApplicationService._constraints_publish,
+        Capability.CONSTRAINTS_UPDATE: ApplicationService._constraints_update,
+        Capability.CONSTRAINTS_TRANSITION: ApplicationService._constraints_transition,
+        Capability.CONSTRAINTS_CLOSE: ApplicationService._constraints_close,
+        Capability.CONSTRAINTS_CLOSE_FOLLOW_UP: ApplicationService._constraints_close_follow_up,
+        Capability.CONSTRAINTS_VOID: ApplicationService._constraints_void,
+        Capability.CONSTRAINTS_REOPEN: ApplicationService._constraints_reopen,
+        Capability.CONSTRAINT_CATEGORIES_CREATE: ApplicationService._constraint_categories_create,
+        Capability.CONSTRAINT_CATEGORIES_UPDATE: ApplicationService._constraint_categories_update,
+        Capability.CONSTRAINT_CATEGORIES_DEACTIVATE: (
+            ApplicationService._constraint_categories_deactivate
+        ),
+        Capability.CONSTRAINT_CATEGORIES_REORDER: ApplicationService._constraint_categories_reorder,
         Capability.CONTEXT_PREPARE: ApplicationService._context_prepare,
         Capability.CONTEXT_FEEDBACK: ApplicationService._context_feedback,
         Capability.GOODNOTES_WORK: ApplicationService._goodnotes_work,
@@ -11282,6 +11814,28 @@ _CONSTRAINT_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.CONSTRAINTS_HISTORY,
         Capability.CONSTRAINTS_OVERVIEW,
         Capability.CONSTRAINT_CATEGORIES_LIST,
+    }
+)
+
+#: PC-CM-IMP-WP07. The authoring half, withheld on exactly the composition the
+#: read half is withheld on. Written as its own set rather than added to
+#: `_CONSTRAINT_CAPABILITIES` because the two answer different questions -- a
+#: grant to read the Register and a grant to change it -- and the manifest,
+#: the MCP tool list and the availability answer all read them separately.
+_CONSTRAINT_AUTHORING_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.CONSTRAINTS_CREATE,
+        Capability.CONSTRAINTS_PUBLISH,
+        Capability.CONSTRAINTS_UPDATE,
+        Capability.CONSTRAINTS_TRANSITION,
+        Capability.CONSTRAINTS_CLOSE,
+        Capability.CONSTRAINTS_CLOSE_FOLLOW_UP,
+        Capability.CONSTRAINTS_VOID,
+        Capability.CONSTRAINTS_REOPEN,
+        Capability.CONSTRAINT_CATEGORIES_CREATE,
+        Capability.CONSTRAINT_CATEGORIES_UPDATE,
+        Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
+        Capability.CONSTRAINT_CATEGORIES_REORDER,
     }
 )
 

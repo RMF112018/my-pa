@@ -53,6 +53,12 @@ _WRITE_PURPOSES: Final = frozenset(
         Purpose.CONTINUITY_AUTHORING,
         Purpose.TASK_AUTHORING,
         Purpose.COMMITMENT_AUTHORING,
+        # PC-CM-IMP-WP07. Remote write-gating is `permitted_purposes(capability)
+        # & _WRITE_PURPOSES`, so leaving this out would classify all twelve
+        # Constraint mutations as reads on the remote transport -- a grant issued
+        # to read would reach them. `constraint_read` stays out, for the same
+        # reason every other read purpose does.
+        Purpose.CONSTRAINT_AUTHORING,
         Purpose.CONTEXT_PREFERENCE,
         Purpose.GOODNOTES_PROPOSAL,
         Purpose.REPORT_AUTHORING,

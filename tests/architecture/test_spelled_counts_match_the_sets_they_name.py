@@ -433,7 +433,23 @@ _ORDINAL_UNITS = (
     "hundred-fortieth",
     "hundred-forty-first",
     "hundred-forty-second",
+    # `PC-CM-IMP-WP07`'s twelve Constraint Management mutations took the public
+    # set past a hundred and forty-two, and the green-half plant indexes one
+    # past the set. The boundary announced itself exactly as every one above it
+    # did -- `IndexError` in the plant rather than a false pass.
     "hundred-forty-third",
+    "hundred-forty-fourth",
+    "hundred-forty-fifth",
+    "hundred-forty-sixth",
+    "hundred-forty-seventh",
+    "hundred-forty-eighth",
+    "hundred-forty-ninth",
+    "hundred-fiftieth",
+    "hundred-fifty-first",
+    "hundred-fifty-second",
+    "hundred-fifty-third",
+    "hundred-fifty-fourth",
+    "hundred-fifty-fifth",
 )
 
 

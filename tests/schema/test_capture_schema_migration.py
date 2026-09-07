@@ -29,7 +29,7 @@ this one exists.
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
 emits what it emitted on the day it merged, with one hundred one capabilities and
-forty-two purposes now declared in the domain. If this reddens, the freeze has been undone
+forty-three purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
 
@@ -176,6 +176,23 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "constraints.overview",
         "constraints.read",
         "constraints.search",
+        # PC-CM-IMP-WP07. `f7a2c9d51e64` is the forward `ALTER` that admits the
+        # twelve below. They are listed here for the same reason the six reads
+        # above are: this set is the measured difference between the capture
+        # revision's stored vocabulary and head's, and a member added to the
+        # domain without a forward `ALTER` is caught by exactly that difference.
+        "constraint_categories.create",
+        "constraint_categories.deactivate",
+        "constraint_categories.reorder",
+        "constraint_categories.update",
+        "constraints.close",
+        "constraints.close_follow_up",
+        "constraints.create",
+        "constraints.publish",
+        "constraints.reopen",
+        "constraints.transition",
+        "constraints.update",
+        "constraints.void",
         "capture.search",
         "review.decide",
         "review.list",

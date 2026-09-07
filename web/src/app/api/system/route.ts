@@ -122,8 +122,7 @@ export async function GET(request: NextRequest) {
   if (serving.kind === "refused") return serving.response;
 
   const identity = {
-    identityProvider:
-      guard.principal.authenticationProvider ?? (guard.principal.synthetic ? "synthetic" : "entra"),
+    identityProvider: guard.principal.identityProvider,
     // Browser Entra/MSAL is retired; this field stays false and is not a live seam.
     entraConfigured: false,
     graphConnector: GRAPH_CONNECTOR,

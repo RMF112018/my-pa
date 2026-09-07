@@ -330,7 +330,9 @@ function looksSynthetic(body: string): boolean {
 describe("a default build produces no fixture data at all", () => {
   it("refuses every fixture function at the source", () => {
     const principal = {
-      principalId: "syn-aaaa0001",
+      principalId: "aaaa0001-0000-0000-0000-000000000001",
+      identityProvider: "synthetic" as const,
+      identitySubject: "11111111-2222-3333-4444-555555555555:aaaa0001-0000-0000-0000-000000000001",
       tid: "t",
       oid: "o",
       upn: "u",
@@ -618,7 +620,7 @@ describe("the capture receipt is the backend's own", () => {
     expect(body.status).toBe("persisted");
     expect(body.receipt.receiptId).toBe("rcpt_aaaaaaaa11111111");
     expect(body.receipt.captureId).toBe("cap_aaaaaaaa11111111");
-    expect(body.receipt.principalId).toBe("syn-aaaa0001");
+    expect(body.receipt.principalId).toBe("aaaa0001-0000-0000-0000-000000000001");
     expect(body.created).toBe(true);
     // The note itself is never echoed back.
     expect(raw).not.toContain("a note");
@@ -646,14 +648,14 @@ describe("the capture receipt is the backend's own", () => {
     const response = await capture(post(cookie, "/api/capture", { text: "a note", idempotencyKey: "k1" }));
 
     expect(response.status).toBe(200);
-    expect((await response.json()).receipt.principalId).toBe("syn-aaaa0001");
+    expect((await response.json()).receipt.principalId).toBe("aaaa0001-0000-0000-0000-000000000001");
   });
 
   it("refuses a replay when the authenticating cookie changes after session introspection", async () => {
     vi.stubEnv("MYPA_GATEWAY_AUTH_MODE", "entra");
     const cookieA = await signIn("synthetic-a");
     const authority = await (await sessionIntrospection(get(cookieA, "/api/session"))).json();
-    expect(authority).toMatchObject({ principalId: "syn-aaaa0001" });
+    expect(authority).toMatchObject({ principalId: "aaaa0001-0000-0000-0000-000000000001" });
 
     const cookieB = await signIn("synthetic-b");
     stubGateway({});

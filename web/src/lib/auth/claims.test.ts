@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   validateTokenClaims,
   rejectCallerSuppliedPrincipal,
+  canonicalPrincipalUuid,
+  InvalidPrincipalIdError,
   MissingClaimError,
   ForeignTenantError,
   CallerSuppliedPrincipalError,
@@ -72,5 +74,23 @@ describe("rejectCallerSuppliedPrincipal", () => {
     expect(() =>
       rejectCallerSuppliedPrincipal({ a: { b: { principal_id: "p-1" } } }),
     ).toThrow(CallerSuppliedPrincipalError);
+  });
+});
+
+describe("canonicalPrincipalUuid", () => {
+  it("lowercases a hyphenated UUID", () => {
+    expect(canonicalPrincipalUuid("24ABF5D2-D0C2-5E1C-82F6-E72425E9ED37")).toBe(
+      "24abf5d2-d0c2-5e1c-82f6-e72425e9ed37",
+    );
+  });
+
+  it("accepts 32-character hex", () => {
+    expect(canonicalPrincipalUuid("24abf5d2d0c25e1c82f6e72425e9ed37")).toBe(
+      "24abf5d2-d0c2-5e1c-82f6-e72425e9ed37",
+    );
+  });
+
+  it("fails closed on malformed ids", () => {
+    expect(() => canonicalPrincipalUuid("syn-aaaa0001")).toThrow(InvalidPrincipalIdError);
   });
 });

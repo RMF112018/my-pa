@@ -36,7 +36,9 @@ const NEW_SID = "cd".repeat(32);
 const PRIOR = "ef".repeat(32);
 
 const PRINCIPAL: PrincipalSession = {
-  principalId: "syn-aaaa0001",
+  principalId: "aaaa0001-0000-0000-0000-000000000001",
+  identityProvider: "synthetic",
+  identitySubject: "11111111-2222-3333-4444-555555555555:aaaa0001-0000-0000-0000-000000000001",
   tid: SYNTHETIC_MOSS_TENANT_ID,
   oid: "aaaa0001-0000-0000-0000-000000000001",
   upn: "synthetic.a@moss.example",
@@ -218,5 +220,86 @@ describe("ceremony passthrough", () => {
     );
     const response = await post(["authentication", "options"], {});
     expect(await response.json()).toEqual({ challenge: "abc" });
+  });
+});
+
+describe("public bootstrap and auth-state", () => {
+  it("forwards auth-state without a cookie and returns {state} only", async () => {
+    mockedGateway.mockResolvedValueOnce(
+      new Response(JSON.stringify({ state: "uninitialized", reasons: ["bootstrap_required"] }), {
+        status: 200,
+      }),
+    );
+    const response = await post(["auth-state"], {});
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ state: "uninitialized" });
+    expect(mockedCall).not.toHaveBeenCalled();
+    expect(mockedGateway).toHaveBeenCalledWith("auth-state", {}, expect.anything(), undefined);
+  });
+
+  it("forwards bootstrap registration options without a cookie", async () => {
+    mockedGateway.mockResolvedValueOnce(
+      new Response(JSON.stringify({ challenge: "abc" }), { status: 200 }),
+    );
+    const response = await post(["bootstrap", "registration", "options"], { grant: "g" });
+    expect(response.status).toBe(200);
+    expect(mockedCall).not.toHaveBeenCalled();
+    expect(mockedGateway).toHaveBeenCalledWith(
+      "bootstrap/registration/options",
+      { grant: "g" },
+      expect.anything(),
+      undefined,
+    );
+  });
+
+  it("sets the cookie on bootstrap complete and keeps recovery codes", async () => {
+    mockedGateway.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ sessionCreated: true, issuedSid: SID, codes: ["AAAA-BBBB"] }),
+        { status: 200 },
+      ),
+    );
+    const response = await post(["bootstrap", "registration", "complete"], { credential: {} });
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.codes).toEqual(["AAAA-BBBB"]);
+    expect(body).not.toHaveProperty("issuedSid");
+    expect(cookieOf(response)).toBe(SID);
+  });
+
+  it("sets the cookie on operator-recovery complete", async () => {
+    mockedGateway.mockResolvedValueOnce(
+      new Response(JSON.stringify({ sessionCreated: true, issuedSid: NEW_SID, codes: ["CCCC"] }), {
+        status: 200,
+      }),
+    );
+    const response = await post(["operator-recovery", "registration", "complete"], {
+      credential: {},
+    });
+    expect(response.status).toBe(200);
+    expect((await response.json()).codes).toEqual(["CCCC"]);
+    expect(cookieOf(response)).toBe(NEW_SID);
+  });
+});
+
+describe("authenticated registration", () => {
+  it("forwards registration/options without a grant and still requires a session", async () => {
+    mockedGateway.mockResolvedValueOnce(
+      new Response(JSON.stringify({ challenge: "abc" }), { status: 200 }),
+    );
+    const response = await post(["registration", "options"], {}, { cookie: SID });
+    expect(response.status).toBe(200);
+    expect(mockedGateway).toHaveBeenCalledWith(
+      "registration/options",
+      {},
+      expect.anything(),
+      expect.objectContaining({ principalId: PRINCIPAL.principalId }),
+    );
+  });
+
+  it("refuses authenticated registration without a cookie", async () => {
+    const response = await post(["registration", "options"], {});
+    expect(response.status).toBe(401);
+    expect(mockedGateway).not.toHaveBeenCalled();
   });
 });

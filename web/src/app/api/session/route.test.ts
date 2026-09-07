@@ -35,7 +35,9 @@ const ORIGIN = "http://localhost:3000";
 const HMAC_SHAPED = "eyJpYXQiOjE3MjUwMDAwMDB9.0123456789abcdef0123456789abcdef";
 
 const PRINCIPAL_A: PrincipalSession = {
-  principalId: "syn-aaaa0001",
+  principalId: "aaaa0001-0000-0000-0000-000000000001",
+  identityProvider: "synthetic",
+  identitySubject: "11111111-2222-3333-4444-555555555555:aaaa0001-0000-0000-0000-000000000001",
   tid: SYNTHETIC_MOSS_TENANT_ID,
   oid: "aaaa0001-0000-0000-0000-000000000001",
   upn: "synthetic.a@moss.example",
@@ -46,7 +48,9 @@ const PRINCIPAL_A: PrincipalSession = {
 };
 
 const PRINCIPAL_B: PrincipalSession = {
-  principalId: "syn-bbbb0002",
+  principalId: "bbbb0002-0000-0000-0000-000000000002",
+  identityProvider: "synthetic",
+  identitySubject: "11111111-2222-3333-4444-555555555555:bbbb0002-0000-0000-0000-000000000002",
   tid: SYNTHETIC_MOSS_TENANT_ID,
   oid: "bbbb0002-0000-0000-0000-000000000002",
   upn: "synthetic.b@moss.example",

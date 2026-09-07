@@ -119,6 +119,12 @@ REGISTERED_WRITERS: Final[dict[str, str]] = {
     "scripts/migration/reconcile.py": (
         "writes a reconciliation report to an explicit output path."
     ),
+    "apps/cli/tbr_import.py": (
+        "writes the TBR import report (tbr-import.json, TBR-IMPORT.md) to an "
+        "explicit --output directory. Migration tooling run by an operator; the "
+        "report holds counts, identifiers, codes and issue codes only, never "
+        "workbook content, and it reads no managed root."
+    ),
     "ops/nas/write-candidate-manifest.py": (
         "writes only a non-deployable image manifest into the operator-selected "
         "candidate artifact directory; it never reads or writes personal or managed bytes."

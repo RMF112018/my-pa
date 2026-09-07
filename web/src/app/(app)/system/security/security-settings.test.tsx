@@ -50,4 +50,34 @@ describe("security settings enrollment", () => {
       grant: "grant-1",
     });
   });
+
+  it("tells the operator to add another passkey before removing the last one", async () => {
+    const fetchStub = vi.fn(async (url: string | URL | Request) => {
+      const path = String(url);
+      if (path.endsWith("/step-up/options")) return json({ challenge: "su" });
+      if (path.endsWith("/step-up/complete")) return json({ administrationGrant: "grant-1" });
+      if (path.endsWith("/credentials/revoke")) {
+        return json({ error: { code: "last_passkey_requires_recovery" } }, 400);
+      }
+      return json({ error: { code: "failed" } }, 500);
+    });
+    vi.stubGlobal("fetch", fetchStub);
+    render(
+      <SecuritySettings
+        initialCredentials={[
+          {
+            credentialId: "cred-1",
+            label: "Only key",
+            createdAt: "2026-09-07T00:00:00+00:00",
+            lastUsedAt: null,
+          },
+        ]}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Revoke" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Add another passkey before removing this one.",
+    );
+    expect(screen.queryByText("Add recovery codes before removing the last passkey.")).toBeNull();
+  });
 });

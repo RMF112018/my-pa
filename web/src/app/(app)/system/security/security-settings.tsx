@@ -23,7 +23,7 @@ function messageFor(code: string): string {
     case "duplicate_credential":
       return "That passkey is already registered.";
     case "last_passkey_requires_recovery":
-      return "Add recovery codes before removing the last passkey.";
+      return "Add another passkey before removing this one.";
     case "invalid_challenge":
       return "The sign-in challenge expired. Try again.";
     default:

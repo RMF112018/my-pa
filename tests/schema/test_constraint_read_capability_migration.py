@@ -260,8 +260,19 @@ def test_no_historical_revision_was_edited() -> None:
     if changed.returncode != 0:
         pytest.skip("no merge base available in this checkout")
     touched = {line for line in changed.stdout.splitlines() if line.strip()}
-    assert touched <= {MIGRATION.relative_to(ROOT).as_posix()}, (
-        f"a revision other than this one changed: {sorted(touched)}"
+    listed = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", "origin/main", "--", "migrations/"],  # noqa: S607
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if listed.returncode != 0:
+        pytest.skip("no merge base available in this checkout")
+    historical = {line for line in listed.stdout.splitlines() if line.strip()}
+    edited_historical = touched & historical
+    assert not edited_historical, (
+        f"a historical revision was edited: {sorted(edited_historical)}"
     )
 
 

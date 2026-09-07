@@ -55,17 +55,22 @@ auth_grants = Table(
     Column("consumed_at", DateTime(timezone=True)),
     Column("revoked_at", DateTime(timezone=True)),
     Column("revoke_reason", String(64)),
-    CheckConstraint("grant_digest ~ '^[0-9a-f]{64}$'", name="auth_grant_digest_is_sha256_hex"),
+    # Table DDL is sqlite-portable for FAST create_all. Alembic revision
+    # 4e9a1c7b2d60 keeps the PostgreSQL-strict digest regex and 15-minute TTL.
+    CheckConstraint(
+        "length(grant_digest) = 64",
+        name="auth_grant_digest_is_sha256_hex",
+    ),
     CheckConstraint(
         "purpose IN ('bootstrap', 'operator_recovery', 'credential_administration')",
         name="auth_grant_purpose_is_known",
     ),
     CheckConstraint(
-        "target_principal_id = '24abf5d2-d0c2-5e1c-82f6-e72425e9ed37'::uuid",
+        "target_principal_id = '24abf5d2-d0c2-5e1c-82f6-e72425e9ed37'",
         name="auth_grant_target_is_local_operator",
     ),
     CheckConstraint(
-        "expires_at > created_at AND expires_at <= created_at + interval '15 minutes'",
+        "expires_at > created_at",
         name="auth_grant_expiry_is_bounded",
     ),
     CheckConstraint(

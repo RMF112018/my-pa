@@ -104,7 +104,7 @@ user_accounts = Table(
     CheckConstraint(
         "identity_provider <> 'local' OR "
         "(identity_subject = 'local-operator' AND "
-        "principal_id = '24abf5d2-d0c2-5e1c-82f6-e72425e9ed37'::uuid)",
+        "principal_id = '24abf5d2-d0c2-5e1c-82f6-e72425e9ed37')",
         name="user_account_local_binding_is_fixed",
     ),
     UniqueConstraint(

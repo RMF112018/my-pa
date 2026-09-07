@@ -76,7 +76,7 @@ def test_an_unusable_oid_claim_is_rejected(value: object) -> None:
         validate_token_claims(_claims(oid=value), home_tenant_id=MOSS_TENANT)
 
 
-@pytest.mark.parametrize("field", ["principal_id", "tid", "oid"])
+@pytest.mark.parametrize("field", ["principal_id", "principalId", "tid", "oid"])
 def test_caller_supplied_identity_in_the_payload_is_rejected(field: str) -> None:
     """MU-AC-02: identity arrives only from the token, never from the body."""
     with pytest.raises(CallerSuppliedPrincipalError) as denied:

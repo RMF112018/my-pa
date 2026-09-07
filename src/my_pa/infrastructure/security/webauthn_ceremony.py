@@ -432,8 +432,18 @@ class WebAuthnCeremonyService:
             expected_principal=principal_id,
             create_session=False,
         )
-        session = self._resolve_authorizing_session(principal_id, authorizing_sid)
+        # `_resolve_authorizing_session` also rejects a missing SID; this check
+        # narrows the type for `rotate`.
+        if authorizing_sid is None:
+            raise WebAuthnCeremonyError("unauthenticated")
+        self._resolve_authorizing_session(principal_id, authorizing_sid)
         now = self._clock()
+        # Bind the grant to the successor session, not the SID the browser just
+        # presented: rotation revokes that one, and `consume` matches
+        # authorizing_session_id exactly with no lineage walk.
+        rotated = self._stores.sessions.rotate(authorizing_sid, now=now)
+        if rotated is None:
+            raise WebAuthnCeremonyError("unauthenticated")
         self._stores.grants.revoke_active(
             AuthGrantPurpose.CREDENTIAL_ADMINISTRATION,
             now=now,
@@ -443,13 +453,14 @@ class WebAuthnCeremonyService:
             AuthGrantPurpose.CREDENTIAL_ADMINISTRATION,
             now=now,
             ttl=ADMIN_GRANT_TTL,
-            authorizing_session_id=session.id,
+            authorizing_session_id=rotated.record.id,
         )
         return CeremonyResult(
             payload={
                 **result.payload,
                 "administrationGrant": issued.raw_grant,
-            }
+            },
+            issued_session=rotated,
         )
 
     def list_credentials(self, principal_id: UUID) -> CeremonyResult:
@@ -490,7 +501,12 @@ class WebAuthnCeremonyService:
         target = next((item for item in remaining if item.credential_id == credential_id), None)
         if target is None:
             raise WebAuthnCeremonyError("unknown_credential")
-        if len(remaining) == 1 and not self._has_active_recovery(principal_id):
+        # Recovery codes do not license this: with no credential left the auth
+        # state is INCONSISTENT, which every `_admit` path refuses, so neither
+        # a recovery code nor an operator-recovery grant could recover from it.
+        # A lost authenticator keeps its credential row, so operator recovery
+        # remains reachable from READY.
+        if len(remaining) == 1:
             raise WebAuthnCeremonyError(_LAST_CREDENTIAL_BLOCK)
         revoked = self._stores.credentials.revoke(credential_id, now=self._clock())
         if revoked is None or revoked.principal_id != principal_id:
@@ -697,9 +713,6 @@ class WebAuthnCeremonyService:
     def _require_origin(self, origin: str) -> None:
         if not self._rp.accepts_origin(origin):
             raise WebAuthnCeremonyError("wrong_origin")
-
-    def _has_active_recovery(self, principal_id: UUID) -> bool:
-        return bool(self._stores.recovery.active_sets_for(principal_id))
 
     def _admit(self, kind: _Admit) -> None:
         state = AuthStateValidator(self._connection).inspect(now=self._clock())

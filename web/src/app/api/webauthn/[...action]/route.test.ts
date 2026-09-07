@@ -1,18 +1,14 @@
 /**
  * WebAuthn BFF: issuedSid is a Set-Cookie only, never browser JSON.
- * Step-up rotates the cookie SID via the session-service.
+ * Step-up carries the cookie from the SID Python rotated to; the BFF never
+ * rotates on its own, or the administration grant would bind to a dead SID.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { POST } from "@/app/api/webauthn/[...action]/route";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { callWebAuthnGateway } from "@/lib/auth/webauthn-server";
-import {
-  callSessionService,
-  rotateSid,
-  revokeSid,
-  MissingSessionServiceSecretError,
-} from "@/lib/auth/session-service";
+import { callSessionService, rotateSid, revokeSid } from "@/lib/auth/session-service";
 import { SYNTHETIC_MOSS_TENANT_ID } from "@/lib/auth/synthetic";
 import type { PrincipalSession } from "@/contracts/identity";
 
@@ -160,40 +156,56 @@ describe("recovery/consume issuedSid handoff", () => {
   });
 });
 
-describe("step-up/complete rotates the SID", () => {
-  it("sets the rotated SID cookie and strips any issuedSid from JSON", async () => {
+describe("step-up/complete adopts the SID Python rotated to", () => {
+  it("sets the cookie from issuedSid and strips it from the browser JSON", async () => {
     mockedGateway.mockResolvedValueOnce(
-      new Response(JSON.stringify({ administrationGrant: "grant", issuedSid: "leak-me" }), { status: 200 }),
+      new Response(
+        JSON.stringify({ administrationGrant: "grant", sessionCreated: true, issuedSid: NEW_SID }),
+        { status: 200 },
+      ),
     );
-    mockedRotate.mockResolvedValueOnce(NEW_SID);
     const response = await post(["step-up", "complete"], { credential: {} }, { cookie: SID });
     expect(response.status).toBe(200);
-    expect(mockedRotate).toHaveBeenCalledWith(SID, expect.anything());
     const body = await response.json();
     expect(body.administrationGrant).toBe("grant");
     expect(body).not.toHaveProperty("issuedSid");
+    expect(JSON.stringify(body)).not.toContain(NEW_SID);
     expect(cookieOf(response)).toBe(NEW_SID);
   });
 
-  it("answers 401 when rotate loses a concurrent rotation, without inventing a SID", async () => {
+  it("does not rotate in the BFF, so the grant stays bound to Python's successor", async () => {
     mockedGateway.mockResolvedValueOnce(
-      new Response(JSON.stringify({ administrationGrant: "grant" }), { status: 200 }),
+      new Response(
+        JSON.stringify({ administrationGrant: "grant", sessionCreated: true, issuedSid: NEW_SID }),
+        { status: 200 },
+      ),
     );
-    mockedRotate.mockResolvedValueOnce(null);
     const response = await post(["step-up", "complete"], { credential: {} }, { cookie: SID });
-    expect(response.status).toBe(401);
-    expect(cookieOf(response)).toBe("");
-    expect(JSON.stringify(await response.json())).not.toContain(NEW_SID);
+    expect(response.status).toBe(200);
+    expect(mockedRotate).not.toHaveBeenCalled();
+    expect(mockedRevoke).toHaveBeenCalledWith(SID, expect.anything());
   });
 
-  it("answers 503 when the session-service secret is missing", async () => {
+  it("passes through Python's 401 when it loses a concurrent rotation", async () => {
+    mockedGateway.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: { code: "unauthenticated" } }), { status: 401 }),
+    );
+    const response = await post(["step-up", "complete"], { credential: {} }, { cookie: SID });
+    expect(response.status).toBe(401);
+    expect((await response.json()).error.code).toBe("unauthenticated");
+    expect(mockedRotate).not.toHaveBeenCalled();
+    expect(cookieOf(response)).toBeUndefined();
+  });
+
+  it("fails closed when Python omits issuedSid, without inventing or rotating a SID", async () => {
     mockedGateway.mockResolvedValueOnce(
       new Response(JSON.stringify({ administrationGrant: "grant" }), { status: 200 }),
     );
-    mockedRotate.mockRejectedValueOnce(new MissingSessionServiceSecretError());
     const response = await post(["step-up", "complete"], { credential: {} }, { cookie: SID });
     expect(response.status).toBe(503);
     expect((await response.json()).error.code).toBe("authority_unavailable");
+    expect(mockedRotate).not.toHaveBeenCalled();
+    expect(cookieOf(response)).toBeUndefined();
   });
 });
 

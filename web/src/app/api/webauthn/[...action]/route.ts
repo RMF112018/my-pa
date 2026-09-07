@@ -10,12 +10,7 @@ import {
   SESSION_COOKIE_OPTIONS,
   SESSION_MAX_AGE_SECONDS,
 } from "@/lib/auth/session";
-import {
-  rotateSid,
-  revokeSid,
-  MissingSessionServiceSecretError,
-  SessionServiceUnavailableError,
-} from "@/lib/auth/session-service";
+import { revokeSid } from "@/lib/auth/session-service";
 
 const PUBLIC_ACTIONS = new Set([
   "authentication/options",
@@ -33,7 +28,16 @@ const SESSION_ISSUE_ACTIONS = new Set([
   "recovery/consume",
   "bootstrap/registration/complete",
   "operator-recovery/registration/complete",
+  "step-up/complete",
 ]);
+
+/**
+ * Actions whose success is unusable without the successor SID: Python has
+ * already rotated the session and bound the administration grant to it, so a
+ * missing issuedSid must fail closed rather than leave the browser holding a
+ * revoked SID and a grant it can never spend.
+ */
+const SESSION_REQUIRED_ACTIONS = new Set(["step-up/complete"]);
 
 function refuse(code: string, status: number): NextResponse {
   const response = NextResponse.json({ error: { code } }, { status });
@@ -43,16 +47,6 @@ function refuse(code: string, status: number): NextResponse {
 
 function authorityUnavailable(): NextResponse {
   return NextResponse.json({ error: { code: "authority_unavailable" } }, { status: 503 });
-}
-
-function asAuthorityFailure(error: unknown): NextResponse | null {
-  if (
-    error instanceof MissingSessionServiceSecretError ||
-    error instanceof SessionServiceUnavailableError
-  ) {
-    return authorityUnavailable();
-  }
-  return null;
 }
 
 function browserPayload(payload: Record<string, unknown>): Record<string, unknown> {
@@ -148,12 +142,13 @@ export async function POST(
     return authStateResponse(payload, upstream.status);
   }
 
-  if (upstream.ok && joined === "step-up/complete") {
-    return finishStepUp(request, payload ?? {});
-  }
-
   if (upstream.ok && SESSION_ISSUE_ACTIONS.has(joined)) {
-    return finishIssuedSession(request, payload ?? {}, upstream.status);
+    return finishIssuedSession(
+      request,
+      payload ?? {},
+      upstream.status,
+      SESSION_REQUIRED_ACTIONS.has(joined),
+    );
   }
 
   if (payload) return jsonResponse(payload, upstream.status);
@@ -167,44 +162,16 @@ async function finishIssuedSession(
   request: NextRequest,
   payload: Record<string, unknown>,
   status: number,
+  requireIssuedSid: boolean,
 ): Promise<NextResponse> {
   const raw = payload.issuedSid;
   if (typeof raw !== "string" || !isOpaqueSessionSid(raw)) {
-    if (payload.sessionCreated === true) return authorityUnavailable();
+    if (requireIssuedSid || payload.sessionCreated === true) return authorityUnavailable();
     return jsonResponse(payload, status);
   }
   const issuedSid = parseOpaqueSessionSid(raw);
   if (!issuedSid) return authorityUnavailable();
   const response = jsonResponse(payload, status);
   await attachIssuedSidCookie(response, issuedSid, request);
-  return response;
-}
-
-async function finishStepUp(
-  request: NextRequest,
-  payload: Record<string, unknown>,
-): Promise<NextResponse> {
-  const currentSid = parseOpaqueSessionSid(request.cookies.get(SESSION_COOKIE_NAME)?.value);
-  if (!currentSid) return refuse("unauthenticated", 401);
-  let issuedSid: string | null;
-  try {
-    issuedSid = await rotateSid(currentSid, request);
-  } catch (error) {
-    const failure = asAuthorityFailure(error);
-    if (failure) return failure;
-    throw error;
-  }
-  if (issuedSid === null) {
-    const denied = refuse("unauthenticated", 401);
-    denied.cookies.set(SESSION_COOKIE_NAME, "", { ...SESSION_COOKIE_OPTIONS, maxAge: 0 });
-    return denied;
-  }
-  const normalized = parseOpaqueSessionSid(issuedSid);
-  if (!normalized) return authorityUnavailable();
-  const response = jsonResponse(payload, 200);
-  response.cookies.set(SESSION_COOKIE_NAME, normalized, {
-    ...SESSION_COOKIE_OPTIONS,
-    maxAge: SESSION_MAX_AGE_SECONDS,
-  });
   return response;
 }

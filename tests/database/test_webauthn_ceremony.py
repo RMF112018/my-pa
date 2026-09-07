@@ -175,6 +175,26 @@ def _bootstrap(connection: Connection, *, credential_id: bytes = b"cred-a") -> C
     )
 
 
+def _step_up(service: WebAuthnCeremonyService, sid: str | None) -> CeremonyResult:
+    options = service.step_up_options(LOCAL_OPERATOR_UUID, origin=ORIGIN)
+    challenge = options.payload["challenge"]
+    assert isinstance(challenge, str)
+    return service.step_up_complete(
+        LOCAL_OPERATOR_UUID,
+        origin=ORIGIN,
+        credential=_assertion_payload(challenge),
+        authorizing_sid=sid,
+    )
+
+
+def _admin_grant(stepped: CeremonyResult) -> tuple[str, str]:
+    """The administration grant and the successor SID it is bound to."""
+    grant = stepped.payload["administrationGrant"]
+    assert isinstance(grant, str)
+    assert stepped.issued_session is not None
+    return grant, stepped.issued_session.raw_sid
+
+
 def test_bootstrap_uninitialized_happy_path(engine: Engine) -> None:
     with engine.begin() as connection:
         created = _bootstrap(connection)
@@ -327,17 +347,155 @@ def test_registration_options_requires_grant_and_consumes_once(engine: Engine) -
             credential=_assertion_payload(challenge),
             authorizing_sid=sid,
         )
-        grant = stepped.payload["administrationGrant"]
-        assert isinstance(grant, str)
+        grant, rotated_sid = _admin_grant(stepped)
         first = service.registration_options(
-            LOCAL_OPERATOR_UUID, origin=ORIGIN, grant=grant, authorizing_sid=sid
+            LOCAL_OPERATOR_UUID, origin=ORIGIN, grant=grant, authorizing_sid=rotated_sid
         )
         assert "challenge" in first.payload
         with pytest.raises(WebAuthnCeremonyError) as second:
             service.registration_options(
-                LOCAL_OPERATOR_UUID, origin=ORIGIN, grant=grant, authorizing_sid=sid
+                LOCAL_OPERATOR_UUID, origin=ORIGIN, grant=grant, authorizing_sid=rotated_sid
             )
         assert second.value.code == "step_up_required"
+
+
+def test_step_up_rotates_the_sid_and_binds_the_grant_to_the_successor(engine: Engine) -> None:
+    with engine.begin() as connection:
+        bootstrapped = _bootstrap(connection)
+        assert bootstrapped.issued_session is not None
+        old_sid = bootstrapped.issued_session.raw_sid
+        service = _service(
+            connection,
+            verify_registration=_verify_registration(b"cred-b"),
+            verify_authentication=_verify_authentication(),
+        )
+        grant, rotated_sid = _admin_grant(_step_up(service, old_sid))
+        assert rotated_sid != old_sid
+        stores = WebAuthnAuthPersistence(connection)
+        assert stores.sessions.resolve(old_sid, now=WHEN) is None
+        assert stores.sessions.resolve(rotated_sid, now=WHEN) is not None
+        with pytest.raises(WebAuthnCeremonyError) as stale:
+            service.registration_options(
+                LOCAL_OPERATOR_UUID, origin=ORIGIN, grant=grant, authorizing_sid=old_sid
+            )
+        assert stale.value.code in {"step_up_required", "unauthenticated"}
+        first = service.registration_options(
+            LOCAL_OPERATOR_UUID, origin=ORIGIN, grant=grant, authorizing_sid=rotated_sid
+        )
+        assert "challenge" in first.payload
+        with pytest.raises(WebAuthnCeremonyError) as replayed:
+            service.registration_options(
+                LOCAL_OPERATOR_UUID, origin=ORIGIN, grant=grant, authorizing_sid=rotated_sid
+            )
+        assert replayed.value.code == "step_up_required"
+
+
+def test_rotation_after_the_grant_is_issued_invalidates_it(engine: Engine) -> None:
+    """The pre-fix BFF rotated after issue; a bound session has no lineage walk."""
+    with engine.begin() as connection:
+        bootstrapped = _bootstrap(connection)
+        assert bootstrapped.issued_session is not None
+        service = _service(
+            connection,
+            verify_registration=_verify_registration(b"cred-b"),
+            verify_authentication=_verify_authentication(),
+        )
+        grant, rotated_sid = _admin_grant(_step_up(service, bootstrapped.issued_session.raw_sid))
+        successor = WebAuthnAuthPersistence(connection).sessions.rotate(rotated_sid, now=WHEN)
+        assert successor is not None
+        with pytest.raises(WebAuthnCeremonyError) as raised:
+            service.registration_options(
+                LOCAL_OPERATOR_UUID,
+                origin=ORIGIN,
+                grant=grant,
+                authorizing_sid=successor.raw_sid,
+            )
+        assert raised.value.code == "step_up_required"
+
+
+def test_administration_actions_accept_the_rotated_sid(engine: Engine) -> None:
+    with engine.begin() as connection:
+        bootstrapped = _bootstrap(connection)
+        assert bootstrapped.issued_session is not None
+        sid = bootstrapped.issued_session.raw_sid
+        service = _service(connection, verify_authentication=_verify_authentication())
+        grant, rotated_sid = _admin_grant(_step_up(service, sid))
+        issued = service.issue_recovery(
+            LOCAL_OPERATOR_UUID,
+            origin=ORIGIN,
+            administration_grant=grant,
+            authorizing_sid=rotated_sid,
+        )
+        assert issued.recovery_codes
+        grant, rotated_sid = _admin_grant(_step_up(service, rotated_sid))
+        revoked = service.revoke_all_sessions(
+            LOCAL_OPERATOR_UUID,
+            origin=ORIGIN,
+            administration_grant=grant,
+            authorizing_sid=rotated_sid,
+        )
+        assert int(str(revoked.payload["revoked"])) >= 1
+
+
+def test_last_passkey_revoke_is_refused_even_with_active_recovery(engine: Engine) -> None:
+    with engine.begin() as connection:
+        bootstrapped = _bootstrap(connection)
+        assert bootstrapped.issued_session is not None
+        assert bootstrapped.recovery_codes
+        service = _service(connection, verify_authentication=_verify_authentication())
+        grant, rotated_sid = _admin_grant(_step_up(service, bootstrapped.issued_session.raw_sid))
+        stores = WebAuthnAuthPersistence(connection)
+        assert stores.recovery.active_sets_for(LOCAL_OPERATOR_UUID)
+        with pytest.raises(WebAuthnCeremonyError) as raised:
+            service.revoke_credential(
+                LOCAL_OPERATOR_UUID,
+                origin=ORIGIN,
+                credential_id=b"cred-a",
+                administration_grant=grant,
+                authorizing_sid=rotated_sid,
+            )
+        assert raised.value.code == "last_passkey_requires_recovery"
+        credentials = _service(connection).list_credentials(LOCAL_OPERATOR_UUID).payload
+        assert credentials["credentials"] and len(credentials["credentials"]) == 1
+        assert _service(connection).auth_state().payload == {"state": "ready"}
+        recovered = _service(connection).consume_recovery(
+            bootstrapped.recovery_codes[0], origin=ORIGIN
+        )
+        assert recovered.issued_session is not None
+
+
+def test_revoking_a_non_final_passkey_still_succeeds(engine: Engine) -> None:
+    with engine.begin() as connection:
+        _bootstrap(connection, credential_id=b"cred-a")
+        recovery_grant = AuthGrantStore(connection).issue(
+            AuthGrantPurpose.OPERATOR_RECOVERY, now=WHEN
+        )
+        service = _service(
+            connection,
+            verify_registration=_verify_registration(b"cred-b"),
+            verify_authentication=_verify_authentication(),
+        )
+        options = service.operator_recovery_registration_options(
+            origin=ORIGIN, grant=recovery_grant.raw_grant
+        )
+        challenge = options.payload["challenge"]
+        assert isinstance(challenge, str)
+        enrolled = service.operator_recovery_registration_complete(
+            origin=ORIGIN, credential=_credential_payload(challenge, b"cred-b")
+        )
+        assert enrolled.issued_session is not None
+        grant, rotated_sid = _admin_grant(_step_up(service, enrolled.issued_session.raw_sid))
+        revoked = service.revoke_credential(
+            LOCAL_OPERATOR_UUID,
+            origin=ORIGIN,
+            credential_id=b"cred-a",
+            administration_grant=grant,
+            authorizing_sid=rotated_sid,
+        )
+        assert revoked.payload == {"revoked": True}
+        remaining = _service(connection).list_credentials(LOCAL_OPERATOR_UUID).payload
+        assert remaining["credentials"] and len(remaining["credentials"]) == 1
+        assert _service(connection).auth_state().payload == {"state": "ready"}
 
 
 def test_authenticated_registration_without_grant_fails(engine: Engine) -> None:

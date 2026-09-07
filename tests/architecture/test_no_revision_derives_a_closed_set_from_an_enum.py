@@ -823,8 +823,8 @@ def test_the_chain_is_readable_and_non_empty() -> None:
     # (RULING-M2). This is a derived fact about the tree; the deny rule, the
     # allowlist and the freeze ledger are untouched.
     # R8 adds immutable promotion receipts as revision92 on the existing head.
-    assert len(revisions) == 96
-    assert len({revision for revision, _ in revisions}) == 96
+    assert len(revisions) == 97
+    assert len({revision for revision, _ in revisions}) == 97
     assert {
         "9c6b4a18ed72",
         "1a4c9e77b2d5",

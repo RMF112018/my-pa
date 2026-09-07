@@ -46,7 +46,8 @@ GRAPH_REVISION: Final = "c3f8a1d07e94"
 #: GoodNotes pull/review, then R8 promotion receipts, then canvas overlay head.
 GOODNOTES_REVISION: Final = "6a2f9d1c4b80"
 PROMOTION_REVISION: Final = "a4d8e31b2c90"
-CURRENT_HEAD_REVISION: Final = "a1c9e4b72f80"
+CURRENT_HEAD_REVISION: Final = "c5b71e0a8d43"
+CURRENT_HEAD_REVISION: Final = "c5b71e0a8d43"
 NEW_TABLES: Final = frozenset(
     {
         "webauthn_credentials",
@@ -100,7 +101,7 @@ def test_tables_share_the_canonical_identity_metadata() -> None:
 def test_the_chain_has_one_head_and_this_revision_is_five_links_beneath_it() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD_REVISION]
-    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "2774329487be"
+    assert script.get_revision("a1c9e4b72f80").down_revision == "2774329487be"
     assert script.get_revision("2774329487be").down_revision == "e8f2a6c9d104"
     assert script.get_revision("e8f2a6c9d104").down_revision == "d4e8b1c7a902"
     assert script.get_revision("d4e8b1c7a902").down_revision == "a4d8e31b2c90"
@@ -113,7 +114,7 @@ def test_the_chain_has_one_head_and_this_revision_is_five_links_beneath_it() -> 
     # 91 on the merged tree: 88 at `16f05c46b8c3`, plus `b8e4d1a6c073`, the
     # graph vocabulary admission, and additive GoodNotes successor.
     # R8 adds one receipt migration on the previous 91-revision chain.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 96
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 97
 
 
 @pytest.mark.database

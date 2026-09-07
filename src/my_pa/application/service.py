@@ -111,8 +111,9 @@ import json
 import sys
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, is_dataclass, replace
 from datetime import UTC, date, datetime, timedelta
+from enum import StrEnum
 from itertools import islice
 from types import MappingProxyType
 from typing import Any, Final, NoReturn, assert_never, cast
@@ -183,6 +184,8 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListConstraintCategories,
+    ListConstraints,
     ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
@@ -214,6 +217,9 @@ from my_pa.application.commands import (
     PutCanvasWorkspace,
     ReadCapture,
     ReadCommitment,
+    ReadConstraint,
+    ReadConstraintHistory,
+    ReadConstraintOverview,
     ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadKnowledge,
@@ -249,6 +255,7 @@ from my_pa.application.commands import (
     ReviseRelationshipMemory,
     SearchCaptures,
     SearchCommitments,
+    SearchConstraints,
     SearchEntities,
     SearchGoodNotes,
     SearchIntelligenceArtifacts,
@@ -268,6 +275,7 @@ from my_pa.application.commands import (
     WaitingOn,
 )
 from my_pa.application.commitments import CommitmentManagementService
+from my_pa.application.constraints import ConstraintReadService
 from my_pa.application.context import ContextPreparationService
 from my_pa.application.disclosure import (
     Limitation,
@@ -411,6 +419,7 @@ from my_pa.contracts.ports import (
     CaptureAdmissionRequest,
     CaptureSearchOutcome,
     CaptureSearchRequest,
+    ConstraintManagementUnitOfWork,
     DirectedReceipt,
     EntitiesRepository,
     EntityMutationAdmission,
@@ -499,6 +508,11 @@ from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.policy.decision import POLICY_VERSION
+from my_pa.domain.project_controls.read_models import (
+    ConstraintCursorError,
+    ConstraintListQuery,
+    ConstraintQueryError,
+)
 from my_pa.domain.relationship.authoring import (
     AmbiguousEntityError,
     ConflictedIdentifierError,
@@ -2687,6 +2701,72 @@ def _namespace_or_refuse(named: str | None) -> ExternalIdentifierNamespace | Non
 
 _TASK_TRUST_BASIS: Final = ("principal_partition",)
 _COMMITMENT_TRUST_BASIS: Final = ("product_owned_commitment",)
+#: A Constraint is a Project control this Principal's own partition holds, read
+#: through no configured source and no enrollment, so the basis is the partition
+#: exactly as the task plane's is (PC-CM-IMP-WP04).
+_CONSTRAINT_TRUST_BASIS: Final = ("principal_partition",)
+
+
+@contextmanager
+def _constraint_translated() -> Iterator[None]:
+    """Classify what the Constraint read plane's request objects refuse.
+
+    `ConstraintListQuery` and the two cursor codecs raise `ConstraintQueryError`
+    and `ConstraintCursorError` -- `ValueError`s of the read plane, not members
+    of the public taxonomy -- and an unclassified one would leave `invoke` as an
+    `internal_error` telling a caller the fault was ours. Both are malformed
+    *requests*, so both become `invalid_request` naming the field the plane's own
+    error identifies. Nothing here inspects the message: the code the read plane
+    chose is not a `SafeDetail`, and rendering one would put plane vocabulary into
+    a public error.
+    """
+    failure: ApplicationError | None = None
+    try:
+        yield
+    except ConstraintCursorError:
+        failure = InvalidRequestError(SafeDetail.CURSOR)
+    except ConstraintQueryError:
+        failure = InvalidRequestError(SafeDetail.SELECTOR)
+    if failure is not None:
+        raise failure
+
+
+def _constraint_payload(value: object) -> object:
+    """One Constraint read model as the JSON document the envelope carries.
+
+    Shape conversion and nothing else, which is what keeps this handler family
+    honest: a frozen dataclass becomes an object, a tuple an array, a `StrEnum`
+    its value, a `datetime` or `date` its ISO-8601 text. There is no field this
+    renames, none it drops, none it computes and none it reorders -- every
+    derived flag, count, group and cursor in the document was decided by
+    `application.constraints`, and a second opinion about any of them would be a
+    second answer able to disagree with the Register it came from.
+
+    Written here rather than as a `to_canonical_dict` on the read models because
+    those models are the canonical *domain* projection and
+    `tests/architecture/test_constraint_read_plane_boundaries.py` keeps them
+    free of any transport's vocabulary; a serialiser is this layer's concern.
+    """
+    if is_dataclass(value) and not isinstance(value, type):
+        # `asdict` rather than a `getattr` walk, and the reason is a guard rather
+        # than a preference: `test_every_capability_reaching_a_memory_row_is_declared`
+        # forbids naming an attribute with a string anywhere in a module that
+        # holds a port, because a computed attribute name is a reach no static
+        # walk can follow. `asdict` recurses through nested dataclasses, tuples
+        # and lists on its own, so what is left below is only the leaf shapes
+        # JSON has no name for.
+        return _constraint_payload(asdict(value))
+    if isinstance(value, Mapping):
+        return {str(name): _constraint_payload(item) for name, item in value.items()}
+    if isinstance(value, StrEnum):
+        return value.value
+    if isinstance(value, tuple | list):
+        return [_constraint_payload(item) for item in value]
+    if isinstance(value, datetime | date):
+        return value.isoformat()
+    return value
+
+
 #: The entity plane reads the acting Principal's own partition and nothing else,
 #: so its trust basis is the partition, exactly as the task plane's is.
 _ENTITY_TRUST_BASIS: Final = ("principal_partition",)
@@ -2866,6 +2946,9 @@ class ApplicationService:
         model_gate: BoundedModelGate | None = None,
         task_management_unit_of_work: Callable[[], Any] | None = None,
         commitment_management_unit_of_work: Callable[[], Any] | None = None,
+        constraint_management_unit_of_work: (
+            Callable[[], ConstraintManagementUnitOfWork] | None
+        ) = None,
         relationship_intelligence_enabled: bool = False,
         relationship_intelligence_writes_enabled: bool = False,
         relationship_memory_enabled: bool = False,
@@ -2976,6 +3059,20 @@ class ApplicationService:
             if commitment_management_unit_of_work is not None
             else None
         )
+        #: PC-CM-IMP-WP04. The factory for one Constraint Management transaction,
+        #: held rather than opened: `ApplicationService` opens one per request,
+        #: never a shared one, exactly as the task and commitment planes do.
+        #: Optional and defaulting to `None` on the same terms as those two --
+        #: `bootstrap.gateway` supplies it unconditionally, under every settings
+        #: shape, so a real build always has it; a service constructed without
+        #: one refuses the six reads rather than answering from nothing.
+        self._constraint_management_unit_of_work = constraint_management_unit_of_work
+        #: WP03's read service, held rather than built per request for the reason
+        #: `_managed` and `_memory` are: it is a stateless frozen dataclass that
+        #: takes its repository as an argument, and constructing one per call
+        #: would say it held something. Every derived flag, count, group and
+        #: cursor the six reads return is decided in there and nowhere here.
+        self._constraint_reads = ConstraintReadService()
 
     @property
     def available_capabilities(self) -> frozenset[Capability]:
@@ -3025,6 +3122,12 @@ class ApplicationService:
             served -= _IDENTITY_CORRECTION_CAPABILITIES
         if not self._goodnotes_pull_enabled:
             served -= _GOODNOTES_PULL_CAPABILITIES
+        # The Constraint read plane, withheld on composition rather than on a
+        # switch: there is no `MY_PA_` variable that turns it off, and the one
+        # thing it needs is the unit-of-work factory a composition root either
+        # handed over or did not.
+        if self._constraint_management_unit_of_work is None:
+            served -= _CONSTRAINT_CAPABILITIES
         return served
 
     def invoke(
@@ -8522,6 +8625,245 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_COMMITMENT_TRUST_BASIS),
         )
 
+    # ---- the Constraint Management read plane (PC-CM-IMP-WP04) -------------
+    #
+    # Six handlers, each one call. The whole of what a handler here does is open
+    # the Constraint transaction, hand its repository to the read service with
+    # the *authenticated* Principal, and render what comes back. There is no date
+    # arithmetic, no business-day call, no party comparison, no aggregation and
+    # no filtering in this file: Overdue, Due Soon, In My Court, the recent
+    # windows, the attention fields, the grouping, the cursor semantics and every
+    # overview formula are decided in `application.constraints`, which is the
+    # only place they are decided. A handler that recomputed one would be a
+    # second answer able to disagree with the page it is summarising, and the
+    # disagreement would be invisible.
+    #
+    # `authorization.principal.principal_id` and never a field of the command:
+    # no Constraint command carries a principal, and `commands.py`'s own
+    # docstring says why. The read service collapses absent, foreign and
+    # unconfigured into the answers its docstrings state, so a Project or a
+    # Constraint belonging to another Principal is indistinguishable here from
+    # one that does not exist -- there is no branch in this file that could tell
+    # them apart even by accident.
+
+    def _constraint_work(self) -> ConstraintManagementUnitOfWork:
+        """The Constraint transaction this request runs in, or a refusal.
+
+        `UnsupportedError` rather than `internal_error`, on the managed-document
+        plane's own terms: a process handed no factory does not serve these
+        names, which is a fact about the build and not a fault in the request.
+        `available_capabilities` withholds all six from such a process, so this
+        is the floor beneath that rather than the only thing standing between a
+        caller and an unwired plane.
+        """
+        factory = self._constraint_management_unit_of_work
+        if factory is None:
+            raise UnsupportedError()
+        return factory()
+
+    def _constraints_read(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadConstraint
+    ) -> _Result:
+        """`constraints.read`: one Constraint in full, exactly as WP03 derives it."""
+        del unit_of_work
+        with _translated(), self._constraint_work() as work:
+            view = self._constraint_reads.read_constraint(
+                work.constraints,
+                principal_id=authorization.principal.principal_id,
+                constraint_id=command.constraint_id,
+                now=self._clock(),
+            )
+        return _Result(
+            payload={"constraint": _constraint_payload(view)},
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CONSTRAINT_TRUST_BASIS),
+        )
+
+    def _constraints_list(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListConstraints
+    ) -> _Result:
+        """`constraints.list`: one bounded page of the Register.
+
+        The page's truncation and its next cursor are read off the page the
+        service returned. Neither is recomputed: the cursor binds to the
+        Principal, the Project and the exact filter set it was issued under, and
+        a second construction of either here would be a second definition of
+        what "the same request" means.
+        """
+        del unit_of_work
+        with _constraint_translated():
+            query = self._constraint_query(command)
+        with _translated(), _constraint_translated(), self._constraint_work() as work:
+            page = self._constraint_reads.list_constraints(
+                work.constraints,
+                principal_id=authorization.principal.principal_id,
+                project_id=command.project_id,
+                query=query,
+                now=self._clock(),
+            )
+        return _Result(
+            payload={"constraints": _constraint_payload(page.entries)},
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_CONSTRAINT_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=page.is_truncated,
+                    reason="page_size_reached" if page.is_truncated else None,
+                    next_cursor=page.next_cursor,
+                ),
+            ),
+        )
+
+    def _constraints_search(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: SearchConstraints
+    ) -> _Result:
+        """`constraints.search`: the same Register page, narrowed by one term.
+
+        The same service method the Register uses, with the term set on the
+        query, because a search *is* a Register request with a search predicate.
+        A second path would be a second set of derived flags over the same rows.
+        """
+        del unit_of_work
+        with _constraint_translated():
+            query = self._constraint_query(command, search_text=command.query)
+        with _translated(), _constraint_translated(), self._constraint_work() as work:
+            page = self._constraint_reads.list_constraints(
+                work.constraints,
+                principal_id=authorization.principal.principal_id,
+                project_id=command.project_id,
+                query=query,
+                now=self._clock(),
+            )
+        return _Result(
+            payload={"constraints": _constraint_payload(page.entries)},
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_CONSTRAINT_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=page.is_truncated,
+                    reason="page_size_reached" if page.is_truncated else None,
+                    next_cursor=page.next_cursor,
+                ),
+            ),
+        )
+
+    def _constraints_history(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadConstraintHistory,
+    ) -> _Result:
+        """`constraints.history`: one bounded page of mutation receipts."""
+        del unit_of_work
+        with _translated(), _constraint_translated(), self._constraint_work() as work:
+            page = (
+                self._constraint_reads.read_history(
+                    work.constraints,
+                    principal_id=authorization.principal.principal_id,
+                    constraint_id=command.constraint_id,
+                    cursor=command.cursor,
+                )
+                if command.page_size is None
+                else self._constraint_reads.read_history(
+                    work.constraints,
+                    principal_id=authorization.principal.principal_id,
+                    constraint_id=command.constraint_id,
+                    page_size=command.page_size,
+                    cursor=command.cursor,
+                )
+            )
+        return _Result(
+            payload={"history": _constraint_payload(page.entries)},
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_CONSTRAINT_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=page.is_truncated,
+                    reason="page_size_reached" if page.is_truncated else None,
+                    next_cursor=page.next_cursor,
+                ),
+            ),
+        )
+
+    def _constraints_overview(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadConstraintOverview,
+    ) -> _Result:
+        """`constraints.overview`: the Project's position, counted once by WP03."""
+        del unit_of_work
+        with _translated(), self._constraint_work() as work:
+            overview = self._constraint_reads.read_overview(
+                work.constraints,
+                principal_id=authorization.principal.principal_id,
+                project_id=command.project_id,
+                now=self._clock(),
+            )
+        return _Result(
+            payload={"overview": _constraint_payload(overview)},
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CONSTRAINT_TRUST_BASIS),
+        )
+
+    def _constraint_categories_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListConstraintCategories,
+    ) -> _Result:
+        """`constraint_categories.list`: the Project's Category scheme, in order."""
+        del unit_of_work
+        with _translated(), self._constraint_work() as work:
+            categories = self._constraint_reads.list_categories(
+                work.constraints,
+                principal_id=authorization.principal.principal_id,
+                project_id=command.project_id,
+                include_states=frozenset(command.states) if command.states else None,
+            )
+        return _Result(
+            payload={"categories": _constraint_payload(categories)},
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CONSTRAINT_TRUST_BASIS),
+        )
+
+    @staticmethod
+    def _constraint_query(
+        command: ListConstraints | SearchConstraints, *, search_text: str | None = None
+    ) -> ConstraintListQuery:
+        """The read plane's own request object, built from the command's fields.
+
+        Field-for-field, with the tuples the wire carries turned back into the
+        frozensets the query holds. Nothing is defaulted here that the query does
+        not default itself: `limit` is passed only when the caller stated one, so
+        the page size stays `DEFAULT_LIST_LIMIT`'s and this layer holds no copy
+        of it.
+        """
+        common: dict[str, Any] = {
+            "scope": command.scope,
+            "cursor": command.cursor,
+        }
+        if command.limit is not None:
+            common["limit"] = command.limit
+        if search_text is not None:
+            common["search_text"] = search_text
+        if isinstance(command, SearchConstraints):
+            return ConstraintListQuery(**common)
+        return ConstraintListQuery(
+            statuses=frozenset(command.statuses),
+            category_ids=frozenset(command.category_ids),
+            bic_party_refs=frozenset(command.bic_party_refs),
+            responsible_party_refs=frozenset(command.responsible_party_refs),
+            sync_states=frozenset(command.sync_states),
+            record_qualities=frozenset(command.record_qualities),
+            overdue=command.overdue,
+            due_soon=command.due_soon,
+            my_court=command.my_court,
+            needs_attention=command.needs_attention,
+            recent=command.recent,
+            sort=command.sort,
+            direction=command.sort_order,
+            grouping=command.grouping,
+            **common,
+        )
+
     def _documents_archive(
         self,
         unit_of_work: UnitOfWork,
@@ -10604,6 +10946,12 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.COMMITMENTS_CREATE: ApplicationService._commitments_create,
         Capability.COMMITMENTS_UPDATE: ApplicationService._commitments_update,
         Capability.COMMITMENTS_CLOSE: ApplicationService._commitments_close,
+        Capability.CONSTRAINTS_READ: ApplicationService._constraints_read,
+        Capability.CONSTRAINTS_LIST: ApplicationService._constraints_list,
+        Capability.CONSTRAINTS_SEARCH: ApplicationService._constraints_search,
+        Capability.CONSTRAINTS_HISTORY: ApplicationService._constraints_history,
+        Capability.CONSTRAINTS_OVERVIEW: ApplicationService._constraints_overview,
+        Capability.CONSTRAINT_CATEGORIES_LIST: ApplicationService._constraint_categories_list,
         Capability.CONTEXT_PREPARE: ApplicationService._context_prepare,
         Capability.CONTEXT_FEEDBACK: ApplicationService._context_feedback,
         Capability.GOODNOTES_WORK: ApplicationService._goodnotes_work,
@@ -10918,6 +11266,25 @@ _RELATIONSHIP_MEMORY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.RELATIONSHIP_MEMORY_PROPOSE,
     }
 )
+
+#: PC-CM-IMP-WP04. Withheld from a process the composition root did not hand a
+#: Constraint unit-of-work factory, exactly as the six `documents.` names are
+#: withheld from one with no managed root. `bootstrap.gateway` supplies the
+#: factory under every settings shape, so a real build never loses these -- but
+#: availability is derived from what is *composed* rather than from what is
+#: compiled in, and a manifest that published a name the process would then
+#: refuse would be describing a different build than the one running.
+_CONSTRAINT_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.CONSTRAINTS_READ,
+        Capability.CONSTRAINTS_LIST,
+        Capability.CONSTRAINTS_SEARCH,
+        Capability.CONSTRAINTS_HISTORY,
+        Capability.CONSTRAINTS_OVERVIEW,
+        Capability.CONSTRAINT_CATEGORIES_LIST,
+    }
+)
+
 
 _MANAGED_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     {

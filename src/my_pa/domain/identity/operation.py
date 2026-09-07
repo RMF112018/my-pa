@@ -781,6 +781,35 @@ class Capability(StrEnum):
     CANVAS_WORKSPACE_GET = "canvas.workspace.get"
     CANVAS_WORKSPACE_PUT = "canvas.workspace.put"
 
+    #: `PC-CM-IMP-WP04`. The six Constraint Management reads, and nothing else:
+    #: the plane's authoring and its SharePoint synchronisation are deliberately
+    #: absent, so a grant issued over this family cannot reach either. Each name
+    #: is served by exactly one method of `application.constraints`'s read
+    #: service, which is where every derived flag — Overdue, Due Soon, In My
+    #: Court, the recent filters, the grouping, the cursor and the overview
+    #: formulas — is decided; the capability admits that answer to a transport
+    #: and recomputes no part of it.
+    #:
+    #: **`constraint_categories.list` rather than `constraints.categories.list`,**
+    #: because a Category is not a Constraint. It is the Project's own
+    #: classification scheme, readable when the Register is empty, and folding it
+    #: under the `constraints.` prefix would make a grant issued to read the
+    #: scheme look like one issued to read the records filed under it.
+    #:
+    #: None of the six is in `_WRITE_CAPABILITIES`, `_ADDITIVE_WRITE_CAPABILITIES`
+    #: or `_OPERATOR_ONLY`, and each absence is a decision rather than an
+    #: omission. They change no product-owned state, so the write sets would be
+    #: false; and none widens the scope a later request is evaluated against,
+    #: which is the property that puts `sources.enroll` in the operator set. The
+    #: absence from `_WRITE_CAPABILITIES` is also what makes the generated MCP
+    #: tools carry `read_only_hint`.
+    CONSTRAINTS_READ = "constraints.read"
+    CONSTRAINTS_LIST = "constraints.list"
+    CONSTRAINTS_SEARCH = "constraints.search"
+    CONSTRAINTS_HISTORY = "constraints.history"
+    CONSTRAINTS_OVERVIEW = "constraints.overview"
+    CONSTRAINT_CATEGORIES_LIST = "constraint_categories.list"
+
 
 class NativeSourceCapability(StrEnum):
     """Authenticated native-host commands, separate from legacy public transports."""
@@ -1223,6 +1252,28 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.RELATIONSHIP_MEMORY_PROPOSE: frozenset({Purpose.RELATIONSHIP_MEMORY_PROPOSAL}),
         Capability.CANVAS_WORKSPACE_GET: frozenset({Purpose.CANVAS_WORKSPACE_READ}),
         Capability.CANVAS_WORKSPACE_PUT: frozenset({Purpose.CANVAS_WORKSPACE_AUTHORING}),
+        # `PC-CM-IMP-WP04`. One purpose across the Constraint read family, and
+        # one purpose only.
+        # `constraint_read` is minted rather than borrowed on the rule this
+        # module applies everywhere (`D-91`): would reuse widen the grant? Every
+        # candidate does. `task_read` and `commitment_read` are the work-tracking
+        # planes, and a Constraint is a Project control whose parties, evidence
+        # links and history are not a task's; `document_read` is the managed
+        # custody plane; `entity_read` is identity. Admitting a Register read
+        # under any of them would let a grant issued for one plane return
+        # another's rows.
+        #
+        # There is deliberately no authoring purpose paired with these names.
+        # Constraint authoring is a later package's, and the separation the
+        # acceptance criteria ask for is proved by that absence together with the
+        # deny-all default `permitted_purposes` gives an unmapped pair — not by
+        # minting a purpose nothing yet grants.
+        Capability.CONSTRAINTS_READ: frozenset({Purpose.CONSTRAINT_READ}),
+        Capability.CONSTRAINTS_LIST: frozenset({Purpose.CONSTRAINT_READ}),
+        Capability.CONSTRAINTS_SEARCH: frozenset({Purpose.CONSTRAINT_READ}),
+        Capability.CONSTRAINTS_HISTORY: frozenset({Purpose.CONSTRAINT_READ}),
+        Capability.CONSTRAINTS_OVERVIEW: frozenset({Purpose.CONSTRAINT_READ}),
+        Capability.CONSTRAINT_CATEGORIES_LIST: frozenset({Purpose.CONSTRAINT_READ}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),

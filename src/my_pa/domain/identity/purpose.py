@@ -348,3 +348,21 @@ class Purpose(StrEnum):
     # caller overwrite it.
     CANVAS_WORKSPACE_READ = "canvas_workspace_read"
     CANVAS_WORKSPACE_AUTHORING = "canvas_workspace_authoring"
+    # Constraint Management reads (PC-CM-IMP-WP04). One purpose, and only the
+    # read half of the plane, on `D-91`: would reuse widen the grant? Every
+    # candidate would. `task_read` and `commitment_read` are the work-tracking
+    # planes and a Constraint is a Project control — its parties, evidence links,
+    # categories and mutation receipts are rows neither of those grants reaches;
+    # `document_read` is managed custody; `entity_read` is identity.
+    #
+    # **No `constraint_authoring` beside it, and the absence is the decision.**
+    # This build serves six Constraint reads and no Constraint write, so an
+    # authoring purpose would be a grant nothing can exercise — declared ahead of
+    # the behaviour that would justify it, which is the half of a boundary that
+    # gets forgotten. The read/authoring separation the plane requires is proved
+    # today by this purpose granting only reads and by `operation.py`'s deny-all
+    # default for the pair nobody mapped. Sync read and sync authoring are absent
+    # for the same reason twice over: the synchronisation behaviour is a later
+    # package's, and a purpose named for it would be the first half of building
+    # one.
+    CONSTRAINT_READ = "constraint_read"

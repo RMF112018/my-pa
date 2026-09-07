@@ -117,6 +117,8 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListConstraintCategories,
+    ListConstraints,
     ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
@@ -147,6 +149,9 @@ from my_pa.application.commands import (
     PutCanvasWorkspace,
     ReadCapture,
     ReadCommitment,
+    ReadConstraint,
+    ReadConstraintHistory,
+    ReadConstraintOverview,
     ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadKnowledge,
@@ -179,6 +184,7 @@ from my_pa.application.commands import (
     ReviseRelationshipMemory,
     SearchCaptures,
     SearchCommitments,
+    SearchConstraints,
     SearchEntities,
     SearchGoodNotes,
     SearchIntelligenceArtifacts,
@@ -218,6 +224,19 @@ from my_pa.domain.intelligence.catalog import (
     ProducerRunState,
     ResolverSetId,
     SourceLaneId,
+)
+from my_pa.domain.project_controls.category import ConstraintCategoryState
+from my_pa.domain.project_controls.constraint import (
+    ConstraintLifecycleState,
+    ConstraintRecordQuality,
+)
+from my_pa.domain.project_controls.read_models import (
+    ConstraintGrouping,
+    ConstraintListScope,
+    ConstraintRecentFilter,
+    ConstraintSort,
+    ConstraintSyncStateView,
+    SortDirection,
 )
 from my_pa.domain.relationship.authoring import CallerNamespace
 from my_pa.domain.relationship.entity import (
@@ -1834,6 +1853,83 @@ def _split_entity(payload: Mapping[str, Any]) -> Command:
 #: audit vocabulary but remain intentionally absent here until WP-12G owns the
 #: gateway/UI route. The Command union and this mapping stay equal, so absence
 #: is explicit rather than a half-wired route.
+# --- the Constraint Management read plane (PC-CM-IMP-WP04) -------------------
+#
+# Shape conversion and nothing else, exactly as the entity and memory builders
+# above are: a JSON array is not a tuple and a JSON string is not a
+# `ConstraintListScope`. A value outside a vocabulary is left as it arrived so
+# the command reports it under its own field name, which is the rule
+# `_entity_member` states and the reason nothing here raises.
+
+#: The single-valued closed vocabularies a Register request may carry.
+_CONSTRAINT_VOCABULARIES: Final[Mapping[str, type[StrEnum]]] = MappingProxyType(
+    {
+        "scope": ConstraintListScope,
+        "recent": ConstraintRecentFilter,
+        "sort": ConstraintSort,
+        "sort_order": SortDirection,
+        "grouping": ConstraintGrouping,
+    }
+)
+
+#: The filter families, each an array of one closed vocabulary.
+_CONSTRAINT_FILTERS: Final[Mapping[str, type[StrEnum]]] = MappingProxyType(
+    {
+        "statuses": ConstraintLifecycleState,
+        "sync_states": ConstraintSyncStateView,
+        "record_qualities": ConstraintRecordQuality,
+        "states": ConstraintCategoryState,
+    }
+)
+
+#: The identifier and party-reference arrays, which carry no vocabulary at all.
+_CONSTRAINT_SEQUENCES: Final = (
+    "category_ids",
+    "bic_party_refs",
+    "responsible_party_refs",
+)
+
+
+def _constraint_vocabulary(payload: Mapping[str, Any]) -> dict[str, Any]:
+    converted = dict(payload)
+    for name, vocabulary in _CONSTRAINT_VOCABULARIES.items():
+        if name in converted:
+            converted[name] = _entity_member(converted[name], vocabulary)
+    for name, vocabulary in _CONSTRAINT_FILTERS.items():
+        supplied = converted.get(name)
+        if isinstance(supplied, list):
+            converted[name] = tuple(_entity_member(entry, vocabulary) for entry in supplied)
+    for name in _CONSTRAINT_SEQUENCES:
+        supplied = converted.get(name)
+        if isinstance(supplied, list):
+            converted[name] = tuple(supplied)
+    return converted
+
+
+def _read_constraint(payload: Mapping[str, Any]) -> Command:
+    return ReadConstraint(**payload)
+
+
+def _list_constraints(payload: Mapping[str, Any]) -> Command:
+    return ListConstraints(**_constraint_vocabulary(payload))
+
+
+def _search_constraints(payload: Mapping[str, Any]) -> Command:
+    return SearchConstraints(**_constraint_vocabulary(payload))
+
+
+def _read_constraint_history(payload: Mapping[str, Any]) -> Command:
+    return ReadConstraintHistory(**payload)
+
+
+def _read_constraint_overview(payload: Mapping[str, Any]) -> Command:
+    return ReadConstraintOverview(**payload)
+
+
+def _list_constraint_categories(payload: Mapping[str, Any]) -> Command:
+    return ListConstraintCategories(**_constraint_vocabulary(payload))
+
+
 _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = MappingProxyType(
     {
         Capability.CAPABILITIES_GET: _get_capabilities,
@@ -1884,6 +1980,12 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.COMMITMENTS_CREATE: _create_commitment,
         Capability.COMMITMENTS_UPDATE: _update_commitment,
         Capability.COMMITMENTS_CLOSE: _close_commitment,
+        Capability.CONSTRAINTS_READ: _read_constraint,
+        Capability.CONSTRAINTS_LIST: _list_constraints,
+        Capability.CONSTRAINTS_SEARCH: _search_constraints,
+        Capability.CONSTRAINTS_HISTORY: _read_constraint_history,
+        Capability.CONSTRAINTS_OVERVIEW: _read_constraint_overview,
+        Capability.CONSTRAINT_CATEGORIES_LIST: _list_constraint_categories,
         Capability.CONTEXT_PREPARE: _prepare_context,
         Capability.CONTEXT_FEEDBACK: _record_context_feedback,
         Capability.GOODNOTES_PULL: _pull_goodnotes_work,

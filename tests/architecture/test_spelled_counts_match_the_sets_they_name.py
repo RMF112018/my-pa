@@ -423,6 +423,17 @@ _ORDINAL_UNITS = (
     "hundred-thirty-fifth",
     "hundred-thirty-sixth",
     "hundred-thirty-seventh",
+    # `PC-CM-IMP-WP04`'s six Constraint Management reads took the public set past
+    # a hundred and thirty-six, and the green-half plant indexes one past the
+    # set. The boundary announced itself exactly as every one above it did --
+    # `IndexError` in the plant rather than a false pass -- which is the property
+    # the density of this tuple buys.
+    "hundred-thirty-eighth",
+    "hundred-thirty-ninth",
+    "hundred-fortieth",
+    "hundred-forty-first",
+    "hundred-forty-second",
+    "hundred-forty-third",
 )
 
 

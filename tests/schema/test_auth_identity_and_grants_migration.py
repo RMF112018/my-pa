@@ -186,6 +186,9 @@ def test_empty_schema_reaches_the_new_head(disposable_database: str) -> None:
         names = _constraint_names(engine, "auth_grants")
         assert set(GRANT_CONSTRAINTS) <= names
         assert "auth_grant_id" in _columns(engine, "webauthn_challenges")
+        account_constraints = _constraint_names(engine, "user_accounts")
+        assert set(ACCOUNT_CONSTRAINTS) <= account_constraints
+        assert "one_user_account_per_entra_identity" not in account_constraints
     finally:
         engine.dispose()
 
@@ -250,8 +253,12 @@ def test_predecessor_backfills_identity_preserves_ids_and_adds_empty_grants(
                 text("SELECT count(*) FROM identity.auth_grants")
             ).scalar_one()
             assert grants == 0
-        assert set(ACCOUNT_CONSTRAINTS) <= _constraint_names(engine, "user_accounts")
-        assert "one_user_account_per_entra_identity" in _constraint_names(engine, "user_accounts")
+        account_constraints = _constraint_names(engine, "user_accounts")
+        assert set(ACCOUNT_CONSTRAINTS) <= account_constraints
+        # `(identity_provider, identity_subject)` is the sole account unique after
+        # the upgrade: a surviving `(tid, oid)` unique is the one a concurrent
+        # first sign-in would violate, since `ON CONFLICT` names only the other.
+        assert "one_user_account_per_entra_identity" not in account_constraints
         definition = _purpose_check(engine)
         for purpose in NEW_CHALLENGE_PURPOSES:
             assert purpose in definition
@@ -349,6 +356,9 @@ def test_downgrade_empty_and_entra_only_succeeds_and_data_bearing_refuses(
     try:
         assert "auth_grants" not in inspect(engine).get_table_names(schema="identity")
         assert "identity_provider" not in _columns(engine, "user_accounts")
+        restored_constraints = _constraint_names(engine, "user_accounts")
+        assert "one_user_account_per_entra_identity" in restored_constraints
+        assert "one_user_account_per_provider_subject" not in restored_constraints
         with engine.connect() as connection:
             tid_nullable = connection.execute(
                 text(

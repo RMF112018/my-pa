@@ -1,14 +1,21 @@
 """Persisting the Principal registry: resolve-or-create and scope grants.
 
-The registry's one non-negotiable behavior is that `(tid, oid)` maps to
-exactly one `principal_id`, forever, under concurrency and retry. That is a
-database fact, not an application check: the insert is attempted first with
-`ON CONFLICT (tid, oid) DO UPDATE`, so two concurrent first sign-ins of the
-same person cannot both read "absent" and both mint a Principal — the second
-insert collapses onto the first row and both callers observe the same
+The registry's one non-negotiable behavior is that
+`(identity_provider, identity_subject)` maps to exactly one `principal_id`,
+forever, under concurrency and retry. That is a database fact, not an
+application check: the insert is attempted first with `ON CONFLICT` on
+`one_user_account_per_provider_subject`, so two concurrent first sign-ins of
+the same person cannot both read "absent" and both mint a Principal — the
+second insert collapses onto the first row and both callers observe the same
 `principal_id`. Check-then-insert would reintroduce exactly the window the
 constraint exists to close (the same argument `enrollment.py` records for
 idempotency keys).
+
+That subject is `tid:oid` for the `entra` and `synthetic` providers, so the
+Entra guarantee is unchanged in substance. It is the *only* account unique:
+`ON CONFLICT` names exactly one constraint, so a second overlapping unique on
+`(tid, oid)` would be the one a concurrent insert violated, and PostgreSQL
+would raise there rather than collapse.
 
 What the conflict arm may touch is deliberately narrow: `upn`,
 `display_name`, `last_authenticated_at`, and lifecycle re-activation. It may
@@ -112,7 +119,6 @@ user_accounts = Table(
         "identity_subject",
         name="one_user_account_per_provider_subject",
     ),
-    UniqueConstraint("tid", "oid", name="one_user_account_per_entra_identity"),
 )
 
 principal_scope_grants = Table(
@@ -168,8 +174,10 @@ class UserAccountRepository:
         self._connection = connection
 
     def resolve_or_create(self, claims: EntraTokenClaims, *, now: datetime) -> UserAccount:
-        """Return the one account for `(tid, oid)`, creating it on first sight.
+        """Return the one account for this subject, creating it on first sight.
 
+        The subject is `tid:oid` under the `entra` or `synthetic` provider, and
+        `(identity_provider, identity_subject)` is what the conflict arm names.
         Idempotent: a retry or a concurrent duplicate lands on the same row
         and the same `principal_id`. The conflict arm refreshes the mutable
         observations and the authentication timestamp only.
@@ -195,7 +203,7 @@ class UserAccountRepository:
             home_tenant_verified=True,
         )
         resolved = insert.on_conflict_do_update(
-            constraint="one_user_account_per_entra_identity",
+            constraint="one_user_account_per_provider_subject",
             set_={
                 "upn": insert.excluded.upn,
                 "display_name": insert.excluded.display_name,

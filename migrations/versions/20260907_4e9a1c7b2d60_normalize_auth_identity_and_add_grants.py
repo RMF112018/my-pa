@@ -7,6 +7,13 @@ Create Date: 2026-09-07
 The local account is the fixed LOCAL_OPERATOR_UUID. Existing account and
 foreign-key identities are never rewritten. Closed vocabularies and the fixed
 UUID are frozen here rather than imported from runtime modules.
+
+`(identity_provider, identity_subject)` replaces `(tid, oid)` as the sole
+account uniqueness arbiter: the local account carries no `tid`/`oid` at all,
+and two overlapping uniques would let a concurrent first sign-in raise on the
+one its `ON CONFLICT` did not name instead of collapsing onto the existing
+row. The downgrade restores `(tid, oid)` first, which its own guard has
+already proven representable.
 """
 
 from __future__ import annotations
@@ -59,6 +66,9 @@ def upgrade() -> None:
           ),
           ADD CONSTRAINT one_user_account_per_provider_subject
             UNIQUE (identity_provider, identity_subject);
+
+        ALTER TABLE identity.user_accounts
+          DROP CONSTRAINT one_user_account_per_entra_identity;
 
         CREATE TABLE identity.auth_grants (
           id uuid PRIMARY KEY,
@@ -165,6 +175,9 @@ def downgrade() -> None:
           ));
         DROP INDEX identity.auth_grants_one_live_per_purpose;
         DROP TABLE identity.auth_grants;
+
+        ALTER TABLE identity.user_accounts
+          ADD CONSTRAINT one_user_account_per_entra_identity UNIQUE (tid, oid);
 
         ALTER TABLE identity.user_accounts
           DROP CONSTRAINT one_user_account_per_provider_subject,

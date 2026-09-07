@@ -143,7 +143,7 @@ def test_two_moss_principals_resolve_to_distinct_stable_principals(
 def test_concurrent_first_sign_ins_mint_exactly_one_principal(
     engine: Engine, service: PrincipalIdentityService
 ) -> None:
-    """The `(tid, oid)` constraint, not a check, closes the duplicate window."""
+    """The provider-subject unique, not a check, closes the duplicate window."""
 
     def _authenticate(_: int) -> object:
         with engine.begin() as connection:

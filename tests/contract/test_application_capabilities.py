@@ -25,11 +25,16 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from types import MappingProxyType
+from typing import Final
+from unittest import mock
 
 import pytest
 from tests.conftest import (
     DEFAULT_LIMITS,
+    WHEN,
     FakeProviders,
+    FakeUnitOfWork,
     Scene,
     World,
     build_provider,
@@ -41,6 +46,8 @@ from tests.conftest import (
     staged_search,
 )
 
+from my_pa.application import service as service_module
+from my_pa.application.capabilities import build_capability_manifest
 from my_pa.application.commands import (
     EnrollSource,
     FetchSource,
@@ -52,6 +59,7 @@ from my_pa.application.commands import (
     GetSourceStatus,
     ListSources,
     PrepareContext,
+    ReadConstraintOverview,
     ReadKnowledge,
     RecordContextFeedback,
     Representation,
@@ -60,7 +68,7 @@ from my_pa.application.commands import (
     SubmitGoodNotesProposal,
 )
 from my_pa.application.disclosure import Limitation
-from my_pa.application.service import ApplicationService
+from my_pa.application.service import _HANDLERS, ApplicationService
 from my_pa.contracts.ports import KnowledgeRecord
 from my_pa.contracts.v1.capabilities import Availability, EffectiveLimits, ReadinessState
 from my_pa.contracts.v1.envelope import ResponseEnvelope
@@ -81,6 +89,19 @@ from my_pa.domain.source.registry import issue_identifier
 MARKDOWN = "text/markdown"
 PLAIN = "text/plain"
 PDF = "application/pdf"
+
+#: PC-CM-IMP-WP04's read capabilities, named once so the availability pair
+#: below cannot drift apart.
+CONSTRAINT_READS: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.CONSTRAINTS_READ,
+        Capability.CONSTRAINTS_LIST,
+        Capability.CONSTRAINTS_SEARCH,
+        Capability.CONSTRAINTS_HISTORY,
+        Capability.CONSTRAINTS_OVERVIEW,
+        Capability.CONSTRAINT_CATEGORIES_LIST,
+    }
+)
 
 
 def run(
@@ -1364,3 +1385,85 @@ def test_gsqs_status_returns_the_started_run(scene: Scene) -> None:
     assert result["run_id"] == started["run_id"]
     assert result["state"] == "COMPLETE"
     assert "capture_artifact" in result
+
+
+# ---- the Constraint read plane's availability (PC-CM-IMP-WP04) --------------
+
+
+def _service_without_constraints(scene: Scene) -> ApplicationService:
+    """The same build, composed without the Constraint unit-of-work factory.
+
+    Constructed directly rather than through `build_service`, which composes the
+    factory by default for the reason its own comment gives. This is the "test
+    about the uncomposed build" that comment points at.
+    """
+    scene.world.providers = scene.providers
+    return ApplicationService(
+        unit_of_work=lambda: FakeUnitOfWork(scene.world),
+        limits=DEFAULT_LIMITS,
+        clock=lambda: WHEN,
+        managed_store=scene.world.managed_store,
+        constraint_management_unit_of_work=None,
+    )
+
+
+def test_a_composed_constraint_plane_publishes_all_six_reads(scene: Scene) -> None:
+    """Composed dependency, published capability — the positive half of `§7.5`."""
+    served = build_service(scene.world, scene.providers).available_capabilities
+    assert served >= CONSTRAINT_READS
+
+
+def test_an_uncomposed_constraint_plane_publishes_none_of_them(scene: Scene) -> None:
+    """No factory, no capability, and the manifest says so rather than the code.
+
+    The negative half, and it is what makes the positive half mean something: a
+    service that published these names whatever it held would pass the test above
+    with availability hardcoded. Both are read off `available_capabilities`,
+    which derives from `_HANDLERS` less what composition withheld.
+    """
+    service = _service_without_constraints(scene)
+    assert not (CONSTRAINT_READS & service.available_capabilities)
+    manifest = build_capability_manifest(
+        implemented=service.available_capabilities, limits=DEFAULT_LIMITS
+    )
+    availability = {status.name: status.availability for status in manifest.capabilities}
+    for capability in sorted(CONSTRAINT_READS, key=lambda item: item.value):
+        assert availability[capability.value] is Availability.NOT_IMPLEMENTED
+
+
+def test_an_uncomposed_constraint_plane_refuses_the_request_it_withholds(
+    scene: Scene,
+) -> None:
+    """The floor beneath the manifest: a withheld name is refused, not answered."""
+    envelope = run(
+        _service_without_constraints(scene),
+        scene,
+        Capability.CONSTRAINTS_OVERVIEW,
+        Purpose.CONSTRAINT_READ,
+        ReadConstraintOverview(project_id=scene.constraint_project_id),
+    )
+    assert envelope.error is not None
+    assert envelope.error.code is ErrorCode.UNSUPPORTED
+
+
+def test_availability_is_derived_from_the_dispatch_table_and_not_from_a_constant(
+    scene: Scene,
+) -> None:
+    """Remove a handler and the capability stops being published.
+
+    The one thing neither test above can show: that the published set is read off
+    `_HANDLERS` at all. A constant listing the same names would satisfy both.
+    """
+    service = build_service(scene.world, scene.providers)
+    assert Capability.CONSTRAINTS_READ in service.available_capabilities
+    thinned = MappingProxyType(
+        {
+            capability: handler
+            for capability, handler in _HANDLERS.items()
+            if capability is not Capability.CONSTRAINTS_READ
+        }
+    )
+    with mock.patch.object(service_module, "_HANDLERS", thinned):
+        served = service.available_capabilities
+    assert Capability.CONSTRAINTS_READ not in served
+    assert Capability.CONSTRAINTS_LIST in served

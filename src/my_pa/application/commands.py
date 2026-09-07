@@ -94,6 +94,22 @@ from my_pa.domain.intelligence.catalog import (
     ResolverSetId,
     SourceLaneId,
 )
+from my_pa.domain.project_controls.category import ConstraintCategoryState
+from my_pa.domain.project_controls.constraint import (
+    ConstraintLifecycleState,
+    ConstraintRecordQuality,
+)
+from my_pa.domain.project_controls.read_models import (
+    MAX_CURSOR_CHARACTERS,
+    MAX_LIST_LIMIT,
+    MAX_SEARCH_CHARACTERS,
+    ConstraintGrouping,
+    ConstraintListScope,
+    ConstraintRecentFilter,
+    ConstraintSort,
+    ConstraintSyncStateView,
+    SortDirection,
+)
 from my_pa.domain.relationship.authoring import (
     CALLER_SETTABLE_STATUSES,
     MAX_ENTITY_NAME_CHARACTERS,
@@ -7774,6 +7790,247 @@ class SplitEntity:
         _split_dispositions(self.dispositions)
 
 
+def _constraint_limit(value: int | None, detail: SafeDetail) -> int | None:
+    """One Register page bound, refused here rather than deep in the query object.
+
+    `ConstraintListQuery` already enforces `1..MAX_LIST_LIMIT`, and it raises
+    `ConstraintQueryError` — a `ValueError` of the read plane, not one of the
+    eleven public errors. Reaching it with a caller's number would turn a
+    malformed request into whatever the handler's translation happened to make
+    of it. The ceiling is the domain's own constant rather than a second copy, so
+    the two cannot drift; what is added here is the classification.
+    """
+    sized = _positive(value, detail)
+    if sized is not None and sized > MAX_LIST_LIMIT:
+        raise InvalidRequestError(detail)
+    return sized
+
+
+def _constraint_enum[T: StrEnum](
+    value: object, kind: type[T], detail: SafeDetail, *, optional: bool = False
+) -> None:
+    """Refuse anything that is not a member of one closed vocabulary."""
+    if optional and value is None:
+        return
+    if not isinstance(value, kind):
+        raise InvalidRequestError(detail)
+
+
+def _constraint_enum_tuple[T: StrEnum](value: object, kind: type[T], detail: SafeDetail) -> None:
+    """Refuse a filter family that is not a tuple of one closed vocabulary.
+
+    A tuple rather than a `frozenset`, which is what `ConstraintListQuery` holds:
+    a set has no JSON shape and `adapters.mcp.tools` publishes nothing for one,
+    so a set-annotated field would reach the wire as an unconstrained value. The
+    handler converts; the closed enum is what makes the published array bounded.
+    """
+    if not isinstance(value, tuple):
+        raise InvalidRequestError(detail)
+    for member in value:
+        if not isinstance(member, kind):
+            raise InvalidRequestError(detail)
+
+
+def _constraint_cursor(value: str | None) -> None:
+    """A read cursor is opaque, and bounded before it is decoded."""
+    if value is None:
+        return
+    _text(value, SafeDetail.CURSOR)
+    if not value or len(value) > MAX_CURSOR_CHARACTERS:
+        raise InvalidRequestError(SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadConstraint:
+    """`constraints.read`: one Constraint in full, on its own Project's calendar.
+
+    The Project is not part of the request, and that is the read service's shape
+    rather than an omission here: a Constraint identifier is unique in the
+    Principal's partition, a Draft may belong to no Project at all, and the
+    calendar every derived flag needs is resolved from the record's own Project.
+    Asking a caller to restate the Project would let a request name one the
+    record does not belong to, which is a disagreement this command cannot have.
+
+    Absent and another Principal's are the same `not_found`.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINTS_READ
+
+    constraint_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.constraint_id, IdKind.PROJECT_CONSTRAINT, SafeDetail.CONSTRAINT_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class ListConstraints:
+    """`constraints.list`: one bounded page of a Project's Register.
+
+    Every filter is a closed vocabulary or an identifier, never free text: that
+    is the line this command keeps against `SearchConstraints`, the same one
+    `ListTasks` keeps against `SearchTasks`. Mixing the two would make "no filter
+    supplied" ambiguous between listing everything and searching for nothing.
+
+    The fields are the read plane's own request shape, restated as a transport
+    payload and converted by the handler. Nothing here decides what Overdue, Due
+    Soon, In My Court, a recent window or a group means — those are the read
+    service's, and a command that recomputed one would be a second answer able to
+    disagree with the Register it is paging.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINTS_LIST
+
+    project_id: str
+    scope: ConstraintListScope = ConstraintListScope.OPEN
+    statuses: tuple[ConstraintLifecycleState, ...] = ()
+    category_ids: tuple[str, ...] = ()
+    bic_party_refs: tuple[str, ...] = ()
+    responsible_party_refs: tuple[str, ...] = ()
+    sync_states: tuple[ConstraintSyncStateView, ...] = ()
+    record_qualities: tuple[ConstraintRecordQuality, ...] = ()
+    overdue: bool = False
+    due_soon: bool = False
+    my_court: bool = False
+    needs_attention: bool = False
+    recent: ConstraintRecentFilter | None = None
+    sort: ConstraintSort = ConstraintSort.CODE
+    #: `sort_order` rather than the read plane's own `direction`, and the
+    #: rename is a wire decision rather than a domain one: every published
+    #: MCP property name is swept for location vocabulary by
+    #: `tests/architecture/test_mcp_is_a_thin_adapter.py`, and `direction`
+    #: trips it on the substring "dir". The three Commitment filters and
+    #: the entity edge carry that name because it is their frozen
+    #: contract's; this surface is new, so it takes a name that says the
+    #: same thing and needs no exemption. The handler passes the value
+    #: straight through to `ConstraintListQuery.direction`.
+    sort_order: SortDirection = SortDirection.ASC
+    grouping: ConstraintGrouping = ConstraintGrouping.CATEGORY
+    limit: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _constraint_enum(self.scope, ConstraintListScope, SafeDetail.SELECTOR)
+        _constraint_enum_tuple(self.statuses, ConstraintLifecycleState, SafeDetail.LIFECYCLE_STATE)
+        _constraint_enum_tuple(self.sync_states, ConstraintSyncStateView, SafeDetail.SELECTOR)
+        _constraint_enum_tuple(self.record_qualities, ConstraintRecordQuality, SafeDetail.SELECTOR)
+        _constraint_enum(self.recent, ConstraintRecentFilter, SafeDetail.SELECTOR, optional=True)
+        _constraint_enum(self.sort, ConstraintSort, SafeDetail.SELECTOR)
+        _constraint_enum(self.sort_order, SortDirection, SafeDetail.SELECTOR)
+        _constraint_enum(self.grouping, ConstraintGrouping, SafeDetail.SELECTOR)
+        for name in ("category_ids", "bic_party_refs", "responsible_party_refs"):
+            if not isinstance(getattr(self, name), tuple):
+                raise InvalidRequestError(SafeDetail.SELECTOR)
+        for category_id in self.category_ids:
+            _identifier(category_id, IdKind.CONSTRAINT_CATEGORY, SafeDetail.SELECTOR)
+        for flag in (self.overdue, self.due_soon, self.my_court, self.needs_attention):
+            if not isinstance(flag, bool):
+                raise InvalidRequestError(SafeDetail.SELECTOR)
+        # The two party families are checked for *type* here and for membership
+        # by `ConstraintListQuery`, which is where the closed tokens
+        # `principal`/`unresolved` and the entity-identity shape are decided. A
+        # second spelling of that rule is a second thing to keep in step.
+        for ref in (*self.bic_party_refs, *self.responsible_party_refs):
+            _text(ref, SafeDetail.SELECTOR)
+        _constraint_limit(self.limit, SafeDetail.LIMIT)
+        _constraint_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class SearchConstraints:
+    """`constraints.search`: lexical search across one Project's Register.
+
+    The same page the Register returns, narrowed by a term. It is a separate
+    capability rather than a `ListConstraints` field for the reason the task
+    plane separates its two: a grant issued to browse a Project's controls and
+    one issued to search across them are different requests, and the search term
+    is the only input here a caller writes freely.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINTS_SEARCH
+
+    project_id: str
+    query: str = field(repr=False)
+    scope: ConstraintListScope = ConstraintListScope.OPEN
+    limit: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _text(self.query, SafeDetail.QUERY)
+        # Length only. Normalisation, the minimum term and the forbidden
+        # character classes belong to `ConstraintListQuery`, which is what the
+        # cursor binds its fingerprint to; restating them here would be a second
+        # rule able to disagree with the one the page was issued under.
+        if len(self.query) > MAX_SEARCH_CHARACTERS:
+            raise InvalidRequestError(SafeDetail.QUERY)
+        _constraint_enum(self.scope, ConstraintListScope, SafeDetail.SELECTOR)
+        _constraint_limit(self.limit, SafeDetail.LIMIT)
+        _constraint_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadConstraintHistory:
+    """`constraints.history`: one bounded page of a Constraint's receipts.
+
+    No Project, for the reason `ReadConstraint` states, and no clock: a receipt
+    records when it happened and nothing about it is derived from now. A
+    Constraint that is absent or another Principal's has no receipts, which is
+    the same page an untouched one returns.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINTS_HISTORY
+
+    constraint_id: str
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.constraint_id, IdKind.PROJECT_CONSTRAINT, SafeDetail.CONSTRAINT_ID)
+        # The ceiling is the read service's own `MAX_HISTORY_PAGE_SIZE`, which
+        # already answers `invalid_request` naming `page_size`. Only the sign is
+        # checked here, so there is one place the history bound is written.
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        _constraint_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadConstraintOverview:
+    """`constraints.overview`: one Project's Constraint position, counted once.
+
+    No filters and no page. The overview is one aggregate over the Project the
+    Register is paging, computed from the same calendar, and a filter here would
+    be a second definition of the set being counted.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINTS_OVERVIEW
+
+    project_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class ListConstraintCategories:
+    """`constraint_categories.list`: one Project's Category scheme, in display order.
+
+    Its own capability rather than a shape of `constraints.list`, because a
+    Category is the Project's classification and not a record filed under one: it
+    is readable when the Register is empty and it needs no Project calendar, so a
+    Project whose timezone nobody has configured still answers.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINT_CATEGORIES_LIST
+
+    project_id: str
+    states: tuple[ConstraintCategoryState, ...] = ()
+
+    def __post_init__(self) -> None:
+        _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _constraint_enum_tuple(self.states, ConstraintCategoryState, SafeDetail.STATES)
+
+
 type Command = (
     GetCapabilities
     | ListSources
@@ -7911,6 +8168,12 @@ type Command = (
     | ArchiveRelationshipMemory
     | RestoreRelationshipMemory
     | ProposeRelationshipMemory
+    | ReadConstraint
+    | ListConstraints
+    | SearchConstraints
+    | ReadConstraintHistory
+    | ReadConstraintOverview
+    | ListConstraintCategories
 )
 
 

@@ -22,6 +22,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "a1c9e4b72f80"
+CURRENT_HEAD_REVISION: Final = "c5b71e0a8d43"
 PREVIOUS: Final = "2774329487be"
 MIGRATION: Final = (
     ROOT / "migrations/versions/20260906_a1c9e4b72f80_admit_goodnotes_browser_contracts.py"
@@ -95,7 +96,7 @@ def _audit(engine: Engine, *, capability: str, purpose: str) -> None:
 
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [REVISION]
+    assert script.get_heads() == [CURRENT_HEAD_REVISION]
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 
 

@@ -11,7 +11,7 @@ The five, over both:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — proved from both ends: the tool list and the option
-  surface route one hundred and thirty-six capability names and none of them mutates a
+  surface route one hundred and forty-two capability names and none of them mutates a
   source, and every capability driven over both transports is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -474,6 +474,18 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_SPLIT_PREVIEW,
         Capability.ENTITIES_SPLIT,
         Capability.RELATIONSHIP_MEMORY_PROPOSE,
+        # PC-CM-IMP-WP04's six Constraint Management reads join them for the same
+        # reason: a Constraint names a Project in the acting Principal's own
+        # partition, never a `src_...` or an `enr_...`. All six are in
+        # `domain.policy.decision._SCOPELESS`, and leaving them in would make this
+        # rule assert that a stranger is denied a scope neither the request nor
+        # the plane has.
+        Capability.CONSTRAINTS_READ,
+        Capability.CONSTRAINTS_LIST,
+        Capability.CONSTRAINTS_SEARCH,
+        Capability.CONSTRAINTS_HISTORY,
+        Capability.CONSTRAINTS_OVERVIEW,
+        Capability.CONSTRAINT_CATEGORIES_LIST,
     }
 ]
 

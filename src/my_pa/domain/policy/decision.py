@@ -270,6 +270,19 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         # a search of one enrollment, which is `knowledge.search`. Until WP-KC-02
         # searches a plane, the requested scope is empty as a measurement.
         Capability.CONTEXT_PREPARE,
+        # The Constraint Management reads (PC-CM-IMP-WP04) name a Project, not a
+        # source. A Constraint is a Project control the Principal's own partition
+        # holds: its rows carry no `source_id` and no `enrollment_id` for a
+        # requested scope to be compared against, exactly as a task's and a
+        # commitment's do not. Requiring one would make all six permanently
+        # unusable, which is how an unlisted capability fails — silently, with
+        # `scope_not_authorized`, on every request.
+        Capability.CONSTRAINTS_READ,
+        Capability.CONSTRAINTS_LIST,
+        Capability.CONSTRAINTS_SEARCH,
+        Capability.CONSTRAINTS_HISTORY,
+        Capability.CONSTRAINTS_OVERVIEW,
+        Capability.CONSTRAINT_CATEGORIES_LIST,
         # `context.feedback` names a ranking preference, not a source. The rows
         # it writes belong to the acting Principal's partition and carry no
         # `enrollment_id` and no grant a scope could be compared against.

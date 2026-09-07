@@ -69,6 +69,12 @@ import { decodeGoodNotesSearch } from "./capabilities/goodnotes.search";
 import { decodeGoodNotesCorrect } from "./capabilities/goodnotes.correct";
 import { decodeGoodNotesWork } from "./capabilities/goodnotes.work";
 import { decodeGoodNotesContent } from "./capabilities/goodnotes.content";
+import { decodeConstraintsRead } from "./capabilities/constraints.read";
+import { decodeConstraintsList } from "./capabilities/constraints.list";
+import { decodeConstraintsSearch } from "./capabilities/constraints.search";
+import { decodeConstraintsHistory } from "./capabilities/constraints.history";
+import { decodeConstraintsOverview } from "./capabilities/constraints.overview";
+import { decodeConstraintCategoriesList } from "./capabilities/constraint_categories.list";
 import type { CapabilityResults, Decoder, GatewayCapability } from "./types";
 
 export type { CapabilityResults, DecodeResult, Decoder } from "./types";
@@ -143,6 +149,12 @@ export const DECODERS = {
   "goodnotes.correct": decodeGoodNotesCorrect,
   "goodnotes.work": decodeGoodNotesWork,
   "goodnotes.content": decodeGoodNotesContent,
+  "constraints.read": decodeConstraintsRead,
+  "constraints.list": decodeConstraintsList,
+  "constraints.search": decodeConstraintsSearch,
+  "constraints.history": decodeConstraintsHistory,
+  "constraints.overview": decodeConstraintsOverview,
+  "constraint_categories.list": decodeConstraintCategoriesList,
 } satisfies { [K in GatewayCapability]: Decoder<CapabilityResults[K]> };
 
 /**

@@ -88,6 +88,166 @@ echo "e2e: seeding one Principal-scoped Intelligence artifact"
 echo "e2e: seeding Principal-scoped synthetic people"
 ( cd "${REPO_DIR}" && PYTHONPATH="${REPO_DIR}/src" MY_PA_DATABASE_URL="${DATABASE_URL}" "${PYTHON}" tests/end_to_end/seed_entities.py )
 
+# Seed one Principal-scoped synthetic Constraint Register.
+#
+# Inline rather than a `web/e2e/seed_*.py` module, and the reason is a repository
+# rule rather than taste: `tests/architecture/test_ci_invokes_mypy_over_the_declared_tree.py`
+# requires every Python *root* under the repository to be type-checked or named
+# in that rule, and `web/` is neither. A here-document adds no root. The rows are
+# inserted through the same repository the application uses, because WP08 admits
+# no Constraint mutation and so cannot create them through the BFF the way the
+# Work seed creates Commitments. Everything below is synthetic and disposable.
+echo "e2e: seeding one Principal-scoped synthetic Constraint Register"
+(
+  cd "${REPO_DIR}"
+  PYTHONPATH="${REPO_DIR}/src" MY_PA_DATABASE_URL="${DATABASE_URL}" "${PYTHON}" - <<'SEED'
+from __future__ import annotations
+
+import os
+from datetime import UTC, date, datetime
+
+from sqlalchemy import create_engine, insert
+
+from my_pa.bootstrap.gateway import local_principal
+from my_pa.domain.project_controls.category import ConstraintCategory, ConstraintCategoryState
+from my_pa.domain.project_controls.constraint import (
+    ConstraintLifecycleState,
+    ConstraintOrigin,
+    ConstraintRecordQuality,
+    ProjectConstraint,
+)
+from my_pa.domain.project_controls.history import (
+    ConstraintHistoryEntry,
+    ConstraintMutationActor,
+    ConstraintMutationOperation,
+    ConstraintMutationOutcome,
+)
+from my_pa.domain.project_controls.party import PartyKind, PartyRef
+from my_pa.domain.project_controls.settings import ConstraintProjectSettings
+from my_pa.infrastructure.persistence.constraints import SqlConstraintManagementRepository
+from my_pa.infrastructure.persistence.tables import projects
+
+#: Published so the browser spec can address the same rows without guessing.
+PROJECT_ID = "prj_e2ecst0000000001"
+CATEGORY_ID = "ccat_e2ecst0000000001"
+FIRST_CONSTRAINT_ID = "cst_e2ecst0000000001"
+SECOND_CONSTRAINT_ID = "cst_e2ecst0000000002"
+HISTORY_ID = "chst_e2ecst0000000001"
+
+T0 = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
+
+
+def main() -> None:
+    database_url = os.environ["MY_PA_DATABASE_URL"]
+    principal_id = local_principal().principal_id
+    with create_engine(database_url).begin() as connection:
+        connection.execute(
+            insert(projects).values(
+                project_id=PROJECT_ID,
+                principal_id=principal_id,
+                name="E2E Synthetic Project",
+                state="active",
+                participants=[],
+                opened_at=T0,
+                created_at=T0,
+                updated_at=T0,
+            )
+        )
+        repository = SqlConstraintManagementRepository(connection)
+        repository.insert_project_settings(
+            principal_id,
+            ConstraintProjectSettings(
+                principal_id=principal_id,
+                project_id=PROJECT_ID,
+                timezone_name="America/New_York",
+                version=1,
+                created_at=T0,
+                updated_at=T0,
+            ),
+        )
+        repository.insert_category(
+            principal_id,
+            ConstraintCategory(
+                category_id=CATEGORY_ID,
+                principal_id=principal_id,
+                project_id=PROJECT_ID,
+                prefix="1",
+                title="Synthetic category",
+                state=ConstraintCategoryState.ACTIVE,
+                created_at=T0,
+                updated_at=T0,
+                display_order=1,
+            ),
+        )
+        # Two rows, so a search term narrows the page to one and the Register
+        # returning both is something the data could disprove.
+        repository.insert_constraint(
+            principal_id,
+            ProjectConstraint(
+                constraint_id=FIRST_CONSTRAINT_ID,
+                principal_id=principal_id,
+                lifecycle_state=ConstraintLifecycleState.IDENTIFIED,
+                origin=ConstraintOrigin.PRODUCT,
+                record_quality=ConstraintRecordQuality.NORMAL,
+                created_at=T0,
+                updated_at=T0,
+                version=2,
+                project_id=PROJECT_ID,
+                category_id=CATEGORY_ID,
+                constraint_code="1.01",
+                description="Switchgear submittal outstanding",
+                date_identified=date(2026, 8, 1),
+                due_date=date(2026, 8, 20),
+                bic=(PartyRef(kind=PartyKind.PRINCIPAL),),
+                published_at=T0,
+            ),
+        )
+        repository.insert_constraint(
+            principal_id,
+            ProjectConstraint(
+                constraint_id=SECOND_CONSTRAINT_ID,
+                principal_id=principal_id,
+                lifecycle_state=ConstraintLifecycleState.IN_PROGRESS,
+                origin=ConstraintOrigin.PRODUCT,
+                record_quality=ConstraintRecordQuality.NORMAL,
+                created_at=T0,
+                updated_at=T0,
+                version=3,
+                project_id=PROJECT_ID,
+                category_id=CATEGORY_ID,
+                constraint_code="1.02",
+                description="Crane pick plan pending review",
+                date_identified=date(2026, 8, 2),
+                due_date=date(2026, 9, 30),
+                bic=(PartyRef(kind=PartyKind.PRINCIPAL),),
+                published_at=T0,
+            ),
+        )
+        repository.insert_history(
+            principal_id,
+            ConstraintHistoryEntry(
+                history_id=HISTORY_ID,
+                principal_id=principal_id,
+                constraint_id=FIRST_CONSTRAINT_ID,
+                # `NO_OP` rather than `APPLIED`: an applied receipt names the
+                # revision it wrote, and seeding a revision ledger is not what
+                # this fixture is for. The read plane projects both the same way.
+                operation=ConstraintMutationOperation.UPDATE,
+                actor=ConstraintMutationActor.PRINCIPAL,
+                outcome=ConstraintMutationOutcome.NO_OP,
+                before_version=2,
+                after_version=2,
+                occurred_at=T0,
+                recorded_at=T0,
+                project_id=PROJECT_ID,
+            ),
+        )
+
+
+main()
+SEED
+)
+
 echo "e2e: starting the Python gateway on 127.0.0.1:${GATEWAY_PORT}"
 # Session-service origin checks use this allowlist. Live Next is :3100; the
 # dead-gateway Next is :3101. Omitting :3101 makes synthetic sign-in 403.

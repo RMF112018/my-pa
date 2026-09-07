@@ -6,6 +6,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
+import pytest
 from starlette.requests import Request
 from starlette.responses import Response
 
@@ -202,3 +203,38 @@ def test_public_and_authenticated_actions_are_closed() -> None:
     assert "registration/options" in AUTHENTICATED_WEBAUTHN_ACTIONS
     assert "step-up/complete" in AUTHENTICATED_WEBAUTHN_ACTIONS
     assert not (PUBLIC_WEBAUTHN_ACTIONS & AUTHENTICATED_WEBAUTHN_ACTIONS)
+
+
+@pytest.mark.parametrize(
+    "action",
+    sorted(PUBLIC_WEBAUTHN_ACTIONS | AUTHENTICATED_WEBAUTHN_ACTIONS),
+)
+def test_missing_origin_is_forbidden_on_every_webauthn_action(action: str) -> None:
+    handler = webauthn_http_handler(
+        relying_party=RP, execute=lambda *_args, **_kwargs: {"ok": True}
+    )
+    response = handler(_request(f"/webauthn/v1/{action}"), {})
+    assert response.status_code == 403, action
+    assert _load(response) == {"error": {"code": "wrong_origin"}}
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        "auth-state",
+        "bootstrap/registration/options",
+        "bootstrap/registration/complete",
+        "operator-recovery/registration/options",
+        "operator-recovery/registration/complete",
+    ],
+)
+def test_wrong_origin_is_forbidden_on_new_public_actions(action: str) -> None:
+    handler = webauthn_http_handler(
+        relying_party=RP, execute=lambda *_args, **_kwargs: {"ok": True}
+    )
+    response = handler(
+        _request(f"/webauthn/v1/{action}", headers={"origin": "https://evil.example"}),
+        {"grant": "raw-grant"},
+    )
+    assert response.status_code == 403, action
+    assert _load(response) == {"error": {"code": "wrong_origin"}}

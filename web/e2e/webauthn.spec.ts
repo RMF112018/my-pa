@@ -1,6 +1,11 @@
 import { test, expect } from "@playwright/test";
 import { DEAD_GATEWAY_URL } from "../playwright.config";
-import { ADMISSIBLE_PRINCIPAL, signIn } from "./fixtures";
+import {
+  ADMISSIBLE_PRINCIPAL,
+  expectNoSecretInBrowserStores,
+  hideNextjsDevOverlay,
+  signIn,
+} from "./fixtures";
 
 const OPAQUE_SID = /^[0-9a-f]{64}$/;
 
@@ -8,7 +13,8 @@ const OPAQUE_SID = /^[0-9a-f]{64}$/;
  * Chromium-only. The virtual authenticator uses CDP `WebAuthn.enable`.
  * Do not add this file to Playwright firefox/webkit projects. Playwright's
  * WebKit engine is not Safari; real Safari / iOS Safari remain MANUAL/RUNTIME
- * (HARVEST_CANNOT_PROVE).
+ * (HARVEST_CANNOT_PROVE). AC072-074 stay operator-gated; this file does not
+ * close them.
  */
 test.skip(
   ({ browserName }) => browserName !== "chromium",
@@ -23,8 +29,9 @@ async function sessionCookie(page: import("@playwright/test").Page, origin: stri
 test.describe("WebAuthn virtual authenticator", () => {
   // Chromium CDP only (`WebAuthn.enable` / addVirtualAuthenticator). Playwright
   // Firefox/WebKit cannot prove this path. Playwright WebKit is not Safari;
-  // real Safari remains MANUAL/RUNTIME (HARVEST_CANNOT_PROVE).
-  test("registers a passkey through the real browser API", async ({ page }) => {
+  // real Safari remains MANUAL/RUNTIME (HARVEST_CANNOT_PROVE). AC072-074 stay
+  // operator-gated; this file does not close them.
+  test("Add a passkey performs step-up before enrollment", async ({ page }) => {
     const client = await page.context().newCDPSession(page);
     await client.send("WebAuthn.enable");
     await client.send("WebAuthn.addVirtualAuthenticator", {
@@ -37,11 +44,52 @@ test.describe("WebAuthn virtual authenticator", () => {
         automaticPresenceSimulation: true,
       },
     });
+    const seen: string[] = [];
+    page.on("request", (request) => {
+      if (request.method() !== "POST") return;
+      const path = new URL(request.url()).pathname;
+      if (path.startsWith("/api/webauthn/")) seen.push(path);
+    });
     await signIn(page);
     await page.goto("/system/security");
     await expect(page.getByRole("heading", { name: "Security" })).toBeVisible();
     await page.getByRole("button", { name: "Add a passkey" }).click();
-    await expect(page.getByRole("status")).toContainText(/Passkey added|could not/i);
+    await expect.poll(() => seen.some((path) => path.endsWith("/step-up/options"))).toBe(true);
+    // Synthetic e2e sign-in has no passkey, so step-up cannot complete. The UI
+    // must still request step-up before registration/options; it must not skip
+    // to enrollment. CLI issue requires production RP, so this stack cannot
+    // bootstrap a first passkey against localhost.
+    expect(
+      seen.some((path) => path.endsWith("/registration/options")),
+      "enrollment must not start without a completed step-up grant",
+    ).toBe(false);
+    await expect(page.getByRole("status")).toContainText(/could not|Confirm with a passkey/i);
+  });
+
+  test("registration/options without a grant is refused while signed in", async ({ page }) => {
+    await signIn(page);
+    // In-page fetch so Origin is the live page. `page.request` is Node-side and
+    // omits Origin, which is a different refusal (`cross_site_request`) already
+    // covered in browser-security.spec.ts.
+    const result = await page.evaluate(async () => {
+      const response = await fetch("/api/webauthn/registration/options", {
+        method: "POST",
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      return {
+        status: response.status,
+        body: (await response.json()) as { error?: { code?: string } },
+      };
+    });
+    expect(result.status, "missing administration grant must not enroll").toBeGreaterThanOrEqual(
+      400,
+    );
+    expect(["step_up_required", "unauthenticated", "invalid_request"]).toContain(
+      result.body.error?.code ?? "",
+    );
   });
 });
 
@@ -84,6 +132,7 @@ test.describe("opaque session cookie", () => {
     expect(blob).not.toContain("mypa_session");
     expect(blob).not.toContain(sid.toLowerCase());
     expect(blob).not.toMatch(/eyj[a-z0-9_-]+\.[a-z0-9_-]+\./i);
+    await expectNoSecretInBrowserStores(page, [sid]);
   });
 
   test("sign-out revokes the SID so the same cookie value cannot replay", async ({
@@ -130,6 +179,7 @@ test.describe("opaque session cookie", () => {
   test("middleware plants a relative next and never an absolute evil URL", async ({ page }) => {
     await page.goto("/work");
     await expect(page).toHaveURL(/\/sign-in/);
+    await hideNextjsDevOverlay(page);
     const landed = new URL(page.url());
     const next = landed.searchParams.get("next");
     expect(next).toBe("/work");
@@ -148,6 +198,7 @@ test.describe("opaque session cookie", () => {
 
     await page.context().clearCookies();
     await page.goto("/sign-in?next=https://evil.example");
+    await hideNextjsDevOverlay(page);
     await expect(page.getByTestId(`sign-in-${ADMISSIBLE_PRINCIPAL}`)).toBeVisible();
     await page.getByTestId(`sign-in-${ADMISSIBLE_PRINCIPAL}`).click();
     await page.waitForURL((url) => new URL(url).pathname === "/today");

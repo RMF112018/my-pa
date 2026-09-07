@@ -482,3 +482,85 @@ def test_concurrent_bootstrap_complete_succeeds_once(engine: Engine) -> None:
         ).scalar_one()
     assert int(credentials) == 1
     assert int(grants_consumed) == 1
+
+
+@pytest.mark.parametrize(
+    ("purpose", "action", "expected"),
+    [
+        (AuthGrantPurpose.OPERATOR_RECOVERY, "bootstrap", "bootstrap_grant_invalid"),
+        (AuthGrantPurpose.BOOTSTRAP, "operator_recovery", "operator_recovery_unavailable"),
+        (AuthGrantPurpose.OPERATOR_RECOVERY, "registration", "bootstrap_required"),
+        (AuthGrantPurpose.BOOTSTRAP, "registration", "bootstrap_required"),
+    ],
+)
+def test_uninitialized_grant_purpose_cannot_open_another_ceremony(
+    engine: Engine,
+    purpose: AuthGrantPurpose,
+    action: str,
+    expected: str,
+) -> None:
+    with engine.begin() as connection:
+        issued = AuthGrantStore(connection).issue(purpose, now=WHEN)
+        service = _service(connection)
+        with pytest.raises(WebAuthnCeremonyError) as raised:
+            if action == "bootstrap":
+                service.bootstrap_registration_options(origin=ORIGIN, grant=issued.raw_grant)
+            elif action == "operator_recovery":
+                service.operator_recovery_registration_options(
+                    origin=ORIGIN, grant=issued.raw_grant
+                )
+            else:
+                service.registration_options(
+                    LOCAL_OPERATOR_UUID,
+                    origin=ORIGIN,
+                    grant=issued.raw_grant,
+                    authorizing_sid=None,
+                )
+        assert raised.value.code == expected
+
+
+@pytest.mark.parametrize(
+    ("purpose", "action", "expected"),
+    [
+        (AuthGrantPurpose.BOOTSTRAP, "bootstrap", "bootstrap_unavailable"),
+        (AuthGrantPurpose.BOOTSTRAP, "operator_recovery", "operator_recovery_grant_invalid"),
+        (AuthGrantPurpose.BOOTSTRAP, "registration", "step_up_required"),
+        (AuthGrantPurpose.OPERATOR_RECOVERY, "bootstrap", "bootstrap_unavailable"),
+        (AuthGrantPurpose.OPERATOR_RECOVERY, "registration", "step_up_required"),
+        (AuthGrantPurpose.CREDENTIAL_ADMINISTRATION, "bootstrap", "bootstrap_unavailable"),
+        (
+            AuthGrantPurpose.CREDENTIAL_ADMINISTRATION,
+            "operator_recovery",
+            "operator_recovery_grant_invalid",
+        ),
+    ],
+)
+def test_ready_grant_purpose_cannot_open_another_ceremony(
+    engine: Engine,
+    purpose: AuthGrantPurpose,
+    action: str,
+    expected: str,
+) -> None:
+    with engine.begin() as connection:
+        bootstrapped = _bootstrap(connection)
+        sid = bootstrapped.issued_session.raw_sid if bootstrapped.issued_session else None
+        grants = AuthGrantStore(connection)
+        kwargs: dict[str, object] = {"now": WHEN}
+        if purpose is AuthGrantPurpose.CREDENTIAL_ADMINISTRATION:
+            session = bootstrapped.issued_session
+            assert session is not None
+            kwargs["authorizing_session_id"] = session.record.id
+        issued = grants.issue(purpose, **kwargs)  # type: ignore[arg-type]
+        service = _service(connection)
+        with pytest.raises(WebAuthnCeremonyError) as raised:
+            if action == "bootstrap":
+                service.bootstrap_registration_options(origin=ORIGIN, grant=issued.raw_grant)
+            elif action == "operator_recovery":
+                service.operator_recovery_registration_options(
+                    origin=ORIGIN, grant=issued.raw_grant
+                )
+            else:
+                service.registration_options(
+                    LOCAL_OPERATOR_UUID, origin=ORIGIN, grant=issued.raw_grant, authorizing_sid=sid
+                )
+        assert raised.value.code == expected

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -220,3 +221,26 @@ def test_webauthn_challenge_persists_auth_grant_id(engine: Engine) -> None:
         )
         assert loaded is not None
         assert loaded.auth_grant_id == exchanged.id
+
+
+def test_concurrent_bootstrap_issue_has_one_winner(engine: Engine) -> None:
+    def attempt() -> str | None:
+        try:
+            with engine.begin() as connection:
+                issued = AuthGrantStore(connection).issue(AuthGrantPurpose.BOOTSTRAP, now=WHEN)
+                return str(issued.record.id)
+        except ValueError:
+            return None
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        outcomes = tuple(pool.map(lambda _item: attempt(), range(8)))
+    winners = [item for item in outcomes if item is not None]
+    assert len(winners) == 1
+    with engine.connect() as connection:
+        live = connection.execute(
+            text(
+                "SELECT count(*) FROM identity.auth_grants "
+                "WHERE purpose = 'bootstrap' AND consumed_at IS NULL AND revoked_at IS NULL"
+            )
+        ).scalar_one()
+    assert int(live) == 1

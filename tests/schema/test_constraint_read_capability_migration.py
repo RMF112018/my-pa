@@ -3,7 +3,8 @@
 `c5b71e0a8d43` widens both closed-set CHECKs on `knowledge.audit_events` and
 touches nothing else. Four things are asserted and they fail in different ways.
 
-**The graph.** One head (`4e9a1c7b2d60`), with this revision as its predecessor descending from `a1c9e4b72f80`.
+**The graph.** One head (`4e9a1c7b2d60`), with this revision as its predecessor
+descending from `a1c9e4b72f80`.
 A second head makes `alembic upgrade head` ambiguous.
 
 **The freeze.** The revision imports no domain enum and no declaration module,

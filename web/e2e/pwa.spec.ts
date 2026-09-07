@@ -142,7 +142,14 @@ test("the worker never caches a principal-bound response", async ({ page }) => {
   expect(
     cached.filter((url) => {
       const parsed = new URL(url);
-      return parsed.pathname === "/today" || parsed.pathname === "/library" || parsed.pathname === "/";
+      return (
+        parsed.pathname === "/today" ||
+        parsed.pathname === "/library" ||
+        parsed.pathname === "/" ||
+        parsed.pathname === "/setup" ||
+        parsed.pathname === "/recover/operator" ||
+        parsed.pathname === "/sign-in"
+      );
     }),
     "no navigation document may be cached",
   ).toEqual([]);

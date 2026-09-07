@@ -61,9 +61,10 @@ describe("route guard middleware", () => {
     expect(response.status).toBe(200);
   });
 
-  it("leaves /sign-in and /api/session unguarded", async () => {
+  it("leaves /sign-in, /api/session, and /api/health unguarded", async () => {
     expect((await middleware(requestFor("/sign-in"))).status).toBe(200);
     expect((await middleware(requestFor("/api/session"))).status).toBe(200);
+    expect((await middleware(requestFor("/api/health"))).status).toBe(200);
   });
 
   it("does not plant an absolute URL as next; the request path is relative", async () => {

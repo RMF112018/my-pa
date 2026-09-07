@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as session from "@/lib/auth/session";
 import {
   isOpaqueSessionSid,
@@ -41,10 +41,23 @@ describe("opaque SID parse", () => {
 });
 
 describe("session cookie flags", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("is HttpOnly so document.cookie cannot read the SID", () => {
     expect(SESSION_COOKIE_OPTIONS.httpOnly).toBe(true);
     expect(SESSION_COOKIE_OPTIONS.sameSite).toBe("lax");
     expect(SESSION_COOKIE_OPTIONS.path).toBe("/");
+  });
+
+  it("is Secure in production, SameSite Lax, HttpOnly, path /, and has no Domain", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    expect(SESSION_COOKIE_OPTIONS.httpOnly).toBe(true);
+    expect(SESSION_COOKIE_OPTIONS.sameSite).toBe("lax");
+    expect(SESSION_COOKIE_OPTIONS.path).toBe("/");
+    expect(SESSION_COOKIE_OPTIONS.secure).toBe(true);
+    expect(SESSION_COOKIE_OPTIONS).not.toHaveProperty("domain");
   });
 });
 

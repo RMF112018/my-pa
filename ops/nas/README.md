@@ -14,6 +14,7 @@ Files:
   identity is required explicitly; it has no usable defaults. It also names a
   NAS-04 gateway bind setting that does not exist yet, deliberately preventing
   this topology contract from being mistaken for a runnable stack.
+- [`compose.public-browser.example.yml`](compose.public-browser.example.yml) is an optional `--profile public-browser-edge` overlay for ADR-012 public browser Cloudflare ingress; it does not change the private six-service count.
 - [`proxy-allowlist.example.caddy`](proxy-allowlist.example.caddy) shows the
   fail-closed route ordering. It is mounted only by the disabled example.
 - [`image-manifest.example.toml`](image-manifest.example.toml) separates the
@@ -224,6 +225,12 @@ admits only the exact Compose egress bridge and DNS/Cloudflare Tunnel ports,
 after the existing data- and ingress-plane rules.
 See [`../runbooks/remote-mcp-cloudflare.md`](../runbooks/remote-mcp-cloudflare.md)
 for exact configuration, deployment, rollback, client, and loopback-fallback procedures.
+
+UI-IMP-WP29 adds a non-secret production environment schema, placeholder env,
+deployment-manifest example, fail-closed `validate-production-env.py` /
+`validate-delivery-config.py`, and dry-run `rollback.sh`. Public hostname is
+`pa.bobby-fetting.me`. Live DNS and Cloudflare routing are not performed.
+See [`../runbooks/production-frontend-deployment.md`](../runbooks/production-frontend-deployment.md).
 
 Later packages own executable behavior:
 

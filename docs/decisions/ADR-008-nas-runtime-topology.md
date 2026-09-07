@@ -1,10 +1,12 @@
 # ADR-008: NAS runtime topology and authority boundaries
 
-**Status:** Accepted; implementation staged as NAS-01 through NAS-10; browser-authentication selection partially superseded by [ADR-011](ADR-011-passkey-webauthn-authentication-and-opaque-server-sessions.md)
+**Status:** Accepted; implementation staged as NAS-01 through NAS-10; browser-authentication selection partially superseded by [ADR-011](ADR-011-passkey-webauthn-authentication-and-opaque-server-sessions.md); production **public browser** ingress selection superseded by [ADR-012](ADR-012-public-browser-cloudflare-tunnel.md)
 **Decision date:** 2026-08-12
 **Repository basis:** `main@c10ecf397e1556ac5da64ff49a608aa8e963cdb3`, tree `838169552d9b8db92c5ba38be93fd6dfc9fbac04`
 
 > **Controlling supersession notice (2026-09-01):** ADR-011 supersedes only this ADR's Entra production-browser authentication selection and Entra-specific web egress/authorization-code requirement insofar as it is an enduring application-login requirement. NAS/process placement, filesystem authority, private ingress, network isolation, Apple/TCC split, lifecycle controls, and all other non-authentication topology provisions remain accepted. Current Entra runtime remains implementation truth until UI-IMP-WP02..WP04 replace it.
+
+> **Controlling supersession notice (2026-09-07):** [ADR-012](ADR-012-public-browser-cloudflare-tunnel.md) supersedes only this ADR's rejection of Cloudflare as production **public browser** ingress (the sentence that pilot HTTPS uses tailnet-only Tailscale Serve and never Cloudflare / Funnel / public Internet / production LAN HTTP **for that public browser origin**). Tailscale remains the private management and machine-ingress plane. NAS hosting, unpublished PostgreSQL, unpublished generic gateway, filesystem authority, and Apple/TCC split remain accepted. Cloudflare Access is not selected by ADR-012.
 
 ## Context
 

@@ -1,7 +1,8 @@
-"""WP28 gate membership must stay explicit.
+"""WP28/WP29 gate membership must stay explicit.
 
 Advisory jobs may exist. They must not silently join `frontend / required`.
-This is not a coverage-percentage gate and not a budget.
+WP29 adds `delivery-config` as a required child. This is not a coverage-percentage
+gate and not a budget.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ REQUIRED_CHILDREN = (
     "e2e-critical",
     "accessibility",
     "responsive",
+    "delivery-config",
 )
 
 ADVISORY = (
@@ -35,7 +37,7 @@ def _workflow() -> str:
     return WORKFLOW.read_text(encoding="utf-8")
 
 
-def test_required_aggregate_lists_exactly_the_wp27_children() -> None:
+def test_required_aggregate_lists_exactly_the_required_children() -> None:
     text = _workflow()
     match = re.search(
         r"name: frontend / required\n\s+needs: \[([^\]]+)\]",

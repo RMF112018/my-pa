@@ -1,0 +1,15 @@
+# Render with render-frontend-cloudflared-config.py; cloudflared does not consume this template.
+tunnel: __TUNNEL_ID__
+credentials-file: /run/secrets/cloudflared/credentials.json
+protocol: quic
+no-autoupdate: true
+
+ingress:
+  - hostname: __FRONTEND_HOSTNAME__
+    service: http://public-proxy:8080
+    originRequest:
+      connectTimeout: 10s
+      httpHostHeader: pa.bobby-fetting.me
+      noHappyEyeballs: true
+      disableChunkedEncoding: true
+  - service: http_status:404

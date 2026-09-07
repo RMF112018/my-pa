@@ -27,8 +27,9 @@
  *
  * **The schema head is not restated here and must not be.** A migration revision
  * copied into the web tier is a claim nothing on this side can check, and it was
- * already stale by eight revisions the last time someone tried. Git SHA and
- * deployed artifact identity are likewise unreported (WP29).
+ * already stale by eight revisions the last time someone tried. Deployed source
+ * identity is the labelled `MYPA_SOURCE_COMMIT` / `MYPA_SOURCE_TREE` hex, or
+ * `unknown` when those are unset or invalid.
  *
  * **Morning Intelligence is `reports.resolve_set` for `morning_brief_inputs`.**
  * `cycle_run_id` is taken from the first `reports.list` item, the same discovery
@@ -42,6 +43,7 @@ import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resolveSessionPrincipal } from "@/lib/auth/principal";
 import { invokeGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled, gatewayAuthMode } from "@/lib/api/gateway-config";
+import { runtimeIdentity } from "@/lib/runtime-identity";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { SurfaceState } from "@/components/ui/surface-state";
@@ -122,6 +124,7 @@ export default async function SystemPage() {
   const principal = await resolveSessionPrincipal(cookieStore.get(SESSION_COOKIE_NAME)?.value);
   if (!principal) redirect("/sign-in");
 
+  const source = runtimeIdentity();
   const synthetic = syntheticDataEnabled();
   // **A gateway auth mode this build cannot read is a misconfiguration, and it
   // is shown as one.** The previous default of `"not configured"` fell through
@@ -466,8 +469,10 @@ export default async function SystemPage() {
               migration history, which this tier cannot read.
             </li>
             <li>
-              No page here restates a git revision or deployed artifact identity. That claim
-              belongs to WP29, which this tier cannot check.
+              Runtime identity: source commit{" "}
+              <span data-testid="system-source-commit">{source.sourceCommit}</span>, source tree{" "}
+              {source.sourceTree}. Unset or non-hex labels report as unknown — never a branch
+              name, never a filesystem path.
             </li>
           </ul>
         </CardBody>

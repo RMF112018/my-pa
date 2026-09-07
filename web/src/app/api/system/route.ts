@@ -32,8 +32,10 @@
  *
  * **PWA observation is client-side.** This route does not report this browser's
  * service-worker controller, Cache Storage, online bit, or IndexedDB queue
- * counts — the server cannot know them. Git SHA / deployed artifact identity is
- * not restated (WP29).
+ * counts — the server cannot know them. Deployed source identity is
+ * `runtimeIdentity` from `MYPA_SOURCE_COMMIT` / `MYPA_SOURCE_TREE` image labels,
+ * or `unknown` when those are unset or not hex — never a `gitSha` / `commitSha`
+ * field, never `"main"`, never `process.cwd()`.
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { requirePrincipal } from "@/lib/api/guard";
@@ -42,6 +44,7 @@ import type { ReportsResolveSetResult } from "@/lib/api/decode/capabilities/repo
 import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
 import type { PrincipalSession } from "@/contracts/identity";
+import { runtimeIdentity } from "@/lib/runtime-identity";
 
 const SCOPE = "system";
 const MORNING_BRIEF_SET_ID = "morning_brief_inputs";
@@ -130,6 +133,7 @@ export async function GET(request: NextRequest) {
       upn: guard.principal.upn,
     },
     pwa: PWA_CLIENT_SIDE,
+    runtimeIdentity: runtimeIdentity(),
   };
 
   if (serving.kind === "synthetic") {

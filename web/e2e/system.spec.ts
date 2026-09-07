@@ -3,7 +3,8 @@
  *
  * Capability readiness is counted off `capabilities.get`. Live worker health is
  * a different field. Connected sources are unknown — never an invented empty
- * list — and git SHA / deployed artifact identity is not restated here (WP29).
+ * list. Deployed identity is `runtimeIdentity` from image labels, never
+ * `gitSha` / `commitSha` / `schemaHead` / `"main"`.
  * PWA fields on this page are labelled as this-browser observations; the server
  * route does not claim them. Morning Intelligence members stay listed when the
  * aggregate is not READY.
@@ -20,6 +21,7 @@ type SystemBody = {
   commitSha?: unknown;
   revision?: unknown;
   schemaHead?: unknown;
+  runtimeIdentity?: { sourceCommit?: unknown; sourceTree?: unknown };
   pwa?: {
     observation?: string;
     controller?: unknown;
@@ -78,6 +80,8 @@ test("System shows capability readiness against live health without inventing so
   await expect(page.getByTestId("system-sources-unknown")).toContainText(/unknown/i);
   await expect(page.getByText(/None connected/)).toHaveCount(0);
   await expect(page.getByTestId("system-git-sha")).toHaveCount(0);
+  await expect(page.getByTestId("system-source-commit")).toBeVisible();
+  await expect(page.getByTestId("system-source-commit")).not.toHaveText("main");
 
   const system = await api<SystemBody>(page, "/api/system");
   expect(system.status).toBe(200);
@@ -87,6 +91,9 @@ test("System shows capability readiness against live health without inventing so
   expect(system.body).not.toHaveProperty("commitSha");
   expect(system.body).not.toHaveProperty("revision");
   expect(system.body).not.toHaveProperty("schemaHead");
+  expect(system.body.runtimeIdentity?.sourceCommit).toBe("unknown");
+  expect(system.body.runtimeIdentity?.sourceTree).toBe("unknown");
+  expect(JSON.stringify(system.body.runtimeIdentity)).not.toContain("main");
   expect(system.body.backend?.readiness?.total_capabilities).toBeGreaterThan(0);
 });
 

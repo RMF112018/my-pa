@@ -1,0 +1,68 @@
+# Public browser edge overlay (ADR-012). Use WITH the base contract file:
+#   docker compose --file compose.example.yml --file compose.public-browser.example.yml
+#     --profile nas-01-contract-only --profile public-browser-edge
+# Does not change the private six-service count. Does not join postgres or
+# gateway. Caddyfile and cloudflared config are owned separately.
+services:
+  web:
+    networks: [ingress-plane, browser-origin]
+
+  public-proxy:
+    profiles: [public-browser-edge]
+    image: "${MY_PA_PROXY_IMAGE:?repository required}@${MY_PA_PROXY_IMAGE_DIGEST:?sha256 digest required}"
+    platform: linux/amd64
+    user: "${MY_PA_PROXY_UID:?verified proxy uid required}:${MY_PA_PROXY_GID:?verified proxy gid required}"
+    restart: "no"
+    cap_drop: [ALL]
+    # Same Caddy NET_BIND_SERVICE exception as the private proxy: the binary
+    # carries the file capability even though this service exposes 8080 only.
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    environment:
+      MY_PA_PUBLIC_BROWSER_HOST: pa.bobby-fetting.me
+    expose: ["8080"]
+    volumes:
+      - {type: bind, source: "./proxy-public-browser.example.caddy", target: /etc/caddy/Caddyfile, read_only: true}
+    tmpfs:
+      - /config
+      - /data
+    networks: [browser-origin]
+
+  frontend-cloudflared:
+    profiles: [public-browser-edge]
+    image: "${MY_PA_FRONTEND_CLOUDFLARED_IMAGE:?digest-pinned frontend cloudflared image required}"
+    platform: linux/amd64
+    user: "${MY_PA_FRONTEND_CLOUDFLARED_UID:?verified cloudflared uid required}:${MY_PA_FRONTEND_CLOUDFLARED_GID:?verified cloudflared gid required}"
+    init: true
+    restart: "no"
+    stop_grace_period: 30s
+    command: [tunnel, --config, /etc/cloudflared/config.yml, --no-autoupdate, run]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - type: bind
+        source: "${MY_PA_FRONTEND_CLOUDFLARED_CONFIG:?rendered frontend cloudflared config required}"
+        target: /etc/cloudflared/config.yml
+        read_only: true
+      - type: bind
+        source: "${MY_PA_FRONTEND_CLOUDFLARED_CREDENTIALS_DIR:?owner-only frontend tunnel credentials directory required}"
+        target: /run/secrets/cloudflared
+        read_only: true
+    networks: [browser-origin, cloudflare-egress]
+    depends_on:
+      public-proxy:
+        condition: service_started
+    healthcheck:
+      test: [CMD, cloudflared, tunnel, --config, /etc/cloudflared/config.yml, ingress, validate]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  browser-origin:
+    internal: true
+  cloudflare-egress:
+    internal: false

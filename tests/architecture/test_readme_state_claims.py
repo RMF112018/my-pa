@@ -569,6 +569,8 @@ def test_web_readme_names_the_routes_and_capabilities_the_bff_reaches() -> None:
         "/api/session",
         "/api/webauthn",
         "/sign-in",
+        "/setup",
+        "/recover/operator",
     ):
         assert route in text, f"web README lost current route {route}"
 

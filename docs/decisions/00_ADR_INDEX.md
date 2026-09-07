@@ -14,6 +14,7 @@
 | [ADR-010](ADR-010-intelligence-artifact-report-plane.md) | Product-owned Intelligence Artifact / Report plane: immutable artifacts, cycle-run identity, and staged pipeline lineage in PostgreSQL | Accepted |
 | [ADR-011](ADR-011-passkey-webauthn-authentication-and-opaque-server-sessions.md) | Normal production browser authentication is WebAuthn/passkey with an opaque server-side session and server-derived Principal; no production Entra/MSAL or browser shared-secret/local-operator fallback | Accepted; target authority only, runtime implementation owned by UI-IMP-WP02..WP04 |
 | [ADR-012](ADR-012-public-browser-cloudflare-tunnel.md) | Production public browser origin `https://pa.bobby-fetting.me` via a dedicated Cloudflare Tunnel to a NAS-local browser-only reverse proxy; Tailscale remains private management; gateway/PostgreSQL stay unpublished; Cloudflare is not Principal authority; Access is not selected | Accepted; repository implementation owned by UI-IMP-WP29; live activation is a separate operator gate |
+| [ADR-013](ADR-013-fixed-local-principal-and-operator-auth-grants.md) | One production Principal (`LOCAL_OPERATOR_UUID`); one-time operator bootstrap/recovery/credential-administration grants; provider-neutral session and `{pid,iat}` attestation; local `tid`/`oid` absent | Accepted; addendum to ADR-011; production activation remains operator-gated |
 
 Later ADRs must identify repository identity, context, decision, consequences, supersession rules, and implementation status.
 

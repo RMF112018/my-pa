@@ -1,5 +1,7 @@
 # Non-secret production environment schema for https://pa.bobby-fetting.me.
 # Names and semantics only. Never commit live secrets.
+# Expected Alembic head for operator assertions: 4e9a1c7b2d60
+# There is no caller-configurable Principal variable.
 schema = "my-pa.nas-production-environment.v1"
 environment_schema_version = "1"
 canonical_origin = "https://pa.bobby-fetting.me"
@@ -53,25 +55,25 @@ semantics = "Must be absent or empty in production. Session-service is the same 
 classification = "secret"
 required = true
 min_length = 32
-semantics = "BFF secret authenticating to Python session-service. Owner-only. Never logged."
+semantics = "BFF secret authenticating to Python session-service. Must equal MY_PA_SESSION_SERVICE_SECRET. Owner-only. Compared without printing either value. Never logged."
 
 [variable.MY_PA_SESSION_SERVICE_SECRET]
 classification = "secret"
 required = true
 min_length = 32
-semantics = "Python gateway session-service shared secret (same value as MYPA_SESSION_SERVICE_SECRET)."
+semantics = "Python gateway session-service shared secret. Must equal MYPA_SESSION_SERVICE_SECRET. Compared without printing either value."
 
 [variable.MYPA_WEBAUTHN_BFF_SECRET]
 classification = "secret"
 required = true
 min_length = 32
-semantics = "BFF WebAuthn ceremony secret. Owner-only. Never logged."
+semantics = "BFF WebAuthn ceremony secret. Must equal MY_PA_WEBAUTHN_BFF_SECRET and remain distinct from the session-service pair. Owner-only. Compared without printing either value. Never logged."
 
 [variable.MY_PA_WEBAUTHN_BFF_SECRET]
 classification = "secret"
 required = true
 min_length = 32
-semantics = "Python WebAuthn BFF shared secret (same value as MYPA_WEBAUTHN_BFF_SECRET)."
+semantics = "Python WebAuthn BFF shared secret. Must equal MYPA_WEBAUTHN_BFF_SECRET. Compared without printing either value."
 
 # ---------------------------------------------------------------------------
 # WebAuthn relying party

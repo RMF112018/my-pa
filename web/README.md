@@ -26,7 +26,8 @@ does not currently expose a managed-document screen or API route.
 
 ## Routes and capability mapping
 
-All application pages require a verified session. `/sign-in` is public.
+All application pages require a verified session. `/sign-in`, `/setup`, and
+`/recover/operator` are public.
 `GET /api/health` is unauthenticated and carries no Principal or PII.
 
 | UI or BFF route | Backend capability | Current behavior |
@@ -86,8 +87,11 @@ All application pages require a verified session. `/sign-in` is public.
 | `POST /api/commitments/:commitmentId/close` | `commitments.close` | Closes a Commitment explicitly with validated closure evidence |
 | `/system`, `GET /api/system` | `capabilities.get`, `reports.list`, `reports.resolve_set` | Reports the runtime manifest, readiness, worker planes, and `runtimeIdentity` from image labels (unknown when unset); Morning Intelligence is resolver aggregate and members (READY is not system health); PWA observation is client-side; connected sources remain unknown |
 | `GET /api/health` | none | Unauthenticated liveness. `{ ok: true, status: "live" }` when `NODE_ENV` parses and `MYPA_AUTH_MODE` is a usable web value; otherwise 503 `misconfigured` with no env echo |
+| `/sign-in` | none | Production passkey sign-in; public |
+| `/setup` | none | One-time operator bootstrap grant plus WebAuthn; public; first-user path |
+| `/recover/operator` | none | One-time operator recovery grant plus WebAuthn; public |
 | `POST /api/session` | none | Synthetic development sign-in only; refused in passkey mode and in production |
-| `POST /api/webauthn` | none | Passkey ceremony BFF; Python issues the opaque SID cookie after authentication or recovery |
+| `POST /api/webauthn` | none | Passkey ceremony BFF; Python issues the opaque SID cookie after authentication, bootstrap, or recovery |
 
 The relationship timeline is therefore implemented, but it is not a separate
 public capability. It is a projection of `relationship_events` already returned
@@ -118,17 +122,21 @@ empty healthy state.
 - `synthetic` exposes fixed development principals. It is refused in production.
 - `passkey` is production web authentication. Sessions are an opaque SID issued
   by Python after WebAuthn or recovery; `POST /api/session` does not mint a
-  synthetic identity.
+  synthetic identity. Production Principal is the fixed `LOCAL_OPERATOR_UUID`.
+  Server/BFF session JSON is provider-neutral (`principalId`, `identityProvider`,
+  `identitySubject`, `displayName`, `lifecycleState`); `tid`/`oid` are present
+  only for Entra/synthetic accounts and are absent for local.
 
 Browser Entra/MSAL and browser local-operator sign-in are retired. There is no
-`/auth/sign-in` route and no MSAL package on this tier.
+`/auth/sign-in` route and no MSAL package on this tier. Setup and operator
+recovery are one-time CLI grants (`apps/cli/auth.py`) plus WebAuthn — not a
+browser `local_operator` fallback.
 
 `MYPA_GATEWAY_AUTH_MODE` separately describes the Python gateway:
 
-- `local_operator` sends no credential. The gateway serves one configured
-  process Principal, and the web tier admits only the matching synthetic
-  Principal so browser sessions cannot imply backend partitioning that does not
-  exist.
+- `local_operator` sends no credential. The gateway serves the fixed
+  `LOCAL_OPERATOR_UUID`. Browser passkey sessions bind that same UUID; the
+  gateway plane is not a browser authentication mode.
 - `entra` requires a bearer token. Browser Entra/MSAL is retired, so this BFF
   has no forwardable Entra credential and refuses (`no_forwardable_credential`)
   rather than sending the session cookie as a bearer or fabricating a token.
@@ -169,8 +177,10 @@ secrets. Generate local values out of band.
 
 ## Production configuration
 
-Production web authentication is passkey at the public browser origin. Do not
-put secrets in this file or in image labels.
+Production web authentication is passkey at the public browser origin
+`https://pa.bobby-fetting.me` (RP ID `pa.bobby-fetting.me`). Setup and operator
+recovery remain one-time operator grants plus WebAuthn. Do not put secrets in
+this file or in image labels.
 
 ```sh
 export MYPA_AUTH_MODE=passkey

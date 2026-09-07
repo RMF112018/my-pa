@@ -128,8 +128,9 @@ internal bridge, so the hardened proxy alone also joins the non-internal
 the proxy retains no database credential or application filesystem authority.
 [`ingress_gate.py`](ingress_gate.py)
 is read-only: it binds verified proxy, loopback publication, config hash, private
-Tailscale Serve mapping, disabled Funnel, the credentialed `local_operator`
-browser mode, and the absence of Entra configuration in the live gateway/web
+Tailscale Serve mapping, disabled Funnel, production browser passkey authentication
+(historical credentialed `local_operator` browser mode is superseded), and the
+absence of Entra configuration in the live gateway/web
 environments. The proxy drops every capability before adding back only
 `NET_BIND_SERVICE`: the pinned upstream Caddy binary carries that file capability
 and Linux refuses to execute it under `no-new-privileges` when it is absent,
@@ -229,8 +230,39 @@ for exact configuration, deployment, rollback, client, and loopback-fallback pro
 UI-IMP-WP29 adds a non-secret production environment schema, placeholder env,
 deployment-manifest example, fail-closed `validate-production-env.py` /
 `validate-delivery-config.py`, and dry-run `rollback.sh`. Public hostname is
-`pa.bobby-fetting.me`. Live DNS and Cloudflare routing are not performed.
+`pa.bobby-fetting.me`. Canonical origin is exactly
+`https://pa.bobby-fetting.me`. WebAuthn RP ID is exactly `pa.bobby-fetting.me`.
+Live DNS and Cloudflare routing are not performed.
 See [`../runbooks/production-frontend-deployment.md`](../runbooks/production-frontend-deployment.md).
+
+Production authentication (current; historical browser `local_operator` is
+superseded):
+
+- Browser production authentication is **passkey**.
+- Browser setup (`/setup`) and operator recovery (`/recover/operator`) are
+  WebAuthn plus one-time operator grants issued by
+  [`../../apps/cli/auth.py`](../../apps/cli/auth.py).
+- The private gateway **may** remain `local_operator` (capability plane). That
+  is not a browser authentication mode and is not a recovery fallback.
+- Browser passkey sessions and the gateway bind the same durable
+  `LOCAL_OPERATOR_UUID` `24abf5d2-d0c2-5e1c-82f6-e72425e9ed37`. There is no
+  caller-configurable Principal environment variable.
+- Production web `MYPA_AUTH_MODE` is `passkey`. Forbidden browser values remain
+  `synthetic`, `local_operator`, and `entra`. Entra/MSAL browser variables stay
+  forbidden. BFF/Python session-service and WebAuthn secret pairs must match;
+  [`validate-production-env.py`](validate-production-env.py) compares them
+  without printing either value.
+- Private smoke is transport-only. Production WebAuthn is observed only at
+  `https://pa.bobby-fetting.me` after `PRODUCTION_ACTIVATION_APPROVED`. The
+  operator-gated procedure is
+  [`../runbooks/auth-runtime-validation.md`](../runbooks/auth-runtime-validation.md)
+  (**UNEXECUTED / OPERATOR-GATED**). Its inert template is
+  [`auth-runtime-evidence.example.toml`](auth-runtime-evidence.example.toml);
+  validate structure with
+  [`validate-auth-runtime-evidence.py`](validate-auth-runtime-evidence.py)
+  `--allow-template`. Neither file is runtime evidence.
+
+Expected Alembic head for operator assertions: `4e9a1c7b2d60`.
 
 Later packages own executable behavior:
 
@@ -240,7 +272,9 @@ Later packages own executable behavior:
   operator/device gates; no image here is currently deployable;
 - NAS-03 PostgreSQL storage, migration, backup, and scratch restore;
 - NAS-04/05 services and filesystem permissions;
-- NAS-06 private HTTPS ingress, credentialed local-operator browser access,
-  and proof that gateway/web have no Entra configuration or application egress;
+- NAS-06 private HTTPS ingress, production browser passkey (historical
+  credentialed local-operator browser access is superseded), gateway
+  `local_operator` transport, and proof that gateway/web have no Entra
+  configuration or application egress;
 - NAS-07 live Apple/TCC activation and real credential minting remain operator gates;
 - NAS-10 acceptance.

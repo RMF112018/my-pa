@@ -43,12 +43,22 @@ PostgreSQL or the gateway.
    ```
 
    Production web `MYPA_AUTH_MODE` is `passkey`.
+   `MYPA_GATEWAY_AUTH_MODE` / Python `MY_PA_AUTH_MODE` may remain
+   `local_operator` (capability-plane transport, not a browser mode).
    `MYPA_CANONICAL_ORIGIN` is exactly `https://pa.bobby-fetting.me`.
-   `MYPA_SESSION_SERVICE_URL` is absent or empty. Session secrets are ≥32
-   characters. Synthetic auth, `local_operator` as `MYPA_AUTH_MODE`, and
-   Entra/MSAL browser variables are refused.
-6. **Migrate.** Run `ops/nas/migrate.sh` only after a current backup receipt.
-   Migration is never an application startup side effect.
+   WebAuthn RP ID is exactly `pa.bobby-fetting.me`.
+   `MYPA_SESSION_SERVICE_URL` is absent or empty. Session and WebAuthn secrets
+   are ≥32 characters. The BFF/Python session-service pair
+   (`MYPA_SESSION_SERVICE_SECRET` / `MY_PA_SESSION_SERVICE_SECRET`) must match,
+   and the BFF/Python WebAuthn pair (`MYPA_WEBAUTHN_BFF_SECRET` /
+   `MY_PA_WEBAUTHN_BFF_SECRET`) must match; the validator compares those pairs
+   without printing either value. Synthetic auth, `local_operator` as
+   `MYPA_AUTH_MODE`, and Entra/MSAL browser variables are refused. There is no
+   caller-configurable Principal variable. Expected Alembic head:
+   `4e9a1c7b2d60`.
+6. **Migrate.** Run `ops/nas/migrate.sh` only after a current backup receipt
+   and a separately authorized migration instruction. Migration is never an
+   application startup side effect and is not authorized by PREPARE alone.
 7. **Start private services.** Start PostgreSQL, gateway, workers, and the
    private Tailscale proxy with `ops/nas/start.sh` using `--no-build --pull never`.
    Do not start `frontend-cloudflared` or `public-proxy` yet if public routing
@@ -62,9 +72,16 @@ PostgreSQL or the gateway.
    variables are absent.
 10. **Private proxy.** Confirm the Tailscale allowlist proxy still refuses
     `/v1/*` as machine-internal and does not become the public origin.
-11. **Non-public smoke.** Exercise sign-in, `/api/health`, and reserved-path
-    refusals on the private origin only. Do not send traffic to
-    `pa.bobby-fetting.me`.
+11. **Non-public smoke (transport only).** Private smoke may validate services,
+    health, routing, proxying, reserved-path refusals, and configuration. It
+    MUST NOT claim production WebAuthn, passkey, or sign-in from an incompatible
+    private origin. Do not send traffic to `pa.bobby-fetting.me` during PREPARE.
+
+    Actual production WebAuthn validation occurs only when the browser sees
+    exactly `https://pa.bobby-fetting.me` with valid TLS and RP ID
+    `pa.bobby-fetting.me`, after `PRODUCTION_ACTIVATION_APPROVED`. That sequence
+    is [`auth-runtime-validation.md`](auth-runtime-validation.md), which remains
+    **UNEXECUTED / OPERATOR-GATED** (`NOT_PERFORMED_OPERATOR_GATED`).
 12. **STOP before DNS.** Do not create or change a Cloudflare DNS record. Do
     not run `cloudflared tunnel route dns`. Do not enable Funnel, port-forward,
     or a public NAS/LAN origin port. Leave this runbook here unless the operator
@@ -97,6 +114,17 @@ After private smoke is green and the operator has approved:
    `/remote/*`, `/apple/*`, `/mcp`, and `/mcp/*` return 404.
 5. Do not treat Cloudflare Access, Cloudflare identity headers, or
    `X-Forwarded-*` as Principal authority.
+6. Auth-state is read-only. `inconsistent` hard-stops. `uninitialized` means
+   bootstrap is pending and is never ready. Only `ready` supports ordinary
+   commissioned operation. Do not treat a private-origin transport check as
+   WebAuthn commissioning.
+
+On canonical-origin auth failure: stop `frontend-cloudflared` and
+`public-proxy`; retain PostgreSQL and Tailscale private management; restore
+prior digest-pinned images and configuration only under operator instruction.
+Do not continue public-edge traffic. Physical-device WebAuthn, bootstrap, and
+recovery remain [`auth-runtime-validation.md`](auth-runtime-validation.md)
+(**UNEXECUTED / OPERATOR-GATED**).
 
 ## ROLLBACK
 
@@ -126,4 +154,6 @@ docker compose \
 
 After the public edge is down, Tailscale private management and PostgreSQL
 remain. Restore the previous digest-pinned images from the prior manifest only
-under operator instruction. Never roll forward with `:latest`.
+under operator instruction. Never roll forward with `:latest`. Canonical-origin
+auth failure uses this same public-edge stop; it does not stop PostgreSQL or
+the private management path.

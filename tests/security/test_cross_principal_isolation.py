@@ -113,6 +113,7 @@ def test_the_identity_revision_round_trips_from_empty(empty_database_url: str) -
                 "recovery_code_sets",
                 "recovery_codes",
                 "auth_sessions",
+                "auth_grants",
             }
         command.downgrade(_config(), "base")
         with engine.connect() as connection:

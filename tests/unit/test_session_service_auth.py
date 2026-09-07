@@ -32,10 +32,13 @@ from my_pa.application.session_service_auth import (
 )
 from my_pa.bootstrap.gateway import _ceremony_response_body
 from my_pa.domain.identity.auth_sessions import AuthSession, IssuedAuthSession
+from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID
 from my_pa.domain.identity.user_account import (
+    AccountIdentityProvider,
     ConsentState,
     UserAccount,
     UserLifecycleState,
+    local_user_account,
 )
 from my_pa.domain.identity.webauthn_relying_party import WebAuthnRelyingParty
 from my_pa.infrastructure.security.webauthn_ceremony import CeremonyResult
@@ -51,6 +54,8 @@ NEW_SID = "11" * 32
 ISSUED_SID = "22" * 32
 PRINCIPAL = {
     "principalId": "11111111-1111-1111-1111-111111111111",
+    "identityProvider": "synthetic",
+    "identitySubject": f"{SYNTHETIC_MOSS_TENANT_ID}:aaaa0001-0000-0000-0000-000000000001",
     "tid": SYNTHETIC_MOSS_TENANT_ID,
     "oid": "aaaa0001-0000-0000-0000-000000000001",
     "upn": "synthetic.a@moss.example",
@@ -120,11 +125,14 @@ def test_synthetic_catalogue_maps_keys() -> None:
 
 
 def test_session_principal_payload_marks_synthetic_moss_tenant() -> None:
+    oid = "aaaa0001-0000-0000-0000-000000000001"
     account = UserAccount(
         id=uuid4(),
         principal_id=uuid4(),
+        identity_provider=AccountIdentityProvider.SYNTHETIC,
+        identity_subject=f"{SYNTHETIC_MOSS_TENANT_ID}:{oid}",
         tid=SYNTHETIC_MOSS_TENANT_ID,
-        oid="aaaa0001-0000-0000-0000-000000000001",
+        oid=oid,
         upn=None,
         display_name=None,
         first_seen_at=WHEN,
@@ -134,10 +142,33 @@ def test_session_principal_payload_marks_synthetic_moss_tenant() -> None:
         home_tenant_verified=True,
     )
     payload = session_principal_payload(account)
+    assert payload["principalId"] == str(account.principal_id)
+    assert payload["identityProvider"] == "synthetic"
+    assert payload["identitySubject"] == f"{SYNTHETIC_MOSS_TENANT_ID}:{oid}"
     assert payload["upn"] == ""
     assert payload["displayName"] == ""
     assert payload["synthetic"] is True
     assert payload["lifecycleState"] == "active"
+    assert payload["tid"] == SYNTHETIC_MOSS_TENANT_ID
+    assert payload["oid"] == oid
+    assert "sid" not in payload
+
+
+def test_session_principal_payload_omits_entra_claims_for_local() -> None:
+    account = local_user_account(account_id=uuid4(), now=WHEN)
+    payload = session_principal_payload(account)
+    assert payload == {
+        "principalId": str(LOCAL_OPERATOR_UUID),
+        "identityProvider": "local",
+        "identitySubject": "local-operator",
+        "displayName": "Local operator",
+        "lifecycleState": "active",
+    }
+    assert "tid" not in payload
+    assert "oid" not in payload
+    assert "upn" not in payload
+    assert "synthetic" not in payload
+    assert "sid" not in payload
 
 
 def test_ceremony_response_body_copies_raw_sid() -> None:
@@ -205,6 +236,7 @@ def _execute(action: str, document: dict[str, Any]) -> dict[str, Any]:
             "principal": {
                 **PRINCIPAL,
                 "oid": claims.oid,
+                "identitySubject": f"{claims.tid}:{claims.oid}",
                 "upn": claims.upn or "",
                 "displayName": claims.display_name or "",
             },

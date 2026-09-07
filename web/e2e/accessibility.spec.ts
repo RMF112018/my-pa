@@ -96,6 +96,28 @@ test.describe("axe-core, in Chromium, against the rendered page", () => {
     expect(await scan(page), "sign-in accessibility violations").toEqual([]);
   });
 
+  test("the setup screen has no detectable violation", async ({ page }) => {
+    await page.goto("/setup");
+    expect(await scan(page), "/setup accessibility violations").toEqual([]);
+  });
+
+  test("the operator-recovery screen has no detectable violation", async ({ page }) => {
+    await page.goto("/recover/operator");
+    expect(await scan(page), "/recover/operator accessibility violations").toEqual([]);
+  });
+
+  test("public owner-setup and operator-recovery reflow at 390px", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    for (const path of ["/setup", "/recover/operator"] as const) {
+      await page.goto(path);
+      await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow, `${path} overflows horizontally at 390`).toBeLessThanOrEqual(1);
+    }
+  });
+
   for (const path of PAGES) {
     test(`${path} has no detectable violation`, async ({ page }) => {
       await signIn(page);

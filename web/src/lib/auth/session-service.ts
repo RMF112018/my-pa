@@ -155,30 +155,49 @@ export async function callSessionService(
   });
 }
 
+const IDENTITY_PROVIDERS = new Set(["entra", "synthetic", "local"]);
+
 export function mapSessionPrincipal(payload: unknown): PrincipalSession | null {
   if (payload === null || typeof payload !== "object") return null;
   const raw = payload as Record<string, unknown>;
   if (
     typeof raw.principalId !== "string" ||
-    typeof raw.tid !== "string" ||
-    typeof raw.oid !== "string" ||
-    typeof raw.upn !== "string" ||
+    raw.principalId.length === 0 ||
+    typeof raw.identityProvider !== "string" ||
+    !IDENTITY_PROVIDERS.has(raw.identityProvider) ||
+    typeof raw.identitySubject !== "string" ||
+    raw.identitySubject.length === 0 ||
     typeof raw.displayName !== "string" ||
-    typeof raw.lifecycleState !== "string" ||
-    typeof raw.synthetic !== "boolean"
+    typeof raw.lifecycleState !== "string"
   ) {
     return null;
   }
   if (!LIFECYCLE_STATES.has(raw.lifecycleState as UserLifecycleState)) return null;
+  const identityProvider = raw.identityProvider as PrincipalSession["identityProvider"];
+  const synthetic = identityProvider === "synthetic";
+  if (identityProvider === "local") {
+    if (raw.tid !== undefined || raw.oid !== undefined) return null;
+    return {
+      principalId: raw.principalId,
+      identityProvider,
+      identitySubject: raw.identitySubject,
+      displayName: raw.displayName,
+      lifecycleState: raw.lifecycleState as UserLifecycleState,
+      synthetic: false,
+    };
+  }
+  if (typeof raw.tid !== "string" || typeof raw.oid !== "string") return null;
   return {
     principalId: raw.principalId,
-    tid: raw.tid,
-    oid: raw.oid,
-    upn: raw.upn,
+    identityProvider,
+    identitySubject: raw.identitySubject,
     displayName: raw.displayName,
     lifecycleState: raw.lifecycleState as UserLifecycleState,
-    synthetic: raw.synthetic,
-    ...(raw.synthetic ? { authenticationProvider: "synthetic" as const } : {}),
+    synthetic,
+    tid: raw.tid,
+    oid: raw.oid,
+    ...(typeof raw.upn === "string" ? { upn: raw.upn } : {}),
+    ...(synthetic ? { authenticationProvider: "synthetic" as const } : {}),
   };
 }
 

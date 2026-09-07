@@ -18,7 +18,12 @@ from typing import Final
 
 from my_pa.application.webauthn_bff_attestation import ATTESTATION_MAX_AGE
 from my_pa.domain.identity.secret_digests import AuthSecretError
-from my_pa.domain.identity.user_account import EntraTokenClaims, UserAccount
+from my_pa.domain.identity.user_account import (
+    SYNTHETIC_TENANT_ID,
+    AccountIdentityProvider,
+    EntraTokenClaims,
+    UserAccount,
+)
 
 __all__ = [
     "SYNTHETIC_CATALOGUE",
@@ -30,7 +35,7 @@ __all__ = [
     "verify_session_service_token",
 ]
 
-SYNTHETIC_MOSS_TENANT_ID: Final = "11111111-2222-3333-4444-555555555555"
+SYNTHETIC_MOSS_TENANT_ID: Final = SYNTHETIC_TENANT_ID
 _FORBIDDEN_PAYLOAD_KEYS: Final = frozenset({"tid", "oid", "principal_id", "principalId", "sid"})
 
 SYNTHETIC_CATALOGUE: Final[Mapping[str, EntraTokenClaims]] = {
@@ -94,16 +99,19 @@ def verify_session_service_token(secret: str, token: str, *, now: datetime) -> N
 
 
 def session_principal_payload(account: UserAccount) -> dict[str, object]:
-    """JSON object the BFF receives for a live session's UserAccount."""
-    return {
+    """Provider-neutral JSON object for one server-resolved live session."""
+    payload: dict[str, object] = {
         "principalId": str(account.principal_id),
-        "tid": account.tid,
-        "oid": account.oid,
-        "upn": account.upn or "",
+        "identityProvider": account.identity_provider.value,
+        "identitySubject": account.identity_subject,
         "displayName": account.display_name or "",
         "lifecycleState": account.lifecycle_state.value,
-        "synthetic": account.tid == SYNTHETIC_MOSS_TENANT_ID,
     }
+    if account.identity_provider is AccountIdentityProvider.SYNTHETIC:
+        payload["synthetic"] = True
+    if account.identity_provider is not AccountIdentityProvider.LOCAL:
+        payload.update({"tid": account.tid, "oid": account.oid, "upn": account.upn or ""})
+    return payload
 
 
 def _require_secret(secret: str) -> None:

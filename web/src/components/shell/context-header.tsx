@@ -26,7 +26,7 @@ export function ContextHeader({ principal }: { principal: PrincipalSession }) {
             {principal.displayName}
           </div>
           <div className="truncate text-xs text-muted" data-testid="principal-upn">
-            {principal.upn}
+            {principal.upn ?? principal.identitySubject}
           </div>
         </div>
         <Button variant="ghost" onClick={signOut}>

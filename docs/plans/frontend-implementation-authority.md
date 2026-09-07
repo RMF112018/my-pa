@@ -44,7 +44,7 @@ Execution is organized as `UI-IMP-WP01..WP30`. Older `WP-FE-*` sequencing is his
 - `UI-IMP-WP29` — Deployment, Rollback, Environment, and Observability Contract.
 - `UI-IMP-WP30` — Final Runtime / Acceptance Validation.
 
-WP02 persistence substrate exists (`identity.webauthn_credentials`, `identity.webauthn_challenges`, `identity.recovery_code_sets`, `identity.recovery_codes`, `identity.auth_sessions`; see [frontend-auth-persistence.md](frontend-auth-persistence.md)). The production browser cookie and session registry remain the legacy HMAC + process-local map. WP02 does not activate WebAuthn.
+WP02 persistence substrate exists (`identity.webauthn_credentials`, `identity.webauthn_challenges`, `identity.recovery_code_sets`, `identity.recovery_codes`, `identity.auth_sessions`; see [frontend-auth-persistence.md](frontend-auth-persistence.md)). WP04 replaced the legacy HMAC cookie and process-local session registry with an opaque SID cookie. ADR-013 adds the fixed local Principal, one-time operator grants, and provider-neutral session contracts. Production activation remains operator-gated.
 
 `UI-IMP-WP22 — Knowledge / GoodNotes Evidence and Correction UI` is implemented on this branch over merged WP21 contracts (`3f5c80f9` / #212). Wave 5 Canvas and WP23–WP26 remain on main. This merge does not name or activate a further executable package; WP23+ are not activated here. `gsqs.start` / `gsqs.status` remain not browser-admitted. This is not production activation, not WP26+ assurance, not a dedicated WP-14 audit, and never `PASS_VERIFIED` of `PFE-AC-077..082` or `PFE-AC-132`.
 
@@ -52,7 +52,7 @@ WP11 Reports/Morning Intelligence BFF on this PR is contract substrate, not WP12
 
 ## 2. Authentication/session authority
 
-[ADR-011](../decisions/ADR-011-passkey-webauthn-authentication-and-opaque-server-sessions.md) is the controlling production browser authentication/session decision.
+[ADR-011](../decisions/ADR-011-passkey-webauthn-authentication-and-opaque-server-sessions.md) is the controlling production browser authentication/session decision. [ADR-013](../decisions/ADR-013-fixed-local-principal-and-operator-auth-grants.md) is the accepted addendum: one production Principal (`LOCAL_OPERATOR_UUID`), one-time operator grants, and provider-neutral session/attestation contracts. Sessions are not tid/oid-only.
 
 Target:
 
@@ -75,9 +75,9 @@ Required authority rules:
 
 ### Current implementation truth versus target
 
-At the WP02 repository basis the web runtime still supports `synthetic | entra | local_operator`, still contains Entra/MSAL code, still uses a signed session cookie carrying Principal/session data, and still uses a process-local session registry. Durable PostgreSQL stores for credentials, challenges, recovery hashes, and opaque sessions now exist but are not wired to that runtime. These are legacy/current implementation facts, not the target architecture.
+At the WP02 repository basis the web runtime still supported `synthetic | entra | local_operator`, still contained Entra/MSAL code, still used a signed session cookie carrying Principal/session data, and still used a process-local session registry. Those were WP02-era facts, not the current target.
 
-`UI-IMP-WP03..WP04` own ceremony and cookie cutover. WP02 does not remove or repair those runtime paths.
+Later packages replaced that runtime: browser production is passkey with an opaque SID; setup and operator recovery are one-time grants plus WebAuthn; sessions are provider-neutral (not tid/oid-only); the gateway may remain `local_operator` as a capability-plane transport bound to the same `LOCAL_OPERATOR_UUID`. Production activation remains operator-gated.
 
 ### Prior ADR supersession
 

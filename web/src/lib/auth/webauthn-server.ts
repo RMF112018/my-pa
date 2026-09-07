@@ -5,13 +5,19 @@
  * already have a Principal. Session-service routes (resolve/touch/rotate/revoke/
  * issue-synthetic) must go through `session-service.ts` and must not send this
  * header. Cookie set and `issuedSid` stripping happen in the route handler.
+ *
+ * Authenticated gateway calls also copy the opaque SID from the HttpOnly cookie
+ * onto `x-my-pa-auth-sid`. The browser never supplies that header.
  */
 
 import { createHmac } from "node:crypto";
 import type { PrincipalSession } from "@/contracts/identity";
+import { canonicalPrincipalUuid } from "@/lib/auth/claims";
+import { parseOpaqueSessionSid, SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { gatewayBaseUrl } from "@/lib/api/gateway-config";
 
-const ATTESTATION_HEADER = "x-my-pa-webauthn-attestation";
+export const WEBAUTHN_ATTESTATION_HEADER = "x-my-pa-webauthn-attestation";
+export const WEBAUTHN_SID_HEADER = "x-my-pa-auth-sid";
 
 export class MissingWebAuthnBffSecretError extends Error {
   constructor() {
@@ -31,9 +37,29 @@ function base64Url(bytes: Buffer): string {
   return bytes.toString("base64url");
 }
 
+type CookieJar = { get(name: string): { value?: string } | undefined };
+
+function opaqueSidFromRequest(request: Request): string | null {
+  const jar = (request as Request & { cookies?: CookieJar }).cookies;
+  const fromJar = parseOpaqueSessionSid(jar?.get(SESSION_COOKIE_NAME)?.value);
+  if (fromJar) return fromJar;
+  const header = request.headers.get("cookie");
+  if (!header) return null;
+  for (const part of header.split(";")) {
+    const trimmed = part.trim();
+    const eq = trimmed.indexOf("=");
+    if (eq <= 0) continue;
+    if (trimmed.slice(0, eq) !== SESSION_COOKIE_NAME) continue;
+    return parseOpaqueSessionSid(trimmed.slice(eq + 1));
+  }
+  return null;
+}
+
+/** Signed `{iat,pid}` with sorted JSON keys, matching Python `issue_webauthn_attestation`. */
 export function issueWebAuthnAttestation(principal: PrincipalSession, now = Date.now()): string {
+  const pid = canonicalPrincipalUuid(principal.principalId);
   const payload = base64Url(
-    Buffer.from(JSON.stringify({ iat: Math.floor(now / 1000), oid: principal.oid, tid: principal.tid })),
+    Buffer.from(JSON.stringify({ iat: Math.floor(now / 1000), pid }, ["iat", "pid"])),
   );
   const signature = createHmac("sha256", bffSecret()).update(payload).digest("hex");
   return `${payload}.${signature}`;
@@ -51,7 +77,11 @@ export async function callWebAuthnGateway(
   };
   const fetchSite = request.headers.get("sec-fetch-site");
   if (fetchSite) headers["sec-fetch-site"] = fetchSite;
-  if (principal) headers[ATTESTATION_HEADER] = issueWebAuthnAttestation(principal);
+  if (principal) {
+    headers[WEBAUTHN_ATTESTATION_HEADER] = issueWebAuthnAttestation(principal);
+    const sid = opaqueSidFromRequest(request);
+    if (sid) headers[WEBAUTHN_SID_HEADER] = sid;
+  }
   const response = await fetch(`${gatewayBaseUrl()}/webauthn/v1/${action}`, {
     method: "POST",
     headers,

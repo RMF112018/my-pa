@@ -32,6 +32,61 @@ def test_production_example_env_validates() -> None:
     assert errors == []
 
 
+def test_production_env_refuses_mismatched_secret_pairs_without_leaking_values() -> None:
+    env = _module(NAS / "validate-production-env.py")
+    schema = env.load_schema(NAS / "production-environment.schema.toml")
+    values = env.load_env(NAS / "production-environment.example.env")
+    session_left = "PLANTED_SESSION_SECRET_VALUE_32CHARS!!"
+    session_right = "MISMATCH_SESSION_SECRET_VALUE_32CHAR!"
+    webauthn_left = "PLANTED_WEBAUTHN_SECRET_VALUE_32CHARS"
+    webauthn_right = "MISMATCH_WEBAUTHN_SECRET_VALUE_32CHAR"
+    values["MYPA_SESSION_SERVICE_SECRET"] = session_left
+    values["MY_PA_SESSION_SERVICE_SECRET"] = session_right
+    values["MYPA_WEBAUTHN_BFF_SECRET"] = webauthn_left
+    values["MY_PA_WEBAUTHN_BFF_SECRET"] = webauthn_right
+    errors = env.validate_env(values, schema)
+    joined = " ".join(errors)
+    assert (
+        "secret_pair_mismatch:MYPA_SESSION_SERVICE_SECRET!=MY_PA_SESSION_SERVICE_SECRET" in errors
+    )
+    assert "secret_pair_mismatch:MYPA_WEBAUTHN_BFF_SECRET!=MY_PA_WEBAUTHN_BFF_SECRET" in errors
+    for secret in (session_left, session_right, webauthn_left, webauthn_right):
+        assert secret not in joined
+
+
+def test_production_env_cli_mismatch_does_not_print_secret_values(tmp_path: Path) -> None:
+    env_file = tmp_path / "mismatch.env"
+    planted = "PLANTED_CLI_SESSION_SECRET_VALUE_32CH"
+    env_file.write_text(
+        (NAS / "production-environment.example.env")
+        .read_text(encoding="utf-8")
+        .replace(
+            "MY_PA_SESSION_SERVICE_SECRET=REPLACE_ME_FAKE_SESSION_SERVICE_SECRET_00",
+            f"MY_PA_SESSION_SERVICE_SECRET={planted}",
+        ),
+        encoding="utf-8",
+    )
+    completed = subprocess.run(  # noqa: S603
+        [
+            str(NAS / "validate-production-env.py"),
+            "--env",
+            str(env_file),
+            "--schema",
+            str(NAS / "production-environment.schema.toml"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 1
+    combined = completed.stdout + completed.stderr
+    assert (
+        "secret_pair_mismatch:MYPA_SESSION_SERVICE_SECRET!=MY_PA_SESSION_SERVICE_SECRET" in combined
+    )
+    assert planted not in combined
+    assert "REPLACE_ME_FAKE_SESSION_SERVICE_SECRET_00" not in combined
+
+
 def test_production_env_refuses_synthetic_and_http_origin(tmp_path: Path) -> None:
     env = _module(NAS / "validate-production-env.py")
     schema = env.load_schema(NAS / "production-environment.schema.toml")

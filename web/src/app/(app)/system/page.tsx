@@ -171,14 +171,36 @@ export default async function SystemPage() {
           <dl className="grid grid-cols-[8rem_1fr] gap-1 font-mono text-xs break-all">
             <dt className="text-muted">principal</dt>
             <dd data-testid="system-principal-id">{principal.principalId}</dd>
-            <dt className="text-muted">tenant (tid)</dt>
-            <dd data-testid="system-tid">{principal.tid}</dd>
-            <dt className="text-muted">object (oid)</dt>
-            <dd data-testid="system-oid">{principal.oid}</dd>
-            <dt className="text-muted">upn</dt>
-            <dd>{principal.upn}</dd>
+            <dt className="text-muted">identity</dt>
+            <dd data-testid="system-identity-provider">{principal.identityProvider}</dd>
+            <dt className="text-muted">subject</dt>
+            <dd data-testid="system-identity-subject">{principal.identitySubject}</dd>
+            {principal.tid ? (
+              <>
+                <dt className="text-muted">tenant (tid)</dt>
+                <dd data-testid="system-tid">{principal.tid}</dd>
+              </>
+            ) : null}
+            {principal.oid ? (
+              <>
+                <dt className="text-muted">object (oid)</dt>
+                <dd data-testid="system-oid">{principal.oid}</dd>
+              </>
+            ) : null}
+            {principal.upn ? (
+              <>
+                <dt className="text-muted">upn</dt>
+                <dd>{principal.upn}</dd>
+              </>
+            ) : null}
             <dt className="text-muted">provider</dt>
-            <dd>{principal.synthetic ? "synthetic development provider" : "Microsoft Entra ID"}</dd>
+            <dd>
+              {principal.identityProvider === "synthetic" || principal.synthetic
+                ? "synthetic development provider"
+                : principal.identityProvider === "local"
+                  ? "passkey"
+                  : "Microsoft Entra ID"}
+            </dd>
           </dl>
           <p className="mt-2">
             Your identity here derives only from the signed server-side session; nothing you or

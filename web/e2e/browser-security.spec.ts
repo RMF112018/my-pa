@@ -203,4 +203,25 @@ test.describe("browser mutation admission", () => {
     });
     expectCrossSiteRefusal(response.status, (await response.json()) as CaptureEnvelope);
   });
+
+  test("cross-origin public WebAuthn POSTs are 403", async ({ page }) => {
+    await page.goto("/setup");
+    for (const path of [
+      "/api/webauthn/auth-state",
+      "/api/webauthn/bootstrap/registration/options",
+      "/api/webauthn/operator-recovery/registration/options",
+    ]) {
+      const response = await fetch(`${LIVE_URL}${path}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          origin: ATTACKER_ORIGIN,
+        },
+        body: JSON.stringify({ grant: "e2e-wrong-origin-grant" }),
+      });
+      expect(response.status, path).toBe(403);
+      const body = (await response.json()) as CaptureEnvelope;
+      expect(body.error?.code, path).toBe("cross_site_request");
+    }
+  });
 });

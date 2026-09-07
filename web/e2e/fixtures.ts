@@ -24,6 +24,23 @@ export function syntheticNote(marker: string): string {
 }
 
 /**
+ * Hide Next.js `next dev` chrome so it cannot intercept clicks.
+ *
+ * This suite runs against `next dev` because a production build refuses the
+ * synthetic provider (see `playwright.config.ts`). `PasskeySignIn` currently
+ * hydrates a different first paint than SSR, and `next dev` puts a
+ * `<nextjs-portal>` error overlay on top of the real form. That overlay is
+ * framework development chrome, not product UI — `visual.spec.ts` already
+ * hides it the same way. Hiding it here does not close the hydration defect
+ * and does not claim Safari/PWA (AC072-074).
+ */
+export async function hideNextjsDevOverlay(page: Page): Promise<void> {
+  await page.addStyleTag({
+    content: "nextjs-portal { display: none !important; pointer-events: none !important; }",
+  });
+}
+
+/**
  * Sign in through the real screen, and land where the app sends you.
  *
  * The last assertion is not decoration. The URL becoming `/today` only says the
@@ -35,11 +52,112 @@ export function syntheticNote(marker: string): string {
  */
 export async function signIn(page: Page, origin?: string): Promise<void> {
   await page.goto(`${origin ?? ""}/sign-in`);
+  await hideNextjsDevOverlay(page);
   const button = page.getByTestId(`sign-in-${ADMISSIBLE_PRINCIPAL}`);
   await expect(button).toBeVisible();
   await button.click();
   await page.waitForURL("**/today");
   await expect(page.getByTestId("capture-button")).toBeVisible();
+}
+
+type SecretStoreDump = {
+  local: Record<string, string>;
+  session: Record<string, string>;
+  indexed: unknown[];
+  cached: Array<{ url: string; body: string }>;
+  cookie: string;
+};
+
+/**
+ * Dump web storage, IndexedDB, and CacheStorage and prove none of the named
+ * sentinels (raw grant, recovery code, SID) were persisted. Cached static
+ * bundles may mention the word "grant"; that is not a secret.
+ */
+export async function expectNoSecretInBrowserStores(
+  page: Page,
+  sentinels: readonly string[] = [],
+): Promise<void> {
+  const dump = (await page.evaluate(async () => {
+    const fromStorage = (store: Storage) => {
+      const entries: Record<string, string> = {};
+      for (let index = 0; index < store.length; index += 1) {
+        const key = store.key(index);
+        if (key !== null) entries[key] = store.getItem(key) ?? "";
+      }
+      return entries;
+    };
+    const indexed: unknown[] = [];
+    for (const meta of await indexedDB.databases()) {
+      if (!meta.name) continue;
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const open = indexedDB.open(meta.name as string, meta.version);
+        open.onsuccess = () => resolve(open.result);
+        open.onerror = () => reject(open.error ?? new Error("idb"));
+      });
+      for (const storeName of Array.from(db.objectStoreNames)) {
+        const rows = await new Promise<unknown>((resolve, reject) => {
+          const req = db.transaction(storeName, "readonly").objectStore(storeName).getAll();
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error ?? new Error("idb store"));
+        });
+        indexed.push({ db: meta.name, store: storeName, rows });
+      }
+      db.close();
+    }
+    const cached: Array<{ url: string; body: string }> = [];
+    for (const name of await caches.keys()) {
+      const cache = await caches.open(name);
+      for (const request of await cache.keys()) {
+        const response = await cache.match(request);
+        cached.push({
+          url: request.url,
+          body: response ? await response.clone().text().catch(() => "") : "",
+        });
+      }
+    }
+    return {
+      local: fromStorage(localStorage),
+      session: fromStorage(sessionStorage),
+      indexed,
+      cached,
+      cookie: document.cookie,
+    };
+  })) as SecretStoreDump;
+
+  const durable = JSON.stringify({
+    local: dump.local,
+    session: dump.session,
+    indexed: dump.indexed,
+    cookie: dump.cookie,
+  }).toLowerCase();
+  expect(durable, "HttpOnly SID must not appear in script-visible stores").not.toContain(
+    "mypa_session",
+  );
+  expect(durable).not.toContain("bearer ");
+  expect(durable).not.toMatch(/eyj[a-z0-9_-]+\.[a-z0-9_-]+\./i);
+
+  const cachedUrls = dump.cached.map((entry) => new URL(entry.url).pathname);
+  expect(
+    cachedUrls.filter(
+      (pathname) =>
+        pathname === "/setup" ||
+        pathname.startsWith("/setup/") ||
+        pathname === "/recover/operator" ||
+        pathname.startsWith("/recover/") ||
+        pathname === "/api" ||
+        pathname.startsWith("/api/") ||
+        pathname === "/sign-in",
+    ),
+    "service-worker cache must not hold auth HTML, grants, or API",
+  ).toEqual([]);
+
+  const haystack = `${durable}\n${dump.cached.map((entry) => entry.body).join("\n")}`.toLowerCase();
+  for (const sentinel of sentinels) {
+    if (!sentinel) continue;
+    expect(haystack, `sentinel ${sentinel} must not persist in browser stores`).not.toContain(
+      sentinel.toLowerCase(),
+    );
+  }
 }
 
 /**

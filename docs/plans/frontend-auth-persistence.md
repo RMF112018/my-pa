@@ -1,10 +1,19 @@
 # Frontend auth persistence substrate (UI-IMP-WP02) and WP04 cookie cutover
 
 **Package:** `UI-IMP-WP02 — Auth Persistence and Session Topology`  
-**Architecture authority:** [ADR-011](../decisions/ADR-011-passkey-webauthn-authentication-and-opaque-server-sessions.md)  
-**Alembic:** `2c00c9ac64bc` on `c99cd8ed8d1c` (`identity` schema only)
+**Architecture authority:** [ADR-011](../decisions/ADR-011-passkey-webauthn-authentication-and-opaque-server-sessions.md), addendum [ADR-013](../decisions/ADR-013-fixed-local-principal-and-operator-auth-grants.md)  
+**Alembic:** WP02 substrate `2c00c9ac64bc` on `c99cd8ed8d1c` (`identity` schema); current head `4e9a1c7b2d60` on `c5b71e0a8d43` normalizes account identity and adds one-time auth grants.
 
-This document describes the durable PostgreSQL substrate WP02 added, then the WP04 cookie cutover implemented on this branch. It does not restate ADR-011. It does not claim production activation, production Entra retirement as a completed deployment, or `PASS_VERIFIED` for production session criteria.
+This document describes the durable PostgreSQL substrate WP02 added, then the WP04 cookie cutover implemented on this branch, then the ADR-013 identity/grant additions. It does not restate those ADRs. It does not claim production activation, production Entra retirement as a completed deployment, or `PASS_VERIFIED` for production session criteria.
+
+Sessions are **not** tid/oid-only. Canonical account identity is
+`(identity_provider, identity_subject)` with providers `entra | synthetic | local`.
+Local `tid` and `oid` are both absent. Server/BFF `PrincipalSession` is
+provider-neutral: required `principalId`, `identityProvider`, `identitySubject`,
+`displayName`, and `lifecycleState`. Provider-specific `tid`/`oid`/`upn` are
+present only for Entra/synthetic. The browser cookie still carries only the
+opaque SID. BFF-to-gateway WebAuthn attestation signs `{pid, iat}` for the
+durable Principal UUID; it does not carry `tid` or `oid`.
 
 ## What WP02 established
 
@@ -43,7 +52,7 @@ Coherence is the database, not process memory. Two independent store instances (
 
 Python `WebAuthnCeremonyService` verifies registration/assertion through the `webauthn` library and persists through WP02 stores. Next BFF `/api/webauthn/*` attests to the gateway. Successful authentication creates a WP02 `auth_sessions` row. On this branch the cookie is no longer a Principal-bearing HMAC token: WP04 sets `mypa_session` to the raw opaque SID (see below). Ceremony JSON may carry `issuedSid` on the loopback BFF↔Python hop; that field is stripped before the browser sees the body.
 
-WP03 still owns navigator.credentials, passkey UI, options/verify endpoints, RP ID/origin enforcement at the ceremony, user verification, enrollment gating, recovery UX, and step-up ceremonies. Operator-local recovery remains unimplemented.
+WP03 still owns navigator.credentials, passkey UI, options/verify endpoints, RP ID/origin enforcement at the ceremony, user verification, enrollment gating, recovery UX, and step-up ceremonies. Operator recovery is the one-time grant plus WebAuthn path at `/recover/operator` (CLI `apps/cli/auth.py`); it is not a browser `local_operator` fallback.
 
 ## WP04 cutover (implemented on this PR, not production-activated)
 
@@ -54,10 +63,10 @@ Runtime truth on this branch:
 - Cookie `mypa_session` is the raw `AuthSessionStore` SID: 64 hex characters. HttpOnly, `SameSite=Lax`, `Secure` when `NODE_ENV === "production"`, 8h `maxAge`. It does not carry a Principal and is not an HMAC token.
 - Next BFF resolves, touches, rotates, revokes, and (in synthetic mode) issues sessions through the Python session-service, authenticating with header `x-my-pa-session-service`. The BFF HMAC authenticates Next to Python; it is not the browser cookie.
 - Ceremony/session JSON may include `issuedSid` on the loopback hop. Route handlers set the cookie from that value and strip `issuedSid` before the body is returned to the browser.
-- Browser Entra/MSAL and browser `local_operator` sign-in are retired as web modes. Web `MYPA_AUTH_MODE` is exactly `passkey` or `synthetic` (`synthetic` is refused when `NODE_ENV === "production"`).
-- Python `MY_PA_AUTH_MODE` / `MYPA_GATEWAY_AUTH_MODE` are unchanged. Gateway process identity remains a separate concern from the browser cookie.
+- Browser Entra/MSAL and browser `local_operator` sign-in are retired as web modes. Web `MYPA_AUTH_MODE` is exactly `passkey` or `synthetic` (`synthetic` is refused when `NODE_ENV === "production"`). Public routes include `/sign-in`, `/setup`, and `/recover/operator`. Setup and operator recovery are one-time operator grants plus WebAuthn.
+- Python `MY_PA_AUTH_MODE` / `MYPA_GATEWAY_AUTH_MODE` are unchanged. Gateway process identity remains a separate concern from the browser cookie and binds the same durable `LOCAL_OPERATOR_UUID`.
 - There is no Redis, no Next→PostgreSQL connection, no production deployment, and no WP-05 mutation-admission work in this package.
-- PFE-AC-097 remains `IMPLEMENTATION_REQUIRED`: hashed recovery is live; operator-local recovery is not implemented and is not invented here.
+- Hashed recovery codes remain live. Operator recovery uses a one-time digest-backed grant targeting `LOCAL_OPERATOR_UUID`; it is not a reusable shared secret and is not browser `local_operator`.
 - Production activation is not claimed. This is a repository cutover on the PR branch, not an operator-gated production session change.
 
 Process-local maps and the HMAC cookie are not current runtime truth on this branch. Remaining compile-safe shims in `session-registry.ts` must not authorize anyone.

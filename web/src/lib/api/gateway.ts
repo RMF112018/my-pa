@@ -11,17 +11,17 @@
  * back into the web tier's existing typed vocabulary.
  *
  * **Identity is filled from the verified session and from nowhere else.** The
- * envelope's `principal_id` is derived — by SHA-256 over a fixed domain-separated
- * string and the session's `tid`/`oid` — from the `PrincipalSession` that
- * `requirePrincipal` resolved out of the signed cookie. It is never read from a
- * body, a query string, or a header, and `rejectCallerSuppliedPrincipal` runs on
- * every payload before it is sent, so a caller that names a principal is refused
- * rather than ignored. The value is a *correlation* identifier on the Python
- * side and is read by nothing there — `RequestMetadata.principal_id` is required
- * by the contract and consulted by no production module, and an architecture
- * guard keeps that a measurement. This module does not change that and must not:
- * the acting Principal is the gateway's to establish, from its own authenticated
- * context, exactly as `docs/specs` section 8.2 requires.
+ * envelope's `principal_id` is `prn_` plus the canonical UUID hex of the
+ * session's `principalId` — the same rendering as Python `capture_principal_id`.
+ * It is never hashed from `tid`/`oid`, never read from a body, a query string,
+ * or a header, and `rejectCallerSuppliedPrincipal` runs on every payload before
+ * it is sent, so a caller that names a principal is refused rather than ignored.
+ * The value is a *correlation* identifier on the Python side and is read by
+ * nothing there — `RequestMetadata.principal_id` is required by the contract and
+ * consulted by no production module, and an architecture guard keeps that a
+ * measurement. This module does not change that and must not: the acting
+ * Principal is the gateway's to establish, from its own authenticated context,
+ * exactly as `docs/specs` section 8.2 requires.
  *
  * **A credential is forwarded or the request is refused; one is never invented.**
  * In `local_operator` mode the gateway acts as its own fixed process principal
@@ -41,7 +41,7 @@
  * `policy_denied` stay distinguishable rather than collapsing into "no data".
  */
 import contract from "@/contracts/gateway.json";
-import { rejectCallerSuppliedPrincipal } from "@/lib/auth/claims";
+import { canonicalPrincipalUuid, rejectCallerSuppliedPrincipal } from "@/lib/auth/claims";
 import { decodeCapability } from "@/lib/api/decode";
 import type { CapabilityResults } from "@/lib/api/decode";
 import type { DecodedDisclosure } from "@/lib/api/decode/disclosure";
@@ -126,23 +126,19 @@ function unavailable(code: string, message: string): { status: number; error: Er
 
 /**
  * The correlation identifier the envelope carries, derived from the verified
- * session.
+ * session's durable principal UUID.
  *
- * Derived rather than passed through, because the web tier's `principalId` is
- * `syn-…`-shaped and the Python contract requires a `prn_` identifier of 8-64
- * alphanumeric characters — and because a *derivation* cannot be influenced by
- * anything the browser sends. The inputs are `tid` and `oid`, which are the only
- * two fields of a session that are identity at all; `upn` and `displayName` are
- * mutable observations and are deliberately not in the digest.
+ * Canonicalize `principal.principalId` as a UUID and render `prn_` plus the
+ * 32 lowercase hex characters, matching Python `capture_principal_id`. Malformed
+ * IDs fail closed. `tid` and `oid` are not inputs; `upn` and `displayName` are
+ * mutable observations and are deliberately not used.
  *
  * This value is correlation input on the far side and authorises nothing. The
  * gateway derives the acting Principal from its own authenticated context.
  */
 export async function correlationPrincipalId(principal: PrincipalSession): Promise<string> {
-  const material = `my-pa/bff/principal-correlation/v1/${principal.tid}/${principal.oid}`;
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(material));
-  const hex = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
-  return `prn_${hex.slice(0, 32)}`;
+  const uuid = canonicalPrincipalUuid(principal.principalId);
+  return `prn_${uuid.replace(/-/g, "")}`;
 }
 
 /**

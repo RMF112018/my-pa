@@ -8,7 +8,9 @@
  */
 
 const SYNTHETIC_A = {
-  principalId: "syn-aaaa0001",
+  principalId: "aaaa0001-0000-0000-0000-000000000001",
+  identityProvider: "synthetic",
+  identitySubject: "11111111-2222-3333-4444-555555555555:aaaa0001-0000-0000-0000-000000000001",
   tid: "11111111-2222-3333-4444-555555555555",
   oid: "aaaa0001-0000-0000-0000-000000000001",
   upn: "synthetic.a@moss.example",
@@ -19,7 +21,8 @@ const SYNTHETIC_A = {
 
 const SYNTHETIC_B = {
   ...SYNTHETIC_A,
-  principalId: "syn-bbbb0002",
+  principalId: "bbbb0002-0000-0000-0000-000000000002",
+  identitySubject: "11111111-2222-3333-4444-555555555555:bbbb0002-0000-0000-0000-000000000002",
   oid: "bbbb0002-0000-0000-0000-000000000002",
   upn: "synthetic.b@moss.example",
   displayName: "Synthetic B",

@@ -432,6 +432,8 @@ test.describe("the page body reflows rather than scrolling sideways", () => {
       "/system",
       "/situations",
       "/library",
+      "/setup",
+      "/recover/operator",
       "/work/projects/prj_syn_0001/constraints",
     ]) {
       await page.goto(path);

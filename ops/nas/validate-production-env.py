@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import re
 import sys
@@ -22,6 +23,19 @@ DIGEST_PINNED = re.compile(
     r"^[^:@\s]+(?:/[^:@\s]+)*:[^:@\s]+@sha256:[0-9a-f]{64}$",
     re.IGNORECASE,
 )
+SECRET_PAIRS = (
+    ("MYPA_SESSION_SERVICE_SECRET", "MY_PA_SESSION_SERVICE_SECRET"),
+    ("MYPA_WEBAUTHN_BFF_SECRET", "MY_PA_WEBAUTHN_BFF_SECRET"),
+)
+
+
+def secrets_equal(left: str, right: str) -> bool:
+    """Compare two secrets without returning either value."""
+    left_bytes = left.encode("utf-8")
+    right_bytes = right.encode("utf-8")
+    if len(left_bytes) != len(right_bytes):
+        return False
+    return hmac.compare_digest(left_bytes, right_bytes)
 
 
 def load_schema(path: Path) -> dict[str, Any]:
@@ -188,6 +202,14 @@ def validate_env(
             errors.append(f"secret_too_short:{name}")
         if spec.get("classification") == "secret" and len(raw) < 32:
             errors.append(f"secret_too_short:{name}")
+
+    for left_name, right_name in SECRET_PAIRS:
+        left = values.get(left_name)
+        right = values.get(right_name)
+        if left is None or right is None:
+            continue
+        if not secrets_equal(left, right):
+            errors.append(f"secret_pair_mismatch:{left_name}!={right_name}")
 
     if "https://" not in values.get("MY_PA_WEBAUTHN_ALLOWED_ORIGINS", ""):
         errors.append("webauthn_origin_not_https")

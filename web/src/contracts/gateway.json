@@ -435,6 +435,55 @@
         "page_version_id": "gnver_aaaaaaaaaaaaaaaaaaaaaaaa",
         "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
       }
+    },
+    "constraints.read": {
+      "purpose": "constraint_read",
+      "payloadFields": ["constraint_id"],
+      "probe": { "constraint_id": "cst_aaaaaaaa11111111" }
+    },
+    "constraints.list": {
+      "purpose": "constraint_read",
+      "payloadFields": [
+        "project_id",
+        "scope",
+        "statuses",
+        "category_ids",
+        "bic_party_refs",
+        "responsible_party_refs",
+        "sync_states",
+        "record_qualities",
+        "overdue",
+        "due_soon",
+        "my_court",
+        "needs_attention",
+        "recent",
+        "sort",
+        "sort_order",
+        "grouping",
+        "limit",
+        "cursor"
+      ],
+      "probe": { "project_id": "prj_aaaaaaaa11111111" }
+    },
+    "constraints.search": {
+      "purpose": "constraint_read",
+      "payloadFields": ["project_id", "query", "scope", "limit", "cursor"],
+      "probe": { "project_id": "prj_aaaaaaaa11111111", "query": "steel delivery" }
+    },
+    "constraints.history": {
+      "purpose": "constraint_read",
+      "payloadFields": ["constraint_id", "page_size", "cursor"],
+      "probe": { "constraint_id": "cst_aaaaaaaa11111111" }
+    },
+    "constraints.overview": {
+      "purpose": "constraint_read",
+      "payloadFields": ["project_id"],
+      "probe": { "project_id": "prj_aaaaaaaa11111111" }
+    },
+    "constraint_categories.list": {
+      "purpose": "constraint_read",
+      "payloadFields": ["project_id", "states"],
+      "probe": { "project_id": "prj_aaaaaaaa11111111" }
     }
   },
   "_dispositionComment": [

@@ -355,14 +355,18 @@ class Purpose(StrEnum):
     # categories and mutation receipts are rows neither of those grants reaches;
     # `document_read` is managed custody; `entity_read` is identity.
     #
-    # **No `constraint_authoring` beside it, and the absence is the decision.**
-    # This build serves six Constraint reads and no Constraint write, so an
-    # authoring purpose would be a grant nothing can exercise — declared ahead of
-    # the behaviour that would justify it, which is the half of a boundary that
-    # gets forgotten. The read/authoring separation the plane requires is proved
-    # today by this purpose granting only reads and by `operation.py`'s deny-all
-    # default for the pair nobody mapped. Sync read and sync authoring are absent
-    # for the same reason twice over: the synchronisation behaviour is a later
-    # package's, and a purpose named for it would be the first half of building
-    # one.
+    # **`constraint_authoring` now sits beside it, and the separation is the
+    # decision.** `PC-CM-IMP-WP07` admits the twelve canonical Constraint and
+    # Category mutations, so the grant this purpose names is one something can
+    # exercise — the condition WP04 stated for adding it, met by the behaviour
+    # arriving rather than by anybody's intention to build it. The two remain
+    # separate purposes rather than one wider one: a grant issued to read a
+    # Project's Register must not also close, void or reopen the records in it,
+    # and `operation.py` maps every capability to exactly one of the two, never
+    # to both. Sync read and sync authoring are still absent, and for the
+    # unchanged reason: no `constraint_sync.*` capability exists in this build,
+    # so either would be a grant nothing can exercise — the synchronisation
+    # behaviour is `PC-CM-IMP-WP11`'s, and a purpose named for it would be the
+    # first half of building one.
     CONSTRAINT_READ = "constraint_read"
+    CONSTRAINT_AUTHORING = "constraint_authoring"

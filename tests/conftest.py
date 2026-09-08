@@ -42,7 +42,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import pytest
 
@@ -210,12 +210,18 @@ from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.identity.user_account import CallerSuppliedPrincipalError
-from my_pa.domain.project_controls.category import ConstraintCategoryState
+from my_pa.domain.project_controls.category import ConstraintCategory, ConstraintCategoryState
 from my_pa.domain.project_controls.constraint import (
     ConstraintLifecycleState,
     ConstraintOrigin,
     ConstraintRecordQuality,
+    ProjectConstraint,
 )
+from my_pa.domain.project_controls.history import (
+    ConstraintCategoryHistoryEntry,
+    ConstraintHistoryEntry,
+)
+from my_pa.domain.project_controls.party import PartyKind, PartyRef
 from my_pa.domain.project_controls.read_models import (
     ConstraintCategoryRow,
     ConstraintEvidenceLinkRow,
@@ -227,6 +233,8 @@ from my_pa.domain.project_controls.read_models import (
     ConstraintSyncFacts,
     PersistedConstraintRecord,
 )
+from my_pa.domain.project_controls.relationship import ConstraintRelationship
+from my_pa.domain.project_controls.revision import ConstraintRevision
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
 from my_pa.domain.relationship.authoring import (
     ConflictedIdentifierError,
@@ -518,6 +526,20 @@ class World:
     constraint_categories: dict[tuple[str, str], tuple[ConstraintCategoryRow, ...]] = field(
         default_factory=dict
     )
+    #: The mutation plane's four ledgers (PC-CM-IMP-WP07), so the twelve
+    #: authoring capabilities can be driven over the three transports here
+    #: exactly as the six reads are. Flat collections keyed by the partition the
+    #: real statements use; the receipts are append-only in this fake for the
+    #: same reason the real tables are, which is what makes a replay lookup mean
+    #: anything.
+    constraint_revisions: dict[tuple[str, str, int], ConstraintRevision] = field(
+        default_factory=dict
+    )
+    constraint_history: list[tuple[str, ConstraintHistoryEntry]] = field(default_factory=list)
+    constraint_category_history: list[tuple[str, ConstraintCategoryHistoryEntry]] = field(
+        default_factory=list
+    )
+    constraint_relationships: list[tuple[str, ConstraintRelationship]] = field(default_factory=list)
     review_cases: list[ReviewCase] = field(default_factory=list)
     review_decisions: list[ReviewDecision] = field(default_factory=list)
     #: The managed-document plane (WP-27, reachable behind a capability seat since
@@ -2932,15 +2954,17 @@ class _ConstraintReads:
     """The Constraint read plane over the `World`, partition predicate written out.
 
     Structural rather than a subclass of `ConstraintManagementRepository`, and
-    deliberately: that port is an ABC whose write half belongs to a later work
-    package, and a subclass would have to stub twenty methods this harness has no
-    behaviour for. What the read service takes is the locally declared
-    `ConstraintReadRepository` Protocol, which this satisfies by shape. Reaching
-    a method it does not carry raises, so a write is a loud failure rather than a
+    deliberately: a subclass would have to satisfy the ABC exactly, and what the
+    two services take is shape. The read half is `PC-CM-IMP-WP03`'s and the
+    mutation half below is what `PC-CM-IMP-WP07` needs to drive the twelve
+    authoring capabilities over the three transports. Reaching a method this
+    class does not carry still raises, so a gap is a loud failure rather than a
     silent empty answer.
 
-    Nothing here derives anything. The rows go out as stored and
-    `application.constraints` decides every flag, count, group and cursor.
+    Nothing here derives anything. The rows go out as stored:
+    `application.constraints` decides every flag, count, group and cursor, and
+    `application.constraint_management` decides every disposition, version,
+    public code, receipt and ordering.
     """
 
     def __init__(self, world: World) -> None:
@@ -2955,6 +2979,246 @@ class _ConstraintReads:
         self, principal_id: str, project_id: str
     ) -> ConstraintProjectSettings | None:
         return self._world.constraint_settings.get((principal_id, project_id))
+
+    # --- the mutation half (PC-CM-IMP-WP07) ----------------------------------
+    #
+    # Storage and the partition predicate, and nothing else. Every lifecycle
+    # rule, version comparison, allocator step, idempotency decision and receipt
+    # is `application.constraint_management`'s: this class stores exactly what it
+    # is handed and returns exactly what it stored, so a transport matrix driven
+    # through it is comparing the service's answers rather than a second
+    # implementation's. `get_for_update` and `get_category_for_update` take no
+    # lock because a single-threaded in-memory world has nothing to lock; the
+    # concurrency claims are proved against a real database in
+    # `tests/database/test_constraint_numbering_concurrency.py`.
+
+    def insert_project_settings(
+        self, principal_id: str, settings: ConstraintProjectSettings
+    ) -> None:
+        self._world.constraint_settings[(principal_id, settings.project_id)] = settings
+
+    def update_project_settings(
+        self, principal_id: str, settings: ConstraintProjectSettings
+    ) -> None:
+        self._world.constraint_settings[(principal_id, settings.project_id)] = settings
+
+    def _category_row(
+        self, principal_id: str, category_id: str
+    ) -> tuple[str, ConstraintCategoryRow] | None:
+        for (owner, project_id), rows in self._world.constraint_categories.items():
+            if owner != principal_id:
+                continue
+            for row in rows:
+                if row.category_id == category_id:
+                    return project_id, row
+        return None
+
+    def get_category(self, principal_id: str, category_id: str) -> ConstraintCategory | None:
+        found = self._category_row(principal_id, category_id)
+        if found is None:
+            return None
+        project_id, row = found
+        return ConstraintCategory(
+            category_id=row.category_id,
+            principal_id=principal_id,
+            project_id=project_id,
+            prefix=row.prefix,
+            title=row.title,
+            state=row.state,
+            created_at=WHEN,
+            updated_at=WHEN,
+            description=row.description,
+            display_order=row.display_order,
+            prefix_locked_at=row.prefix_locked_at,
+        )
+
+    def get_category_for_update(
+        self, principal_id: str, category_id: str
+    ) -> ConstraintCategory | None:
+        return self.get_category(principal_id, category_id)
+
+    def category_allocator(self, principal_id: str, category_id: str) -> tuple[int, int, int]:
+        """The three allocator columns, which the real row carries and the aggregate does not."""
+        found = self._category_row(principal_id, category_id)
+        if found is None:
+            return (1, 0, 1)
+        _project_id, row = found
+        return (row.next_sequence, row.issued_count, row.version)
+
+    def insert_category(
+        self,
+        principal_id: str,
+        category: ConstraintCategory,
+        *,
+        next_sequence: int = 1,
+        issued_count: int = 0,
+        version: int = 1,
+    ) -> None:
+        key = (principal_id, category.project_id)
+        row = ConstraintCategoryRow(
+            category_id=category.category_id,
+            project_id=category.project_id,
+            prefix=category.prefix,
+            title=category.title,
+            description=category.description,
+            display_order=category.display_order,
+            state=category.state,
+            next_sequence=next_sequence,
+            issued_count=issued_count,
+            version=version,
+            prefix_locked_at=category.prefix_locked_at,
+        )
+        self._world.constraint_categories[key] = (
+            *self._world.constraint_categories.get(key, ()),
+            row,
+        )
+
+    def update_category(
+        self,
+        principal_id: str,
+        category: ConstraintCategory,
+        *,
+        next_sequence: int,
+        issued_count: int,
+        version: int,
+    ) -> None:
+        key = (principal_id, category.project_id)
+        replacement = ConstraintCategoryRow(
+            category_id=category.category_id,
+            project_id=category.project_id,
+            prefix=category.prefix,
+            title=category.title,
+            description=category.description,
+            display_order=category.display_order,
+            state=category.state,
+            next_sequence=next_sequence,
+            issued_count=issued_count,
+            version=version,
+            prefix_locked_at=category.prefix_locked_at,
+        )
+        self._world.constraint_categories[key] = tuple(
+            replacement if row.category_id == category.category_id else row
+            for row in self._world.constraint_categories.get(key, ())
+        )
+
+    def get(self, principal_id: str, constraint_id: str) -> ProjectConstraint | None:
+        record = self._world.project_constraints.get((principal_id, constraint_id))
+        if record is None:
+            return None
+        return ProjectConstraint(
+            constraint_id=record.constraint_id,
+            principal_id=record.principal_id,
+            lifecycle_state=record.lifecycle_state,
+            origin=record.origin,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+            version=record.version,
+            project_id=record.project_id,
+            category_id=record.category_id,
+            constraint_code=record.constraint_code,
+            description=record.description,
+            date_identified=record.date_identified,
+            due_date=record.due_date,
+            reference=record.reference,
+            current_update=record.current_update,
+            bic=record.bic,
+            responsible=record.responsible,
+            completion_date=record.completion_date,
+            closure_commentary=record.closure_commentary,
+            voided_date=record.voided_date,
+            void_reason=record.void_reason,
+            record_quality=record.record_quality,
+            published_at=record.published_at,
+        )
+
+    def get_for_update(self, principal_id: str, constraint_id: str) -> ProjectConstraint | None:
+        return self.get(principal_id, constraint_id)
+
+    def _store(self, principal_id: str, constraint: ProjectConstraint) -> None:
+        self._world.project_constraints[(principal_id, constraint.constraint_id)] = (
+            PersistedConstraintRecord(
+                constraint_id=constraint.constraint_id,
+                principal_id=constraint.principal_id,
+                lifecycle_state=constraint.lifecycle_state,
+                record_quality=constraint.record_quality,
+                origin=constraint.origin,
+                version=constraint.version,
+                created_at=constraint.created_at,
+                updated_at=constraint.updated_at,
+                project_id=constraint.project_id,
+                category_id=constraint.category_id,
+                constraint_code=constraint.constraint_code,
+                description=constraint.description,
+                date_identified=constraint.date_identified,
+                due_date=constraint.due_date,
+                reference=constraint.reference,
+                current_update=constraint.current_update,
+                completion_date=constraint.completion_date,
+                closure_commentary=constraint.closure_commentary,
+                voided_date=constraint.voided_date,
+                void_reason=constraint.void_reason,
+                published_at=constraint.published_at,
+                bic=constraint.bic,
+                responsible=constraint.responsible,
+            )
+        )
+
+    def insert_constraint(
+        self,
+        principal_id: str,
+        constraint: ProjectConstraint,
+        *,
+        current_revision_id: str | None = None,
+    ) -> None:
+        del current_revision_id
+        self._store(principal_id, constraint)
+
+    def update_constraint(
+        self,
+        principal_id: str,
+        constraint: ProjectConstraint,
+        *,
+        current_revision_id: str | None = None,
+    ) -> None:
+        del current_revision_id
+        self._store(principal_id, constraint)
+
+    def insert_revision(self, principal_id: str, revision: ConstraintRevision) -> None:
+        self._world.constraint_revisions[
+            (principal_id, revision.constraint_id, revision.version)
+        ] = revision
+
+    def get_revision(
+        self, principal_id: str, constraint_id: str, version: int
+    ) -> ConstraintRevision | None:
+        return self._world.constraint_revisions.get((principal_id, constraint_id, version))
+
+    def insert_history(self, principal_id: str, entry: ConstraintHistoryEntry) -> None:
+        self._world.constraint_history.append((principal_id, entry))
+
+    def find_history_by_idempotency_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> ConstraintHistoryEntry | None:
+        for owner, entry in self._world.constraint_history:
+            if owner == principal_id and entry.idempotency_key == idempotency_key:
+                return entry
+        return None
+
+    def insert_category_history(
+        self, principal_id: str, entry: ConstraintCategoryHistoryEntry
+    ) -> None:
+        self._world.constraint_category_history.append((principal_id, entry))
+
+    def find_category_history_by_idempotency_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> ConstraintCategoryHistoryEntry | None:
+        for owner, entry in self._world.constraint_category_history:
+            if owner == principal_id and entry.idempotency_key == idempotency_key:
+                return entry
+        return None
+
+    def insert_relationship(self, principal_id: str, relationship: ConstraintRelationship) -> None:
+        self._world.constraint_relationships.append((principal_id, relationship))
 
     def list_categories(
         self,
@@ -7858,6 +8122,32 @@ class Scene:
         self.constraint_project_id = issue_identifier(IdKind.PROJECT)
         self.constraint_category_id = issue_identifier(IdKind.CONSTRAINT_CATEGORY)
         self.constraint_id = issue_identifier(IdKind.PROJECT_CONSTRAINT)
+        #: PC-CM-IMP-WP07. A second Category and two more Constraints, seeded so
+        #: the twelve authoring capabilities each have a record in the state they
+        #: name: Publish needs a Draft, Reopen needs a closed record, and a
+        #: reorder names every Category of the Project exactly once, which one
+        #: Category cannot demonstrate.
+        self.constraint_second_category_id = issue_identifier(IdKind.CONSTRAINT_CATEGORY)
+        self.constraint_draft_id = issue_identifier(IdKind.PROJECT_CONSTRAINT)
+        self.constraint_closed_id = issue_identifier(IdKind.PROJECT_CONSTRAINT)
+        #: Three further Projects, so a harness that drives every capability in
+        #: turn against one world does not have the twelve mutations collide with
+        #: each other. Each operation names a record no other operation touches:
+        #: a version conflict between two rows of the matrix would be an artefact
+        #: of the fixture rather than a fact about the capability.
+        self.constraint_mutation_project_id = issue_identifier(IdKind.PROJECT)
+        self.constraint_category_project_id = issue_identifier(IdKind.PROJECT)
+        self.constraint_reorder_project_id = issue_identifier(IdKind.PROJECT)
+        self.constraint_mutation_category_id = issue_identifier(IdKind.CONSTRAINT_CATEGORY)
+        self.constraint_update_category_id = issue_identifier(IdKind.CONSTRAINT_CATEGORY)
+        self.constraint_deactivate_category_id = issue_identifier(IdKind.CONSTRAINT_CATEGORY)
+        self.constraint_first_ordered_category_id = issue_identifier(IdKind.CONSTRAINT_CATEGORY)
+        self.constraint_second_ordered_category_id = issue_identifier(IdKind.CONSTRAINT_CATEGORY)
+        self.constraint_update_id = issue_identifier(IdKind.PROJECT_CONSTRAINT)
+        self.constraint_transition_id = issue_identifier(IdKind.PROJECT_CONSTRAINT)
+        self.constraint_close_id = issue_identifier(IdKind.PROJECT_CONSTRAINT)
+        self.constraint_follow_up_id = issue_identifier(IdKind.PROJECT_CONSTRAINT)
+        self.constraint_void_id = issue_identifier(IdKind.PROJECT_CONSTRAINT)
         world.constraint_settings[(self.principal.principal_id, self.constraint_project_id)] = (
             ConstraintProjectSettings(
                 principal_id=self.principal.principal_id,
@@ -7868,6 +8158,98 @@ class Scene:
                 updated_at=WHEN,
             )
         )
+        for extra_project in (
+            self.constraint_mutation_project_id,
+            self.constraint_category_project_id,
+            self.constraint_reorder_project_id,
+        ):
+            world.constraint_settings[(self.principal.principal_id, extra_project)] = (
+                ConstraintProjectSettings(
+                    principal_id=self.principal.principal_id,
+                    project_id=extra_project,
+                    timezone_name="UTC",
+                    version=1,
+                    created_at=WHEN,
+                    updated_at=WHEN,
+                )
+            )
+        world.constraint_categories[
+            (self.principal.principal_id, self.constraint_mutation_project_id)
+        ] = (
+            ConstraintCategoryRow(
+                category_id=self.constraint_mutation_category_id,
+                project_id=self.constraint_mutation_project_id,
+                prefix="MUT",
+                title="Mutation targets",
+                description=None,
+                display_order=1,
+                state=ConstraintCategoryState.ACTIVE,
+                next_sequence=6,
+                issued_count=5,
+                version=1,
+                prefix_locked_at=WHEN,
+            ),
+        )
+        world.constraint_categories[
+            (self.principal.principal_id, self.constraint_category_project_id)
+        ] = (
+            ConstraintCategoryRow(
+                category_id=self.constraint_update_category_id,
+                project_id=self.constraint_category_project_id,
+                prefix="UPD",
+                title="Revisable",
+                description=None,
+                display_order=1,
+                state=ConstraintCategoryState.ACTIVE,
+                next_sequence=1,
+                issued_count=0,
+                version=1,
+                prefix_locked_at=None,
+            ),
+            ConstraintCategoryRow(
+                category_id=self.constraint_deactivate_category_id,
+                project_id=self.constraint_category_project_id,
+                prefix="DCT",
+                title="Retirable",
+                description=None,
+                display_order=2,
+                state=ConstraintCategoryState.ACTIVE,
+                next_sequence=1,
+                issued_count=0,
+                version=1,
+                prefix_locked_at=None,
+            ),
+        )
+        world.constraint_categories[
+            (self.principal.principal_id, self.constraint_reorder_project_id)
+        ] = (
+            ConstraintCategoryRow(
+                category_id=self.constraint_first_ordered_category_id,
+                project_id=self.constraint_reorder_project_id,
+                prefix="ONE",
+                title="First",
+                description=None,
+                display_order=1,
+                state=ConstraintCategoryState.ACTIVE,
+                next_sequence=1,
+                issued_count=0,
+                version=1,
+                prefix_locked_at=None,
+            ),
+            ConstraintCategoryRow(
+                category_id=self.constraint_second_ordered_category_id,
+                project_id=self.constraint_reorder_project_id,
+                prefix="TWO",
+                title="Second",
+                description=None,
+                display_order=2,
+                state=ConstraintCategoryState.ACTIVE,
+                next_sequence=1,
+                issued_count=0,
+                version=1,
+                prefix_locked_at=None,
+            ),
+        )
         world.constraint_categories[(self.principal.principal_id, self.constraint_project_id)] = (
             ConstraintCategoryRow(
                 category_id=self.constraint_category_id,
@@ -7876,6 +8258,19 @@ class Scene:
                 title="General",
                 description=None,
                 display_order=1,
+                state=ConstraintCategoryState.ACTIVE,
+                next_sequence=2,
+                issued_count=1,
+                version=1,
+                prefix_locked_at=WHEN,
+            ),
+            ConstraintCategoryRow(
+                category_id=self.constraint_second_category_id,
+                project_id=self.constraint_project_id,
+                prefix="SIT",
+                title="Site",
+                description=None,
+                display_order=2,
                 state=ConstraintCategoryState.ACTIVE,
                 next_sequence=2,
                 issued_count=1,
@@ -7898,9 +8293,87 @@ class Scene:
                 constraint_code="GEN-001",
                 description="A synthetic Project control.",
                 date_identified=WHEN.date(),
+                due_date=WHEN.date(),
                 published_at=WHEN,
             )
         )
+        for index, mutation_target in enumerate(
+            (
+                self.constraint_update_id,
+                self.constraint_transition_id,
+                self.constraint_close_id,
+                self.constraint_follow_up_id,
+                self.constraint_void_id,
+            ),
+            start=1,
+        ):
+            world.project_constraints[(self.principal.principal_id, mutation_target)] = (
+                PersistedConstraintRecord(
+                    constraint_id=mutation_target,
+                    principal_id=self.principal.principal_id,
+                    lifecycle_state=ConstraintLifecycleState.IDENTIFIED,
+                    record_quality=ConstraintRecordQuality.NORMAL,
+                    origin=ConstraintOrigin.PRODUCT,
+                    version=1,
+                    created_at=WHEN,
+                    updated_at=WHEN,
+                    project_id=self.constraint_mutation_project_id,
+                    category_id=self.constraint_mutation_category_id,
+                    constraint_code=f"MUT-{index:03d}",
+                    description="A synthetic mutation target.",
+                    date_identified=WHEN.date(),
+                    due_date=WHEN.date(),
+                    published_at=WHEN,
+                    bic=(PartyRef(kind=PartyKind.PRINCIPAL),),
+                    responsible=(PartyRef(kind=PartyKind.PRINCIPAL),),
+                )
+            )
+        world.project_constraints[(self.principal.principal_id, self.constraint_draft_id)] = (
+            PersistedConstraintRecord(
+                constraint_id=self.constraint_draft_id,
+                principal_id=self.principal.principal_id,
+                lifecycle_state=ConstraintLifecycleState.DRAFT,
+                record_quality=ConstraintRecordQuality.NORMAL,
+                origin=ConstraintOrigin.PRODUCT,
+                version=1,
+                created_at=WHEN,
+                updated_at=WHEN,
+                project_id=self.constraint_project_id,
+                category_id=self.constraint_category_id,
+                description="A synthetic Draft control.",
+                date_identified=WHEN.date(),
+                due_date=WHEN.date(),
+                bic=(PartyRef(kind=PartyKind.PRINCIPAL),),
+                responsible=(PartyRef(kind=PartyKind.PRINCIPAL),),
+            )
+        )
+        world.project_constraints[(self.principal.principal_id, self.constraint_closed_id)] = (
+            PersistedConstraintRecord(
+                constraint_id=self.constraint_closed_id,
+                principal_id=self.principal.principal_id,
+                lifecycle_state=ConstraintLifecycleState.CLOSED,
+                record_quality=ConstraintRecordQuality.NORMAL,
+                origin=ConstraintOrigin.PRODUCT,
+                version=1,
+                created_at=WHEN,
+                updated_at=WHEN,
+                project_id=self.constraint_project_id,
+                category_id=self.constraint_second_category_id,
+                constraint_code="SIT-001",
+                description="A synthetic closed control.",
+                date_identified=WHEN.date(),
+                due_date=WHEN.date(),
+                completion_date=WHEN.date(),
+                published_at=WHEN,
+            )
+        )
+
+
+#: The default `build_service` passes for the Constraint factory. A sentinel
+#: rather than `None`, because `None` is the *meaningful* value a test about the
+#: uncomposed build passes deliberately (PC-CM-IMP-WP07, T07-04) and a default of
+#: `None` would make "not stated" and "deliberately absent" the same argument.
+_COMPOSE_CONSTRAINTS: Final = cast("Callable[[], ConstraintManagementUnitOfWork]", object())
 
 
 def build_service(
@@ -7913,6 +8386,9 @@ def build_service(
     relationship_memory_enabled: bool = True,
     relationship_identity_correction_enabled: bool = True,
     producer_origins: ProducerOriginRegistry | None = None,
+    constraint_management_unit_of_work: (
+        Callable[[], ConstraintManagementUnitOfWork] | None
+    ) = _COMPOSE_CONSTRAINTS,
 ) -> ApplicationService:
     """The service under test, with a fixed clock and in-memory repositories.
 
@@ -7944,7 +8420,11 @@ def build_service(
         # and a suite that quantifies over `Capability` would be quantifying over
         # names its own service refuses. A test about the *uncomposed* build passes
         # `None` explicitly and says so.
-        constraint_management_unit_of_work=(lambda: FakeConstraintManagementUnitOfWork(world)),
+        constraint_management_unit_of_work=(
+            (lambda: FakeConstraintManagementUnitOfWork(world))
+            if constraint_management_unit_of_work is _COMPOSE_CONSTRAINTS
+            else constraint_management_unit_of_work
+        ),
         # Enabled by the same default reasoning: the fifty-five `entities.` names are
         # withheld from a build that has not turned the plane on, and a suite
         # that quantifies over `Capability` would be quantifying over names its

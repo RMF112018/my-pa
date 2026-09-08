@@ -1248,6 +1248,78 @@
           "version": "v1",
           "availability": "available",
           "operator_only": false
+        },
+        {
+          "name": "constraints.create",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraints.publish",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraints.update",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraints.transition",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraints.close",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraints.close_follow_up",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraints.void",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraints.reopen",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraint_categories.create",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraint_categories.update",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraint_categories.deactivate",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraint_categories.reorder",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
         }
       ],
       "content_types": [
@@ -1274,8 +1346,8 @@
     "readiness": {
       "state": "degraded",
       "contract_version": "v1",
-      "implemented_capabilities": 142,
-      "total_capabilities": 142,
+      "implemented_capabilities": 154,
+      "total_capabilities": 154,
       "limitations": [
         "Content types awaiting an operator decision: application/pdf. They are reported rather than silently skipped.",
         "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, constraints.history, constraints.list, constraints.search, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.graph, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, goodnotes.notebooks.list, goodnotes.pages.list, goodnotes.pull, goodnotes.runs.list, goodnotes.search, knowledge.search, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",

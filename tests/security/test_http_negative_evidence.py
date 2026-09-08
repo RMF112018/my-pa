@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes one hundred and forty-two capability names and none of them
+  ends: the transport routes one hundred and fifty-four capability names and none of them
   mutates a source, and every capability driven over the wire is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -688,6 +688,83 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         Capability.CONSTRAINTS_HISTORY: {"constraint_id": marked.constraint_id},
         Capability.CONSTRAINTS_OVERVIEW: {"project_id": marked.constraint_project_id},
         Capability.CONSTRAINT_CATEGORIES_LIST: {"project_id": marked.constraint_project_id},
+        # PC-CM-IMP-WP07's twelve Constraint Management mutations. Each names a
+        # seeded record in the state its operation requires -- Publish a Draft,
+        # Reopen a closed record, a reorder every Category of the Project exactly
+        # once -- so each one *answers* here rather than refusing, which is what
+        # makes this a comparison of answers. Every minted identifier and every
+        # issued public code in the reply is masked before comparison, so three
+        # transports each mutating their own copy of the world still agree.
+        Capability.CONSTRAINTS_CREATE: {
+            "project_id": marked.constraint_project_id,
+            "category_id": marked.constraint_category_id,
+            "description": "A drafted Project control.",
+            "date_identified": "2026-08-02",
+            "due_date": "2026-09-02",
+        },
+        Capability.CONSTRAINTS_PUBLISH: {
+            "constraint_id": marked.constraint_draft_id,
+            "expected_version": 1,
+            "to_state": "identified",
+        },
+        Capability.CONSTRAINTS_UPDATE: {
+            "constraint_id": marked.constraint_update_id,
+            "expected_version": 1,
+            "current_update": "Awaiting the site survey.",
+        },
+        Capability.CONSTRAINTS_TRANSITION: {
+            "constraint_id": marked.constraint_transition_id,
+            "to_state": "pending",
+            "expected_version": 1,
+        },
+        Capability.CONSTRAINTS_CLOSE: {
+            "constraint_id": marked.constraint_close_id,
+            "expected_version": 1,
+            "completion_date": "2026-08-03",
+            "closure_commentary": "Resolved on site.",
+        },
+        Capability.CONSTRAINTS_CLOSE_FOLLOW_UP: {
+            "constraint_id": marked.constraint_follow_up_id,
+            "expected_version": 1,
+            "successor_description": "The follow-up control.",
+            "completion_date": "2026-08-03",
+            "successor_due_date": "2026-09-30",
+        },
+        Capability.CONSTRAINTS_VOID: {
+            "constraint_id": marked.constraint_void_id,
+            "expected_version": 1,
+            "void_reason": "Raised in error.",
+            "voided_date": "2026-08-03",
+        },
+        Capability.CONSTRAINTS_REOPEN: {
+            "constraint_id": marked.constraint_closed_id,
+            "to_state": "identified",
+            "expected_version": 1,
+            "reason": "The work was not complete.",
+        },
+        Capability.CONSTRAINT_CATEGORIES_CREATE: {
+            "project_id": marked.constraint_project_id,
+            "code_segment": "MEP",
+            "title": "Mechanical",
+            "display_order": 3,
+        },
+        Capability.CONSTRAINT_CATEGORIES_UPDATE: {
+            "category_id": marked.constraint_update_category_id,
+            "expected_version": 1,
+            "title": "Site Logistics",
+        },
+        Capability.CONSTRAINT_CATEGORIES_DEACTIVATE: {
+            "category_id": marked.constraint_deactivate_category_id,
+            "expected_version": 1,
+        },
+        Capability.CONSTRAINT_CATEGORIES_REORDER: {
+            "project_id": marked.constraint_reorder_project_id,
+            "ordered_category_ids": [
+                marked.constraint_second_ordered_category_id,
+                marked.constraint_first_ordered_category_id,
+            ],
+            "expected_versions": [1, 1],
+        },
         # The entity plane's authoring half (`WP-RI-A-02`), and its payloads carry
         # no marker for the reason the reads above carry none: every field is an
         # identifier, a closed vocabulary value, a name or a reason the *caller*
@@ -1682,6 +1759,23 @@ SCOPED_CAPABILITIES = [
         Capability.CONSTRAINTS_HISTORY,
         Capability.CONSTRAINTS_OVERVIEW,
         Capability.CONSTRAINT_CATEGORIES_LIST,
+        # `PC-CM-IMP-WP07`'s twelve authoring names join them on the same
+        # reading, and writing changes nothing about it: a Constraint mutation
+        # names a Project or a record in the acting Principal's own partition and
+        # never a `src_...` or an `enr_...`. All twelve are in
+        # `domain.policy.decision._SCOPELESS`.
+        Capability.CONSTRAINTS_CREATE,
+        Capability.CONSTRAINTS_PUBLISH,
+        Capability.CONSTRAINTS_UPDATE,
+        Capability.CONSTRAINTS_TRANSITION,
+        Capability.CONSTRAINTS_CLOSE,
+        Capability.CONSTRAINTS_CLOSE_FOLLOW_UP,
+        Capability.CONSTRAINTS_VOID,
+        Capability.CONSTRAINTS_REOPEN,
+        Capability.CONSTRAINT_CATEGORIES_CREATE,
+        Capability.CONSTRAINT_CATEGORIES_UPDATE,
+        Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
+        Capability.CONSTRAINT_CATEGORIES_REORDER,
     }
 ]
 
@@ -1926,6 +2020,25 @@ ENTITY_RECORD_FAMILY_EXEMPTION = frozenset(
 #: (ADR-003), not a source. GET does not contain a mutating verb.
 CANVAS_WORKSPACE_EXEMPTION = frozenset({Capability.CANVAS_WORKSPACE_PUT})
 
+#: `PC-CM-IMP-WP07`'s four authoring names the substring proxy refuses --
+#: `constraints.create`, `constraints.update`, `constraint_categories.create`
+#: and `constraint_categories.update` -- on exactly the reading `CAPTURE_
+#: CAPABILITIES` and `CANVAS_WORKSPACE_EXEMPTION` are exempt under. A Constraint
+#: and a Category are Project controls in the acting Principal's own partition,
+#: which `ADR-003` makes product-owned records rather than source systems: the
+#: property the proxy stands for -- no source mutation -- holds, and holds
+#: structurally, because the Constraint plane reaches no source provider and no
+#: enrollment at all. The other eight authoring names carry no substring on the
+#: list and are checked by it unchanged.
+CONSTRAINT_AUTHORING_EXEMPTION = frozenset(
+    {
+        Capability.CONSTRAINTS_CREATE,
+        Capability.CONSTRAINTS_UPDATE,
+        Capability.CONSTRAINT_CATEGORIES_CREATE,
+        Capability.CONSTRAINT_CATEGORIES_UPDATE,
+    }
+)
+
 
 def test_the_transport_routes_no_mutating_capability() -> None:
     """One route, one method, and no name that mutates a *source*.
@@ -1969,6 +2082,7 @@ def test_the_transport_routes_no_mutating_capability() -> None:
         | PHASE_B_PROPOSAL_EXEMPTION
         | ENTITY_RECORD_FAMILY_EXEMPTION
         | CANVAS_WORKSPACE_EXEMPTION
+        | CONSTRAINT_AUTHORING_EXEMPTION
     )
     checked = [c for c in _BUILDERS if c not in exempt]
     assert len(checked) == len(Capability) - len(exempt)

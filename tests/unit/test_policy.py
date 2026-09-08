@@ -377,6 +377,21 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.CONSTRAINTS_HISTORY, Purpose.CONSTRAINT_READ),
         (Capability.CONSTRAINTS_OVERVIEW, Purpose.CONSTRAINT_READ),
         (Capability.CONSTRAINT_CATEGORIES_LIST, Purpose.CONSTRAINT_READ),
+        # PC-CM-IMP-WP07's twelve authoring names, each under
+        # `constraint_authoring` and under nothing else. No read gains the
+        # authoring purpose and no write gains `constraint_read`.
+        (Capability.CONSTRAINTS_CREATE, Purpose.CONSTRAINT_AUTHORING),
+        (Capability.CONSTRAINTS_PUBLISH, Purpose.CONSTRAINT_AUTHORING),
+        (Capability.CONSTRAINTS_UPDATE, Purpose.CONSTRAINT_AUTHORING),
+        (Capability.CONSTRAINTS_TRANSITION, Purpose.CONSTRAINT_AUTHORING),
+        (Capability.CONSTRAINTS_CLOSE, Purpose.CONSTRAINT_AUTHORING),
+        (Capability.CONSTRAINTS_CLOSE_FOLLOW_UP, Purpose.CONSTRAINT_AUTHORING),
+        (Capability.CONSTRAINTS_VOID, Purpose.CONSTRAINT_AUTHORING),
+        (Capability.CONSTRAINTS_REOPEN, Purpose.CONSTRAINT_AUTHORING),
+        (Capability.CONSTRAINT_CATEGORIES_CREATE, Purpose.CONSTRAINT_AUTHORING),
+        (Capability.CONSTRAINT_CATEGORIES_UPDATE, Purpose.CONSTRAINT_AUTHORING),
+        (Capability.CONSTRAINT_CATEGORIES_DEACTIVATE, Purpose.CONSTRAINT_AUTHORING),
+        (Capability.CONSTRAINT_CATEGORIES_REORDER, Purpose.CONSTRAINT_AUTHORING),
     }
 )
 
@@ -441,9 +456,16 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # else, so it contributes six pairs rather than the forty-two a cross
     # product would give -- and no authoring or synchronisation purpose, so the
     # plane's writes have no permitted pair at all.
-    # Unioned: 142 capabilities, 42 purposes, 144 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 144
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 144 == 5820
+    # `PC-CM-IMP-WP07` adds the twelve Constraint Management authoring names and
+    # the one `constraint_authoring` purpose, each write mapped to that purpose
+    # and to nothing else, so it contributes twelve pairs rather than the five
+    # hundred and sixteen a cross product would give. No read gains the authoring
+    # purpose and no write gains `constraint_read`: that disjointness is what the
+    # plane's read/authoring separation now rests on. Still no synchronisation
+    # purpose, so the sync plane has no permitted pair at all.
+    # Unioned: 154 capabilities, 43 purposes, 156 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 156
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 156 == 6466
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

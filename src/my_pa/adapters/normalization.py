@@ -70,12 +70,17 @@ from my_pa.application.commands import (
     BulkConfirmTasks,
     BulkPreviewTasks,
     CloseCommitment,
+    CloseConstraint,
+    CloseConstraintWithFollowUp,
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
+    ConstraintUpdateField,
     CorrectGoodNotes,
     CreateCapture,
     CreateCommitment,
+    CreateConstraintCategory,
+    CreateConstraintDraft,
     CreateEntity,
     CreateEntityAffiliation,
     CreateEntityAssignment,
@@ -87,6 +92,7 @@ from my_pa.application.commands import (
     CreateRelationshipMemory,
     CreateSituation,
     CreateTask,
+    DeactivateConstraintCategory,
     DecideReviewCase,
     EndEntityAffiliation,
     EndEntityAssignment,
@@ -145,6 +151,7 @@ from my_pa.application.commands import (
     PreviewEntityMerge,
     PreviewEntitySplit,
     ProposeRelationshipMemory,
+    PublishConstraint,
     PullGoodNotesWork,
     PutCanvasWorkspace,
     ReadCapture,
@@ -160,6 +167,8 @@ from my_pa.application.commands import (
     RecordContextFeedback,
     RecordIntelligenceRunState,
     RecordTask,
+    ReopenConstraint,
+    ReorderConstraintCategories,
     Representation,
     ResolveEntity,
     ResolveIntelligenceSet,
@@ -197,10 +206,14 @@ from my_pa.application.commands import (
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
     SupersedeEntityName,
+    TransitionConstraint,
     TransitionTask,
     UpdateCommitment,
+    UpdateConstraint,
+    UpdateConstraintCategory,
     UpdateEntity,
     UpdateTask,
+    VoidConstraint,
     WaitingOn,
 )
 from my_pa.application.errors import InvalidRequestError, SafeDetail, UnsupportedError
@@ -230,6 +243,7 @@ from my_pa.domain.project_controls.constraint import (
     ConstraintLifecycleState,
     ConstraintRecordQuality,
 )
+from my_pa.domain.project_controls.party import PartyKind, PartyRef
 from my_pa.domain.project_controls.read_models import (
     ConstraintGrouping,
     ConstraintListScope,
@@ -1930,6 +1944,153 @@ def _list_constraint_categories(payload: Mapping[str, Any]) -> Command:
     return ListConstraintCategories(**_constraint_vocabulary(payload))
 
 
+# --- the Constraint Management authoring plane (PC-CM-IMP-WP07) --------------
+#
+# The same shape conversion the read builders above do, over three more wire
+# shapes the authoring commands carry: a calendar date arrives as an ISO string,
+# a party collection as an array of small objects, and a clear list as an array
+# of one closed vocabulary. Nothing here raises and nothing here decides
+# anything: a value outside a vocabulary, an unparsable date and a malformed
+# party are each left exactly as they arrived, so the command reports them under
+# their own field names rather than this module reporting them under a plane's.
+
+#: The single-valued closed vocabularies the twelve authoring commands carry.
+_CONSTRAINT_AUTHORING_VOCABULARIES: Final[Mapping[str, type[StrEnum]]] = MappingProxyType(
+    {
+        "to_state": ConstraintLifecycleState,
+        "successor_state": ConstraintLifecycleState,
+        "state": ConstraintCategoryState,
+    }
+)
+
+#: Every calendar-date field on the authoring plane. `date` and never `datetime`:
+#: a Constraint's dates carry no clock and no timezone, and the commands refuse a
+#: `datetime` by exact type for that reason.
+_CONSTRAINT_DATE_FIELDS: Final[tuple[str, ...]] = (
+    "date_identified",
+    "due_date",
+    "completion_date",
+    "voided_date",
+    "successor_due_date",
+)
+
+#: Every BIC/Responsible collection, by the field name that carries it.
+_CONSTRAINT_PARTY_FIELDS: Final[tuple[str, ...]] = (
+    "bic",
+    "responsible",
+    "successor_bic",
+    "successor_responsible",
+)
+
+#: The party object's three admitted keys. A document naming anything else is
+#: left untouched, so the command refuses the field rather than this module
+#: silently dropping what it did not recognise.
+_PARTY_KEYS: Final[frozenset[str]] = frozenset({"kind", "entity_id", "label"})
+
+
+def _constraint_date(value: object) -> object:
+    """One ISO calendar date as a `date`, or exactly what arrived."""
+    if not isinstance(value, str):
+        return value
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return value
+
+
+def _constraint_party(value: object) -> object:
+    """One party object as a `PartyRef`, or exactly what arrived.
+
+    `PartyRef.__post_init__` decides which combinations of kind, identity and
+    label are legal, and it raises its own `PartyRefError`. That is caught here
+    and the original document is returned, because a refusal is the command's to
+    report under the field the caller named -- an escaping `ValueError` would
+    leave `invoke` telling the caller the fault was ours.
+    """
+    if not isinstance(value, Mapping) or not set(value) <= _PARTY_KEYS:
+        return value
+    try:
+        return PartyRef(
+            kind=PartyKind(value["kind"]),
+            entity_id=value.get("entity_id"),
+            label=value.get("label"),
+        )
+    except (KeyError, TypeError, ValueError):
+        return value
+
+
+def _constraint_authoring(payload: Mapping[str, Any]) -> dict[str, Any]:
+    converted = dict(payload)
+    for name, vocabulary in _CONSTRAINT_AUTHORING_VOCABULARIES.items():
+        if name in converted:
+            converted[name] = _entity_member(converted[name], vocabulary)
+    supplied = converted.get("clear_fields")
+    if isinstance(supplied, list):
+        converted["clear_fields"] = tuple(
+            _entity_member(entry, ConstraintUpdateField) for entry in supplied
+        )
+    for name in _CONSTRAINT_DATE_FIELDS:
+        if name in converted:
+            converted[name] = _constraint_date(converted[name])
+    for name in _CONSTRAINT_PARTY_FIELDS:
+        parties = converted.get(name)
+        if isinstance(parties, list):
+            converted[name] = tuple(_constraint_party(entry) for entry in parties)
+    for name in ("ordered_category_ids", "expected_versions"):
+        sequence = converted.get(name)
+        if isinstance(sequence, list):
+            converted[name] = tuple(sequence)
+    return converted
+
+
+def _create_constraint_draft(payload: Mapping[str, Any]) -> Command:
+    return CreateConstraintDraft(**_constraint_authoring(payload))
+
+
+def _publish_constraint(payload: Mapping[str, Any]) -> Command:
+    return PublishConstraint(**_constraint_authoring(payload))
+
+
+def _update_constraint(payload: Mapping[str, Any]) -> Command:
+    return UpdateConstraint(**_constraint_authoring(payload))
+
+
+def _transition_constraint(payload: Mapping[str, Any]) -> Command:
+    return TransitionConstraint(**_constraint_authoring(payload))
+
+
+def _close_constraint(payload: Mapping[str, Any]) -> Command:
+    return CloseConstraint(**_constraint_authoring(payload))
+
+
+def _close_constraint_with_follow_up(payload: Mapping[str, Any]) -> Command:
+    return CloseConstraintWithFollowUp(**_constraint_authoring(payload))
+
+
+def _void_constraint(payload: Mapping[str, Any]) -> Command:
+    return VoidConstraint(**_constraint_authoring(payload))
+
+
+def _reopen_constraint(payload: Mapping[str, Any]) -> Command:
+    return ReopenConstraint(**_constraint_authoring(payload))
+
+
+def _create_constraint_category(payload: Mapping[str, Any]) -> Command:
+    return CreateConstraintCategory(**_constraint_authoring(payload))
+
+
+def _update_constraint_category(payload: Mapping[str, Any]) -> Command:
+    return UpdateConstraintCategory(**_constraint_authoring(payload))
+
+
+def _deactivate_constraint_category(payload: Mapping[str, Any]) -> Command:
+    return DeactivateConstraintCategory(**_constraint_authoring(payload))
+
+
+def _reorder_constraint_categories(payload: Mapping[str, Any]) -> Command:
+    return ReorderConstraintCategories(**_constraint_authoring(payload))
+
+
 _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = MappingProxyType(
     {
         Capability.CAPABILITIES_GET: _get_capabilities,
@@ -1986,6 +2147,18 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.CONSTRAINTS_HISTORY: _read_constraint_history,
         Capability.CONSTRAINTS_OVERVIEW: _read_constraint_overview,
         Capability.CONSTRAINT_CATEGORIES_LIST: _list_constraint_categories,
+        Capability.CONSTRAINTS_CREATE: _create_constraint_draft,
+        Capability.CONSTRAINTS_PUBLISH: _publish_constraint,
+        Capability.CONSTRAINTS_UPDATE: _update_constraint,
+        Capability.CONSTRAINTS_TRANSITION: _transition_constraint,
+        Capability.CONSTRAINTS_CLOSE: _close_constraint,
+        Capability.CONSTRAINTS_CLOSE_FOLLOW_UP: _close_constraint_with_follow_up,
+        Capability.CONSTRAINTS_VOID: _void_constraint,
+        Capability.CONSTRAINTS_REOPEN: _reopen_constraint,
+        Capability.CONSTRAINT_CATEGORIES_CREATE: _create_constraint_category,
+        Capability.CONSTRAINT_CATEGORIES_UPDATE: _update_constraint_category,
+        Capability.CONSTRAINT_CATEGORIES_DEACTIVATE: _deactivate_constraint_category,
+        Capability.CONSTRAINT_CATEGORIES_REORDER: _reorder_constraint_categories,
         Capability.CONTEXT_PREPARE: _prepare_context,
         Capability.CONTEXT_FEEDBACK: _record_context_feedback,
         Capability.GOODNOTES_PULL: _pull_goodnotes_work,

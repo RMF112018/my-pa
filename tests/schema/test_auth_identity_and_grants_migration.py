@@ -28,6 +28,8 @@ from my_pa.infrastructure.persistence.webauthn_auth import (
 ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "4e9a1c7b2d60"
 PREVIOUS: Final = "c5b71e0a8d43"
+#: The revision that landed on this one, making it the chain head instead.
+SUCCESSOR: Final = "f7a2c9d51e64"
 MIGRATION: Final = (
     ROOT / "migrations/versions/20260907_4e9a1c7b2d60_normalize_auth_identity_and_add_grants.py"
 )
@@ -121,11 +123,17 @@ def _purpose_check(engine: Engine) -> str:
         )
 
 
-def test_the_chain_has_exactly_one_head_and_this_revision_is_it() -> None:
+def test_the_chain_has_exactly_one_head_and_this_revision_is_beneath_it() -> None:
+    """`f7a2c9d51e64` (PC-CM-IMP-WP07) landed on this revision, so it is no longer
+    the head. The claim worth keeping is that the chain still holds exactly one
+    head and that this revision sits on it at a known position, asserted link by
+    link rather than loosened to reachability.
+    """
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [REVISION]
+    assert script.get_heads() == [SUCCESSOR]
+    assert script.get_revision(SUCCESSOR).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 98
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 99
 
 
 def test_revision_imports_no_domain_or_persistence_modules() -> None:
@@ -177,7 +185,7 @@ def test_empty_schema_reaches_the_new_head(disposable_database: str) -> None:
         with engine.connect() as connection:
             assert (
                 connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-                == REVISION
+                == SUCCESSOR
             )
         assert "auth_grants" in inspect(engine).get_table_names(schema="identity")
         assert {"identity_provider", "identity_subject", "exchanged_at"} <= (

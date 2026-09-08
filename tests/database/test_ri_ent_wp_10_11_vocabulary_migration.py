@@ -88,7 +88,7 @@ HEAD_REVISION: Final = "b8e4d1a6c073"
 GRAPH_REVISION: Final = "c3f8a1d07e94"
 PULL_REVISION: Final = "6a2f9d1c4b80"
 PROMOTION_REVISION: Final = "a4d8e31b2c90"
-CURRENT_HEAD_REVISION: Final = "4e9a1c7b2d60"
+CURRENT_HEAD_REVISION: Final = "f7a2c9d51e64"
 #: What was head until `REVISION` stacked on it, and therefore the revision
 #: this module downgrades to. This revision was written against `c99cd8ed8d1c`
 #: and re-parented onto `UI-IMP-WP02`'s `2c00c9ac64bc` when `origin/main` merged
@@ -475,7 +475,7 @@ def test_the_stored_vocabularies_are_missing_nothing_the_domain_declares(
     names are stored and are not in `Capability`, and they predate all of this.
     The direction that breaks a request is a name the domain declares and the
     database has never heard of, and the only way to be sure of it for all one
-    hundred and forty-two is to try all one hundred and forty-two.
+    hundred and fifty-four is to try all one hundred and fifty-four.
 
     `Purpose` is driven for the same reason and not because this revision
     touched it: it deliberately does not widen `purpose_is_known`, because

@@ -100,8 +100,8 @@ def _manifest(path: Path, commit: str, tree: str) -> None:
     )
 
 
-def _operator_artifacts(tmp_path: Path) -> tuple[Path, Path, Path]:
-    config_name = OPERATOR_IMAGE_ID.removeprefix("sha256:") + ".json"
+def _operator_artifacts(tmp_path: Path, *, config: str | None = None) -> tuple[Path, Path, Path]:
+    config_name = config or OPERATOR_IMAGE_ID.removeprefix("sha256:") + ".json"
     archive = tmp_path / "operator.tar"
     archive_manifest = json.dumps([{"Config": config_name, "RepoTags": [], "Layers": []}]).encode()
     with tarfile.open(archive, "w") as stream:
@@ -278,6 +278,30 @@ def test_source_roles_require_full_exact_clean_manifest_identities(tmp_path: Pat
         compose,
         expected_current_source=current,
         runner=_runner(current, preserved),
+    )
+
+
+def test_pre_source_gate_binds_oci_docker_save_config(tmp_path: Path) -> None:
+    gate = _pre_source_gate()
+    current = tmp_path / "current"
+    current.mkdir()
+    current_manifest = tmp_path / "current.toml"
+    _manifest(current_manifest, CURRENT_COMMIT, CURRENT_TREE)
+    archive, candidate, metadata = _operator_artifacts(
+        tmp_path,
+        config="blobs/sha256/" + OPERATOR_IMAGE_ID.removeprefix("sha256:"),
+    )
+    admission = tmp_path / "operator-runtime.toml"
+    _operator_admission(admission, archive, candidate, metadata, source=current)
+    assert (
+        gate.verify(
+            admission,
+            current,
+            current_manifest,
+            owner_uid=os.getuid(),
+            runner=_runner(current, current),
+        )
+        == []
     )
 
 

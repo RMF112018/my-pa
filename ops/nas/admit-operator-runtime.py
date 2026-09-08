@@ -16,10 +16,8 @@ from pathlib import Path
 
 from archive_image import inspect_archive
 from nas_tools import docker
+from operator_pre_source_gate import admission_shape_errors, candidate_shape_errors
 
-SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
-HEX_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
-GIT_OBJECT = re.compile(r"[0-9a-f]{40}\Z")
 COMPOSE_VERSION = re.compile(r"v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?\Z")
 COMPOSE_SERVICES = {
     "gateway",
@@ -48,19 +46,6 @@ COMPOSE_SENTINEL_ENVIRONMENT = {
     "MYPA_CANONICAL_ORIGIN": "https://invalid.example",
     "MYPA_ENTRA_REDIRECT_URI": "https://invalid.example/callback",
 }
-EXPECTED_KEYS = {
-    "schema",
-    "status",
-    "repository_commit",
-    "repository_tree",
-    "built_at",
-    "target_os",
-    "target_architecture",
-    "oci_manifest_digest",
-    "docker_image_id",
-    "archive_sha256",
-    "build_metadata_sha256",
-}
 
 
 def _sha256(path: Path) -> str:
@@ -82,27 +67,7 @@ def admit(candidate: Path, archive: Path, metadata: Path, output: Path) -> list[
         data = tomllib.loads(candidate.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError):
         return ["candidate_unreadable"]
-    errors: list[str] = []
-    if (
-        set(data) != EXPECTED_KEYS
-        or data.get("schema") != "my-pa.nas-operator-runtime-candidate.v1"
-        or data.get("status") != "candidate_not_admitted"
-    ):
-        errors.append("candidate_shape")
-    if data.get("target_os") != "linux" or data.get("target_architecture") != "amd64":
-        errors.append("candidate_platform")
-    if not GIT_OBJECT.fullmatch(str(data.get("repository_commit", ""))) or not GIT_OBJECT.fullmatch(
-        str(data.get("repository_tree", ""))
-    ):
-        errors.append("candidate_repository_identity")
-    if not SHA256.fullmatch(str(data.get("oci_manifest_digest", ""))) or not SHA256.fullmatch(
-        str(data.get("docker_image_id", ""))
-    ):
-        errors.append("candidate_image_identity")
-    if not HEX_SHA256.fullmatch(str(data.get("archive_sha256", ""))) or not HEX_SHA256.fullmatch(
-        str(data.get("build_metadata_sha256", ""))
-    ):
-        errors.append("candidate_checksum_shape")
+    errors = candidate_shape_errors(data)
     try:
         archive_identity = inspect_archive(archive)
         metadata_data = json.loads(metadata.read_text(encoding="utf-8"))
@@ -168,6 +133,7 @@ def admit(candidate: Path, archive: Path, metadata: Path, output: Path) -> list[
         or inspected.get("Os") != "linux"
         or inspected.get("Architecture") != "amd64"
         or labels.get("org.opencontainers.image.revision") != data.get("repository_commit")
+        or labels.get("org.opencontainers.image.created") != data.get("built_at")
         or labels.get("io.my-pa.repository-tree") != data.get("repository_tree")
         or labels.get("io.my-pa.target-platform") != "linux/amd64"
         or labels.get("io.my-pa.operator-runtime") != "python-3.12"
@@ -175,21 +141,30 @@ def admit(candidate: Path, archive: Path, metadata: Path, output: Path) -> list[
         errors.append("loaded_operator_identity")
     if errors:
         return errors
-    lines = [
-        'schema = "my-pa.nas-operator-runtime-admission.v1"',
-        'status = "admitted"',
-        f"repository_commit = {json.dumps(str(data['repository_commit']))}",
-        f"repository_tree = {json.dumps(str(data['repository_tree']))}",
-        f"docker_engine_id = {json.dumps(str(engine['ID']))}",
-        f"docker_engine_name = {json.dumps(str(engine['Name']))}",
-        f"operator_image_id = {json.dumps(str(data['docker_image_id']))}",
-        f"operator_manifest_digest = {json.dumps(str(data['oci_manifest_digest']))}",
-        f"operator_archive_sha256 = {json.dumps(str(data['archive_sha256']))}",
-        f"python_version = {json.dumps('.'.join(map(str, sys.version_info[:3])))}",
-        f"git_version = {json.dumps(git_version)}",
-        f"openssl_version = {json.dumps(openssl_version)}",
-        f"compose_version = {json.dumps(compose_version)}",
-    ]
+    admission = {
+        "schema": "my-pa.nas-operator-runtime-admission.v1",
+        "status": "admitted",
+        "repository_commit": str(data["repository_commit"]),
+        "repository_tree": str(data["repository_tree"]),
+        "repository_source_path": str(Path(__file__).resolve().parents[2]),
+        "docker_engine_id": str(engine["ID"]),
+        "docker_engine_name": str(engine["Name"]),
+        "operator_image_id": str(data["docker_image_id"]),
+        "operator_manifest_digest": str(data["oci_manifest_digest"]),
+        "operator_archive_path": str(archive.resolve()),
+        "operator_archive_sha256": str(data["archive_sha256"]),
+        "operator_candidate_path": str(candidate.resolve()),
+        "operator_candidate_sha256": _sha256(candidate),
+        "operator_metadata_path": str(metadata.resolve()),
+        "operator_metadata_sha256": _sha256(metadata),
+        "python_version": ".".join(map(str, sys.version_info[:3])),
+        "git_version": git_version,
+        "openssl_version": openssl_version,
+        "compose_version": compose_version,
+    }
+    if admission_shape_errors(admission):
+        return ["operator_admission_shape"]
+    lines = [f"{key} = {json.dumps(value)}" for key, value in admission.items()]
     try:
         descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
     except OSError:

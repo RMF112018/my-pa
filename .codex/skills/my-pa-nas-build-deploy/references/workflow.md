@@ -168,10 +168,38 @@ Obtain separate authorization before stopping dependent Compose projects not alr
 Require zero non-operator sessions capable of writing and recheck after a bounded quiet interval. If sessions return, identify and stop the owning authorized service; do not terminate unknown sessions or continue under contention. Keep PostgreSQL itself running for backup and migration.
 
 Only after the zero-writer quiet gate passes, use an existing owner-only backup
-directory outside the repository. With the old manifest, PostgreSQL bootstrap
-admission, resource admission, and protected environment still selected, run
-the preserved old checkout's `ops/nas/backup.sh`, then that checkout's
-`ops/nas/verify-backup-receipt.sh`. Bind the verified receipt to its dump
+directory outside both the current and preserved repositories. It must be an
+unlinked physical directory owned by the effective operator with exact mode
+`0700`; the script opens its partial dump atomically with no-clobber. With the old
+manifest, PostgreSQL bootstrap
+admission, resource admission, and protected environment still selected, set
+`MY_PA_PRESERVED_RUNTIME_SOURCE` to the exact preserved clean old checkout and
+`MY_PA_CURRENT_GATE_SOURCE` to the exact clean current checkout, and
+`MY_PA_CURRENT_GATE_IMAGE_MANIFEST` to the current checkout's exact deployable
+manifest. Require the existing root-owned mode-0400 current operator admission
+(canonical default `/etc/my-pa/operator-runtime.toml`) to pass its complete
+authoritative schema and bind that same source, engine, operator image,
+externally staged candidate, archive, metadata and their byte digests, Python,
+Git, OpenSSL, and Compose identities. Canonical Docker must run the standalone
+gate baked into that exact admitted image with no network and a read-only
+filesystem. It mounts every external input at its own fixed
+`/run/my-pa-input/` destination, never over `/usr/local` tooling; it validates
+the full admission, external artifacts, source,
+engine, and authoritative deployable image-manifest shape before any path in
+the current checkout is executed. Run the
+current checkout's
+`ops/nas/backup.sh`, then the current checkout's
+`ops/nas/verify-backup-receipt.sh`. This preserved-runtime mode
+revalidates the old checkout, manifest, Compose, runtime admission, PostgreSQL
+bootstrap admission, resource artifact, and live PostgreSQL container through
+the old checkout's gates. It separately revalidates the exact clean current
+checkout against the current manifest and runs only the current checkout's
+data-plane firewall check, but only after the immutable operator-image gate has
+authenticated the external admission/artifacts, current source, manifest, and
+engine. Unset all three
+preserved-runtime variables after the backup. Do not run the old `backup.sh`
+or bypass either identity. Bind the
+verified receipt to its dump
 digest and the pre-migration database revision immediately before migration.
 If any writer resumes after the backup starts, quiesce again and create a new
 verified backup; do not migrate from the stale receipt.

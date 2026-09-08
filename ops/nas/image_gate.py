@@ -144,13 +144,18 @@ def _shape_errors(data: dict[str, Any]) -> list[str]:
     return errors
 
 
+def shape_errors(data: dict[str, Any]) -> list[str]:
+    """Return authoritative deployable-manifest shape refusals."""
+    return _shape_errors(data)
+
+
 def verify(path: Path, archive_dir: Path | None = None, *, live: bool = False) -> list[str]:
     """Return every refusal reason; passing requires live Docker and all archives."""
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError):
         return ["manifest_unreadable"]
-    errors = _shape_errors(data)
+    errors = shape_errors(data)
     if not live:
         return [*errors, "live_verification_required"]
     if archive_dir is None:

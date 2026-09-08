@@ -24,6 +24,12 @@ esac
   echo "operator candidate, archive, and metadata must exist" >&2
   exit 64
 }
+for artifact in "$candidate" "$archive" "$metadata"; do
+  [ ! -L "$artifact" ] && [ "$(stat -c '%u:%a:%h' "$artifact")" = "0:400:1" ] || {
+    echo "operator bootstrap inputs must be unlinked root-owned mode 0400 files" >&2
+    exit 1
+  }
+done
 [ ! -e "$output" ] || { echo "operator admission output already exists" >&2; exit 1; }
 
 expected_archive=$(sed -n 's/^archive_sha256 = "\([0-9a-f][0-9a-f]*\)"$/\1/p' "$candidate")

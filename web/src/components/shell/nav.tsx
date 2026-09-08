@@ -9,11 +9,19 @@ import {
   MOBILE_MORE,
   MOBILE_PRIMARY,
   UTILITY_DESTINATIONS,
+  groupedDestinations,
   type Destination,
+  type DestinationGroup,
 } from "@/components/shell/destinations";
 import { Icon } from "@/components/ui/icon";
 import { IconButton } from "@/components/ui/icon-button";
 import { Sheet } from "@/components/ui/sheet";
+
+const MORE_GROUP_HEADING: Record<DestinationGroup, string> = {
+  workspace: "Workspaces",
+  global: "Global",
+  utility: "Utilities",
+};
 
 function activeFor(pathname: string, href: string) {
   return (
@@ -29,11 +37,13 @@ function NavLink({
   pathname,
   collapsed = false,
   onNavigate,
+  minHeightClass = "min-h-11",
 }: {
   item: Destination;
   pathname: string;
   collapsed?: boolean;
   onNavigate?: () => void;
+  minHeightClass?: string;
 }) {
   const active = activeFor(pathname, item.href);
   return (
@@ -42,7 +52,7 @@ function NavLink({
       onClick={onNavigate}
       aria-current={active ? "page" : undefined}
       title={collapsed ? item.label : undefined}
-      className={`flex min-h-11 items-center gap-3 rounded-[var(--radius-md)] px-3 text-sm font-medium ${
+      className={`flex ${minHeightClass} items-center gap-3 rounded-[var(--radius-md)] px-3 text-sm font-medium ${
         active
           ? "bg-interactive text-on-interactive"
           : "text-text-secondary hover:bg-surface-subtle hover:text-text-primary"
@@ -94,7 +104,10 @@ export function MobileNav() {
   const [moreOpen, setMoreOpen] = useState(false);
   return (
     <>
-      <nav aria-label="Primary" className="fixed inset-x-0 bottom-0 z-30 flex border-t bg-surface md:hidden">
+      <nav
+        aria-label="Primary"
+        className="fixed inset-x-0 bottom-0 z-30 flex border-t bg-surface pb-[env(safe-area-inset-bottom)] md:hidden"
+      >
         {MOBILE_PRIMARY.map((item) => {
           const active = activeFor(pathname, item.href);
           return (
@@ -120,14 +133,24 @@ export function MobileNav() {
           More
         </button>
       </nav>
-      <Sheet open={moreOpen} onOpenChange={setMoreOpen} title="More destinations">
-        {MOBILE_MORE.map((item) => (
-          <NavLink
-            key={item.href}
-            item={item}
-            pathname={pathname}
-            onNavigate={() => setMoreOpen(false)}
-          />
+      <Sheet open={moreOpen} onOpenChange={setMoreOpen} title="More">
+        {groupedDestinations(MOBILE_MORE).map(({ group, items }) => (
+          <section key={group} className="mb-4 last:mb-0">
+            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-muted">
+              {MORE_GROUP_HEADING[group]}
+            </h2>
+            <div className="space-y-1">
+              {items.map((item) => (
+                <NavLink
+                  key={item.href}
+                  item={item}
+                  pathname={pathname}
+                  onNavigate={() => setMoreOpen(false)}
+                  minHeightClass="min-h-14"
+                />
+              ))}
+            </div>
+          </section>
         ))}
       </Sheet>
     </>

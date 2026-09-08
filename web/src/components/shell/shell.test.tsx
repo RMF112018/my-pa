@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AppShell } from "@/components/shell/app-shell";
 import { DESTINATIONS, MOBILE_MORE, MOBILE_PRIMARY } from "@/components/shell/destinations";
@@ -65,8 +65,25 @@ describe("app shell", () => {
     expect(screen.getAllByRole("link", { name: "System" }).length).toBeGreaterThanOrEqual(1);
   });
 
-  it("shows the signed-in principal and the synthetic badge", () => {
+  it("groups the More sheet into Workspaces and Utilities without changing membership", async () => {
+    const user = userEvent.setup();
     render(<AppShell principal={PRINCIPAL}>content</AppShell>);
+    await user.click(screen.getByRole("button", { name: "More" }));
+    const more = screen.getByRole("dialog", { name: "More" });
+    expect(within(more).getByRole("heading", { name: "Workspaces" })).toBeTruthy();
+    expect(within(more).getByRole("heading", { name: "Utilities" })).toBeTruthy();
+    expect(within(more).queryByRole("heading", { name: "Global" })).toBeNull();
+    for (const label of ["People", "Intelligence", "Knowledge", "Map"]) {
+      expect(within(more).getByRole("link", { name: label })).toBeTruthy();
+    }
+    expect(within(more).getByRole("link", { name: "System" })).toBeTruthy();
+    expect(within(more).queryByRole("link", { name: "Today" })).toBeNull();
+  });
+
+  it("shows the signed-in principal and the synthetic badge", async () => {
+    const user = userEvent.setup();
+    render(<AppShell principal={PRINCIPAL}>content</AppShell>);
+    await user.click(screen.getByRole("button", { name: "Account" }));
     expect(screen.getByTestId("principal-name")).toHaveTextContent("Synthetic A");
     expect(screen.getByTestId("principal-upn")).toHaveTextContent("synthetic.a@moss.example");
     expect(screen.getByText("Synthetic identity")).toBeInTheDocument();

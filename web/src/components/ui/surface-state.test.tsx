@@ -33,6 +33,10 @@ const EMPTINESS_CLAIMS = [
   /nothing here yet/i,
 ];
 
+function firstParagraphOutsideDetails(root: HTMLElement): HTMLElement | undefined {
+  return Array.from(root.querySelectorAll("p")).find((node) => !node.closest("details"));
+}
+
 describe("the four non-record answers are four different answers", () => {
   it("gives empty and unavailable different text, roles, and names", () => {
     const { unmount } = render(
@@ -42,8 +46,12 @@ describe("the four non-record answers are four different answers", () => {
     expect(empty).toHaveAttribute("data-state", "empty");
     expect(empty.getAttribute("role")).toBe("status");
     const emptyText = empty.textContent ?? "";
-    expect(emptyText).toMatch(/read successfully/i);
-    expect(emptyText).toMatch(/holds nothing/i);
+    const emptyDetails = within(empty).getByTestId("surface-state-details");
+    expect(emptyDetails).toHaveTextContent(/read successfully/i);
+    expect(emptyDetails).toHaveTextContent(/holds nothing/i);
+    expect(firstParagraphOutsideDetails(empty)?.getAttribute("data-testid")).not.toBe(
+      "surface-state-clarification",
+    );
     unmount();
 
     render(
@@ -53,8 +61,10 @@ describe("the four non-record answers are four different answers", () => {
     expect(unavailable).toHaveAttribute("data-state", "unavailable");
     expect(unavailable.getAttribute("role")).toBe("alert");
     const unavailableText = unavailable.textContent ?? "";
-    expect(unavailableText).toMatch(/nothing was retrieved/i);
-    expect(unavailableText).toMatch(/read that did not happen/i);
+    const unavailableDetails = within(unavailable).getByTestId("surface-state-details");
+    expect(unavailableDetails).toHaveTextContent(/nothing was retrieved/i);
+    expect(unavailableDetails).toHaveTextContent(/read that did not happen/i);
+    expect(within(unavailable).getByTestId("surface-state-detail")).toHaveTextContent("boom");
 
     // The whole point: a failure never carries the vocabulary of emptiness.
     for (const claim of EMPTINESS_CLAIMS) {
@@ -72,7 +82,9 @@ describe("the four non-record answers are four different answers", () => {
     expect(degraded.getAttribute("role")).toBe("status");
     const text = degraded.textContent ?? "";
     expect(text).toMatch(/incomplete/i);
-    expect(text).toMatch(/what is shown is real/i);
+    expect(within(degraded).getByTestId("surface-state-details")).toHaveTextContent(
+      /what is shown is real/i,
+    );
     for (const claim of EMPTINESS_CLAIMS) {
       expect(text).not.toMatch(claim);
     }
@@ -127,6 +139,28 @@ describe("the four non-record answers are four different answers", () => {
     expect(list.textContent).toContain("does not stem words");
     expect(list.textContent).toContain("no continuation");
   });
+
+  it("never uses empty-kind vocabulary for a failed read", () => {
+    render(<SurfaceState kind="unavailable" title="Your captures could not be read" />);
+    const unavailable = screen.getByTestId("state-unavailable");
+    const text = unavailable.textContent ?? "";
+    expect(unavailable).toHaveAttribute("data-state", "unavailable");
+    expect(within(unavailable).queryByText("Empty")).toBeNull();
+    for (const claim of EMPTINESS_CLAIMS) {
+      expect(text).not.toMatch(claim);
+    }
+  });
+
+  it("puts generic clarification behind a Details disclosure", () => {
+    render(<SurfaceState kind="empty" title="You have not captured anything yet" />);
+    const details = screen.getByTestId("surface-state-details");
+    expect(details.tagName).toBe("DETAILS");
+    expect(within(details).getByText("Details")).toBeTruthy();
+    const clarification = screen.getByTestId("surface-state-clarification");
+    expect(details.contains(clarification)).toBe(true);
+    expect(clarification).toHaveTextContent(/read successfully/i);
+    expect(firstParagraphOutsideDetails(screen.getByTestId("state-empty"))).toBeUndefined();
+  });
 });
 
 describe("the degraded banner sits above real records", () => {
@@ -137,6 +171,9 @@ describe("the degraded banner sits above real records", () => {
     expect(banner.textContent).toMatch(/records below are real/i);
     expect(banner.textContent).toMatch(/not all of them/i);
     expect(banner.textContent).toContain("one scope was skipped");
+    expect(within(banner).getByTestId("surface-state-details")).toHaveTextContent(
+      /this page guessing it/i,
+    );
   });
 
   it("states truncation separately, because it is a different fact", () => {

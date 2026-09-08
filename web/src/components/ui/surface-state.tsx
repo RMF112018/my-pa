@@ -13,7 +13,7 @@
  *
  * The four states, and what each one is a claim about:
  *
- * * **empty** — the read succeeded and the Principal holds nothing. This is the
+ * * **empty** — the read succeeded and the record holds nothing. This is the
  *   only one of the four that is a claim about the record, and it is only ever
  *   rendered when a successful answer came back carrying no rows.
  * * **unavailable** — the read did not succeed. Nothing was retrieved, so
@@ -27,6 +27,11 @@
  * * **not_implemented** — there is nothing on the backend to ask. Different
  *   from `unavailable` for the reason `lib/api/serving.ts` gives: `unavailable`
  *   implies a retry could succeed and this does not.
+ *
+ * Level 1 is title, badge, optional caller `detail`, and children (retry).
+ * Generic clarification and diagnostic extras sit behind a native Details
+ * disclosure so they remain in the accessibility tree without being the first
+ * visible paragraph.
  *
  * **Nothing here is conveyed by colour alone.** Every state carries a word (the
  * badge label), a distinct heading, and a distinct `data-state` attribute, so a
@@ -105,6 +110,33 @@ export interface SurfaceStateProps {
   readonly testId?: string;
 }
 
+function StateDetails({
+  clarification,
+  limitations,
+}: {
+  clarification: string;
+  limitations: readonly string[];
+}) {
+  return (
+    <details className="mt-2" data-testid="surface-state-details">
+      <summary className="cursor-pointer font-medium text-moss-slate">Details</summary>
+      <p className="mt-2" data-testid="surface-state-clarification">
+        {clarification}
+      </p>
+      {limitations.length > 0 ? (
+        <>
+          <p className="mt-2 font-medium text-moss-slate">What is missing from this answer:</p>
+          <ul className="mt-1 list-inside list-disc" data-testid="surface-state-limitations">
+            {limitations.map((limitation) => (
+              <li key={limitation}>{limitation}</li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+    </details>
+  );
+}
+
 /**
  * One non-record answer, rendered so it cannot be mistaken for another.
  *
@@ -136,23 +168,11 @@ export function SurfaceState({
         <Badge tone={presentation.tone}>{presentation.badge}</Badge>
       </div>
       <CardBody>
-        <p data-testid="surface-state-clarification">{presentation.clarification}</p>
         {detail ? (
-          <p className="mt-2" data-testid="surface-state-detail">
-            {detail}
-          </p>
-        ) : null}
-        {limitations.length > 0 ? (
-          <>
-            <p className="mt-2 font-medium text-moss-slate">What is missing from this answer:</p>
-            <ul className="mt-1 list-inside list-disc" data-testid="surface-state-limitations">
-              {limitations.map((limitation) => (
-                <li key={limitation}>{limitation}</li>
-              ))}
-            </ul>
-          </>
+          <p data-testid="surface-state-detail">{detail}</p>
         ) : null}
         {children}
+        <StateDetails clarification={presentation.clarification} limitations={limitations} />
       </CardBody>
     </Card>
   );
@@ -187,10 +207,7 @@ export function DegradedBanner({
       <p className="font-medium text-moss-slate">
         Partial answer — {scope} returned less than the whole.
       </p>
-      <p className="mt-1 text-muted">
-        The records below are real. They are not all of them, and the backend said so rather than
-        this page guessing it.
-      </p>
+      <p className="mt-1 text-muted">The records below are real. They are not all of them.</p>
       {truncated ? (
         <p className="mt-1 text-muted" data-testid="degraded-truncated">
           The answer was cut off at this build&rsquo;s page limit, and there is no continuation
@@ -204,6 +221,12 @@ export function DegradedBanner({
           ))}
         </ul>
       ) : null}
+      <details className="mt-2" data-testid="surface-state-details">
+        <summary className="cursor-pointer font-medium text-moss-slate">Details</summary>
+        <p className="mt-2 text-muted">
+          The backend said so rather than this page guessing it.
+        </p>
+      </details>
     </div>
   );
 }

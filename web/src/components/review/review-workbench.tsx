@@ -96,7 +96,7 @@ export function ReviewWorkbench({ cases }: { cases: readonly ReviewCase[] }) {
   }
 
   if (cases.length === 0) {
-    return <p className="text-sm text-muted">No proposals are waiting for your review.</p>;
+    return <p className="text-sm text-muted">Nothing to review right now.</p>;
   }
 
   return (
@@ -112,7 +112,7 @@ export function ReviewWorkbench({ cases }: { cases: readonly ReviewCase[] }) {
               </div>
               <CardBody>
                 <p className="text-xs uppercase tracking-wide text-muted">
-                  Proposal — not asserted. Awaiting your disposition.
+                  Waiting for your decision.
                 </p>
 
                 <div className="mt-3">
@@ -144,10 +144,7 @@ export function ReviewWorkbench({ cases }: { cases: readonly ReviewCase[] }) {
                     <p className="font-medium text-moss-everglade">
                       Recorded: {DISPOSITION_LABEL[status.disposition]}
                     </p>
-                    <p className="mt-1 text-xs text-muted">
-                      Receipt {status.receipt.receiptId} · transition{" "}
-                      {status.receipt.transition} · policy {status.receipt.policyVersion}
-                    </p>
+                    <p className="mt-1 text-xs text-muted">{status.receipt.receiptId}</p>
                   </div>
                 ) : status.phase === "not_persisted" ? (
                   <p

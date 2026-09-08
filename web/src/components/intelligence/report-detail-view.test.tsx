@@ -105,7 +105,7 @@ describe("superseded and malformed report rendering", () => {
       artifact_state: "final",
     };
     render(<ReportCard row={row} currentCycle={row.cycle_run_id} />);
-    expect(screen.getByTestId("intelligence-brief-artifact").textContent).toBe("Brief artifact");
+    expect(screen.getByTestId("intelligence-brief-artifact").textContent).toBe("Brief");
     expect(screen.queryByText("scraped item one")).toBeNull();
   });
 });

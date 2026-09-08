@@ -101,7 +101,7 @@ describe("review workbench", () => {
 
   it("shows an empty state when nothing is waiting", () => {
     render(<ReviewWorkbench cases={[]} />);
-    expect(screen.getByText("No proposals are waiting for your review.")).toBeInTheDocument();
+    expect(screen.getByText("Nothing to review right now.")).toBeInTheDocument();
   });
 
   it("does not treat an acknowledged-not-persisted answer as a recorded decision", async () => {

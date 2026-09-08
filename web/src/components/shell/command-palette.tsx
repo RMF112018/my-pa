@@ -44,7 +44,7 @@ function classifyFailure(error: unknown): SearchAnswer {
       kind: "not_implemented",
       message:
         failure.message ||
-        "The synthetic provider has no federated search fixture. Federated search requires the executable Python search capabilities.",
+        "Search is not available in this build.",
     };
   }
   return {
@@ -204,9 +204,7 @@ export function SearchCommandPanel({
   return (
     <div>
       <p className="mb-3 text-sm text-text-secondary">
-        Type to search Work, Capture, Intelligence, People, and Knowledge. An empty query lists
-        destinations and Quick Capture. Coverage tokens stay visible when a domain was omitted or
-        unavailable.
+        Search my-pa. An empty query lists destinations and Quick Capture.
       </p>
       <label htmlFor={inputId} className="mb-1 block text-sm font-medium text-moss-slate">
         Search
@@ -227,11 +225,10 @@ export function SearchCommandPanel({
         aria-controls={listId}
         aria-describedby={`${inputId}-hint`}
         data-testid="search-command-input"
-        placeholder="Search or jump to a destination"
+        placeholder="Search my-pa"
       />
       <p id={`${inputId}-hint`} className="mt-1 text-xs text-muted">
-        Results keep each domain&rsquo;s upstream order. Knowledge rank is shown only inside
-        Knowledge.
+        Pick a destination, or type to search tasks, people, notes, and reports.
       </p>
       <div
         id={listId}
@@ -263,7 +260,7 @@ export function SearchCommandPanel({
         {answer.kind === "not_implemented" ? (
           <SurfaceState
             kind="not_implemented"
-            title="Federated search is not in this build"
+            title="Search is not available in this build"
             detail={answer.message}
             testId="search-not-implemented"
           />
@@ -288,7 +285,7 @@ export function SearchCommandPanel({
           <SurfaceState
             kind="empty"
             title="No matches in the domains that were searched"
-            detail="That is a fact about this query, not a missing search. Omitted and unavailable domains are listed below."
+            detail="Omitted and unavailable sources are listed below."
             testId="search-empty"
           />
         ) : null}

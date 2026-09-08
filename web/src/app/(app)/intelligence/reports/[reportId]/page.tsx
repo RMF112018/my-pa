@@ -35,7 +35,7 @@ export default async function IntelligenceReportPage({
         title="Intelligence"
         description={BLURB}
         state="not_implemented"
-        detail="The synthetic provider has no report fixture. Report reads require the executable Python Intelligence plane."
+        detail="The synthetic provider has no report fixture. Report reads are not available in this build."
       />
     );
   }

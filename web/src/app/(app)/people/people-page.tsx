@@ -20,7 +20,7 @@ import { invokeGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
-import { PeopleSearchForm, PeopleResolveForm } from "@/components/people/people-forms";
+import { PeopleLookupForms } from "@/components/people/people-forms";
 import { SearchHits } from "@/components/people/search-hits";
 import { ResolvePanel } from "@/components/people/resolve-panel";
 import { UnresolvedMentionsPanel } from "@/components/people/unresolved-mentions";
@@ -30,9 +30,7 @@ import type { PrincipalSession } from "@/contracts/identity";
 const SCOPE = "people";
 
 const BLURB =
-  "People is search, resolve, and a profile of one entity you already hold. " +
-  "Search finds names; resolve says whether a reference names one person, several, or none. " +
-  "It does not list everyone, and it does not merge anyone.";
+  "Find a person already in your records. Search by name. This is not a directory of everyone.";
 
 function frame(children: React.ReactNode) {
   return (
@@ -87,7 +85,7 @@ export async function PeoplePage({
       <SurfaceState
         kind="not_implemented"
         title="People has no synthetic fixture"
-        detail="This build is serving the synthetic provider. People reads the Python entity plane, and no fixture stands in for it — run against the gateway to see real records."
+        detail="This build is serving sample data. People is not included in that sample, so there is no one to look up here."
         testId="people-synthetic"
       />,
     );
@@ -97,12 +95,7 @@ export async function PeoplePage({
     redirect(peopleEntity(entityId));
   }
 
-  const forms = (
-    <>
-      <PeopleSearchForm query={query} />
-      <PeopleResolveForm reference={reference} />
-    </>
-  );
+  const forms = <PeopleLookupForms query={query} reference={reference} />;
 
   if (reference) {
     const outcome = await invokeGateway(principal, "entities.resolve", {
@@ -229,8 +222,8 @@ export async function PeoplePage({
       {forms}
       <SurfaceState
         kind="empty"
-        title="Ask by name or by reference"
-        detail="This is not a directory of everyone. Search a name, or resolve a reference. Ambiguous answers stay visible; nothing here merges two people."
+        title="Search for a person by name."
+        detail="This is not a directory of everyone. Ambiguous answers stay visible; nothing here merges two people."
         testId="people-idle"
       />
       {mentions}

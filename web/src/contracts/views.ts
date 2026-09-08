@@ -195,13 +195,14 @@ export interface PulseItem {
  * `PulseItem` above and therefore a different type.
  *
  * `PulseItem` is the fixture shape: a title, a reason, a consequence, a next
- * step. A derived item has no title at all — nothing wrote one — and carries
- * three things the fixture shape has no field for and which are the whole point
- * of the derivation: a closed `reasonCode` naming *why now*, the `basisRefs` a
- * reader can open to check that reason, and a bounded `priority` that is an
- * evidentiary urgency rank rather than a position in a stream. Merging the two
- * would mean inventing a title and dropping the basis, which is exactly the
- * flattening that turns a Pulse back into a feed.
+ * step. A derived item may carry an optional `subjectTitle` when the backend
+ * named the subject, and it must not be invented from identifiers. It also
+ * carries three things the fixture shape has no field for and which are the
+ * whole point of the derivation: a closed `reasonCode` naming *why now*, the
+ * `basisRefs` a reader can open to check that reason, and a bounded `priority`
+ * that is an evidentiary urgency rank rather than a position in a stream.
+ * Merging the two would mean inventing a title and dropping the basis, which is
+ * exactly the flattening that turns a Pulse back into a feed.
  *
  * `itemRef` names the accepted record the item is about; `generatedAt` is the
  * moment of the read and is identical across every item in one answer, so it
@@ -218,6 +219,8 @@ export interface BackendPulseItem {
   readonly nextStep: string | null;
   readonly priority: number;
   readonly generatedAt: IsoTimestamp;
+  /** Backend-supplied subject name. Absent or empty means the renderer must not invent one. */
+  readonly subjectTitle?: string;
 }
 
 /**

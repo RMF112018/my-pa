@@ -65,7 +65,7 @@ export async function PeopleEntityPage({
         <SurfaceState
           kind="not_implemented"
           title="People has no synthetic fixture"
-          detail="This build is serving the synthetic provider. People reads the Python entity plane, and no fixture stands in for it — run against the gateway to see real records."
+          detail="This build is serving sample data. People is not included in that sample, so there is no one to look up here."
           testId="people-synthetic"
         />
       </section>

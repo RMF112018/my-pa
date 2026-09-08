@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import type { ReportListEntry } from "@/lib/api/decode/capabilities/reports.list";
 import { groupArtifactsByCycle } from "./cycle-selection";
-import { ReportListing } from "./report-card";
+import { ReportCard, ReportListing } from "./report-card";
 
 function entry(overrides: Partial<ReportListEntry> = {}): ReportListEntry {
   return {
@@ -57,5 +57,50 @@ describe("History report cards", () => {
     );
     expect(screen.getByText("Prior-run collector")).toBeTruthy();
     expect(screen.queryByText("Current cycle")).toBeNull();
+  });
+});
+
+describe("ReportCard", () => {
+  it("badges a morning brief as Brief, not Brief artifact", () => {
+    render(
+      <ReportCard
+        row={entry({
+          artifact_kind: "morning_brief",
+          stage: "morning_brief",
+          title: "Morning brief",
+        })}
+      />,
+    );
+    const badge = screen.getByTestId("intelligence-brief-artifact");
+    expect(badge.textContent).toBe("Brief");
+    expect(badge.textContent).not.toMatch(/artifact/i);
+    expect(screen.getByRole("link", { name: "Morning brief" })).toBeTruthy();
+  });
+
+  it("keeps report and cycle identifiers behind Details", () => {
+    const row = entry();
+    render(<ReportCard row={row} />);
+    const details = screen.getByTestId("intelligence-report-details");
+    expect(details.querySelector("summary")?.textContent).toBe("Details");
+    expect(screen.getByTestId("intelligence-report-id").textContent).toBe(row.report_id);
+    expect(screen.getByTestId("intelligence-report-cycle").textContent).toBe(row.cycle_run_id);
+    expect(details.contains(screen.getByTestId("intelligence-report-id"))).toBe(true);
+    expect(details.contains(screen.getByTestId("intelligence-report-cycle"))).toBe(true);
+    expect(screen.queryByText(/\d{4}-\d{2}-\d{2}/)).toBeNull();
+  });
+
+  it("labels superseded and partial reports without inventing dates", () => {
+    const { rerender } = render(
+      <ReportCard row={entry({ artifact_state: "superseded", title: "Superseded collector" })} />,
+    );
+    expect(document.querySelector("[data-epistemic-role='superseded']")).not.toBeNull();
+    expect(screen.getByRole("link", { name: "Superseded collector" })).toBeTruthy();
+    expect(screen.queryByText(/\d{4}-\d{2}-\d{2}/)).toBeNull();
+
+    rerender(
+      <ReportCard row={entry({ artifact_state: "partial", title: "Partial collector" })} />,
+    );
+    expect(document.querySelector("[data-epistemic-role='pipeline-incomplete']")).not.toBeNull();
+    expect(screen.queryByText(/\d{4}-\d{2}-\d{2}/)).toBeNull();
   });
 });

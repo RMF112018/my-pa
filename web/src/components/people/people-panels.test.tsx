@@ -18,7 +18,7 @@ import { ResolvePanel } from "./resolve-panel";
 import { EntityProfilePanel } from "./entity-profile";
 import { AssignmentsPanel } from "./related-records";
 import { UnresolvedMentionsPanel } from "./unresolved-mentions";
-import { PeopleSearchForm, PeopleResolveForm } from "./people-forms";
+import { PeopleLookupForms, PeopleSearchForm, PeopleResolveForm } from "./people-forms";
 import { SurfaceState } from "@/components/ui/surface-state";
 
 afterEach(cleanup);
@@ -271,8 +271,22 @@ describe("forms and unresolved mentions", () => {
         <PeopleResolveForm reference="" />
       </>,
     );
-    expect(screen.getByRole("searchbox", { name: "Search people" })).toBeTruthy();
+    expect(screen.getByRole("searchbox", { name: "Find a person" })).toBeTruthy();
     expect(screen.getByLabelText("Resolve a reference")).toBeTruthy();
+    noMerge(container);
+  });
+
+  it("keeps resolve behind advanced details, open when a reference is already in the URL", () => {
+    const { container, rerender } = render(<PeopleLookupForms query="" reference="" />);
+    const closed = screen.getByTestId("people-resolve-advanced");
+    expect(closed.tagName).toBe("DETAILS");
+    expect(closed).not.toHaveAttribute("open");
+    expect(closed.textContent).toMatch(/Resolve a reference/);
+    expect(closed.textContent).toMatch(/Advanced/);
+    expect(screen.getByRole("searchbox", { name: "Find a person" })).toBeTruthy();
+    rerender(<PeopleLookupForms query="" reference="Alex Chen" />);
+    expect(screen.getByTestId("people-resolve-advanced")).toHaveAttribute("open");
+    expect(screen.getByLabelText("Resolve a reference")).toHaveValue("Alex Chen");
     noMerge(container);
   });
 

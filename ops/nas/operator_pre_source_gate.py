@@ -60,6 +60,17 @@ CANDIDATE_KEYS = {
 Runner = Callable[[list[str]], str]
 
 
+def archive_config_image_id(config: object) -> str:
+    """Map docker-save Config to the loaded image/config ID.
+
+    Legacy `docker save` writes `<digest>.json`. OCI layout writes
+    `blobs/sha256/<digest>`. Either form must bind the admitted image ID.
+    """
+    value = str(config)
+    digest = value.rsplit("/", 1)[-1].removeprefix("sha256:").removesuffix(".json")
+    return f"sha256:{digest}"
+
+
 def candidate_shape_errors(data: Mapping[str, object]) -> list[str]:
     errors: list[str] = []
     if (
@@ -246,7 +257,7 @@ def verify(
         or candidate.get("build_metadata_sha256") != admission.get("operator_metadata_sha256")
         or metadata.get("containerimage.digest") != admission.get("operator_manifest_digest")
         or metadata.get("containerimage.config.digest") != admission.get("operator_image_id")
-        or "sha256:" + str(archive_manifest.get("Config", "")).removesuffix(".json")
+        or archive_config_image_id(archive_manifest.get("Config", ""))
         != admission.get("operator_image_id")
     ):
         errors.append("operator_artifact_binding")

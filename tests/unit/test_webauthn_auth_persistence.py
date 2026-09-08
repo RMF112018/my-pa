@@ -83,8 +83,8 @@ def test_recovery_code_normalizes_grouping_before_hashing() -> None:
 
 
 def test_session_ttl_policy_is_thirty_days() -> None:
-    assert AUTH_SESSION_ABSOLUTE_TTL == timedelta(days=30)
-    assert AUTH_SESSION_IDLE_TTL == timedelta(days=30)
+    assert timedelta(days=30) == AUTH_SESSION_ABSOLUTE_TTL
+    assert timedelta(days=30) == AUTH_SESSION_IDLE_TTL
     assert AUTH_SESSION_IDLE_TTL <= AUTH_SESSION_ABSOLUTE_TTL
 
 

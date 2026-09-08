@@ -7,6 +7,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import socket
 import subprocess
 import tarfile
@@ -107,6 +108,20 @@ def test_operator_admission_is_exclusive_and_engine_bound() -> None:
     assert '"--no-interpolate"' not in source
     assert '"compose_version": compose_version' in source
     assert "admission_shape_errors(admission)" in source
+
+
+def test_operator_compose_sentinels_cover_nas_profile_interpolations() -> None:
+    compose = (ROOT / "ops/nas/compose.example.yml").read_text(encoding="utf-8")
+    interpolations = set(re.findall(r"\$\{([A-Z][A-Z0-9_]+)", compose))
+    module = _module("admit-operator-runtime")
+    missing = sorted(interpolations - set(module.COMPOSE_SENTINEL_ENVIRONMENT))
+    assert missing == []
+    wrapper = (ROOT / "ops/nas/container-python.sh").read_text(encoding="utf-8")
+    common = (ROOT / "ops/nas/postgres-bootstrap-common.sh").read_text(encoding="utf-8")
+    bootstrap = _module("generate-postgres-bootstrap-admission")
+    assert "MYPA_SESSION_SERVICE_SECRET" in wrapper
+    assert "MYPA_SESSION_SERVICE_SECRET" in common
+    assert "MYPA_SESSION_SERVICE_SECRET" in bootstrap.SENTINEL_ENVIRONMENT
 
 
 def _operator_artifacts(tmp_path: Path) -> tuple[Path, Path, Path, str]:

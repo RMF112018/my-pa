@@ -32,6 +32,9 @@ RUN pip install --no-cache-dir --disable-pip-version-check \
 
 RUN addgroup --system --gid 10001 my-pa \
  && adduser --system --uid 10001 --ingroup my-pa --home /nonexistent --no-create-home my-pa
+# BuildKit COPY inherits the builder umask. Force world-read/traverse so the
+# uid-10001 database operator can read pyproject.toml, alembic.ini, and revisions.
+RUN chmod -R a+rX /opt/my-pa
 LABEL org.opencontainers.image.revision="${SOURCE_COMMIT}" \
       io.my-pa.repository-tree="${SOURCE_TREE}" \
       org.opencontainers.image.created="${BUILD_TIMESTAMP}" \

@@ -1,8 +1,7 @@
 """Opaque server-session records and idle/absolute expiry arithmetic.
 
-Defaults match the current web runtime numbers (8h absolute, 30m idle) so WP04
-can wire the cookie to this store without inventing a new policy. WP02 does not
-replace the live cookie.
+Defaults match the browser cookie: 30-day idle and 30-day absolute. The server
+remains the authority; the cookie max-age must not be shorter than absolute TTL.
 """
 
 from __future__ import annotations
@@ -23,8 +22,8 @@ __all__ = [
     "session_is_authoritative",
 ]
 
-AUTH_SESSION_ABSOLUTE_TTL: Final = timedelta(hours=8)
-AUTH_SESSION_IDLE_TTL: Final = timedelta(minutes=30)
+AUTH_SESSION_ABSOLUTE_TTL: Final = timedelta(days=30)
+AUTH_SESSION_IDLE_TTL: Final = timedelta(days=30)
 
 
 @dataclass(frozen=True, slots=True)

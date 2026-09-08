@@ -38,7 +38,7 @@ Runtime tables and repositories live in `src/my_pa/infrastructure/persistence/we
 - **Recovery.** Plaintext exists only in the issue return value. Consume hashes the normalized presented code and uses the same one-row `UPDATE` guard, also requiring the parent set not revoked. Revoking a set stamps `revoked_at` on the set and its unused codes. Hashed recovery is live; operator-local recovery is not implemented (PFE-AC-097 remains `IMPLEMENTATION_REQUIRED`).
 - **Sessions.** Create returns the raw SID once; only `token_hash` is stored. Resolve requires not revoked, not superseded, and now before both idle and absolute expiry. Touch refreshes `last_seen_at` and idle expiry but never past `absolute_expires_at`. Rotate locks the current row `FOR UPDATE`, creates one successor, marks the old row revoked (`rotated`) and superseded. A concurrent rotator of the same SID fails closed and does not learn the new SID. `revoke_all_for_principal` stamps every live session for that Principal.
 
-Default TTLs match the current web runtime numbers (8h absolute, 30m idle). WP02 did not change cookies; WP04 now sets the live cookie to the raw SID.
+Default TTLs are 30-day idle and 30-day absolute, matching the browser cookie max-age. The Python session store remains the authority; WP04 sets the live cookie to the raw SID.
 
 ## Secret storage
 

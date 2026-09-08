@@ -7,8 +7,8 @@
  * anyone. Worker C/D will delete remaining imports of this module.
  */
 
-/** Documented idle window matching Python (30 minutes). Not used for auth here. */
-export const IDLE_TIMEOUT_SECONDS = 30 * 60;
+/** Documented idle window matching Python (30 days). Not used for auth here. */
+export const IDLE_TIMEOUT_SECONDS = 30 * 24 * 60 * 60;
 
 /** No-op. Does not register, rotate, or authorize a session. */
 export function registerSession(

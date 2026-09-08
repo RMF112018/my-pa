@@ -33,6 +33,8 @@ def test_dockerfiles_are_platform_inputs_without_implicit_start_builds() -> None
     assert "sha256sum --check --strict" in app
     assert "USER 10001:10001" in app
     assert "USER 10001:10001" in web
+    assert "chmod -R a+rX /opt/my-pa" in app
+    assert app.index("chmod -R a+rX /opt/my-pa") < app.index("USER 10001:10001")
     assert "--no-build --pull never" in start
     assert '"$NAS_PYTHON_BIN" "$script_dir/image_gate.py"' in start
     assert '. "$script_dir/lifecycle-common.sh"' in start

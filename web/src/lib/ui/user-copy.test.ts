@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyForbiddenLevel1Copy } from "@/lib/ui/user-copy";
+import { classifyForbiddenLevel1Copy, collectLevel1Copy } from "@/lib/ui/user-copy";
 
 describe("Level-1 product language", () => {
   it("flags doctrine terms on non-System surfaces", () => {
@@ -35,5 +35,15 @@ describe("Level-1 product language", () => {
 
   it("flags Retry Work read", () => {
     expect(classifyForbiddenLevel1Copy("Retry Work read")).toContain("Retry Work read");
+  });
+
+  it("collectLevel1Copy drops Details so plane/artifact diagnostics are not scored as Level-1", () => {
+    const root = document.createElement("div");
+    root.innerHTML =
+      "<p>No briefings yet.</p><details><summary>Details</summary><p>The report plane was read incompletely.</p></details>";
+    const level1 = collectLevel1Copy(root);
+    expect(level1).toMatch(/no briefings yet/i);
+    expect(level1).not.toMatch(/\bplane\b/i);
+    expect(classifyForbiddenLevel1Copy(level1)).toEqual([]);
   });
 });

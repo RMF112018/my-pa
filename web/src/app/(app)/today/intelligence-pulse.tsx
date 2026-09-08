@@ -3,7 +3,7 @@
  *
  * READY is specialist coverage for morning_brief_inputs, never "system healthy".
  * An unavailable list is unavailable, not all-clear. An empty list is "no
- * artifact", not an error and not all-clear.
+ * briefings yet", not an error and not all-clear.
  *
  * Lives under app/(app) so the server-only gateway import stays inside the
  * allowlist in gateway.test.ts (route handlers, server pages, lib/api).
@@ -66,8 +66,14 @@ export async function IntelligencePulse({
         <CardTitle>Morning Intelligence</CardTitle>
         <CardBody>
           <p data-testid="intelligence-pulse-none" role="status">
-            No Morning Intelligence artifact. That is not all-clear and not a Pulse error.
+            No briefings yet. That is not all-clear and not a Pulse error.
           </p>
+          <details className="mt-2" data-testid="intelligence-pulse-details">
+            <summary className="cursor-pointer font-medium text-moss-slate">Details</summary>
+            <p className="mt-2 text-xs text-muted">
+              The report list was read and holds no briefing for your account.
+            </p>
+          </details>
           <Link
             href={intelligenceHome()}
             className="mt-2 inline-flex min-h-[var(--control-height)] items-center text-sm text-moss-green underline"
@@ -85,8 +91,15 @@ export async function IntelligencePulse({
         <CardTitle>Morning Intelligence</CardTitle>
         <CardBody>
           <LiveAnnouncement tone="status" testId="intelligence-pulse-degraded">
-            The report plane was read incompletely and returned nothing. That is not all-clear.
+            This briefing could not be read completely and returned nothing. That is not all-clear.
           </LiveAnnouncement>
+          <details className="mt-2" data-testid="intelligence-pulse-details">
+            <summary className="cursor-pointer font-medium text-moss-slate">Details</summary>
+            <p className="mt-2 text-xs text-muted">
+              The report plane was read incompletely. An empty listing is not established by an
+              incomplete read.
+            </p>
+          </details>
           <Link
             href={intelligenceHome()}
             className="mt-2 inline-flex min-h-[var(--control-height)] items-center text-sm text-moss-green underline"
@@ -106,8 +119,14 @@ export async function IntelligencePulse({
         <CardTitle>Morning Intelligence</CardTitle>
         <CardBody>
           <p data-testid="intelligence-pulse-none" role="status">
-            No Morning Intelligence artifact. That is not all-clear and not a Pulse error.
+            No briefings yet. That is not all-clear and not a Pulse error.
           </p>
+          <details className="mt-2" data-testid="intelligence-pulse-details">
+            <summary className="cursor-pointer font-medium text-moss-slate">Details</summary>
+            <p className="mt-2 text-xs text-muted">
+              Listed reports have no cycle, so no briefing set can be selected.
+            </p>
+          </details>
         </CardBody>
       </Card>
     );
@@ -124,9 +143,12 @@ export async function IntelligencePulse({
         <CardTitle>Morning Intelligence</CardTitle>
         <CardBody>
           <LiveAnnouncement tone="alert" testId="intelligence-pulse-unavailable">
-            Specialist readiness could not be read for cycle {cycleRunId}. Listed artifacts are not
-            all-clear.
+            Specialist readiness could not be read. Listed reports are not all-clear.
           </LiveAnnouncement>
+          <details className="mt-2" data-testid="intelligence-pulse-details">
+            <summary className="cursor-pointer font-medium text-moss-slate">Details</summary>
+            <p className="mt-2 text-xs text-muted">cycle {cycleRunId}</p>
+          </details>
           <Link
             href={intelligenceHome()}
             className="mt-2 inline-flex min-h-[var(--control-height)] items-center text-sm text-moss-green underline"

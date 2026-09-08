@@ -450,6 +450,13 @@ _ORDINAL_UNITS = (
     "hundred-fifty-third",
     "hundred-fifty-fourth",
     "hundred-fifty-fifth",
+    "hundred-fifty-sixth",
+    "hundred-fifty-seventh",
+    "hundred-fifty-eighth",
+    "hundred-fifty-ninth",
+    "hundred-sixtieth",
+    "hundred-sixty-first",
+    "hundred-sixty-second",
 )
 
 
@@ -943,40 +950,6 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "five capabilities",
         "All five capabilities share the single",
         "the five task-write names sharing one purpose, not the size of `Capability`",
-    ),
-    # --- the two runbook lines this package corrected --------------------------
-    #
-    # The default publication count. Read by `BARE_EMPHASIS` and excused rather
-    # than checked, because it is the size of a *different* set — `Capability`
-    # less the two families a default composition withholds — and this module
-    # derives only `Capability` and `Purpose`. Excused, not unread: both lines
-    # said `twenty` of a set that publishes forty-two, and if either is reworded
-    # or the figure moves, `test_every_excused_claim_is_still_there` reddens and
-    # an author has to come back here. The module docstring's last boundary note
-    # records what deriving it would cost.
-    (
-        "ops/runbooks/mcp-and-cli-operations.md",
-        "**sixty-six**",
-        "A default process publishes",
-        "the count a default composition publishes — `Capability` less the six "
-        "`documents.`, fifty-five `entities.` and nine `relationship_memory.` names it "
-        "withholds — not the size of `Capability`, which the same block states "
-        "correctly as one hundred and thirty-six",
-    ),
-    (
-        "ops/runbooks/mcp-and-cli-operations.md",
-        "**sixty-six**",
-        "none beginning `documents.`",
-        "the same default-publication count, in the line naming the test that measures it",
-    ),
-    (
-        "README.md",
-        "sixty-six tools",
-        "process publishes sixty-six tools",
-        "the same default-publication count, in the bullet describing the MCP "
-        "adapter; the tool list is derived from `available_capabilities`, not "
-        "from `Capability`, which the same bullet states correctly as "
-        "one hundred and thirty-six",
     ),
     # --- the Intelligence Artifact plane, newly swept --------------------------
     #

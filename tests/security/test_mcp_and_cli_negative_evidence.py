@@ -11,7 +11,7 @@ The five, over both:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — proved from both ends: the tool list and the option
-  surface route one hundred and fifty-four capability names and none of them mutates a
+  surface route one hundred and sixty-one capability names and none of them mutates a
   source, and every capability driven over both transports is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -486,6 +486,13 @@ SCOPED_CAPABILITIES = [
         Capability.CONSTRAINTS_HISTORY,
         Capability.CONSTRAINTS_OVERVIEW,
         Capability.CONSTRAINT_CATEGORIES_LIST,
+        Capability.CONSTRAINT_SYNC_STATE,
+        Capability.CONSTRAINT_SYNC_DELTA,
+        Capability.CONSTRAINT_SYNC_CONFLICTS,
+        Capability.CONSTRAINT_SYNC_PREVIEW,
+        Capability.CONSTRAINT_SYNC_APPLY,
+        Capability.CONSTRAINT_SYNC_ACKNOWLEDGE,
+        Capability.CONSTRAINT_SYNC_RESOLVE,
         # `PC-CM-IMP-WP07`'s twelve authoring names join them on the same
         # reading, and writing changes nothing about it: a Constraint mutation
         # names a Project or a record in the acting Principal's own partition and

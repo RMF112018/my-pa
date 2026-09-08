@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes one hundred and fifty-four capability names and none of them
+  ends: the transport routes one hundred and sixty-one capability names and none of them
   mutates a source, and every capability driven over the wire is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -88,7 +88,7 @@ from my_pa.application.intelligence import begin_cycle, commit_artifact
 from my_pa.application.service import ApplicationService, _normalise_bulk_mutations
 from my_pa.contracts.ports import EvidenceUnavailableError, KnowledgeRecord
 from my_pa.contracts.v1.errors import ErrorCode
-from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.common.identifiers import IdKind, make_identifier
 from my_pa.domain.common.provenance import Provenance
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal
@@ -688,6 +688,57 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         Capability.CONSTRAINTS_HISTORY: {"constraint_id": marked.constraint_id},
         Capability.CONSTRAINTS_OVERVIEW: {"project_id": marked.constraint_project_id},
         Capability.CONSTRAINT_CATEGORIES_LIST: {"project_id": marked.constraint_project_id},
+        Capability.CONSTRAINT_SYNC_STATE: {
+            "project_id": marked.constraint_project_id,
+            "target_id": make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
+        },
+        Capability.CONSTRAINT_SYNC_DELTA: {
+            "project_id": marked.constraint_project_id,
+            "target_id": make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
+        },
+        Capability.CONSTRAINT_SYNC_CONFLICTS: {
+            "project_id": marked.constraint_project_id,
+            "target_id": make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
+        },
+        Capability.CONSTRAINT_SYNC_PREVIEW: {
+            "project_id": marked.constraint_project_id,
+            "external_identity": "synthetic.xlsx#Constraints",
+            "normalization_version": "1",
+            "rows": [{"external_row_key": "row-1"}],
+            "idempotency_key": "negative-sync-preview-0001",
+        },
+        Capability.CONSTRAINT_SYNC_APPLY: {
+            "project_id": marked.constraint_project_id,
+            "target_id": make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
+            "run_id": make_identifier(IdKind.CONSTRAINT_SYNC_RUN, "syncrun000000000001"),
+            "lease_token": "a" * 64,
+            "preview_digest": "b" * 64,
+            "idempotency_key": "negative-sync-apply-0001",
+        },
+        Capability.CONSTRAINT_SYNC_ACKNOWLEDGE: {
+            "project_id": marked.constraint_project_id,
+            "target_id": make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
+            "run_id": make_identifier(IdKind.CONSTRAINT_SYNC_RUN, "syncrun000000000001"),
+            "lease_token": "a" * 64,
+            "canonical_digest": "c" * 64,
+            "item_count": 0,
+            "action_counts": {
+                "no_op": 0,
+                "import_external": 0,
+                "export_canonical": 0,
+                "merge": 0,
+                "conflict": 0,
+            },
+            "provider_version": "v1",
+            "idempotency_key": "negative-sync-ack-0001",
+        },
+        Capability.CONSTRAINT_SYNC_RESOLVE: {
+            "project_id": marked.constraint_project_id,
+            "conflict_id": make_identifier(IdKind.CONSTRAINT_SYNC_CONFLICT, "syncconflict00000001"),
+            "resolution": "keep_canonical",
+            "expected_version": 1,
+            "idempotency_key": "negative-sync-resolve-0001",
+        },
         # PC-CM-IMP-WP07's twelve Constraint Management mutations. Each names a
         # seeded record in the state its operation requires -- Publish a Draft,
         # Reopen a closed record, a reorder every Category of the Project exactly
@@ -1759,6 +1810,13 @@ SCOPED_CAPABILITIES = [
         Capability.CONSTRAINTS_HISTORY,
         Capability.CONSTRAINTS_OVERVIEW,
         Capability.CONSTRAINT_CATEGORIES_LIST,
+        Capability.CONSTRAINT_SYNC_STATE,
+        Capability.CONSTRAINT_SYNC_DELTA,
+        Capability.CONSTRAINT_SYNC_CONFLICTS,
+        Capability.CONSTRAINT_SYNC_PREVIEW,
+        Capability.CONSTRAINT_SYNC_APPLY,
+        Capability.CONSTRAINT_SYNC_ACKNOWLEDGE,
+        Capability.CONSTRAINT_SYNC_RESOLVE,
         # `PC-CM-IMP-WP07`'s twelve authoring names join them on the same
         # reading, and writing changes nothing about it: a Constraint mutation
         # names a Project or a record in the acting Principal's own partition and

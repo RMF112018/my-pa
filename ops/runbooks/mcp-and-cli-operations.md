@@ -76,7 +76,7 @@ All three transports call one function — `adapters/normalization.normalize` �
 and none of them can build a request value of its own. A request that HTTP
 refuses, MCP and the CLI refuse, with the same code, the same message, the same
 `safe_details`, and the same audit event. That is `SPEC-AC-001`, and
-`tests/contract/test_transport_parity.py` holds it over all one hundred and fifty-four capabilities.
+`tests/contract/test_transport_parity.py` holds it over all one hundred and sixty-one capabilities.
 
 Practically: **there is no capability reachable from a shell that is not
 reachable over HTTP, and no authority that comes with being local.** The CLI is
@@ -181,59 +181,50 @@ one declared capability, `tools`, and nothing else.
 ## The tool list
 
 `tools/list` returns the tools **this process can serve**, and that is not the
-same as the tools this build implements. The build implements one hundred and fifty-four, one
-per capability name. A default process publishes **sixty-six**. That is one
-hundred and thirty-six, less the six `documents.` names, the fifty-five `entities.`
-names, and the nine `relationship_memory.` names a default composition withholds.
+same as the tools this build implements. The build declares **161** capability
+names. The measured application composition with GoodNotes pull enabled has
+**91 application-available capabilities**: 161 less the six `documents.`,
+fifty-five `entities.`, and nine `relationship_memory.` capabilities whose
+composition gates remain off. A local stdio MCP session has no authenticated
+client identity, so it additionally withholds the three client-bound GoodNotes
+pull operations and publishes **88 tools**. An authenticated MCP client against
+that same 91-capability application composition sees all 91. These figures are
+derived in `test_current_state_docs_derive_the_default_capability_split` from a
+real `ApplicationService` and `published_tools`, not from a second list.
 
 **The six `documents.` tools appear only when `MY_PA_MANAGED_DOCUMENT_ROOT` is
 configured**, and nothing else gates them. There is no default location and no
 inference: with the variable unset the composition root builds no managed byte
 store, `capabilities.get` omits those names, `tools/list` omits those tools, and
 a `tools/call` naming one is refused `unsupported`. Set the variable and the
-same child publishes those six, reaching seventy of the one hundred and fifty-four. The
-remaining sixty-three are the fifty-five `entities.` names, which `D-RI-20`
+same application composition serves 97 capabilities; its unauthenticated local
+stdio MCP publication serves 94. The remaining composition-gated names are the
+fifty-five `entities.` names, which `D-RI-20`
 gates behind `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` on exactly the same terms
 — and whose thirty-eight writes need
 `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` beside it, so a process with
-the plane switch alone publishes eighty — and the nine
+the plane switch alone still withholds its write half — and the nine
 `relationship_memory.` names, which need the plane variable *and*
-`MY_PA_RELATIONSHIP_MEMORY_ENABLED`; a child publishing all one hundred and fifty-four has
+`MY_PA_RELATIONSHIP_MEMORY_ENABLED`; a child publishing all one hundred and sixty-one has
 all required feature gates and composition dependencies satisfied. An operator who expects `documents.create`
 on the list and does not find it should look at that variable first — it is the
 only thing that decides it. (Pointing the plane at real storage is `EXT-10` and
 remains operator-gated; `docs/operations/mcv-limitations.md` section 13 states
 the same gating and the plane's limits.)
 
-Measured at this head against a real child process — `.venv/bin/python
-apps/gateway.py mcp` — by
+Measured against a real child process — `.venv/bin/python apps/gateway.py mcp`
+— by
 `tests/contract/test_mcp_transport.py::test_a_real_child_process_publishes_only_what_it_was_composed_with`
-(unset: **sixty-six**, none beginning `documents.`) and
-`::test_a_child_with_a_managed_root_publishes_every_capability` (set:
-sixty-five).
+(unconfigured local stdio: 88, with the three authenticated-client capabilities
+absent) and
+`::test_a_child_with_a_managed_root_publishes_every_locally_available_capability`
+(fully feature-composed local stdio: 158, again excluding exactly those three).
 
-**Current-state correction (2026-08-22): the second figure is the measurement
-WP-29 outran, and the test beside it has not caught up.** That child is composed
-with `MY_PA_MANAGED_DOCUMENT_ROOT` and `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`
-and nothing else, and `ApplicationService.available_capabilities` withholds the
-`relationship_memory.` family unless `MY_PA_RELATIONSHIP_MEMORY_ENABLED` is set
-as well — so a child composed that way now publishes sixty-two of seventy rather
-than every capability, and the assertion under that test's name is the one that
-says so. The figure is left as measured rather than re-spelled, because nobody
-has re-run it: a runbook that states a number no one observed is the defect the
-2026-08-19 correction below was written about.
-
-**Corrected 2026-08-19: both figures above read `twenty` and neither had been
-measured.** The test named here derives what it asserts from `Capability` minus
-the withheld prefixes, so it never carried the stale figure; the prose beside it
-did, under a heading that said "Measured at this head". Twenty was the default
-count some earlier head published, and it was left standing through every
-package that widened the set — including the one that added the
-`entities.` names this same section describes. Re-derived rather than restated:
-`len(Capability)` is 54 and the two withheld families hold 6 and 6, so a default
-process publishes 42. The emphasised spelling is deliberate — it is the form
-`tests/architecture/test_spelled_counts_match_the_sets_they_name.py` reads, and
-until this correction the bare `twenty` on both lines was bound to nothing.
+**Current-state correction (2026-09-08):** earlier snapshots in this section
+mixed declared capability totals, application availability, feature-gated
+families, and local MCP publication. Their dated evidence remains in repository
+history; the current claims above replace those incomparable figures and are
+guarded against the real composition and transport filter.
 
 **Re-executed 2026-08-03** — a real `stdio_client` spawning
 `.venv/bin/python apps/gateway.py mcp` as a child process, against a disposable
@@ -270,8 +261,8 @@ that names it again is refused.
 ## Calling a tool
 
 **Current-state correction (2026-08-28):** the tool list is derived from all
-**one hundred and fifty-four** current capabilities, and the schema has
-**ninety-nine** revisions at head `f7a2c9d51e64` (`f7a2c9d51e64` is additive on `4e9a1c7b2d60` and widens the two frozen `audit_events` closed sets to admit the twelve Constraint Management authoring capabilities together with the single `constraint_authoring` purpose, and no Constraint synchronisation vocabulary (PC-CM-IMP-WP07); `4e9a1c7b2d60` is additive on `c5b71e0a8d43` and normalizes account identity plus one-time digest-backed auth grants targeting the fixed local operator; `c5b71e0a8d43` is additive on `a1c9e4b72f80` and admits the six Constraint Management read capabilities `constraints.read`, `constraints.list`, `constraints.search`, `constraints.history`, `constraints.overview`, and `constraint_categories.list` together with the single `constraint_read` purpose, and no Constraint authoring or synchronisation vocabulary (PC-CM-IMP-WP04); `a1c9e4b72f80` is additive on `2774329487be` and admits `goodnotes.notebooks.list`, `goodnotes.pages.list`, `goodnotes.runs.list`, `goodnotes.read`, `goodnotes.search`, and `goodnotes.correct` together with `goodnotes_browse`, `goodnotes_read`, and `goodnotes_correction`; `2774329487be` is additive on `e8f2a6c9d104` and adds the fourteen-table Constraint-management plane (PC-CM-IMP-WP02); `e8f2a6c9d104` is additive on `d4e8b1c7a902` and adds immutable GoodNotes client lease policy and client-scoped attempt/completion uniqueness; `d4e8b1c7a902` is additive on `a4d8e31b2c90` and adds the Principal-partitioned canvas workspace overlay; `6a2f9d1c4b80` is additive on `c3f8a1d07e94` and adds five Principal-partitioned, content-free GoodNotes pull and semantic-review ledger tables while admitting `goodnotes.pull`, `goodnotes.complete`, and `goodnotes.status` to the frozen audit vocabulary; `c3f8a1d07e94` admits `entities.graph` on `b8e4d1a6c073`; corrected 2026-09-03 from
+**one hundred and sixty-one** current capabilities, and the schema has
+**one hundred** revisions at head `b8e4d6f20a11` (`b8e4d6f20a11` is additive on `f7a2c9d51e64` for the bounded Constraint synchronization backend; `f7a2c9d51e64` is additive on `4e9a1c7b2d60` and widens the two frozen `audit_events` closed sets to admit the twelve Constraint Management authoring capabilities together with the single `constraint_authoring` purpose, and no Constraint synchronisation vocabulary (PC-CM-IMP-WP07); `4e9a1c7b2d60` is additive on `c5b71e0a8d43` and normalizes account identity plus one-time digest-backed auth grants targeting the fixed local operator; `c5b71e0a8d43` is additive on `a1c9e4b72f80` and admits the six Constraint Management read capabilities `constraints.read`, `constraints.list`, `constraints.search`, `constraints.history`, `constraints.overview`, and `constraint_categories.list` together with the single `constraint_read` purpose, and no Constraint authoring or synchronisation vocabulary (PC-CM-IMP-WP04); `a1c9e4b72f80` is additive on `2774329487be` and admits `goodnotes.notebooks.list`, `goodnotes.pages.list`, `goodnotes.runs.list`, `goodnotes.read`, `goodnotes.search`, and `goodnotes.correct` together with `goodnotes_browse`, `goodnotes_read`, and `goodnotes_correction`; `2774329487be` is additive on `e8f2a6c9d104` and adds the fourteen-table Constraint-management plane (PC-CM-IMP-WP02); `e8f2a6c9d104` is additive on `d4e8b1c7a902` and adds immutable GoodNotes client lease policy and client-scoped attempt/completion uniqueness; `d4e8b1c7a902` is additive on `a4d8e31b2c90` and adds the Principal-partitioned canvas workspace overlay; `6a2f9d1c4b80` is additive on `c3f8a1d07e94` and adds five Principal-partitioned, content-free GoodNotes pull and semantic-review ledger tables while admitting `goodnotes.pull`, `goodnotes.complete`, and `goodnotes.status` to the frozen audit vocabulary; `c3f8a1d07e94` admits `entities.graph` on `b8e4d1a6c073`; corrected 2026-09-03 from
 eighty-eight at `16f05c46b8c3`, on which `b8e4d1a6c073` is additive and
 backfills one `display`-typed `entity_names` row per active `entities` row --
 `display_value` from `entities.display_name`, `normalized_value` from

@@ -123,10 +123,12 @@ from my_pa.application import goodnotes_browse
 from my_pa.application.authorization import Authorization, authorize
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
 from my_pa.application.commands import (
+    AcknowledgeConstraintSync,
     AddEntityAddress,
     AddEntityAlias,
     AddEntityCommunicationMethod,
     AddEntityName,
+    ApplyConstraintSync,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveManagedDocumentCommand,
@@ -191,6 +193,7 @@ from my_pa.application.commands import (
     ListCommitments,
     ListConstraintCategories,
     ListConstraints,
+    ListConstraintSyncConflicts,
     ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
@@ -215,6 +218,7 @@ from my_pa.application.commands import (
     MergeEntities,
     ObserveEntityMention,
     PrepareContext,
+    PreviewConstraintSync,
     PreviewEntityMerge,
     PreviewEntitySplit,
     ProposeRelationshipMemory,
@@ -226,6 +230,8 @@ from my_pa.application.commands import (
     ReadConstraint,
     ReadConstraintHistory,
     ReadConstraintOverview,
+    ReadConstraintSyncDelta,
+    ReadConstraintSyncState,
     ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadKnowledge,
@@ -238,6 +244,7 @@ from my_pa.application.commands import (
     ReopenConstraint,
     ReorderConstraintCategories,
     Representation,
+    ResolveConstraintSyncConflict,
     ResolveEntity,
     ResolveIntelligenceSet,
     ResolveUnresolvedMention,
@@ -538,16 +545,18 @@ from my_pa.domain.project_controls.category import ConstraintCategoryError
 from my_pa.domain.project_controls.constraint import (
     ConstraintInvariantError,
     ConstraintLifecycleError,
+    ConstraintLifecycleState,
     ConstraintPublishError,
 )
 from my_pa.domain.project_controls.history import ConstraintMutationActor
-from my_pa.domain.project_controls.party import PartyRefError
+from my_pa.domain.project_controls.party import PartyKind, PartyRef, PartyRefError
 from my_pa.domain.project_controls.read_models import (
     ConstraintCursorError,
     ConstraintListQuery,
     ConstraintQueryError,
 )
 from my_pa.domain.project_controls.relationship import ConstraintRelationshipError
+from my_pa.domain.project_controls.sync import ConstraintSyncAction, NormalizedExternalConstraintRow
 from my_pa.domain.relationship.authoring import (
     AmbiguousEntityError,
     ConflictedIdentifierError,
@@ -2802,6 +2811,73 @@ def _constraint_payload(value: object) -> object:
     return value
 
 
+def _sync_request_digest(**values: object) -> str:
+    return hashlib.sha256(
+        json.dumps(values, sort_keys=True, separators=(",", ":"), default=str).encode()
+    ).hexdigest()
+
+
+def _sync_candidate(value: Mapping[str, object]) -> NormalizedExternalConstraintRow:
+    def parties(name: str) -> tuple[PartyRef, ...]:
+        raw = value.get(name, [])
+        if not isinstance(raw, list):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        return tuple(
+            PartyRef(
+                kind=PartyKind(str(item["kind"])),
+                entity_id=None if item.get("entity_id") is None else str(item["entity_id"]),
+                label=None if item.get("label") is None else str(item["label"]),
+            )
+            for item in raw
+            if isinstance(item, Mapping)
+        )
+
+    def logical_date(name: str) -> date | None:
+        raw = value.get(name)
+        return None if raw is None else date.fromisoformat(str(raw))
+
+    raw_status = value.get("status")
+    return NormalizedExternalConstraintRow(
+        external_row_key=str(value["external_row_key"]),
+        constraint_id=None if value.get("constraint_id") is None else str(value["constraint_id"]),
+        constraint_code=(
+            None if value.get("constraint_code") is None else str(value["constraint_code"])
+        ),
+        category=None if value.get("category") is None else str(value["category"]),
+        description=None if value.get("description") is None else str(value["description"]),
+        date_identified=logical_date("date_identified"),
+        status=(None if raw_status is None else ConstraintLifecycleState(str(raw_status))),
+        bic=parties("bic"),
+        responsible=parties("responsible"),
+        due_date=logical_date("due_date"),
+        reference=None if value.get("reference") is None else str(value["reference"]),
+        current_update=(
+            None if value.get("current_update") is None else str(value["current_update"])
+        ),
+        completion_date=logical_date("completion_date"),
+    )
+
+
+_SYNC_CLEARABLE_UPDATE_FIELDS: Final = frozenset(
+    {"description", "date_identified", "due_date", "reference", "current_update"}
+)
+_SYNC_VALUE_UPDATE_FIELDS: Final = _SYNC_CLEARABLE_UPDATE_FIELDS | {"bic", "responsible"}
+
+
+def _sync_update_patch(
+    candidate: NormalizedExternalConstraintRow, names: set[str]
+) -> tuple[dict[str, object], frozenset[str]]:
+    patch = {
+        name: getattr(candidate, name)
+        for name in names & _SYNC_VALUE_UPDATE_FIELDS
+        if getattr(candidate, name) is not None
+    }
+    clear_fields = frozenset(
+        name for name in names & _SYNC_CLEARABLE_UPDATE_FIELDS if getattr(candidate, name) is None
+    )
+    return patch, clear_fields
+
+
 #: The nine settable fields of `UpdateConstraint`, in the spelling
 #: `ConstraintManagementService.update` takes them. Held as one tuple so the
 #: handler builds its patch by iterating a stated list rather than by naming
@@ -3245,6 +3321,7 @@ class ApplicationService:
             # composes one without the other must be able to say so here rather
             # than by editing a single fused constant (PC-CM-IMP-WP07).
             served -= _CONSTRAINT_AUTHORING_CAPABILITIES
+            served -= _CONSTRAINT_SYNC_CAPABILITIES
         return served
 
     def invoke(
@@ -8941,6 +9018,309 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CONSTRAINT_TRUST_BASIS),
         )
 
+    # --- Constraint synchronization (PC-CM-IMP-WP11) -----------------------
+
+    def _constraint_sync_result(
+        self, authorization: Authorization, payload: Mapping[str, object]
+    ) -> _Result:
+        return _Result(
+            payload=cast(dict[str, Any], _constraint_payload(dict(payload))),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CONSTRAINT_TRUST_BASIS),
+        )
+
+    def _constraint_sync_state(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadConstraintSyncState,
+    ) -> _Result:
+        del unit_of_work
+        with self._constraint_work() as work:
+            found = cast(Any, work.constraints).read_sync_state(
+                authorization.principal.principal_id, command.project_id, command.target_id
+            )
+        if found is None:
+            raise NotFoundError()
+        return self._constraint_sync_result(authorization, found)
+
+    def _constraint_sync_delta(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadConstraintSyncDelta,
+    ) -> _Result:
+        del unit_of_work
+        with self._constraint_work() as work:
+            rows = cast(Any, work.constraints).read_sync_delta(
+                authorization.principal.principal_id,
+                command.project_id,
+                command.target_id,
+                limit=command.limit,
+                cursor=command.cursor,
+            )
+        if rows is None:
+            raise NotFoundError()
+        has_more = len(rows) > command.limit
+        page = rows[: command.limit]
+        return self._constraint_sync_result(
+            authorization,
+            {
+                "items": page,
+                "next_cursor": str(page[-1]["constraint_id"]) if has_more else None,
+            },
+        )
+
+    def _constraint_sync_conflicts(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListConstraintSyncConflicts,
+    ) -> _Result:
+        del unit_of_work
+        with self._constraint_work() as work:
+            rows = cast(Any, work.constraints).list_sync_conflicts(
+                authorization.principal.principal_id,
+                command.project_id,
+                command.target_id,
+                limit=command.limit,
+                cursor=command.cursor,
+            )
+        has_more = len(rows) > command.limit
+        page = rows[: command.limit]
+        return self._constraint_sync_result(
+            authorization,
+            {
+                "items": page,
+                "next_cursor": str(page[-1]["sync_conflict_id"]) if has_more else None,
+            },
+        )
+
+    def _constraint_sync_preview(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: PreviewConstraintSync,
+    ) -> _Result:
+        del unit_of_work
+        with self._constraint_work() as work:
+            try:
+                result = cast(Any, work.constraints).preview_sync(
+                    authorization.principal.principal_id,
+                    command.project_id,
+                    external_identity=command.external_identity,
+                    normalization_version=command.normalization_version,
+                    rows=command.rows,
+                    provider_version=command.provider_version,
+                    workbook_digest=command.workbook_digest,
+                    idempotency_key=command.idempotency_key,
+                    at=authorization.at,
+                    lease_until=authorization.at + timedelta(minutes=5),
+                )
+            except ValueError as error:
+                raise ConflictError() from error
+        return self._constraint_sync_result(authorization, result)
+
+    def _constraint_sync_apply(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ApplyConstraintSync,
+    ) -> _Result:
+        del unit_of_work
+        principal_id = authorization.principal.principal_id
+        request_digest = _sync_request_digest(
+            project_id=command.project_id,
+            target_id=command.target_id,
+            run_id=command.run_id,
+            lease_token=command.lease_token,
+            preview_digest=command.preview_digest,
+        )
+        with self._constraint_work() as work:
+            repository = cast(Any, work.constraints)
+            try:
+                prepared = repository.prepare_sync_apply(
+                    principal_id,
+                    command.project_id,
+                    command.target_id,
+                    command.run_id,
+                    lease_token=command.lease_token,
+                    preview_digest=command.preview_digest,
+                    idempotency_key=command.idempotency_key,
+                    request_digest=request_digest,
+                    at=authorization.at,
+                )
+            except ValueError as error:
+                raise ConflictError() from error
+            if prepared is None:
+                raise NotFoundError()
+            if prepared["replayed"]:
+                apply_result = prepared["apply_result"]
+                if not isinstance(apply_result, Mapping):
+                    raise InternalError()
+                return self._constraint_sync_result(authorization, apply_result)
+            applied: dict[str, tuple[int, str | None]] = {}
+            for item in prepared["items"]:
+                action = ConstraintSyncAction(str(item["action"]))
+                constraint_id = item["constraint_id"]
+                if constraint_id is None or action is ConstraintSyncAction.CONFLICT:
+                    continue
+                record = repository.read_constraint(principal_id, str(constraint_id))
+                if record is None or record.project_id != command.project_id:
+                    raise ConflictError()
+                expected_version = int(item["expected_constraint_version"])
+                if record.version != expected_version:
+                    raise ConflictError()
+                if action in {ConstraintSyncAction.IMPORT_EXTERNAL, ConstraintSyncAction.MERGE}:
+                    raw_candidate = item["external_candidate"]
+                    if not isinstance(raw_candidate, Mapping):
+                        raise InternalError()
+                    candidate = _sync_candidate(raw_candidate)
+                    names = set(item["field_names"])
+                    patch, clear_fields = _sync_update_patch(candidate, names)
+                    if patch or clear_fields:
+                        mutation = self._constraint_mutations().update(
+                            principal_id=principal_id,
+                            constraint_id=str(constraint_id),
+                            expected_version=expected_version,
+                            actor=ConstraintMutationActor.SYSTEM,
+                            values=patch,
+                            clear_fields=clear_fields,
+                            idempotency_key=(
+                                "sync_"
+                                + hashlib.sha256(
+                                    f"{command.idempotency_key}:{item['external_row_key']}:update".encode()
+                                ).hexdigest()
+                            ),
+                            correlation_id=authorization.correlation_id,
+                            active_uow=work,
+                        )
+                        record = mutation.record
+                        expected_version = record.version
+                    if "completion_date" in names and "status" not in names:
+                        raise ConflictError()
+                    if "status" in names:
+                        if candidate.status is None:
+                            raise ConflictError()
+                        if candidate.status is ConstraintLifecycleState.CLOSED:
+                            if "completion_date" not in names or candidate.completion_date is None:
+                                raise ConflictError()
+                            if record.lifecycle_state is ConstraintLifecycleState.CLOSED:
+                                raise ConflictError()
+                            mutation = self._constraint_mutations().close(
+                                principal_id=principal_id,
+                                constraint_id=str(constraint_id),
+                                expected_version=expected_version,
+                                actor=ConstraintMutationActor.SYSTEM,
+                                completion_date=candidate.completion_date,
+                                idempotency_key=(
+                                    "sync_"
+                                    + hashlib.sha256(
+                                        f"{command.idempotency_key}:{item['external_row_key']}:close".encode()
+                                    ).hexdigest()
+                                ),
+                                correlation_id=authorization.correlation_id,
+                                active_uow=work,
+                            )
+                            record = mutation.record
+                        elif candidate.completion_date is not None:
+                            raise ConflictError()
+                        elif candidate.status != record.lifecycle_state:
+                            mutation = self._constraint_mutations().transition_active(
+                                principal_id=principal_id,
+                                constraint_id=str(constraint_id),
+                                target_state=candidate.status,
+                                expected_version=expected_version,
+                                actor=ConstraintMutationActor.SYSTEM,
+                                idempotency_key=(
+                                    "sync_"
+                                    + hashlib.sha256(
+                                        f"{command.idempotency_key}:{item['external_row_key']}:state".encode()
+                                    ).hexdigest()
+                                ),
+                                correlation_id=authorization.correlation_id,
+                                active_uow=work,
+                            )
+                            record = mutation.record
+                revision_id = repository.current_sync_revision(principal_id, str(constraint_id))
+                applied[str(item["external_row_key"])] = (record.version, revision_id)
+            apply_result = repository.complete_sync_apply(
+                principal_id, command.run_id, applied=applied, at=authorization.at
+            )
+        return self._constraint_sync_result(authorization, apply_result)
+
+    def _constraint_sync_acknowledge(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: AcknowledgeConstraintSync,
+    ) -> _Result:
+        del unit_of_work
+        request_digest = _sync_request_digest(
+            project_id=command.project_id,
+            target_id=command.target_id,
+            run_id=command.run_id,
+            canonical_digest=command.canonical_digest,
+            item_count=command.item_count,
+            action_counts=dict(command.action_counts),
+            provider_version=command.provider_version,
+            workbook_digest=command.workbook_digest,
+        )
+        with self._constraint_work() as work:
+            try:
+                result = cast(Any, work.constraints).acknowledge_sync(
+                    authorization.principal.principal_id,
+                    command.project_id,
+                    command.target_id,
+                    command.run_id,
+                    lease_token=command.lease_token,
+                    canonical_digest=command.canonical_digest,
+                    item_count=command.item_count,
+                    action_counts=command.action_counts,
+                    provider_version=command.provider_version,
+                    workbook_digest=command.workbook_digest,
+                    idempotency_key=command.idempotency_key,
+                    request_digest=request_digest,
+                    at=authorization.at,
+                )
+            except ValueError as error:
+                raise ConflictError() from error
+        if result is None:
+            raise NotFoundError()
+        if result.get("verification_failed") is True:
+            raise ConflictError()
+        return self._constraint_sync_result(authorization, result)
+
+    def _constraint_sync_resolve(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ResolveConstraintSyncConflict,
+    ) -> _Result:
+        del unit_of_work
+        # Persistence owns the append-only receipt and WP06 owns any canonical
+        # mutation. The concrete resolver is intentionally invoked only after
+        # authenticated authorization has selected this handler.
+        with self._constraint_work() as work:
+            try:
+                result = cast(Any, work.constraints).resolve_sync_conflict(
+                    authorization.principal.principal_id,
+                    command.project_id,
+                    command.conflict_id,
+                    resolution=command.resolution,
+                    expected_version=command.expected_version,
+                    manual_patch=command.manual_patch,
+                    idempotency_key=command.idempotency_key,
+                    at=authorization.at,
+                    mutation_service=self._constraint_mutations(),
+                    active_uow=work,
+                    correlation_id=authorization.correlation_id,
+                )
+            except ValueError as error:
+                raise ConflictError() from error
+        if result is None:
+            raise NotFoundError()
+        return self._constraint_sync_result(authorization, result)
+
     # --- Constraint Management authoring (PC-CM-IMP-WP07) ---------------------
     #
     # Twelve handlers, each exactly three statements' worth of work: resolve the
@@ -11484,6 +11864,13 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
             ApplicationService._constraint_categories_deactivate
         ),
         Capability.CONSTRAINT_CATEGORIES_REORDER: ApplicationService._constraint_categories_reorder,
+        Capability.CONSTRAINT_SYNC_STATE: ApplicationService._constraint_sync_state,
+        Capability.CONSTRAINT_SYNC_DELTA: ApplicationService._constraint_sync_delta,
+        Capability.CONSTRAINT_SYNC_CONFLICTS: ApplicationService._constraint_sync_conflicts,
+        Capability.CONSTRAINT_SYNC_PREVIEW: ApplicationService._constraint_sync_preview,
+        Capability.CONSTRAINT_SYNC_APPLY: ApplicationService._constraint_sync_apply,
+        Capability.CONSTRAINT_SYNC_ACKNOWLEDGE: ApplicationService._constraint_sync_acknowledge,
+        Capability.CONSTRAINT_SYNC_RESOLVE: ApplicationService._constraint_sync_resolve,
         Capability.CONTEXT_PREPARE: ApplicationService._context_prepare,
         Capability.CONTEXT_FEEDBACK: ApplicationService._context_feedback,
         Capability.GOODNOTES_WORK: ApplicationService._goodnotes_work,
@@ -11836,6 +12223,18 @@ _CONSTRAINT_AUTHORING_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.CONSTRAINT_CATEGORIES_UPDATE,
         Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
         Capability.CONSTRAINT_CATEGORIES_REORDER,
+    }
+)
+
+_CONSTRAINT_SYNC_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.CONSTRAINT_SYNC_STATE,
+        Capability.CONSTRAINT_SYNC_DELTA,
+        Capability.CONSTRAINT_SYNC_CONFLICTS,
+        Capability.CONSTRAINT_SYNC_PREVIEW,
+        Capability.CONSTRAINT_SYNC_APPLY,
+        Capability.CONSTRAINT_SYNC_ACKNOWLEDGE,
+        Capability.CONSTRAINT_SYNC_RESOLVE,
     }
 )
 

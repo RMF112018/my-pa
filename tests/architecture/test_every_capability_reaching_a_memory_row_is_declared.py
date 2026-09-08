@@ -949,6 +949,14 @@ UNTYPED_PORT_CALL_SITES: Final[frozenset[tuple[str, str]]] = frozenset()
 #: declared with what it looks up: those cannot be read at all, and the claim
 #: about them is only that each has been.
 DYNAMIC_ATTRIBUTE_LOOKUPS: Final[dict[tuple[str, str], str]] = {
+    ("my_pa.application.service", "getattr(candidate, name)"): (
+        "the Constraint sync apply path reads one of an exact closed set of normalized DTO "
+        "fields; the receiver is a value object and holds no port"
+    ),
+    ("my_pa.infrastructure.persistence.constraints", "getattr(candidate, name)"): (
+        "the Constraint sync persistence serializer reads the same exact normalized DTO field "
+        "set; the receiver is a value object and the lookup does not select a method"
+    ),
     ("my_pa.application.context.providers", "getattr(continuity, method_name, None)"): (
         "`method_name` comes from the three-tuple `listers` immediately above it — "
         "`commitments`, `decisions`, `tasks` — none of which is a method of any port "

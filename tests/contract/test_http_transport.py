@@ -2,7 +2,7 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the one hundred and fifty-four capabilities is addressable
+**Reachability.** Every one of the one hundred and sixty-one capabilities is addressable
 over HTTP and answers. Parametrised over `Capability` rather than over a list
 written here, so the next capability added to the domain arrives as
 a failing row instead of as an untested one. Fourteen of the one hundred and forty-two answer a
@@ -52,6 +52,7 @@ from tests.conftest import (
     FakeUnitOfWork,
     Scene,
     World,
+    _ConstraintReads,
     build_service,
     metadata_for,
     operator,
@@ -85,10 +86,12 @@ from my_pa.adapters.http import create_http_app
 from my_pa.adapters.http.app import _STATUS
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
 from my_pa.application.commands import (
+    AcknowledgeConstraintSync,
     AddEntityAddress,
     AddEntityAlias,
     AddEntityCommunicationMethod,
     AddEntityName,
+    ApplyConstraintSync,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
@@ -151,6 +154,7 @@ from my_pa.application.commands import (
     ListCommitments,
     ListConstraintCategories,
     ListConstraints,
+    ListConstraintSyncConflicts,
     ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
@@ -174,6 +178,7 @@ from my_pa.application.commands import (
     MergeEntities,
     ObserveEntityMention,
     PrepareContext,
+    PreviewConstraintSync,
     PreviewEntityMerge,
     PreviewEntitySplit,
     ProposeRelationshipMemory,
@@ -185,6 +190,8 @@ from my_pa.application.commands import (
     ReadConstraint,
     ReadConstraintHistory,
     ReadConstraintOverview,
+    ReadConstraintSyncDelta,
+    ReadConstraintSyncState,
     ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadKnowledge,
@@ -196,6 +203,7 @@ from my_pa.application.commands import (
     ReopenConstraint,
     ReorderConstraintCategories,
     Representation,
+    ResolveConstraintSyncConflict,
     ResolveEntity,
     ResolveIntelligenceSet,
     ResolveUnresolvedMention,
@@ -267,6 +275,10 @@ from my_pa.domain.intelligence.catalog import (
 )
 from my_pa.domain.project_controls.constraint import ConstraintLifecycleState
 from my_pa.domain.project_controls.party import PartyKind, PartyRef
+from my_pa.domain.project_controls.sync import (
+    ConstraintSyncResolution,
+    NormalizedExternalConstraintRow,
+)
 from my_pa.domain.relationship.authoring import CallerNamespace
 from my_pa.domain.relationship.entity import (
     AddressTypeCode,
@@ -800,6 +812,57 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.CONSTRAINTS_HISTORY: {"constraint_id": scene.constraint_id},
         Capability.CONSTRAINTS_OVERVIEW: {"project_id": scene.constraint_project_id},
         Capability.CONSTRAINT_CATEGORIES_LIST: {"project_id": scene.constraint_project_id},
+        Capability.CONSTRAINT_SYNC_STATE: {
+            "project_id": scene.constraint_project_id,
+            "target_id": make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
+        },
+        Capability.CONSTRAINT_SYNC_DELTA: {
+            "project_id": scene.constraint_project_id,
+            "target_id": make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
+        },
+        Capability.CONSTRAINT_SYNC_CONFLICTS: {
+            "project_id": scene.constraint_project_id,
+            "target_id": make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
+        },
+        Capability.CONSTRAINT_SYNC_PREVIEW: {
+            "project_id": scene.constraint_project_id,
+            "external_identity": "synthetic.xlsx#Constraints",
+            "normalization_version": "1",
+            "rows": [{"external_row_key": "row-1"}],
+            "idempotency_key": "http-sync-preview-0001",
+        },
+        Capability.CONSTRAINT_SYNC_APPLY: {
+            "project_id": scene.constraint_project_id,
+            "target_id": make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
+            "run_id": make_identifier(IdKind.CONSTRAINT_SYNC_RUN, "syncrun000000000001"),
+            "lease_token": "a" * 64,
+            "preview_digest": "b" * 64,
+            "idempotency_key": "http-sync-apply-0001",
+        },
+        Capability.CONSTRAINT_SYNC_ACKNOWLEDGE: {
+            "project_id": scene.constraint_project_id,
+            "target_id": make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
+            "run_id": make_identifier(IdKind.CONSTRAINT_SYNC_RUN, "syncrun000000000001"),
+            "lease_token": "a" * 64,
+            "canonical_digest": "c" * 64,
+            "item_count": 0,
+            "action_counts": {
+                "no_op": 0,
+                "import_external": 0,
+                "export_canonical": 0,
+                "merge": 0,
+                "conflict": 0,
+            },
+            "provider_version": "v1",
+            "idempotency_key": "http-sync-ack-0001",
+        },
+        Capability.CONSTRAINT_SYNC_RESOLVE: {
+            "project_id": scene.constraint_project_id,
+            "conflict_id": make_identifier(IdKind.CONSTRAINT_SYNC_CONFLICT, "syncconflict00000001"),
+            "resolution": "keep_canonical",
+            "expected_version": 1,
+            "idempotency_key": "http-sync-resolve-0001",
+        },
         # PC-CM-IMP-WP07's twelve Constraint Management mutations. Each names a
         # seeded record in the state its operation requires -- Publish a Draft,
         # Reopen a closed record, a reorder every Category of the Project exactly
@@ -1677,6 +1740,57 @@ def commands_for(
         Capability.CONSTRAINT_CATEGORIES_LIST: ListConstraintCategories(
             project_id=scene.constraint_project_id
         ),
+        Capability.CONSTRAINT_SYNC_STATE: ReadConstraintSyncState(
+            project_id=scene.constraint_project_id,
+            target_id=make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
+        ),
+        Capability.CONSTRAINT_SYNC_DELTA: ReadConstraintSyncDelta(
+            project_id=scene.constraint_project_id,
+            target_id=make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
+        ),
+        Capability.CONSTRAINT_SYNC_CONFLICTS: ListConstraintSyncConflicts(
+            project_id=scene.constraint_project_id,
+            target_id=make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
+        ),
+        Capability.CONSTRAINT_SYNC_PREVIEW: PreviewConstraintSync(
+            project_id=scene.constraint_project_id,
+            external_identity="synthetic.xlsx#Constraints",
+            normalization_version="1",
+            rows=(NormalizedExternalConstraintRow(external_row_key="row-1"),),
+            idempotency_key="http-sync-preview-0001",
+        ),
+        Capability.CONSTRAINT_SYNC_APPLY: ApplyConstraintSync(
+            project_id=scene.constraint_project_id,
+            target_id=make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
+            run_id=make_identifier(IdKind.CONSTRAINT_SYNC_RUN, "syncrun000000000001"),
+            lease_token="a" * 64,
+            preview_digest="b" * 64,
+            idempotency_key="http-sync-apply-0001",
+        ),
+        Capability.CONSTRAINT_SYNC_ACKNOWLEDGE: AcknowledgeConstraintSync(
+            project_id=scene.constraint_project_id,
+            target_id=make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
+            run_id=make_identifier(IdKind.CONSTRAINT_SYNC_RUN, "syncrun000000000001"),
+            lease_token="a" * 64,
+            canonical_digest="c" * 64,
+            item_count=0,
+            action_counts={
+                "no_op": 0,
+                "import_external": 0,
+                "export_canonical": 0,
+                "merge": 0,
+                "conflict": 0,
+            },
+            provider_version="v1",
+            idempotency_key="http-sync-ack-0001",
+        ),
+        Capability.CONSTRAINT_SYNC_RESOLVE: ResolveConstraintSyncConflict(
+            project_id=scene.constraint_project_id,
+            conflict_id=make_identifier(IdKind.CONSTRAINT_SYNC_CONFLICT, "syncconflict00000001"),
+            resolution=ConstraintSyncResolution.KEEP_CANONICAL,
+            expected_version=1,
+            idempotency_key="http-sync-resolve-0001",
+        ),
         # PC-CM-IMP-WP07's twelve authoring commands, written as what the payload
         # table above must normalise to: the closed vocabularies as their enum
         # members, the ISO dates as `date`, and the party arrays as `PartyRef`.
@@ -2239,6 +2353,31 @@ def test_every_capability_is_reachable_over_http(
     assert envelope["disclosure"] is not None
     assert envelope["request_id"] == f"req-{capability.value}"
     assert envelope["contract_version"] == "v1"
+
+
+def test_constraint_sync_delta_hidden_targets_are_identical_not_found_over_http(
+    scene: Scene, wire: Wire, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(_ConstraintReads, "read_sync_delta", lambda *_args, **_kwargs: None)
+    refusals = []
+    for project_id, target_id in (
+        (scene.constraint_project_id, "csyt_absent00000001"),
+        ("prj_foreign00000001", "csyt_foreign0000001"),
+        (scene.constraint_project_id, "csyt_otherproject001"),
+    ):
+        reply = wire.send(
+            Capability.CONSTRAINT_SYNC_DELTA.value,
+            document_for(
+                Capability.CONSTRAINT_SYNC_DELTA,
+                scene,
+                {"project_id": project_id, "target_id": target_id, "limit": 7},
+            ),
+        )
+        document = reply.document()
+        refusals.append(
+            (reply.status, document["error"]["code"], document["error"]["safe_details"])
+        )
+    assert refusals == [(404, ErrorCode.NOT_FOUND.value, [])] * 3
 
 
 @pytest.mark.parametrize("reference", ["cap_unknown001unknown001", "asrt_unknown01unknown01"])
@@ -3287,6 +3426,124 @@ def test_an_unknown_field_in_the_payload_is_refused(scene: Scene, wire: Wire) ->
         Capability.SOURCES_LIST, scene, {"source_id": scene.source.source_id, "recurse": True}
     )
     assert_refused(wire.send("sources.list", document))
+
+
+@pytest.mark.parametrize(
+    ("field", "malformed"),
+    [
+        ("bic", [{"kind": "bogus"}]),
+        ("responsible", [{"kind": "unresolved"}]),
+        ("bic", "principal"),
+        ("responsible", {"kind": "principal"}),
+        ("bic", [[{"kind": "principal"}]]),
+    ],
+)
+def test_http_refuses_malformed_external_sync_parties(
+    scene: Scene, wire: Wire, field: str, malformed: object
+) -> None:
+    document = document_for(
+        Capability.CONSTRAINT_SYNC_PREVIEW,
+        scene,
+        {
+            "project_id": scene.constraint_project_id,
+            "external_identity": "synthetic-workbook-identity-0001",
+            "normalization_version": "1",
+            "rows": [{"external_row_key": "row-1", field: malformed}],
+            "idempotency_key": "http-sync-party-invalid-0001",
+        },
+    )
+    reply = wire.send(Capability.CONSTRAINT_SYNC_PREVIEW.value, document)
+    assert reply.status == 400
+    refusal = reply.document()
+    assert refusal["code"] == ErrorCode.INVALID_REQUEST.value
+    assert refusal["retry"] == "after_correction"
+    assert refusal["safe_details"] == ["selector"]
+    for fragment in INTERNAL_TEXT:
+        assert fragment not in reply.rendered()
+
+
+@pytest.mark.parametrize(
+    "manual_patch",
+    [
+        {"description": "x" * 4097},
+        {"current_update": "x" * 4097},
+        {"reference": "x" * 1025},
+        {"bic": [{"kind": "principal"}] * 33},
+        {"responsible": [{"kind": "unresolved", "label": "x" * 513}]},
+        {"responsible": [{"kind": "unresolved", "label": 42}]},
+        {"bic": [{"kind": "unknown"}]},
+    ],
+)
+def test_http_refuses_out_of_contract_manual_sync_patches(
+    scene: Scene, wire: Wire, manual_patch: dict[str, object]
+) -> None:
+    document = document_for(
+        Capability.CONSTRAINT_SYNC_RESOLVE,
+        scene,
+        {
+            "project_id": scene.constraint_project_id,
+            "conflict_id": "csyc_12345678",
+            "resolution": "manual_patch",
+            "expected_version": 1,
+            "idempotency_key": "http-sync-resolve-bounds-0001",
+            "manual_patch": manual_patch,
+        },
+    )
+    reply = wire.send(Capability.CONSTRAINT_SYNC_RESOLVE.value, document)
+    assert reply.status == 400
+    refusal = reply.document()
+    assert refusal["code"] == ErrorCode.INVALID_REQUEST.value
+    assert refusal["retry"] == "after_correction"
+    assert refusal["safe_details"] in (["text"], ["selector"])
+    for fragment in INTERNAL_TEXT:
+        assert fragment not in reply.rendered()
+
+
+@pytest.mark.parametrize(
+    "manual_patch",
+    [
+        {"description": "x" * 4096},
+        {"current_update": "x" * 4096},
+        {"reference": "x" * 1024},
+        {"bic": [{"kind": "principal"}] * 32},
+        {"responsible": [{"kind": "unresolved", "label": "x" * 512}]},
+    ],
+)
+def test_http_admits_exact_manual_sync_patch_boundaries(
+    scene: Scene, wire: Wire, manual_patch: dict[str, object]
+) -> None:
+    document = document_for(
+        Capability.CONSTRAINT_SYNC_RESOLVE,
+        scene,
+        {
+            "project_id": scene.constraint_project_id,
+            "conflict_id": "csyc_12345678",
+            "resolution": "manual_patch",
+            "expected_version": 1,
+            "idempotency_key": "http-sync-resolve-boundary-0001",
+            "manual_patch": manual_patch,
+        },
+    )
+    reply = wire.send(Capability.CONSTRAINT_SYNC_RESOLVE.value, document)
+    assert reply.status == 200
+    assert reply.document()["result"]["state"] == "resolved"
+
+
+def test_http_admits_the_named_reopen_sync_resolution(scene: Scene, wire: Wire) -> None:
+    document = document_for(
+        Capability.CONSTRAINT_SYNC_RESOLVE,
+        scene,
+        {
+            "project_id": scene.constraint_project_id,
+            "conflict_id": "csyc_12345678",
+            "resolution": "reopen",
+            "expected_version": 1,
+            "idempotency_key": "http-sync-reopen-0001",
+        },
+    )
+    reply = wire.send(Capability.CONSTRAINT_SYNC_RESOLVE.value, document)
+    assert reply.status == 200
+    assert reply.document()["result"]["state"] == "resolved"
 
 
 def test_a_capability_named_in_the_document_as_well_is_refused(scene: Scene, wire: Wire) -> None:

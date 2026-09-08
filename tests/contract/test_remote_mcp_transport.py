@@ -375,6 +375,10 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.CONSTRAINT_CATEGORIES_UPDATE,
         Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
         Capability.CONSTRAINT_CATEGORIES_REORDER,
+        Capability.CONSTRAINT_SYNC_PREVIEW,
+        Capability.CONSTRAINT_SYNC_APPLY,
+        Capability.CONSTRAINT_SYNC_ACKNOWLEDGE,
+        Capability.CONSTRAINT_SYNC_RESOLVE,
     }
     destructive_writes = {
         Capability.CAPTURE_REVISE,
@@ -450,6 +454,12 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.CONSTRAINT_CATEGORIES_UPDATE,
         Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
         Capability.CONSTRAINT_CATEGORIES_REORDER,
+        # WP11's four commands all reach durable run, baseline, conflict,
+        # resolution, or canonical state and are intentionally non-additive.
+        Capability.CONSTRAINT_SYNC_PREVIEW,
+        Capability.CONSTRAINT_SYNC_APPLY,
+        Capability.CONSTRAINT_SYNC_ACKNOWLEDGE,
+        Capability.CONSTRAINT_SYNC_RESOLVE,
     }
     for capability in Capability:
         tool = tools.get(capability.value)

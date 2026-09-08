@@ -1,19 +1,18 @@
 """The Constraint Management tables, behind `contracts.ports.ConstraintManagementRepository`.
 
-PC-CM-IMP-WP02 wrote the mutation seam; PC-CM-IMP-WP03 added the read plane
-beside it. Eleven of the fourteen tables §C declares now have a concrete caller
-and are reached here: the eight WP02 wrote through — `constraint_project_settings`,
+PC-CM-IMP-WP02 wrote the mutation seam; PC-CM-IMP-WP03 added the read plane,
+and PC-CM-IMP-WP11 added the bounded synchronization repository beside it. The
+canonical, read, and active synchronization tables are reached here: the eight
+WP02 wrote through — `constraint_project_settings`,
 `constraint_categories`, `project_constraints`, `project_constraint_parties`,
 `project_constraint_revisions`, `project_constraint_revision_parties`,
 `project_constraint_history` and `constraint_category_history` — plus the three
-WP03 reads and never writes: `project_constraint_relationships`,
-`project_constraint_evidence_links` and, read-only, the sync trio
-`constraint_sync_targets`, `constraint_sync_baselines` and
-`constraint_sync_conflicts`. `constraint_sync_runs` still has no caller: a run
-is behavior, and reading one would not tell a reader anything a baseline and an
-open conflict do not already say. Nothing in this module writes to any sync
-table, starts a run, takes a lease, or reads a workbook — that is WP11's, and a
-read plane that did it would be doing sync rather than reporting it.
+WP03 reads and never writes: `project_constraint_relationships` and
+`project_constraint_evidence_links`. WP11 reads and writes the active sync
+targets, runs, baselines, conflicts, run items, and append-only resolution
+history. It accepts only normalized provider-neutral rows and never reads or
+writes a workbook. The database-only legacy-unbound quarantine has deliberately
+no runtime caller, so predecessor history cannot act as cross-target authority.
 
 **The write path and the read path hydrate differently, on purpose.**
 `_to_constraint` builds the strict WP01 aggregate and is what `get` and
@@ -57,11 +56,12 @@ work package (WP13) along with the importer that creates one.
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Collection, Mapping, Sequence
 from contextlib import AbstractContextManager
 from datetime import UTC, date, datetime, timedelta
 from types import TracebackType
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from sqlalchemy import (
     ColumnElement,
@@ -77,6 +77,7 @@ from sqlalchemy import (
     func,
     insert,
     literal,
+    null,
     or_,
     select,
     type_coerce,
@@ -131,6 +132,20 @@ from my_pa.domain.project_controls.read_models import (
 from my_pa.domain.project_controls.relationship import ConstraintRelationship
 from my_pa.domain.project_controls.revision import ConstraintRevision
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
+from my_pa.domain.project_controls.sync import (
+    MAX_SYNC_ROWS,
+    ConstraintSyncAction,
+    ConstraintSyncBaseline,
+    ConstraintSyncConflictKind,
+    ConstraintSyncDecision,
+    ConstraintSyncResolution,
+    ConstraintSyncRunState,
+    ConstraintSyncState,
+    NormalizedExternalConstraintRow,
+    candidate_json,
+    compare_three_way,
+)
+from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
     matching_partition_criterion,
@@ -144,6 +159,9 @@ from my_pa.infrastructure.persistence.tables import (
     constraint_project_settings,
     constraint_sync_baselines,
     constraint_sync_conflicts,
+    constraint_sync_resolution_history,
+    constraint_sync_run_items,
+    constraint_sync_runs,
     constraint_sync_targets,
     entities,
     project_constraint_evidence_links,
@@ -162,6 +180,45 @@ __all__ = ["SqlAlchemyConstraintManagementUnitOfWork", "SqlConstraintManagementR
 #: domain names the two collections as fields rather than as an enum.
 _BIC_ROLE: Final = "bic"
 _RESPONSIBLE_ROLE: Final = "responsible"
+
+
+def _sync_preview_request_digest(
+    *,
+    project_id: str,
+    external_identity: str,
+    normalization_version: str,
+    provider_version: str | None,
+    workbook_digest: str | None,
+    rows: tuple[NormalizedExternalConstraintRow, ...],
+) -> str:
+    request_values = {
+        "project_id": project_id,
+        "external_identity": external_identity,
+        "normalization_version": normalization_version,
+        "provider_version": provider_version,
+        "workbook_digest": workbook_digest,
+        "rows": [
+            row.logical_values()
+            | {"external_row_key": row.external_row_key, "constraint_id": row.constraint_id}
+            for row in rows
+        ],
+    }
+    return hashlib.sha256(
+        json.dumps(request_values, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _sync_preview_state(decisions: Sequence[ConstraintSyncDecision]) -> ConstraintSyncState:
+    if any(decision.action is ConstraintSyncAction.CONFLICT for decision in decisions):
+        return ConstraintSyncState.CONFLICT
+    if any(
+        decision.action in {ConstraintSyncAction.IMPORT_EXTERNAL, ConstraintSyncAction.MERGE}
+        for decision in decisions
+    ):
+        return ConstraintSyncState.EXTERNAL_IMPORT_PENDING
+    if any(decision.action is ConstraintSyncAction.EXPORT_CANONICAL for decision in decisions):
+        return ConstraintSyncState.DB_EXPORT_PENDING
+    return ConstraintSyncState.IN_SYNC
 
 
 def _mine(table: Table, principal_id: str) -> ColumnElement[bool]:
@@ -210,6 +267,47 @@ def _split_parties(rows: list[Row[Any]]) -> tuple[tuple[PartyRef, ...], tuple[Pa
     bic = tuple(_to_party(row) for row in rows if row._mapping["role"] == _BIC_ROLE)
     responsible = tuple(_to_party(row) for row in rows if row._mapping["role"] == _RESPONSIBLE_ROLE)
     return bic, responsible
+
+
+def _candidate_from_json(value: Mapping[str, object]) -> NormalizedExternalConstraintRow:
+    def parties(name: str) -> tuple[PartyRef, ...]:
+        raw = value.get(name, [])
+        if not isinstance(raw, list):
+            raise ValueError("a candidate party collection is invalid")
+        return tuple(
+            PartyRef(
+                kind=PartyKind(str(item["kind"])),
+                entity_id=None if item.get("entity_id") is None else str(item["entity_id"]),
+                label=None if item.get("label") is None else str(item["label"]),
+            )
+            for item in raw
+            if isinstance(item, Mapping)
+        )
+
+    def logical_date(name: str) -> date | None:
+        raw = value.get(name)
+        return None if raw is None else date.fromisoformat(str(raw))
+
+    raw_status = value.get("status")
+    return NormalizedExternalConstraintRow(
+        external_row_key=str(value["external_row_key"]),
+        constraint_id=None if value.get("constraint_id") is None else str(value["constraint_id"]),
+        constraint_code=(
+            None if value.get("constraint_code") is None else str(value["constraint_code"])
+        ),
+        category=None if value.get("category") is None else str(value["category"]),
+        description=None if value.get("description") is None else str(value["description"]),
+        date_identified=logical_date("date_identified"),
+        status=(None if raw_status is None else ConstraintLifecycleState(str(raw_status))),
+        bic=parties("bic"),
+        responsible=parties("responsible"),
+        due_date=logical_date("due_date"),
+        reference=None if value.get("reference") is None else str(value["reference"]),
+        current_update=(
+            None if value.get("current_update") is None else str(value["current_update"])
+        ),
+        completion_date=logical_date("completion_date"),
+    )
 
 
 def _to_settings(row: Row[Any]) -> ConstraintProjectSettings:
@@ -1971,6 +2069,1402 @@ class SqlConstraintManagementRepository(ConstraintManagementRepository):
             open_age_business_day_sum=int(mapping["open_age_sum"]),
             open_age_denominator=mapping["open_age_denominator"],
         )
+
+    # --- Constraint synchronization (PC-CM-IMP-WP11) -------------------
+
+    def read_sync_state(
+        self, principal_id: str, project_id: str, sync_target_id: str
+    ) -> Mapping[str, object] | None:
+        target = self._connection.execute(
+            principal_scoped(
+                select(*constraint_sync_targets.c),
+                constraint_sync_targets,
+                capture_context(principal_id),
+            ).where(
+                constraint_sync_targets.c.project_id == project_id,
+                constraint_sync_targets.c.sync_target_id == sync_target_id,
+            )
+        ).one_or_none()
+        if target is None:
+            return None
+        mapping = target._mapping
+        run = None
+        if mapping["last_run_id"] is not None:
+            run = self._connection.execute(
+                principal_scoped(
+                    select(*constraint_sync_runs.c),
+                    constraint_sync_runs,
+                    capture_context(principal_id),
+                ).where(
+                    constraint_sync_runs.c.project_id == project_id,
+                    constraint_sync_runs.c.sync_target_id == sync_target_id,
+                    constraint_sync_runs.c.sync_run_id == mapping["last_run_id"],
+                )
+            ).one_or_none()
+        state = (
+            ConstraintSyncState.NEVER_SYNCED.value if run is None else run._mapping["sync_state"]
+        )
+        active_run_id = mapping["active_run_id"]
+        if active_run_id is not None:
+            active_run_id = self._connection.execute(
+                principal_scoped(
+                    select(constraint_sync_runs.c.sync_run_id),
+                    constraint_sync_runs,
+                    capture_context(principal_id),
+                ).where(
+                    constraint_sync_runs.c.project_id == project_id,
+                    constraint_sync_runs.c.sync_target_id == sync_target_id,
+                    constraint_sync_runs.c.sync_run_id == active_run_id,
+                )
+            ).scalar_one_or_none()
+        return {
+            "target_id": sync_target_id,
+            "project_id": project_id,
+            "state": state,
+            "last_run_id": None if run is None else mapping["last_run_id"],
+            "last_verified_at": mapping["last_verified_at"],
+            "last_verified_provider_version": mapping["last_verified_provider_version"],
+            "active_run_id": active_run_id,
+            "active_run_lease_until": (
+                mapping["active_run_lease_until"] if active_run_id is not None else None
+            ),
+        }
+
+    def read_sync_delta(
+        self,
+        principal_id: str,
+        project_id: str,
+        sync_target_id: str,
+        *,
+        limit: int,
+        cursor: str | None,
+    ) -> tuple[Mapping[str, object], ...] | None:
+        target = self._connection.execute(
+            principal_scoped(
+                select(constraint_sync_targets.c.sync_target_id),
+                constraint_sync_targets,
+                capture_context(principal_id),
+            ).where(
+                constraint_sync_targets.c.project_id == project_id,
+                constraint_sync_targets.c.sync_target_id == sync_target_id,
+            )
+        ).one_or_none()
+        if target is None:
+            return None
+        statement = (
+            principal_scoped(
+                select(
+                    project_constraints.c.constraint_id,
+                    project_constraints.c.version,
+                    project_constraints.c.current_revision_id,
+                    constraint_sync_baselines.c.baseline_constraint_version,
+                    constraint_sync_baselines.c.baseline_record_digest,
+                ).select_from(
+                    project_constraints.outerjoin(
+                        constraint_sync_baselines,
+                        and_(
+                            matching_partition_criterion(
+                                project_constraints, constraint_sync_baselines
+                            ),
+                            constraint_sync_baselines.c.constraint_id
+                            == project_constraints.c.constraint_id,
+                            constraint_sync_baselines.c.sync_target_id == sync_target_id,
+                        ),
+                    )
+                ),
+                project_constraints,
+                capture_context(principal_id),
+            )
+            .where(
+                project_constraints.c.project_id == project_id,
+                or_(
+                    constraint_sync_baselines.c.constraint_id.is_(None),
+                    constraint_sync_baselines.c.baseline_constraint_version
+                    != project_constraints.c.version,
+                ),
+            )
+            .order_by(asc(project_constraints.c.constraint_id))
+            .limit(limit + 1)
+        )
+        if cursor is not None:
+            statement = statement.where(project_constraints.c.constraint_id > cursor)
+        return tuple(dict(row._mapping) for row in self._connection.execute(statement).all())
+
+    def list_sync_conflicts(
+        self,
+        principal_id: str,
+        project_id: str,
+        sync_target_id: str,
+        *,
+        limit: int,
+        cursor: str | None,
+    ) -> tuple[Mapping[str, object], ...]:
+        statement = (
+            principal_scoped(
+                select(
+                    constraint_sync_conflicts.c.sync_conflict_id,
+                    constraint_sync_conflicts.c.constraint_id,
+                    constraint_sync_conflicts.c.sync_run_id,
+                    constraint_sync_conflicts.c.conflict_kind,
+                    constraint_sync_conflicts.c.field_names,
+                    constraint_sync_conflicts.c.baseline_revision_id,
+                    constraint_sync_conflicts.c.db_version,
+                    constraint_sync_conflicts.c.provider_version,
+                    constraint_sync_conflicts.c.external_candidate_digest,
+                    constraint_sync_conflicts.c.state,
+                    constraint_sync_conflicts.c.created_at,
+                    constraint_sync_conflicts.c.resolved_at,
+                ),
+                constraint_sync_conflicts,
+                capture_context(principal_id),
+            )
+            .where(
+                constraint_sync_conflicts.c.project_id == project_id,
+                constraint_sync_conflicts.c.sync_target_id == sync_target_id,
+            )
+            .order_by(asc(constraint_sync_conflicts.c.sync_conflict_id))
+            .limit(limit + 1)
+        )
+        if cursor is not None:
+            statement = statement.where(constraint_sync_conflicts.c.sync_conflict_id > cursor)
+        return tuple(dict(row._mapping) for row in self._connection.execute(statement).all())
+
+    def preview_sync(
+        self,
+        principal_id: str,
+        project_id: str,
+        *,
+        external_identity: str,
+        normalization_version: str,
+        rows: tuple[NormalizedExternalConstraintRow, ...],
+        provider_version: str | None,
+        workbook_digest: str | None,
+        idempotency_key: str,
+        at: datetime,
+        lease_until: datetime,
+    ) -> Mapping[str, object]:
+        if (
+            any(character.isspace() for character in external_identity)
+            or "://" in external_identity
+        ):
+            raise ValueError("an external identity is opaque and non-fetchable")
+        if self.get_project_settings(principal_id, project_id) is None:
+            raise ValueError("the synchronization project is unavailable")
+        request_digest = _sync_preview_request_digest(
+            project_id=project_id,
+            external_identity=external_identity,
+            normalization_version=normalization_version,
+            provider_version=provider_version,
+            workbook_digest=workbook_digest,
+            rows=rows,
+        )
+        self._connection.execute(
+            select(
+                func.pg_advisory_xact_lock(
+                    func.hashtextextended(f"{principal_id}\x1f{idempotency_key}", 0)
+                )
+            )
+        ).one()
+        self._connection.execute(
+            select(
+                func.pg_advisory_xact_lock(
+                    func.hashtextextended(
+                        f"{principal_id}\x1f{project_id}\x1fexcel_workbook\x1f{external_identity}",
+                        0,
+                    )
+                )
+            )
+        ).one()
+        replay = self._connection.execute(
+            principal_scoped(
+                select(*constraint_sync_runs.c),
+                constraint_sync_runs,
+                capture_context(principal_id),
+            ).where(constraint_sync_runs.c.preview_idempotency_key == idempotency_key)
+        ).one_or_none()
+        if replay is not None:
+            if replay._mapping["preview_request_digest"] != request_digest:
+                raise ValueError("the preview idempotency key is already bound")
+            items = self._sync_items(principal_id, replay._mapping["sync_run_id"])
+            return self._sync_preview_payload(dict(replay._mapping), items, replayed=True)
+
+        target = self._connection.execute(
+            principal_scoped(
+                select(*constraint_sync_targets.c),
+                constraint_sync_targets,
+                capture_context(principal_id),
+            )
+            .where(
+                constraint_sync_targets.c.project_id == project_id,
+                constraint_sync_targets.c.external_kind == "excel_workbook",
+                constraint_sync_targets.c.external_identity == external_identity,
+            )
+            .with_for_update()
+        ).one_or_none()
+        if target is None:
+            target_id = issue_identifier(IdKind.CONSTRAINT_SYNC_TARGET)
+            create_target = True
+            target_map: Mapping[str, object] = {"active_run_id": None}
+        else:
+            target_id = target._mapping["sync_target_id"]
+            create_target = False
+            target_map = dict(target._mapping)
+            if target._mapping["normalization_contract_version"] != normalization_version:
+                run_id = issue_identifier(IdKind.CONSTRAINT_SYNC_RUN)
+                lease_token = hashlib.sha256(
+                    f"{run_id}\x1f{idempotency_key}\x1f{at.isoformat()}".encode()
+                ).hexdigest()
+                preview_digest = hashlib.sha256(b"[]").hexdigest()
+                run_values = _bound(
+                    constraint_sync_runs,
+                    principal_id,
+                    {
+                        "sync_run_id": run_id,
+                        "project_id": project_id,
+                        "sync_target_id": target_id,
+                        "state": ConstraintSyncRunState.FAILED.value,
+                        "sync_state": ConstraintSyncState.SCHEMA_UNSUPPORTED.value,
+                        "lease_token": lease_token,
+                        "preview_lease_until": at,
+                        "started_at": at,
+                        "finished_at": at,
+                        "provider_version_before": provider_version,
+                        "workbook_digest_before": workbook_digest,
+                        "preview_digest": preview_digest,
+                        "outcome": "failed",
+                        "safe_failure_reason": "schema_unsupported",
+                        "failure_kind": "schema_unsupported",
+                        "preview_idempotency_key": idempotency_key,
+                        "preview_request_digest": request_digest,
+                        "created_at": at,
+                        "updated_at": at,
+                    },
+                )
+                self._connection.execute(insert(constraint_sync_runs).values(run_values))
+                self._connection.execute(
+                    update(constraint_sync_targets)
+                    .where(
+                        _mine(constraint_sync_targets, principal_id),
+                        constraint_sync_targets.c.project_id == project_id,
+                        constraint_sync_targets.c.sync_target_id == target_id,
+                    )
+                    .values(last_run_id=run_id, updated_at=at)
+                )
+                return self._sync_preview_payload(run_values, (), replayed=False)
+        active_run_id = target_map["active_run_id"]
+        expired_run_id = None
+        if active_run_id is not None:
+            owned_active_run = self._connection.execute(
+                principal_scoped(
+                    select(constraint_sync_runs.c.sync_run_id),
+                    constraint_sync_runs,
+                    capture_context(principal_id),
+                ).where(
+                    constraint_sync_runs.c.project_id == project_id,
+                    constraint_sync_runs.c.sync_target_id == target_id,
+                    constraint_sync_runs.c.sync_run_id == active_run_id,
+                )
+            ).scalar_one_or_none()
+            if owned_active_run is not None:
+                active_until = cast(datetime | None, target_map.get("active_run_lease_until"))
+                if active_until is not None and active_until > at:
+                    raise ValueError("a synchronization run already holds the lease")
+                expired_run_id = active_run_id
+
+        canonical_ids = list(
+            self._connection.execute(
+                principal_scoped(
+                    select(project_constraints.c.constraint_id),
+                    project_constraints,
+                    capture_context(principal_id),
+                )
+                .where(project_constraints.c.project_id == project_id)
+                .order_by(asc(project_constraints.c.constraint_id))
+                .limit(101)
+            ).scalars()
+        )
+        if len(canonical_ids) > 100:
+            raise ValueError("a synchronization preview is limited to 100 canonical rows")
+        canonical = {
+            record.constraint_id: record
+            for constraint_id in canonical_ids
+            if (record := self.read_constraint(principal_id, constraint_id)) is not None
+        }
+        by_code = {
+            record.constraint_code.casefold(): record
+            for record in canonical.values()
+            if record.constraint_code is not None
+        }
+        baseline_rows = self._connection.execute(
+            principal_scoped(
+                select(*constraint_sync_baselines.c),
+                constraint_sync_baselines,
+                capture_context(principal_id),
+            ).where(constraint_sync_baselines.c.sync_target_id == target_id)
+        ).all()
+        baselines = {
+            item._mapping["constraint_id"]: ConstraintSyncBaseline(
+                constraint_id=item._mapping["constraint_id"],
+                revision_id=item._mapping["baseline_revision_id"],
+                constraint_version=item._mapping["baseline_constraint_version"],
+                field_digests=dict(item._mapping["baseline_field_digests"]),
+                record_digest=item._mapping["baseline_record_digest"],
+                external_row_key=item._mapping["workbook_row_identity"],
+                verified_provider_version=item._mapping["verified_provider_version"],
+                verified_at=item._mapping["verified_at"],
+            )
+            for item in baseline_rows
+        }
+        decisions: list[tuple[ConstraintSyncDecision, NormalizedExternalConstraintRow | None]] = []
+        seen: set[str] = set()
+        for external in rows:
+            code_record = (
+                None
+                if external.constraint_code is None
+                else by_code.get(external.constraint_code.casefold())
+            )
+            record = (
+                canonical.get(external.constraint_id)
+                if external.constraint_id is not None
+                else code_record
+            )
+            if record is not None:
+                if record.constraint_id in seen:
+                    raise ValueError("multiple external rows resolve to one canonical constraint")
+                seen.add(record.constraint_id)
+            decisions.append(
+                (
+                    compare_three_way(
+                        None if record is None else baselines.get(record.constraint_id),
+                        record,
+                        external,
+                    ),
+                    external,
+                )
+            )
+        for constraint_id, record in canonical.items():
+            if constraint_id not in seen:
+                decisions.append(
+                    (compare_three_way(baselines.get(constraint_id), record, None), None)
+                )
+        if len(decisions) > MAX_SYNC_ROWS:
+            raise ValueError("a synchronization preview is limited to 100 total plan items")
+        if create_target:
+            self._connection.execute(
+                insert(constraint_sync_targets).values(
+                    _bound(
+                        constraint_sync_targets,
+                        principal_id,
+                        {
+                            "sync_target_id": target_id,
+                            "project_id": project_id,
+                            "external_kind": "excel_workbook",
+                            "external_identity": external_identity,
+                            "normalization_contract_version": normalization_version,
+                            "version": 1,
+                            "created_at": at,
+                            "updated_at": at,
+                        },
+                    )
+                )
+            )
+        if expired_run_id is not None:
+            self._connection.execute(
+                update(constraint_sync_conflicts)
+                .where(
+                    _mine(constraint_sync_conflicts, principal_id),
+                    constraint_sync_conflicts.c.project_id == project_id,
+                    constraint_sync_conflicts.c.sync_target_id == target_id,
+                    constraint_sync_conflicts.c.sync_run_id == expired_run_id,
+                    constraint_sync_conflicts.c.state == "open",
+                )
+                .values(state="superseded")
+            )
+            self._connection.execute(
+                update(constraint_sync_runs)
+                .where(
+                    _mine(constraint_sync_runs, principal_id),
+                    constraint_sync_runs.c.project_id == project_id,
+                    constraint_sync_runs.c.sync_target_id == target_id,
+                    constraint_sync_runs.c.sync_run_id == expired_run_id,
+                )
+                .values(
+                    state="failed",
+                    sync_state=ConstraintSyncState.PARTIAL.value,
+                    safe_failure_reason="lease_expired",
+                    finished_at=at,
+                    updated_at=at,
+                )
+            )
+        run_id = issue_identifier(IdKind.CONSTRAINT_SYNC_RUN)
+        lease_token = hashlib.sha256(
+            f"{run_id}\x1f{idempotency_key}\x1f{at.isoformat()}".encode()
+        ).hexdigest()
+        plan_values = [
+            {
+                "row": decision.external_row_key,
+                "constraint_id": decision.constraint_id,
+                "action": decision.action.value,
+                "db": decision.changed_in_db,
+                "external": decision.changed_external,
+                "conflicts": decision.conflict_fields,
+                "kind": None if decision.conflict_kind is None else decision.conflict_kind.value,
+            }
+            for decision, _external in decisions
+        ]
+        preview_digest = hashlib.sha256(
+            json.dumps(plan_values, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        sync_state = _sync_preview_state([decision for decision, _external in decisions])
+        run_values = _bound(
+            constraint_sync_runs,
+            principal_id,
+            {
+                "sync_run_id": run_id,
+                "project_id": project_id,
+                "sync_target_id": target_id,
+                "state": "previewed",
+                "sync_state": sync_state.value,
+                "lease_token": lease_token,
+                "preview_lease_until": lease_until,
+                "started_at": at,
+                "provider_version_before": provider_version,
+                "workbook_digest_before": workbook_digest,
+                "preview_digest": preview_digest,
+                "preview_idempotency_key": idempotency_key,
+                "preview_request_digest": request_digest,
+                "created_at": at,
+                "updated_at": at,
+            },
+        )
+        self._connection.execute(insert(constraint_sync_runs).values(run_values))
+        for (decision, external_candidate_row), response_summary in zip(
+            decisions, plan_values, strict=True
+        ):
+            baseline = baselines.get(decision.constraint_id or "")
+            candidate = (
+                null() if external_candidate_row is None else candidate_json(external_candidate_row)
+            )
+            candidate_digest = (
+                None if external_candidate_row is None else external_candidate_row.record_digest()
+            )
+            self._connection.execute(
+                insert(constraint_sync_run_items).values(
+                    _bound(
+                        constraint_sync_run_items,
+                        principal_id,
+                        {
+                            "sync_run_id": run_id,
+                            "project_id": project_id,
+                            "sync_target_id": target_id,
+                            "external_row_key": decision.external_row_key,
+                            "constraint_id": decision.constraint_id,
+                            "action": decision.action.value,
+                            "expected_constraint_version": (
+                                None
+                                if decision.constraint_id is None
+                                else canonical[decision.constraint_id].version
+                            ),
+                            "baseline_revision_id": (
+                                None if baseline is None else baseline.revision_id
+                            ),
+                            "external_candidate": candidate,
+                            "external_candidate_digest": candidate_digest,
+                            "field_names": list(
+                                decision.conflict_fields or decision.changed_external
+                            ),
+                            "response_summary": response_summary,
+                            "created_at": at,
+                            "updated_at": at,
+                        },
+                    )
+                )
+            )
+            if decision.action is ConstraintSyncAction.CONFLICT:
+                conflict_id = issue_identifier(IdKind.CONSTRAINT_SYNC_CONFLICT)
+                self._connection.execute(
+                    insert(constraint_sync_conflicts).values(
+                        _bound(
+                            constraint_sync_conflicts,
+                            principal_id,
+                            {
+                                "sync_conflict_id": conflict_id,
+                                "project_id": project_id,
+                                "sync_target_id": target_id,
+                                "constraint_id": decision.constraint_id,
+                                "sync_run_id": run_id,
+                                "conflict_kind": (
+                                    decision.conflict_kind
+                                    or ConstraintSyncConflictKind.BOTH_CHANGED
+                                ).value,
+                                "field_names": list(decision.conflict_fields),
+                                "baseline_revision_id": (
+                                    None if baseline is None else baseline.revision_id
+                                ),
+                                "db_version": (
+                                    None
+                                    if decision.constraint_id is None
+                                    else canonical[decision.constraint_id].version
+                                ),
+                                "provider_version": provider_version,
+                                "external_candidate": candidate,
+                                "external_candidate_digest": candidate_digest,
+                                "state": "open",
+                                "created_at": at,
+                            },
+                        )
+                    )
+                )
+        self._connection.execute(
+            update(constraint_sync_targets)
+            .where(
+                _mine(constraint_sync_targets, principal_id),
+                constraint_sync_targets.c.project_id == project_id,
+                constraint_sync_targets.c.sync_target_id == target_id,
+            )
+            .values(
+                active_run_id=run_id,
+                active_run_lease_until=lease_until,
+                last_run_id=run_id,
+                updated_at=at,
+            )
+        )
+        return self._sync_preview_payload(
+            run_values,
+            self._sync_items(principal_id, run_id),
+            replayed=False,
+        )
+
+    def _sync_items(self, principal_id: str, run_id: str) -> tuple[Mapping[str, object], ...]:
+        rows = self._connection.execute(
+            principal_scoped(
+                select(*constraint_sync_run_items.c),
+                constraint_sync_run_items,
+                capture_context(principal_id),
+            )
+            .where(constraint_sync_run_items.c.sync_run_id == run_id)
+            .order_by(asc(constraint_sync_run_items.c.external_row_key))
+        ).all()
+        return tuple(dict(row._mapping) for row in rows)
+
+    @staticmethod
+    def _sync_action_summary(items: tuple[Mapping[str, object], ...]) -> Mapping[str, object]:
+        counts = {action.value: 0 for action in ConstraintSyncAction}
+        for item in items:
+            action = str(item["action"])
+            if action not in counts:
+                raise ValueError("a synchronization item action is invalid")
+            counts[action] += 1
+        return {"item_count": len(items), "action_counts": counts}
+
+    def _sync_canonical_material(
+        self,
+        principal_id: str,
+        project_id: str,
+        items: tuple[Mapping[str, object], ...],
+    ) -> tuple[Mapping[str, object], list[tuple[Mapping[str, object], PersistedConstraintRecord]]]:
+        snapshots: list[tuple[Mapping[str, object], PersistedConstraintRecord]] = []
+        for item in items:
+            constraint_id = item["constraint_id"]
+            if constraint_id is None or item["action"] == ConstraintSyncAction.CONFLICT.value:
+                continue
+            record = self.read_constraint(principal_id, str(constraint_id))
+            if record is None or record.project_id != project_id:
+                raise ValueError("a synchronization item is stale")
+            expected = item["applied_constraint_version"] or item["expected_constraint_version"]
+            if record.version != expected:
+                raise ValueError("a canonical constraint version changed before verification")
+            snapshots.append((item, record))
+        record_digests = [
+            NormalizedExternalConstraintRow(
+                external_row_key=str(item["external_row_key"]),
+                constraint_id=record.constraint_id,
+                constraint_code=record.constraint_code,
+                category=record.category_id,
+                description=record.description,
+                date_identified=record.date_identified,
+                status=record.lifecycle_state,
+                bic=record.bic,
+                responsible=record.responsible,
+                due_date=record.due_date,
+                reference=record.reference,
+                current_update=record.current_update,
+                completion_date=record.completion_date,
+            ).record_digest()
+            for item, record in snapshots
+        ]
+        digest = hashlib.sha256(
+            json.dumps(sorted(record_digests), separators=(",", ":")).encode()
+        ).hexdigest()
+        return (
+            {"canonical_digest": digest, **self._sync_action_summary(items)},
+            snapshots,
+        )
+
+    def _sync_apply_payload(
+        self,
+        run: Mapping[str, object],
+        items: tuple[Mapping[str, object], ...],
+        *,
+        replayed: bool,
+    ) -> Mapping[str, object]:
+        canonical_digest = run["apply_canonical_digest"]
+        if not isinstance(canonical_digest, str):
+            raise ValueError("a completed synchronization run has no verification digest")
+        apply_state = run["apply_sync_state"]
+        if apply_state not in {
+            ConstraintSyncState.PARTIAL.value,
+            ConstraintSyncState.VERIFICATION_PENDING.value,
+        }:
+            raise ValueError("a completed synchronization run has no apply state")
+        return {
+            "run_id": run["sync_run_id"],
+            "state": apply_state,
+            "canonical_digest": canonical_digest,
+            **self._sync_action_summary(items),
+            "replayed": replayed,
+        }
+
+    @staticmethod
+    def _sync_preview_payload(
+        run: Mapping[str, object],
+        items: tuple[Mapping[str, object], ...],
+        *,
+        replayed: bool,
+    ) -> Mapping[str, object]:
+        summaries: list[Mapping[str, object]] = []
+        for item in items:
+            summary = item["response_summary"]
+            if not isinstance(summary, Mapping):
+                raise ValueError("a synchronization preview summary is invalid")
+            summaries.append(dict(summary))
+        actions = {str(summary.get("action")) for summary in summaries}
+        valid_actions = {action.value for action in ConstraintSyncAction}
+        if not actions <= valid_actions:
+            raise ValueError("a synchronization preview summary action is invalid")
+        if run["sync_state"] == ConstraintSyncState.SCHEMA_UNSUPPORTED.value:
+            preview_state = ConstraintSyncState.SCHEMA_UNSUPPORTED
+        elif ConstraintSyncAction.CONFLICT.value in actions:
+            preview_state = ConstraintSyncState.CONFLICT
+        elif actions & {
+            ConstraintSyncAction.IMPORT_EXTERNAL.value,
+            ConstraintSyncAction.MERGE.value,
+        }:
+            preview_state = ConstraintSyncState.EXTERNAL_IMPORT_PENDING
+        elif ConstraintSyncAction.EXPORT_CANONICAL.value in actions:
+            preview_state = ConstraintSyncState.DB_EXPORT_PENDING
+        else:
+            preview_state = ConstraintSyncState.IN_SYNC
+        return {
+            "target_id": run["sync_target_id"],
+            "run_id": run["sync_run_id"],
+            "lease_token": run["lease_token"],
+            "lease_until": run["preview_lease_until"],
+            "preview_digest": run["preview_digest"],
+            "state": preview_state.value,
+            "replayed": replayed,
+            "items": summaries,
+        }
+
+    def prepare_sync_apply(
+        self,
+        principal_id: str,
+        project_id: str,
+        sync_target_id: str,
+        sync_run_id: str,
+        *,
+        lease_token: str,
+        preview_digest: str,
+        idempotency_key: str,
+        request_digest: str,
+        at: datetime,
+    ) -> Mapping[str, object] | None:
+        run = self._connection.execute(
+            principal_scoped(
+                select(*constraint_sync_runs.c),
+                constraint_sync_runs,
+                capture_context(principal_id),
+            )
+            .where(
+                constraint_sync_runs.c.project_id == project_id,
+                constraint_sync_runs.c.sync_target_id == sync_target_id,
+                constraint_sync_runs.c.sync_run_id == sync_run_id,
+            )
+            .with_for_update()
+        ).one_or_none()
+        target = self._connection.execute(
+            principal_scoped(
+                select(*constraint_sync_targets.c),
+                constraint_sync_targets,
+                capture_context(principal_id),
+            )
+            .where(
+                constraint_sync_targets.c.project_id == project_id,
+                constraint_sync_targets.c.sync_target_id == sync_target_id,
+            )
+            .with_for_update()
+        ).one_or_none()
+        if run is None or target is None:
+            return None
+        values = run._mapping
+        if values["lease_token"] != lease_token or values["preview_digest"] != preview_digest:
+            raise ValueError("the synchronization preview binding is stale")
+        if values["apply_idempotency_key"] is not None:
+            if (
+                values["apply_idempotency_key"] != idempotency_key
+                or values["apply_request_digest"] != request_digest
+            ):
+                raise ValueError("the apply idempotency binding conflicts")
+            items = self._sync_items(principal_id, sync_run_id)
+            replayed = values["state"] in {"applied", "acknowledged", "failed"}
+            if values["state"] == "failed" and (
+                values["apply_canonical_digest"] is None or values["apply_sync_state"] is None
+            ):
+                raise ValueError("the failed synchronization apply cannot be retried")
+            return {
+                "run": dict(values),
+                "items": items,
+                "replayed": replayed,
+                "apply_result": (
+                    self._sync_apply_payload(dict(values), items, replayed=True)
+                    if replayed
+                    else None
+                ),
+            }
+        if (
+            values["state"] != "previewed"
+            or target._mapping["active_run_id"] != sync_run_id
+            or target._mapping["active_run_lease_until"] <= at
+        ):
+            raise ValueError("the synchronization lease is no longer active")
+        self._connection.execute(
+            update(constraint_sync_runs)
+            .where(
+                _mine(constraint_sync_runs, principal_id),
+                constraint_sync_runs.c.project_id == project_id,
+                constraint_sync_runs.c.sync_target_id == sync_target_id,
+                constraint_sync_runs.c.sync_run_id == sync_run_id,
+            )
+            .values(
+                apply_idempotency_key=idempotency_key,
+                apply_request_digest=request_digest,
+                updated_at=at,
+            )
+        )
+        return {
+            "run": dict(values),
+            "items": self._sync_items(principal_id, sync_run_id),
+            "replayed": False,
+        }
+
+    def complete_sync_apply(
+        self,
+        principal_id: str,
+        sync_run_id: str,
+        *,
+        applied: Mapping[str, tuple[int, str | None]],
+        at: datetime,
+    ) -> Mapping[str, object]:
+        run = self._connection.execute(
+            principal_scoped(
+                select(*constraint_sync_runs.c),
+                constraint_sync_runs,
+                capture_context(principal_id),
+            )
+            .where(constraint_sync_runs.c.sync_run_id == sync_run_id)
+            .with_for_update()
+        ).one()
+        if run._mapping["state"] != "previewed":
+            raise ValueError("the synchronization apply is already terminal")
+        for external_row_key, (version, revision_id) in applied.items():
+            self._connection.execute(
+                update(constraint_sync_run_items)
+                .where(
+                    _mine(constraint_sync_run_items, principal_id),
+                    constraint_sync_run_items.c.project_id == run._mapping["project_id"],
+                    constraint_sync_run_items.c.sync_target_id == run._mapping["sync_target_id"],
+                    constraint_sync_run_items.c.sync_run_id == sync_run_id,
+                    constraint_sync_run_items.c.external_row_key == external_row_key,
+                )
+                .values(
+                    applied_constraint_version=version,
+                    applied_revision_id=revision_id,
+                    updated_at=at,
+                )
+            )
+        conflicts = self._connection.execute(
+            principal_scoped(
+                select(func.count()),
+                constraint_sync_conflicts,
+                capture_context(principal_id),
+            ).where(
+                constraint_sync_conflicts.c.project_id == run._mapping["project_id"],
+                constraint_sync_conflicts.c.sync_target_id == run._mapping["sync_target_id"],
+                constraint_sync_conflicts.c.sync_run_id == sync_run_id,
+                constraint_sync_conflicts.c.state == "open",
+            )
+        ).scalar_one()
+        state = (
+            ConstraintSyncState.PARTIAL if conflicts else ConstraintSyncState.VERIFICATION_PENDING
+        )
+        items = self._sync_items(principal_id, sync_run_id)
+        material, _snapshots = self._sync_canonical_material(
+            principal_id, str(run._mapping["project_id"]), items
+        )
+        self._connection.execute(
+            update(constraint_sync_runs)
+            .where(
+                _mine(constraint_sync_runs, principal_id),
+                constraint_sync_runs.c.project_id == run._mapping["project_id"],
+                constraint_sync_runs.c.sync_target_id == run._mapping["sync_target_id"],
+                constraint_sync_runs.c.sync_run_id == sync_run_id,
+            )
+            .values(
+                state="applied",
+                sync_state=state.value,
+                outcome="applied",
+                apply_canonical_digest=material["canonical_digest"],
+                apply_sync_state=state.value,
+                finished_at=at,
+                updated_at=at,
+            )
+        )
+        return {
+            "run_id": sync_run_id,
+            "state": state.value,
+            **material,
+            "replayed": False,
+        }
+
+    def acknowledge_sync(
+        self,
+        principal_id: str,
+        project_id: str,
+        sync_target_id: str,
+        sync_run_id: str,
+        *,
+        lease_token: str,
+        canonical_digest: str,
+        item_count: int,
+        action_counts: Mapping[str, int],
+        provider_version: str | None,
+        workbook_digest: str | None,
+        idempotency_key: str,
+        request_digest: str,
+        at: datetime,
+    ) -> Mapping[str, object] | None:
+        run = self._connection.execute(
+            principal_scoped(
+                select(*constraint_sync_runs.c),
+                constraint_sync_runs,
+                capture_context(principal_id),
+            )
+            .where(
+                constraint_sync_runs.c.project_id == project_id,
+                constraint_sync_runs.c.sync_target_id == sync_target_id,
+                constraint_sync_runs.c.sync_run_id == sync_run_id,
+            )
+            .with_for_update()
+        ).one_or_none()
+        target = self._connection.execute(
+            principal_scoped(
+                select(*constraint_sync_targets.c),
+                constraint_sync_targets,
+                capture_context(principal_id),
+            )
+            .where(
+                constraint_sync_targets.c.project_id == project_id,
+                constraint_sync_targets.c.sync_target_id == sync_target_id,
+            )
+            .with_for_update()
+        ).one_or_none()
+        if run is None or target is None:
+            return None
+        values = run._mapping
+        if values["lease_token"] != lease_token:
+            raise ValueError("the synchronization lease binding is stale")
+        if values["acknowledge_idempotency_key"] is not None:
+            if (
+                values["acknowledge_idempotency_key"] != idempotency_key
+                or values["acknowledge_request_digest"] != request_digest
+            ):
+                raise ValueError("the acknowledge idempotency binding conflicts")
+            items = self._sync_items(principal_id, sync_run_id)
+            return {
+                "run_id": sync_run_id,
+                "state": values["sync_state"],
+                **self._sync_action_summary(items),
+                "replayed": True,
+            }
+        items = self._sync_items(principal_id, sync_run_id)
+        if any(item["action"] == ConstraintSyncAction.CONFLICT.value for item in items):
+            raise ValueError("a resolved synchronization conflict requires a fresh preview")
+        if values["state"] != "applied" or target._mapping["active_run_id"] != sync_run_id:
+            raise ValueError("the synchronization run is not awaiting verification")
+        material, snapshots = self._sync_canonical_material(principal_id, project_id, items)
+        if (
+            material["canonical_digest"] != canonical_digest
+            or values["apply_canonical_digest"] != canonical_digest
+            or material["item_count"] != item_count
+            or material["action_counts"] != dict(action_counts)
+        ):
+            self._connection.execute(
+                update(constraint_sync_runs)
+                .where(
+                    _mine(constraint_sync_runs, principal_id),
+                    constraint_sync_runs.c.project_id == project_id,
+                    constraint_sync_runs.c.sync_target_id == sync_target_id,
+                    constraint_sync_runs.c.sync_run_id == sync_run_id,
+                )
+                .values(
+                    state="failed",
+                    sync_state=ConstraintSyncState.VERIFICATION_FAILED.value,
+                    failure_kind="verification_failed",
+                    safe_failure_reason="verification_failed",
+                    finished_at=at,
+                    updated_at=at,
+                )
+            )
+            self._connection.execute(
+                update(constraint_sync_targets)
+                .where(
+                    _mine(constraint_sync_targets, principal_id),
+                    constraint_sync_targets.c.project_id == project_id,
+                    constraint_sync_targets.c.sync_target_id == sync_target_id,
+                    constraint_sync_targets.c.active_run_id == sync_run_id,
+                )
+                .values(active_run_id=None, active_run_lease_until=None, updated_at=at)
+            )
+            return {
+                "run_id": sync_run_id,
+                "state": ConstraintSyncState.VERIFICATION_FAILED.value,
+                "replayed": False,
+                "verification_failed": True,
+            }
+        for item, record in snapshots:
+            row = NormalizedExternalConstraintRow(
+                external_row_key=str(item["external_row_key"]),
+                constraint_id=record.constraint_id,
+                constraint_code=record.constraint_code,
+                category=record.category_id,
+                description=record.description,
+                date_identified=record.date_identified,
+                status=record.lifecycle_state,
+                bic=record.bic,
+                responsible=record.responsible,
+                due_date=record.due_date,
+                reference=record.reference,
+                current_update=record.current_update,
+                completion_date=record.completion_date,
+            )
+            revision_id = self._connection.execute(
+                principal_scoped(
+                    select(project_constraints.c.current_revision_id),
+                    project_constraints,
+                    capture_context(principal_id),
+                ).where(project_constraints.c.constraint_id == record.constraint_id)
+            ).scalar_one()
+            if revision_id is None:
+                raise ValueError("a canonical constraint has no revision to verify")
+            self._connection.execute(
+                delete(constraint_sync_baselines).where(
+                    _mine(constraint_sync_baselines, principal_id),
+                    constraint_sync_baselines.c.sync_target_id == sync_target_id,
+                    constraint_sync_baselines.c.constraint_id == record.constraint_id,
+                )
+            )
+            self._connection.execute(
+                insert(constraint_sync_baselines).values(
+                    _bound(
+                        constraint_sync_baselines,
+                        principal_id,
+                        {
+                            "sync_target_id": sync_target_id,
+                            "constraint_id": record.constraint_id,
+                            "project_id": project_id,
+                            "baseline_revision_id": revision_id,
+                            "baseline_constraint_version": record.version,
+                            "baseline_field_digests": row.field_digests(),
+                            "baseline_record_digest": row.record_digest(),
+                            "workbook_row_identity": item["external_row_key"],
+                            "verified_provider_version": provider_version,
+                            "verified_at": at,
+                            "created_at": at,
+                            "updated_at": at,
+                        },
+                    )
+                )
+            )
+        open_conflicts = self._connection.execute(
+            principal_scoped(
+                select(func.count()),
+                constraint_sync_conflicts,
+                capture_context(principal_id),
+            ).where(
+                constraint_sync_conflicts.c.sync_run_id == sync_run_id,
+                constraint_sync_conflicts.c.state == "open",
+            )
+        ).scalar_one()
+        state = ConstraintSyncState.PARTIAL if open_conflicts else ConstraintSyncState.IN_SYNC
+        self._connection.execute(
+            update(constraint_sync_runs)
+            .where(
+                _mine(constraint_sync_runs, principal_id),
+                constraint_sync_runs.c.project_id == project_id,
+                constraint_sync_runs.c.sync_target_id == sync_target_id,
+                constraint_sync_runs.c.sync_run_id == sync_run_id,
+            )
+            .values(
+                state="acknowledged",
+                sync_state=state.value,
+                provider_version_after=provider_version,
+                workbook_digest_after=workbook_digest,
+                acknowledge_idempotency_key=idempotency_key,
+                acknowledge_request_digest=request_digest,
+                updated_at=at,
+            )
+        )
+        self._connection.execute(
+            update(constraint_sync_targets)
+            .where(
+                _mine(constraint_sync_targets, principal_id),
+                constraint_sync_targets.c.project_id == project_id,
+                constraint_sync_targets.c.sync_target_id == sync_target_id,
+            )
+            .values(
+                last_verified_provider_version=provider_version,
+                last_verified_workbook_digest=workbook_digest,
+                last_verified_at=at,
+                last_verified_sync_run_id=sync_run_id,
+                active_run_id=None,
+                active_run_lease_until=None,
+                updated_at=at,
+            )
+        )
+        return {
+            "run_id": sync_run_id,
+            "state": state.value,
+            "item_count": material["item_count"],
+            "action_counts": material["action_counts"],
+            "replayed": False,
+        }
+
+    def current_sync_revision(self, principal_id: str, constraint_id: str) -> str | None:
+        return self._connection.execute(
+            principal_scoped(
+                select(project_constraints.c.current_revision_id),
+                project_constraints,
+                capture_context(principal_id),
+            ).where(project_constraints.c.constraint_id == constraint_id)
+        ).scalar_one_or_none()
+
+    def resolve_sync_conflict(
+        self,
+        principal_id: str,
+        project_id: str,
+        sync_conflict_id: str,
+        *,
+        resolution: ConstraintSyncResolution,
+        expected_version: int,
+        manual_patch: Mapping[str, object] | None,
+        idempotency_key: str,
+        at: datetime,
+        mutation_service: object,
+        active_uow: object,
+        correlation_id: str | None,
+    ) -> Mapping[str, object] | None:
+        request_digest = hashlib.sha256(
+            json.dumps(
+                {
+                    "project_id": project_id,
+                    "conflict_id": sync_conflict_id,
+                    "resolution": resolution.value,
+                    "expected_version": expected_version,
+                    "manual_patch": manual_patch,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode()
+        ).hexdigest()
+
+        def resolution_replay() -> Mapping[str, object] | None:
+            replay = self._connection.execute(
+                principal_scoped(
+                    select(*constraint_sync_resolution_history.c),
+                    constraint_sync_resolution_history,
+                    capture_context(principal_id),
+                ).where(constraint_sync_resolution_history.c.idempotency_key == idempotency_key)
+            ).one_or_none()
+            if replay is None:
+                return None
+            if replay._mapping["request_digest"] != request_digest:
+                raise ValueError("the resolution idempotency key is already bound")
+            return {
+                "conflict_id": replay._mapping["sync_conflict_id"],
+                "resolution_id": replay._mapping["resolution_history_id"],
+                "resolution": replay._mapping["resolution"],
+                "constraint_version": replay._mapping["constraint_version"],
+                "replayed": True,
+            }
+
+        replay = resolution_replay()
+        if replay is not None:
+            return replay
+        conflict = self._connection.execute(
+            principal_scoped(
+                select(*constraint_sync_conflicts.c),
+                constraint_sync_conflicts,
+                capture_context(principal_id),
+            )
+            .where(
+                constraint_sync_conflicts.c.project_id == project_id,
+                constraint_sync_conflicts.c.sync_conflict_id == sync_conflict_id,
+            )
+            .with_for_update()
+        ).one_or_none()
+        if conflict is None:
+            return None
+        replay = resolution_replay()
+        if replay is not None:
+            return replay
+        values = conflict._mapping
+        if values["state"] != "open":
+            raise ValueError("the synchronization conflict is no longer open")
+        target = self._connection.execute(
+            principal_scoped(
+                select(*constraint_sync_targets.c),
+                constraint_sync_targets,
+                capture_context(principal_id),
+            )
+            .where(
+                constraint_sync_targets.c.project_id == project_id,
+                constraint_sync_targets.c.sync_target_id == values["sync_target_id"],
+            )
+            .with_for_update()
+        ).one_or_none()
+        if target is None:
+            return None
+        target_values = target._mapping
+        if (
+            target_values["last_run_id"] != values["sync_run_id"]
+            or target_values["active_run_id"] != values["sync_run_id"]
+            or target_values["active_run_lease_until"] is None
+            or target_values["active_run_lease_until"] <= at
+        ):
+            raise ValueError("the synchronization conflict run is no longer active")
+        constraint_id = values["constraint_id"]
+        record = None
+        if constraint_id is None:
+            if resolution is not ConstraintSyncResolution.KEEP_CANONICAL:
+                raise ValueError("new external rows must be created canonically")
+        else:
+            record = self.read_constraint(principal_id, str(constraint_id))
+            if (
+                record is None
+                or record.project_id != project_id
+                or record.version != expected_version
+            ):
+                raise ValueError("the synchronization conflict version is stale")
+        service = cast(Any, mutation_service)
+        mutation = None
+        if resolution is ConstraintSyncResolution.ACCEPT_EXTERNAL:
+            if record is None:
+                raise ValueError("a canonical constraint is required for mutation resolution")
+            raw_candidate = values["external_candidate"]
+            if not isinstance(raw_candidate, Mapping):
+                raise ValueError("the conflict carries no external candidate")
+            candidate = _candidate_from_json(raw_candidate)
+            field_names = values["field_names"]
+            if not isinstance(field_names, list):
+                raise ValueError("the conflict field selection is invalid")
+            selected = set(map(str, field_names))
+            supported = {
+                "description",
+                "date_identified",
+                "due_date",
+                "reference",
+                "current_update",
+                "bic",
+                "responsible",
+            }
+            if not selected or not selected <= supported:
+                raise ValueError("the external conflict requires a named canonical operation")
+            patch = {
+                name: getattr(candidate, name)
+                for name in (
+                    "description",
+                    "date_identified",
+                    "due_date",
+                    "reference",
+                    "current_update",
+                    "bic",
+                    "responsible",
+                )
+                if name in selected and getattr(candidate, name) is not None
+            }
+            clear_fields = frozenset(
+                name
+                for name in selected
+                if name
+                in {
+                    "description",
+                    "date_identified",
+                    "due_date",
+                    "reference",
+                    "current_update",
+                }
+                and getattr(candidate, name) is None
+            )
+            mutation = service.update(
+                principal_id=principal_id,
+                constraint_id=str(constraint_id),
+                expected_version=expected_version,
+                actor=ConstraintMutationActor.SYSTEM,
+                values=patch,
+                clear_fields=clear_fields,
+                idempotency_key="sync_" + request_digest,
+                correlation_id=correlation_id,
+                active_uow=active_uow,
+            )
+        elif resolution is ConstraintSyncResolution.REOPEN:
+            if record is None:
+                raise ValueError("a canonical constraint is required for reopen resolution")
+            if values["conflict_kind"] != ConstraintSyncConflictKind.LIFECYCLE.value:
+                raise ValueError("only a lifecycle conflict can be reopened")
+            field_names = values["field_names"]
+            if not isinstance(field_names, list) or tuple(map(str, field_names)) != ("status",):
+                raise ValueError("a reopen resolution requires the selected status field")
+            raw_candidate = values["external_candidate"]
+            if not isinstance(raw_candidate, Mapping):
+                raise ValueError("the conflict carries no external candidate")
+            candidate = _candidate_from_json(raw_candidate)
+            if candidate.status not in ACTIVE_CONSTRAINT_LIFECYCLE_STATES:
+                raise ValueError("a reopen resolution requires an active target state")
+            mutation = service.reopen(
+                principal_id=principal_id,
+                constraint_id=str(constraint_id),
+                target_state=candidate.status,
+                expected_version=expected_version,
+                actor=ConstraintMutationActor.SYSTEM,
+                idempotency_key="sync_" + request_digest,
+                correlation_id=correlation_id,
+                active_uow=active_uow,
+            )
+        elif resolution is ConstraintSyncResolution.MANUAL_PATCH:
+            if record is None:
+                raise ValueError("a canonical constraint is required for mutation resolution")
+            manual_values: dict[str, object] = dict(manual_patch or {})
+            manual_values_to_set: dict[str, object] = {
+                name: value for name, value in manual_values.items() if value is not None
+            }
+            clear_fields = frozenset(name for name, value in manual_values.items() if value is None)
+            requested_project = manual_values.get("project_id")
+            if "project_id" in manual_values and requested_project != project_id:
+                raise ValueError("the manual patch scope is unavailable")
+            requested_category = manual_values_to_set.get("category_id")
+            if requested_category is not None:
+                category = self.get_category(principal_id, str(requested_category))
+                if category is None or category.project_id != project_id:
+                    raise ValueError("the manual patch scope is unavailable")
+            mutation = service.update(
+                principal_id=principal_id,
+                constraint_id=str(constraint_id),
+                expected_version=expected_version,
+                actor=ConstraintMutationActor.SYSTEM,
+                values=manual_values_to_set,
+                clear_fields=clear_fields,
+                idempotency_key="sync_" + request_digest,
+                correlation_id=correlation_id,
+                active_uow=active_uow,
+            )
+        constraint_version = (
+            None
+            if record is None
+            else record.version
+            if mutation is None
+            else mutation.record.version
+        )
+        resolution_id = issue_identifier(IdKind.CONSTRAINT_SYNC_RESOLUTION)
+        self._connection.execute(
+            insert(constraint_sync_resolution_history).values(
+                _bound(
+                    constraint_sync_resolution_history,
+                    principal_id,
+                    {
+                        "resolution_history_id": resolution_id,
+                        "project_id": project_id,
+                        "sync_target_id": values["sync_target_id"],
+                        "sync_conflict_id": sync_conflict_id,
+                        "sync_run_id": values["sync_run_id"],
+                        "resolution": resolution.value,
+                        "expected_constraint_version": expected_version,
+                        "idempotency_key": idempotency_key,
+                        "request_digest": request_digest,
+                        "constraint_history_id": (
+                            None if mutation is None else mutation.receipt.history_id
+                        ),
+                        "constraint_version": constraint_version,
+                        "created_at": at,
+                    },
+                )
+            )
+        )
+        self._connection.execute(
+            update(constraint_sync_conflicts)
+            .where(
+                _mine(constraint_sync_conflicts, principal_id),
+                constraint_sync_conflicts.c.project_id == project_id,
+                constraint_sync_conflicts.c.sync_target_id == values["sync_target_id"],
+                constraint_sync_conflicts.c.sync_run_id == values["sync_run_id"],
+                constraint_sync_conflicts.c.sync_conflict_id == sync_conflict_id,
+            )
+            .values(
+                state="resolved",
+                resolved_at=at,
+                resolution_history_id=resolution_id,
+            )
+        )
+        self._connection.execute(
+            update(constraint_sync_runs)
+            .where(
+                _mine(constraint_sync_runs, principal_id),
+                constraint_sync_runs.c.project_id == project_id,
+                constraint_sync_runs.c.sync_target_id == values["sync_target_id"],
+                constraint_sync_runs.c.sync_run_id == values["sync_run_id"],
+            )
+            .values(sync_state=ConstraintSyncState.PARTIAL.value, updated_at=at)
+        )
+        open_conflicts = self._connection.execute(
+            principal_scoped(
+                select(func.count()),
+                constraint_sync_conflicts,
+                capture_context(principal_id),
+            ).where(
+                constraint_sync_conflicts.c.project_id == project_id,
+                constraint_sync_conflicts.c.sync_target_id == values["sync_target_id"],
+                constraint_sync_conflicts.c.sync_run_id == values["sync_run_id"],
+                constraint_sync_conflicts.c.state == "open",
+            )
+        ).scalar_one()
+        if not open_conflicts:
+            self._connection.execute(
+                update(constraint_sync_targets)
+                .where(
+                    _mine(constraint_sync_targets, principal_id),
+                    constraint_sync_targets.c.project_id == project_id,
+                    constraint_sync_targets.c.sync_target_id == values["sync_target_id"],
+                    constraint_sync_targets.c.active_run_id == values["sync_run_id"],
+                )
+                .values(active_run_id=None, active_run_lease_until=None, updated_at=at)
+            )
+        return {
+            "conflict_id": sync_conflict_id,
+            "resolution_id": resolution_id,
+            "resolution": resolution.value,
+            "constraint_version": constraint_version,
+            "replayed": False,
+        }
 
 
 def _archived_at(category: ConstraintCategory) -> object:

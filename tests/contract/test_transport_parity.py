@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-one hundred and fifty-four capabilities. There are two ways to prove that and only one stays
+one hundred and sixty-one capabilities. There are two ways to prove that and only one stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -1215,6 +1215,57 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.CONSTRAINTS_HISTORY: {"constraint_id": scene.constraint_id},
         Capability.CONSTRAINTS_OVERVIEW: {"project_id": scene.constraint_project_id},
         Capability.CONSTRAINT_CATEGORIES_LIST: {"project_id": scene.constraint_project_id},
+        Capability.CONSTRAINT_SYNC_STATE: {
+            "project_id": scene.constraint_project_id,
+            "target_id": make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
+        },
+        Capability.CONSTRAINT_SYNC_DELTA: {
+            "project_id": scene.constraint_project_id,
+            "target_id": make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
+        },
+        Capability.CONSTRAINT_SYNC_CONFLICTS: {
+            "project_id": scene.constraint_project_id,
+            "target_id": make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
+        },
+        Capability.CONSTRAINT_SYNC_PREVIEW: {
+            "project_id": scene.constraint_project_id,
+            "external_identity": "synthetic.xlsx#Constraints",
+            "normalization_version": "1",
+            "rows": [{"external_row_key": "row-1"}],
+            "idempotency_key": "parity-sync-preview-0001",
+        },
+        Capability.CONSTRAINT_SYNC_APPLY: {
+            "project_id": scene.constraint_project_id,
+            "target_id": make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
+            "run_id": make_identifier(IdKind.CONSTRAINT_SYNC_RUN, "syncrun000000000001"),
+            "lease_token": "a" * 64,
+            "preview_digest": "b" * 64,
+            "idempotency_key": "parity-sync-apply-0001",
+        },
+        Capability.CONSTRAINT_SYNC_ACKNOWLEDGE: {
+            "project_id": scene.constraint_project_id,
+            "target_id": make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
+            "run_id": make_identifier(IdKind.CONSTRAINT_SYNC_RUN, "syncrun000000000001"),
+            "lease_token": "a" * 64,
+            "canonical_digest": "c" * 64,
+            "item_count": 0,
+            "action_counts": {
+                "no_op": 0,
+                "import_external": 0,
+                "export_canonical": 0,
+                "merge": 0,
+                "conflict": 0,
+            },
+            "provider_version": "v1",
+            "idempotency_key": "parity-sync-ack-0001",
+        },
+        Capability.CONSTRAINT_SYNC_RESOLVE: {
+            "project_id": scene.constraint_project_id,
+            "conflict_id": make_identifier(IdKind.CONSTRAINT_SYNC_CONFLICT, "syncconflict00000001"),
+            "resolution": "keep_canonical",
+            "expected_version": 1,
+            "idempotency_key": "parity-sync-resolve-0001",
+        },
         # PC-CM-IMP-WP07's twelve Constraint Management mutations. Each names a
         # seeded record in the state its operation requires -- Publish a Draft,
         # Reopen a closed record, a reorder every Category of the Project exactly
@@ -1868,7 +1919,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 155, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 162, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))

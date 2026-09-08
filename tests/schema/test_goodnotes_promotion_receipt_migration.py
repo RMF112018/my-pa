@@ -19,7 +19,7 @@ from my_pa.infrastructure.persistence.tables import goodnotes_semantic_promotion
 ROOT = Path(__file__).resolve().parents[2]
 REVISION = "a4d8e31b2c90"
 PREVIOUS = "6a2f9d1c4b80"
-HEAD_REVISION = "f7a2c9d51e64"
+HEAD_REVISION = "b8e4d6f20a11"
 TABLE = "goodnotes_semantic_promotion_receipts"
 MIGRATION = ROOT / "migrations/versions/20260905_a4d8e31b2c90_add_goodnotes_promotion_receipts.py"
 

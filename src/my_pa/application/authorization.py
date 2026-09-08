@@ -49,10 +49,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from my_pa.application.commands import (
+    AcknowledgeConstraintSync,
     AddEntityAddress,
     AddEntityAlias,
     AddEntityCommunicationMethod,
     AddEntityName,
+    ApplyConstraintSync,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
@@ -115,6 +117,7 @@ from my_pa.application.commands import (
     ListCommitments,
     ListConstraintCategories,
     ListConstraints,
+    ListConstraintSyncConflicts,
     ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
@@ -138,6 +141,7 @@ from my_pa.application.commands import (
     MergeEntities,
     ObserveEntityMention,
     PrepareContext,
+    PreviewConstraintSync,
     PreviewEntityMerge,
     PreviewEntitySplit,
     ProposeRelationshipMemory,
@@ -149,6 +153,8 @@ from my_pa.application.commands import (
     ReadConstraint,
     ReadConstraintHistory,
     ReadConstraintOverview,
+    ReadConstraintSyncDelta,
+    ReadConstraintSyncState,
     ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadKnowledge,
@@ -159,6 +165,7 @@ from my_pa.application.commands import (
     RecordTask,
     ReopenConstraint,
     ReorderConstraintCategories,
+    ResolveConstraintSyncConflict,
     ResolveEntity,
     ResolveIntelligenceSet,
     ResolveUnresolvedMention,
@@ -407,6 +414,13 @@ def _requested_scope(
             | UpdateConstraintCategory()
             | DeactivateConstraintCategory()
             | ReorderConstraintCategories()
+            | ReadConstraintSyncState()
+            | ReadConstraintSyncDelta()
+            | ListConstraintSyncConflicts()
+            | PreviewConstraintSync()
+            | ApplyConstraintSync()
+            | AcknowledgeConstraintSync()
+            | ResolveConstraintSyncConflict()
             # `context.prepare` names a query, not a source. The requested scope
             # is empty as a measurement: the request does not name a grant, and
             # `_SCOPELESS` is where that empty set is read that way.

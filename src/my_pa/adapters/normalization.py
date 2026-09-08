@@ -58,10 +58,12 @@ from types import MappingProxyType
 from typing import Any, Final
 
 from my_pa.application.commands import (
+    AcknowledgeConstraintSync,
     AddEntityAddress,
     AddEntityAlias,
     AddEntityCommunicationMethod,
     AddEntityName,
+    ApplyConstraintSync,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
@@ -125,6 +127,7 @@ from my_pa.application.commands import (
     ListCommitments,
     ListConstraintCategories,
     ListConstraints,
+    ListConstraintSyncConflicts,
     ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
@@ -148,6 +151,7 @@ from my_pa.application.commands import (
     MergeEntities,
     ObserveEntityMention,
     PrepareContext,
+    PreviewConstraintSync,
     PreviewEntityMerge,
     PreviewEntitySplit,
     ProposeRelationshipMemory,
@@ -159,6 +163,8 @@ from my_pa.application.commands import (
     ReadConstraint,
     ReadConstraintHistory,
     ReadConstraintOverview,
+    ReadConstraintSyncDelta,
+    ReadConstraintSyncState,
     ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadKnowledge,
@@ -170,6 +176,7 @@ from my_pa.application.commands import (
     ReopenConstraint,
     ReorderConstraintCategories,
     Representation,
+    ResolveConstraintSyncConflict,
     ResolveEntity,
     ResolveIntelligenceSet,
     ResolveUnresolvedMention,
@@ -251,6 +258,10 @@ from my_pa.domain.project_controls.read_models import (
     ConstraintSort,
     ConstraintSyncStateView,
     SortDirection,
+)
+from my_pa.domain.project_controls.sync import (
+    ConstraintSyncResolution,
+    NormalizedExternalConstraintRow,
 )
 from my_pa.domain.relationship.authoring import CallerNamespace
 from my_pa.domain.relationship.entity import (
@@ -2009,6 +2020,10 @@ def _constraint_party(value: object) -> object:
     """
     if not isinstance(value, Mapping) or not set(value) <= _PARTY_KEYS:
         return value
+    if value.get("entity_id") is not None and not isinstance(value.get("entity_id"), str):
+        return value
+    if value.get("label") is not None and not isinstance(value.get("label"), str):
+        return value
     try:
         return PartyRef(
             kind=PartyKind(value["kind"]),
@@ -2091,6 +2106,85 @@ def _reorder_constraint_categories(payload: Mapping[str, Any]) -> Command:
     return ReorderConstraintCategories(**_constraint_authoring(payload))
 
 
+_SYNC_ROW_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "external_row_key",
+        "constraint_id",
+        "constraint_code",
+        "category",
+        "description",
+        "date_identified",
+        "status",
+        "bic",
+        "responsible",
+        "due_date",
+        "reference",
+        "current_update",
+        "completion_date",
+    }
+)
+
+
+def _sync_row(value: object) -> object:
+    if not isinstance(value, Mapping) or not set(value) <= _SYNC_ROW_KEYS:
+        return value
+    converted = dict(value)
+    for name in ("date_identified", "due_date", "completion_date"):
+        if name in converted:
+            converted[name] = _constraint_date(converted[name])
+    if "status" in converted:
+        converted["status"] = _entity_member(converted["status"], ConstraintLifecycleState)
+    for name in ("bic", "responsible"):
+        parties = converted.get(name)
+        if isinstance(parties, list):
+            converted[name] = tuple(_constraint_party(entry) for entry in parties)
+    try:
+        return NormalizedExternalConstraintRow(**converted)
+    except (TypeError, ValueError):
+        return value
+
+
+def _constraint_sync(payload: Mapping[str, Any]) -> dict[str, Any]:
+    converted = dict(payload)
+    rows = converted.get("rows")
+    if isinstance(rows, list):
+        converted["rows"] = tuple(_sync_row(row) for row in rows)
+    if "resolution" in converted:
+        converted["resolution"] = _entity_member(converted["resolution"], ConstraintSyncResolution)
+    manual_patch = converted.get("manual_patch")
+    if isinstance(manual_patch, Mapping):
+        converted["manual_patch"] = _constraint_authoring(manual_patch)
+    return converted
+
+
+def _read_constraint_sync_state(payload: Mapping[str, Any]) -> Command:
+    return ReadConstraintSyncState(**payload)
+
+
+def _read_constraint_sync_delta(payload: Mapping[str, Any]) -> Command:
+    return ReadConstraintSyncDelta(**payload)
+
+
+def _list_constraint_sync_conflicts(payload: Mapping[str, Any]) -> Command:
+    return ListConstraintSyncConflicts(**payload)
+
+
+def _preview_constraint_sync(payload: Mapping[str, Any]) -> Command:
+    return PreviewConstraintSync(**_constraint_sync(payload))
+
+
+def _apply_constraint_sync(payload: Mapping[str, Any]) -> Command:
+    return ApplyConstraintSync(**payload)
+
+
+def _acknowledge_constraint_sync(payload: Mapping[str, Any]) -> Command:
+    return AcknowledgeConstraintSync(**payload)
+
+
+def _resolve_constraint_sync_conflict(payload: Mapping[str, Any]) -> Command:
+    return ResolveConstraintSyncConflict(**_constraint_sync(payload))
+
+
 _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = MappingProxyType(
     {
         Capability.CAPABILITIES_GET: _get_capabilities,
@@ -2159,6 +2253,13 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.CONSTRAINT_CATEGORIES_UPDATE: _update_constraint_category,
         Capability.CONSTRAINT_CATEGORIES_DEACTIVATE: _deactivate_constraint_category,
         Capability.CONSTRAINT_CATEGORIES_REORDER: _reorder_constraint_categories,
+        Capability.CONSTRAINT_SYNC_STATE: _read_constraint_sync_state,
+        Capability.CONSTRAINT_SYNC_DELTA: _read_constraint_sync_delta,
+        Capability.CONSTRAINT_SYNC_CONFLICTS: _list_constraint_sync_conflicts,
+        Capability.CONSTRAINT_SYNC_PREVIEW: _preview_constraint_sync,
+        Capability.CONSTRAINT_SYNC_APPLY: _apply_constraint_sync,
+        Capability.CONSTRAINT_SYNC_ACKNOWLEDGE: _acknowledge_constraint_sync,
+        Capability.CONSTRAINT_SYNC_RESOLVE: _resolve_constraint_sync_conflict,
         Capability.CONTEXT_PREPARE: _prepare_context,
         Capability.CONTEXT_FEEDBACK: _record_context_feedback,
         Capability.GOODNOTES_PULL: _pull_goodnotes_work,

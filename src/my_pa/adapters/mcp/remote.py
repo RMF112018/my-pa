@@ -59,6 +59,7 @@ _WRITE_PURPOSES: Final = frozenset(
         # to read would reach them. `constraint_read` stays out, for the same
         # reason every other read purpose does.
         Purpose.CONSTRAINT_AUTHORING,
+        Purpose.CONSTRAINT_SYNC_AUTHORING,
         Purpose.CONTEXT_PREFERENCE,
         Purpose.GOODNOTES_PROPOSAL,
         Purpose.REPORT_AUTHORING,

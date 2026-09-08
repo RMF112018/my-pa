@@ -91,13 +91,15 @@ def test_the_authoring_purpose_exists_and_is_the_only_one_added() -> None:
     assert {purpose for purpose in Purpose if purpose.value.startswith("constraint")} == {
         Purpose.CONSTRAINT_READ,
         Purpose.CONSTRAINT_AUTHORING,
+        Purpose.CONSTRAINT_SYNC_READ,
+        Purpose.CONSTRAINT_SYNC_AUTHORING,
     }
 
 
 def test_the_two_vocabularies_are_the_sizes_this_package_states() -> None:
     """The counts the census documents and the migration are written against."""
-    assert len(Capability) == 154
-    assert len(Purpose) == 43
+    assert len(Capability) == 161
+    assert len(Purpose) == 45
 
 
 def test_no_public_migration_capability_exists() -> None:
@@ -208,7 +210,10 @@ def test_no_constraint_read_became_a_write() -> None:
         assert not is_operator_only(capability)
 
 
-def test_no_synchronisation_capability_or_purpose_exists() -> None:
-    """`PC-CM-IMP-WP11`'s vocabulary, deliberately absent at this head."""
-    assert [c for c in Capability if c.value.startswith("constraint_sync")] == []
-    assert [p for p in Purpose if "sync" in p.value] == []
+def test_synchronisation_vocabulary_is_bounded() -> None:
+    """`PC-CM-IMP-WP11` admits exactly seven operations and its bounded purpose pair."""
+    assert len([c for c in Capability if c.value.startswith("constraint_sync.")]) == 7
+    assert {p.value for p in Purpose if p.value.startswith("constraint_sync_")} == {
+        "constraint_sync_read",
+        "constraint_sync_authoring",
+    }

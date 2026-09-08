@@ -57,6 +57,7 @@ from my_pa.infrastructure.persistence.constraints import SqlConstraintManagement
 from my_pa.infrastructure.persistence.tables import (
     constraint_sync_baselines,
     constraint_sync_conflicts,
+    constraint_sync_resolution_history,
     constraint_sync_runs,
     constraint_sync_targets,
     projects,
@@ -222,6 +223,11 @@ def _seed_target(connection: Connection) -> None:
             project_id=PROJECT_A,
             sync_target_id=TARGET,
             state="applied",
+            sync_state="verification_pending",
+            lease_token="0" * 64,
+            preview_lease_until=T0,
+            preview_idempotency_key="legacy__" + RUN,
+            preview_request_digest="0" * 64,
             started_at=T0,
             finished_at=T0,
             outcome="applied",
@@ -307,7 +313,24 @@ def _synced(
             field_names=["due_date"],
             state="resolved",
             resolved_at=T0,
-            resolution_history_id=_id("chst", 1),
+            resolution_history_id=_id("csyrh", 1),
+            created_at=T0,
+        )
+    )
+    connection.execute(
+        insert(constraint_sync_resolution_history).values(
+            resolution_history_id=_id("csyrh", 1),
+            principal_id=PRINCIPAL_A,
+            project_id=PROJECT_A,
+            sync_target_id=TARGET,
+            sync_conflict_id=RESOLVED_CONFLICT,
+            sync_run_id=RUN,
+            resolution="keep_canonical",
+            expected_constraint_version=2,
+            idempotency_key="resolved_sync_0001",
+            request_digest=DIGEST,
+            constraint_history_id=None,
+            constraint_version=2,
             created_at=T0,
         )
     )
@@ -325,13 +348,19 @@ def _states(repository: SqlConstraintManagementRepository) -> dict[str, Constrai
     return {entry.constraint_id: entry.sync_state for entry in page.entries}
 
 
-def test_only_four_sync_states_exist_to_be_emitted(migrated_engine: Engine) -> None:
-    """The six that need a connector have no member, so no path can produce one."""
+def test_the_ten_sync_states_exist_to_be_emitted(migrated_engine: Engine) -> None:
+    """WP11's provider-neutral state machine is exact and bounded."""
     assert {state.value for state in ConstraintSyncStateView} == {
         "never_synced",
         "in_sync",
         "db_export_pending",
+        "external_import_pending",
         "conflict",
+        "workbook_unavailable",
+        "schema_unsupported",
+        "partial",
+        "verification_pending",
+        "verification_failed",
     }
     assert migrated_engine is not None
 

@@ -229,6 +229,9 @@ def test_downgrading_one_step_removes_exactly_these_two_tables(migrated_engine: 
         "constraint_sync_runs",
         "constraint_sync_baselines",
         "constraint_sync_conflicts",
+        "constraint_sync_run_items",
+        "constraint_sync_resolution_history",
+        "constraint_sync_legacy_unbound_conflicts",
     }
     assert {
         "entities",

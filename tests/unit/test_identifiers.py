@@ -201,6 +201,8 @@ def test_contract_prefixes_are_stable() -> None:
         "csyt",
         "csyr",
         "csyc",
+        # PC-CM-IMP-WP11: one append-only conflict-resolution receipt.
+        "csyrh",
     }
 
 

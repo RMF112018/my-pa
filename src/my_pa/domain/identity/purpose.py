@@ -363,10 +363,12 @@ class Purpose(StrEnum):
     # separate purposes rather than one wider one: a grant issued to read a
     # Project's Register must not also close, void or reopen the records in it,
     # and `operation.py` maps every capability to exactly one of the two, never
-    # to both. Sync read and sync authoring are still absent, and for the
-    # unchanged reason: no `constraint_sync.*` capability exists in this build,
-    # so either would be a grant nothing can exercise — the synchronisation
-    # behaviour is `PC-CM-IMP-WP11`'s, and a purpose named for it would be the
-    # first half of building one.
+    # to both. `PC-CM-IMP-WP11` adds a second read/authoring pair for the seven
+    # provider-neutral `constraint_sync.*` operations. Those grants remain
+    # separate from canonical Constraint authoring: synchronizing may compare,
+    # apply, acknowledge, or resolve a bounded plan, while an ordinary authoring
+    # grant must not acquire workbook-reconciliation authority implicitly.
     CONSTRAINT_READ = "constraint_read"
     CONSTRAINT_AUTHORING = "constraint_authoring"
+    CONSTRAINT_SYNC_READ = "constraint_sync_read"
+    CONSTRAINT_SYNC_AUTHORING = "constraint_sync_authoring"

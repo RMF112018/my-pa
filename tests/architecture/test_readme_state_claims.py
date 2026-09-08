@@ -26,12 +26,14 @@ from typing import Final
 
 import pytest
 
+from my_pa.adapters.mcp.server import published_tools
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
 from my_pa.application.service import (
     _ENTITY_CAPABILITIES,
     _ENTITY_WRITE_CAPABILITIES,
     _HANDLERS,
 )
+from my_pa.bootstrap.gateway import build_gateway_runtime
 from my_pa.bootstrap.settings import DATABASE_URL_SCHEME, Settings
 from my_pa.contracts.v1.capabilities import Availability, ReadinessState
 from my_pa.domain.identity.operation import Capability
@@ -387,6 +389,13 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     152: "One hundred and fifty-two",
     153: "One hundred and fifty-three",
     154: "One hundred and fifty-four",
+    155: "One hundred and fifty-five",
+    156: "One hundred and fifty-six",
+    157: "One hundred and fifty-seven",
+    158: "One hundred and fifty-eight",
+    159: "One hundred and fifty-nine",
+    160: "One hundred and sixty",
+    161: "One hundred and sixty-one",
 }
 
 
@@ -519,13 +528,45 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # on the withheld side too, as do `RI-ENT-WP-11`'s record-family writes. The
     # GoodNotes pull adds three default-composed names after the entity work,
     # and UI-IMP-WP17 admits canvas.workspace get/put on the served side, so the
-    # combined surface exposes sixty and still withholds seventy.
+    # combined surface exposes the derived default and still withholds seventy.
     # `PC-CM-IMP-WP04`'s six Constraint reads arrive on the served side --
     # they are in none of the three withheld families -- so the default grows
     # by six while the withheld figure is unchanged. `PC-CM-IMP-WP07`'s twelve
     # Constraint mutations arrive on the served side for the same reason, and
     # the withheld figure is again unchanged.
-    assert default == 84 and total == 154 and withheld == 70
+    assert default == 91 and total == 161 and withheld == 70
+
+    # Exercise the same application and MCP publication composition that owns
+    # the current 91-tool measurement. GoodNotes pull is part of that measured
+    # composition and its authenticated-client presence is required for the
+    # three pull tools to be published; the other three documented families
+    # remain deliberately uncomposed.
+    runtime = build_gateway_runtime(
+        Settings(
+            database_url=f"{DATABASE_URL_SCHEME}://someone@db.invalid:5432/somewhere",
+            goodnotes_pull_enabled=True,
+            goodnotes_pull_cursor_signing_key="synthetic-current-state-key-0001",
+        )
+    )
+    try:
+        application_capabilities = runtime.service.available_capabilities
+        authenticated_mcp_capabilities = {
+            tool.name
+            for tool in published_tools(runtime.service, authenticated_client_present=True)
+        }
+        local_mcp_capabilities = {tool.name for tool in published_tools(runtime.service)}
+    finally:
+        runtime.close()
+    assert len(application_capabilities) == default
+    assert authenticated_mcp_capabilities == {
+        capability.value for capability in application_capabilities
+    }
+    assert len(local_mcp_capabilities) == default - 3 == 88
+    assert authenticated_mcp_capabilities - local_mcp_capabilities == {
+        "goodnotes.pull",
+        "goodnotes.complete",
+        "goodnotes.status",
+    }
 
     entity_total = len(_ENTITY_CAPABILITIES)
     entity_writes = len(_ENTITY_WRITE_CAPABILITIES)
@@ -546,11 +587,21 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert "twenty-nine writes" not in readme
 
     system_context = SYSTEM_CONTEXT.read_text(encoding="utf-8").lower()
-    assert "one hundred and fifty-four capabilities" in system_context
-    assert "exposes eighty-four of them" in system_context
+    assert "one hundred and sixty-one capabilities" in system_context
+    assert f"exposes {default} of them" in system_context
+
+    architecture_index = (ROOT / "docs/architecture/00_ARCHITECTURE_INDEX.md").read_text(
+        encoding="utf-8"
+    )
+    runbook = (ROOT / "ops/runbooks/mcp-and-cli-operations.md").read_text(encoding="utf-8")
+    assert f"default composition serves {default} of" in architecture_index
+    assert f"**{default} application-available capabilities**" in runbook
+    assert f"publishes **{default - 3} tools**" in runbook
+    assert "unconfigured local stdio: 88" in runbook
+    assert "fully feature-composed local stdio: 158" in runbook
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
-    assert "one hundred and fifty-four capabilities" in module_boundaries
+    assert "one hundred and sixty-one capabilities" in module_boundaries
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:
@@ -609,6 +660,14 @@ def test_web_readme_names_the_routes_and_capabilities_the_bff_reaches() -> None:
     # literal in the document it is guarding.
     assert len(capability_values) in SPELLED_COUNTS, "extend the readable count vocabulary"
     assert f"{SPELLED_COUNTS[len(capability_values)].lower()} capability names" in lowered
+    # WP11 is MCP/backend-only; the browser routes remain the pre-sync subset.
+    sync_capabilities = {
+        capability for capability in capability_values if capability.startswith("constraint_sync.")
+    }
+    assert len(sync_capabilities) == 7
+    assert sync_capabilities.isdisjoint(routed)
+    normalized_text = " ".join(lowered.split())
+    assert "seven `constraint_sync.*` backend and mcp capabilities" in normalized_text
     work_routed = {
         "tasks.read",
         "tasks.list",

@@ -319,6 +319,14 @@ EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
         # renaming it to dodge the scan would put the wire, the domain and the
         # schema out of step to satisfy a substring.
         ("entities.split", "target_entity_id"),
+        # Opaque product-issued synchronization identities, never external
+        # locations or workbook paths. The provider identity uses the neutral
+        # wire name `external_identity` and is deliberately not exempted.
+        ("constraint_sync.state", "target_id"),
+        ("constraint_sync.delta", "target_id"),
+        ("constraint_sync.conflicts", "target_id"),
+        ("constraint_sync.apply", "target_id"),
+        ("constraint_sync.acknowledge", "target_id"),
     }
 )
 
@@ -618,7 +626,7 @@ def test_the_location_scan_would_catch_one() -> None:
     # name trips the scan on "target" -- and WP-01's settled-ambiguity target
     # Entity, an opaque `ent_` identifier that apply refuses outside that
     # ambiguity's own `allowed_target_entity_ids`.
-    assert len(EXEMPT_PROPERTIES) == 9
+    assert len(EXEMPT_PROPERTIES) == 14
     for tool_name, property_name in EXEMPT_PROPERTIES:
         tool = next(entry for entry in TOOLS if entry.name == tool_name)
         assert property_name in set(_schema_property_names(tool.input_schema))

@@ -32,6 +32,7 @@ inside the payload the caller controls.
 
 from __future__ import annotations
 
+import json
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -110,6 +111,25 @@ from my_pa.domain.project_controls.read_models import (
     ConstraintSort,
     ConstraintSyncStateView,
     SortDirection,
+)
+from my_pa.domain.project_controls.sync import (
+    MANUAL_PATCH_FIELDS,
+    MAX_CANDIDATE_BYTES,
+    MAX_NARRATIVE,
+    MAX_NORMALIZATION_VERSION,
+    MAX_PARTIES_PER_ROLE,
+    MAX_PARTY_LABEL,
+    MAX_PROVIDER_VERSION,
+    MAX_REFERENCE,
+    MAX_SYNC_CURSOR,
+    MAX_SYNC_PAGE,
+    MAX_SYNC_ROWS,
+    MAX_TARGET_IDENTITY,
+    ConstraintSyncAction,
+    ConstraintSyncError,
+    ConstraintSyncResolution,
+    NormalizedExternalConstraintRow,
+    validate_digest,
 )
 from my_pa.domain.relationship.authoring import (
     CALLER_SETTABLE_STATUSES,
@@ -8032,6 +8052,343 @@ class ListConstraintCategories:
         _constraint_enum_tuple(self.states, ConstraintCategoryState, SafeDetail.STATES)
 
 
+# --- provider-neutral Constraint synchronization (PC-CM-IMP-WP11) ---------
+
+
+def _sync_identifier(value: object, kind: IdKind, detail: SafeDetail) -> None:
+    if not isinstance(value, str):
+        raise InvalidRequestError(detail)
+    _identifier(value, kind, detail)
+
+
+def _sync_bounded_text(value: object, maximum: int, detail: SafeDetail) -> None:
+    if not isinstance(value, str) or not value.strip() or len(value) > maximum:
+        raise InvalidRequestError(detail)
+
+
+def _sync_optional_bounded_text(value: object, maximum: int, detail: SafeDetail) -> None:
+    if value is None:
+        return
+    _sync_bounded_text(value, maximum, detail)
+
+
+def _sync_parties(value: object) -> None:
+    if (
+        not isinstance(value, tuple)
+        or len(value) > MAX_PARTIES_PER_ROLE
+        or any(not isinstance(party, PartyRef) for party in value)
+        or any(party.label is not None and len(party.label) > MAX_PARTY_LABEL for party in value)
+    ):
+        raise InvalidRequestError(SafeDetail.SELECTOR)
+
+
+def _sync_digest(value: object, *, optional: bool = False) -> None:
+    if optional and value is None:
+        return
+    try:
+        validate_digest(value if isinstance(value, str) else "")
+    except ConstraintSyncError as error:
+        raise InvalidRequestError(SafeDetail.SELECTOR) from error
+
+
+def _sync_page(limit: object, cursor: object) -> None:
+    if type(limit) is not int or not 1 <= limit <= MAX_SYNC_PAGE:
+        raise InvalidRequestError(SafeDetail.LIMIT)
+    if cursor is not None:
+        _sync_bounded_text(cursor, MAX_SYNC_CURSOR, SafeDetail.CURSOR)
+
+
+def _sync_rows(value: object) -> None:
+    if not isinstance(value, tuple) or not 1 <= len(value) <= MAX_SYNC_ROWS:
+        raise InvalidRequestError(SafeDetail.SELECTOR)
+    if any(not isinstance(row, NormalizedExternalConstraintRow) for row in value):
+        raise InvalidRequestError(SafeDetail.SELECTOR)
+    if len({row.external_row_key for row in value}) != len(value):
+        raise InvalidRequestError(SafeDetail.SELECTOR)
+    constraint_ids = [row.constraint_id for row in value if row.constraint_id is not None]
+    if len(set(constraint_ids)) != len(constraint_ids):
+        raise InvalidRequestError(SafeDetail.SELECTOR)
+    constraint_codes = [row.constraint_code for row in value if row.constraint_code is not None]
+    if len(set(constraint_codes)) != len(constraint_codes):
+        raise InvalidRequestError(SafeDetail.SELECTOR)
+
+
+def _sync_party_schema(description: str) -> Mapping[str, object]:
+    return {
+        "type": "array",
+        "maxItems": 32,
+        "items": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "enum": [member.value for member in PartyKind]},
+                "entity_id": {"type": ["string", "null"]},
+                "label": {"type": ["string", "null"], "maxLength": 512},
+            },
+            "required": ["kind"],
+            "additionalProperties": False,
+        },
+        "description": description,
+    }
+
+
+_SYNC_ROW_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": MAX_SYNC_ROWS,
+        "items": {
+            "type": "object",
+            "properties": {
+                "external_row_key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "pattern": r"^\S+$",
+                },
+                "constraint_id": {"type": ["string", "null"]},
+                "constraint_code": {"type": ["string", "null"], "maxLength": 32},
+                "category": {"type": ["string", "null"], "maxLength": 256},
+                "description": {"type": ["string", "null"], "maxLength": 4096},
+                "date_identified": {"type": ["string", "null"], "format": "date"},
+                "status": {
+                    "type": ["string", "null"],
+                    "enum": [*[member.value for member in ConstraintLifecycleState], None],
+                },
+                "bic": _sync_party_schema("Ordered ball-in-court party tokens."),
+                "responsible": _sync_party_schema("Ordered responsible party tokens."),
+                "due_date": {"type": ["string", "null"], "format": "date"},
+                "reference": {"type": ["string", "null"], "maxLength": 1024},
+                "current_update": {"type": ["string", "null"], "maxLength": 4096},
+                "completion_date": {"type": ["string", "null"], "format": "date"},
+            },
+            "required": ["external_row_key"],
+            "additionalProperties": False,
+        },
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadConstraintSyncState:
+    capability: ClassVar[Capability] = Capability.CONSTRAINT_SYNC_STATE
+    project_id: str
+    target_id: str
+
+    def __post_init__(self) -> None:
+        _sync_identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _sync_identifier(self.target_id, IdKind.CONSTRAINT_SYNC_TARGET, SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadConstraintSyncDelta:
+    capability: ClassVar[Capability] = Capability.CONSTRAINT_SYNC_DELTA
+    project_id: str
+    target_id: str
+    limit: int = MAX_SYNC_PAGE
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _sync_identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _sync_identifier(self.target_id, IdKind.CONSTRAINT_SYNC_TARGET, SafeDetail.SELECTOR)
+        if self.cursor is not None and not isinstance(self.cursor, str):
+            raise InvalidRequestError(SafeDetail.CURSOR)
+        _sync_page(self.limit, self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class ListConstraintSyncConflicts:
+    capability: ClassVar[Capability] = Capability.CONSTRAINT_SYNC_CONFLICTS
+    project_id: str
+    target_id: str
+    limit: int = MAX_SYNC_PAGE
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _sync_identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _sync_identifier(self.target_id, IdKind.CONSTRAINT_SYNC_TARGET, SafeDetail.SELECTOR)
+        if self.cursor is not None and not isinstance(self.cursor, str):
+            raise InvalidRequestError(SafeDetail.CURSOR)
+        _sync_page(self.limit, self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class PreviewConstraintSync:
+    capability: ClassVar[Capability] = Capability.CONSTRAINT_SYNC_PREVIEW
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+        {"rows": _SYNC_ROW_SCHEMA}
+    )
+    project_id: str
+    external_identity: str
+    normalization_version: str
+    rows: tuple[NormalizedExternalConstraintRow, ...]
+    idempotency_key: str
+    provider_version: str | None = None
+    workbook_digest: str | None = None
+
+    def __post_init__(self) -> None:
+        _sync_identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _sync_bounded_text(self.external_identity, MAX_TARGET_IDENTITY, SafeDetail.SELECTOR)
+        _sync_bounded_text(
+            self.normalization_version, MAX_NORMALIZATION_VERSION, SafeDetail.SELECTOR
+        )
+        _sync_rows(self.rows)
+        _idempotency_key(self.idempotency_key)
+        _constraint_idempotency_key(self.idempotency_key)
+        if self.provider_version is not None:
+            _sync_bounded_text(self.provider_version, MAX_PROVIDER_VERSION, SafeDetail.SELECTOR)
+        _sync_digest(self.workbook_digest, optional=True)
+
+
+@dataclass(frozen=True, slots=True)
+class ApplyConstraintSync:
+    capability: ClassVar[Capability] = Capability.CONSTRAINT_SYNC_APPLY
+    project_id: str
+    target_id: str
+    run_id: str
+    lease_token: str
+    preview_digest: str
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _sync_identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _sync_identifier(self.target_id, IdKind.CONSTRAINT_SYNC_TARGET, SafeDetail.SELECTOR)
+        _sync_identifier(self.run_id, IdKind.CONSTRAINT_SYNC_RUN, SafeDetail.SELECTOR)
+        _sync_digest(self.lease_token)
+        _sync_digest(self.preview_digest)
+        _idempotency_key(self.idempotency_key)
+        _constraint_idempotency_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class AcknowledgeConstraintSync:
+    capability: ClassVar[Capability] = Capability.CONSTRAINT_SYNC_ACKNOWLEDGE
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+        {
+            "item_count": {"type": "integer", "minimum": 0, "maximum": MAX_SYNC_ROWS},
+            "action_counts": {
+                "type": "object",
+                "properties": {
+                    action.value: {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": MAX_SYNC_ROWS,
+                    }
+                    for action in ConstraintSyncAction
+                },
+                "required": [action.value for action in ConstraintSyncAction],
+                "additionalProperties": False,
+            },
+        }
+    )
+    project_id: str
+    target_id: str
+    run_id: str
+    lease_token: str
+    canonical_digest: str
+    item_count: int
+    action_counts: Mapping[str, int]
+    idempotency_key: str
+    provider_version: str | None = None
+    workbook_digest: str | None = None
+
+    def __post_init__(self) -> None:
+        _sync_identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _sync_identifier(self.target_id, IdKind.CONSTRAINT_SYNC_TARGET, SafeDetail.SELECTOR)
+        _sync_identifier(self.run_id, IdKind.CONSTRAINT_SYNC_RUN, SafeDetail.SELECTOR)
+        _sync_digest(self.lease_token)
+        _sync_digest(self.canonical_digest)
+        if type(self.item_count) is not int or not 0 <= self.item_count <= MAX_SYNC_ROWS:
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        required_actions = {action.value for action in ConstraintSyncAction}
+        if not isinstance(self.action_counts, dict) or set(self.action_counts) != required_actions:
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        counts = tuple(self.action_counts.values())
+        if any(type(count) is not int or not 0 <= count <= MAX_SYNC_ROWS for count in counts):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        if sum(counts) != self.item_count:
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        _idempotency_key(self.idempotency_key)
+        _constraint_idempotency_key(self.idempotency_key)
+        if self.provider_version is not None:
+            _sync_bounded_text(self.provider_version, MAX_PROVIDER_VERSION, SafeDetail.SELECTOR)
+        _sync_digest(self.workbook_digest, optional=True)
+        if self.provider_version is None and self.workbook_digest is None:
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ResolveConstraintSyncConflict:
+    capability: ClassVar[Capability] = Capability.CONSTRAINT_SYNC_RESOLVE
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+        {
+            "manual_patch": {
+                "type": ["object", "null"],
+                "properties": {
+                    "description": {"type": ["string", "null"], "maxLength": 4096},
+                    "date_identified": {"type": ["string", "null"], "format": "date"},
+                    "due_date": {"type": ["string", "null"], "format": "date"},
+                    "reference": {"type": ["string", "null"], "maxLength": 1024},
+                    "current_update": {"type": ["string", "null"], "maxLength": 4096},
+                    "bic": _sync_party_schema("Ordered ball-in-court party tokens."),
+                    "responsible": _sync_party_schema("Ordered responsible party tokens."),
+                    "project_id": {"type": ["string", "null"]},
+                    "category_id": {"type": ["string", "null"]},
+                },
+                "maxProperties": 9,
+                "additionalProperties": False,
+            }
+        }
+    )
+    project_id: str
+    conflict_id: str
+    resolution: ConstraintSyncResolution
+    expected_version: int
+    idempotency_key: str
+    manual_patch: Mapping[str, object] | None = None
+
+    def __post_init__(self) -> None:
+        _sync_identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _sync_identifier(self.conflict_id, IdKind.CONSTRAINT_SYNC_CONFLICT, SafeDetail.SELECTOR)
+        _constraint_enum(self.resolution, ConstraintSyncResolution, SafeDetail.SELECTOR)
+        _constraint_expected_version(self.expected_version)
+        _idempotency_key(self.idempotency_key)
+        _constraint_idempotency_key(self.idempotency_key)
+        if self.resolution is ConstraintSyncResolution.MANUAL_PATCH:
+            if not isinstance(self.manual_patch, Mapping) or not self.manual_patch:
+                raise InvalidRequestError(SafeDetail.SELECTOR)
+            if not set(self.manual_patch) <= set(MANUAL_PATCH_FIELDS):
+                raise InvalidRequestError(SafeDetail.SELECTOR)
+            if len(json.dumps(self.manual_patch, default=str).encode()) > MAX_CANDIDATE_BYTES:
+                raise InvalidRequestError(SafeDetail.SELECTOR)
+            for field in ("date_identified", "due_date"):
+                if field in self.manual_patch:
+                    _constraint_date(self.manual_patch[field], SafeDetail.SELECTOR)
+            for field in ("description", "current_update"):
+                if field in self.manual_patch:
+                    _sync_optional_bounded_text(
+                        self.manual_patch[field], MAX_NARRATIVE, SafeDetail.TEXT
+                    )
+            if "reference" in self.manual_patch:
+                _sync_optional_bounded_text(
+                    self.manual_patch["reference"], MAX_REFERENCE, SafeDetail.SELECTOR
+                )
+            for field in ("bic", "responsible"):
+                if field in self.manual_patch:
+                    _sync_parties(self.manual_patch[field])
+            if "project_id" in self.manual_patch:
+                _constraint_optional_identifier(
+                    self.manual_patch["project_id"], IdKind.PROJECT, SafeDetail.PROJECT_ID
+                )
+            if "category_id" in self.manual_patch:
+                _constraint_optional_identifier(
+                    self.manual_patch["category_id"],
+                    IdKind.CONSTRAINT_CATEGORY,
+                    SafeDetail.SELECTOR,
+                )
+        elif self.manual_patch is not None:
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+
+
 # --- the Constraint Management authoring plane (PC-CM-IMP-WP07) --------------
 #
 # Twelve commands, one per canonical mutation `application.constraint_management`
@@ -8863,6 +9220,13 @@ type Command = (
     | ReadConstraintHistory
     | ReadConstraintOverview
     | ListConstraintCategories
+    | ReadConstraintSyncState
+    | ReadConstraintSyncDelta
+    | ListConstraintSyncConflicts
+    | PreviewConstraintSync
+    | ApplyConstraintSync
+    | AcknowledgeConstraintSync
+    | ResolveConstraintSyncConflict
     | CreateConstraintDraft
     | PublishConstraint
     | UpdateConstraint

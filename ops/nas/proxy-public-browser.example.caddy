@@ -1,0 +1,53 @@
+# Public browser-only reverse proxy for https://pa.bobby-fetting.me.
+# This listener is NOT the Tailscale private proxy. Machine and MCP routes
+# stay on the private Tailscale allowlist proxy; this origin never forwards them.
+:8080 {
+    @hostile_host not host pa.bobby-fetting.me
+    handle @hostile_host {
+        respond "not found" 404
+    }
+
+    @internal_capabilities path /v1/*
+    handle @internal_capabilities {
+        respond "not found" 404
+    }
+
+    @unmatched_remote path /remote/*
+    handle @unmatched_remote {
+        respond "not found" 404
+    }
+
+    @reserved_apple path /apple/*
+    handle @reserved_apple {
+        respond "not found" 404
+    }
+
+    @mcp path /mcp /mcp/*
+    handle @mcp {
+        respond "not found" 404
+    }
+
+    handle /healthz {
+        respond "ok" 200
+    }
+
+    header Strict-Transport-Security "max-age=31536000"
+
+    handle {
+        reverse_proxy web:3000 {
+            header_up -Authorization
+            header_up -Forwarded
+            header_up -X-Forwarded-For
+            header_up -X-Forwarded-Host
+            header_up -X-Forwarded-Proto
+            header_up -X-Forwarded-*
+            header_up -Tailscale-User-Login
+            header_up -Tailscale-User-Name
+            header_up -Tailscale-User-Profile-Pic
+            header_up -Tailscale-App-Capabilities
+            header_up -Cf-Access-Authenticated-User-Email
+            header_up -Cf-Access-Jwt-Assertion
+            header_up -Cf-Access-Token
+        }
+    }
+}

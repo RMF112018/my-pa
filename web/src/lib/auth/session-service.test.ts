@@ -1,11 +1,14 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  InvalidSessionServiceUrlError,
   MissingSessionServiceSecretError,
   SESSION_SERVICE_HEADER,
   callSessionService,
   issueSessionServiceToken,
+  sessionServiceBaseUrl,
   issueSyntheticSession,
+  mapSessionPrincipal,
   rotateSid,
   revokeSid,
   touchSid,
@@ -13,7 +16,9 @@ import {
 
 const SID = "ab".repeat(32);
 const PRINCIPAL = {
-  principalId: "syn-aaaa0001",
+  principalId: "aaaa0001-0000-0000-0000-000000000001",
+  identityProvider: "synthetic",
+  identitySubject: "11111111-2222-3333-4444-555555555555:aaaa0001-0000-0000-0000-000000000001",
   tid: "11111111-2222-3333-4444-555555555555",
   oid: "aaaa0001-0000-0000-0000-000000000001",
   upn: "synthetic.a@moss.example",
@@ -80,6 +85,24 @@ describe("callSessionService", () => {
     expect(headers.get("x-my-pa-webauthn-attestation")).toBeNull();
     expect(JSON.parse(String(init.body))).toEqual({ sid: SID });
   });
+
+  it("uses MYPA_GATEWAY_URL when MYPA_SESSION_SERVICE_URL is unset", () => {
+    vi.stubEnv("MYPA_SESSION_SERVICE_URL", "");
+    expect(sessionServiceBaseUrl()).toBe("http://127.0.0.1:8000");
+  });
+
+  it("POSTs session-service to MYPA_SESSION_SERVICE_URL when set", async () => {
+    vi.stubEnv("MYPA_SESSION_SERVICE_URL", "http://127.0.0.1:9099");
+    const fetchStub = stubFetch(200, { principal: PRINCIPAL });
+    await callSessionService("sessions/touch", { sid: SID });
+    const [url] = fetchStub.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:9099/webauthn/v1/sessions/touch");
+  });
+
+  it("refuses a non-http MYPA_SESSION_SERVICE_URL", () => {
+    vi.stubEnv("MYPA_SESSION_SERVICE_URL", "file:///etc/passwd");
+    expect(() => sessionServiceBaseUrl()).toThrow(InvalidSessionServiceUrlError);
+  });
 });
 
 describe("session-service helpers", () => {
@@ -110,7 +133,8 @@ describe("session-service helpers", () => {
     const sidB = "cd".repeat(32);
     const principalB = {
       ...PRINCIPAL,
-      principalId: "syn-bbbb0002",
+      principalId: "bbbb0002-0000-0000-0000-000000000002",
+      identitySubject: "11111111-2222-3333-4444-555555555555:bbbb0002-0000-0000-0000-000000000002",
       oid: "bbbb0002-0000-0000-0000-000000000002",
       upn: "synthetic.b@moss.example",
       displayName: "Synthetic B",
@@ -155,5 +179,62 @@ describe("session-service helpers", () => {
       issuedSid: "22".repeat(32),
       principal: { principalId: PRINCIPAL.principalId },
     });
+  });
+});
+
+describe("mapSessionPrincipal", () => {
+  it("maps a local principal without tid or oid", () => {
+    expect(
+      mapSessionPrincipal({
+        principalId: "24abf5d2-d0c2-5e1c-82f6-e72425e9ed37",
+        identityProvider: "local",
+        identitySubject: "local-operator",
+        displayName: "Local operator",
+        lifecycleState: "active",
+      }),
+    ).toEqual({
+      principalId: "24abf5d2-d0c2-5e1c-82f6-e72425e9ed37",
+      identityProvider: "local",
+      identitySubject: "local-operator",
+      displayName: "Local operator",
+      lifecycleState: "active",
+      synthetic: false,
+    });
+  });
+
+  it("maps a synthetic principal with tid and oid", () => {
+    expect(mapSessionPrincipal(PRINCIPAL)).toMatchObject({
+      identityProvider: "synthetic",
+      synthetic: true,
+      authenticationProvider: "synthetic",
+      tid: PRINCIPAL.tid,
+      oid: PRINCIPAL.oid,
+    });
+  });
+
+  it("refuses a local payload that still carries tid or oid", () => {
+    expect(
+      mapSessionPrincipal({
+        principalId: "24abf5d2-d0c2-5e1c-82f6-e72425e9ed37",
+        identityProvider: "local",
+        identitySubject: "local-operator",
+        displayName: "Local operator",
+        lifecycleState: "active",
+        tid: PRINCIPAL.tid,
+        oid: PRINCIPAL.oid,
+      }),
+    ).toBeNull();
+  });
+
+  it("refuses an Entra-shaped payload without tid and oid", () => {
+    expect(
+      mapSessionPrincipal({
+        principalId: PRINCIPAL.principalId,
+        identityProvider: "entra",
+        identitySubject: PRINCIPAL.identitySubject,
+        displayName: PRINCIPAL.displayName,
+        lifecycleState: "active",
+      }),
+    ).toBeNull();
   });
 });

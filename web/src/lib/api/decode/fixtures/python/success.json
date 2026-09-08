@@ -1212,6 +1212,114 @@
           "version": "v1",
           "availability": "available",
           "operator_only": false
+        },
+        {
+          "name": "constraints.read",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraints.list",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraints.search",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraints.history",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraints.overview",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraint_categories.list",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraints.create",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraints.publish",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraints.update",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraints.transition",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraints.close",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraints.close_follow_up",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraints.void",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraints.reopen",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraint_categories.create",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraint_categories.update",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraint_categories.deactivate",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraint_categories.reorder",
+          "version": "v1",
+          "availability": "available",
+          "operator_only": false
         }
       ],
       "content_types": [
@@ -1238,11 +1346,11 @@
     "readiness": {
       "state": "degraded",
       "contract_version": "v1",
-      "implemented_capabilities": 136,
-      "total_capabilities": 136,
+      "implemented_capabilities": 154,
+      "total_capabilities": 154,
       "limitations": [
         "Content types awaiting an operator decision: application/pdf. They are reported rather than silently skipped.",
-        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.graph, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, goodnotes.notebooks.list, goodnotes.pages.list, goodnotes.pull, goodnotes.runs.list, goodnotes.search, knowledge.search, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
+        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, constraints.history, constraints.list, constraints.search, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.graph, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, goodnotes.notebooks.list, goodnotes.pages.list, goodnotes.pull, goodnotes.runs.list, goodnotes.search, knowledge.search, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
         "Model proposals and semantic retrieval are disabled; deterministic lexical retrieval remains active.",
         "Worker-plane health is unavailable, stale, absent for queued work, or reports dead-lettered work; inspect worker_planes."
       ]
@@ -2129,5 +2237,249 @@
     "renderer_name": "synthetic",
     "renderer_version": "1",
     "render_profile_version": "v1"
+  },
+  "constraints.read": {
+    "constraint": {
+      "constraint_id": "cst_aaaaaaaa11111111",
+      "project_id": "prj_aaaaaaaa11111111",
+      "constraint_code": "2.01",
+      "description": "Synthetic access constraint",
+      "category": {
+        "category_id": "ccat_aaaaaaaa11111111",
+        "prefix": "2",
+        "title": "Site access"
+      },
+      "status": "in_progress",
+      "date_identified": "2026-07-28",
+      "due_date": "2026-08-14",
+      "bic": [
+        {
+          "kind": "principal",
+          "party_ref_id": "principal",
+          "display_label": "You",
+          "entity_id": null
+        },
+        {
+          "kind": "entity",
+          "party_ref_id": "ent_aaaaaaaa11111111",
+          "display_label": "Pat Synthetic",
+          "entity_id": "ent_aaaaaaaa11111111"
+        }
+      ],
+      "responsible": [
+        {
+          "kind": "unresolved",
+          "party_ref_id": null,
+          "display_label": "Steel subcontractor",
+          "entity_id": null
+        }
+      ],
+      "reference": "RFI-014",
+      "days_elapsed": 8,
+      "version": 3,
+      "created_at": "2026-08-09T12:00:00+00:00",
+      "updated_at": "2026-08-09T12:00:00+00:00",
+      "is_overdue": false,
+      "is_due_soon": true,
+      "in_my_court": true,
+      "record_quality": "legacy_incomplete",
+      "needs_attention": true,
+      "needs_attention_reasons": [
+        "legacy_incomplete"
+      ],
+      "missing_fields": [
+        "description"
+      ],
+      "is_published": true,
+      "published_at": "2026-08-09T12:00:00+00:00",
+      "current_update": "Awaiting a confirmed delivery date",
+      "completion": null,
+      "void": null,
+      "sync": {
+        "state": "never_synced",
+        "last_verified_at": null,
+        "conflict_count": 0
+      },
+      "relationships": [
+        {
+          "relationship_id": "crel_aaaaaaaa11111111",
+          "relationship_type": "blocks",
+          "direction": "outgoing",
+          "related_constraint_id": "cst_bbbbbbbb22222222",
+          "related_constraint_code": "2.10",
+          "related_status": "identified"
+        }
+      ],
+      "evidence_links": [
+        {
+          "evidence_link_id": "cevd_aaaaaaaa11111111",
+          "evidence_kind": "capture",
+          "evidence_ref": "cap_aaaaaaaa11111111",
+          "role": "origin"
+        }
+      ]
+    }
+  },
+  "constraints.list": {
+    "constraints": [
+      {
+        "constraint_id": "cst_aaaaaaaa11111111",
+        "project_id": "prj_aaaaaaaa11111111",
+        "constraint_code": "2.01",
+        "description": "Synthetic access constraint",
+        "category": {
+          "category_id": "ccat_aaaaaaaa11111111",
+          "prefix": "2",
+          "title": "Site access"
+        },
+        "status": "in_progress",
+        "date_identified": "2026-07-28",
+        "due_date": "2026-08-14",
+        "bic": [
+          {
+            "kind": "principal",
+            "party_ref_id": "principal",
+            "display_label": "You",
+            "entity_id": null
+          },
+          {
+            "kind": "entity",
+            "party_ref_id": "ent_aaaaaaaa11111111",
+            "display_label": "Pat Synthetic",
+            "entity_id": "ent_aaaaaaaa11111111"
+          }
+        ],
+        "responsible": [
+          {
+            "kind": "unresolved",
+            "party_ref_id": null,
+            "display_label": "Steel subcontractor",
+            "entity_id": null
+          }
+        ],
+        "reference": "RFI-014",
+        "days_elapsed": 8,
+        "version": 3,
+        "updated_at": "2026-08-09T12:00:00+00:00",
+        "is_overdue": false,
+        "is_due_soon": true,
+        "in_my_court": true,
+        "record_quality": "normal",
+        "needs_attention": false,
+        "sync_state": "never_synced",
+        "group_keys": [
+          "ccat_aaaaaaaa11111111"
+        ]
+      }
+    ]
+  },
+  "constraints.search": {
+    "constraints": [
+      {
+        "constraint_id": "cst_aaaaaaaa11111111",
+        "project_id": "prj_aaaaaaaa11111111",
+        "constraint_code": "2.01",
+        "description": "Synthetic access constraint",
+        "category": {
+          "category_id": "ccat_aaaaaaaa11111111",
+          "prefix": "2",
+          "title": "Site access"
+        },
+        "status": "in_progress",
+        "date_identified": "2026-07-28",
+        "due_date": "2026-08-14",
+        "bic": [
+          {
+            "kind": "principal",
+            "party_ref_id": "principal",
+            "display_label": "You",
+            "entity_id": null
+          },
+          {
+            "kind": "entity",
+            "party_ref_id": "ent_aaaaaaaa11111111",
+            "display_label": "Pat Synthetic",
+            "entity_id": "ent_aaaaaaaa11111111"
+          }
+        ],
+        "responsible": [
+          {
+            "kind": "unresolved",
+            "party_ref_id": null,
+            "display_label": "Steel subcontractor",
+            "entity_id": null
+          }
+        ],
+        "reference": "RFI-014",
+        "days_elapsed": 8,
+        "version": 3,
+        "updated_at": "2026-08-09T12:00:00+00:00",
+        "is_overdue": false,
+        "is_due_soon": true,
+        "in_my_court": true,
+        "record_quality": "normal",
+        "needs_attention": false,
+        "sync_state": "never_synced",
+        "group_keys": [
+          "ccat_aaaaaaaa11111111"
+        ]
+      }
+    ]
+  },
+  "constraints.history": {
+    "history": [
+      {
+        "history_id": "chst_aaaaaaaa11111111",
+        "operation": "transition",
+        "actor": "principal",
+        "outcome": "applied",
+        "before_version": 2,
+        "after_version": 3,
+        "occurred_at": "2026-08-09T12:00:00+00:00",
+        "revision_id": "crev_aaaaaaaa11111111",
+        "safe_failure_reason": null
+      }
+    ]
+  },
+  "constraints.overview": {
+    "overview": {
+      "project_id": "prj_aaaaaaaa11111111",
+      "project_today": "2026-08-09",
+      "project_timezone": "America/New_York",
+      "total_open": 4,
+      "overdue": 1,
+      "due_soon": 2,
+      "due_soon_through": "2026-08-16",
+      "average_open_age_business_days": 6.5,
+      "in_my_court": 2,
+      "on_hold": 1,
+      "recently_changed": 3,
+      "recently_closed": 1,
+      "draft": 1,
+      "needs_attention": 1,
+      "sync_health": {
+        "state": "never_synced",
+        "open_conflict_count": 0,
+        "last_verified_at": null
+      },
+      "as_of": "2026-08-09T12:00:00+00:00"
+    }
+  },
+  "constraint_categories.list": {
+    "categories": [
+      {
+        "category_id": "ccat_aaaaaaaa11111111",
+        "project_id": "prj_aaaaaaaa11111111",
+        "prefix": "2",
+        "title": "Site access",
+        "description": "Access, egress and laydown",
+        "display_order": 2,
+        "state": "active",
+        "next_sequence": 3,
+        "issued_count": 2,
+        "version": 1,
+        "prefix_locked": true
+      }
+    ]
   }
 }

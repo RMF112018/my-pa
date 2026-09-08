@@ -1,4 +1,4 @@
-"""NAS private-ingress evidence for permanent local-operator authentication."""
+"""NAS private-ingress evidence for passkey web authentication."""
 
 from __future__ import annotations
 
@@ -45,8 +45,7 @@ def _live_fixture(
     tmp_path: Path,
     *,
     planted_entra: bool = False,
-    session_secret: str = "S" * 32,
-    operator_secret: str = "O" * 43,
+    session_service_secret: str = "S" * 32,
     proxy_cap_add: list[str] | None = None,
     host_edge_internal: bool = False,
     extra_host_edge_member: bool = False,
@@ -83,12 +82,11 @@ def _live_fixture(
     )
     web_environment = [
         "NODE_ENV=production",
-        "MYPA_AUTH_MODE=local_operator",
+        "MYPA_AUTH_MODE=passkey",
         "MYPA_GATEWAY_URL=http://gateway:8765",
         "MYPA_GATEWAY_AUTH_MODE=local_operator",
         "MYPA_CANONICAL_ORIGIN=https://my-pa.tail.example",
-        f"MYPA_SESSION_SECRET={session_secret}",
-        f"MYPA_LOCAL_OPERATOR_SECRET={operator_secret}",
+        f"MYPA_SESSION_SERVICE_SECRET={session_service_secret}",
         *(["MYPA_ENTRA_CLIENT_ID=forbidden"] if planted_entra else []),
     ]
 
@@ -235,7 +233,7 @@ def _live_fixture(
     return manifest, runner
 
 
-def test_gate_binds_private_local_operator_runtime(tmp_path: Path) -> None:
+def test_gate_binds_private_passkey_web_runtime(tmp_path: Path) -> None:
     manifest, runner = _live_fixture(tmp_path)
     assert (
         _gate().verify(
@@ -281,7 +279,7 @@ def test_gate_requires_the_canonical_web_env_file_declaration() -> None:
 
 @pytest.mark.parametrize(
     ("missing_key", "changed_key"),
-    (("MYPA_SESSION_SECRET", None), (None, "MYPA_LOCAL_OPERATOR_SECRET")),
+    (("MYPA_SESSION_SERVICE_SECRET", None), (None, "MYPA_SESSION_SERVICE_SECRET")),
 )
 def test_gate_refuses_resolved_web_environment_drift(
     tmp_path: Path, missing_key: str | None, changed_key: str | None
@@ -414,16 +412,11 @@ def test_gate_refuses_proxy_without_the_exact_caddy_exec_capability(
     assert "proxy_runtime_authority" in errors
 
 
-@pytest.mark.parametrize(
-    ("session_secret", "operator_secret"),
-    (("short", "O" * 43), ("S" * 32, "short"), ("S" * 32, "!" * 43)),
-)
+@pytest.mark.parametrize("session_service_secret", ("short", "!" * 31, " " * 32))
 def test_gate_refuses_credentials_the_runtime_would_reject(
-    tmp_path: Path, session_secret: str, operator_secret: str
+    tmp_path: Path, session_service_secret: str
 ) -> None:
-    manifest, runner = _live_fixture(
-        tmp_path, session_secret=session_secret, operator_secret=operator_secret
-    )
+    manifest, runner = _live_fixture(tmp_path, session_service_secret=session_service_secret)
     errors = _gate().verify(
         manifest,
         ROOT / "ops/nas/proxy-allowlist.example.caddy",

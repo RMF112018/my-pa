@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only NAS private-ingress evidence gate for local-operator auth."""
+"""Read-only NAS private-ingress evidence gate for passkey web auth."""
 
 from __future__ import annotations
 
@@ -32,8 +32,7 @@ WEB_COMPOSE_ENVIRONMENT_KEYS = {
     "MYPA_GATEWAY_URL",
     "MYPA_GATEWAY_AUTH_MODE",
     "MYPA_CANONICAL_ORIGIN",
-    "MYPA_SESSION_SECRET",
-    "MYPA_LOCAL_OPERATOR_SECRET",
+    "MYPA_SESSION_SERVICE_SECRET",
 }
 
 
@@ -328,13 +327,14 @@ def verify(
         errors.append("gateway_ingress_environment")
     required_web = {
         "NODE_ENV": "production",
-        "MYPA_AUTH_MODE": "local_operator",
+        "MYPA_AUTH_MODE": "passkey",
         "MYPA_GATEWAY_URL": "http://gateway:8765",
         "MYPA_GATEWAY_AUTH_MODE": "local_operator",
         "MYPA_CANONICAL_ORIGIN": f"https://{host}",
     }
-    session_secret = web_env.get("MYPA_SESSION_SECRET", "") if web_env is not None else ""
-    operator_secret = web_env.get("MYPA_LOCAL_OPERATOR_SECRET", "") if web_env is not None else ""
+    session_service_secret = (
+        web_env.get("MYPA_SESSION_SERVICE_SECRET", "") if web_env is not None else ""
+    )
     if configured_web_environment_error or any(
         web_env is None or web_env.get(key) != value
         for key, value in configured_web_environment.items()
@@ -343,8 +343,8 @@ def verify(
     if (
         web_env is None
         or any(web_env.get(key) != value for key, value in required_web.items())
-        or len(session_secret.strip()) < 32
-        or re.fullmatch(r"[A-Za-z0-9_-]{43,128}", operator_secret) is None
+        or len(session_service_secret.strip()) < 32
+        or web_env.get("MYPA_SESSION_SERVICE_URL")
         or any("DATABASE" in key or "POSTGRES" in key for key in web_env)
         or web.get("Mounts")
     ):

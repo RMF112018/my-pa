@@ -94,6 +94,13 @@ PERMITTED_CLIENT_NAMES = frozenset(
     {"register_client", "revoke_client", "clients_of", "capture_context"}
 )
 
+#: Every name rule 2 permits `auth.py` to import from persistence.
+#:
+#: The grant store writes digest-only rows; the state validator classifies and
+#: never repairs. No table declaration, and nothing about sessions, credentials,
+#: or accounts is reachable through either name.
+PERMITTED_AUTH_NAMES = frozenset({"AuthGrantStore", "AuthStateValidator"})
+
 #: The commands these rules govern, and — for rule 2 — exactly what each may name
 #: out of `infrastructure.persistence`.
 #:
@@ -106,10 +113,14 @@ PERMITTED_CLIENT_NAMES = frozenset(
 #: while also minting the credentials that authenticate future requests would be
 #: the widest hole in the tree. It names four persistence functions and no
 #: capability at all.
+#:
+#: `auth.py` issues digest-only bootstrap and recovery grants. It may name the
+#: grant store and the read-only state validator, and nothing else.
 COMMANDS = {
     "sources.py": PERMITTED_PERSISTENCE_NAMES,
     "health.py": frozenset(),
     "clients.py": PERMITTED_CLIENT_NAMES,
+    "auth.py": PERMITTED_AUTH_NAMES,
 }
 
 #: The identifier rule 3 forbids anywhere in the file.

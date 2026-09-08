@@ -610,7 +610,15 @@ HAND_WRITTEN_COMPARISONS: Final = {
         ("continuity_authoring_submissions", "principal_id"),
     ),
     "infrastructure/persistence/remote_identity.py": (("remote_clients", "principal_id"),),
-    "infrastructure/persistence/user_accounts.py": (("user_accounts", "principal_id"),),
+    "infrastructure/persistence/user_accounts.py": (
+        ("user_accounts", "principal_id"),
+        ("user_accounts", "principal_id"),
+    ),
+    # WP02 auth-state inspection is Connection-bound and not behind
+    # PrincipalContext: it reads the fixed local-operator row to classify
+    # uninitialized vs ready vs inconsistent. HTTP must not gain a path that
+    # supplies that UUID from a payload.
+    "infrastructure/persistence/auth_state.py": (("user_accounts", "principal_id"),),
     # WP02 identity-plane stores are Connection-bound and not yet behind
     # PrincipalContext. Each comparison is table.c.principal_id against a
     # UUID the caller already resolved (list/revoke-all) or a generation
@@ -622,6 +630,9 @@ HAND_WRITTEN_COMPARISONS: Final = {
         ("recovery_code_sets", "principal_id"),
         ("webauthn_credentials", "principal_id"),
     ),
+    # WP04 bootstrap registration binds the challenge to the fixed local
+    # operator. The UUID is the repository constant, never a request field.
+    "infrastructure/security/webauthn_ceremony.py": (("webauthn_challenges", "principal_id"),),
     "infrastructure/persistence/enrollment.py": (
         ("enrollments", "principal_id"),
         ("enrollments", "principal_id"),

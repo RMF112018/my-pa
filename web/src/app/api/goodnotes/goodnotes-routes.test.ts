@@ -148,11 +148,40 @@ describe("GoodNotes BFF lists", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     const body = await response.json();
     expect(body.notebooks).toEqual([NOTEBOOK]);
+    expect(body.notebooks[0].liveness).toBe("unknown");
     expect(String(gateway.mock.calls[0]?.[0])).toContain("/v1/goodnotes.notebooks.list");
     const sent = JSON.parse(String(gateway.mock.calls[0]?.[1]?.body ?? "{}")) as {
       payload?: Record<string, unknown>;
     };
     expect(sent.payload).not.toHaveProperty("principal_id");
+  });
+
+  it("fails closed when catalog liveness is a NAS probe rather than unknown", async () => {
+    stubGateway(async () =>
+      gatewayOk({
+        notebooks: [{ ...NOTEBOOK, liveness: "live", path: "/Volumes/NAS/secret.goodnotes" }],
+      }),
+    );
+    const response = await notebooks(get(await cookie(), "/api/goodnotes/notebooks"));
+    expect(response.status).toBe(503);
+    const body = await response.json();
+    expect(body.error.code).toBe("upstream_contract_invalid");
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain('"liveness":"live"');
+    expect(serialized).not.toContain("/Volumes/NAS/secret.goodnotes");
+    expect(body.notebooks).toBeUndefined();
+  });
+
+  it("does not leak a filesystem path in notebook JSON", async () => {
+    stubGateway(async () =>
+      gatewayOk({ notebooks: [{ ...NOTEBOOK, path: "/Volumes/NAS/secret.goodnotes" }] }),
+    );
+    const response = await notebooks(get(await cookie(), "/api/goodnotes/notebooks"));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.notebooks[0]).toEqual(NOTEBOOK);
+    expect(body.notebooks[0]).not.toHaveProperty("path");
+    expect(JSON.stringify(body)).not.toContain("/Volumes/NAS/secret.goodnotes");
   });
 
   it("requires notebookId for pages", async () => {
@@ -173,6 +202,35 @@ describe("GoodNotes BFF lists", () => {
       payload?: Record<string, unknown>;
     };
     expect(sent.payload).toMatchObject({ notebook_id: NOTEBOOK_ID });
+    expect(JSON.stringify(await response.json())).not.toContain("/Volumes/");
+  });
+
+  it("answers not_found for a foreign notebook without leaking existence", async () => {
+    const foreign = "gnnb_bbbbbbbbbbbbbbbbbbbbbbbb";
+    stubGateway(async () =>
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "not_found",
+            message: "the named target was not found",
+            correlation_id: "corr_aaaaaaaa11111111",
+          },
+        }),
+        { status: 404, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const response = await pages(
+      get(await cookie(), `/api/goodnotes/pages?notebookId=${foreign}`),
+    );
+    expect(response.status).toBe(404);
+    const body = await response.json();
+    expect(body.error.errorClass).toBe("not_found");
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toMatch(/exist/i);
+    expect(serialized).not.toMatch(/another principal/i);
+    expect(serialized).not.toMatch(/belongs to/i);
+    expect(serialized).not.toContain("/Volumes/");
+    expect(body.pages).toBeUndefined();
   });
 
   it("lists runs through goodnotes.runs.list", async () => {
@@ -265,10 +323,27 @@ describe("GoodNotes BFF raster", () => {
       ),
     );
     expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
     const body = await response.json();
     expect(body.error.code).toBe("upstream_contract_invalid");
     expect(JSON.stringify(body)).not.toContain("/secret.png");
     expect(JSON.stringify(body)).not.toContain("content_base64");
+  });
+
+  it("does not echo a filesystem path from an otherwise valid raster payload", async () => {
+    stubGateway(async () => gatewayOk({ ...CONTENT, path: "/Volumes/NAS/secret.png" }));
+    const response = await raster(
+      get(
+        await cookie(),
+        `/api/goodnotes/raster?runId=${RUN_ID}&pageVersionId=${PAGE_VERSION_ID}&contentSha256=${DIGEST}`,
+      ),
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/png");
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    const asText = Buffer.from(await response.arrayBuffer()).toString("utf8");
+    expect(asText).not.toContain("/Volumes/NAS/secret.png");
+    expect(asText).not.toContain("content_base64");
   });
 
   it("requires the three raster identifiers", async () => {

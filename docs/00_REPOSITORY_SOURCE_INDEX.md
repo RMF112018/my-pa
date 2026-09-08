@@ -29,6 +29,7 @@ Corrected 2026-08-29. This paragraph named `bf/pilot-blocker-remediation`, forke
 - [`docs/decisions/ADR-008-nas-runtime-topology.md`](decisions/ADR-008-nas-runtime-topology.md) — accepted NAS runtime placement, filesystem authority, ingress, auth, image-platform, restart, and Mac Apple-TCC split.
 - [`docs/decisions/ADR-009-oauth-refresh-token-families.md`](decisions/ADR-009-oauth-refresh-token-families.md) — rotating opaque refresh-token families for remote MCP; 1-hour access tokens remain; existing clients refresh-disabled by default.
 - [`docs/decisions/ADR-010-intelligence-artifact-report-plane.md`](decisions/ADR-010-intelligence-artifact-report-plane.md) — product-owned Intelligence Artifact / Report plane: immutable artifacts, cycle-run identity, staged pipeline lineage.
+- [`docs/decisions/ADR-013-fixed-local-principal-and-operator-auth-grants.md`](decisions/ADR-013-fixed-local-principal-and-operator-auth-grants.md) — addendum to ADR-011: one production Principal (`LOCAL_OPERATOR_UUID`), one-time operator grants, provider-neutral sessions; local `tid`/`oid` are absent.
 - [`docs/architecture/system-context.md`](architecture/system-context.md) — actors, external systems, trust and authority boundaries.
 - [`docs/architecture/module-boundaries.md`](architecture/module-boundaries.md) — module ownership, dependency direction, and split triggers.
 - [`docs/architecture/data-authority.md`](architecture/data-authority.md) — data ownership, authority, lifecycle, and disclosure.

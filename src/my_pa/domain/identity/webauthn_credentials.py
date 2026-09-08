@@ -36,17 +36,28 @@ WEBAUTHN_CHALLENGE_PURPOSE_VALUES: Final[tuple[str, ...]] = (
     "credential_administration",
     "recovery",
     "step_up",
+    "bootstrap_registration",
+    "credential_registration",
+    "operator_recovery_registration",
 )
 
 
 class WebAuthnChallengePurpose(StrEnum):
-    """Why one challenge nonce was issued. Closed set for WP02 persistence."""
+    """Why one challenge nonce was issued. Closed set for WP02 persistence.
+
+    `registration`, `credential_administration`, and `recovery` remain for
+    stored history. New bootstrap, ordinary enrollment, and operator-recovery
+    flows emit the dedicated `*_registration` purposes instead.
+    """
 
     REGISTRATION = "registration"
     AUTHENTICATION = "authentication"
     CREDENTIAL_ADMINISTRATION = "credential_administration"
     RECOVERY = "recovery"
     STEP_UP = "step_up"
+    BOOTSTRAP_REGISTRATION = "bootstrap_registration"
+    CREDENTIAL_REGISTRATION = "credential_registration"
+    OPERATOR_RECOVERY_REGISTRATION = "operator_recovery_registration"
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +113,7 @@ class WebAuthnChallenge:
     challenge_bytes: bytes = field(repr=False)
     principal_id: UUID | None = None
     credential_record_id: UUID | None = None
+    auth_grant_id: UUID | None = None
     consumed_at: datetime | None = None
 
     def __post_init__(self) -> None:

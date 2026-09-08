@@ -9,6 +9,15 @@ export type WorkField = {
   readonly gateway: string;
   readonly type: "string" | "integer" | "boolean" | "string-array" | "mutation-array";
   readonly maxItems?: number;
+  /**
+   * The closed vocabulary this field's value must be a member of.
+   *
+   * Present only where the backend command itself declares a closed set, so the
+   * BFF refuses a value the gateway would refuse anyway — before the request
+   * leaves the process, and naming the browser field rather than a Python one.
+   * Omitted, the field keeps its previous behaviour of accepting any string.
+   */
+  readonly values?: readonly string[];
 };
 type FieldMap = Readonly<Record<string, WorkField>>;
 type InputKind = "query" | "body";
@@ -124,9 +133,14 @@ function isBoundedMutationArray(value: unknown, maximum: number): value is Recor
 function parseField(browserName: string, value: unknown, field: WorkField, input: InputKind):
   | { readonly ok: true; readonly gateway: string; readonly value: unknown }
   | { readonly ok: false; readonly response: NextResponse } {
-  const { gateway, type } = field;
+  const { gateway, type, values } = field;
   if (type === "string") {
-    if (typeof value === "string") return { ok: true, gateway, value };
+    if (typeof value === "string") {
+      if (values && !values.includes(value)) {
+        return { ok: false, response: invalid(`${browserName} is not an accepted value`) };
+      }
+      return { ok: true, gateway, value };
+    }
     return { ok: false, response: invalid(`${browserName} must be a string`) };
   }
   if (type === "integer") {
@@ -147,7 +161,12 @@ function parseField(browserName: string, value: unknown, field: WorkField, input
   }
   const maximum = field.maxItems ?? (type === "mutation-array" ? 100 : 32);
   if (type === "string-array") {
-    if (isStringArray(value, maximum)) return { ok: true, gateway, value };
+    if (isStringArray(value, maximum)) {
+      if (values && value.some((item) => !values.includes(item))) {
+        return { ok: false, response: invalid(`${browserName} contains a value that is not accepted`) };
+      }
+      return { ok: true, gateway, value };
+    }
     return {
       ok: false,
       response: invalid(`${browserName} must be an array of at most ${maximum} strings`),
@@ -175,6 +194,23 @@ function mapped(source: Record<string, unknown>, fields: FieldMap, input: InputK
     ok: true as const,
     payload,
   };
+}
+
+/**
+ * The declared query, read off the URL — never the URL's own parameter bag.
+ *
+ * A field the map does not declare is still copied in, because `mapped` is what
+ * refuses an unknown name and it has to see one to refuse it. What this adds is
+ * repetition: a declared `string-array` field collects every occurrence of its
+ * name, so `?status=open&status=closed` is a two-member filter rather than the
+ * last value silently winning. No `URLSearchParams` is ever handed onward.
+ */
+function readQuery(search: URLSearchParams, fields: FieldMap): Record<string, unknown> {
+  const query: Record<string, unknown> = Object.fromEntries(search.entries());
+  for (const [name, field] of Object.entries(fields)) {
+    if (field.type === "string-array" && search.has(name)) query[name] = search.getAll(name);
+  }
+  return query;
 }
 
 function publicResult(result: Record<string, unknown>) {
@@ -246,8 +282,7 @@ export async function workGet(
   fields: FieldMap,
   fixed: Record<string, unknown> = {},
 ) {
-  const query = Object.fromEntries(request.nextUrl.searchParams.entries());
-  const result = mapped(query, fields, "query");
+  const result = mapped(readQuery(request.nextUrl.searchParams, fields), fields, "query");
   if (!result.ok) return noStore(result.response);
   return noStore(await serve(request, scope, capability, { ...result.payload, ...fixed }));
 }

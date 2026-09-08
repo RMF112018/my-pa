@@ -86,6 +86,10 @@ REGISTERED_WRITERS: Final[dict[str, str]] = {
         "writes a non-secret tunnel configuration to an explicit operator output path and "
         "refuses overwrite; it is deployment configuration, not user or managed content."
     ),
+    "ops/nas/render-frontend-cloudflared-config.py": (
+        "writes a non-secret frontend tunnel configuration to an explicit operator output "
+        "path and refuses overwrite; it is deployment configuration, not user or managed content."
+    ),
     "src/my_pa/infrastructure/apple_transport_agent.py": (
         "writes only NAS-issued grant metadata and its content digest receipt into an "
         "absolute, existing, owner-only Mac journal; the constructor rejects symlinks "
@@ -114,6 +118,12 @@ REGISTERED_WRITERS: Final[dict[str, str]] = {
     ),
     "scripts/migration/reconcile.py": (
         "writes a reconciliation report to an explicit output path."
+    ),
+    "apps/cli/tbr_import.py": (
+        "writes the TBR import report (tbr-import.json, TBR-IMPORT.md) to an "
+        "explicit --output directory. Migration tooling run by an operator; the "
+        "report holds counts, identifiers, codes and issue codes only, never "
+        "workbook content, and it reads no managed root."
     ),
     "ops/nas/write-candidate-manifest.py": (
         "writes only a non-deployable image manifest into the operator-selected "

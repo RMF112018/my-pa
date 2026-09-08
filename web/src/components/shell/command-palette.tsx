@@ -13,7 +13,12 @@ import {
   fetchFederatedSearch,
   type FederatedSearchResponse,
 } from "@/lib/search/client";
-import { presentFederatedHits, type PresentedGroup, type SearchCoverage } from "@/lib/search/presentation";
+import {
+  federatedZeroHitKind,
+  presentFederatedHits,
+  type PresentedGroup,
+  type SearchCoverage,
+} from "@/lib/search/presentation";
 import type { ApiFailure } from "@/lib/api/work-client";
 
 const COMMANDS = [...DESTINATIONS, ...UTILITY_DESTINATIONS];
@@ -263,15 +268,23 @@ export function SearchCommandPanel({
             testId="search-not-implemented"
           />
         ) : null}
-        {answer.kind === "unavailable" ? (
+        {answer.kind === "unavailable" ||
+        (answer.kind === "ready" &&
+          federatedZeroHitKind(answer.result.coverage, answer.result.hits.length) === "unavailable") ? (
           <SurfaceState
             kind="unavailable"
             title="Search could not be read"
-            detail={answer.message}
+            detail={
+              answer.kind === "unavailable"
+                ? answer.message
+                : "No domain could be searched. That is not a fact about what you hold."
+            }
             testId="search-unavailable"
           />
         ) : null}
-        {answer.kind === "ready" && groups.length === 0 ? (
+        {answer.kind === "ready" &&
+        federatedZeroHitKind(answer.result.coverage, answer.result.hits.length) === "empty" &&
+        groups.length === 0 ? (
           <SurfaceState
             kind="empty"
             title="No matches in the domains that were searched"
@@ -279,7 +292,8 @@ export function SearchCommandPanel({
             testId="search-empty"
           />
         ) : null}
-        {answer.kind === "ready"
+        {answer.kind === "ready" &&
+        federatedZeroHitKind(answer.result.coverage, answer.result.hits.length) !== "unavailable"
           ? groups.map((group) => (
               <section
                 key={group.domain}

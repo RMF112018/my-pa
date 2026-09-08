@@ -79,7 +79,12 @@ beforeEach(() => {
     return {
       issuedSid,
       principal: {
-        principalId: key === "synthetic-b" ? "syn-bbbb0002" : "syn-aaaa0001",
+        principalId: key === "synthetic-b" ? "bbbb0002-0000-0000-0000-000000000002" : "aaaa0001-0000-0000-0000-000000000001",
+        identityProvider: "synthetic",
+        identitySubject:
+          key === "synthetic-b"
+            ? `${SYNTHETIC_MOSS_TENANT_ID}:bbbb0002-0000-0000-0000-000000000002`
+            : `${SYNTHETIC_MOSS_TENANT_ID}:aaaa0001-0000-0000-0000-000000000001`,
         tid: SYNTHETIC_MOSS_TENANT_ID,
         oid:
           key === "synthetic-b"

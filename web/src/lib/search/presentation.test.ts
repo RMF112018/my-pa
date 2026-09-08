@@ -10,9 +10,11 @@ import {
   captureSearchHref,
   goodnotesSearchHref,
   knowledgeSearchHref,
+  federatedZeroHitKind,
   presentFederatedHits,
   SEARCH_DOMAIN_ORDER,
   type FederatedHit,
+  type SearchCoverage,
 } from "@/lib/search/presentation";
 
 const TASK_A: TaskListEntry = {
@@ -221,5 +223,43 @@ describe("federated search presentation", () => {
     ]);
     expect(skipped).toEqual([]);
     expect(goodnotesSearchHref({ ...GOODNOTES, page_version_id: null, run_id: null })).toBeNull();
+  });
+});
+
+describe("federatedZeroHitKind", () => {
+  const row = (domain: string, state: string): SearchCoverage => ({
+    domain,
+    state,
+    hitCount: 0,
+  });
+
+  it("treats hits as records even when some coverage is unavailable", () => {
+    expect(
+      federatedZeroHitKind([row("tasks", "searched"), row("capture", "unavailable")], 1),
+    ).toBe("records");
+  });
+
+  it("does not treat all-unavailable zero hits as empty", () => {
+    expect(
+      federatedZeroHitKind(
+        [
+          row("tasks", "unavailable"),
+          row("commitments", "unavailable"),
+          row("capture", "unavailable"),
+          row("reports", "unavailable"),
+          row("entities", "unavailable"),
+          row("goodnotes", "unavailable"),
+          row("knowledge", "knowledge_not_enrolled"),
+          row("situations", "omitted"),
+        ],
+        0,
+      ),
+    ).toBe("unavailable");
+  });
+
+  it("keeps searched-empty with some unavailable as empty, not a missing search", () => {
+    expect(
+      federatedZeroHitKind([row("tasks", "searched"), row("capture", "unavailable")], 0),
+    ).toBe("empty");
   });
 });

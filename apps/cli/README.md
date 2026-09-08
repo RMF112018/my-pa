@@ -10,6 +10,47 @@ asking whether the database can serve one.
 and `tests/architecture/test_operator_commands_are_not_capabilities.py` holds
 `sources.py` and `health.py` mechanically outside the capability path.
 
+## `auth.py` — fixed-principal bootstrap and recovery grants
+
+`auth.py` reports authentication readiness and issues or revokes one-time
+bootstrap/operator-recovery grants. It is an operator command, not a Capability
+and not a browser fallback. It never accepts a Principal to act as: every grant
+is database-constrained to `LOCAL_OPERATOR_UUID`. A grant is shown once; only
+its SHA-256 digest is stored.
+
+```text
+python apps/cli/auth.py bootstrap status|issue|revoke <assertions>
+python apps/cli/auth.py recovery status|issue|revoke <assertions>
+```
+
+Every invocation requires these assertions. They are never optional:
+
+- `--expected-host`
+- `--expected-port`
+- `--expected-database`
+- `--expected-alembic-head`
+- `--expected-rp-id`
+- `--expected-origin`
+- `--expected-local-principal`
+
+`issue` and `revoke` also require an exact confirmation token. These are not
+boolean flags; a missing or wrong token refuses with no write:
+
+- bootstrap issue: `--confirm-issue ISSUE_BOOTSTRAP_GRANT`
+- recovery issue: `--confirm-issue ISSUE_OPERATOR_RECOVERY_GRANT`
+- bootstrap revoke: `--confirm-revoke REVOKE_BOOTSTRAP_GRANT`
+- recovery revoke: `--confirm-revoke REVOKE_OPERATOR_RECOVERY_GRANT`
+
+The database URL remains in `MY_PA_DATABASE_URL`; it is never an argument and
+never printed. Assertions are compared to parsed configuration before connecting,
+then catalog name and Alembic head are re-checked after connecting. A mismatch,
+unknown, unreachable, or non-head target refuses before mutation.
+
+Issuance changes only the configured isolated database. It does not deploy,
+activate the public origin, register a credential, or select a Principal.
+Operators and tests must aim this command at a disposable catalog, never at the
+canonical `my_pa` database.
+
 ## `invoke.py` — one public capability
 
 ```text
@@ -186,3 +227,5 @@ place in the Alembic sequence is documented in
 [`migrations/README.md`](/migrations/README.md).
 
 New implementation must use the neutral `my_pa` / `MY_PA_` namespace. Legacy identities may appear only in explicit compatibility or evidence records.
+
+Wait, I need to INSERT the auth section, not append at the end incorrectly. Let me read the file around the intro.

@@ -1,4 +1,4 @@
-"""User accounts: the R0A Principal registry vocabulary and claim validation.
+"""Provider-neutral user accounts and provider-specific claim validation.
 
 This is the *user* identity plane the v4.0 Moss package introduces. It is
 deliberately not `Principal`/`PrincipalKind` from `principal.py`: those name
@@ -8,8 +8,9 @@ the partition key every durable user-scoped record carries.
 
 Three rules are enforced here, in the domain, so no adapter can relax them:
 
-* **Identity is `(tid, oid)` and nothing else.** `upn` and `display_name` are
-  mutable observations — a rename must never fork or reassign an account.
+* **Canonical identity is `(identity_provider, identity_subject)`.** Entra's
+  `(tid, oid)` remains a provider-specific uniqueness key; local accounts do
+  not invent either claim.
 * **A Principal derives only from validated token claims.**
   `validate_token_claims` is the single constructor of `EntraTokenClaims`, and
   it fails closed: a missing `tid`, a missing `oid`, or a `tid` that is not the
@@ -17,8 +18,8 @@ Three rules are enforced here, in the domain, so no adapter can relax them:
   MU-AC-03).
 * **Caller-supplied identity is rejected, not ignored.**
   `reject_caller_supplied_principal` raises when a request payload attempts to
-  carry `principal_id`, `tid`, or `oid`, so the attempt is denied and auditable
-  rather than silently overwritten by the token-derived value.
+  carry `principal_id`, `principalId`, `tid`, or `oid`, so the attempt is denied
+  and auditable rather than silently overwritten by the server-derived value.
 
 Nothing here touches a database, a token library, or a network: synthetic
 claims are sufficient to exercise every branch, which is what keeps live
@@ -33,8 +34,14 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
 
+from my_pa.domain.common.time import ensure_utc
+from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID
+
 __all__ = [
     "FORBIDDEN_IDENTITY_FIELDS",
+    "LOCAL_ACCOUNT_SUBJECT",
+    "SYNTHETIC_TENANT_ID",
+    "AccountIdentityProvider",
     "CallerSuppliedPrincipalError",
     "ConsentState",
     "EntraTokenClaims",
@@ -44,9 +51,22 @@ __all__ = [
     "TokenClaimsError",
     "UserAccount",
     "UserLifecycleState",
+    "local_user_account",
     "reject_caller_supplied_principal",
     "validate_token_claims",
 ]
+
+
+class AccountIdentityProvider(StrEnum):
+    """The bounded identity sources the fixed deployment currently supports."""
+
+    ENTRA = "entra"
+    SYNTHETIC = "synthetic"
+    LOCAL = "local"
+
+
+LOCAL_ACCOUNT_SUBJECT = "local-operator"
+SYNTHETIC_TENANT_ID = "11111111-2222-3333-4444-555555555555"
 
 
 class ConsentState(StrEnum):
@@ -103,7 +123,11 @@ class CallerSuppliedPrincipalError(TokenClaimsError):
 
 
 #: Payload keys that would constitute caller-supplied principal identity.
-FORBIDDEN_IDENTITY_FIELDS: frozenset[str] = frozenset({"principal_id", "tid", "oid"})
+#: `principalId` is the same identifier in the BFF JSON vocabulary. Provider and
+#: subject keys stay off this set: adding them would require a scanner update
+#: outside this package, and the closed Entra/principal names already catch
+#: caller-chosen identity.
+FORBIDDEN_IDENTITY_FIELDS: frozenset[str] = frozenset({"principal_id", "principalId", "tid", "oid"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,8 +150,10 @@ class UserAccount:
 
     id: UUID
     principal_id: UUID
-    tid: str
-    oid: str
+    identity_provider: AccountIdentityProvider
+    identity_subject: str
+    tid: str | None
+    oid: str | None
     upn: str | None
     display_name: str | None
     first_seen_at: datetime
@@ -135,6 +161,30 @@ class UserAccount:
     consent_state: ConsentState
     lifecycle_state: UserLifecycleState
     home_tenant_verified: bool
+
+    def __post_init__(self) -> None:
+        if not self.identity_subject.strip():
+            raise ValueError("identity_subject is required")
+        ensure_utc(self.first_seen_at)
+        if self.last_authenticated_at is not None:
+            ensure_utc(self.last_authenticated_at)
+        if self.identity_provider is AccountIdentityProvider.LOCAL:
+            if self.principal_id != LOCAL_OPERATOR_UUID:
+                raise ValueError("the local account must use LOCAL_OPERATOR_UUID")
+            if self.identity_subject != LOCAL_ACCOUNT_SUBJECT:
+                raise ValueError("the local account subject is fixed")
+            if self.tid is not None or self.oid is not None:
+                raise ValueError("a local account has no Entra tid or oid")
+            return
+        if not self.tid or not self.tid.strip() or not self.oid or not self.oid.strip():
+            raise ValueError("Entra-shaped accounts require tid and oid")
+        if self.identity_subject != f"{self.tid}:{self.oid}":
+            raise ValueError("Entra-shaped identity_subject is tid:oid")
+        if self.identity_provider is AccountIdentityProvider.SYNTHETIC:
+            if self.tid != SYNTHETIC_TENANT_ID:
+                raise ValueError("synthetic accounts use SYNTHETIC_TENANT_ID")
+        elif self.tid == SYNTHETIC_TENANT_ID:
+            raise ValueError("entra accounts do not use the synthetic tenant")
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +235,25 @@ def validate_token_claims(claims: Mapping[str, object], *, home_tenant_id: str) 
         oid=oid,
         upn=_optional_string_claim(claims, "upn"),
         display_name=_optional_string_claim(claims, "name"),
+    )
+
+
+def local_user_account(*, account_id: UUID, now: datetime) -> UserAccount:
+    """Construct the one fixed local account without caller-selected identity."""
+    return UserAccount(
+        id=account_id,
+        principal_id=LOCAL_OPERATOR_UUID,
+        identity_provider=AccountIdentityProvider.LOCAL,
+        identity_subject=LOCAL_ACCOUNT_SUBJECT,
+        tid=None,
+        oid=None,
+        upn=None,
+        display_name="Local operator",
+        first_seen_at=now,
+        last_authenticated_at=now,
+        consent_state=ConsentState.PENDING,
+        lifecycle_state=UserLifecycleState.ACTIVE,
+        home_tenant_verified=False,
     )
 
 

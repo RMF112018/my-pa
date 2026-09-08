@@ -2,10 +2,10 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the one hundred and thirty-six capabilities is addressable
+**Reachability.** Every one of the one hundred and fifty-four capabilities is addressable
 over HTTP and answers. Parametrised over `Capability` rather than over a list
 written here, so the next capability added to the domain arrives as
-a failing row instead of as an untested one. Fourteen of the one hundred and thirty-six answer a
+a failing row instead of as an untested one. Fourteen of the one hundred and forty-two answer a
 well-formed `501 unsupported` rather than a result — `_UNCOMPOSED_CAPABILITIES`,
 the plane this harness does not switch on — and one, `tasks.bulk_confirm`,
 answers a well-formed `404 not_found`, because a confirm names a preview this
@@ -46,6 +46,7 @@ from tests.conftest import (
     DEFAULT_LIMITS,
     WHEN,
     FakeCommitmentManagementUnitOfWork,
+    FakeConstraintManagementUnitOfWork,
     FakeProviders,
     FakeTaskManagementUnitOfWork,
     FakeUnitOfWork,
@@ -96,12 +97,16 @@ from my_pa.application.commands import (
     BulkConfirmTasks,
     BulkPreviewTasks,
     CloseCommitment,
+    CloseConstraint,
+    CloseConstraintWithFollowUp,
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
     CorrectGoodNotes,
     CreateCapture,
     CreateCommitment,
+    CreateConstraintCategory,
+    CreateConstraintDraft,
     CreateEntity,
     CreateEntityAffiliation,
     CreateEntityAssignment,
@@ -113,6 +118,7 @@ from my_pa.application.commands import (
     CreateRelationshipMemory,
     CreateSituation,
     CreateTask,
+    DeactivateConstraintCategory,
     DecideReviewCase,
     EndEntityAffiliation,
     EndEntityAssignment,
@@ -143,6 +149,8 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListConstraintCategories,
+    ListConstraints,
     ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
@@ -169,10 +177,14 @@ from my_pa.application.commands import (
     PreviewEntityMerge,
     PreviewEntitySplit,
     ProposeRelationshipMemory,
+    PublishConstraint,
     PullGoodNotesWork,
     PutCanvasWorkspace,
     ReadCapture,
     ReadCommitment,
+    ReadConstraint,
+    ReadConstraintHistory,
+    ReadConstraintOverview,
     ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadKnowledge,
@@ -181,6 +193,8 @@ from my_pa.application.commands import (
     RecordContextFeedback,
     RecordIntelligenceRunState,
     RecordTask,
+    ReopenConstraint,
+    ReorderConstraintCategories,
     Representation,
     ResolveEntity,
     ResolveIntelligenceSet,
@@ -205,6 +219,7 @@ from my_pa.application.commands import (
     ReviseRelationshipMemory,
     SearchCaptures,
     SearchCommitments,
+    SearchConstraints,
     SearchEntities,
     SearchGoodNotes,
     SearchIntelligenceArtifacts,
@@ -217,10 +232,14 @@ from my_pa.application.commands import (
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
     SupersedeEntityName,
+    TransitionConstraint,
     TransitionTask,
     UpdateCommitment,
+    UpdateConstraint,
+    UpdateConstraintCategory,
     UpdateEntity,
     UpdateTask,
+    VoidConstraint,
     WaitingOn,
 )
 from my_pa.application.intelligence import begin_cycle, commit_artifact
@@ -246,6 +265,8 @@ from my_pa.domain.intelligence.catalog import (
     ResolverSetId,
     SourceLaneId,
 )
+from my_pa.domain.project_controls.constraint import ConstraintLifecycleState
+from my_pa.domain.project_controls.party import PartyKind, PartyRef
 from my_pa.domain.relationship.authoring import CallerNamespace
 from my_pa.domain.relationship.entity import (
     AddressTypeCode,
@@ -768,6 +789,96 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         # No arguments: the queue is every unplaced mention in the Principal's
         # own partition, so there is nothing to name.
         Capability.ENTITIES_UNRESOLVED_MENTIONS: {},
+        # PC-CM-IMP-WP04's six Constraint Management reads, naming the scene's own
+        # seeded Project and Constraint so each answers rather than refuses.
+        Capability.CONSTRAINTS_READ: {"constraint_id": scene.constraint_id},
+        Capability.CONSTRAINTS_LIST: {"project_id": scene.constraint_project_id},
+        Capability.CONSTRAINTS_SEARCH: {
+            "project_id": scene.constraint_project_id,
+            "query": "synthetic",
+        },
+        Capability.CONSTRAINTS_HISTORY: {"constraint_id": scene.constraint_id},
+        Capability.CONSTRAINTS_OVERVIEW: {"project_id": scene.constraint_project_id},
+        Capability.CONSTRAINT_CATEGORIES_LIST: {"project_id": scene.constraint_project_id},
+        # PC-CM-IMP-WP07's twelve Constraint Management mutations. Each names a
+        # seeded record in the state its operation requires -- Publish a Draft,
+        # Reopen a closed record, a reorder every Category of the Project exactly
+        # once -- so each one *answers* here rather than refusing, which is what
+        # makes this a comparison of answers. Every minted identifier and every
+        # issued public code in the reply is masked before comparison, so three
+        # transports each mutating their own copy of the world still agree.
+        Capability.CONSTRAINTS_CREATE: {
+            "project_id": scene.constraint_project_id,
+            "category_id": scene.constraint_category_id,
+            "description": "A drafted Project control.",
+            "date_identified": "2026-08-02",
+            "due_date": "2026-09-02",
+        },
+        Capability.CONSTRAINTS_PUBLISH: {
+            "constraint_id": scene.constraint_draft_id,
+            "expected_version": 1,
+            "to_state": "identified",
+        },
+        Capability.CONSTRAINTS_UPDATE: {
+            "constraint_id": scene.constraint_update_id,
+            "expected_version": 1,
+            "current_update": "Awaiting the site survey.",
+        },
+        Capability.CONSTRAINTS_TRANSITION: {
+            "constraint_id": scene.constraint_transition_id,
+            "to_state": "pending",
+            "expected_version": 1,
+        },
+        Capability.CONSTRAINTS_CLOSE: {
+            "constraint_id": scene.constraint_close_id,
+            "expected_version": 1,
+            "completion_date": "2026-08-03",
+            "closure_commentary": "Resolved on site.",
+        },
+        Capability.CONSTRAINTS_CLOSE_FOLLOW_UP: {
+            "constraint_id": scene.constraint_follow_up_id,
+            "expected_version": 1,
+            "successor_description": "The follow-up control.",
+            "completion_date": "2026-08-03",
+            "successor_due_date": "2026-09-30",
+            "successor_bic": [{"kind": "principal"}],
+            "successor_responsible": [{"kind": "principal"}],
+        },
+        Capability.CONSTRAINTS_VOID: {
+            "constraint_id": scene.constraint_void_id,
+            "expected_version": 1,
+            "void_reason": "Raised in error.",
+            "voided_date": "2026-08-03",
+        },
+        Capability.CONSTRAINTS_REOPEN: {
+            "constraint_id": scene.constraint_closed_id,
+            "to_state": "identified",
+            "expected_version": 1,
+            "reason": "The work was not complete.",
+        },
+        Capability.CONSTRAINT_CATEGORIES_CREATE: {
+            "project_id": scene.constraint_project_id,
+            "code_segment": "MEP",
+            "title": "Mechanical",
+            "display_order": 3,
+        },
+        Capability.CONSTRAINT_CATEGORIES_UPDATE: {
+            "category_id": scene.constraint_update_category_id,
+            "expected_version": 1,
+            "title": "Site Logistics",
+        },
+        Capability.CONSTRAINT_CATEGORIES_DEACTIVATE: {
+            "category_id": scene.constraint_deactivate_category_id,
+            "expected_version": 1,
+        },
+        Capability.CONSTRAINT_CATEGORIES_REORDER: {
+            "project_id": scene.constraint_reorder_project_id,
+            "ordered_category_ids": [
+                scene.constraint_second_ordered_category_id,
+                scene.constraint_first_ordered_category_id,
+            ],
+            "expected_versions": [1, 1],
+        },
         # The entity plane's authoring half (`WP-RI-A-02`), staged so each of the
         # twelve answers rather than refuses: the subject is the same `person`
         # the reads above name, the child records are its staged binding and
@@ -1553,6 +1664,93 @@ def commands_for(
             focus_entity_id=person.entity_id,
         ),
         Capability.ENTITIES_UNRESOLVED_MENTIONS: ListUnresolvedMentions(),
+        # PC-CM-IMP-WP04's six Constraint Management reads, as commands.
+        Capability.CONSTRAINTS_READ: ReadConstraint(constraint_id=scene.constraint_id),
+        Capability.CONSTRAINTS_LIST: ListConstraints(project_id=scene.constraint_project_id),
+        Capability.CONSTRAINTS_SEARCH: SearchConstraints(
+            project_id=scene.constraint_project_id, query="synthetic"
+        ),
+        Capability.CONSTRAINTS_HISTORY: ReadConstraintHistory(constraint_id=scene.constraint_id),
+        Capability.CONSTRAINTS_OVERVIEW: ReadConstraintOverview(
+            project_id=scene.constraint_project_id
+        ),
+        Capability.CONSTRAINT_CATEGORIES_LIST: ListConstraintCategories(
+            project_id=scene.constraint_project_id
+        ),
+        # PC-CM-IMP-WP07's twelve authoring commands, written as what the payload
+        # table above must normalise to: the closed vocabularies as their enum
+        # members, the ISO dates as `date`, and the party arrays as `PartyRef`.
+        Capability.CONSTRAINTS_CREATE: CreateConstraintDraft(
+            project_id=scene.constraint_project_id,
+            category_id=scene.constraint_category_id,
+            description="A drafted Project control.",
+            date_identified=date(2026, 8, 2),
+            due_date=date(2026, 9, 2),
+        ),
+        Capability.CONSTRAINTS_PUBLISH: PublishConstraint(
+            constraint_id=scene.constraint_draft_id,
+            expected_version=1,
+            to_state=ConstraintLifecycleState.IDENTIFIED,
+        ),
+        Capability.CONSTRAINTS_UPDATE: UpdateConstraint(
+            constraint_id=scene.constraint_update_id,
+            expected_version=1,
+            current_update="Awaiting the site survey.",
+        ),
+        Capability.CONSTRAINTS_TRANSITION: TransitionConstraint(
+            constraint_id=scene.constraint_transition_id,
+            to_state=ConstraintLifecycleState.PENDING,
+            expected_version=1,
+        ),
+        Capability.CONSTRAINTS_CLOSE: CloseConstraint(
+            constraint_id=scene.constraint_close_id,
+            expected_version=1,
+            completion_date=date(2026, 8, 3),
+            closure_commentary="Resolved on site.",
+        ),
+        Capability.CONSTRAINTS_CLOSE_FOLLOW_UP: CloseConstraintWithFollowUp(
+            constraint_id=scene.constraint_follow_up_id,
+            expected_version=1,
+            successor_description="The follow-up control.",
+            completion_date=date(2026, 8, 3),
+            successor_due_date=date(2026, 9, 30),
+            successor_bic=(PartyRef(kind=PartyKind.PRINCIPAL),),
+            successor_responsible=(PartyRef(kind=PartyKind.PRINCIPAL),),
+        ),
+        Capability.CONSTRAINTS_VOID: VoidConstraint(
+            constraint_id=scene.constraint_void_id,
+            expected_version=1,
+            void_reason="Raised in error.",
+            voided_date=date(2026, 8, 3),
+        ),
+        Capability.CONSTRAINTS_REOPEN: ReopenConstraint(
+            constraint_id=scene.constraint_closed_id,
+            to_state=ConstraintLifecycleState.IDENTIFIED,
+            expected_version=1,
+            reason="The work was not complete.",
+        ),
+        Capability.CONSTRAINT_CATEGORIES_CREATE: CreateConstraintCategory(
+            project_id=scene.constraint_project_id,
+            code_segment="MEP",
+            title="Mechanical",
+            display_order=3,
+        ),
+        Capability.CONSTRAINT_CATEGORIES_UPDATE: UpdateConstraintCategory(
+            category_id=scene.constraint_update_category_id,
+            expected_version=1,
+            title="Site Logistics",
+        ),
+        Capability.CONSTRAINT_CATEGORIES_DEACTIVATE: DeactivateConstraintCategory(
+            category_id=scene.constraint_deactivate_category_id, expected_version=1
+        ),
+        Capability.CONSTRAINT_CATEGORIES_REORDER: ReorderConstraintCategories(
+            project_id=scene.constraint_reorder_project_id,
+            ordered_category_ids=(
+                scene.constraint_second_ordered_category_id,
+                scene.constraint_first_ordered_category_id,
+            ),
+            expected_versions=(1, 1),
+        ),
         # The entity plane's authoring half, written as the commands the payload
         # table above must normalise to. The vocabulary members and the datetime
         # are spelled here as domain values because that is what the caller's
@@ -1963,6 +2161,11 @@ class RecordingService(ApplicationService):
             managed_store=world.managed_store,
             task_management_unit_of_work=lambda: FakeTaskManagementUnitOfWork(world),
             commitment_management_unit_of_work=lambda: FakeCommitmentManagementUnitOfWork(world),
+            # Composed on the same argument again (PC-CM-IMP-WP04): this suite
+            # quantifies over every `Capability` and asserts each is reachable, so a
+            # service composed without the Constraint unit of work would have it
+            # asserting reachability for the `constraints.` names it withholds.
+            constraint_management_unit_of_work=lambda: FakeConstraintManagementUnitOfWork(world),
             # Composed, for the same reason the managed store above is: this
             # suite quantifies over every `Capability` and asserts each is
             # reachable, so a service composed *without* the relationship plane

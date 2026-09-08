@@ -1,8 +1,7 @@
 """BFF-to-gateway attestation of an already-verified browser session.
 
 The browser never supplies Principal. After the Next BFF resolves the HMAC
-session, it signs `(tid, oid, iat)` with a server-only secret. WebAuthn routes
-verify that signature and map claims through `UserAccountRepository`.
+session, it signs its durable Principal UUID with a server-only secret.
 """
 
 from __future__ import annotations
@@ -13,6 +12,7 @@ import json
 from datetime import datetime, timedelta
 from hashlib import sha256
 from typing import Final
+from uuid import UUID
 
 from my_pa.domain.identity.secret_digests import AuthSecretError
 
@@ -30,16 +30,16 @@ class AttestationError(AuthSecretError):
     """The BFF attestation is missing, expired, or forged."""
 
 
-def issue_webauthn_attestation(secret: str, *, tid: str, oid: str, now: datetime) -> str:
-    """Return `base64url(json).hexsig` for a verified session's tid/oid."""
+def issue_webauthn_attestation(secret: str, *, principal_id: UUID, now: datetime) -> str:
+    """Return a signed, short-lived durable-Principal assertion."""
     _require_secret(secret)
-    payload = _encode({"tid": tid, "oid": oid, "iat": int(now.timestamp())})
+    payload = _encode({"pid": str(principal_id), "iat": int(now.timestamp())})
     signature = hmac.new(secret.encode("utf-8"), payload.encode("utf-8"), sha256).hexdigest()
     return f"{payload}.{signature}"
 
 
-def verify_webauthn_attestation(secret: str, token: str, *, now: datetime) -> tuple[str, str]:
-    """Return `(tid, oid)` or raise. Does not accept caller-supplied principal_id."""
+def verify_webauthn_attestation(secret: str, token: str, *, now: datetime) -> UUID:
+    """Return the server-attested durable Principal or raise."""
     _require_secret(secret)
     if "." not in token:
         raise AttestationError("malformed attestation")
@@ -49,22 +49,20 @@ def verify_webauthn_attestation(secret: str, token: str, *, now: datetime) -> tu
         raise AttestationError("malformed attestation")
     try:
         attested = _decode(payload)
-        tid = attested["tid"]
-        oid = attested["oid"]
+        pid_raw = attested["pid"]
         issued_raw = attested["iat"]
-        if not isinstance(issued_raw, int):
+        if not isinstance(pid_raw, str) or not isinstance(issued_raw, int):
             raise AttestationError("malformed attestation")
+        principal_id = UUID(pid_raw)
         issued_at = issued_raw
     except (KeyError, TypeError, ValueError) as error:
         raise AttestationError("malformed attestation") from error
-    if not isinstance(tid, str) or not isinstance(oid, str) or not tid or not oid:
-        raise AttestationError("malformed attestation")
-    if "principal_id" in attested or "principalId" in attested:
+    if any(key in attested for key in ("principal_id", "principalId", "tid", "oid")):
         raise AttestationError("malformed attestation")
     age = now.timestamp() - issued_at
     if age < 0 or age > ATTESTATION_MAX_AGE.total_seconds():
         raise AttestationError("expired attestation")
-    return tid, oid
+    return principal_id
 
 
 def _require_secret(secret: str) -> None:

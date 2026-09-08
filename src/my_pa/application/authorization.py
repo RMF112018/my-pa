@@ -61,12 +61,16 @@ from my_pa.application.commands import (
     BulkConfirmTasks,
     BulkPreviewTasks,
     CloseCommitment,
+    CloseConstraint,
+    CloseConstraintWithFollowUp,
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
     CorrectGoodNotes,
     CreateCapture,
     CreateCommitment,
+    CreateConstraintCategory,
+    CreateConstraintDraft,
     CreateEntity,
     CreateEntityAffiliation,
     CreateEntityAssignment,
@@ -78,6 +82,7 @@ from my_pa.application.commands import (
     CreateRelationshipMemory,
     CreateSituation,
     CreateTask,
+    DeactivateConstraintCategory,
     DecideReviewCase,
     EndEntityAffiliation,
     EndEntityAssignment,
@@ -108,6 +113,8 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListConstraintCategories,
+    ListConstraints,
     ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
@@ -134,10 +141,14 @@ from my_pa.application.commands import (
     PreviewEntityMerge,
     PreviewEntitySplit,
     ProposeRelationshipMemory,
+    PublishConstraint,
     PullGoodNotesWork,
     PutCanvasWorkspace,
     ReadCapture,
     ReadCommitment,
+    ReadConstraint,
+    ReadConstraintHistory,
+    ReadConstraintOverview,
     ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadKnowledge,
@@ -146,6 +157,8 @@ from my_pa.application.commands import (
     RecordContextFeedback,
     RecordIntelligenceRunState,
     RecordTask,
+    ReopenConstraint,
+    ReorderConstraintCategories,
     ResolveEntity,
     ResolveIntelligenceSet,
     ResolveUnresolvedMention,
@@ -169,6 +182,7 @@ from my_pa.application.commands import (
     ReviseRelationshipMemory,
     SearchCaptures,
     SearchCommitments,
+    SearchConstraints,
     SearchEntities,
     SearchGoodNotes,
     SearchIntelligenceArtifacts,
@@ -181,10 +195,14 @@ from my_pa.application.commands import (
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
     SupersedeEntityName,
+    TransitionConstraint,
     TransitionTask,
     UpdateCommitment,
+    UpdateConstraint,
+    UpdateConstraintCategory,
     UpdateEntity,
     UpdateTask,
+    VoidConstraint,
     WaitingOn,
 )
 from my_pa.contracts.ports import UnitOfWork
@@ -361,6 +379,34 @@ def _requested_scope(
             | CreateCommitment()
             | UpdateCommitment()
             | CloseCommitment()
+            # The Constraint Management reads (PC-CM-IMP-WP04) name a Project,
+            # not a source, for the identical reason the task and commitment
+            # planes do: a Constraint is a Project control in the acting
+            # Principal's own partition, and its rows carry no `source_id` and no
+            # `enrollment_id` for a scope to be compared against. The empty set
+            # is a measurement, and `domain.policy.decision._SCOPELESS` is where
+            # it is read as one rather than as a failed lookup.
+            | ReadConstraint()
+            | ListConstraints()
+            | SearchConstraints()
+            | ReadConstraintHistory()
+            | ReadConstraintOverview()
+            | ListConstraintCategories()
+            # The twelve Constraint mutations name a Project or a record in the
+            # Principal's own partition and never a configured source, exactly
+            # as the six reads above do (PC-CM-IMP-WP07).
+            | CreateConstraintDraft()
+            | PublishConstraint()
+            | UpdateConstraint()
+            | TransitionConstraint()
+            | CloseConstraint()
+            | CloseConstraintWithFollowUp()
+            | VoidConstraint()
+            | ReopenConstraint()
+            | CreateConstraintCategory()
+            | UpdateConstraintCategory()
+            | DeactivateConstraintCategory()
+            | ReorderConstraintCategories()
             # `context.prepare` names a query, not a source. The requested scope
             # is empty as a measurement: the request does not name a grant, and
             # `_SCOPELESS` is where that empty set is read that way.

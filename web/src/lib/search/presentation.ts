@@ -185,6 +185,26 @@ function presentHit(hit: FederatedHit, enrollmentId: string | undefined): Presen
  * Group hits in BFF/domain order. Per-domain order is the upstream hit order.
  * Knowledge rank is copied onto the row for display inside that group only.
  */
+/**
+ * Zero-hit federated Search must not claim an empty record when no domain was
+ * actually searched. A 200 with every invoked domain `unavailable` is the dead
+ * gateway / all-upstream-failed case; that is unavailable, not "no matches".
+ *
+ * Mixed searched-empty plus some unavailable stays empty: the searched domains
+ * did answer, and coverage tokens disclose the rest.
+ */
+export function federatedZeroHitKind(
+  coverage: readonly SearchCoverage[],
+  hitCount: number,
+): "records" | "empty" | "unavailable" {
+  if (hitCount > 0) return "records";
+  const invoked = coverage.filter((row) => row.state !== "omitted");
+  const searched = invoked.filter((row) => row.state === "searched");
+  const unavailable = invoked.filter((row) => row.state === "unavailable");
+  if (searched.length === 0 && unavailable.length > 0) return "unavailable";
+  return "empty";
+}
+
 export function presentFederatedHits(
   hits: readonly FederatedHit[],
   enrollmentId?: string,

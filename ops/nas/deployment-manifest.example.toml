@@ -1,0 +1,18 @@
+# Non-secret NAS deployment identity. Copy outside Git and replace REQUIRED
+# values from a verified build. This file never holds secrets, credentials,
+# or environment values.
+schema = "my-pa.nas-deployment-manifest.v1"
+repository_commit = "REQUIRED_FULL_SHA"
+repository_tree = "REQUIRED_FULL_TREE_SHA"
+app_image_id = "sha256:REQUIRED_LOADED_APP_CONFIG_ID"
+web_image_id = "sha256:REQUIRED_LOADED_WEB_CONFIG_ID"
+proxy_image_digest = "sha256:REQUIRED_CADDY_DIGEST"
+cloudflared_image = "cloudflare/cloudflared:REQUIRED_TAG@sha256:REQUIRED_DIGEST"
+alembic_head = "REQUIRED_ALEMBIC_REVISION"
+compose_hash = "REQUIRED_64_HEX"
+public_proxy_config_hash = "REQUIRED_64_HEX"
+tunnel_config_hash = "REQUIRED_64_HEX"
+environment_schema_version = "1"
+deployed_at = "REQUIRED_RFC3339_UTC"
+previous_manifest = "/volume1/my-pa/deployment/previous-manifest.toml"
+backup_receipt = "/volume1/my-pa/backups/REQUIRED.dump.sha256"

@@ -235,9 +235,28 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # value is server-owned session state, not a request-body owner — the same
     # pattern as `webauthn_auth.py` `current.principal_id`.
     "bootstrap/gateway.py": (("session", "principal_id"),),
+    # Auth-state classification reads the stored local account's principal_id
+    # to judge the fixed binding. The snapshot is assembled from rows, not
+    # from a request body.
+    "domain/identity/auth_state.py": (("account", "principal_id"),),
+    # Local-account resolve-or-create compares the candidate binding against
+    # a stored row and refuses an inconsistent principal_id. The candidate is
+    # constructed from LOCAL_OPERATOR_UUID, not caller input.
+    "infrastructure/persistence/user_accounts.py": (
+        ("candidate", "principal_id"),
+        ("candidate", "principal_id"),
+        ("candidate", "principal_id"),
+    ),
+    # WP03 ceremony reads Principal off stored credentials, challenges, and
+    # the authorizing session resolved from the BFF SID header. None of these
+    # values come from the JSON body.
     "infrastructure/security/webauthn_ceremony.py": (
+        ("challenge", "principal_id"),
+        ("challenge", "principal_id"),
         ("record", "principal_id"),
         ("revoked", "principal_id"),
+        ("session", "principal_id"),
+        ("stored", "principal_id"),
         ("stored", "principal_id"),
         ("stored", "principal_id"),
         ("stored", "principal_id"),

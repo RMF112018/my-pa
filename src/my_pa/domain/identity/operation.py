@@ -781,6 +781,75 @@ class Capability(StrEnum):
     CANVAS_WORKSPACE_GET = "canvas.workspace.get"
     CANVAS_WORKSPACE_PUT = "canvas.workspace.put"
 
+    #: `PC-CM-IMP-WP04`. The six Constraint Management reads, and nothing else:
+    #: the plane's authoring and its SharePoint synchronisation are deliberately
+    #: absent, so a grant issued over this family cannot reach either. Each name
+    #: is served by exactly one method of `application.constraints`'s read
+    #: service, which is where every derived flag — Overdue, Due Soon, In My
+    #: Court, the recent filters, the grouping, the cursor and the overview
+    #: formulas — is decided; the capability admits that answer to a transport
+    #: and recomputes no part of it.
+    #:
+    #: **`constraint_categories.list` rather than `constraints.categories.list`,**
+    #: because a Category is not a Constraint. It is the Project's own
+    #: classification scheme, readable when the Register is empty, and folding it
+    #: under the `constraints.` prefix would make a grant issued to read the
+    #: scheme look like one issued to read the records filed under it.
+    #:
+    #: None of the six is in `_WRITE_CAPABILITIES`, `_ADDITIVE_WRITE_CAPABILITIES`
+    #: or `_OPERATOR_ONLY`, and each absence is a decision rather than an
+    #: omission. They change no product-owned state, so the write sets would be
+    #: false; and none widens the scope a later request is evaluated against,
+    #: which is the property that puts `sources.enroll` in the operator set. The
+    #: absence from `_WRITE_CAPABILITIES` is also what makes the generated MCP
+    #: tools carry `read_only_hint`.
+    CONSTRAINTS_READ = "constraints.read"
+    CONSTRAINTS_LIST = "constraints.list"
+    CONSTRAINTS_SEARCH = "constraints.search"
+    CONSTRAINTS_HISTORY = "constraints.history"
+    CONSTRAINTS_OVERVIEW = "constraints.overview"
+    CONSTRAINT_CATEGORIES_LIST = "constraint_categories.list"
+    #: Constraint Management authoring (PC-CM-IMP-WP07). The twelve canonical
+    #: mutations of the plane WP06 implemented, admitted here so the one entry
+    #: point can dispatch them. Every one maps to `Purpose.CONSTRAINT_AUTHORING`
+    #: and to nothing else, and none of the six reads above gains it: a grant
+    #: issued to read a Project's Register must not also change what is in it.
+    #:
+    #: **Ten of the twelve are destructive and two are additive**, which is a
+    #: statement about existing state rather than about deletion. `is_destructive_
+    #: capability` is `_WRITE_CAPABILITIES - _ADDITIVE_WRITE_CAPABILITIES`, and
+    #: `_ADDITIVE_WRITE_CAPABILITIES` means what its comment below says: a write
+    #: that only adds a new durable record and reaches no existing one. Only
+    #: `constraints.create` and `constraint_categories.create` do that. Publish
+    #: transitions a Draft and consumes an allocator sequence; update, transition,
+    #: close, void and reopen move a record that already existed;
+    #: `constraints.close_follow_up` is the two-write shape that comment names,
+    #: marking the predecessor and minting the successor in one transaction; and
+    #: `constraint_categories.deactivate` is its retirement case verbatim.
+    #: Publishing any of those as additive would annotate a lifecycle transition
+    #: as a plain insert on every generated MCP tool.
+    #:
+    #: None is operator-only. Constraint authoring is ordinary Principal work over
+    #: the Principal's own partition: it widens no scope a later request is
+    #: evaluated against, which is the property that puts `sources.enroll` and the
+    #: identity-correction pair in `_OPERATOR_ONLY`.
+    #:
+    #: No `constraint_sync.*` member joins them. The synchronisation plane is
+    #: `PC-CM-IMP-WP11`'s, and a capability minted here would be one nothing
+    #: dispatches.
+    CONSTRAINTS_CREATE = "constraints.create"
+    CONSTRAINTS_PUBLISH = "constraints.publish"
+    CONSTRAINTS_UPDATE = "constraints.update"
+    CONSTRAINTS_TRANSITION = "constraints.transition"
+    CONSTRAINTS_CLOSE = "constraints.close"
+    CONSTRAINTS_CLOSE_FOLLOW_UP = "constraints.close_follow_up"
+    CONSTRAINTS_VOID = "constraints.void"
+    CONSTRAINTS_REOPEN = "constraints.reopen"
+    CONSTRAINT_CATEGORIES_CREATE = "constraint_categories.create"
+    CONSTRAINT_CATEGORIES_UPDATE = "constraint_categories.update"
+    CONSTRAINT_CATEGORIES_DEACTIVATE = "constraint_categories.deactivate"
+    CONSTRAINT_CATEGORIES_REORDER = "constraint_categories.reorder"
+
 
 class NativeSourceCapability(StrEnum):
     """Authenticated native-host commands, separate from legacy public transports."""
@@ -1223,6 +1292,41 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.RELATIONSHIP_MEMORY_PROPOSE: frozenset({Purpose.RELATIONSHIP_MEMORY_PROPOSAL}),
         Capability.CANVAS_WORKSPACE_GET: frozenset({Purpose.CANVAS_WORKSPACE_READ}),
         Capability.CANVAS_WORKSPACE_PUT: frozenset({Purpose.CANVAS_WORKSPACE_AUTHORING}),
+        # `PC-CM-IMP-WP04`. One purpose across the Constraint read family, and
+        # one purpose only.
+        # `constraint_read` is minted rather than borrowed on the rule this
+        # module applies everywhere (`D-91`): would reuse widen the grant? Every
+        # candidate does. `task_read` and `commitment_read` are the work-tracking
+        # planes, and a Constraint is a Project control whose parties, evidence
+        # links and history are not a task's; `document_read` is the managed
+        # custody plane; `entity_read` is identity. Admitting a Register read
+        # under any of them would let a grant issued for one plane return
+        # another's rows.
+        #
+        # The read half maps to `constraint_read` and to nothing else, and the
+        # authoring half below maps to `constraint_authoring` and to nothing
+        # else. No name appears under both purposes: that disjointness *is* the
+        # read/authoring separation the acceptance criteria ask for, and it is
+        # now proved by two mapped sets rather than, as at WP04, by the absence
+        # of one of them (PC-CM-IMP-WP07).
+        Capability.CONSTRAINTS_READ: frozenset({Purpose.CONSTRAINT_READ}),
+        Capability.CONSTRAINTS_LIST: frozenset({Purpose.CONSTRAINT_READ}),
+        Capability.CONSTRAINTS_SEARCH: frozenset({Purpose.CONSTRAINT_READ}),
+        Capability.CONSTRAINTS_HISTORY: frozenset({Purpose.CONSTRAINT_READ}),
+        Capability.CONSTRAINTS_OVERVIEW: frozenset({Purpose.CONSTRAINT_READ}),
+        Capability.CONSTRAINT_CATEGORIES_LIST: frozenset({Purpose.CONSTRAINT_READ}),
+        Capability.CONSTRAINTS_CREATE: frozenset({Purpose.CONSTRAINT_AUTHORING}),
+        Capability.CONSTRAINTS_PUBLISH: frozenset({Purpose.CONSTRAINT_AUTHORING}),
+        Capability.CONSTRAINTS_UPDATE: frozenset({Purpose.CONSTRAINT_AUTHORING}),
+        Capability.CONSTRAINTS_TRANSITION: frozenset({Purpose.CONSTRAINT_AUTHORING}),
+        Capability.CONSTRAINTS_CLOSE: frozenset({Purpose.CONSTRAINT_AUTHORING}),
+        Capability.CONSTRAINTS_CLOSE_FOLLOW_UP: frozenset({Purpose.CONSTRAINT_AUTHORING}),
+        Capability.CONSTRAINTS_VOID: frozenset({Purpose.CONSTRAINT_AUTHORING}),
+        Capability.CONSTRAINTS_REOPEN: frozenset({Purpose.CONSTRAINT_AUTHORING}),
+        Capability.CONSTRAINT_CATEGORIES_CREATE: frozenset({Purpose.CONSTRAINT_AUTHORING}),
+        Capability.CONSTRAINT_CATEGORIES_UPDATE: frozenset({Purpose.CONSTRAINT_AUTHORING}),
+        Capability.CONSTRAINT_CATEGORIES_DEACTIVATE: frozenset({Purpose.CONSTRAINT_AUTHORING}),
+        Capability.CONSTRAINT_CATEGORIES_REORDER: frozenset({Purpose.CONSTRAINT_AUTHORING}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),
@@ -1336,6 +1440,22 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_AFFILIATIONS_REVISE,
         Capability.ENTITIES_AFFILIATIONS_END,
         Capability.CANVAS_WORKSPACE_PUT,
+        # PC-CM-IMP-WP07. All twelve Constraint authoring names change
+        # product-owned state, so all twelve are here. The six Constraint reads
+        # are deliberately still absent, which is what keeps their generated MCP
+        # tools annotated `read_only_hint`.
+        Capability.CONSTRAINTS_CREATE,
+        Capability.CONSTRAINTS_PUBLISH,
+        Capability.CONSTRAINTS_UPDATE,
+        Capability.CONSTRAINTS_TRANSITION,
+        Capability.CONSTRAINTS_CLOSE,
+        Capability.CONSTRAINTS_CLOSE_FOLLOW_UP,
+        Capability.CONSTRAINTS_VOID,
+        Capability.CONSTRAINTS_REOPEN,
+        Capability.CONSTRAINT_CATEGORIES_CREATE,
+        Capability.CONSTRAINT_CATEGORIES_UPDATE,
+        Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
+        Capability.CONSTRAINT_CATEGORIES_REORDER,
     }
 )
 
@@ -1397,6 +1517,28 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_COMMUNICATION_ADD,
         Capability.ENTITIES_PARTICIPATIONS_CREATE,
         Capability.ENTITIES_AFFILIATIONS_CREATE,
+        # `PC-CM-IMP-WP07`: `constraints.create` and `constraint_categories.create`,
+        # and no other authoring capability. A Draft is minted and reaches
+        # nothing -- no code is issued, no allocator sequence is consumed, no
+        # predecessor is marked -- and a new Category is inserted into the
+        # Project's scheme without moving one that was already
+        # there.
+        #
+        # **The other ten are deliberately absent, by the same reading the
+        # `supersede`/`revise`/`retire`/`end` paragraph above states.** Publish
+        # transitions a Draft *and* consumes the Category's allocator sequence;
+        # update, transition, close, void and reopen each change a record that
+        # already existed; `constraints.close_follow_up` is exactly the "two
+        # writes" case -- it closes the predecessor and mints the successor with
+        # its own code and a `FOLLOW_UP_OF` edge, in one transaction;
+        # `constraint_categories.update` revises a live row;
+        # `constraint_categories.deactivate` is the retirement case, moving an
+        # ACTIVE Category out of the set new records may be filed under; and
+        # `constraint_categories.reorder` rewrites the display order of every
+        # Category in the Project. Calling any of them additive would publish a
+        # `destructive_hint=False` annotation that contradicts the transaction.
+        Capability.CONSTRAINTS_CREATE,
+        Capability.CONSTRAINT_CATEGORIES_CREATE,
     }
 )
 

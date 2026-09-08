@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-one hundred and thirty-six capabilities. There are two ways to prove that and only one stays
+one hundred and fifty-four capabilities. There are two ways to prove that and only one stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -1204,6 +1204,96 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         # No arguments: the queue is every unplaced mention in the Principal's
         # own partition, so there is nothing to name.
         Capability.ENTITIES_UNRESOLVED_MENTIONS: {},
+        # PC-CM-IMP-WP04's six Constraint Management reads, naming the scene's own
+        # seeded Project and Constraint so each answers rather than refuses.
+        Capability.CONSTRAINTS_READ: {"constraint_id": scene.constraint_id},
+        Capability.CONSTRAINTS_LIST: {"project_id": scene.constraint_project_id},
+        Capability.CONSTRAINTS_SEARCH: {
+            "project_id": scene.constraint_project_id,
+            "query": "synthetic",
+        },
+        Capability.CONSTRAINTS_HISTORY: {"constraint_id": scene.constraint_id},
+        Capability.CONSTRAINTS_OVERVIEW: {"project_id": scene.constraint_project_id},
+        Capability.CONSTRAINT_CATEGORIES_LIST: {"project_id": scene.constraint_project_id},
+        # PC-CM-IMP-WP07's twelve Constraint Management mutations. Each names a
+        # seeded record in the state its operation requires -- Publish a Draft,
+        # Reopen a closed record, a reorder every Category of the Project exactly
+        # once -- so each one *answers* here rather than refusing, which is what
+        # makes this a comparison of answers. Every minted identifier and every
+        # issued public code in the reply is masked before comparison, so three
+        # transports each mutating their own copy of the world still agree.
+        Capability.CONSTRAINTS_CREATE: {
+            "project_id": scene.constraint_project_id,
+            "category_id": scene.constraint_category_id,
+            "description": "A drafted Project control.",
+            "date_identified": "2026-08-02",
+            "due_date": "2026-09-02",
+        },
+        Capability.CONSTRAINTS_PUBLISH: {
+            "constraint_id": scene.constraint_draft_id,
+            "expected_version": 1,
+            "to_state": "identified",
+        },
+        Capability.CONSTRAINTS_UPDATE: {
+            "constraint_id": scene.constraint_update_id,
+            "expected_version": 1,
+            "current_update": "Awaiting the site survey.",
+        },
+        Capability.CONSTRAINTS_TRANSITION: {
+            "constraint_id": scene.constraint_transition_id,
+            "to_state": "pending",
+            "expected_version": 1,
+        },
+        Capability.CONSTRAINTS_CLOSE: {
+            "constraint_id": scene.constraint_close_id,
+            "expected_version": 1,
+            "completion_date": "2026-08-03",
+            "closure_commentary": "Resolved on site.",
+        },
+        Capability.CONSTRAINTS_CLOSE_FOLLOW_UP: {
+            "constraint_id": scene.constraint_follow_up_id,
+            "expected_version": 1,
+            "successor_description": "The follow-up control.",
+            "completion_date": "2026-08-03",
+            "successor_due_date": "2026-09-30",
+            "successor_bic": [{"kind": "principal"}],
+            "successor_responsible": [{"kind": "principal"}],
+        },
+        Capability.CONSTRAINTS_VOID: {
+            "constraint_id": scene.constraint_void_id,
+            "expected_version": 1,
+            "void_reason": "Raised in error.",
+            "voided_date": "2026-08-03",
+        },
+        Capability.CONSTRAINTS_REOPEN: {
+            "constraint_id": scene.constraint_closed_id,
+            "to_state": "identified",
+            "expected_version": 1,
+            "reason": "The work was not complete.",
+        },
+        Capability.CONSTRAINT_CATEGORIES_CREATE: {
+            "project_id": scene.constraint_project_id,
+            "code_segment": "MEP",
+            "title": "Mechanical",
+            "display_order": 3,
+        },
+        Capability.CONSTRAINT_CATEGORIES_UPDATE: {
+            "category_id": scene.constraint_update_category_id,
+            "expected_version": 1,
+            "title": "Site Logistics",
+        },
+        Capability.CONSTRAINT_CATEGORIES_DEACTIVATE: {
+            "category_id": scene.constraint_deactivate_category_id,
+            "expected_version": 1,
+        },
+        Capability.CONSTRAINT_CATEGORIES_REORDER: {
+            "project_id": scene.constraint_reorder_project_id,
+            "ordered_category_ids": [
+                scene.constraint_second_ordered_category_id,
+                scene.constraint_first_ordered_category_id,
+            ],
+            "expected_versions": [1, 1],
+        },
         # The entity plane's authoring half (`WP-RI-A-02`). Every one of the
         # twelve is executed here rather than refused, which is what makes this
         # a comparison of answers rather than of refusals -- so each names the
@@ -1778,7 +1868,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 137, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 155, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))

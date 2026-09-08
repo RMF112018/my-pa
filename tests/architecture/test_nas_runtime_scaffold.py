@@ -121,6 +121,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         "target_platform",
         "images",
         "network",
+        "public_browser_ingress",
         "auth",
         "restart",
         "postgres",
@@ -160,7 +161,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         or network.get("application_egress") != "forbidden"
     ):
         errors.add("network_planes")
-    if contract.get("auth", {}).get("pilot_web") != "local_operator":
+    if contract.get("auth", {}).get("pilot_web") != "passkey":
         errors.add("pilot_auth")
     if (
         contract.get("restart", {}).get("pilot_after_nas_10_and_operator_activation")
@@ -256,7 +257,15 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "pilot_https": "tailscale_serve",
             "public_exposure": "forbidden",
         },
-        "auth": {"pilot_web": "local_operator", "scratch_only": "local_operator"},
+        "public_browser_ingress": {
+            "overlay": "compose.public-browser.example.yml",
+            "profile": "public-browser-edge",
+            "hostname": "pa.bobby-fetting.me",
+            "canonical_origin": "https://pa.bobby-fetting.me",
+            "auth": "passkey",
+            "host_publish": "forbidden",
+        },
+        "auth": {"pilot_web": "passkey", "scratch_only": "local_operator"},
         "restart": {"smoke": "no", "pilot_after_nas_10_and_operator_activation": "unless-stopped"},
         "postgres": {
             "storage": "nas_local_bind",
@@ -308,7 +317,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
                 "principal_source": "credential",
                 "enabled_by_default": False,
             },
-            "browser": {"upstream": "web", "auth": "local_operator"},
+            "browser": {"upstream": "web", "auth": "passkey"},
         },
         "mcp": {"transport": "stdio_only"},
     }
@@ -452,11 +461,12 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
         "worker-capture": None,
         "web": {
             "NODE_ENV": "production",
-            "MYPA_AUTH_MODE": "local_operator",
+            "MYPA_AUTH_MODE": "passkey",
             "MYPA_GATEWAY_URL": "http://gateway:8765",
             "MYPA_GATEWAY_AUTH_MODE": "local_operator",
-            "MYPA_CANONICAL_ORIGIN": (
-                "${MYPA_CANONICAL_ORIGIN:?exact private HTTPS origin required}"
+            "MYPA_CANONICAL_ORIGIN": ("${MYPA_CANONICAL_ORIGIN:?exact HTTPS origin required}"),
+            "MYPA_SESSION_SERVICE_SECRET": (
+                "${MYPA_SESSION_SERVICE_SECRET:?session-service secret required}"
             ),
         },
         "proxy": {
@@ -519,6 +529,7 @@ def validate_nas_scaffold(files: Mapping[str, str]) -> set[str]:
             "volumes",
             "depends_on",
             "networks",
+            "healthcheck",
         },
         "worker-enrollment": {
             "profiles",
@@ -1224,7 +1235,7 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
         ),
         (
             "ops/nas/runtime-contract.toml",
-            'pilot_web = "local_operator"',
+            'pilot_web = "passkey"',
             'pilot_web = "synthetic"',
             "pilot_auth",
         ),
@@ -1280,7 +1291,7 @@ def _replace(files: dict[str, str], path: str, old: str, new: str) -> dict[str, 
         ),
         (
             "ops/nas/runtime-contract.toml",
-            '[ingress.browser]\nupstream = "web"\nauth = "local_operator"',
+            '[ingress.browser]\nupstream = "web"\nauth = "passkey"',
             '[ingress.browser]\nupstream = "web"\nauth = "disabled"',
             "contract_values",
         ),

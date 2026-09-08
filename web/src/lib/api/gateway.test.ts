@@ -37,7 +37,9 @@ import type { PrincipalSession } from "@/contracts/identity";
 import { resetSessionRegistry } from "@/lib/auth/session-registry";
 
 const PRINCIPAL: PrincipalSession = {
-  principalId: "syn-aaaa0001",
+  principalId: "aaaa0001-0000-0000-0000-000000000001",
+  identityProvider: "synthetic",
+  identitySubject: "11111111-2222-3333-4444-555555555555:aaaa0001-0000-0000-0000-000000000001",
   tid: "11111111-2222-3333-4444-555555555555",
   oid: "aaaa0001-0000-0000-0000-000000000001",
   upn: "synthetic.a@moss.example",
@@ -46,7 +48,21 @@ const PRINCIPAL: PrincipalSession = {
   synthetic: true,
 };
 
-const OTHER: PrincipalSession = { ...PRINCIPAL, oid: "bbbb0002-0000-0000-0000-000000000002" };
+const OTHER: PrincipalSession = {
+  ...PRINCIPAL,
+  principalId: "bbbb0002-0000-0000-0000-000000000002",
+  identitySubject: "11111111-2222-3333-4444-555555555555:bbbb0002-0000-0000-0000-000000000002",
+  oid: "bbbb0002-0000-0000-0000-000000000002",
+};
+
+const LOCAL_OPERATOR: PrincipalSession = {
+  principalId: "24abf5d2-d0c2-5e1c-82f6-e72425e9ed37",
+  identityProvider: "local",
+  identitySubject: "local-operator",
+  displayName: "Local operator",
+  lifecycleState: "active",
+  synthetic: false,
+};
 
 const DISCLOSURE: PythonDisclosure = {
   coverage: { state: "not_enrolled" },
@@ -182,6 +198,13 @@ describe("the correlation principal identifier", () => {
     expect(await correlationPrincipalId(PRINCIPAL)).toMatch(/^prn_[0-9a-f]{32}$/);
   });
 
+  it("canonicalizes the session UUID as prn_ plus lowercase hex", async () => {
+    expect(await correlationPrincipalId(PRINCIPAL)).toBe("prn_aaaa0001000000000000000000000001");
+    expect(await correlationPrincipalId(LOCAL_OPERATOR)).toBe(
+      "prn_24abf5d2d0c25e1c82f6e72425e9ed37",
+    );
+  });
+
   it("is derived from the session and is stable for it", async () => {
     expect(await correlationPrincipalId(PRINCIPAL)).toBe(await correlationPrincipalId(PRINCIPAL));
   });
@@ -193,6 +216,27 @@ describe("the correlation principal identifier", () => {
   it("does not depend on the mutable observations", async () => {
     const renamed = { ...PRINCIPAL, upn: "someone.else@moss.example", displayName: "Renamed" };
     expect(await correlationPrincipalId(renamed)).toBe(await correlationPrincipalId(PRINCIPAL));
+  });
+
+  it("does not hash tid or oid", async () => {
+    const sameIdDifferentClaims = {
+      ...PRINCIPAL,
+      tid: "99999999-9999-9999-9999-999999999999",
+      oid: "cccccccc-0000-0000-0000-000000000003",
+    };
+    expect(await correlationPrincipalId(sameIdDifferentClaims)).toBe(
+      await correlationPrincipalId(PRINCIPAL),
+    );
+    const material = `my-pa/bff/principal-correlation/v1/${PRINCIPAL.tid}/${PRINCIPAL.oid}`;
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(material));
+    const hashed = `prn_${Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("").slice(0, 32)}`;
+    expect(await correlationPrincipalId(PRINCIPAL)).not.toBe(hashed);
+  });
+
+  it("fails closed on a malformed principalId", async () => {
+    await expect(
+      correlationPrincipalId({ ...PRINCIPAL, principalId: "syn-aaaa0001" }),
+    ).rejects.toThrow(/principalId is not a UUID/);
   });
 });
 

@@ -11,7 +11,7 @@ The five, over both:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — proved from both ends: the tool list and the option
-  surface route one hundred and thirty-six capability names and none of them mutates a
+  surface route one hundred and fifty-four capability names and none of them mutates a
   source, and every capability driven over both transports is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -474,6 +474,35 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_SPLIT_PREVIEW,
         Capability.ENTITIES_SPLIT,
         Capability.RELATIONSHIP_MEMORY_PROPOSE,
+        # PC-CM-IMP-WP04's six Constraint Management reads join them for the same
+        # reason: a Constraint names a Project in the acting Principal's own
+        # partition, never a `src_...` or an `enr_...`. All six are in
+        # `domain.policy.decision._SCOPELESS`, and leaving them in would make this
+        # rule assert that a stranger is denied a scope neither the request nor
+        # the plane has.
+        Capability.CONSTRAINTS_READ,
+        Capability.CONSTRAINTS_LIST,
+        Capability.CONSTRAINTS_SEARCH,
+        Capability.CONSTRAINTS_HISTORY,
+        Capability.CONSTRAINTS_OVERVIEW,
+        Capability.CONSTRAINT_CATEGORIES_LIST,
+        # `PC-CM-IMP-WP07`'s twelve authoring names join them on the same
+        # reading, and writing changes nothing about it: a Constraint mutation
+        # names a Project or a record in the acting Principal's own partition and
+        # never a `src_...` or an `enr_...`. All twelve are in
+        # `domain.policy.decision._SCOPELESS`.
+        Capability.CONSTRAINTS_CREATE,
+        Capability.CONSTRAINTS_PUBLISH,
+        Capability.CONSTRAINTS_UPDATE,
+        Capability.CONSTRAINTS_TRANSITION,
+        Capability.CONSTRAINTS_CLOSE,
+        Capability.CONSTRAINTS_CLOSE_FOLLOW_UP,
+        Capability.CONSTRAINTS_VOID,
+        Capability.CONSTRAINTS_REOPEN,
+        Capability.CONSTRAINT_CATEGORIES_CREATE,
+        Capability.CONSTRAINT_CATEGORIES_UPDATE,
+        Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
+        Capability.CONSTRAINT_CATEGORIES_REORDER,
     }
 ]
 
@@ -783,6 +812,25 @@ ENTITY_RECORD_FAMILY_EXEMPTION = frozenset(
 #: (ADR-003), not a source. GET does not contain a mutating verb.
 CANVAS_WORKSPACE_EXEMPTION = frozenset({Capability.CANVAS_WORKSPACE_PUT})
 
+#: `PC-CM-IMP-WP07`'s four authoring names the substring proxy refuses --
+#: `constraints.create`, `constraints.update`, `constraint_categories.create`
+#: and `constraint_categories.update` -- on exactly the reading `CAPTURE_
+#: CAPABILITIES` and `CANVAS_WORKSPACE_EXEMPTION` are exempt under. A Constraint
+#: and a Category are Project controls in the acting Principal's own partition,
+#: which `ADR-003` makes product-owned records rather than source systems: the
+#: property the proxy stands for -- no source mutation -- holds, and holds
+#: structurally, because the Constraint plane reaches no source provider and no
+#: enrollment at all. The other eight authoring names carry no substring on the
+#: list and are checked by it unchanged.
+CONSTRAINT_AUTHORING_EXEMPTION = frozenset(
+    {
+        Capability.CONSTRAINTS_CREATE,
+        Capability.CONSTRAINTS_UPDATE,
+        Capability.CONSTRAINT_CATEGORIES_CREATE,
+        Capability.CONSTRAINT_CATEGORIES_UPDATE,
+    }
+)
+
 
 def test_neither_transport_routes_a_mutating_capability() -> None:
     """The tool list and the CLI's positional, and no name that mutates a *source*.
@@ -808,6 +856,7 @@ def test_neither_transport_routes_a_mutating_capability() -> None:
         | PHASE_B_PROPOSAL_EXEMPTION
         | ENTITY_RECORD_FAMILY_EXEMPTION
         | CANVAS_WORKSPACE_EXEMPTION
+        | CONSTRAINT_AUTHORING_EXEMPTION
     )
     checked = [c for c in Capability if c not in exempt]
     assert len(checked) == len(Capability) - len(exempt)

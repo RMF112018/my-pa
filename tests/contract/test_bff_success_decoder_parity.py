@@ -17,13 +17,14 @@ from __future__ import annotations
 import hashlib
 import json
 import zlib
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Final
 
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
 from my_pa.application.goodnotes_content import content_payload
 from my_pa.application.goodnotes_semantics import work_payload
+from my_pa.application.service import _constraint_payload
 from my_pa.contracts.ports import CaptureSearchMatch, DirectedReceipt, MutationRecordFamily
 from my_pa.contracts.v1.canvas_workspace import (
     CanvasPointView,
@@ -50,6 +51,34 @@ from my_pa.domain.extraction.text import EXTRACTOR, EXTRACTOR_VERSION
 from my_pa.domain.goodnotes.models import GoodNotesPageRaster, GoodNotesPageWork
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.modeling.gate import ModelRoutePolicy
+from my_pa.domain.project_controls.category import ConstraintCategoryState
+from my_pa.domain.project_controls.constraint import (
+    ConstraintAttentionReason,
+    ConstraintFieldKey,
+    ConstraintLifecycleState,
+    ConstraintRecordQuality,
+)
+from my_pa.domain.project_controls.history import (
+    ConstraintMutationActor,
+    ConstraintMutationOperation,
+    ConstraintMutationOutcome,
+)
+from my_pa.domain.project_controls.party import PartyKind
+from my_pa.domain.project_controls.read_models import (
+    ConstraintCategoryRef,
+    ConstraintCategoryView,
+    ConstraintEvidenceLinkView,
+    ConstraintHistoryEntryView,
+    ConstraintListEntry,
+    ConstraintOverview,
+    ConstraintRelationshipView,
+    ConstraintSyncHealthView,
+    ConstraintSyncStateView,
+    ConstraintSyncSummaryView,
+    ConstraintView,
+    PartyRefView,
+    RelationshipDirection,
+)
 from my_pa.domain.relationship.entity import RelationshipState
 from my_pa.domain.search.query import RankCategory, SearchMatch, label_for_media_type
 from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
@@ -1394,7 +1423,226 @@ def python_success_payloads() -> dict[str, dict[str, Any]]:
         "goodnotes.correct": _goodnotes_correct(),
         "goodnotes.work": _goodnotes_work(),
         "goodnotes.content": _goodnotes_content(),
+        "constraints.read": _constraints_read(),
+        "constraints.list": _constraints_list(),
+        "constraints.search": _constraints_search(),
+        "constraints.history": _constraints_history(),
+        "constraints.overview": _constraints_overview(),
+        "constraint_categories.list": _constraint_categories_list(),
     }
+
+
+# --- the Constraint Management read plane (PC-CM-IMP-WP08) -------------------
+#
+# Built from the frozen read models and dumped through the *handler's own*
+# serialiser, so a rename or a dropped field on the Python side fails here
+# rather than in the browser. Nothing below is a hand-written dict of what the
+# payload is believed to look like.
+
+CONSTRAINT_ID: Final = "cst_aaaaaaaa11111111"
+CONSTRAINT_PROJECT_ID: Final = "prj_aaaaaaaa11111111"
+CONSTRAINT_CATEGORY_ID: Final = "ccat_aaaaaaaa11111111"
+PROJECT_TODAY: Final = date(2026, 8, 9)
+
+
+def _constraint_category_ref() -> ConstraintCategoryRef:
+    return ConstraintCategoryRef(
+        category_id=CONSTRAINT_CATEGORY_ID, prefix="2", title="Site access"
+    )
+
+
+def _constraint_parties() -> tuple[tuple[PartyRefView, ...], tuple[PartyRefView, ...]]:
+    bic = (
+        PartyRefView(kind=PartyKind.PRINCIPAL, party_ref_id="principal", display_label="You"),
+        PartyRefView(
+            kind=PartyKind.ENTITY,
+            party_ref_id="ent_aaaaaaaa11111111",
+            display_label="Pat Synthetic",
+            entity_id="ent_aaaaaaaa11111111",
+        ),
+    )
+    responsible = (
+        PartyRefView(
+            kind=PartyKind.UNRESOLVED,
+            party_ref_id=None,
+            display_label="Steel subcontractor",
+        ),
+    )
+    return bic, responsible
+
+
+def _constraint_list_entry() -> ConstraintListEntry:
+    bic, responsible = _constraint_parties()
+    return ConstraintListEntry(
+        constraint_id=CONSTRAINT_ID,
+        project_id=CONSTRAINT_PROJECT_ID,
+        # Text, never a number: "2.01" and "2.1" are two different Codes.
+        constraint_code="2.01",
+        description="Synthetic access constraint",
+        category=_constraint_category_ref(),
+        status=ConstraintLifecycleState.IN_PROGRESS,
+        date_identified=date(2026, 7, 28),
+        due_date=date(2026, 8, 14),
+        bic=bic,
+        responsible=responsible,
+        reference="RFI-014",
+        days_elapsed=8,
+        version=3,
+        updated_at=AT,
+        is_overdue=False,
+        is_due_soon=True,
+        in_my_court=True,
+        record_quality=ConstraintRecordQuality.NORMAL,
+        needs_attention=False,
+        sync_state=ConstraintSyncStateView.NEVER_SYNCED,
+        group_keys=(CONSTRAINT_CATEGORY_ID,),
+    )
+
+
+def _constraint_view() -> ConstraintView:
+    bic, responsible = _constraint_parties()
+    return ConstraintView(
+        constraint_id=CONSTRAINT_ID,
+        project_id=CONSTRAINT_PROJECT_ID,
+        constraint_code="2.01",
+        description="Synthetic access constraint",
+        category=_constraint_category_ref(),
+        status=ConstraintLifecycleState.IN_PROGRESS,
+        date_identified=date(2026, 7, 28),
+        due_date=date(2026, 8, 14),
+        bic=bic,
+        responsible=responsible,
+        reference="RFI-014",
+        days_elapsed=8,
+        version=3,
+        created_at=AT,
+        updated_at=AT,
+        is_overdue=False,
+        is_due_soon=True,
+        in_my_court=True,
+        record_quality=ConstraintRecordQuality.LEGACY_INCOMPLETE,
+        needs_attention=True,
+        needs_attention_reasons=(ConstraintAttentionReason.LEGACY_INCOMPLETE,),
+        missing_fields=(ConstraintFieldKey.DESCRIPTION,),
+        is_published=True,
+        published_at=AT,
+        current_update="Awaiting a confirmed delivery date",
+        completion=None,
+        void=None,
+        sync=ConstraintSyncSummaryView(
+            state=ConstraintSyncStateView.NEVER_SYNCED,
+            last_verified_at=None,
+            conflict_count=0,
+        ),
+        relationships=(
+            ConstraintRelationshipView(
+                relationship_id="crel_aaaaaaaa11111111",
+                relationship_type="blocks",
+                direction=RelationshipDirection.OUTGOING,
+                related_constraint_id="cst_bbbbbbbb22222222",
+                related_constraint_code="2.10",
+                related_status=ConstraintLifecycleState.IDENTIFIED,
+            ),
+        ),
+        evidence_links=(
+            ConstraintEvidenceLinkView(
+                evidence_link_id="cevd_aaaaaaaa11111111",
+                evidence_kind="capture",
+                evidence_ref="cap_aaaaaaaa11111111",
+                role="origin",
+            ),
+        ),
+    )
+
+
+def _constraint_history_entry() -> ConstraintHistoryEntryView:
+    return ConstraintHistoryEntryView(
+        history_id="chst_aaaaaaaa11111111",
+        operation=ConstraintMutationOperation.TRANSITION,
+        actor=ConstraintMutationActor.PRINCIPAL,
+        outcome=ConstraintMutationOutcome.APPLIED,
+        before_version=2,
+        after_version=3,
+        occurred_at=AT,
+        revision_id="crev_aaaaaaaa11111111",
+        safe_failure_reason=None,
+    )
+
+
+def _constraint_overview() -> ConstraintOverview:
+    return ConstraintOverview(
+        project_id=CONSTRAINT_PROJECT_ID,
+        project_today=PROJECT_TODAY,
+        project_timezone="America/New_York",
+        total_open=4,
+        overdue=1,
+        due_soon=2,
+        due_soon_through=date(2026, 8, 16),
+        # A float, and `None` rather than `0` when nothing qualifies: an average
+        # of nothing is not zero, and this tier never invents one.
+        average_open_age_business_days=6.5,
+        in_my_court=2,
+        on_hold=1,
+        recently_changed=3,
+        recently_closed=1,
+        draft=1,
+        needs_attention=1,
+        sync_health=ConstraintSyncHealthView(
+            state=ConstraintSyncStateView.NEVER_SYNCED,
+            open_conflict_count=0,
+            last_verified_at=None,
+        ),
+        as_of=AT,
+    )
+
+
+def _constraint_category_view() -> ConstraintCategoryView:
+    return ConstraintCategoryView(
+        category_id=CONSTRAINT_CATEGORY_ID,
+        project_id=CONSTRAINT_PROJECT_ID,
+        prefix="2",
+        title="Site access",
+        description="Access, egress and laydown",
+        display_order=2,
+        state=ConstraintCategoryState.ACTIVE,
+        next_sequence=3,
+        issued_count=2,
+        version=1,
+        prefix_locked=True,
+    )
+
+
+def _constraint_dump(value: object) -> object:
+    """One read model as the JSON document the Constraint handlers publish.
+
+    The handler's own serialiser, not a second description of it: a field the
+    read models rename or drop fails here rather than in the browser.
+    """
+    return _constraint_payload(value)
+
+
+def _constraints_read() -> dict[str, Any]:
+    return {"constraint": _constraint_dump(_constraint_view())}
+
+
+def _constraints_list() -> dict[str, Any]:
+    return {"constraints": _constraint_dump((_constraint_list_entry(),))}
+
+
+def _constraints_search() -> dict[str, Any]:
+    return {"constraints": _constraint_dump((_constraint_list_entry(),))}
+
+
+def _constraints_history() -> dict[str, Any]:
+    return {"history": _constraint_dump((_constraint_history_entry(),))}
+
+
+def _constraints_overview() -> dict[str, Any]:
+    return {"overview": _constraint_dump(_constraint_overview())}
+
+
+def _constraint_categories_list() -> dict[str, Any]:
+    return {"categories": _constraint_dump((_constraint_category_view(),))}
 
 
 def test_committed_python_fixtures_match_live_model_dumps() -> None:

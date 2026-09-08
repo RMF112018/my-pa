@@ -76,11 +76,38 @@ test.describe("offline capture and reconnect", () => {
 
     // The note really is on this device: it is in IndexedDB, not in component
     // state, and it is stored encrypted rather than in the clear.
-    const stored = await page.evaluate(async () => {
+    const stored = await page.evaluate(async (plaintext) => {
       const names = await indexedDB.databases();
-      return names.map((entry) => entry.name ?? "");
-    });
-    expect(stored.some((name) => name.includes("mypa"))).toBe(true);
+      const db = await new Promise<IDBDatabase>((resolve, reject) => {
+        const open = indexedDB.open("mypa-offline", 1);
+        open.onsuccess = () => resolve(open.result);
+        open.onerror = () => reject(open.error ?? new Error("offline db missing"));
+      });
+      const events = await new Promise<unknown[]>((resolve, reject) => {
+        const req = db.transaction("events", "readonly").objectStore("events").getAll();
+        req.onsuccess = () => resolve(req.result as unknown[]);
+        req.onerror = () => reject(req.error ?? new Error("events unread"));
+      });
+      const payloads = await new Promise<Array<{ ciphertext?: ArrayBuffer }>>((resolve, reject) => {
+        const req = db.transaction("payloads", "readonly").objectStore("payloads").getAll();
+        req.onsuccess = () => resolve(req.result as Array<{ ciphertext?: ArrayBuffer }>);
+        req.onerror = () => reject(req.error ?? new Error("payloads unread"));
+      });
+      db.close();
+      const ciphertexts = payloads.map((record) =>
+        record.ciphertext ? new TextDecoder().decode(new Uint8Array(record.ciphertext)) : "",
+      );
+      return {
+        names: names.map((entry) => entry.name ?? ""),
+        eventContainsNote: JSON.stringify(events).includes(plaintext),
+        payloadCount: payloads.length,
+        ciphertextContainsNote: ciphertexts.some((text) => text.includes(plaintext)),
+      };
+    }, syntheticNote(marker));
+    expect(stored.names.some((name) => name.includes("mypa"))).toBe(true);
+    expect(stored.payloadCount, "the held note must occupy the payload store").toBeGreaterThan(0);
+    expect(stored.eventContainsNote, "the append-only log must not hold plaintext").toBe(false);
+    expect(stored.ciphertextContainsNote, "payload bytes must be ciphertext").toBe(false);
 
     // Reconnect, then reload: replay runs on mount as well as on `online`, and a
     // reload exercises the path a person actually takes after a dropout.
@@ -140,4 +167,8 @@ test.describe("offline capture and reconnect", () => {
       "PWA_FIELDS_PENDING_WP26",
     );
   });
+
+  // Principal switching is not constructible in this e2e stack (`D-15` admits
+  // one Principal). The unit negatives live in `lib/offline/replay.test.ts` and
+  // `lib/offline/queue.test.ts`; do not add a flaky two-identity browser test.
 });

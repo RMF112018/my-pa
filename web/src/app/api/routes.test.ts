@@ -330,7 +330,9 @@ function looksSynthetic(body: string): boolean {
 describe("a default build produces no fixture data at all", () => {
   it("refuses every fixture function at the source", () => {
     const principal = {
-      principalId: "syn-aaaa0001",
+      principalId: "aaaa0001-0000-0000-0000-000000000001",
+      identityProvider: "synthetic" as const,
+      identitySubject: "11111111-2222-3333-4444-555555555555:aaaa0001-0000-0000-0000-000000000001",
       tid: "t",
       oid: "o",
       upn: "u",
@@ -618,7 +620,7 @@ describe("the capture receipt is the backend's own", () => {
     expect(body.status).toBe("persisted");
     expect(body.receipt.receiptId).toBe("rcpt_aaaaaaaa11111111");
     expect(body.receipt.captureId).toBe("cap_aaaaaaaa11111111");
-    expect(body.receipt.principalId).toBe("syn-aaaa0001");
+    expect(body.receipt.principalId).toBe("aaaa0001-0000-0000-0000-000000000001");
     expect(body.created).toBe(true);
     // The note itself is never echoed back.
     expect(raw).not.toContain("a note");
@@ -646,14 +648,14 @@ describe("the capture receipt is the backend's own", () => {
     const response = await capture(post(cookie, "/api/capture", { text: "a note", idempotencyKey: "k1" }));
 
     expect(response.status).toBe(200);
-    expect((await response.json()).receipt.principalId).toBe("syn-aaaa0001");
+    expect((await response.json()).receipt.principalId).toBe("aaaa0001-0000-0000-0000-000000000001");
   });
 
   it("refuses a replay when the authenticating cookie changes after session introspection", async () => {
     vi.stubEnv("MYPA_GATEWAY_AUTH_MODE", "entra");
     const cookieA = await signIn("synthetic-a");
     const authority = await (await sessionIntrospection(get(cookieA, "/api/session"))).json();
-    expect(authority).toMatchObject({ principalId: "syn-aaaa0001" });
+    expect(authority).toMatchObject({ principalId: "aaaa0001-0000-0000-0000-000000000001" });
 
     const cookieB = await signIn("synthetic-b");
     stubGateway({});
@@ -840,12 +842,47 @@ describe("System reports what is off as off", () => {
   });
 
   it("no longer restates a schema head the web tier cannot check", async () => {
+    vi.stubEnv("MYPA_SOURCE_COMMIT", "");
+    vi.stubEnv("MYPA_SOURCE_TREE", "");
     const cookie = await signIn();
     stubGateway(CAPABILITIES_GET);
     const raw = await (await system(get(cookie, "/api/system"))).text();
     expect(raw).not.toContain("schemaHead");
     expect(raw).not.toContain("gitSha");
     expect(raw).not.toContain("commitSha");
+    const body = JSON.parse(raw) as {
+      runtimeIdentity?: { sourceCommit?: string; sourceTree?: string };
+    };
+    expect(body.runtimeIdentity).toEqual({ sourceCommit: "unknown", sourceTree: "unknown" });
+  });
+
+  it("reports labelled source commit and tree when they are hex", async () => {
+    const commit = `${"a".repeat(40)}`;
+    const tree = `${"b".repeat(40)}`;
+    vi.stubEnv("MYPA_SOURCE_COMMIT", commit);
+    vi.stubEnv("MYPA_SOURCE_TREE", tree);
+    const cookie = await signIn();
+    stubGateway(CAPABILITIES_GET);
+    const body = await (await system(get(cookie, "/api/system"))).json();
+    expect(body.runtimeIdentity).toEqual({ sourceCommit: commit, sourceTree: tree });
+    const raw = JSON.stringify(body);
+    expect(raw).not.toContain("schemaHead");
+    expect(raw).not.toContain("gitSha");
+    expect(raw).not.toContain("commitSha");
+  });
+
+  it("reports invalid source identity as unknown, never a branch or path", async () => {
+    vi.stubEnv("MYPA_SOURCE_COMMIT", "main");
+    vi.stubEnv("MYPA_SOURCE_TREE", process.cwd());
+    const cookie = await signIn();
+    stubGateway(CAPABILITIES_GET);
+    const body = await (await system(get(cookie, "/api/system"))).json();
+    expect(body.runtimeIdentity).toEqual({ sourceCommit: "unknown", sourceTree: "unknown" });
+    expect(JSON.stringify(body.runtimeIdentity)).not.toContain("main");
+    expect(JSON.stringify(body.runtimeIdentity)).not.toContain(process.cwd());
+    expect(JSON.stringify(body)).not.toContain("schemaHead");
+    expect(JSON.stringify(body)).not.toContain("gitSha");
+    expect(JSON.stringify(body)).not.toContain("commitSha");
   });
 
   it("passes through worker heartbeats and does not invent PWA identity", async () => {

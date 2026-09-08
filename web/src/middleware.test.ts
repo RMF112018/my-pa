@@ -61,9 +61,34 @@ describe("route guard middleware", () => {
     expect(response.status).toBe(200);
   });
 
-  it("leaves /sign-in and /api/session unguarded", async () => {
+  it("leaves /sign-in, /api/session, and /api/health unguarded", async () => {
     expect((await middleware(requestFor("/sign-in"))).status).toBe(200);
     expect((await middleware(requestFor("/api/session"))).status).toBe(200);
+    expect((await middleware(requestFor("/api/health"))).status).toBe(200);
+  });
+
+  it("leaves the exact public WebAuthn and first-user paths unguarded", async () => {
+    for (const path of [
+      "/setup",
+      "/recover/operator",
+      "/api/webauthn/auth-state",
+      "/api/webauthn/authentication/options",
+      "/api/webauthn/authentication/complete",
+      "/api/webauthn/recovery/consume",
+      "/api/webauthn/bootstrap/registration/options",
+      "/api/webauthn/bootstrap/registration/complete",
+      "/api/webauthn/operator-recovery/registration/options",
+      "/api/webauthn/operator-recovery/registration/complete",
+    ]) {
+      expect((await middleware(requestFor(path))).status, path).toBe(200);
+    }
+  });
+
+  it("does not broadly bypass WebAuthn", async () => {
+    expect((await middleware(requestFor("/api/webauthn/registration/options"))).status).toBe(401);
+    expect((await middleware(requestFor("/api/webauthn/credentials/list"))).status).toBe(401);
+    expect((await middleware(requestFor("/api/webauthn/step-up/options"))).status).toBe(401);
+    expect((await middleware(requestFor("/api/webauthn"))).status).toBe(401);
   });
 
   it("does not plant an absolute URL as next; the request path is relative", async () => {

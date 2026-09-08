@@ -23,6 +23,8 @@ from my_pa.domain.identity.webauthn_relying_party import (
 )
 
 __all__ = [
+    "AUTHENTICATED_WEBAUTHN_ACTIONS",
+    "PUBLIC_WEBAUTHN_ACTIONS",
     "WEBAUTHN_PATH",
     "WEBAUTHN_PATH_PREFIX",
     "webauthn_http_handler",
@@ -32,7 +34,9 @@ WEBAUTHN_PATH_PREFIX: Final = "/webauthn/v1/"
 WEBAUTHN_PATH: Final = "/webauthn/v1/{action:path}"
 _JSON: Final = "application/json"
 _ATTESTATION_HEADER: Final = "x-my-pa-webauthn-attestation"
-_AUTHENTICATED_ACTIONS: Final = frozenset(
+_SID_HEADER: Final = "x-my-pa-auth-sid"
+_BODY_SID_KEYS: Final = frozenset({"sid", "issuedSid", "sessionId"})
+AUTHENTICATED_WEBAUTHN_ACTIONS: Final = frozenset(
     {
         "registration/options",
         "registration/complete",
@@ -44,11 +48,20 @@ _AUTHENTICATED_ACTIONS: Final = frozenset(
         "sessions/revoke-all",
     }
 )
-_PUBLIC_ACTIONS: Final = frozenset(
-    {"authentication/options", "authentication/complete", "recovery/consume"}
+PUBLIC_WEBAUTHN_ACTIONS: Final = frozenset(
+    {
+        "auth-state",
+        "authentication/options",
+        "authentication/complete",
+        "recovery/consume",
+        "bootstrap/registration/options",
+        "bootstrap/registration/complete",
+        "operator-recovery/registration/options",
+        "operator-recovery/registration/complete",
+    }
 )
 
-WebAuthnExecute = Callable[[str, str, Mapping[str, Any], str | None], Mapping[str, Any]]
+WebAuthnExecute = Callable[..., Mapping[str, Any]]
 
 
 def webauthn_http_handler(
@@ -60,7 +73,7 @@ def webauthn_http_handler(
 
     def handle(request: Request, document: Mapping[str, Any]) -> Response:
         action = request.url.path.removeprefix(WEBAUTHN_PATH_PREFIX)
-        if action not in _AUTHENTICATED_ACTIONS and action not in _PUBLIC_ACTIONS:
+        if action not in AUTHENTICATED_WEBAUTHN_ACTIONS and action not in PUBLIC_WEBAUTHN_ACTIONS:
             return _error("invalid_request", 404)
         if relying_party is None:
             return _error("backend_unavailable", 503)
@@ -73,11 +86,14 @@ def webauthn_http_handler(
             reject_caller_supplied_principal(document)
         except Exception:
             return _error("caller_supplied_principal", 400)
+        if any(key in document for key in _BODY_SID_KEYS):
+            return _error("invalid_request", 400)
         attestation = request.headers.get(_ATTESTATION_HEADER)
-        if action in _AUTHENTICATED_ACTIONS and not attestation:
+        if action in AUTHENTICATED_WEBAUTHN_ACTIONS and not attestation:
             return _error("unauthenticated", 401)
+        sid = request.headers.get(_SID_HEADER)
         try:
-            payload = execute(action, origin, document, attestation)
+            payload = execute(action, origin, document, attestation, sid)
         except AttestationError:
             return _error("unauthenticated", 401)
         except WebAuthnCeremonyError as error:
@@ -104,11 +120,21 @@ def _error(code: str, status: int) -> Response:
 
 
 def _status_for(code: str) -> int:
-    if code in {"unauthenticated", "step_up_required", "step_up_expired"}:
+    if code in {
+        "unauthenticated",
+        "step_up_required",
+        "step_up_expired",
+        "bootstrap_required",
+    }:
         return 401
     if code in {"wrong_origin", "caller_supplied_principal", "principal_mismatch"}:
         return 403
-    if code == "duplicate_credential":
+    if code in {
+        "duplicate_credential",
+        "auth_state_inconsistent",
+        "bootstrap_unavailable",
+        "operator_recovery_unavailable",
+    }:
         return 409
     if code == "backend_unavailable":
         return 503

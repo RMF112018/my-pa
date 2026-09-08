@@ -1,5 +1,18 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { signIn } from "./fixtures";
+
+type ApiAnswer<T> = { status: number; body: T };
+
+async function api<T>(page: Page, pathName: string): Promise<ApiAnswer<T>> {
+  return page.evaluate(async (target) => {
+    const response = await fetch(target, {
+      method: "GET",
+      cache: "no-store",
+      credentials: "same-origin",
+    });
+    return { status: response.status, body: (await response.json()) as T };
+  }, pathName);
+}
 
 test.beforeEach(async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -51,6 +64,32 @@ test("People search, profile, and resolve keep ambiguity visible", async ({ page
   await expect(page.getByTestId("people-resolve-candidates")).toBeVisible();
   await expect(page.getByRole("link", { name: "Open profile" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /merge/i })).toHaveCount(0);
+});
+
+test("foreign entity_id is not_found with no existence leak and no merge control", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  const foreign = "ent_bbbbbbbb22222222";
+  const answer = await api<{ error?: { errorClass?: string; message?: string } }>(
+    page,
+    `/api/people/${foreign}`,
+  );
+  expect(answer.status).toBe(404);
+  expect(answer.body.error?.errorClass).toBe("not_found");
+  const serialized = JSON.stringify(answer.body);
+  expect(serialized).not.toMatch(/exist/i);
+  expect(serialized).not.toMatch(/another principal/i);
+  expect(serialized).not.toMatch(/belongs to/i);
+
+  await page.goto(`/people/${foreign}`);
+  await expect(page.getByTestId("people-profile-unavailable")).toBeVisible();
+  await expect(page.getByTestId("people-profile")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /merge/i })).toHaveCount(0);
+  const copy = (await page.getByTestId("people-profile-unavailable").innerText()).toLowerCase();
+  expect(copy).not.toMatch(/exist/);
+  expect(copy).not.toMatch(/another principal/);
+  expect(copy).not.toMatch(/belongs to/);
 });
 
 test("People search and profile reflow at a narrow viewport", async ({ page }) => {

@@ -23,7 +23,7 @@ function messageFor(code: string): string {
     case "duplicate_credential":
       return "That passkey is already registered.";
     case "last_passkey_requires_recovery":
-      return "Add recovery codes before removing the last passkey.";
+      return "Add another passkey before removing this one.";
     case "invalid_challenge":
       return "The sign-in challenge expired. Try again.";
     default:
@@ -73,8 +73,12 @@ export function SecuritySettings({ initialCredentials }: { initialCredentials: C
   async function enroll() {
     setBusy(true);
     setStatus(null);
+    let grant: string | null = null;
     try {
-      const optionsResponse = await post("registration/options");
+      grant = await withStepUp();
+      if (!grant) return;
+      const optionsResponse = await post("registration/options", { grant });
+      grant = null;
       if (!optionsResponse.ok) {
         setStatus(messageFor((await optionsResponse.json() as { error?: { code?: string } }).error?.code ?? "failed"));
         return;
@@ -91,6 +95,7 @@ export function SecuritySettings({ initialCredentials }: { initialCredentials: C
     } catch (error) {
       setStatus(messageFor(error instanceof WebAuthnBrowserError ? error.code : "failed"));
     } finally {
+      grant = null;
       setBusy(false);
     }
   }

@@ -1,18 +1,14 @@
 /**
  * WebAuthn BFF: issuedSid is a Set-Cookie only, never browser JSON.
- * Step-up rotates the cookie SID via the session-service.
+ * Step-up carries the cookie from the SID Python rotated to; the BFF never
+ * rotates on its own, or the administration grant would bind to a dead SID.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { POST } from "@/app/api/webauthn/[...action]/route";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { callWebAuthnGateway } from "@/lib/auth/webauthn-server";
-import {
-  callSessionService,
-  rotateSid,
-  revokeSid,
-  MissingSessionServiceSecretError,
-} from "@/lib/auth/session-service";
+import { callSessionService, rotateSid, revokeSid } from "@/lib/auth/session-service";
 import { SYNTHETIC_MOSS_TENANT_ID } from "@/lib/auth/synthetic";
 import type { PrincipalSession } from "@/contracts/identity";
 
@@ -36,7 +32,9 @@ const NEW_SID = "cd".repeat(32);
 const PRIOR = "ef".repeat(32);
 
 const PRINCIPAL: PrincipalSession = {
-  principalId: "syn-aaaa0001",
+  principalId: "aaaa0001-0000-0000-0000-000000000001",
+  identityProvider: "synthetic",
+  identitySubject: "11111111-2222-3333-4444-555555555555:aaaa0001-0000-0000-0000-000000000001",
   tid: SYNTHETIC_MOSS_TENANT_ID,
   oid: "aaaa0001-0000-0000-0000-000000000001",
   upn: "synthetic.a@moss.example",
@@ -158,40 +156,56 @@ describe("recovery/consume issuedSid handoff", () => {
   });
 });
 
-describe("step-up/complete rotates the SID", () => {
-  it("sets the rotated SID cookie and strips any issuedSid from JSON", async () => {
+describe("step-up/complete adopts the SID Python rotated to", () => {
+  it("sets the cookie from issuedSid and strips it from the browser JSON", async () => {
     mockedGateway.mockResolvedValueOnce(
-      new Response(JSON.stringify({ administrationGrant: "grant", issuedSid: "leak-me" }), { status: 200 }),
+      new Response(
+        JSON.stringify({ administrationGrant: "grant", sessionCreated: true, issuedSid: NEW_SID }),
+        { status: 200 },
+      ),
     );
-    mockedRotate.mockResolvedValueOnce(NEW_SID);
     const response = await post(["step-up", "complete"], { credential: {} }, { cookie: SID });
     expect(response.status).toBe(200);
-    expect(mockedRotate).toHaveBeenCalledWith(SID, expect.anything());
     const body = await response.json();
     expect(body.administrationGrant).toBe("grant");
     expect(body).not.toHaveProperty("issuedSid");
+    expect(JSON.stringify(body)).not.toContain(NEW_SID);
     expect(cookieOf(response)).toBe(NEW_SID);
   });
 
-  it("answers 401 when rotate loses a concurrent rotation, without inventing a SID", async () => {
+  it("does not rotate in the BFF, so the grant stays bound to Python's successor", async () => {
     mockedGateway.mockResolvedValueOnce(
-      new Response(JSON.stringify({ administrationGrant: "grant" }), { status: 200 }),
+      new Response(
+        JSON.stringify({ administrationGrant: "grant", sessionCreated: true, issuedSid: NEW_SID }),
+        { status: 200 },
+      ),
     );
-    mockedRotate.mockResolvedValueOnce(null);
     const response = await post(["step-up", "complete"], { credential: {} }, { cookie: SID });
-    expect(response.status).toBe(401);
-    expect(cookieOf(response)).toBe("");
-    expect(JSON.stringify(await response.json())).not.toContain(NEW_SID);
+    expect(response.status).toBe(200);
+    expect(mockedRotate).not.toHaveBeenCalled();
+    expect(mockedRevoke).toHaveBeenCalledWith(SID, expect.anything());
   });
 
-  it("answers 503 when the session-service secret is missing", async () => {
+  it("passes through Python's 401 when it loses a concurrent rotation", async () => {
+    mockedGateway.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: { code: "unauthenticated" } }), { status: 401 }),
+    );
+    const response = await post(["step-up", "complete"], { credential: {} }, { cookie: SID });
+    expect(response.status).toBe(401);
+    expect((await response.json()).error.code).toBe("unauthenticated");
+    expect(mockedRotate).not.toHaveBeenCalled();
+    expect(cookieOf(response)).toBeUndefined();
+  });
+
+  it("fails closed when Python omits issuedSid, without inventing or rotating a SID", async () => {
     mockedGateway.mockResolvedValueOnce(
       new Response(JSON.stringify({ administrationGrant: "grant" }), { status: 200 }),
     );
-    mockedRotate.mockRejectedValueOnce(new MissingSessionServiceSecretError());
     const response = await post(["step-up", "complete"], { credential: {} }, { cookie: SID });
     expect(response.status).toBe(503);
     expect((await response.json()).error.code).toBe("authority_unavailable");
+    expect(mockedRotate).not.toHaveBeenCalled();
+    expect(cookieOf(response)).toBeUndefined();
   });
 });
 
@@ -218,5 +232,86 @@ describe("ceremony passthrough", () => {
     );
     const response = await post(["authentication", "options"], {});
     expect(await response.json()).toEqual({ challenge: "abc" });
+  });
+});
+
+describe("public bootstrap and auth-state", () => {
+  it("forwards auth-state without a cookie and returns {state} only", async () => {
+    mockedGateway.mockResolvedValueOnce(
+      new Response(JSON.stringify({ state: "uninitialized", reasons: ["bootstrap_required"] }), {
+        status: 200,
+      }),
+    );
+    const response = await post(["auth-state"], {});
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ state: "uninitialized" });
+    expect(mockedCall).not.toHaveBeenCalled();
+    expect(mockedGateway).toHaveBeenCalledWith("auth-state", {}, expect.anything(), undefined);
+  });
+
+  it("forwards bootstrap registration options without a cookie", async () => {
+    mockedGateway.mockResolvedValueOnce(
+      new Response(JSON.stringify({ challenge: "abc" }), { status: 200 }),
+    );
+    const response = await post(["bootstrap", "registration", "options"], { grant: "g" });
+    expect(response.status).toBe(200);
+    expect(mockedCall).not.toHaveBeenCalled();
+    expect(mockedGateway).toHaveBeenCalledWith(
+      "bootstrap/registration/options",
+      { grant: "g" },
+      expect.anything(),
+      undefined,
+    );
+  });
+
+  it("sets the cookie on bootstrap complete and keeps recovery codes", async () => {
+    mockedGateway.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ sessionCreated: true, issuedSid: SID, codes: ["AAAA-BBBB"] }),
+        { status: 200 },
+      ),
+    );
+    const response = await post(["bootstrap", "registration", "complete"], { credential: {} });
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.codes).toEqual(["AAAA-BBBB"]);
+    expect(body).not.toHaveProperty("issuedSid");
+    expect(cookieOf(response)).toBe(SID);
+  });
+
+  it("sets the cookie on operator-recovery complete", async () => {
+    mockedGateway.mockResolvedValueOnce(
+      new Response(JSON.stringify({ sessionCreated: true, issuedSid: NEW_SID, codes: ["CCCC"] }), {
+        status: 200,
+      }),
+    );
+    const response = await post(["operator-recovery", "registration", "complete"], {
+      credential: {},
+    });
+    expect(response.status).toBe(200);
+    expect((await response.json()).codes).toEqual(["CCCC"]);
+    expect(cookieOf(response)).toBe(NEW_SID);
+  });
+});
+
+describe("authenticated registration", () => {
+  it("forwards registration/options without a grant and still requires a session", async () => {
+    mockedGateway.mockResolvedValueOnce(
+      new Response(JSON.stringify({ challenge: "abc" }), { status: 200 }),
+    );
+    const response = await post(["registration", "options"], {}, { cookie: SID });
+    expect(response.status).toBe(200);
+    expect(mockedGateway).toHaveBeenCalledWith(
+      "registration/options",
+      {},
+      expect.anything(),
+      expect.objectContaining({ principalId: PRINCIPAL.principalId }),
+    );
+  });
+
+  it("refuses authenticated registration without a cookie", async () => {
+    const response = await post(["registration", "options"], {});
+    expect(response.status).toBe(401);
+    expect(mockedGateway).not.toHaveBeenCalled();
   });
 });

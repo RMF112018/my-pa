@@ -362,6 +362,19 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.ENTITIES_AFFILIATIONS_REVISE,
         Capability.ENTITIES_AFFILIATIONS_END,
         Capability.CANVAS_WORKSPACE_PUT,
+        # PC-CM-IMP-WP07's twelve. All twelve change product-owned state.
+        Capability.CONSTRAINTS_CREATE,
+        Capability.CONSTRAINTS_PUBLISH,
+        Capability.CONSTRAINTS_UPDATE,
+        Capability.CONSTRAINTS_TRANSITION,
+        Capability.CONSTRAINTS_CLOSE,
+        Capability.CONSTRAINTS_CLOSE_FOLLOW_UP,
+        Capability.CONSTRAINTS_VOID,
+        Capability.CONSTRAINTS_REOPEN,
+        Capability.CONSTRAINT_CATEGORIES_CREATE,
+        Capability.CONSTRAINT_CATEGORIES_UPDATE,
+        Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
+        Capability.CONSTRAINT_CATEGORIES_REORDER,
     }
     destructive_writes = {
         Capability.CAPTURE_REVISE,
@@ -418,6 +431,25 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         # `_ADDITIVE_WRITE_CAPABILITIES`: a later put replaces stored positions
         # under optimistic concurrency, so `is_destructive_capability` is true.
         Capability.CANVAS_WORKSPACE_PUT,
+        # PC-CM-IMP-WP07: every authoring capability except the two creations.
+        # `constraints.create` and `constraint_categories.create` are in
+        # `_ADDITIVE_WRITE_CAPABILITIES` -- each mints a record and reaches no
+        # existing one. Publish transitions a Draft and consumes an allocator
+        # sequence; update, transition, close, void and reopen move a record
+        # that already existed; `constraints.close_follow_up` marks the
+        # predecessor *and* mints the successor; `constraint_categories.update`
+        # revises a live row, `deactivate` retires one, and `reorder` rewrites
+        # the display order of every Category in the Project.
+        Capability.CONSTRAINTS_PUBLISH,
+        Capability.CONSTRAINTS_UPDATE,
+        Capability.CONSTRAINTS_TRANSITION,
+        Capability.CONSTRAINTS_CLOSE,
+        Capability.CONSTRAINTS_CLOSE_FOLLOW_UP,
+        Capability.CONSTRAINTS_VOID,
+        Capability.CONSTRAINTS_REOPEN,
+        Capability.CONSTRAINT_CATEGORIES_UPDATE,
+        Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
+        Capability.CONSTRAINT_CATEGORIES_REORDER,
     }
     for capability in Capability:
         tool = tools.get(capability.value)

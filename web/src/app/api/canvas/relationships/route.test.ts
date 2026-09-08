@@ -131,7 +131,10 @@ describe("POST /api/canvas/relationships", () => {
     const cookie = await signIn();
     const response = await createRelationship(mutatingPost(cookie, VALID_BODY, ORIGIN));
     expect(response.status).toBe(409);
-    expect((await response.json()).error.errorClass).toBe("conflict");
+    const body = await response.json();
+    expect(body.error.errorClass).toBe("conflict");
+    expect(body).not.toHaveProperty("record_id");
+    expect(body).not.toHaveProperty("receipt_id");
     expect(sent[0].url).toContain("/v1/entities.relationships.create");
   });
 
@@ -156,15 +159,23 @@ describe("POST /api/canvas/relationships", () => {
   });
 
   it.each([
-    { field: "expected_from_version" as const, value: 0 },
-    { field: "expected_from_version" as const, value: -1 },
-    { field: "expected_from_version" as const, value: undefined },
-    { field: "expected_to_version" as const, value: 0 },
-    { field: "expected_to_version" as const, value: -1 },
-    { field: "expected_to_version" as const, value: undefined },
+    { field: "expected_from_version", value: 0 },
+    { field: "expected_from_version", value: -1 },
+    { field: "expected_from_version", value: undefined },
+    { field: "expected_from_version", value: "1" },
+    { field: "expected_from_version", value: 1.5 },
+    { field: "expected_from_version", value: null },
+    { field: "expected_from_version", value: true },
+    { field: "expected_to_version", value: 0 },
+    { field: "expected_to_version", value: -1 },
+    { field: "expected_to_version", value: undefined },
+    { field: "expected_to_version", value: "1" },
+    { field: "expected_to_version", value: 1.5 },
+    { field: "expected_to_version", value: null },
+    { field: "expected_to_version", value: true },
   ])("refuses $field=$value before the gateway", async ({ field, value }) => {
     const cookie = await signIn();
-    const body = { ...VALID_BODY };
+    const body: Record<string, unknown> = { ...VALID_BODY };
     if (value === undefined) {
       delete body[field];
     } else {
@@ -172,6 +183,7 @@ describe("POST /api/canvas/relationships", () => {
     }
     const response = await createRelationship(mutatingPost(cookie, body, ORIGIN));
     expect(response.status).toBe(400);
+    expect((await response.json()).error.errorClass).toBe("validation");
     expect(sent).toEqual([]);
   });
 

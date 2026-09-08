@@ -13,7 +13,8 @@
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
     "e2e": "./e2e/stack.sh",
-    "e2e:report": "playwright show-report"
+    "e2e:report": "playwright show-report",
+    "report:bundle": "node scripts/report-production-bundle.mjs"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "1.1.23",

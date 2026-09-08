@@ -94,6 +94,23 @@ from my_pa.domain.intelligence.catalog import (
     ResolverSetId,
     SourceLaneId,
 )
+from my_pa.domain.project_controls.category import ConstraintCategoryState
+from my_pa.domain.project_controls.constraint import (
+    ConstraintLifecycleState,
+    ConstraintRecordQuality,
+)
+from my_pa.domain.project_controls.party import PartyKind, PartyRef
+from my_pa.domain.project_controls.read_models import (
+    MAX_CURSOR_CHARACTERS,
+    MAX_LIST_LIMIT,
+    MAX_SEARCH_CHARACTERS,
+    ConstraintGrouping,
+    ConstraintListScope,
+    ConstraintRecentFilter,
+    ConstraintSort,
+    ConstraintSyncStateView,
+    SortDirection,
+)
 from my_pa.domain.relationship.authoring import (
     CALLER_SETTABLE_STATUSES,
     MAX_ENTITY_NAME_CHARACTERS,
@@ -7774,6 +7791,935 @@ class SplitEntity:
         _split_dispositions(self.dispositions)
 
 
+def _constraint_limit(value: int | None, detail: SafeDetail) -> int | None:
+    """One Register page bound, refused here rather than deep in the query object.
+
+    `ConstraintListQuery` already enforces `1..MAX_LIST_LIMIT`, and it raises
+    `ConstraintQueryError` — a `ValueError` of the read plane, not one of the
+    eleven public errors. Reaching it with a caller's number would turn a
+    malformed request into whatever the handler's translation happened to make
+    of it. The ceiling is the domain's own constant rather than a second copy, so
+    the two cannot drift; what is added here is the classification.
+    """
+    sized = _positive(value, detail)
+    if sized is not None and sized > MAX_LIST_LIMIT:
+        raise InvalidRequestError(detail)
+    return sized
+
+
+def _constraint_enum[T: StrEnum](
+    value: object, kind: type[T], detail: SafeDetail, *, optional: bool = False
+) -> None:
+    """Refuse anything that is not a member of one closed vocabulary."""
+    if optional and value is None:
+        return
+    if not isinstance(value, kind):
+        raise InvalidRequestError(detail)
+
+
+def _constraint_enum_tuple[T: StrEnum](value: object, kind: type[T], detail: SafeDetail) -> None:
+    """Refuse a filter family that is not a tuple of one closed vocabulary.
+
+    A tuple rather than a `frozenset`, which is what `ConstraintListQuery` holds:
+    a set has no JSON shape and `adapters.mcp.tools` publishes nothing for one,
+    so a set-annotated field would reach the wire as an unconstrained value. The
+    handler converts; the closed enum is what makes the published array bounded.
+    """
+    if not isinstance(value, tuple):
+        raise InvalidRequestError(detail)
+    for member in value:
+        if not isinstance(member, kind):
+            raise InvalidRequestError(detail)
+
+
+def _constraint_cursor(value: str | None) -> None:
+    """A read cursor is opaque, and bounded before it is decoded."""
+    if value is None:
+        return
+    _text(value, SafeDetail.CURSOR)
+    if not value or len(value) > MAX_CURSOR_CHARACTERS:
+        raise InvalidRequestError(SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadConstraint:
+    """`constraints.read`: one Constraint in full, on its own Project's calendar.
+
+    The Project is not part of the request, and that is the read service's shape
+    rather than an omission here: a Constraint identifier is unique in the
+    Principal's partition, a Draft may belong to no Project at all, and the
+    calendar every derived flag needs is resolved from the record's own Project.
+    Asking a caller to restate the Project would let a request name one the
+    record does not belong to, which is a disagreement this command cannot have.
+
+    Absent and another Principal's are the same `not_found`.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINTS_READ
+
+    constraint_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.constraint_id, IdKind.PROJECT_CONSTRAINT, SafeDetail.CONSTRAINT_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class ListConstraints:
+    """`constraints.list`: one bounded page of a Project's Register.
+
+    Every filter is a closed vocabulary or an identifier, never free text: that
+    is the line this command keeps against `SearchConstraints`, the same one
+    `ListTasks` keeps against `SearchTasks`. Mixing the two would make "no filter
+    supplied" ambiguous between listing everything and searching for nothing.
+
+    The fields are the read plane's own request shape, restated as a transport
+    payload and converted by the handler. Nothing here decides what Overdue, Due
+    Soon, In My Court, a recent window or a group means — those are the read
+    service's, and a command that recomputed one would be a second answer able to
+    disagree with the Register it is paging.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINTS_LIST
+
+    project_id: str
+    scope: ConstraintListScope = ConstraintListScope.OPEN
+    statuses: tuple[ConstraintLifecycleState, ...] = ()
+    category_ids: tuple[str, ...] = ()
+    bic_party_refs: tuple[str, ...] = ()
+    responsible_party_refs: tuple[str, ...] = ()
+    sync_states: tuple[ConstraintSyncStateView, ...] = ()
+    record_qualities: tuple[ConstraintRecordQuality, ...] = ()
+    overdue: bool = False
+    due_soon: bool = False
+    my_court: bool = False
+    needs_attention: bool = False
+    recent: ConstraintRecentFilter | None = None
+    sort: ConstraintSort = ConstraintSort.CODE
+    #: `sort_order` rather than the read plane's own `direction`, and the
+    #: rename is a wire decision rather than a domain one: every published
+    #: MCP property name is swept for location vocabulary by
+    #: `tests/architecture/test_mcp_is_a_thin_adapter.py`, and `direction`
+    #: trips it on the substring "dir". The three Commitment filters and
+    #: the entity edge carry that name because it is their frozen
+    #: contract's; this surface is new, so it takes a name that says the
+    #: same thing and needs no exemption. The handler passes the value
+    #: straight through to `ConstraintListQuery.direction`.
+    sort_order: SortDirection = SortDirection.ASC
+    grouping: ConstraintGrouping = ConstraintGrouping.CATEGORY
+    limit: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _constraint_enum(self.scope, ConstraintListScope, SafeDetail.SELECTOR)
+        _constraint_enum_tuple(self.statuses, ConstraintLifecycleState, SafeDetail.LIFECYCLE_STATE)
+        _constraint_enum_tuple(self.sync_states, ConstraintSyncStateView, SafeDetail.SELECTOR)
+        _constraint_enum_tuple(self.record_qualities, ConstraintRecordQuality, SafeDetail.SELECTOR)
+        _constraint_enum(self.recent, ConstraintRecentFilter, SafeDetail.SELECTOR, optional=True)
+        _constraint_enum(self.sort, ConstraintSort, SafeDetail.SELECTOR)
+        _constraint_enum(self.sort_order, SortDirection, SafeDetail.SELECTOR)
+        _constraint_enum(self.grouping, ConstraintGrouping, SafeDetail.SELECTOR)
+        for name in ("category_ids", "bic_party_refs", "responsible_party_refs"):
+            if not isinstance(getattr(self, name), tuple):
+                raise InvalidRequestError(SafeDetail.SELECTOR)
+        for category_id in self.category_ids:
+            _identifier(category_id, IdKind.CONSTRAINT_CATEGORY, SafeDetail.SELECTOR)
+        for flag in (self.overdue, self.due_soon, self.my_court, self.needs_attention):
+            if not isinstance(flag, bool):
+                raise InvalidRequestError(SafeDetail.SELECTOR)
+        # The two party families are checked for *type* here and for membership
+        # by `ConstraintListQuery`, which is where the closed tokens
+        # `principal`/`unresolved` and the entity-identity shape are decided. A
+        # second spelling of that rule is a second thing to keep in step.
+        for ref in (*self.bic_party_refs, *self.responsible_party_refs):
+            _text(ref, SafeDetail.SELECTOR)
+        _constraint_limit(self.limit, SafeDetail.LIMIT)
+        _constraint_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class SearchConstraints:
+    """`constraints.search`: lexical search across one Project's Register.
+
+    The same page the Register returns, narrowed by a term. It is a separate
+    capability rather than a `ListConstraints` field for the reason the task
+    plane separates its two: a grant issued to browse a Project's controls and
+    one issued to search across them are different requests, and the search term
+    is the only input here a caller writes freely.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINTS_SEARCH
+
+    project_id: str
+    query: str = field(repr=False)
+    scope: ConstraintListScope = ConstraintListScope.OPEN
+    limit: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _text(self.query, SafeDetail.QUERY)
+        # Length only. Normalisation, the minimum term and the forbidden
+        # character classes belong to `ConstraintListQuery`, which is what the
+        # cursor binds its fingerprint to; restating them here would be a second
+        # rule able to disagree with the one the page was issued under.
+        if len(self.query) > MAX_SEARCH_CHARACTERS:
+            raise InvalidRequestError(SafeDetail.QUERY)
+        _constraint_enum(self.scope, ConstraintListScope, SafeDetail.SELECTOR)
+        _constraint_limit(self.limit, SafeDetail.LIMIT)
+        _constraint_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadConstraintHistory:
+    """`constraints.history`: one bounded page of a Constraint's receipts.
+
+    No Project, for the reason `ReadConstraint` states, and no clock: a receipt
+    records when it happened and nothing about it is derived from now. A
+    Constraint that is absent or another Principal's has no receipts, which is
+    the same page an untouched one returns.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINTS_HISTORY
+
+    constraint_id: str
+    page_size: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.constraint_id, IdKind.PROJECT_CONSTRAINT, SafeDetail.CONSTRAINT_ID)
+        # The ceiling is the read service's own `MAX_HISTORY_PAGE_SIZE`, which
+        # already answers `invalid_request` naming `page_size`. Only the sign is
+        # checked here, so there is one place the history bound is written.
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        _constraint_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadConstraintOverview:
+    """`constraints.overview`: one Project's Constraint position, counted once.
+
+    No filters and no page. The overview is one aggregate over the Project the
+    Register is paging, computed from the same calendar, and a filter here would
+    be a second definition of the set being counted.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINTS_OVERVIEW
+
+    project_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class ListConstraintCategories:
+    """`constraint_categories.list`: one Project's Category scheme, in display order.
+
+    Its own capability rather than a shape of `constraints.list`, because a
+    Category is the Project's classification and not a record filed under one: it
+    is readable when the Register is empty and it needs no Project calendar, so a
+    Project whose timezone nobody has configured still answers.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINT_CATEGORIES_LIST
+
+    project_id: str
+    states: tuple[ConstraintCategoryState, ...] = ()
+
+    def __post_init__(self) -> None:
+        _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _constraint_enum_tuple(self.states, ConstraintCategoryState, SafeDetail.STATES)
+
+
+# --- the Constraint Management authoring plane (PC-CM-IMP-WP07) --------------
+#
+# Twelve commands, one per canonical mutation `application.constraint_management`
+# already implements. Each carries the bounded inputs of exactly one operation
+# and nothing else: no `principal_id` on any of them (the authenticated Principal
+# is the transport's, `CM-BE-AC-083`), no `constraint_code` on any of them (the
+# public code is server-issued under the Category row lock, `pkg/03:98-101`), no
+# lifecycle bypass, and no raw patch object. `expected_version` is required on
+# the ten that name an existing record and absent from the two that create one,
+# which is `CM-BE-AC-082` stated as a shape rather than as a runtime check.
+#
+# **Two wire names differ from the service method's parameter, and both renames
+# are this surface's rather than the domain's.** `target_state` becomes
+# `to_state` and a Category's `prefix` becomes `code_segment`, because every
+# published MCP property name is swept for location vocabulary by
+# `tests/architecture/test_mcp_is_a_thin_adapter.py` and "target" and "prefix"
+# are both in it. `ListConstraints.sort_order` took the same decision for
+# `direction` at WP04: this surface is new, so it takes a name that says the same
+# thing and needs no exemption. The handlers pass each value straight through to
+# the WP06 parameter it names.
+
+
+class ConstraintUpdateField(StrEnum):
+    """The fields a bounded Constraint update may clear, as a closed vocabulary.
+
+    `UpdateConstraint` sets fields by naming them and clears them by listing them
+    here, which is the split `ConstraintManagementService.update` takes as
+    `values` and `clear_fields`. A closed enum rather than free strings, so a
+    clear list is checked at the boundary and the published schema says which
+    nine names exist; `tests/unit/test_constraint_authoring_commands.py` holds it
+    equal to `UPDATABLE_FIELDS` so the two cannot drift.
+    """
+
+    DESCRIPTION = "description"
+    DATE_IDENTIFIED = "date_identified"
+    DUE_DATE = "due_date"
+    REFERENCE = "reference"
+    CURRENT_UPDATE = "current_update"
+    BIC = "bic"
+    RESPONSIBLE = "responsible"
+    PROJECT_ID = "project_id"
+    CATEGORY_ID = "category_id"
+
+
+#: The alphabet and the bounds of `^[A-Za-z0-9_-]{8,128}$`, which is the CHECK
+#: the Constraint history tables carry on their own `idempotency_key` column.
+#: Spelled here so a key the database would refuse is refused as an
+#: `invalid_request` naming the field, rather than reaching persistence and
+#: surfacing as a conflict about something else.
+_CONSTRAINT_KEY_CHARACTERS: Final = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+)
+_MINIMUM_CONSTRAINT_KEY_LENGTH: Final = 8
+_MAXIMUM_CONSTRAINT_KEY_LENGTH: Final = 128
+
+
+def _party_schema(description: str) -> Mapping[str, object]:
+    """The published shape of one BIC or Responsible collection.
+
+    `PartyRef` is a domain record and `_schema_for` answers `None` for it, which
+    `payload_schema_for` would publish as `{}` — a field documented as accepting
+    anything. The overlay states the real shape: three closed kinds, an optional
+    `ent_` identity, and optional preserved wording. Which combinations are legal
+    is `PartyRef.__post_init__`'s and is not restated here.
+    """
+    return MappingProxyType(
+        {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": [member.value for member in PartyKind],
+                    },
+                    "entity_id": {"type": ["string", "null"]},
+                    "label": {"type": ["string", "null"]},
+                },
+                "required": ["kind"],
+                "additionalProperties": False,
+            },
+            "description": description,
+        }
+    )
+
+
+def _constraint_expected_version(value: object) -> None:
+    """A whole record version, refused here rather than deep in the mutation."""
+    if type(value) is not int or value < 0:
+        raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+
+
+def _constraint_idempotency_key(value: object) -> None:
+    """Absent, or a key the persisted CHECK will also accept.
+
+    Called *after* the shared `_idempotency_key`, never instead of it: that
+    helper owns the type, the emptiness and the repository-wide ceiling, and
+    `tests/architecture/test_every_write_validates_its_idempotency_key.py`
+    requires every write to hand its key to it by name. What is added here is
+    the Constraint plane's own persisted alphabet and floor, which the shared
+    helper has no opinion about.
+
+    `client_context` and `correlation_id` are checked beside it in each
+    `__post_init__` rather than through a helper of their own: a two-argument
+    helper hides the second field from
+    `tests/architecture/test_commands_check_the_type_before_the_content.py`,
+    which credits a check only to a call's first argument.
+    """
+    if value is None:
+        return
+    if not isinstance(value, str):
+        raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+    if not _MINIMUM_CONSTRAINT_KEY_LENGTH <= len(value) <= _MAXIMUM_CONSTRAINT_KEY_LENGTH:
+        raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+    if not set(value) <= _CONSTRAINT_KEY_CHARACTERS:
+        raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+
+
+def _constraint_required_text(value: object, detail: SafeDetail) -> None:
+    """A required non-blank string. The value never reaches a message."""
+    if not isinstance(value, str) or not value.strip():
+        raise InvalidRequestError(detail)
+
+
+def _constraint_optional_text(value: object, detail: SafeDetail) -> None:
+    """The same field where absence is a complete answer.
+
+    Absent is `None`. A blank string is refused rather than read as absence:
+    clearing a Constraint field is `clear_fields`' job and never an empty string,
+    so the two cannot be confused by a caller or by this layer.
+    """
+    if value is None:
+        return
+    _constraint_required_text(value, detail)
+
+
+def _constraint_optional_identifier(value: object, kind: IdKind, detail: SafeDetail) -> None:
+    if value is None:
+        return
+    if not isinstance(value, str):
+        raise InvalidRequestError(detail)
+    _identifier(value, kind, detail)
+
+
+def _constraint_date(value: object, detail: SafeDetail) -> None:
+    """A calendar date, and never a `datetime`.
+
+    `isinstance(x, date)` is true of a `datetime`, so the check is on the exact
+    type: an instant carries a clock and a timezone the Constraint plane's date
+    fields do not have, and accepting one here would silently drop both.
+    """
+    if value is None:
+        return
+    if type(value) is not date:
+        raise InvalidRequestError(detail)
+
+
+def _constraint_sequence(value: object, detail: SafeDetail) -> tuple[object, ...]:
+    """One array field as the tuple it is annotated as, or a refusal.
+
+    `value` is `object` and not the annotated tuple for the reason
+    `_idempotency_key` states: the annotation describes what a transport actually
+    delivers, which is anything the caller sent, and typing it as the declared
+    tuple would make the check unreachable to a type checker and read as dead
+    code to delete.
+    """
+    if not isinstance(value, tuple):
+        raise InvalidRequestError(detail)
+    return value
+
+
+def _constraint_display_order(value: object) -> None:
+    """A Category's place in the Project's display sequence. A whole number."""
+    if type(value) is not int or value < 0:
+        raise InvalidRequestError(SafeDetail.SELECTOR)
+
+
+def _constraint_parties(value: object, detail: SafeDetail) -> None:
+    """A tuple of already-validated `PartyRef` records, or nothing.
+
+    Membership rules — an `ENTITY` party names an `ent_` identity, an
+    `UNRESOLVED` one preserves non-blank wording, a `PRINCIPAL` one carries
+    neither — belong to `PartyRef.__post_init__` and are enforced when the
+    adapter builds one. What is checked here is that the field is the collection
+    it is annotated as.
+    """
+    if value is None:
+        return
+    if not isinstance(value, tuple) or any(not isinstance(item, PartyRef) for item in value):
+        raise InvalidRequestError(detail)
+
+
+@dataclass(frozen=True, slots=True)
+class CreateConstraintDraft:
+    """`constraints.create`: mint one Draft Constraint. It reaches nothing else.
+
+    The only one of the twelve with no `expected_version`, because there is no
+    record to have a version yet. A Draft carries no public code either: the code
+    is issued by Publish, under the Category's row lock, and there is deliberately
+    no field here through which a caller could choose one.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINTS_CREATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+        {
+            "bic": _party_schema("Ball-in-court parties for the Draft."),
+            "responsible": _party_schema("Responsible parties for the Draft."),
+        }
+    )
+
+    project_id: str | None = None
+    category_id: str | None = None
+    description: str | None = None
+    date_identified: date | None = None
+    due_date: date | None = None
+    reference: str | None = None
+    current_update: str | None = None
+    bic: tuple[PartyRef, ...] = ()
+    responsible: tuple[PartyRef, ...] = ()
+    idempotency_key: str | None = None
+    client_context: str | None = None
+    correlation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _constraint_optional_identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _constraint_optional_identifier(
+            self.category_id, IdKind.CONSTRAINT_CATEGORY, SafeDetail.SELECTOR
+        )
+        _constraint_optional_text(self.description, SafeDetail.TEXT)
+        _constraint_date(self.date_identified, SafeDetail.SELECTOR)
+        _constraint_date(self.due_date, SafeDetail.DUE_AT)
+        _constraint_optional_text(self.reference, SafeDetail.SELECTOR)
+        _constraint_optional_text(self.current_update, SafeDetail.TEXT)
+        _constraint_parties(self.bic, SafeDetail.SELECTOR)
+        _constraint_parties(self.responsible, SafeDetail.SELECTOR)
+        if self.idempotency_key is not None:
+            _idempotency_key(self.idempotency_key)
+        _constraint_idempotency_key(self.idempotency_key)
+        _constraint_optional_text(self.client_context, SafeDetail.SELECTOR)
+        _constraint_optional_text(self.correlation_id, SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class PublishConstraint:
+    """`constraints.publish`: issue a Draft's public code and move it into the Register.
+
+    Not additive and not a plain state change: publishing consumes the Category's
+    allocator sequence, which is why `constraints.publish` is in
+    `_WRITE_CAPABILITIES` and deliberately not in `_ADDITIVE_WRITE_CAPABILITIES`.
+    The code it issues is never a field here.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINTS_PUBLISH
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+        {
+            "bic": _party_schema("Ball-in-court parties to set as part of Publish."),
+            "responsible": _party_schema("Responsible parties to set as part of Publish."),
+        }
+    )
+
+    constraint_id: str
+    expected_version: int
+    to_state: ConstraintLifecycleState = ConstraintLifecycleState.IDENTIFIED
+    category_id: str | None = None
+    date_identified: date | None = None
+    due_date: date | None = None
+    bic: tuple[PartyRef, ...] | None = None
+    responsible: tuple[PartyRef, ...] | None = None
+    idempotency_key: str | None = None
+    client_context: str | None = None
+    correlation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.constraint_id, IdKind.PROJECT_CONSTRAINT, SafeDetail.CONSTRAINT_ID)
+        _constraint_expected_version(self.expected_version)
+        _constraint_enum(self.to_state, ConstraintLifecycleState, SafeDetail.LIFECYCLE_STATE)
+        _constraint_optional_identifier(
+            self.category_id, IdKind.CONSTRAINT_CATEGORY, SafeDetail.SELECTOR
+        )
+        _constraint_date(self.date_identified, SafeDetail.SELECTOR)
+        _constraint_date(self.due_date, SafeDetail.DUE_AT)
+        _constraint_parties(self.bic, SafeDetail.SELECTOR)
+        _constraint_parties(self.responsible, SafeDetail.SELECTOR)
+        if self.idempotency_key is not None:
+            _idempotency_key(self.idempotency_key)
+        _constraint_idempotency_key(self.idempotency_key)
+        _constraint_optional_text(self.client_context, SafeDetail.SELECTOR)
+        _constraint_optional_text(self.correlation_id, SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateConstraint:
+    """`constraints.update`: one bounded patch, field by named field.
+
+    **Enumerated rather than a `values` map.** `ConstraintManagementService.update`
+    takes `Mapping[str, object]`, which is an internal seam between an
+    application service and its own closure; publishing it as the wire contract
+    would be an arbitrary raw patch on the public surface, which dispatch §9.3
+    forbids and `CM-BE-AC-081` names. Each settable field is a field here, and
+    `clear_fields` is a closed vocabulary rather than free strings.
+
+    `None` means "not supplied", never "set to null": clearing is `clear_fields`.
+    Lifecycle is absent, because it moves only through the named operations.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINTS_UPDATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+        {
+            "bic": _party_schema("Replacement ball-in-court parties."),
+            "responsible": _party_schema("Replacement responsible parties."),
+        }
+    )
+
+    constraint_id: str
+    expected_version: int
+    description: str | None = None
+    date_identified: date | None = None
+    due_date: date | None = None
+    reference: str | None = None
+    current_update: str | None = None
+    bic: tuple[PartyRef, ...] | None = None
+    responsible: tuple[PartyRef, ...] | None = None
+    project_id: str | None = None
+    category_id: str | None = None
+    clear_fields: tuple[ConstraintUpdateField, ...] = ()
+    idempotency_key: str | None = None
+    client_context: str | None = None
+    correlation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.constraint_id, IdKind.PROJECT_CONSTRAINT, SafeDetail.CONSTRAINT_ID)
+        _constraint_expected_version(self.expected_version)
+        _constraint_optional_text(self.description, SafeDetail.TEXT)
+        _constraint_date(self.date_identified, SafeDetail.SELECTOR)
+        _constraint_date(self.due_date, SafeDetail.DUE_AT)
+        _constraint_optional_text(self.reference, SafeDetail.SELECTOR)
+        _constraint_optional_text(self.current_update, SafeDetail.TEXT)
+        _constraint_parties(self.bic, SafeDetail.SELECTOR)
+        _constraint_parties(self.responsible, SafeDetail.SELECTOR)
+        _constraint_optional_identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _constraint_optional_identifier(
+            self.category_id, IdKind.CONSTRAINT_CATEGORY, SafeDetail.SELECTOR
+        )
+        _constraint_enum_tuple(self.clear_fields, ConstraintUpdateField, SafeDetail.SELECTOR)
+        if len(set(self.clear_fields)) != len(self.clear_fields):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        # A field cannot be both set and cleared. The service refuses the same
+        # contradiction with its own code; refusing it here means a caller is
+        # told which *request field* was wrong instead of learning the plane's
+        # internal error vocabulary.
+        cleared = {member.value for member in self.clear_fields}
+        supplied = {
+            name
+            for name in (
+                "description",
+                "date_identified",
+                "due_date",
+                "reference",
+                "current_update",
+                "bic",
+                "responsible",
+                "project_id",
+                "category_id",
+            )
+            if getattr(self, name) is not None
+        }
+        if cleared & supplied:
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        if self.idempotency_key is not None:
+            _idempotency_key(self.idempotency_key)
+        _constraint_idempotency_key(self.idempotency_key)
+        _constraint_optional_text(self.client_context, SafeDetail.SELECTOR)
+        _constraint_optional_text(self.correlation_id, SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class TransitionConstraint:
+    """`constraints.transition`: move one active Constraint between active states.
+
+    Close, Void and Reopen are their own operations and are not reachable here.
+    Which pairs of states this admits is the domain's lifecycle rule and is
+    decided in `application.constraint_management`, not restated here.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINTS_TRANSITION
+
+    constraint_id: str
+    to_state: ConstraintLifecycleState
+    expected_version: int
+    idempotency_key: str | None = None
+    client_context: str | None = None
+    correlation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.constraint_id, IdKind.PROJECT_CONSTRAINT, SafeDetail.CONSTRAINT_ID)
+        _constraint_enum(self.to_state, ConstraintLifecycleState, SafeDetail.LIFECYCLE_STATE)
+        _constraint_expected_version(self.expected_version)
+        if self.idempotency_key is not None:
+            _idempotency_key(self.idempotency_key)
+        _constraint_idempotency_key(self.idempotency_key)
+        _constraint_optional_text(self.client_context, SafeDetail.SELECTOR)
+        _constraint_optional_text(self.correlation_id, SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class CloseConstraint:
+    """`constraints.close`: close one Constraint, with its completion date and commentary."""
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINTS_CLOSE
+
+    constraint_id: str
+    expected_version: int
+    completion_date: date | None = None
+    closure_commentary: str | None = None
+    idempotency_key: str | None = None
+    client_context: str | None = None
+    correlation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.constraint_id, IdKind.PROJECT_CONSTRAINT, SafeDetail.CONSTRAINT_ID)
+        _constraint_expected_version(self.expected_version)
+        _constraint_date(self.completion_date, SafeDetail.SELECTOR)
+        _constraint_optional_text(self.closure_commentary, SafeDetail.TEXT)
+        if self.idempotency_key is not None:
+            _idempotency_key(self.idempotency_key)
+        _constraint_idempotency_key(self.idempotency_key)
+        _constraint_optional_text(self.client_context, SafeDetail.SELECTOR)
+        _constraint_optional_text(self.correlation_id, SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class CloseConstraintWithFollowUp:
+    """`constraints.close_follow_up`: close one Constraint and mint its successor, atomically.
+
+    **One command and one tool, never two mutations.** The predecessor is closed,
+    the successor is created, published and given its own public code, and the
+    `FOLLOW_UP_OF` edge is written — all in one transaction or none of it. A
+    caller that could do the halves separately could leave a closed Constraint
+    with no successor, or a successor with no edge, and no transport here can.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINTS_CLOSE_FOLLOW_UP
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+        {
+            "successor_bic": _party_schema("Ball-in-court parties for the successor."),
+            "successor_responsible": _party_schema("Responsible parties for the successor."),
+        }
+    )
+
+    constraint_id: str
+    expected_version: int
+    successor_description: str
+    completion_date: date | None = None
+    closure_commentary: str | None = None
+    successor_category_id: str | None = None
+    successor_due_date: date | None = None
+    successor_state: ConstraintLifecycleState = ConstraintLifecycleState.IDENTIFIED
+    successor_bic: tuple[PartyRef, ...] | None = None
+    successor_responsible: tuple[PartyRef, ...] | None = None
+    idempotency_key: str | None = None
+    client_context: str | None = None
+    correlation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.constraint_id, IdKind.PROJECT_CONSTRAINT, SafeDetail.CONSTRAINT_ID)
+        _constraint_expected_version(self.expected_version)
+        _constraint_required_text(self.successor_description, SafeDetail.TEXT)
+        _constraint_date(self.completion_date, SafeDetail.SELECTOR)
+        _constraint_optional_text(self.closure_commentary, SafeDetail.TEXT)
+        _constraint_optional_identifier(
+            self.successor_category_id, IdKind.CONSTRAINT_CATEGORY, SafeDetail.SELECTOR
+        )
+        _constraint_date(self.successor_due_date, SafeDetail.DUE_AT)
+        _constraint_enum(self.successor_state, ConstraintLifecycleState, SafeDetail.LIFECYCLE_STATE)
+        _constraint_parties(self.successor_bic, SafeDetail.SELECTOR)
+        _constraint_parties(self.successor_responsible, SafeDetail.SELECTOR)
+        if self.idempotency_key is not None:
+            _idempotency_key(self.idempotency_key)
+        _constraint_idempotency_key(self.idempotency_key)
+        _constraint_optional_text(self.client_context, SafeDetail.SELECTOR)
+        _constraint_optional_text(self.correlation_id, SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class VoidConstraint:
+    """`constraints.void`: withdraw one Constraint from the Register. It deletes nothing.
+
+    The record, its revisions and its receipts all remain; `void_reason` is
+    required because a withdrawal without a stated reason is the one shape the
+    ledger cannot account for later.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINTS_VOID
+
+    constraint_id: str
+    expected_version: int
+    void_reason: str
+    voided_date: date | None = None
+    idempotency_key: str | None = None
+    client_context: str | None = None
+    correlation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.constraint_id, IdKind.PROJECT_CONSTRAINT, SafeDetail.CONSTRAINT_ID)
+        _constraint_expected_version(self.expected_version)
+        _constraint_required_text(self.void_reason, SafeDetail.REASON)
+        _constraint_date(self.voided_date, SafeDetail.SELECTOR)
+        if self.idempotency_key is not None:
+            _idempotency_key(self.idempotency_key)
+        _constraint_idempotency_key(self.idempotency_key)
+        _constraint_optional_text(self.client_context, SafeDetail.SELECTOR)
+        _constraint_optional_text(self.correlation_id, SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ReopenConstraint:
+    """`constraints.reopen`: return one closed or void Constraint to an active state."""
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINTS_REOPEN
+
+    constraint_id: str
+    to_state: ConstraintLifecycleState
+    expected_version: int
+    reason: str | None = None
+    idempotency_key: str | None = None
+    client_context: str | None = None
+    correlation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.constraint_id, IdKind.PROJECT_CONSTRAINT, SafeDetail.CONSTRAINT_ID)
+        _constraint_enum(self.to_state, ConstraintLifecycleState, SafeDetail.LIFECYCLE_STATE)
+        _constraint_expected_version(self.expected_version)
+        _constraint_optional_text(self.reason, SafeDetail.REASON)
+        if self.idempotency_key is not None:
+            _idempotency_key(self.idempotency_key)
+        _constraint_idempotency_key(self.idempotency_key)
+        _constraint_optional_text(self.client_context, SafeDetail.SELECTOR)
+        _constraint_optional_text(self.correlation_id, SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class CreateConstraintCategory:
+    """`constraint_categories.create`: add one Category to a Project's scheme.
+
+    The second of the two additive writes: a new row in the Project's scheme that
+    reaches no Category already in it. `code_segment` is the Category's own code
+    stem — the WP06 parameter is spelled `prefix`, and the rename is this
+    surface's, for the reason the section comment above states.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINT_CATEGORIES_CREATE
+
+    project_id: str
+    code_segment: str
+    title: str
+    description: str | None = None
+    display_order: int = 0
+    state: ConstraintCategoryState = ConstraintCategoryState.ACTIVE
+    idempotency_key: str | None = None
+    client_context: str | None = None
+    correlation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _constraint_required_text(self.code_segment, SafeDetail.SELECTOR)
+        _constraint_required_text(self.title, SafeDetail.TITLE)
+        _constraint_optional_text(self.description, SafeDetail.TEXT)
+        _constraint_display_order(self.display_order)
+        _constraint_enum(self.state, ConstraintCategoryState, SafeDetail.STATES)
+        if self.idempotency_key is not None:
+            _idempotency_key(self.idempotency_key)
+        _constraint_idempotency_key(self.idempotency_key)
+        _constraint_optional_text(self.client_context, SafeDetail.SELECTOR)
+        _constraint_optional_text(self.correlation_id, SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateConstraintCategory:
+    """`constraint_categories.update`: revise one Category's presentation or code stem.
+
+    State is not settable here: deactivation is its own operation, exactly as the
+    accepted operation contract has it, and there is no archive. `None` means
+    "not supplied" on every field, so nothing here can blank a Category out.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINT_CATEGORIES_UPDATE
+
+    category_id: str
+    expected_version: int
+    code_segment: str | None = None
+    title: str | None = None
+    description: str | None = None
+    display_order: int | None = None
+    idempotency_key: str | None = None
+    client_context: str | None = None
+    correlation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.category_id, IdKind.CONSTRAINT_CATEGORY, SafeDetail.SELECTOR)
+        _constraint_expected_version(self.expected_version)
+        _constraint_optional_text(self.code_segment, SafeDetail.SELECTOR)
+        _constraint_optional_text(self.title, SafeDetail.TITLE)
+        _constraint_optional_text(self.description, SafeDetail.TEXT)
+        if self.display_order is not None:
+            _constraint_display_order(self.display_order)
+        if self.idempotency_key is not None:
+            _idempotency_key(self.idempotency_key)
+        _constraint_idempotency_key(self.idempotency_key)
+        _constraint_optional_text(self.client_context, SafeDetail.SELECTOR)
+        _constraint_optional_text(self.correlation_id, SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class DeactivateConstraintCategory:
+    """`constraint_categories.deactivate`: retire one Category from new Publishes.
+
+    A retirement, not a deletion: Constraints already filed under the Category
+    keep it, and the row and its history remain. It is deliberately not an
+    additive write — it moves a live row out of the set new records may use.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINT_CATEGORIES_DEACTIVATE
+
+    category_id: str
+    expected_version: int
+    idempotency_key: str | None = None
+    client_context: str | None = None
+    correlation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.category_id, IdKind.CONSTRAINT_CATEGORY, SafeDetail.SELECTOR)
+        _constraint_expected_version(self.expected_version)
+        if self.idempotency_key is not None:
+            _idempotency_key(self.idempotency_key)
+        _constraint_idempotency_key(self.idempotency_key)
+        _constraint_optional_text(self.client_context, SafeDetail.SELECTOR)
+        _constraint_optional_text(self.correlation_id, SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ReorderConstraintCategories:
+    """`constraint_categories.reorder`: one atomic reorder of a Project's whole scheme.
+
+    **One command and one tool, never a loop of updates.** The whole ordered
+    sequence is named at once and every member's `expected_version` is supplied
+    beside it, so a conflict on any one member rejects the entire reorder. The
+    two collections are parallel arrays rather than an object map: an object of
+    identifier-to-version pairs publishes as an unconstrained JSON object, and
+    index alignment is checkable at the boundary where the field name is still
+    known.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINT_CATEGORIES_REORDER
+
+    project_id: str
+    ordered_category_ids: tuple[str, ...]
+    expected_versions: tuple[int, ...]
+    idempotency_key: str | None = None
+    client_context: str | None = None
+    correlation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        ordered = _constraint_sequence(self.ordered_category_ids, SafeDetail.SELECTOR)
+        if not ordered:
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        for category_id in ordered:
+            if not isinstance(category_id, str):
+                raise InvalidRequestError(SafeDetail.SELECTOR)
+            _identifier(category_id, IdKind.CONSTRAINT_CATEGORY, SafeDetail.SELECTOR)
+        if len(set(ordered)) != len(ordered):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        versions = _constraint_sequence(self.expected_versions, SafeDetail.EXPECTED_VERSION)
+        if len(versions) != len(ordered):
+            raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+        for version in versions:
+            _constraint_expected_version(version)
+        if self.idempotency_key is not None:
+            _idempotency_key(self.idempotency_key)
+        _constraint_idempotency_key(self.idempotency_key)
+        _constraint_optional_text(self.client_context, SafeDetail.SELECTOR)
+        _constraint_optional_text(self.correlation_id, SafeDetail.SELECTOR)
+
+
 type Command = (
     GetCapabilities
     | ListSources
@@ -7911,6 +8857,24 @@ type Command = (
     | ArchiveRelationshipMemory
     | RestoreRelationshipMemory
     | ProposeRelationshipMemory
+    | ReadConstraint
+    | ListConstraints
+    | SearchConstraints
+    | ReadConstraintHistory
+    | ReadConstraintOverview
+    | ListConstraintCategories
+    | CreateConstraintDraft
+    | PublishConstraint
+    | UpdateConstraint
+    | TransitionConstraint
+    | CloseConstraint
+    | CloseConstraintWithFollowUp
+    | VoidConstraint
+    | ReopenConstraint
+    | CreateConstraintCategory
+    | UpdateConstraintCategory
+    | DeactivateConstraintCategory
+    | ReorderConstraintCategories
 )
 
 

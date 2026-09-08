@@ -24,12 +24,13 @@ describe("resolveSessionPrincipal", () => {
         JSON.stringify({
           principal: {
             principalId: "p1",
+            identityProvider: "synthetic",
+            identitySubject: "t1:o1",
             tid: "t1",
             oid: "o1",
             upn: "a@example",
             displayName: "A",
             lifecycleState: "active",
-            synthetic: true,
           },
         }),
         { status: 200 },
@@ -44,12 +45,13 @@ describe("resolveSessionPrincipal", () => {
         JSON.stringify({
           principal: {
             principalId: "p2",
+            identityProvider: "entra",
+            identitySubject: "t2:o2",
             tid: "t2",
             oid: "o2",
             upn: "b@example",
             displayName: "B",
             lifecycleState: "active",
-            synthetic: false,
           },
         }),
         { status: 200 },

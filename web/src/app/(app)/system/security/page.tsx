@@ -23,7 +23,11 @@ export default async function SecurityPage() {
   try {
     const request = new Request(`${origin}/api/webauthn/credentials/list`, {
       method: "POST",
-      headers: { origin, "content-type": "application/json" },
+      headers: {
+        origin,
+        "content-type": "application/json",
+        cookie: `${SESSION_COOKIE_NAME}=${token}`,
+      },
     });
     const response = await callWebAuthnGateway("credentials/list", {}, request, principal);
     if (response.ok) {

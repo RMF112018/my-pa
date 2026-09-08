@@ -359,6 +359,34 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     134: "One hundred and thirty-four",
     135: "One hundred and thirty-five",
     136: "One hundred and thirty-six",
+    # Extended at `PC-CM-IMP-WP04`, when the six Constraint Management reads
+    # took the public set past a hundred and thirty-six. Extended rather than
+    # the assertion relaxed, for the reason stated at the eighties and
+    # repeated since: a figure this test cannot spell is a figure it cannot
+    # check.
+    137: "One hundred and thirty-seven",
+    138: "One hundred and thirty-eight",
+    139: "One hundred and thirty-nine",
+    140: "One hundred and forty",
+    141: "One hundred and forty-one",
+    142: "One hundred and forty-two",
+    # Extended at `PC-CM-IMP-WP07`, when the twelve Constraint Management
+    # mutations took the public set past a hundred and forty-two. Extended
+    # rather than the assertion relaxed, for the reason stated at the eighties
+    # and repeated since: a figure this test cannot spell is a figure it cannot
+    # check.
+    143: "One hundred and forty-three",
+    144: "One hundred and forty-four",
+    145: "One hundred and forty-five",
+    146: "One hundred and forty-six",
+    147: "One hundred and forty-seven",
+    148: "One hundred and forty-eight",
+    149: "One hundred and forty-nine",
+    150: "One hundred and fifty",
+    151: "One hundred and fifty-one",
+    152: "One hundred and fifty-two",
+    153: "One hundred and fifty-three",
+    154: "One hundred and fifty-four",
 }
 
 
@@ -492,7 +520,12 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # GoodNotes pull adds three default-composed names after the entity work,
     # and UI-IMP-WP17 admits canvas.workspace get/put on the served side, so the
     # combined surface exposes sixty and still withholds seventy.
-    assert default == 66 and total == 136 and withheld == 70
+    # `PC-CM-IMP-WP04`'s six Constraint reads arrive on the served side --
+    # they are in none of the three withheld families -- so the default grows
+    # by six while the withheld figure is unchanged. `PC-CM-IMP-WP07`'s twelve
+    # Constraint mutations arrive on the served side for the same reason, and
+    # the withheld figure is again unchanged.
+    assert default == 84 and total == 154 and withheld == 70
 
     entity_total = len(_ENTITY_CAPABILITIES)
     entity_writes = len(_ENTITY_WRITE_CAPABILITIES)
@@ -513,11 +546,11 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert "twenty-nine writes" not in readme
 
     system_context = SYSTEM_CONTEXT.read_text(encoding="utf-8").lower()
-    assert "one hundred and thirty-six capabilities" in system_context
-    assert "exposes sixty-six of them" in system_context
+    assert "one hundred and fifty-four capabilities" in system_context
+    assert "exposes eighty-four of them" in system_context
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
-    assert "one hundred and thirty-six capabilities" in module_boundaries
+    assert "one hundred and fifty-four capabilities" in module_boundaries
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:
@@ -555,6 +588,8 @@ def test_web_readme_names_the_routes_and_capabilities_the_bff_reaches() -> None:
         "/api/session",
         "/api/webauthn",
         "/sign-in",
+        "/setup",
+        "/recover/operator",
     ):
         assert route in text, f"web README lost current route {route}"
 

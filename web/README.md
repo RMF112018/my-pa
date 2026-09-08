@@ -15,7 +15,7 @@ An explicitly enabled synthetic provider remains available for development and
 is refused when `NODE_ENV=production`. It does not silently replace an
 unconfigured or unavailable backend.
 
-The Python contract contains one hundred and thirty-six capability names. The System route reads
+The Python contract contains one hundred and fifty-four capability names. The System route reads
 the live `capabilities.get` manifest, including each capability's runtime
 availability, instead of restating an availability count in this tier. Six of
 those names are the managed-document lifecycle (`documents.create`,
@@ -26,7 +26,9 @@ does not currently expose a managed-document screen or API route.
 
 ## Routes and capability mapping
 
-All application pages require a verified session. `/sign-in` is public.
+All application pages require a verified session. `/sign-in`, `/setup`, and
+`/recover/operator` are public.
+`GET /api/health` is unauthenticated and carries no Principal or PII.
 
 | UI or BFF route | Backend capability | Current behavior |
 |---|---|---|
@@ -83,9 +85,18 @@ All application pages require a verified session. `/sign-in` is public.
 | `PATCH /api/commitments/:commitmentId` | `commitments.update` | Applies one expected-version bounded Commitment update |
 | `GET /api/commitments/:commitmentId/history` | `commitments.history` | Reads the Commitment's append-only history |
 | `POST /api/commitments/:commitmentId/close` | `commitments.close` | Closes a Commitment explicitly with validated closure evidence |
-| `/system`, `GET /api/system` | `capabilities.get`, `reports.list`, `reports.resolve_set` | Reports the runtime manifest, readiness, and worker planes; Morning Intelligence is resolver aggregate and members (READY is not system health); PWA fields are `PWA_FIELDS_PENDING_WP26`; connected sources remain unknown |
+| `/system`, `GET /api/system` | `capabilities.get`, `reports.list`, `reports.resolve_set` | Reports the runtime manifest, readiness, worker planes, and `runtimeIdentity` from image labels (unknown when unset); Morning Intelligence is resolver aggregate and members (READY is not system health); PWA observation is client-side; connected sources remain unknown |
+| `GET /api/health` | none | Unauthenticated liveness. `{ ok: true, status: "live" }` when `NODE_ENV` parses and `MYPA_AUTH_MODE` is a usable web value; otherwise 503 `misconfigured` with no env echo |
+| `GET /api/project-controls/projects/:projectId/constraints` | `constraints.list`, `constraints.search` | One Project's Register; a non-empty `q` selects search and applies that command's narrower allowlist, so a filter, sort or grouping sent with a term is refused rather than dropped |
+| `GET /api/project-controls/projects/:projectId/constraints/overview` | `constraints.overview` | The Project's Constraint position on its own calendar; `averageOpenAgeBusinessDays` and `syncHealth` are the canonical names and the aliases are refused |
+| `GET /api/project-controls/projects/:projectId/constraints/:constraintId` | `constraints.read` | One same-Principal Constraint in full, including its relationships and evidence links; there are no separate routes for those |
+| `GET /api/project-controls/projects/:projectId/constraints/:constraintId/history` | `constraints.history` | The Constraint's append-only mutation receipts, page size and opaque cursor only |
+| `GET /api/project-controls/projects/:projectId/constraint-categories` | `constraint_categories.list` | The Project's Category scheme in display order; readable when the Register is empty |
+| `/sign-in` | none | Production passkey sign-in; public |
+| `/setup` | none | One-time operator bootstrap grant plus WebAuthn; public; first-user path |
+| `/recover/operator` | none | One-time operator recovery grant plus WebAuthn; public |
 | `POST /api/session` | none | Synthetic development sign-in only; refused in passkey mode and in production |
-| `POST /api/webauthn` | none | Passkey ceremony BFF; Python issues the opaque SID cookie after authentication or recovery |
+| `POST /api/webauthn` | none | Passkey ceremony BFF; Python issues the opaque SID cookie after authentication, bootstrap, or recovery |
 
 The relationship timeline is therefore implemented, but it is not a separate
 public capability. It is a projection of `relationship_events` already returned
@@ -116,17 +127,21 @@ empty healthy state.
 - `synthetic` exposes fixed development principals. It is refused in production.
 - `passkey` is production web authentication. Sessions are an opaque SID issued
   by Python after WebAuthn or recovery; `POST /api/session` does not mint a
-  synthetic identity.
+  synthetic identity. Production Principal is the fixed `LOCAL_OPERATOR_UUID`.
+  Server/BFF session JSON is provider-neutral (`principalId`, `identityProvider`,
+  `identitySubject`, `displayName`, `lifecycleState`); `tid`/`oid` are present
+  only for Entra/synthetic accounts and are absent for local.
 
 Browser Entra/MSAL and browser local-operator sign-in are retired. There is no
-`/auth/sign-in` route and no MSAL package on this tier.
+`/auth/sign-in` route and no MSAL package on this tier. Setup and operator
+recovery are one-time CLI grants (`apps/cli/auth.py`) plus WebAuthn — not a
+browser `local_operator` fallback.
 
 `MYPA_GATEWAY_AUTH_MODE` separately describes the Python gateway:
 
-- `local_operator` sends no credential. The gateway serves one configured
-  process Principal, and the web tier admits only the matching synthetic
-  Principal so browser sessions cannot imply backend partitioning that does not
-  exist.
+- `local_operator` sends no credential. The gateway serves the fixed
+  `LOCAL_OPERATOR_UUID`. Browser passkey sessions bind that same UUID; the
+  gateway plane is not a browser authentication mode.
 - `entra` requires a bearer token. Browser Entra/MSAL is retired, so this BFF
   has no forwardable Entra credential and refuses (`no_forwardable_credential`)
   rather than sending the session cookie as a bearer or fabricating a token.
@@ -141,7 +156,11 @@ values out of band and never commit them.
 | `MYPA_SESSION_SERVICE_SECRET` | At least 32 characters; BFF→Python session-service HMAC; distinct from the WebAuthn BFF secret |
 | `MYPA_WEBAUTHN_BFF_SECRET` | At least 32 characters; WebAuthn BFF ceremony HMAC; distinct from the session-service secret |
 | `MYPA_AUTH_MODE` | `synthetic` or `passkey`; no default |
+| `MYPA_CANONICAL_ORIGIN` | Browser origin the BFF treats as canonical; production is `https://pa.bobby-fetting.me` |
 | `MYPA_GATEWAY_URL` | Absolute HTTP(S) URL for the Python gateway; no default |
+| `MYPA_SESSION_SERVICE_URL` | Optional absolute HTTP(S) URL for session-service; unset uses `MYPA_GATEWAY_URL`. Production leaves this unset |
+| `MYPA_SOURCE_COMMIT` | Optional 40–64 hex source commit from the image label; unset or invalid reports as `unknown` |
+| `MYPA_SOURCE_TREE` | Optional 40-hex source tree from the image label; unset or invalid reports as `unknown` |
 | `MYPA_GATEWAY_AUTH_MODE` | `local_operator` or `entra`; must match the Python gateway plane |
 | `MYPA_DATA_PROVIDER` | Optional explicit `synthetic` fixture switch; unset means off |
 | `MYPA_ENTRA_HOME_TENANT_ID` | Optional home tenant when configured; not a browser MSAL client id |
@@ -160,6 +179,24 @@ npm run dev
 
 The placeholders above are documentation, not acceptable shared or deployed
 secrets. Generate local values out of band.
+
+## Production configuration
+
+Production web authentication is passkey at the public browser origin
+`https://pa.bobby-fetting.me` (RP ID `pa.bobby-fetting.me`). Setup and operator
+recovery remain one-time operator grants plus WebAuthn. Do not put secrets in
+this file or in image labels.
+
+```sh
+export MYPA_AUTH_MODE=passkey
+export MYPA_CANONICAL_ORIGIN=https://pa.bobby-fetting.me
+# Leave MYPA_SESSION_SERVICE_URL unset: session-service is MYPA_GATEWAY_URL.
+# MYPA_SOURCE_COMMIT and MYPA_SOURCE_TREE come from the image labels
+# (40–64 hex commit; 40 hex tree). Unset or invalid values report as unknown.
+```
+
+`synthetic` is refused when `NODE_ENV=production`. This README does not authorize
+live activation.
 
 ## Offline Quick Capture
 

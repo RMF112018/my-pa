@@ -33,6 +33,7 @@ and both halves would fail.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Final
 
 import pytest
 from tests.conftest import (
@@ -63,12 +64,16 @@ from my_pa.application.commands import (
     BulkConfirmTasks,
     BulkPreviewTasks,
     CloseCommitment,
+    CloseConstraint,
+    CloseConstraintWithFollowUp,
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
     CorrectGoodNotes,
     CreateCapture,
     CreateCommitment,
+    CreateConstraintCategory,
+    CreateConstraintDraft,
     CreateEntity,
     CreateEntityAffiliation,
     CreateEntityAssignment,
@@ -80,6 +85,7 @@ from my_pa.application.commands import (
     CreateRelationshipMemory,
     CreateSituation,
     CreateTask,
+    DeactivateConstraintCategory,
     DecideReviewCase,
     EndEntityAffiliation,
     EndEntityAssignment,
@@ -110,6 +116,8 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListConstraintCategories,
+    ListConstraints,
     ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
@@ -136,10 +144,14 @@ from my_pa.application.commands import (
     PreviewEntityMerge,
     PreviewEntitySplit,
     ProposeRelationshipMemory,
+    PublishConstraint,
     PullGoodNotesWork,
     PutCanvasWorkspace,
     ReadCapture,
     ReadCommitment,
+    ReadConstraint,
+    ReadConstraintHistory,
+    ReadConstraintOverview,
     ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadKnowledge,
@@ -148,6 +160,8 @@ from my_pa.application.commands import (
     RecordContextFeedback,
     RecordIntelligenceRunState,
     RecordTask,
+    ReopenConstraint,
+    ReorderConstraintCategories,
     ResolveEntity,
     ResolveIntelligenceSet,
     ResolveUnresolvedMention,
@@ -171,6 +185,7 @@ from my_pa.application.commands import (
     ReviseRelationshipMemory,
     SearchCaptures,
     SearchCommitments,
+    SearchConstraints,
     SearchEntities,
     SearchGoodNotes,
     SearchIntelligenceArtifacts,
@@ -183,10 +198,14 @@ from my_pa.application.commands import (
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
     SupersedeEntityName,
+    TransitionConstraint,
     TransitionTask,
     UpdateCommitment,
+    UpdateConstraint,
+    UpdateConstraintCategory,
     UpdateEntity,
     UpdateTask,
+    VoidConstraint,
     WaitingOn,
 )
 from my_pa.application.service import ApplicationService
@@ -197,7 +216,13 @@ from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.context.preference import ContextPreferenceAction
 from my_pa.domain.goodnotes.models import issue_stable_id
-from my_pa.domain.identity.operation import Capability, permitted_purposes
+from my_pa.domain.identity.operation import (
+    Capability,
+    is_destructive_capability,
+    is_operator_only,
+    is_write_capability,
+    permitted_purposes,
+)
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.intelligence.catalog import (
@@ -211,6 +236,7 @@ from my_pa.domain.intelligence.catalog import (
     SourceLaneId,
 )
 from my_pa.domain.policy.decision import DenialReason
+from my_pa.domain.project_controls.constraint import ConstraintLifecycleState
 from my_pa.domain.relationship.authoring import CallerNamespace
 from my_pa.domain.relationship.entity import (
     AddressTypeCode,
@@ -626,6 +652,79 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             focus_entity_id=issue_identifier(IdKind.ENTITY),
         ),
         Capability.ENTITIES_UNRESOLVED_MENTIONS: ListUnresolvedMentions(),
+        # PC-CM-IMP-WP04's six Constraint Management reads. Identifiers are minted
+        # for the reason the entity reads above mint theirs: a denial test must
+        # fail on the authority and nothing else, so the request has to be well
+        # formed enough that an `invalid_request` cannot stand in for a `denied`.
+        Capability.CONSTRAINTS_READ: ReadConstraint(
+            constraint_id=issue_identifier(IdKind.PROJECT_CONSTRAINT)
+        ),
+        Capability.CONSTRAINTS_LIST: ListConstraints(project_id=issue_identifier(IdKind.PROJECT)),
+        Capability.CONSTRAINTS_SEARCH: SearchConstraints(
+            project_id=issue_identifier(IdKind.PROJECT), query="scaffold"
+        ),
+        Capability.CONSTRAINTS_HISTORY: ReadConstraintHistory(
+            constraint_id=issue_identifier(IdKind.PROJECT_CONSTRAINT)
+        ),
+        Capability.CONSTRAINTS_OVERVIEW: ReadConstraintOverview(
+            project_id=issue_identifier(IdKind.PROJECT)
+        ),
+        Capability.CONSTRAINT_CATEGORIES_LIST: ListConstraintCategories(
+            project_id=issue_identifier(IdKind.PROJECT)
+        ),
+        # PC-CM-IMP-WP07's twelve Constraint Management mutations, on the same
+        # terms: minted identifiers and a version of 1, so a denial test fails on
+        # the authority and never on the shape.
+        Capability.CONSTRAINTS_CREATE: CreateConstraintDraft(
+            project_id=issue_identifier(IdKind.PROJECT), description="A drafted control."
+        ),
+        Capability.CONSTRAINTS_PUBLISH: PublishConstraint(
+            constraint_id=issue_identifier(IdKind.PROJECT_CONSTRAINT), expected_version=1
+        ),
+        Capability.CONSTRAINTS_UPDATE: UpdateConstraint(
+            constraint_id=issue_identifier(IdKind.PROJECT_CONSTRAINT),
+            expected_version=1,
+            current_update="Awaiting the survey.",
+        ),
+        Capability.CONSTRAINTS_TRANSITION: TransitionConstraint(
+            constraint_id=issue_identifier(IdKind.PROJECT_CONSTRAINT),
+            to_state=ConstraintLifecycleState.PENDING,
+            expected_version=1,
+        ),
+        Capability.CONSTRAINTS_CLOSE: CloseConstraint(
+            constraint_id=issue_identifier(IdKind.PROJECT_CONSTRAINT), expected_version=1
+        ),
+        Capability.CONSTRAINTS_CLOSE_FOLLOW_UP: CloseConstraintWithFollowUp(
+            constraint_id=issue_identifier(IdKind.PROJECT_CONSTRAINT),
+            expected_version=1,
+            successor_description="The follow-up control.",
+        ),
+        Capability.CONSTRAINTS_VOID: VoidConstraint(
+            constraint_id=issue_identifier(IdKind.PROJECT_CONSTRAINT),
+            expected_version=1,
+            void_reason="Raised in error.",
+        ),
+        Capability.CONSTRAINTS_REOPEN: ReopenConstraint(
+            constraint_id=issue_identifier(IdKind.PROJECT_CONSTRAINT),
+            to_state=ConstraintLifecycleState.IDENTIFIED,
+            expected_version=1,
+        ),
+        Capability.CONSTRAINT_CATEGORIES_CREATE: CreateConstraintCategory(
+            project_id=issue_identifier(IdKind.PROJECT), code_segment="MEP", title="Mechanical"
+        ),
+        Capability.CONSTRAINT_CATEGORIES_UPDATE: UpdateConstraintCategory(
+            category_id=issue_identifier(IdKind.CONSTRAINT_CATEGORY),
+            expected_version=1,
+            title="Site Logistics",
+        ),
+        Capability.CONSTRAINT_CATEGORIES_DEACTIVATE: DeactivateConstraintCategory(
+            category_id=issue_identifier(IdKind.CONSTRAINT_CATEGORY), expected_version=1
+        ),
+        Capability.CONSTRAINT_CATEGORIES_REORDER: ReorderConstraintCategories(
+            project_id=issue_identifier(IdKind.PROJECT),
+            ordered_category_ids=(issue_identifier(IdKind.CONSTRAINT_CATEGORY),),
+            expected_versions=(1,),
+        ),
         # The entity plane's authoring half (`WP-RI-A-02`). Every identifier is
         # minted for the reason the reads above mint theirs, and every
         # `expected_version` is 1: a denial test must fail on the authority and
@@ -1255,6 +1354,32 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_SPLIT_PREVIEW,
         Capability.ENTITIES_SPLIT,
         Capability.RELATIONSHIP_MEMORY_PROPOSE,
+        # PC-CM-IMP-WP04's Constraint Management reads. A Constraint is a Project
+        # control in the acting Principal's own partition; its rows carry no
+        # `source_id` and no `enrollment_id` for a scope to be compared against.
+        # All six sit in `domain.policy.decision._SCOPELESS`.
+        Capability.CONSTRAINTS_READ,
+        Capability.CONSTRAINTS_LIST,
+        Capability.CONSTRAINTS_SEARCH,
+        Capability.CONSTRAINTS_HISTORY,
+        Capability.CONSTRAINTS_OVERVIEW,
+        Capability.CONSTRAINT_CATEGORIES_LIST,
+        # PC-CM-IMP-WP07's twelve mutations join them, and writing changes
+        # nothing about the reason: they name a Project or a record in the
+        # acting Principal's own partition and never a `src_...` or an
+        # `enr_...`. All twelve sit in `domain.policy.decision._SCOPELESS`.
+        Capability.CONSTRAINTS_CREATE,
+        Capability.CONSTRAINTS_PUBLISH,
+        Capability.CONSTRAINTS_UPDATE,
+        Capability.CONSTRAINTS_TRANSITION,
+        Capability.CONSTRAINTS_CLOSE,
+        Capability.CONSTRAINTS_CLOSE_FOLLOW_UP,
+        Capability.CONSTRAINTS_VOID,
+        Capability.CONSTRAINTS_REOPEN,
+        Capability.CONSTRAINT_CATEGORIES_CREATE,
+        Capability.CONSTRAINT_CATEGORIES_UPDATE,
+        Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
+        Capability.CONSTRAINT_CATEGORIES_REORDER,
     }
 ]
 
@@ -1471,6 +1596,32 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.ENTITIES_SPLIT_PREVIEW,
         Capability.ENTITIES_SPLIT,
         Capability.RELATIONSHIP_MEMORY_PROPOSE,
+        # PC-CM-IMP-WP04's Constraint Management reads. A Constraint is a Project
+        # control in the acting Principal's own partition; its rows carry no
+        # `source_id` and no `enrollment_id` for a scope to be compared against.
+        # All six sit in `domain.policy.decision._SCOPELESS`.
+        Capability.CONSTRAINTS_READ,
+        Capability.CONSTRAINTS_LIST,
+        Capability.CONSTRAINTS_SEARCH,
+        Capability.CONSTRAINTS_HISTORY,
+        Capability.CONSTRAINTS_OVERVIEW,
+        Capability.CONSTRAINT_CATEGORIES_LIST,
+        # PC-CM-IMP-WP07's twelve mutations join them, and writing changes
+        # nothing about the reason: they name a Project or a record in the
+        # acting Principal's own partition and never a `src_...` or an
+        # `enr_...`. All twelve sit in `domain.policy.decision._SCOPELESS`.
+        Capability.CONSTRAINTS_CREATE,
+        Capability.CONSTRAINTS_PUBLISH,
+        Capability.CONSTRAINTS_UPDATE,
+        Capability.CONSTRAINTS_TRANSITION,
+        Capability.CONSTRAINTS_CLOSE,
+        Capability.CONSTRAINTS_CLOSE_FOLLOW_UP,
+        Capability.CONSTRAINTS_VOID,
+        Capability.CONSTRAINTS_REOPEN,
+        Capability.CONSTRAINT_CATEGORIES_CREATE,
+        Capability.CONSTRAINT_CATEGORIES_UPDATE,
+        Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
+        Capability.CONSTRAINT_CATEGORIES_REORDER,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}
@@ -1785,3 +1936,84 @@ def test_a_mismatched_request_reaches_no_handler(scene: Scene) -> None:
     assert envelope.error is not None
     assert envelope.error.code is ErrorCode.INVALID_REQUEST
     assert scene.provider.calls == [], "a mismatched request touched the provider"
+
+
+# ---- the Constraint read plane's grants (PC-CM-IMP-WP04) --------------------
+
+
+CONSTRAINT_READS: Final[tuple[Capability, ...]] = (
+    Capability.CONSTRAINTS_READ,
+    Capability.CONSTRAINTS_LIST,
+    Capability.CONSTRAINTS_SEARCH,
+    Capability.CONSTRAINTS_HISTORY,
+    Capability.CONSTRAINTS_OVERVIEW,
+    Capability.CONSTRAINT_CATEGORIES_LIST,
+)
+
+
+@pytest.mark.parametrize("capability", CONSTRAINT_READS, ids=lambda c: c.value)
+def test_every_constraint_read_is_granted_under_the_constraint_read_purpose(
+    capability: Capability,
+) -> None:
+    """The positive half, and it is not covered by the sweep above.
+
+    `test_every_capability_refuses_a_purpose_it_does_not_permit` passes
+    *trivially* for a capability nobody mapped: `permitted_purposes` answers with
+    the empty set, so every purpose is refused and the parametrisation is green
+    while the grant does not exist. Stating the grant is the only thing that
+    tells a missing mapping from a deliberate deny-all.
+    """
+    assert permitted_purposes(capability) == frozenset({Purpose.CONSTRAINT_READ})
+
+
+def test_the_constraint_read_purpose_grants_the_reads_and_nothing_else() -> None:
+    """One purpose, the Constraint reads, and nothing further.
+
+    Read from the other end, because the per-capability assertions above cannot
+    see a purpose that quietly acquired a *further* capability. A grant issued to
+    read a Project's controls must reach exactly these six.
+    """
+    reached = {
+        capability
+        for capability in Capability
+        if Purpose.CONSTRAINT_READ in permitted_purposes(capability)
+    }
+    assert reached == set(CONSTRAINT_READS)
+
+
+def test_no_constraint_read_is_granted_an_authoring_or_synchronisation_purpose() -> None:
+    """The separation the plane requires, proved by absence rather than by a name.
+
+    `constraint_authoring` now exists -- `PC-CM-IMP-WP07` added it with the
+    twelve mutations that exercise it -- and no `constraint_sync_read` or
+    `constraint_sync_authoring` does, because no `constraint_sync.*` capability
+    does. What is asserted here is unchanged in substance: the Constraint
+    purposes are exactly those two, and none of the six reads is reachable
+    through any purpose whose name says authoring or synchronisation. The second
+    half is what stops a read being quietly folded under an authoring grant --
+    including, now, under the plane's own.
+    """
+    assert {purpose for purpose in Purpose if purpose.value.startswith("constraint_")} == {
+        Purpose.CONSTRAINT_READ,
+        Purpose.CONSTRAINT_AUTHORING,
+    }
+    for capability in CONSTRAINT_READS:
+        granted = permitted_purposes(capability)
+        assert not [
+            purpose
+            for purpose in granted
+            if "authoring" in purpose.value or "sync" in purpose.value
+        ]
+
+
+def test_no_constraint_read_is_a_write_a_destructive_act_or_operator_only() -> None:
+    """The three deliberate non-edits, asserted rather than assumed.
+
+    A capability's absence from `_WRITE_CAPABILITIES` is what gives the generated
+    MCP tool `read_only_hint`, and an absence is exactly the kind of decision that
+    is indistinguishable from an omission unless something says so.
+    """
+    for capability in CONSTRAINT_READS:
+        assert not is_write_capability(capability)
+        assert not is_destructive_capability(capability)
+        assert not is_operator_only(capability)

@@ -76,7 +76,7 @@ principal is the only principal; no credential is issued, read, or required.
 `OPERATOR` rather than `GATEWAY` because the process *is* the operator's local
 transport — a `GATEWAY` principal cannot invoke `sources.enroll`, so the choice
 is between naming what this is and shipping a transport that cannot reach one of
-the 136 capabilities.
+the 154 capabilities.
 
 `entra` composes `entra_authenticator` instead and issues **no** process
 principal. Every request presents a bearer token, the token's validated
@@ -163,7 +163,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 from uuid import UUID
 
 from sqlalchemy import Connection, Engine
@@ -172,7 +172,7 @@ from my_pa.adapters.http.auth_sessions import (
     dispatch_webauthn_http,
     session_service_http_handler,
 )
-from my_pa.adapters.http.webauthn import webauthn_http_handler
+from my_pa.adapters.http.webauthn import AUTHENTICATED_WEBAUTHN_ACTIONS, webauthn_http_handler
 from my_pa.adapters.normalization import PAYLOAD_KEY
 from my_pa.application.apple_machine import AppleBridgeIdentity, AppleMachineControl
 from my_pa.application.entity_reenrichment import (
@@ -222,6 +222,9 @@ from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.capture_clients import authenticate_client, clients_of
 from my_pa.infrastructure.persistence.commitment_management import (
     SqlAlchemyCommitmentManagementUnitOfWork,
+)
+from my_pa.infrastructure.persistence.constraints import (
+    SqlAlchemyConstraintManagementUnitOfWork,
 )
 from my_pa.infrastructure.persistence.entity_reenrichment import (
     ReenrichmentTables,
@@ -597,30 +600,66 @@ def mcp_surface_enabled(
     return any(client.client_id == bound and client.usable for client in held)
 
 
+_COMMITTED_CEREMONY_FAILURES: Final = frozenset(
+    {"invalid_registration", "user_verification_missing"}
+)
+
+
 def _webauthn_execute(
     engine: Engine,
     *,
     relying_party: WebAuthnRelyingParty | None,
     bff_secret: str,
     clock: Callable[[], datetime] = utc_now,
-) -> Callable[[str, str, Mapping[str, Any], str | None], Mapping[str, Any]]:
-    """Attestation mapping and ceremony dispatch, composed off the process file."""
+    require_local_operator: bool = False,
+) -> Callable[..., Mapping[str, Any]]:
+    """Attestation lookup and ceremony dispatch, composed off the process file."""
 
     def execute(
         action: str,
         origin: str,
         document: Mapping[str, Any],
         attestation: str | None,
+        authorizing_sid: str | None = None,
     ) -> Mapping[str, Any]:
         if relying_party is None:
             raise WebAuthnCeremonyError("backend_unavailable")
+        committed_error: WebAuthnCeremonyError | None = None
+        result: CeremonyResult | None = None
         with engine.begin() as connection:
-            service = WebAuthnCeremonyService(connection, relying_party, clock=clock)
-            principal_id = None
-            if attestation:
-                tid, oid = verify_webauthn_attestation(bff_secret, attestation, now=clock())
-                principal_id = service.ensure_account(tid=tid, oid=oid, upn=None, display_name=None)
-            result = _dispatch_webauthn(service, action, origin, document, principal_id)
+            try:
+                principal_id = None
+                if action in AUTHENTICATED_WEBAUTHN_ACTIONS:
+                    if not attestation:
+                        raise WebAuthnCeremonyError("unauthenticated")
+                    attested = verify_webauthn_attestation(bff_secret, attestation, now=clock())
+                    account = UserAccountRepository(connection).get(attested)
+                    if account is None:
+                        raise WebAuthnCeremonyError("unauthenticated")
+                    principal_id = attested
+                service = WebAuthnCeremonyService(
+                    connection,
+                    relying_party,
+                    clock=clock,
+                    require_local_operator=require_local_operator,
+                )
+                result = _dispatch_webauthn(
+                    service,
+                    action,
+                    origin,
+                    document,
+                    principal_id,
+                    authorizing_sid,
+                )
+            except WebAuthnCeremonyError as error:
+                if error.code in _COMMITTED_CEREMONY_FAILURES:
+                    committed_error = error
+                else:
+                    raise
+        if committed_error is not None:
+            raise committed_error
+        if result is None:
+            raise WebAuthnCeremonyError("invalid_request")
         return _ceremony_response_body(result)
 
     return execute
@@ -698,11 +737,47 @@ def _dispatch_webauthn(
     origin: str,
     document: Mapping[str, Any],
     principal_id: UUID | None,
+    authorizing_sid: str | None,
 ) -> CeremonyResult:
+    if action == "auth-state":
+        return service.auth_state()
+    if action == "bootstrap/registration/options":
+        return service.bootstrap_registration_options(
+            origin=origin, grant=_raw_field(document, "grant")
+        )
+    if action == "bootstrap/registration/complete":
+        credential = document.get("credential")
+        if not isinstance(credential, dict):
+            raise WebAuthnCeremonyError("invalid_registration")
+        label = document.get("label")
+        return service.bootstrap_registration_complete(
+            origin=origin,
+            credential=credential,
+            label=label if isinstance(label, str) else None,
+        )
+    if action == "operator-recovery/registration/options":
+        return service.operator_recovery_registration_options(
+            origin=origin, grant=_raw_field(document, "grant")
+        )
+    if action == "operator-recovery/registration/complete":
+        credential = document.get("credential")
+        if not isinstance(credential, dict):
+            raise WebAuthnCeremonyError("invalid_registration")
+        label = document.get("label")
+        return service.operator_recovery_registration_complete(
+            origin=origin,
+            credential=credential,
+            label=label if isinstance(label, str) else None,
+        )
     if action == "registration/options":
         if principal_id is None:
             raise WebAuthnCeremonyError("unauthenticated")
-        return service.registration_options(principal_id, origin=origin)
+        return service.registration_options(
+            principal_id,
+            origin=origin,
+            grant=_raw_field(document, "grant"),
+            authorizing_sid=authorizing_sid,
+        )
     if action == "registration/complete":
         if principal_id is None:
             raise WebAuthnCeremonyError("unauthenticated")
@@ -734,7 +809,8 @@ def _dispatch_webauthn(
             principal_id,
             origin=origin,
             credential_id=_b64_field(document, "credentialId"),
-            administration_grant=_b64_field(document, "administrationGrant"),
+            administration_grant=_raw_field(document, "administrationGrant"),
+            authorizing_sid=authorizing_sid,
         )
     if action == "recovery/issue":
         if principal_id is None:
@@ -742,7 +818,8 @@ def _dispatch_webauthn(
         return service.issue_recovery(
             principal_id,
             origin=origin,
-            administration_grant=_b64_field(document, "administrationGrant"),
+            administration_grant=_raw_field(document, "administrationGrant"),
+            authorizing_sid=authorizing_sid,
         )
     if action == "recovery/consume":
         presented = document.get("code")
@@ -759,16 +836,29 @@ def _dispatch_webauthn(
         credential = document.get("credential")
         if not isinstance(credential, dict):
             raise WebAuthnCeremonyError("invalid_assertion")
-        return service.step_up_complete(principal_id, origin=origin, credential=credential)
+        return service.step_up_complete(
+            principal_id,
+            origin=origin,
+            credential=credential,
+            authorizing_sid=authorizing_sid,
+        )
     if action == "sessions/revoke-all":
         if principal_id is None:
             raise WebAuthnCeremonyError("unauthenticated")
         return service.revoke_all_sessions(
             principal_id,
             origin=origin,
-            administration_grant=_b64_field(document, "administrationGrant"),
+            administration_grant=_raw_field(document, "administrationGrant"),
+            authorizing_sid=authorizing_sid,
         )
     raise WebAuthnCeremonyError("invalid_request")
+
+
+def _raw_field(document: Mapping[str, Any], name: str) -> str:
+    value = document.get(name)
+    if not isinstance(value, str) or not value:
+        raise WebAuthnCeremonyError("invalid_request")
+    return value
 
 
 def _b64_field(document: Mapping[str, Any], name: str) -> bytes:
@@ -793,6 +883,7 @@ def _compose_webauthn_handler(settings: Settings, work_engine: Engine) -> Callab
             work_engine,
             relying_party=relying_party,
             bff_secret=settings.webauthn_bff_secret,
+            require_local_operator=settings.auth_mode is AuthMode.LOCAL_OPERATOR,
         ),
     )
     sessions = session_service_http_handler(
@@ -970,6 +1061,15 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
     def commitment_management_unit_of_work() -> SqlAlchemyCommitmentManagementUnitOfWork:
         return SqlAlchemyCommitmentManagementUnitOfWork(work_engine)
 
+    def constraint_management_unit_of_work() -> SqlAlchemyConstraintManagementUnitOfWork:
+        # PC-CM-IMP-WP04. Unconditional, exactly as the two factories above are:
+        # there is no settings flag that withholds the Constraint read plane, so
+        # a composed gateway always serves the six reads and
+        # `available_capabilities` has no gate to apply. The unit of work is
+        # built per invocation, as `ApplicationService` requires -- one
+        # transaction per request, never a shared open one.
+        return SqlAlchemyConstraintManagementUnitOfWork(work_engine)
+
     entra = settings.auth_mode is AuthMode.ENTRA
     principal = None if entra else local_principal()
     producer_origins = relationship_producer_origins(principal)
@@ -1000,6 +1100,7 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
             managed_store=managed_byte_store(settings, work_engine),
             task_management_unit_of_work=task_management_unit_of_work,
             commitment_management_unit_of_work=commitment_management_unit_of_work,
+            constraint_management_unit_of_work=constraint_management_unit_of_work,
             relationship_intelligence_enabled=settings.relationship_intelligence_enabled,
             relationship_intelligence_writes_enabled=(
                 settings.relationship_intelligence_writes_enabled

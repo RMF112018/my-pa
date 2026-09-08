@@ -13,16 +13,23 @@ import { NextResponse, type NextRequest } from "next/server";
 import { parseOpaqueSessionSid, SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { safeReturnPath } from "@/lib/auth/return-path";
 
-const PUBLIC_PATHS = new Set(["/sign-in"]);
+const PUBLIC_PATHS = new Set(["/sign-in", "/setup", "/recover/operator"]);
+
+function isPublicPath(pathname: string): boolean {
+  if (PUBLIC_PATHS.has(pathname)) return true;
+  if (pathname === "/api/health") return true;
+  if (pathname.startsWith("/api/session")) return true;
+  if (pathname.startsWith("/api/webauthn/authentication/")) return true;
+  if (pathname === "/api/webauthn/recovery/consume") return true;
+  if (pathname === "/api/webauthn/auth-state") return true;
+  if (pathname.startsWith("/api/webauthn/bootstrap/registration/")) return true;
+  if (pathname.startsWith("/api/webauthn/operator-recovery/registration/")) return true;
+  return false;
+}
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  if (
-    PUBLIC_PATHS.has(pathname) ||
-    pathname.startsWith("/api/session") ||
-    pathname.startsWith("/api/webauthn/authentication/") ||
-    pathname === "/api/webauthn/recovery/consume"
-  ) {
+  if (isPublicPath(pathname)) {
     return NextResponse.next();
   }
   const sid = parseOpaqueSessionSid(request.cookies.get(SESSION_COOKIE_NAME)?.value);

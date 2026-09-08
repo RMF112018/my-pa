@@ -270,6 +270,39 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         # a search of one enrollment, which is `knowledge.search`. Until WP-KC-02
         # searches a plane, the requested scope is empty as a measurement.
         Capability.CONTEXT_PREPARE,
+        # The Constraint Management reads (PC-CM-IMP-WP04) name a Project, not a
+        # source. A Constraint is a Project control the Principal's own partition
+        # holds: its rows carry no `source_id` and no `enrollment_id` for a
+        # requested scope to be compared against, exactly as a task's and a
+        # commitment's do not. Requiring one would make all six permanently
+        # unusable, which is how an unlisted capability fails — silently, with
+        # `scope_not_authorized`, on every request.
+        Capability.CONSTRAINTS_READ,
+        Capability.CONSTRAINTS_LIST,
+        Capability.CONSTRAINTS_SEARCH,
+        Capability.CONSTRAINTS_HISTORY,
+        Capability.CONSTRAINTS_OVERVIEW,
+        Capability.CONSTRAINT_CATEGORIES_LIST,
+        # The twelve Constraint Management mutations (PC-CM-IMP-WP07) are
+        # scopeless for exactly the reason the six reads above are, and the fact
+        # that they write changes nothing about it: the rows they create and
+        # change are Project controls in the Principal's own partition, carrying
+        # no `source_id` and no `enrollment_id`. `tasks.create` and
+        # `commitments.update` are listed here on the same reading. Being
+        # scopeless is not being ungated -- capability, purpose and the
+        # Principal's partition all still decide the request.
+        Capability.CONSTRAINTS_CREATE,
+        Capability.CONSTRAINTS_PUBLISH,
+        Capability.CONSTRAINTS_UPDATE,
+        Capability.CONSTRAINTS_TRANSITION,
+        Capability.CONSTRAINTS_CLOSE,
+        Capability.CONSTRAINTS_CLOSE_FOLLOW_UP,
+        Capability.CONSTRAINTS_VOID,
+        Capability.CONSTRAINTS_REOPEN,
+        Capability.CONSTRAINT_CATEGORIES_CREATE,
+        Capability.CONSTRAINT_CATEGORIES_UPDATE,
+        Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
+        Capability.CONSTRAINT_CATEGORIES_REORDER,
         # `context.feedback` names a ranking preference, not a source. The rows
         # it writes belong to the acting Principal's partition and carry no
         # `enrollment_id` and no grant a scope could be compared against.

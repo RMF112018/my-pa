@@ -1,0 +1,238 @@
+# Non-secret production environment schema for https://pa.bobby-fetting.me.
+# Names and semantics only. Never commit live secrets.
+# Expected Alembic head for operator assertions: 4e9a1c7b2d60
+# There is no caller-configurable Principal variable.
+schema = "my-pa.nas-production-environment.v1"
+environment_schema_version = "1"
+canonical_origin = "https://pa.bobby-fetting.me"
+hostname = "pa.bobby-fetting.me"
+webauthn_rp_id = "pa.bobby-fetting.me"
+
+# ---------------------------------------------------------------------------
+# Production web authentication
+# ---------------------------------------------------------------------------
+
+[variable.NODE_ENV]
+classification = "non-secret"
+required = true
+exact_value = "production"
+semantics = "Node/Next.js process environment. Production web refuses synthetic auth."
+
+[variable.MYPA_AUTH_MODE]
+classification = "non-secret"
+required = true
+exact_value = "passkey"
+semantics = "Browser authentication mode. Production is passkey only. synthetic and local_operator are forbidden as web modes."
+
+[variable.MYPA_CANONICAL_ORIGIN]
+classification = "non-secret"
+required = true
+exact_value = "https://pa.bobby-fetting.me"
+semantics = "Exact public browser origin. HTTPS only. No sibling host, wildcard, or http://."
+
+[variable.MYPA_GATEWAY_URL]
+classification = "non-secret"
+required = true
+semantics = "Internal BFF-to-gateway URL on the Compose ingress plane (http://gateway:8765). Not a public origin."
+
+[variable.MYPA_GATEWAY_AUTH_MODE]
+classification = "non-secret"
+required = true
+exact_value = "local_operator"
+semantics = "BFF-to-gateway transport identity. Internal local_operator is allowed. This is not a browser web mode."
+
+[variable.MYPA_SESSION_SERVICE_URL]
+classification = "non-secret"
+required = false
+must_be_absent_or_empty = true
+semantics = "Must be absent or empty in production. Session-service is the same Python gateway process at MYPA_GATEWAY_URL. WP28 CI may still override this for dead-gateway tests."
+
+# ---------------------------------------------------------------------------
+# Session-service and WebAuthn secrets (names only)
+# ---------------------------------------------------------------------------
+
+[variable.MYPA_SESSION_SERVICE_SECRET]
+classification = "secret"
+required = true
+min_length = 32
+semantics = "BFF secret authenticating to Python session-service. Must equal MY_PA_SESSION_SERVICE_SECRET. Owner-only. Compared without printing either value. Never logged."
+
+[variable.MY_PA_SESSION_SERVICE_SECRET]
+classification = "secret"
+required = true
+min_length = 32
+semantics = "Python gateway session-service shared secret. Must equal MYPA_SESSION_SERVICE_SECRET. Compared without printing either value."
+
+[variable.MYPA_WEBAUTHN_BFF_SECRET]
+classification = "secret"
+required = true
+min_length = 32
+semantics = "BFF WebAuthn ceremony secret. Must equal MY_PA_WEBAUTHN_BFF_SECRET and remain distinct from the session-service pair. Owner-only. Compared without printing either value. Never logged."
+
+[variable.MY_PA_WEBAUTHN_BFF_SECRET]
+classification = "secret"
+required = true
+min_length = 32
+semantics = "Python WebAuthn BFF shared secret. Must equal MYPA_WEBAUTHN_BFF_SECRET. Compared without printing either value."
+
+# ---------------------------------------------------------------------------
+# WebAuthn relying party
+# ---------------------------------------------------------------------------
+
+[variable.MY_PA_WEBAUTHN_RP_ID]
+classification = "non-secret"
+required = true
+exact_value = "pa.bobby-fetting.me"
+semantics = "WebAuthn RP ID. Exact hostname, no scheme, no wildcard, no sibling domain."
+
+[variable.MY_PA_WEBAUTHN_RP_NAME]
+classification = "non-secret"
+required = true
+semantics = "WebAuthn relying-party display name."
+
+[variable.MY_PA_WEBAUTHN_ALLOWED_ORIGINS]
+classification = "non-secret"
+required = true
+exact_value = "https://pa.bobby-fetting.me"
+semantics = "Exact allowed WebAuthn origin. HTTPS only. One origin. No wildcards."
+
+# ---------------------------------------------------------------------------
+# Database password and image identities
+# ---------------------------------------------------------------------------
+
+[variable.MY_PA_DB_PASSWORD]
+classification = "secret"
+required = true
+min_length = 32
+semantics = "PostgreSQL POSTGRES_PASSWORD. Owner-only. No fallback empty password."
+
+[variable.MY_PA_APP_IMAGE_ID]
+classification = "non-secret"
+required = true
+semantics = "Exact loaded Docker image/config ID for the application/gateway/worker image (sha256:…)."
+
+[variable.MY_PA_WEB_IMAGE_ID]
+classification = "non-secret"
+required = true
+semantics = "Exact loaded Docker image/config ID for the Next.js web image (sha256:…)."
+
+[variable.MY_PA_POSTGRES_IMAGE_ID]
+classification = "non-secret"
+required = true
+semantics = "Exact loaded Docker image/config ID for PostgreSQL (sha256:…)."
+
+[variable.MY_PA_PROXY_IMAGE]
+classification = "non-secret"
+required = true
+semantics = "Caddy repository name used with MY_PA_PROXY_IMAGE_DIGEST."
+
+[variable.MY_PA_PROXY_IMAGE_DIGEST]
+classification = "non-secret"
+required = true
+semantics = "Pinned Caddy image digest (sha256:…)."
+
+# ---------------------------------------------------------------------------
+# UID/GID and NAS roots
+# ---------------------------------------------------------------------------
+
+[variable.MY_PA_UID]
+classification = "non-secret"
+required = true
+semantics = "Dedicated numeric UID for app/web containers."
+
+[variable.MY_PA_GID]
+classification = "non-secret"
+required = true
+semantics = "Dedicated numeric GID for app/web containers."
+
+[variable.MY_PA_PROXY_UID]
+classification = "non-secret"
+required = true
+semantics = "Verified numeric UID for the private and public Caddy proxies."
+
+[variable.MY_PA_PROXY_GID]
+classification = "non-secret"
+required = true
+semantics = "Verified numeric GID for the private and public Caddy proxies."
+
+[variable.MY_PA_NAS_ROOT]
+classification = "non-secret"
+required = true
+semantics = "Canonical NAS application root (config, postgres data, sources, managed documents)."
+
+[variable.MY_PA_NAS_ENV_FILE]
+classification = "non-secret"
+required = true
+semantics = "Owner-only gateway/worker env file path. Must live outside Git."
+
+[variable.MY_PA_WEB_ENV_FILE]
+classification = "non-secret"
+required = true
+semantics = "Owner-only web env file path. Must live outside Git."
+
+# ---------------------------------------------------------------------------
+# Frontend Cloudflare Tunnel (dedicated; not the remote MCP tunnel)
+# ---------------------------------------------------------------------------
+
+[variable.MY_PA_FRONTEND_CLOUDFLARED_IMAGE]
+classification = "non-secret"
+required = true
+semantics = "Digest-pinned frontend cloudflared image (name@sha256:…)."
+
+[variable.MY_PA_FRONTEND_CLOUDFLARED_CONFIG]
+classification = "non-secret"
+required = true
+semantics = "Rendered frontend cloudflared config path (non-secret). Credentials are never in this file."
+
+[variable.MY_PA_FRONTEND_CLOUDFLARED_CREDENTIALS_DIR]
+classification = "secret"
+required = true
+semantics = "Owner-only directory holding frontend tunnel credentials.json. Never commit."
+
+[variable.MY_PA_FRONTEND_CLOUDFLARED_UID]
+classification = "non-secret"
+required = true
+semantics = "Verified numeric UID for frontend-cloudflared."
+
+[variable.MY_PA_FRONTEND_CLOUDFLARED_GID]
+classification = "non-secret"
+required = true
+semantics = "Verified numeric GID for frontend-cloudflared."
+
+# ---------------------------------------------------------------------------
+# Deployed source identity (image labels / web env)
+# ---------------------------------------------------------------------------
+
+[variable.MYPA_SOURCE_COMMIT]
+classification = "non-secret"
+required = true
+semantics = "Full git commit (40–64 hex) baked into the web image. Never a branch name or short SHA."
+
+[variable.MYPA_SOURCE_TREE]
+classification = "non-secret"
+required = true
+semantics = "Full git tree SHA (exactly 40 hex) baked into the web image."
+
+# ---------------------------------------------------------------------------
+# Forbidden in production web
+# ---------------------------------------------------------------------------
+
+[forbidden]
+web_auth_mode_values = ["synthetic", "local_operator", "entra"]
+data_provider_values = ["synthetic"]
+names = [
+  "NEXT_PUBLIC_AZURE_AD_CLIENT_ID",
+  "NEXT_PUBLIC_AZURE_AD_TENANT_ID",
+  "NEXT_PUBLIC_AZURE_AD_AUTHORITY",
+  "NEXT_PUBLIC_MSAL_CLIENT_ID",
+  "NEXT_PUBLIC_MSAL_AUTHORITY",
+  "NEXT_PUBLIC_ENTRA_CLIENT_ID",
+  "NEXT_PUBLIC_ENTRA_TENANT_ID",
+  "MYPA_ENTRA_CLIENT_ID",
+  "MYPA_ENTRA_CLIENT_SECRET",
+  "MY_PA_ENTRA_CLIENT_ID",
+  "MY_PA_ENTRA_CLIENT_SECRET",
+  "MYPA_SESSION_SECRET",
+  "MYPA_LOCAL_OPERATOR_SECRET",
+]
+semantics = "Production web forbids synthetic auth, local_operator as MYPA_AUTH_MODE, and Entra/MSAL browser variables. Gateway MY_PA_AUTH_MODE=local_operator may remain for BFF transport."

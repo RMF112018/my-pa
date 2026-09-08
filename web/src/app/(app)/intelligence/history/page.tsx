@@ -29,7 +29,9 @@ import type { PrincipalSession } from "@/contracts/identity";
 export const metadata = { title: "Intelligence history — my-pa" };
 export const dynamic = "force-dynamic";
 
-const BLURB = "Prior Morning Intelligence runs, dated by the report plane.";
+const BLURB = "Prior Morning Intelligence runs, dated by the backend business date.";
+const SYNTHETIC_DETAIL =
+  "The synthetic provider has no report fixture. Report reads are not available in this build.";
 
 async function datesForCycles(
   principal: PrincipalSession,
@@ -96,7 +98,7 @@ export default async function IntelligenceHistoryPage({
         title="Intelligence history"
         description={BLURB}
         state="not_implemented"
-        detail="The synthetic provider has no report fixture. Report reads require the executable Python Intelligence plane."
+        detail={SYNTHETIC_DETAIL}
       />
     );
   }
@@ -125,8 +127,8 @@ export default async function IntelligenceHistoryPage({
     return frame(
       <SurfaceState
         kind="empty"
-        title="No report history is stored"
-        detail="The report plane was read and it holds no artifact for this Principal."
+        title="No briefings yet"
+        detail="No reports are stored for your account yet."
         testId="intelligence-history-empty"
       />,
     );
@@ -147,7 +149,7 @@ export default async function IntelligenceHistoryPage({
         <SurfaceState
           kind="unavailable"
           title="That cycle is not in the listed history"
-          detail="The requested cycle_run_id did not match a listed artifact. This is not an empty history."
+          detail="The requested cycle did not match a listed report. This is not an empty history."
           testId="intelligence-history-unknown-cycle"
         />
       ) : (

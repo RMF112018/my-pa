@@ -12,7 +12,7 @@ export function PeopleSearchForm({ query }: { query: string }) {
     >
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <label htmlFor="people-q" className="text-sm font-medium text-moss-slate">
-          Search people
+          Find a person
         </label>
         <Input
           id="people-q"
@@ -22,8 +22,8 @@ export function PeopleSearchForm({ query }: { query: string }) {
           aria-describedby="people-q-hint"
         />
         <p id="people-q-hint" className="text-xs text-muted">
-          A name match over your own entities. This is browse, not identity, and not a
-          directory of everyone.
+          Search by name among people already in your records. This is not a directory of
+          everyone.
         </p>
       </div>
       <Button type="submit">Search</Button>
@@ -33,7 +33,7 @@ export function PeopleSearchForm({ query }: { query: string }) {
 
 export function PeopleResolveForm({ reference }: { reference: string }) {
   return (
-    <form method="get" action={peopleHome()} className="mb-6 flex flex-wrap items-end gap-3">
+    <form method="get" action={peopleHome()} className="mt-3 flex flex-wrap items-end gap-3">
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <label htmlFor="people-reference" className="text-sm font-medium text-moss-slate">
           Resolve a reference
@@ -53,5 +53,31 @@ export function PeopleResolveForm({ reference }: { reference: string }) {
         Resolve
       </Button>
     </form>
+  );
+}
+
+/** Search is the default. Resolve stays behind a disclosure unless a deep link already has `reference`. */
+export function PeopleLookupForms({
+  query,
+  reference,
+}: {
+  query: string;
+  reference: string;
+}) {
+  return (
+    <>
+      <PeopleSearchForm query={query} />
+      <details
+        className="mb-6"
+        data-testid="people-resolve-advanced"
+        {...(reference ? { open: true } : {})}
+      >
+        <summary className="cursor-pointer text-sm font-medium text-moss-slate">
+          Resolve a reference
+          <span className="ml-2 font-normal text-muted">Advanced</span>
+        </summary>
+        <PeopleResolveForm reference={reference} />
+      </details>
+    </>
   );
 }

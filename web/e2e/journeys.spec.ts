@@ -91,7 +91,7 @@ test.describe("the signed-in surfaces", () => {
 
     await page.goto("/people");
     await expect(page.getByRole("heading", { name: "People", level: 1 })).toBeVisible();
-    await expect(page.getByRole("searchbox", { name: "Search people" })).toBeVisible();
+    await expect(page.getByRole("searchbox", { name: "Find a person" })).toBeVisible();
     await expect(page.getByText(/no admitted same-origin BFF exposure/i)).toHaveCount(0);
 
     await page.goto("/canvas");

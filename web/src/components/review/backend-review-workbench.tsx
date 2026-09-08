@@ -241,11 +241,8 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
         className="mb-3 rounded-md border border-moss-gold/40 border-l-4 border-l-moss-gold bg-moss-gold/10 p-3 text-sm"
         data-testid="review-listing-limitation"
       >
-        <strong>This listing carries no proposal text.</strong> The backend&rsquo;s review listing
-        returns identifiers, types and states and no content, so nothing below summarises what a
-        proposal says — that would have to be invented. Open <em>Reveal</em> on a capture case to
-        read the evidence behind it before you decide. GoodNotes cases link to the notebook page by
-        identifier only.
+        <strong>This listing carries no proposal text.</strong> Open <em>Reveal</em> on a capture
+        case, or the GoodNotes page, before you decide.
       </p>
       <ul className="flex flex-col gap-3" data-testid="backend-review-list">
         {cases.map((row) => {

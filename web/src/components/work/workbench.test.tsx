@@ -14,6 +14,23 @@ describe("Work surface", () => {
     renderFromUrl();
     await screen.findByText("No today tasks");
     expect(screen.getByRole("region", { name: "Work" }).className).toContain("pb-24");
+    expect(screen.getByText("Tasks and commitments you are tracking.")).toBeTruthy();
+    expect(screen.queryByText("Select Tasks for admitted bulk actions")).toBeNull();
+    expect(screen.queryByText("Create task")).toBeNull();
+    expect(screen.getByRole("button", { name: "New task" })).toBeTruthy();
+    expect(screen.getByText("Filters")).toBeTruthy();
+    expect(screen.getByLabelText("Archive")).toBeTruthy();
+  });
+
+  it("shows short loading copy while Work is reading", async () => {
+    let resolveRead!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((next) => { resolveRead = next; })));
+    history.replaceState(null, "", "/work?view=today");
+    renderFromUrl();
+    expect(screen.getByText("Loading work…")).toBeTruthy();
+    await waitFor(() => expect(resolveRead).toEqual(expect.any(Function)));
+    await act(async () => resolveRead(new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } })));
+    await screen.findByText("No today tasks");
   });
 
   it("keeps the approved view order and asks the server for exact Today semantics", async () => {
@@ -113,10 +130,15 @@ describe("Work surface", () => {
     });
     vi.stubGlobal("fetch", fetcher); history.replaceState(null, "", "/work?view=waiting"); renderFromUrl();
     await userEvent.click(await screen.findByRole("checkbox", { name: "Select Synthetic follow up" }));
+    const confirm = screen.getByRole("button", { name: "Confirm exact preview" });
+    expect(confirm).toBeDisabled();
     await userEvent.click(screen.getByRole("button", { name: "Preview change" }));
-    expect(await screen.findByText(/Persisted preview: 1 affected/)).toBeTruthy();
-    await userEvent.click(screen.getByRole("button", { name: "Confirm exact preview" }));
-    expect(await screen.findByText(/Persisted confirmation: 1 affected/)).toBeTruthy();
+    expect(await screen.findByText("Preview ready")).toBeTruthy();
+    expect(screen.getByText(/1 affected/)).toBeTruthy();
+    expect(confirm).toBeEnabled();
+    await userEvent.click(confirm);
+    expect(await screen.findByText("Changes applied")).toBeTruthy();
+    expect(screen.getByText(/1 affected/)).toBeTruthy();
     const previewCall = fetcher.mock.calls.find(([path]) => String(path).includes("/bulk/preview"));
     const confirmCall = fetcher.mock.calls.find(([path]) => String(path).includes("/bulk/confirm"));
     const previewBody = JSON.parse(String(previewCall?.[1]?.body));
@@ -142,12 +164,13 @@ describe("Work surface", () => {
     vi.stubGlobal("fetch", fetcher); history.replaceState(null, "", "/work?view=waiting"); renderFromUrl();
     await userEvent.click(await screen.findByRole("checkbox", { name: "Select Synthetic follow up" }));
     await userEvent.click(screen.getByRole("button", { name: "Preview change" }));
-    await screen.findByText(/Persisted preview/);
+    await screen.findByText("Preview ready");
     await userEvent.click(screen.getByRole("button", { name: "Confirm exact preview" }));
-    await screen.findByText(/Work plane is unavailable/);
+    await screen.findByText(/Work is unavailable/);
     expect(screen.getByText(/Preview bulk_aaaaaaaa11111111/)).toBeTruthy();
     await userEvent.click(screen.getByRole("button", { name: "Confirm exact preview" }));
-    expect(await screen.findByText(/Replayed confirmation/)).toBeTruthy();
+    expect(await screen.findByText("Changes applied")).toBeTruthy();
+    expect(screen.getByText(/Replayed confirmation/)).toBeTruthy();
     const bodies = fetcher.mock.calls.filter(([path]) => String(path).includes("/bulk/confirm")).map(([, init]) => JSON.parse(String(init?.body)));
     expect(bodies).toHaveLength(2);
     expect(bodies[1]).toEqual(bodies[0]);
@@ -264,5 +287,6 @@ describe("Work surface", () => {
     vi.stubGlobal("fetch", fetcher); history.replaceState(null, "", "/work?view=upcoming&q=plan&tz=America%2FNew_York&archived=only"); renderFromUrl();
     await screen.findByText("No matching upcoming tasks");
     const path = String(fetcher.mock.calls[0]?.[0]); expect(path).toContain("workView=upcoming"); expect(path).toContain("q=plan"); expect(path).toContain("archived=only"); expect(path).toContain("timezone=America%2FNew_York");
+    expect((screen.getByLabelText("Archive") as HTMLSelectElement).value).toBe("only");
   });
 });

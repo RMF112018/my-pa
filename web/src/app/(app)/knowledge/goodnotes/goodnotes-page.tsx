@@ -30,13 +30,11 @@ import type { GoodNotesRun } from "@/lib/api/decode/capabilities/goodnotes.runs.
 const SCOPE = "goodnotes";
 
 const BLURB =
-  "GoodNotes is the handwritten-notebook record. Catalog rows are identifiers the plane " +
-  "returned. A page is opened as evidence only when both a run id and a page version id " +
-  "are known — nothing here is guessed, transcribed, or filled in from a fixture.";
+  "Handwritten notebooks. Catalog rows are identifiers that were returned. A page opens as " +
+  "evidence only when both a run id and a page version id are known.";
 
 const SYNTHETIC_DETAIL =
-  "The synthetic provider has no GoodNotes fixture. GoodNotes reads the Python GoodNotes " +
-  "plane; run against the gateway to see it.";
+  "The synthetic provider has no GoodNotes fixture. Knowledge does not invent notebooks to fill the space.";
 
 function firstParam(
   params: Record<string, string | string[] | undefined>,

@@ -69,11 +69,11 @@ describe("shell preferences", () => {
       theme: "dark",
       density: "compact",
     });
-    await waitFor(() =>
-      expect(screen.getByTestId("preferences")).toHaveTextContent("dark:compact:false"),
-    );
-    expect(document.documentElement.dataset.theme).toBe("dark");
-    expect(document.documentElement.dataset.density).toBe("compact");
+    await waitFor(() => {
+      expect(screen.getByTestId("preferences")).toHaveTextContent("dark:compact:false");
+      expect(document.documentElement.dataset.theme).toBe("dark");
+      expect(document.documentElement.dataset.density).toBe("compact");
+    });
 
     await user.click(screen.getByRole("button", { name: "Collapse" }));
     await waitFor(() =>

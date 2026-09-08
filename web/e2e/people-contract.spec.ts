@@ -23,13 +23,13 @@ test("People search, profile, and resolve keep ambiguity visible", async ({ page
   test.setTimeout(180_000);
   await page.goto("/people");
   await expect(page.getByRole("heading", { name: "People", level: 1 })).toBeVisible();
-  await expect(page.getByRole("searchbox", { name: "Search people" })).toBeVisible();
+  await expect(page.getByRole("searchbox", { name: "Find a person" })).toBeVisible();
   await expect(page.getByText(/no admitted same-origin BFF exposure/i)).toHaveCount(0);
   await expect(page.getByRole("button", { name: /merge/i })).toHaveCount(0);
   await expect(page.getByTestId("people-idle")).toBeVisible();
   await expect(page.getByTestId("people-search-hits")).toHaveCount(0);
 
-  await page.getByRole("searchbox", { name: "Search people" }).fill("Pat Synthetic");
+  await page.getByRole("searchbox", { name: "Find a person" }).fill("Pat Synthetic");
   await page.getByRole("button", { name: "Search" }).click();
   await expect(page.getByTestId("people-search-hits")).toBeVisible();
   await expect(page.getByRole("link", { name: "Pat Synthetic" })).toBeVisible();
@@ -57,6 +57,7 @@ test("People search, profile, and resolve keep ambiguity visible", async ({ page
   await expect(page.getByRole("heading", { name: "Pat Synthetic", level: 1 })).toBeVisible();
 
   await page.goto("/people");
+  await page.getByTestId("people-resolve-advanced").locator("summary").click();
   await page.getByLabel("Resolve a reference").fill("Alex Chen");
   await page.getByRole("button", { name: "Resolve" }).click();
   await expect(page.getByTestId("people-resolve-outcome")).toBeVisible();
@@ -96,9 +97,9 @@ test("People search and profile reflow at a narrow viewport", async ({ page }) =
   test.setTimeout(180_000);
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto("/people");
-  await expect(page.getByRole("searchbox", { name: "Search people" })).toBeVisible();
-  await expect(page.getByLabel("Resolve a reference")).toBeVisible();
-  await page.getByRole("searchbox", { name: "Search people" }).fill("Pat Synthetic");
+  await expect(page.getByRole("searchbox", { name: "Find a person" })).toBeVisible();
+  await expect(page.getByTestId("people-resolve-advanced")).toBeVisible();
+  await page.getByRole("searchbox", { name: "Find a person" }).fill("Pat Synthetic");
   await page.getByRole("button", { name: "Search" }).click();
   await page.getByRole("link", { name: "Pat Synthetic" }).click();
   await expect(page.getByTestId("people-profile")).toBeVisible();

@@ -16,7 +16,7 @@ export function SearchPage({
     <section className="mx-auto max-w-3xl">
       <PageHeader
         title="Search"
-        description="Federated search over Work, Capture, Intelligence, People, and enrolled Knowledge. Empty search lists destinations and Quick Capture. Omitted domains stay omitted."
+        description="Search tasks, people, notes, and reports."
       />
       <SearchCommandPanel
         autoFocus

@@ -59,10 +59,10 @@ import type { BackendCaptureEntry, BackendCaptureMatch } from "@/contracts/views
 /** The listing this page renders is a read of the moment, never a cached one. */
 const SCOPE = "library";
 
-const BLURB =
-  "Knowledge is the browsable record of what you have captured. Every row below is a stored " +
-  "capture of yours, read from the record itself — nothing here is a summary, a sample, or a " +
-  "placeholder.";
+const BLURB = "Your stored captures. Search finds your own notes; open a row to read the text.";
+
+const LISTING_HELP =
+  "Listings and search results show dates and identifiers only. Captured text is shown when you open a row.";
 
 function toEntry(row: CaptureListEntry): BackendCaptureEntry {
   return {
@@ -153,7 +153,13 @@ export async function KnowledgePage({
       <h1 id="knowledge-heading" className="mb-1 text-xl font-semibold text-moss-slate">
         Knowledge
       </h1>
-      <p className="mb-4 text-sm text-muted">{BLURB}</p>
+      <p className="mb-2 text-sm text-muted">{BLURB}</p>
+      <details className="mb-4" data-testid="library-listing-help">
+        <summary className="cursor-pointer text-sm font-medium text-moss-slate">
+          Why text is not shown
+        </summary>
+        <p className="mt-2 text-sm text-muted">{LISTING_HELP}</p>
+      </details>
     </>
   );
 
@@ -191,10 +197,9 @@ export async function KnowledgePage({
     return frame(
       <SurfaceState
         kind="not_implemented"
-        title="Library has no synthetic fixture"
+        title="Knowledge has no synthetic fixture"
         detail={
-          "This build is serving the synthetic provider. Library reads the Python capture " +
-          "plane, and no fixture stands in for it — run against the gateway to see real records."
+          "This build is serving the synthetic provider. Knowledge does not invent captures to fill the space."
         }
         testId="library-synthetic"
       />,

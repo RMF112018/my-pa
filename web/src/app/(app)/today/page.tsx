@@ -46,6 +46,7 @@ function toItem(row: PulseItem): BackendPulseItem {
     nextStep: row.next_step,
     priority: row.attention_rank,
     generatedAt: row.generated_at,
+    ...(row.subject_title !== undefined ? { subjectTitle: row.subject_title } : {}),
   };
 }
 
@@ -59,12 +60,7 @@ export default async function TodayPage() {
       <h1 id="today-heading" className="mb-1 text-xl font-semibold text-moss-slate">
         Today
       </h1>
-      <p className="mb-4 text-sm text-muted">
-        Pulse is not a list of what happened. Every item below is here because a named condition
-        holds about it right now — a moment passed, a moment approaching, a decision waiting on
-        someone — and each one shows that reason, the records it was computed from, and the next
-        step.
-      </p>
+      <p className="mb-4 text-sm text-muted">What needs you today.</p>
     </>
   );
 
@@ -98,14 +94,18 @@ export default async function TodayPage() {
       ) : answer.kind === "empty" ? (
         <SurfaceState
           kind="empty"
-          title="Nothing meets a why-now condition"
-          detail={
-            "The derivation ran and found no accepted commitment, decision, task or situation " +
-            "that a named condition holds about right now. That is a statement about today, not " +
-            "about what you hold."
-          }
+          title="Nothing needs attention right now"
+          detail="This is about today, not everything you hold."
           testId="today-empty"
-        />
+        >
+          <details className="mt-2">
+            <summary className="cursor-pointer font-medium text-moss-slate">Details</summary>
+            <p className="mt-2">
+              The derivation ran and found no accepted commitment, decision, task or situation that
+              a named condition holds about right now.
+            </p>
+          </details>
+        </SurfaceState>
       ) : answer.kind === "degraded" ? (
         <>
           <DegradedBanner
@@ -116,13 +116,18 @@ export default async function TodayPage() {
           {answer.rowCount === 0 ? (
             <SurfaceState
               kind="degraded"
-              title="The derivation was incomplete and surfaced nothing"
-              detail={
-                "A quiet day is not established by a partial read. Something may need you that " +
-                "this answer did not cover."
-              }
+              title="Today is incomplete"
+              detail="A quiet day is not established. Something may still need you."
               testId="today-degraded-empty"
-            />
+            >
+              <details className="mt-2">
+                <summary className="cursor-pointer font-medium text-moss-slate">Details</summary>
+                <p className="mt-2">
+                  The derivation was incomplete and surfaced nothing. A partial read does not
+                  establish that nothing needs attention.
+                </p>
+              </details>
+            </SurfaceState>
           ) : (
             // The gateway's order, untouched. See `BackendPulseList`.
             <BackendPulseList items={answer.result.pulse_items.map(toItem)} />

@@ -40,7 +40,7 @@ export function ReportCard({
         <div className="flex flex-wrap items-center gap-1">
           {isBrief ? (
             <Badge tone="green">
-              <span data-testid="intelligence-brief-artifact">Brief artifact</span>
+              <span data-testid="intelligence-brief-artifact">Brief</span>
             </Badge>
           ) : null}
           {inCurrent ? <Badge tone="neutral">Current cycle</Badge> : null}
@@ -50,8 +50,6 @@ export function ReportCard({
       </div>
       <CardBody>
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 break-words text-xs">
-          <dt>Identifier</dt>
-          <dd data-testid="intelligence-report-id">{row.report_id}</dd>
           <dt>Stage</dt>
           <dd data-testid="intelligence-stage">{row.stage}</dd>
           <dt>Kind</dt>
@@ -60,9 +58,18 @@ export function ReportCard({
           <dd data-testid="intelligence-artifact-state">
             <Badge tone={STATE_TONE[row.artifact_state] ?? "neutral"}>{row.artifact_state}</Badge>
           </dd>
-          <dt>Cycle</dt>
-          <dd className="break-all">{row.cycle_run_id}</dd>
         </dl>
+        <details className="mt-2" data-testid="intelligence-report-details">
+          <summary className="cursor-pointer font-medium text-moss-slate">Details</summary>
+          <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 break-words text-xs">
+            <dt>Identifier</dt>
+            <dd data-testid="intelligence-report-id">{row.report_id}</dd>
+            <dt>Cycle</dt>
+            <dd className="break-all" data-testid="intelligence-report-cycle">
+              {row.cycle_run_id}
+            </dd>
+          </dl>
+        </details>
       </CardBody>
     </Card>
   );

@@ -32,6 +32,8 @@ export const dynamic = "force-dynamic";
 
 const SCOPE = "intelligence";
 const BLURB = "Evidence-grounded reports and briefs.";
+const SYNTHETIC_DETAIL =
+  "The synthetic provider has no report fixture. Report reads are not available in this build.";
 
 async function loadReadiness(
   principal: PrincipalSession,
@@ -80,7 +82,7 @@ export default async function IntelligencePage() {
         title="Intelligence"
         description={BLURB}
         state="not_implemented"
-        detail="The synthetic provider has no report fixture. Report reads require the executable Python Intelligence plane."
+        detail={SYNTHETIC_DETAIL}
       />
     );
   }
@@ -107,8 +109,8 @@ export default async function IntelligencePage() {
     return frame(
       <SurfaceState
         kind="empty"
-        title="No reports are stored"
-        detail="The report plane was read and it holds no artifact for this Principal."
+        title="No briefings yet"
+        detail="No reports are stored for your account yet."
         testId="intelligence-empty"
       />,
     );
@@ -125,10 +127,10 @@ export default async function IntelligencePage() {
       {readiness && cycleRunId ? (
         <ReadinessPanel answer={readiness} cycleRunId={cycleRunId} />
       ) : null}
-      <h2 className="mb-2 text-base font-semibold text-moss-slate">Report artifacts</h2>
+      <h2 className="mb-2 text-base font-semibold text-moss-slate">Reports</h2>
       <p className="mb-3 text-sm text-muted">
-        Missing specialists do not hide available reports. A morning_brief row is a Brief artifact,
-        not structured Brief items.
+        Missing specialists do not hide available reports. A morning brief is a report, not a list
+        of structured brief items.
       </p>
       {listing}
     </>
@@ -145,7 +147,7 @@ export default async function IntelligencePage() {
         {answer.rowCount === 0 ? (
           <SurfaceState
             kind="degraded"
-            title="The report plane was read incompletely and returned nothing"
+            title="Reports were read incompletely and returned nothing"
             detail="An empty listing is not established by an incomplete read."
             testId="intelligence-degraded-empty"
           />

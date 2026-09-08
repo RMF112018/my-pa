@@ -938,7 +938,7 @@ describe("People reaches search, resolve, and profile instead of a directory", (
     socketFails();
     await renderServerPage(() => PeoplePage({ searchParams: NO_PARAMS }));
     expect(screen.getByTestId("people-idle")).toHaveAttribute("data-state", "empty");
-    expect(screen.getByRole("searchbox", { name: "Search people" })).toBeTruthy();
+    expect(screen.getByRole("searchbox", { name: "Find a person" })).toBeTruthy();
     expect(screen.queryByText(/no admitted same-origin BFF exposure/i)).toBeNull();
   });
 

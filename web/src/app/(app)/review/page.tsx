@@ -40,9 +40,7 @@ export const dynamic = "force-dynamic";
 
 const SCOPE = "review";
 
-const BLURB =
-  "Proposals wait here for your disposition. Nothing is asserted on your behalf — a captured " +
-  "item becomes a canonical record only when you accept or correct-and-accept it.";
+const BLURB = "Decide on proposals before they become records.";
 
 export default async function ReviewPage() {
   const cookieStore = await cookies();
@@ -99,11 +97,8 @@ export default async function ReviewPage() {
     return frame(
       <SurfaceState
         kind="empty"
-        title="Nothing is waiting on your decision"
-        detail={
-          "The review queue was read and it holds no open case. Proposals appear here when a " +
-          "capture derives something consequential enough to need you."
-        }
+        title="Nothing to review right now."
+        detail="Proposals appear here when something needs a decision."
         testId="review-queue-empty"
       />,
     );

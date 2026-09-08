@@ -30,6 +30,7 @@
  * are shown as figures and say why they do not navigate.
  */
 import type {
+  ConstraintCategory,
   ConstraintCategoryOpenCount,
   ConstraintListEntry,
   ConstraintOverview,
@@ -93,6 +94,7 @@ export interface ConstraintsOverviewProps {
   readonly overview: ConstraintOverview;
   readonly categoryOpenCounts: readonly ConstraintCategoryOpenCount[];
   readonly oldestOpen: readonly ConstraintListEntry[];
+  readonly categories?: readonly ConstraintCategory[];
   readonly state: ConstraintUrlState;
   readonly onKpiNavigate: (target: ConstraintKpiTarget) => void;
   readonly onCategoryNavigate: (categoryId: string) => void;
@@ -103,6 +105,7 @@ export function ConstraintsOverview({
   overview,
   categoryOpenCounts,
   oldestOpen,
+  categories,
   onKpiNavigate,
   onCategoryNavigate,
   onSelect,
@@ -221,6 +224,29 @@ export function ConstraintsOverview({
 
       <Card data-testid="overview-by-category">
         <CardTitle>Open Constraints by Category</CardTitle>
+        {categories ? (
+          <>
+            <p className="mt-2 text-sm text-muted">
+              Category totals are not part of this read contract. Choose a Category to ask the
+              server for its matching Register rows.
+            </p>
+            <ul className="mt-2 grid gap-1">
+              {categories.map((row) => (
+                <li key={row.categoryId}>
+                  <button
+                    type="button"
+                    data-testid={`overview-category-${row.categoryId}`}
+                    onClick={() => onCategoryNavigate(row.categoryId)}
+                    className="flex min-h-11 w-full items-center justify-between rounded px-1 text-left text-sm hover:bg-surface-subtle"
+                  >
+                    <span>{row.title}</span>
+                    <span className="text-muted">View in Register</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : (
         <ul className="mt-2 grid gap-1">
           {categoryOpenCounts.map((row) => (
             <li key={row.categoryId}>
@@ -241,9 +267,10 @@ export function ConstraintsOverview({
             </li>
           ))}
         </ul>
+        )}
       </Card>
 
-      <Card data-testid="overview-oldest-open">
+      {categories ? null : <Card data-testid="overview-oldest-open">
         <CardTitle>Oldest open Constraints</CardTitle>
         <ul className="mt-2 grid gap-2 text-sm">
           {oldestOpen.map((entry) => (
@@ -270,7 +297,7 @@ export function ConstraintsOverview({
             </li>
           ))}
         </ul>
-      </Card>
+      </Card>}
     </section>
   );
 }

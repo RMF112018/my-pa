@@ -38,11 +38,7 @@ const PAGES = [
   "/system",
   "/situations",
   "/library",
-  // The canonical Constraint route. In this suite it renders its honest
-  // "not served by this build" state — the browser harness deliberately does
-  // not set `MYPA_DATA_PROVIDER` (see `playwright.config.ts`) — and that state
-  // is exactly as subject to WCAG as a populated one.
-  "/work/projects/prj_syn_0001/constraints",
+  "/work/projects/prj_e2ecst0000000001/constraints",
 ] as const;
 
 /** Desktop primary rail plus System utility. Review/Search/Map are not rail items. */
@@ -128,6 +124,17 @@ test.describe("axe-core, in Chromium, against the rendered page", () => {
     await page.getByTestId("capture-button").click();
     await expect(page.getByTestId("capture-field")).toBeFocused();
     expect(await scan(page), "capture dialog accessibility violations").toEqual([]);
+  });
+
+  test("the populated Constraint Register and Inspector have no detectable violation", async ({ page }) => {
+    await signIn(page);
+    await page.goto("/work/projects/prj_e2ecst0000000001/constraints?view=register&group=none");
+    const register = page.locator("#main").getByRole("table", { name: /Constraint Register/ });
+    await expect(register.getByRole("button", { name: "1.01" })).toBeVisible();
+    expect(await scan(page), "Constraint Register accessibility violations").toEqual([]);
+    await register.getByRole("button", { name: "1.01" }).click();
+    await expect(page.getByTestId("constraint-inspector")).toBeVisible();
+    expect(await scan(page), "Constraint Inspector accessibility violations").toEqual([]);
   });
 
   test("dark Work and interactive surfaces have no detectable violation", async ({ page }) => {

@@ -180,6 +180,21 @@ export function decodePartyRef(input: unknown): DecodeResult<ConstraintPartyRef>
   if (!displayLabel.ok) return displayLabel;
   const entityId = requiredNullableString(known.value.entity_id);
   if (!entityId.ok) return entityId;
+  if (kind.value === "principal") {
+    if (partyRefId.value !== "principal" || entityId.value !== null) {
+      return fail("a principal party carried an invalid identity");
+    }
+  } else if (kind.value === "unresolved") {
+    if (partyRefId.value !== null || entityId.value !== null) {
+      return fail("an unresolved party carried a stable identity");
+    }
+  } else if (
+    partyRefId.value === null ||
+    entityId.value === null ||
+    partyRefId.value !== entityId.value
+  ) {
+    return fail("an entity party carried inconsistent identity fields");
+  }
   return ok({
     kind: kind.value,
     partyRefId: partyRefId.value,

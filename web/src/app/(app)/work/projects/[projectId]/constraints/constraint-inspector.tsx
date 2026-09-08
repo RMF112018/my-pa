@@ -24,10 +24,12 @@
  * not listed here, however obviously blank it looks (`CM-FE-AC-098`).
  */
 import type {
+  ConstraintEvidenceLink,
   ConstraintHistoryEntry,
   ConstraintListEntry,
   ConstraintView,
 } from "@/contracts/constraints";
+import { safeHref } from "@/lib/http/safe-href";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SurfaceState } from "@/components/ui/surface-state";
@@ -83,10 +85,18 @@ function Detail({ label, value }: { readonly label: string; readonly value: Reac
 }
 
 /** The heading the shell shows over the region. Code, or the Draft wording. */
-export function inspectorTitle(entry: ConstraintListEntry | null): string {
+export function inspectorTitle(entry: Pick<ConstraintListEntry, "constraintCode"> | null): string {
   if (entry === null) return "Constraint";
   return `Constraint ${codeLabel(entry.constraintCode)}`;
 }
+
+type InspectorConstraintView = Omit<ConstraintView, "evidenceLinks"> & {
+  readonly evidenceLinks: readonly Omit<ConstraintEvidenceLink, "isSafeUrl">[];
+};
+
+type InspectorHistoryEntry = Omit<ConstraintHistoryEntry, "provenance"> & {
+  readonly provenance?: string | null;
+};
 
 export interface ConstraintInspectorProps {
   /** The list-level row, always available once a row was selected. */
@@ -95,11 +105,17 @@ export interface ConstraintInspectorProps {
    * The canonical detail, read lazily after selection. `undefined` while the
    * read is in flight, `null` when the read failed.
    */
-  readonly detail: ConstraintView | null | undefined;
-  readonly history: readonly ConstraintHistoryEntry[] | undefined;
+  readonly detail: InspectorConstraintView | null | undefined;
+  readonly history: readonly InspectorHistoryEntry[] | undefined;
   readonly onClose: () => void;
   readonly onNavigateToConstraint: (constraintId: string) => void;
   readonly onLifecycleAction: (action: ConstraintLifecycleAction) => void;
+  readonly readOnly?: boolean;
+  readonly historyLoading?: boolean;
+  readonly historyFailure?: string | null;
+  readonly historyNextCursor?: string | null;
+  readonly onLoadMoreHistory?: () => void;
+  readonly selectedConstraintId?: string | null;
 }
 
 export function ConstraintInspector({
@@ -109,8 +125,28 @@ export function ConstraintInspector({
   onClose,
   onNavigateToConstraint,
   onLifecycleAction,
+  readOnly = false,
+  historyLoading = false,
+  historyFailure = null,
+  historyNextCursor = null,
+  onLoadMoreHistory,
+  selectedConstraintId,
 }: ConstraintInspectorProps) {
-  if (entry === null) {
+  const summary = entry ?? detail ?? null;
+  if (summary === null && detail === undefined) {
+    return <p role="status" className="text-sm text-muted" data-testid="inspector-detail-loading">Reading the canonical record…</p>;
+  }
+  if (summary === null) {
+    if (selectedConstraintId) {
+      return (
+        <SurfaceState
+          kind="unavailable"
+          title="This Constraint's detail could not be read"
+          detail="The Register remains available. Nothing is claimed about the selected record."
+          testId="inspector-detail-unavailable"
+        />
+      );
+    }
     return (
       <SurfaceState
         kind="empty"
@@ -121,28 +157,27 @@ export function ConstraintInspector({
     );
   }
 
-  const legacy = entry.recordQuality === "LEGACY_INCOMPLETE";
+  const legacy = summary.recordQuality === "LEGACY_INCOMPLETE";
 
   return (
     <div data-testid="constraint-inspector">
       {/* A. Identity, status and the actions that belong beside it. */}
       <section aria-label="Identity and status" data-testid="inspector-identity">
-        <p className="text-lg font-semibold text-moss-slate">{codeLabel(entry.constraintCode)}</p>
-        <p className="mt-1 text-sm text-moss-slate">{entry.description ?? "Not recorded"}</p>
+        <p className="text-lg font-semibold text-moss-slate">{codeLabel(summary.constraintCode)}</p>
+        <p className="mt-1 text-sm text-moss-slate">{summary.description ?? "Not recorded"}</p>
         <div className="mt-2 flex flex-wrap gap-1">
-          <Badge tone={lifecycleTone(entry.status)}>{lifecycleLabel(entry.status)}</Badge>
-          {entry.status === null ? null : null}
+          <Badge tone={lifecycleTone(summary.status)}>{lifecycleLabel(summary.status)}</Badge>
         </div>
         <div className="mt-2 flex flex-wrap gap-1">
-          {entry.status === "DRAFT" ? (
+          {!readOnly && summary.status === "DRAFT" ? (
             <Button size="sm" onClick={() => onLifecycleAction("publish")} data-testid="inspector-publish">
               Publish
             </Button>
           ) : null}
-          <Button size="sm" variant="secondary" onClick={() => onLifecycleAction("edit")} data-testid="inspector-edit">
+          {!readOnly ? <Button size="sm" variant="secondary" onClick={() => onLifecycleAction("edit")} data-testid="inspector-edit">
             Edit
-          </Button>
-          {entry.status !== null && entry.status !== "DRAFT" && entry.status !== "CLOSED" && entry.status !== "VOID" ? (
+          </Button> : null}
+          {!readOnly && summary.status !== null && summary.status !== "DRAFT" && summary.status !== "CLOSED" && summary.status !== "VOID" ? (
             <>
               <Button size="sm" variant="secondary" onClick={() => onLifecycleAction("transition")} data-testid="inspector-transition">
                 Change status
@@ -158,7 +193,7 @@ export function ConstraintInspector({
               </Button>
             </>
           ) : null}
-          {entry.status === "CLOSED" ? (
+          {!readOnly && summary.status === "CLOSED" ? (
             <Button size="sm" variant="secondary" onClick={() => onLifecycleAction("reopen")} data-testid="inspector-reopen">
               Reopen
             </Button>
@@ -182,14 +217,14 @@ export function ConstraintInspector({
           </div>
         ) : null}
         <div className="flex flex-wrap gap-1">
-          {urgencyLabels(entry).map((label) => (
+          {urgencyLabels(summary).map((label) => (
             <Badge key={label} tone={label === "Overdue" ? "coral" : "gold"}>
               {label}
             </Badge>
           ))}
-          {entry.inMyCourt ? <Badge tone="gold">In my court</Badge> : null}
-          {entry.needsAttention ? <Badge tone="gold">Needs attention</Badge> : null}
-          {urgencyLabels(entry).length === 0 && !entry.inMyCourt && !entry.needsAttention ? (
+          {summary.inMyCourt ? <Badge tone="gold">In my court</Badge> : null}
+          {summary.needsAttention ? <Badge tone="gold">Needs attention</Badge> : null}
+          {urgencyLabels(summary).length === 0 && !summary.inMyCourt && !summary.needsAttention ? (
             <span className="text-muted">The backend flags nothing on this record.</span>
           ) : null}
         </div>
@@ -300,7 +335,7 @@ export function ConstraintInspector({
                 {detail.evidenceLinks.map((link) => (
                   <li key={link.evidenceLinkId} data-testid={`inspector-evidence-${link.evidenceLinkId}`}>
                     <span className="text-muted">{link.evidenceKind}</span>{" "}
-                    {link.isSafeUrl ? (
+                    {safeHref(link.evidenceRef) !== null ? (
                       <a
                         href={link.evidenceRef}
                         rel="noreferrer noopener"
@@ -310,8 +345,8 @@ export function ConstraintInspector({
                         {link.evidenceRef}
                       </a>
                     ) : (
-                      // Not validated as a link by the backend, so not made one
-                      // here. Auto-linking arbitrary reference text is exactly
+                      // This presentation admits only a locally safe absolute
+                      // URL. Auto-linking arbitrary reference text is exactly
                       // what `CM-FE-AC-095` forbids.
                       <span data-testid={`inspector-evidence-text-${link.evidenceLinkId}`}>
                         {link.evidenceRef}
@@ -326,7 +361,11 @@ export function ConstraintInspector({
 
           {/* F. History — a timeline, not audit JSON. */}
           <Section title="History" testId="inspector-history">
-            {history === undefined || history.length === 0 ? (
+            {historyFailure ? (
+              <SurfaceState kind="unavailable" title="Constraint history could not be read" detail={historyFailure} testId="inspector-history-unavailable" />
+            ) : historyLoading && (history === undefined || history.length === 0) ? (
+              <p role="status" className="text-muted" data-testid="inspector-history-loading">Reading history…</p>
+            ) : history === undefined || history.length === 0 ? (
               <p className="text-muted">No history has been read for this Constraint.</p>
             ) : (
               <ol className="grid gap-2">
@@ -354,6 +393,11 @@ export function ConstraintInspector({
                 ))}
               </ol>
             )}
+            {historyNextCursor && onLoadMoreHistory ? (
+              <Button size="sm" variant="secondary" disabled={historyLoading} onClick={onLoadMoreHistory} data-testid="inspector-history-more">
+                Load more history
+              </Button>
+            ) : null}
           </Section>
 
           {/* G. Synchronisation, kept visually separate from canonical state. */}

@@ -308,7 +308,7 @@ function ConstraintsWorkspaceInner({
 
       <Tabs
         value={state.view}
-        onValueChange={(view) =>
+        onValueChange={(view: string) =>
           navigate({ ...state, view: view as ConstraintUrlState["view"] })
         }
       >

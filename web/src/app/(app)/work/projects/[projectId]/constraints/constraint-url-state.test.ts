@@ -19,6 +19,8 @@ import {
   kpiRegisterState,
   parseConstraintUrlState,
   projectSwitchState,
+  listRegisterState,
+  searchRegisterState,
   serializeConstraintUrlState,
 } from "./constraint-url-state";
 
@@ -67,6 +69,7 @@ describe("round-tripping", () => {
       inMyCourt: "1",
       needsAttention: "1",
       sync: "CONFLICT",
+      quality: "LEGACY_INCOMPLETE",
       q: "beam",
       group: "status",
       sort: "due",
@@ -93,6 +96,7 @@ describe("round-tripping", () => {
       inMyCourt: "1",
       needsAttention: "1",
       sync: "IN_SYNC",
+      quality: "NORMAL",
       q: "kerb",
       group: "none",
       sort: "updated",
@@ -111,6 +115,7 @@ describe("round-tripping", () => {
       "needsAttention",
       "overdue",
       "q",
+      "quality",
       "responsible",
       "scope",
       "sort",
@@ -214,13 +219,42 @@ describe("filters", () => {
     expect(hasActiveFilters(clearedFilters(narrowed))).toBe(false);
   });
 
-  it("keeps the selected Constraint when filters are cleared", () => {
+  it("clears the selected Constraint when filters are cleared", () => {
     const state = {
       ...DEFAULT_CONSTRAINT_URL_STATE,
       overdue: true,
       selectedConstraintId: "cst_syn_0001",
     };
-    expect(clearedFilters(state).selectedConstraintId).toBe("cst_syn_0001");
+    expect(clearedFilters(state).selectedConstraintId).toBeNull();
+  });
+
+  it("clears selection on search and every list-control transition", () => {
+    const selected = {
+      ...DEFAULT_CONSTRAINT_URL_STATE,
+      view: "register" as const,
+      selectedConstraintId: "cst_syn_0001",
+    };
+    expect(searchRegisterState(selected, "steel").selectedConstraintId).toBeNull();
+    for (const next of [
+      { scope: "all" as const },
+      { overdue: true },
+      { group: "none" as const },
+      { sort: "due" as const },
+      { dir: "desc" as const },
+    ]) {
+      expect(listRegisterState(selected, next).selectedConstraintId).toBeNull();
+    }
+  });
+
+  it("preserves an explicit deep-linked selection during search canonicalization", () => {
+    const selected = {
+      ...DEFAULT_CONSTRAINT_URL_STATE,
+      view: "register" as const,
+      selectedConstraintId: "cst_syn_0001",
+    };
+    expect(
+      searchRegisterState(selected, "steel", { preserveSelection: true }).selectedConstraintId,
+    ).toBe("cst_syn_0001");
   });
 });
 

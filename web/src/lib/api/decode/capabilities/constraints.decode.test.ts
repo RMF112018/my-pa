@@ -156,6 +156,23 @@ describe("malformed Constraint success fails closed", () => {
     expectClosed("constraints.read", withDetail((r) => { r.responsible = party as never; }), "responsible");
   });
 
+  it.each([
+    ["a raw Principal id", { kind: "principal", party_ref_id: "aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb", display_label: "You", entity_id: null }],
+    ["a Principal entity id", { kind: "principal", party_ref_id: "principal", display_label: "You", entity_id: "ent_aaaaaaaa11111111" }],
+    ["an unresolved stable ref", { kind: "unresolved", party_ref_id: "party_legacy", display_label: "Legacy wording", entity_id: null }],
+    ["an unresolved entity id", { kind: "unresolved", party_ref_id: null, display_label: "Legacy wording", entity_id: "ent_aaaaaaaa11111111" }],
+    ["an entity without a ref", { kind: "entity", party_ref_id: null, display_label: "Pat", entity_id: "ent_aaaaaaaa11111111" }],
+    ["an entity without an entity id", { kind: "entity", party_ref_id: "ent_aaaaaaaa11111111", display_label: "Pat", entity_id: null }],
+    ["mismatched entity identities", { kind: "entity", party_ref_id: "ent_aaaaaaaa11111111", display_label: "Pat", entity_id: "ent_bbbbbbbb22222222" }],
+  ])("refuses %s across detail and Register transport shapes", (_name, party) => {
+    expectClosed("constraints.read", withDetail((record) => { record.bic = [party]; }), "detail party identity");
+    expectClosed(
+      "constraints.list",
+      withRow("constraints.list", "constraints", (row) => { row.responsible = [party]; }),
+      "Register party identity",
+    );
+  });
+
   it.each(["partial", "workbook_unavailable", "verification_pending", "external_import_pending"])(
     "refuses the sync state %s, which no read at this head can establish",
     (state) => {

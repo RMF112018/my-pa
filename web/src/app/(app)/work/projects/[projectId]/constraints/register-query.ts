@@ -89,6 +89,7 @@ export function filterRegisterEntries(
     if (state.inMyCourt && !entry.inMyCourt) return false;
     if (state.needsAttention && !entry.needsAttention) return false;
     if (state.sync !== null && entry.syncState !== state.sync) return false;
+    if (state.quality !== null && entry.recordQuality !== state.quality) return false;
     return matchesSearch(entry, state.search);
   });
 }

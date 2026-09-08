@@ -5,7 +5,7 @@
  * Code is text, that the derived booleans are read rather than recomputed, and
  * that a continuation cannot repeat or lose a row.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ConstraintListEntry } from "@/contracts/constraints";
 import {
   DEFAULT_CONSTRAINT_URL_STATE,
@@ -154,6 +154,37 @@ describe("scope", () => {
 
   it("all admits every row including one with no stored lifecycle", () => {
     expect(filterRegisterEntries(rows, { ...state, scope: "all" }, PROJECT)).toHaveLength(6);
+  });
+});
+
+describe("record quality", () => {
+  const rows = [
+    row({ constraintId: "normal", recordQuality: "NORMAL" }),
+    row({ constraintId: "legacy", recordQuality: "LEGACY_INCOMPLETE" }),
+  ];
+
+  it.each([
+    ["NORMAL", "normal"],
+    ["LEGACY_INCOMPLETE", "legacy"],
+  ] as const)("selects the backend %s classification", (quality, expectedId) => {
+    expect(
+      filterRegisterEntries(rows, { ...state, quality }, PROJECT).map(
+        (entry) => entry.constraintId,
+      ),
+    ).toEqual([expectedId]);
+  });
+
+  it("returns a truthful successful empty page when no row has the requested quality", () => {
+    const page = queryRegisterPage(
+      [row({ constraintId: "normal", recordQuality: "NORMAL" })],
+      { ...state, quality: "LEGACY_INCOMPLETE" },
+      PROJECT,
+      null,
+    );
+
+    expect(page.entries).toEqual([]);
+    expect(page.totalCount).toBe(0);
+    expect(page.nextCursor).toBeNull();
   });
 });
 

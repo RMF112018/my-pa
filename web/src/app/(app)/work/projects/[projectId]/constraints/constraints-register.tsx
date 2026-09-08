@@ -22,14 +22,16 @@ import { useMemo, useState } from "react";
 import type {
   ConstraintCategory,
   ConstraintListEntry,
+  ConstraintListPage,
   ConstraintPartyRef,
 } from "@/contracts/constraints";
+import type { DisclosureEnvelope } from "@/contracts/envelope";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { SurfaceState } from "@/components/ui/surface-state";
+import { DegradedBanner, SurfaceState } from "@/components/ui/surface-state";
 import { LiveAnnouncement } from "@/components/ui/live-region";
 import {
   UNRESOLVED_PARTY_FILTER_BUCKET,
@@ -39,7 +41,8 @@ import {
   type ConstraintSort,
 } from "@/contracts/constraints";
 import type { ConstraintUrlState } from "./constraint-url-state";
-import { clearedFilters, hasActiveFilters } from "./constraint-url-state";
+import { clearedFilters, hasActiveFilters, listRegisterState, searchRegisterState } from "./constraint-url-state";
+import type { LiveFailure } from "./constraint-live";
 import { groupRegisterEntries, queryRegisterPage, REGISTER_PAGE_SIZE } from "./register-query";
 import { RegisterCardList, RegisterTable } from "./register-table";
 import type { ConstraintViewport } from "./use-viewport";
@@ -94,7 +97,15 @@ export interface ConstraintsRegisterProps {
   readonly viewport: ConstraintViewport;
   readonly onStateChange: (next: ConstraintUrlState, options?: { readonly replace?: boolean }) => void;
   readonly onSelect: (constraintId: string) => void;
-  readonly onNewConstraint: () => void;
+  readonly onTriggerMount?: (constraintId: string, node: HTMLButtonElement | null) => void;
+  readonly onNewConstraint?: () => void;
+  readonly livePage?: ConstraintListPage;
+  readonly loading?: boolean;
+  readonly failure?: LiveFailure | null;
+  readonly disclosure?: DisclosureEnvelope | null;
+  readonly onRetry?: () => void;
+  readonly onLoadMore?: () => void;
+  readonly readOnly?: boolean;
 }
 
 export function ConstraintsRegister({
@@ -106,7 +117,15 @@ export function ConstraintsRegister({
   viewport,
   onStateChange,
   onSelect,
+  onTriggerMount,
   onNewConstraint,
+  livePage,
+  loading = false,
+  failure = null,
+  disclosure = null,
+  onRetry,
+  onLoadMore,
+  readOnly = false,
 }: ConstraintsRegisterProps) {
   /**
    * How far the reader has continued, as a cursor and not a page number.
@@ -118,7 +137,7 @@ export function ConstraintsRegister({
   const [cursors, setCursors] = useState<readonly string[]>([]);
   const queryKey = JSON.stringify({ ...state, selectedConstraintId: null });
 
-  const loaded = useMemo(() => {
+  const fixtureLoaded = useMemo(() => {
     // Every page from the first, in order. Each is a bounded read from the
     // same total order, so appending them cannot duplicate or skip a row.
     const pages = [];
@@ -136,6 +155,9 @@ export function ConstraintsRegister({
     // `queryKey` is the query's identity; `cursors.length` is how far into it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries, projectId, queryKey, cursors.length]);
+  const loaded = livePage
+    ? { rows: livePage.entries, isTruncated: livePage.isTruncated, nextCursor: livePage.nextCursor, totalCount: livePage.totalCount }
+    : fixtureLoaded;
 
   const categoryTitles = useMemo(() => {
     const map = new Map<string, string>();
@@ -165,7 +187,17 @@ export function ConstraintsRegister({
 
   function update(next: Partial<ConstraintUrlState>, options?: { readonly replace?: boolean }) {
     setCursors([]);
-    onStateChange({ ...state, ...next }, options);
+    onStateChange(
+      next.search !== undefined
+        ? searchRegisterState(state, next.search)
+        : listRegisterState(state, next),
+      options,
+    );
+  }
+
+  function clearAllFilters() {
+    setCursors([]);
+    onStateChange(clearedFilters(state));
   }
 
   const filtered = hasActiveFilters(state);
@@ -199,9 +231,9 @@ export function ConstraintsRegister({
             onChange={(event) => update({ search: event.target.value }, { replace: true })}
           />
         </label>
-        <Button size="sm" onClick={onNewConstraint} data-testid="register-new-constraint">
+        {!readOnly && onNewConstraint ? <Button size="sm" onClick={onNewConstraint} data-testid="register-new-constraint">
           New Constraint
-        </Button>
+        </Button> : null}
       </div>
 
       <div role="group" aria-label="Quick filters" className="flex flex-wrap gap-1">
@@ -314,6 +346,20 @@ export function ConstraintsRegister({
                 )}
               </Select>
             </label>
+            <label className="grid gap-1 text-sm">
+              Record quality
+              <Select
+                value={state.quality ?? ""}
+                data-testid="register-filter-quality"
+                onChange={(event) =>
+                  update({ quality: (event.target.value || null) as ConstraintUrlState["quality"] })
+                }
+              >
+                <option value="">Any record quality</option>
+                <option value="NORMAL">Current record</option>
+                <option value="LEGACY_INCOMPLETE">Legacy incomplete</option>
+              </Select>
+            </label>
           </PopoverContent>
         </Popover>
         <label className="flex items-center gap-1 text-sm">
@@ -371,17 +417,35 @@ export function ConstraintsRegister({
             </Badge>
           ) : null}
           {state.search.trim().length > 0 ? <Badge tone="neutral">“{state.search}”</Badge> : null}
-          <Button size="sm" variant="ghost" data-testid="register-clear-filters" onClick={() => update(clearedFilters(state))}>
+          {state.quality ? <Badge tone="neutral">{state.quality === "NORMAL" ? "Current record" : "Legacy incomplete"}</Badge> : null}
+          <Button size="sm" variant="ghost" data-testid="register-clear-filters" onClick={clearAllFilters}>
             Clear filters
           </Button>
         </div>
       ) : null}
 
-      <LiveAnnouncement testId="register-live">
-        {`Showing ${loaded.rows.length} of ${loaded.totalCount ?? loaded.rows.length} Constraints.`}
-      </LiveAnnouncement>
+      {disclosure?.coverage === "partial" ? (
+        <DegradedBanner scope="Constraint Register" limitations={disclosure.limitations} truncated={disclosure.truncated && !disclosure.nextCursor} />
+      ) : null}
 
-      {loaded.rows.length === 0 ? (
+      {failure ? (
+        <SurfaceState
+          kind="unavailable"
+          title={failure.code === "upstream_contract_invalid" ? "The Constraint answer was malformed" : "The Constraint Register could not be read"}
+          detail={failure.message}
+          testId="register-unavailable"
+        >
+          {onRetry ? <Button size="sm" variant="secondary" onClick={onRetry}>Retry</Button> : null}
+        </SurfaceState>
+      ) : loading ? (
+        <p role="status" className="text-sm text-muted" data-testid="register-loading">Reading the Constraint Register…</p>
+      ) : <LiveAnnouncement testId="register-live">
+        {loaded.totalCount !== null
+          ? `Showing ${loaded.rows.length} of ${loaded.totalCount} Constraints.`
+          : `${loaded.rows.length} Constraints loaded${loaded.isTruncated || loaded.nextCursor !== null ? "; more available." : "."}`}
+      </LiveAnnouncement>}
+
+      {failure || loading ? null : loaded.rows.length === 0 ? (
         filtered ? (
           <SurfaceState
             kind="empty"
@@ -389,7 +453,7 @@ export function ConstraintsRegister({
             detail="The read succeeded. These filters select nothing in this Project."
             testId="register-empty-filtered"
           >
-            <Button size="sm" variant="secondary" onClick={() => update(clearedFilters(state))}>
+            <Button size="sm" variant="secondary" onClick={clearAllFilters}>
               Clear filters
             </Button>
           </SurfaceState>
@@ -400,9 +464,9 @@ export function ConstraintsRegister({
             detail="The read succeeded and this Project's Constraint Register is empty."
             testId="register-empty-project"
           >
-            <Button size="sm" variant="secondary" onClick={onNewConstraint}>
+            {!readOnly && onNewConstraint ? <Button size="sm" variant="secondary" onClick={onNewConstraint}>
               New Constraint
-            </Button>
+            </Button> : null}
           </SurfaceState>
         )
       ) : (
@@ -419,7 +483,12 @@ export function ConstraintsRegister({
                 </h3>
               )}
               {viewport === "mobile" ? (
-                <RegisterCardList entries={group.entries} state={state} onSelect={onSelect} />
+                <RegisterCardList
+                  entries={group.entries}
+                  state={state}
+                  onSelect={onSelect}
+                  onTriggerMount={onTriggerMount}
+                />
               ) : (
                 <RegisterTable
                   entries={group.entries}
@@ -427,6 +496,7 @@ export function ConstraintsRegister({
                   viewport={viewport}
                   caption={`${group.label} — Constraint Register`}
                   onSelect={onSelect}
+                  onTriggerMount={onTriggerMount}
                   onSort={(sort) =>
                     update(
                       sort === state.sort
@@ -448,7 +518,8 @@ export function ConstraintsRegister({
                 size="sm"
                 variant="secondary"
                 data-testid="register-load-more"
-                onClick={() => setCursors((current) => [...current, loaded.nextCursor as string])}
+                onClick={() => onLoadMore ? onLoadMore() : setCursors((current) => [...current, loaded.nextCursor as string])}
+                disabled={loading}
               >
                 Load {REGISTER_PAGE_SIZE} more
               </Button>

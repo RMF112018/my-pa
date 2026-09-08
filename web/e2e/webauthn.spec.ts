@@ -144,15 +144,9 @@ test.describe("opaque session cookie", () => {
     expect(cookie?.value).toMatch(OPAQUE_SID);
     const sid = cookie!.value;
 
-    const signOut = page.getByRole("button", { name: "Sign out" });
-    if ((await signOut.count()) > 0) {
-      await signOut.click();
-      await page.waitForURL(/\/sign-in/);
-    } else {
-      const deleted = await page.request.delete("/api/session");
-      expect(deleted.ok()).toBeTruthy();
-      await page.goto("/sign-in");
-    }
+    await page.getByRole("button", { name: "Account" }).click();
+    await page.getByRole("button", { name: "Sign out" }).click();
+    await page.waitForURL(/\/sign-in/);
 
     await page.context().addCookies([
       {

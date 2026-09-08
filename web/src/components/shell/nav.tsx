@@ -71,7 +71,7 @@ export function NavRail({
   collapsed: boolean;
   onCollapsedChange: (value: boolean) => void;
 }) {
-  const pathname = usePathname();
+  const pathname = usePathname() ?? "";
   return (
     <nav
       aria-label="Primary"
@@ -100,7 +100,7 @@ export function NavRail({
 }
 
 export function MobileNav() {
-  const pathname = usePathname();
+  const pathname = usePathname() ?? "";
   const [moreOpen, setMoreOpen] = useState(false);
   return (
     <>

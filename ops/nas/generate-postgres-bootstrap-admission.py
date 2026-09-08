@@ -33,6 +33,7 @@ SENTINEL_ENVIRONMENT = {
     "MY_PA_TAILNET_HOST": "invalid.example",
     "MYPA_CANONICAL_ORIGIN": "https://invalid.example",
     "MYPA_ENTRA_REDIRECT_URI": "https://invalid.example/callback",
+    "MYPA_SESSION_SERVICE_SECRET": "operator-admission-sentinel",
 }
 SENTINEL_MARKERS = {
     SENTINEL_IMAGE,
@@ -41,6 +42,7 @@ SENTINEL_MARKERS = {
     "invalid.example",
     "https://invalid.example",
     "https://invalid.example/callback",
+    "operator-admission-sentinel",
 }
 SECRET_MARKER = "<redacted-runtime-secret>"  # noqa: S105 - deliberately non-secret
 

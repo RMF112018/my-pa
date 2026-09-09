@@ -26,7 +26,7 @@ export function AssignmentsPanel({
   if (unavailable) {
     return (
       <section className="mt-6" aria-labelledby="people-assignments-heading">
-        <h2 id="people-assignments-heading" className="text-base font-semibold text-moss-slate">
+        <h2 id="people-assignments-heading" className="text-base font-semibold text-text-primary">
           Assignments
         </h2>
         <div className="mt-2">
@@ -44,7 +44,7 @@ export function AssignmentsPanel({
   const { current, historical } = partitionByCurrency(assignments, directedIsCurrent);
   return (
     <section className="mt-6" aria-labelledby="people-assignments-heading" data-testid="people-assignments">
-      <h2 id="people-assignments-heading" className="text-base font-semibold text-moss-slate">
+      <h2 id="people-assignments-heading" className="text-base font-semibold text-text-primary">
         Assignments
       </h2>
       {disclosure?.coverage === "partial" ? (
@@ -60,7 +60,7 @@ export function AssignmentsPanel({
         <>
           {current.length > 0 ? (
             <div className="mt-3" data-testid="people-assignments-current">
-              <h3 className="text-sm font-medium text-moss-slate">Current</h3>
+              <h3 className="text-sm font-medium text-text-primary">Current</h3>
               <ul className="mt-2 space-y-2">
                 {current.map((row) => (
                   <AssignmentItem key={row.assignment_id} row={row} />
@@ -70,7 +70,7 @@ export function AssignmentsPanel({
           ) : null}
           {historical.length > 0 ? (
             <div className="mt-3" data-testid="people-assignments-historical">
-              <h3 className="text-sm font-medium text-moss-slate">Historical</h3>
+              <h3 className="text-sm font-medium text-text-primary">Historical</h3>
               <ul className="mt-2 space-y-2">
                 {historical.map((row) => (
                   <AssignmentItem key={row.assignment_id} row={row} />
@@ -91,7 +91,7 @@ function AssignmentItem({ row }: { row: AssignmentView }) {
     <li>
       <Card>
         <div className="flex flex-wrap items-start justify-between gap-2">
-          <p className="text-sm font-medium text-moss-slate">
+          <p className="text-sm font-medium text-text-primary">
             {row.role ?? codeLabel(row.assignment_type)}
           </p>
           {currentBadge(current)}
@@ -104,7 +104,7 @@ function AssignmentItem({ row }: { row: AssignmentView }) {
           {row.scope_entity_id ? (
             <p className="mt-1">
               Scope{" "}
-              <Link href={peopleEntity(row.scope_entity_id)} className="underline decoration-moss-green/40">
+              <Link href={peopleEntity(row.scope_entity_id)} className="underline decoration-interactive/40">
                 {row.scope_entity_id}
               </Link>
             </p>
@@ -130,7 +130,7 @@ export function RelationshipsPanel({
   if (unavailable) {
     return (
       <section className="mt-6" aria-labelledby="people-relationships-heading">
-        <h2 id="people-relationships-heading" className="text-base font-semibold text-moss-slate">
+        <h2 id="people-relationships-heading" className="text-base font-semibold text-text-primary">
           Relationships
         </h2>
         <div className="mt-2">
@@ -148,7 +148,7 @@ export function RelationshipsPanel({
   const { current, historical } = partitionByCurrency(relationships, directedIsCurrent);
   return (
     <section className="mt-6" aria-labelledby="people-relationships-heading" data-testid="people-relationships">
-      <h2 id="people-relationships-heading" className="text-base font-semibold text-moss-slate">
+      <h2 id="people-relationships-heading" className="text-base font-semibold text-text-primary">
         Relationships
       </h2>
       {disclosure?.coverage === "partial" ? (
@@ -164,7 +164,7 @@ export function RelationshipsPanel({
         <>
           {current.length > 0 ? (
             <div className="mt-3" data-testid="people-relationships-current">
-              <h3 className="text-sm font-medium text-moss-slate">Current</h3>
+              <h3 className="text-sm font-medium text-text-primary">Current</h3>
               <ul className="mt-2 space-y-2">
                 {current.map((row) => (
                   <RelationshipItem key={row.relationship_id} row={row} subjectId={subjectId} />
@@ -174,7 +174,7 @@ export function RelationshipsPanel({
           ) : null}
           {historical.length > 0 ? (
             <div className="mt-3" data-testid="people-relationships-historical">
-              <h3 className="text-sm font-medium text-moss-slate">Historical</h3>
+              <h3 className="text-sm font-medium text-text-primary">Historical</h3>
               <ul className="mt-2 space-y-2">
                 {historical.map((row) => (
                   <RelationshipItem key={row.relationship_id} row={row} subjectId={subjectId} />
@@ -199,7 +199,7 @@ function RelationshipItem({ row, subjectId }: { row: RelationshipView; subjectId
     <li>
       <Card>
         <div className="flex flex-wrap items-start justify-between gap-2">
-          <p className="text-sm font-medium text-moss-slate">{codeLabel(row.relationship_type)}</p>
+          <p className="text-sm font-medium text-text-primary">{codeLabel(row.relationship_type)}</p>
           {currentBadge(current)}
         </div>
         <CardBody>
@@ -209,7 +209,7 @@ function RelationshipItem({ row, subjectId }: { row: RelationshipView; subjectId
           {relatedIsCanonical ? (
             <p className="mt-1">
               Related entity{" "}
-              <Link href={peopleEntity(relatedId)} className="font-mono text-xs underline decoration-moss-green/40">
+              <Link href={peopleEntity(relatedId)} className="font-mono text-xs underline decoration-interactive/40">
                 {relatedId}
               </Link>
             </p>
@@ -239,7 +239,7 @@ export function IdentityHistoryPanel({
   if (unavailable) {
     return (
       <section className="mt-6" aria-labelledby="people-history-heading">
-        <h2 id="people-history-heading" className="text-base font-semibold text-moss-slate">
+        <h2 id="people-history-heading" className="text-base font-semibold text-text-primary">
           Identity history
         </h2>
         <div className="mt-2">
@@ -256,7 +256,7 @@ export function IdentityHistoryPanel({
   if (entries === null) return null;
   return (
     <section className="mt-6" aria-labelledby="people-history-heading" data-testid="people-history">
-      <h2 id="people-history-heading" className="text-base font-semibold text-moss-slate">
+      <h2 id="people-history-heading" className="text-base font-semibold text-text-primary">
         Identity history
       </h2>
       {truncated ? (
@@ -273,7 +273,7 @@ export function IdentityHistoryPanel({
           {entries.map((entry) => (
             <li key={entry.history_id}>
               <Card>
-                <p className="text-sm font-medium text-moss-slate">{codeLabel(entry.operation)}</p>
+                <p className="text-sm font-medium text-text-primary">{codeLabel(entry.operation)}</p>
                 <CardBody>
                   <p>
                     {codeLabel(entry.source)} · {moment(entry.occurred_at)}
@@ -298,7 +298,7 @@ export function IdentityHistoryPanel({
         <p className="mt-3 text-sm">
           <Link
             href={`${peopleEntity(entityId)}?historyAfter=${encodeURIComponent(nextCursor)}`}
-            className="text-moss-green underline"
+            className="text-interactive underline"
           >
             Continue identity history
           </Link>

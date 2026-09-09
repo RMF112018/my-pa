@@ -11,7 +11,7 @@ export function PeopleSearchForm({ query }: { query: string }) {
       className="mb-4 flex flex-wrap items-end gap-3"
     >
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <label htmlFor="people-q" className="text-sm font-medium text-moss-slate">
+        <label htmlFor="people-q" className="text-sm font-medium text-text-primary">
           Find a person
         </label>
         <Input
@@ -22,8 +22,7 @@ export function PeopleSearchForm({ query }: { query: string }) {
           aria-describedby="people-q-hint"
         />
         <p id="people-q-hint" className="text-xs text-muted">
-          Search by name among people already in your records. This is not a directory of
-          everyone.
+          Search by name among people already in your records.
         </p>
       </div>
       <Button type="submit">Search</Button>
@@ -35,7 +34,7 @@ export function PeopleResolveForm({ reference }: { reference: string }) {
   return (
     <form method="get" action={peopleHome()} className="mt-3 flex flex-wrap items-end gap-3">
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <label htmlFor="people-reference" className="text-sm font-medium text-moss-slate">
+        <label htmlFor="people-reference" className="text-sm font-medium text-text-primary">
           Resolve a reference
         </label>
         <Input
@@ -46,7 +45,7 @@ export function PeopleResolveForm({ reference }: { reference: string }) {
           aria-describedby="people-reference-hint"
         />
         <p id="people-reference-hint" className="text-xs text-muted">
-          Asks who this names. An ambiguous answer stays ambiguous; nothing here merges.
+          Asks who this names.
         </p>
       </div>
       <Button type="submit" variant="secondary">
@@ -72,7 +71,7 @@ export function PeopleLookupForms({
         data-testid="people-resolve-advanced"
         {...(reference ? { open: true } : {})}
       >
-        <summary className="cursor-pointer text-sm font-medium text-moss-slate">
+        <summary className="cursor-pointer text-sm font-medium text-text-primary">
           Resolve a reference
           <span className="ml-2 font-normal text-muted">Advanced</span>
         </summary>

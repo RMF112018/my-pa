@@ -273,6 +273,8 @@ describe("forms and unresolved mentions", () => {
     );
     expect(screen.getByRole("searchbox", { name: "Find a person" })).toBeTruthy();
     expect(screen.getByLabelText("Resolve a reference")).toBeTruthy();
+    expect(container.textContent ?? "").not.toMatch(/not a directory/i);
+    expect(container.textContent ?? "").not.toMatch(/nothing here merges/i);
     noMerge(container);
   });
 

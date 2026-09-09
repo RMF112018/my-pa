@@ -30,13 +30,14 @@ import type { PrincipalSession } from "@/contracts/identity";
 
 const SCOPE = "people";
 
-const BLURB =
-  "Find a person already in your records. Search by name. This is not a directory of everyone.";
+/** One user-facing caveat. Forms and idle copy must not repeat it. */
+const PEOPLE_CAVEAT =
+  "This is not a directory of everyone. Ambiguous identities stay visible; nothing here merges two people.";
 
 function frame(children: React.ReactNode) {
   return (
     <section aria-labelledby="people-heading" className="mx-auto max-w-3xl">
-      <PageHeader headingId="people-heading" title="People" description={BLURB} />
+      <PageHeader headingId="people-heading" title="People" description={PEOPLE_CAVEAT} />
       {children}
     </section>
   );
@@ -218,12 +219,7 @@ export async function PeoplePage({
   return frame(
     <>
       {forms}
-      <SurfaceState
-        kind="empty"
-        title="Search for a person by name."
-        detail="This is not a directory of everyone. Ambiguous answers stay visible; nothing here merges two people."
-        testId="people-idle"
-      />
+      <SurfaceState kind="empty" title="Search for a person by name." testId="people-idle" />
       {mentions}
     </>,
   );

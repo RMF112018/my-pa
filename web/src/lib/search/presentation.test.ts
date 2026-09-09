@@ -11,7 +11,10 @@ import {
   goodnotesSearchHref,
   knowledgeSearchHref,
   federatedZeroHitKind,
+  formatCoverageRow,
   presentFederatedHits,
+  presentSearchCoverage,
+  searchCoverageHeadline,
   SEARCH_DOMAIN_ORDER,
   type FederatedHit,
   type SearchCoverage,
@@ -261,5 +264,31 @@ describe("federatedZeroHitKind", () => {
     expect(
       federatedZeroHitKind([row("tasks", "searched"), row("capture", "unavailable")], 0),
     ).toBe("empty");
+  });
+});
+
+describe("search coverage summary", () => {
+  const row = (domain: string, state: string, reason?: string): SearchCoverage => ({
+    domain,
+    state,
+    hitCount: 0,
+    ...(reason ? { reason } : {}),
+  });
+
+  it("does not count omitted domains as searched", () => {
+    const coverage = [
+      row("tasks", "searched"),
+      row("goodnotes", "searched"),
+      row("knowledge", "knowledge_not_enrolled"),
+      row("meetings", "omitted", "no_search_capability"),
+      row("projects", "omitted", "no_search_capability"),
+    ];
+    const summary = presentSearchCoverage(coverage);
+    expect(summary.searched.map((item) => item.domain)).toEqual(["tasks", "goodnotes"]);
+    expect(summary.omitted.map((item) => item.domain)).toEqual(["meetings", "projects"]);
+    expect(summary.limited.map((item) => item.domain)).toEqual(["knowledge"]);
+    expect(searchCoverageHeadline(coverage)).toBe("2 domains searched");
+    expect(formatCoverageRow(coverage[3]!)).toBe("meetings: omitted (no_search_capability)");
+    expect(summary.omitted.every((item) => item.state === "omitted")).toBe(true);
   });
 });

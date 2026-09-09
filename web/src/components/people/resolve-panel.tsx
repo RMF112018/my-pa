@@ -67,7 +67,7 @@ function CandidateList({ candidates }: { candidates: readonly ResolutionCandidat
         <li key={candidate.entity_id} className="rounded-md border border-border bg-surface p-3">
           <Link
             href={peopleEntity(candidate.entity_id)}
-            className="font-medium text-moss-slate underline decoration-moss-green/40 underline-offset-2"
+            className="font-medium text-text-primary underline decoration-interactive/40 underline-offset-2"
           >
             {candidate.display_name}
           </Link>
@@ -94,14 +94,14 @@ export function ResolvePanel({ resolution }: { resolution: EntityResolutionView 
       data-testid="people-resolve-result"
       data-outcome={resolution.outcome}
       role={alert ? "alert" : "status"}
-      className={alert ? "border-l-4 border-l-moss-gold" : undefined}
+      className={alert ? "border-l-4 border-l-warning" : undefined}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <CardTitle>{copy.title}</CardTitle>
         <EpistemicLabel role={meta.epistemic} />
       </div>
       <CardBody>
-        <p data-testid="people-resolve-outcome" className="font-medium text-moss-slate">
+        <p data-testid="people-resolve-outcome" className="font-medium text-text-primary">
           Outcome: {resolution.outcome}
         </p>
         <p className="mt-2">{copy.detail}</p>
@@ -116,7 +116,7 @@ export function ResolvePanel({ resolution }: { resolution: EntityResolutionView 
           <p className="mt-3">
             <Link
               href={peopleEntity(resolution.entity_id as string)}
-              className="font-medium text-moss-green underline"
+              className="font-medium text-interactive underline"
             >
               Open profile
             </Link>

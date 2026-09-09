@@ -218,3 +218,44 @@ export function presentFederatedHits(
     return [{ domain, heading: DOMAIN_HEADINGS[domain], hits: presented }];
   });
 }
+
+export type PresentedCoverage = {
+  readonly searched: readonly SearchCoverage[];
+  readonly unavailable: readonly SearchCoverage[];
+  readonly omitted: readonly SearchCoverage[];
+  readonly limited: readonly SearchCoverage[];
+};
+
+/** Omitted domains stay omitted. They are never counted as searched. */
+export function presentSearchCoverage(coverage: readonly SearchCoverage[]): PresentedCoverage {
+  const searched: SearchCoverage[] = [];
+  const unavailable: SearchCoverage[] = [];
+  const omitted: SearchCoverage[] = [];
+  const limited: SearchCoverage[] = [];
+  for (const row of coverage) {
+    if (row.state === "omitted") omitted.push(row);
+    else if (row.state === "searched" || row.state === "degraded") searched.push(row);
+    else if (row.state === "unavailable") unavailable.push(row);
+    else limited.push(row);
+  }
+  return { searched, unavailable, omitted, limited };
+}
+
+export function searchCoverageHeadline(coverage: readonly SearchCoverage[]): string {
+  const summary = presentSearchCoverage(coverage);
+  if (summary.searched.length === 0 && summary.unavailable.length > 0) {
+    return "No domain could be searched";
+  }
+  if (summary.searched.length === 0) return "No domain was searched";
+  return summary.searched.length === 1 ? "1 domain searched" : `${summary.searched.length} domains searched`;
+}
+
+export function formatCoverageRow(row: SearchCoverage): string {
+  const extra = [
+    row.reason ? `(${row.reason})` : "",
+    row.hitCount > 0 ? `· ${row.hitCount}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return extra ? `${row.domain}: ${row.state} ${extra}` : `${row.domain}: ${row.state}`;
+}

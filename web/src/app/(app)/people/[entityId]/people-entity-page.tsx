@@ -88,7 +88,7 @@ export async function PeopleEntityPage({
     return (
       <section aria-labelledby="people-entity-heading" className="mx-auto max-w-4xl">
         <p className="mb-4 text-sm">
-          <Link href={peopleHome()} className="text-moss-green underline">
+          <Link href={peopleHome()} className="text-interactive underline">
             ← People
           </Link>
         </p>
@@ -165,13 +165,13 @@ export async function PeopleEntityPage({
   return (
     <section aria-labelledby="people-entity-heading" className="mx-auto max-w-4xl">
       <p className="mb-4 text-sm">
-        <Link href={peopleHome()} className="text-moss-green underline">
+        <Link href={peopleHome()} className="text-interactive underline">
           ← People
         </Link>
         {" · "}
         <Link
           href={canvasMap({ focusEntityId: profile.entity.entity_id })}
-          className="text-moss-green underline"
+          className="text-interactive underline"
           data-testid="people-view-map"
         >
           View map

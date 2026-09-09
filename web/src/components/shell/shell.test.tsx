@@ -63,15 +63,21 @@ describe("app shell", () => {
       "Review",
       "Search",
     ]);
-    for (const destination of MOBILE_PRIMARY) {
-      expect(screen.getAllByRole("link", { name: destination.label }).length).toBeGreaterThanOrEqual(
-        2,
-      );
-    }
-    expect(screen.getAllByRole("link", { name: "Review" }).length).toBeGreaterThanOrEqual(1);
+    const navs = screen.getAllByRole("navigation", { name: "Primary" });
+    expect(navs).toHaveLength(2);
+    const desktopLabels = within(navs[0]!).getAllByRole("link").map((el) => el.textContent?.trim());
+    expect(desktopLabels).toEqual([
+      "Today",
+      "Work",
+      "People",
+      "Knowledge",
+      "Intelligence",
+      "System",
+    ]);
+    const mobileLabels = within(navs[1]!).getAllByRole("link").map((el) => el.textContent?.trim());
+    expect(mobileLabels).toEqual(["Today", "Work", "People"]);
     expect(screen.getByRole("link", { name: "Review" })).toHaveAttribute("href", "/review");
     expect(screen.getByTestId("capture-button")).toBeTruthy();
-    expect(screen.getAllByRole("link", { name: "System" }).length).toBeGreaterThanOrEqual(1);
   });
 
   it("groups More into Workspaces, Global, and Utilities", async () => {

@@ -123,7 +123,7 @@ export function MobileNav() {
               : "text-text-muted"
           }`}
           aria-haspopup="dialog"
-          aria-current={MOBILE_MORE.some((item) => activeFor(pathname, item.href)) ? "page" : undefined}
+          aria-label="More"
           onClick={() => setMoreOpen(true)}
         >
           <Menu size={19} />

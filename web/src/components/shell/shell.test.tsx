@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AppShell } from "@/components/shell/app-shell";
-import { DESTINATIONS, MOBILE_MORE, MOBILE_PRIMARY } from "@/components/shell/destinations";
+import {
+  DESKTOP_PRIMARY,
+  DESTINATIONS,
+  MOBILE_MORE,
+  MOBILE_PRIMARY,
+} from "@/components/shell/destinations";
 import type { PrincipalSession } from "@/contracts/identity";
 
 const navigation = vi.hoisted(() => ({ push: vi.fn() }));
@@ -30,28 +35,31 @@ afterEach(() => {
 });
 
 describe("app shell", () => {
-  it("renders desktop destinations and mobile primary Today, Work, Review, Search", () => {
+  it("renders desktop workspaces and mobile primary Today, Work, People", () => {
     render(<AppShell principal={PRINCIPAL}>content</AppShell>);
-    expect(MOBILE_PRIMARY.map(({ label }) => label)).toEqual([
+    expect(DESKTOP_PRIMARY.map(({ label }) => label)).toEqual([
       "Today",
       "Work",
-      "Review",
-      "Search",
-    ]);
-    expect(MOBILE_MORE.map(({ label }) => label)).toEqual([
       "People",
+      "Knowledge",
+      "Intelligence",
+    ]);
+    expect(MOBILE_PRIMARY.map(({ label }) => label)).toEqual(["Today", "Work", "People"]);
+    expect(MOBILE_MORE.map(({ label }) => label)).toEqual([
       "Intelligence",
       "Knowledge",
       "Map",
+      "Review",
+      "Search",
       "System",
     ]);
     expect(DESTINATIONS.map(({ label }) => label)).toEqual([
       "Today",
       "Work",
-      "Intelligence",
       "People",
-      "Map",
       "Knowledge",
+      "Intelligence",
+      "Map",
       "Review",
       "Search",
     ]);
@@ -60,24 +68,28 @@ describe("app shell", () => {
         2,
       );
     }
-    // People is in More, not the mobile primary bar, so only the desktop rail link is mounted.
-    expect(screen.getAllByRole("link", { name: "People" })).toHaveLength(1);
+    expect(screen.getAllByRole("link", { name: "Review" }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByRole("link", { name: "Review" })).toHaveAttribute("href", "/review");
+    expect(screen.getByTestId("capture-button")).toBeTruthy();
     expect(screen.getAllByRole("link", { name: "System" }).length).toBeGreaterThanOrEqual(1);
   });
 
-  it("groups the More sheet into Workspaces and Utilities without changing membership", async () => {
+  it("groups More into Workspaces, Global, and Utilities", async () => {
     const user = userEvent.setup();
     render(<AppShell principal={PRINCIPAL}>content</AppShell>);
     await user.click(screen.getByRole("button", { name: "More" }));
     const more = screen.getByRole("dialog", { name: "More" });
     expect(within(more).getByRole("heading", { name: "Workspaces" })).toBeTruthy();
+    expect(within(more).getByRole("heading", { name: "Global" })).toBeTruthy();
     expect(within(more).getByRole("heading", { name: "Utilities" })).toBeTruthy();
-    expect(within(more).queryByRole("heading", { name: "Global" })).toBeNull();
-    for (const label of ["People", "Intelligence", "Knowledge", "Map"]) {
+    for (const label of ["Intelligence", "Knowledge", "Map"]) {
       expect(within(more).getByRole("link", { name: label })).toBeTruthy();
     }
+    expect(within(more).getByRole("link", { name: "Review" })).toBeTruthy();
+    expect(within(more).getByRole("link", { name: "Search" })).toBeTruthy();
     expect(within(more).getByRole("link", { name: "System" })).toBeTruthy();
     expect(within(more).queryByRole("link", { name: "Today" })).toBeNull();
+    expect(within(more).queryByRole("link", { name: "People" })).toBeNull();
   });
 
   it("shows the signed-in principal and the synthetic badge", async () => {

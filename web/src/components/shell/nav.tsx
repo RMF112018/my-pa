@@ -5,10 +5,11 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Menu, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import {
-  DESTINATIONS,
+  DESKTOP_PRIMARY,
   MOBILE_MORE,
   MOBILE_PRIMARY,
   UTILITY_DESTINATIONS,
+  activeFor,
   groupedDestinations,
   type Destination,
   type DestinationGroup,
@@ -22,15 +23,6 @@ const MORE_GROUP_HEADING: Record<DestinationGroup, string> = {
   global: "Global",
   utility: "Utilities",
 };
-
-function activeFor(pathname: string, href: string) {
-  return (
-    pathname === href ||
-    pathname.startsWith(`${href}/`) ||
-    (href === "/work" && pathname.startsWith("/situations")) ||
-    (href === "/knowledge" && pathname.startsWith("/library"))
-  );
-}
 
 function NavLink({
   item,
@@ -86,7 +78,7 @@ export function NavRail({
         </IconButton>
       </div>
       <div className="space-y-1">
-        {DESTINATIONS.map((item) => (
+        {DESKTOP_PRIMARY.map((item) => (
           <NavLink key={item.href} item={item} pathname={pathname} collapsed={collapsed} />
         ))}
       </div>
@@ -125,8 +117,13 @@ export function MobileNav() {
           );
         })}
         <button
-          className="flex min-h-14 flex-1 flex-col items-center justify-center gap-1 text-[11px] text-text-muted"
+          className={`flex min-h-14 flex-1 flex-col items-center justify-center gap-1 text-[11px] ${
+            MOBILE_MORE.some((item) => activeFor(pathname, item.href))
+              ? "text-interactive"
+              : "text-text-muted"
+          }`}
           aria-haspopup="dialog"
+          aria-current={MOBILE_MORE.some((item) => activeFor(pathname, item.href)) ? "page" : undefined}
           onClick={() => setMoreOpen(true)}
         >
           <Menu size={19} />

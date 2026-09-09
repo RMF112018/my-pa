@@ -1027,7 +1027,13 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # record.principal_id, ...)). These are the stored/server record partition,
     # not a request-body owner.
     "infrastructure/persistence/canvas_workspace.py": (("record", "principal_id"),) * 4,
+    # `admit_capture` compares `request.principal_id` to
+    # `resolved.capture_principal_id` and refuses a mismatch as
+    # `CallerSuppliedPrincipalError` before any write. The fifth read stamps
+    # that already-verified owner onto the first `capture_labels` row of a new
+    # chain — the same request field, after the same refusal, not a new trust.
     "infrastructure/persistence/capture.py": (
+        ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),

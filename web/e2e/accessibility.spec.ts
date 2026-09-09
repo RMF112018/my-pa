@@ -178,8 +178,8 @@ test.describe("what axe cannot decide", () => {
   test("every destination exposes banner, navigation and main exactly once", async ({ page }) => {
     for (const path of PAGES) {
       await page.goto(path);
-      await expect(page.getByRole("banner")).toHaveCount(1);
-      await expect(page.getByRole("main")).toHaveCount(1);
+      await expect(page.getByRole("banner"), `${path} banner count`).toHaveCount(1);
+      await expect(page.getByRole("main"), `${path} main count`).toHaveCount(1);
       // Two navigation landmarks by design — the desktop rail and the mobile
       // bar — and only one of them is rendered at any viewport.
       const navs = page.getByRole("navigation");

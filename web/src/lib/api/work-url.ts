@@ -11,10 +11,13 @@ export const WORK_VIEWS = [
   "commitments",
 ] as const;
 export type WorkView = (typeof WORK_VIEWS)[number];
+export const TASK_VIEWS = WORK_VIEWS.filter((view): view is Exclude<WorkView, "commitments"> => view !== "commitments");
+export type TaskView = (typeof TASK_VIEWS)[number];
 export const WORK_PERSPECTIVES = ["list", "board", "calendar"] as const;
 export type WorkPerspective = (typeof WORK_PERSPECTIVES)[number];
 export type ArchiveMode = "exclude" | "only";
-export type CommitmentFilter = "all-open" | "due" | "recently-updated" | "waiting-on" | "closed" | "all";
+export const COMMITMENT_FILTERS = ["all-open", "due", "recently-updated", "waiting-on", "closed", "all"] as const;
+export type CommitmentFilter = (typeof COMMITMENT_FILTERS)[number];
 
 export interface WorkUrlState {
   readonly view: WorkView;
@@ -48,7 +51,7 @@ export function parseWorkUrlState(parameters: Record<string, string | readonly s
     cursor: first(parameters.cursor),
     tz: validTimezone(first(parameters.tz)),
     archived: archived === "only" ? "only" : "exclude",
-    commitment: ["all-open", "due", "recently-updated", "waiting-on", "closed", "all"].includes(commitment)
+    commitment: COMMITMENT_FILTERS.includes(commitment as CommitmentFilter)
       ? commitment as CommitmentFilter
       : "all-open",
     perspective: WORK_PERSPECTIVES.includes(perspective as WorkPerspective)

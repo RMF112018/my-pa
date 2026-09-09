@@ -101,7 +101,7 @@ describe("review workbench", () => {
 
   it("shows an empty state when nothing is waiting", () => {
     render(<ReviewWorkbench cases={[]} />);
-    expect(screen.getByText("Nothing to review right now.")).toBeInTheDocument();
+    expect(screen.getByText(/nothing to review right now/i)).toBeInTheDocument();
   });
 
   it("does not treat an acknowledged-not-persisted answer as a recorded decision", async () => {
@@ -202,7 +202,7 @@ describe("review workbench", () => {
 
     const card = screen.getByTestId("review-case");
     await waitFor(() =>
-      expect(within(card).getByRole("alert")).toHaveTextContent("no such review case"),
+      expect(within(card).getByRole("alert")).toHaveTextContent("This item could not be found."),
     );
     expect(screen.queryByTestId(`receipt-${first.reviewCaseId}`)).not.toBeInTheDocument();
   });

@@ -92,16 +92,12 @@ export default async function TodayPage() {
           kind="empty"
           title="Nothing needs attention right now"
           detail="This is about today, not everything you hold."
+          diagnostic={
+            "The derivation ran and found no accepted commitment, decision, task or situation that " +
+            "a named condition holds about right now."
+          }
           testId="today-empty"
-        >
-          <details className="mt-2">
-            <summary className="cursor-pointer font-medium text-moss-slate">Details</summary>
-            <p className="mt-2">
-              The derivation ran and found no accepted commitment, decision, task or situation that
-              a named condition holds about right now.
-            </p>
-          </details>
-        </SurfaceState>
+        />
       ) : answer.kind === "degraded" ? (
         <>
           <DegradedBanner
@@ -114,16 +110,12 @@ export default async function TodayPage() {
               kind="degraded"
               title="Today is incomplete"
               detail="A quiet day is not established. Something may still need you."
+              diagnostic={
+                "The derivation was incomplete and surfaced nothing. A partial read does not " +
+                "establish that nothing needs attention."
+              }
               testId="today-degraded-empty"
-            >
-              <details className="mt-2">
-                <summary className="cursor-pointer font-medium text-moss-slate">Details</summary>
-                <p className="mt-2">
-                  The derivation was incomplete and surfaced nothing. A partial read does not
-                  establish that nothing needs attention.
-                </p>
-              </details>
-            </SurfaceState>
+            />
           ) : (
             // The gateway's order, untouched. See `BackendPulseList`.
             <BackendPulseList items={answer.result.pulse_items.map(toItem)} />

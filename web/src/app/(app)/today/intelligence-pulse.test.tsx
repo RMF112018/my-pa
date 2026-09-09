@@ -110,4 +110,23 @@ describe("IntelligencePulse Level-1 copy on Today", () => {
     expectUserTaskLevel1();
     expect(screen.getByTestId("intelligence-pulse-details").textContent).toMatch(/report plane/i);
   });
+
+  it("does not treat an unread list as empty or all-clear", async () => {
+    answerReportsList(
+      { items: [], next_cursor: null },
+      whole({ coverage: { state: "unavailable" } }),
+    );
+    await renderPulse();
+    const pulse = screen.getByTestId("intelligence-pulse");
+    expect(pulse).toHaveAttribute("data-state", "unavailable");
+    expect(screen.getByTestId("intelligence-pulse-unavailable").textContent).toMatch(
+      /could not be read/i,
+    );
+    expect(screen.getByTestId("intelligence-pulse-unavailable").textContent).toMatch(
+      /not all-clear/i,
+    );
+    expect(screen.queryByTestId("intelligence-pulse-none")).toBeNull();
+    expect(collectLevel1Copy(pulse)).not.toMatch(/no briefings yet/i);
+    expect(collectLevel1Copy(pulse)).not.toMatch(/this scope was not searched/i);
+  });
 });

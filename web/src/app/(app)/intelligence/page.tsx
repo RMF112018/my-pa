@@ -108,7 +108,7 @@ export default async function IntelligencePage() {
       <SurfaceState
         kind="empty"
         title="No briefings yet"
-        detail="No reports are stored for your account yet."
+        detail="None are stored for your account yet."
         testId="intelligence-empty"
       />,
     );
@@ -125,7 +125,7 @@ export default async function IntelligencePage() {
       {readiness && cycleRunId ? (
         <ReadinessPanel answer={readiness} cycleRunId={cycleRunId} />
       ) : null}
-      <h2 className="mb-2 text-base font-semibold text-moss-slate">Reports</h2>
+      <h2 className="mb-2 text-base font-semibold text-text-primary">Reports</h2>
       <p className="mb-3 text-sm text-muted">
         Missing specialists do not hide available reports. A morning brief is a report, not a list
         of structured brief items.

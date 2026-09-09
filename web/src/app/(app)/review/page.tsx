@@ -91,7 +91,7 @@ export default async function ReviewPage() {
     return frame(
       <SurfaceState
         kind="empty"
-        title="Nothing to review right now."
+        title="Nothing to review right now"
         detail="Proposals appear here when something needs a decision."
         testId="review-queue-empty"
       />,

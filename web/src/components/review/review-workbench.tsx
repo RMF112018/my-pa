@@ -19,7 +19,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TextField } from "@/components/ui/field";
 import { RevealDialog } from "@/components/shell/reveal-dialog";
+import { SurfaceState } from "@/components/ui/surface-state";
 import { apiPost } from "@/lib/api/client";
+import { mapUserError } from "@/lib/ui/user-error";
 
 interface DecideResponse {
   receipt?: Receipt;
@@ -82,21 +84,33 @@ export function ReviewWorkbench({ cases }: { cases: readonly ReviewCase[] }) {
           detail: response.data?.status ?? "the server did not report a stored decision",
         });
       } else {
+        const presented = mapUserError({
+          status: response.status,
+          errorClass: response.errorClass,
+          code: response.code,
+          message: response.error,
+        });
         setStatus(reviewCaseId, {
           phase: "error",
-          message: response.error ?? "The disposition could not be recorded.",
+          message: presented.message,
         });
       }
-    } catch {
+    } catch (error) {
       setStatus(reviewCaseId, {
         phase: "error",
-        message: "The disposition could not be recorded.",
+        message: mapUserError(error).message,
       });
     }
   }
 
   if (cases.length === 0) {
-    return <p className="text-sm text-muted">Nothing to review right now.</p>;
+    return (
+      <SurfaceState
+        kind="empty"
+        title="Nothing to review right now"
+        testId="review-workbench-empty"
+      />
+    );
   }
 
   return (
@@ -116,12 +130,12 @@ export function ReviewWorkbench({ cases }: { cases: readonly ReviewCase[] }) {
                 </p>
 
                 <div className="mt-3">
-                  <p className="font-medium text-moss-slate">Evidence</p>
+                  <p className="font-medium text-text-primary">Evidence</p>
                   <ul className="mt-1 flex flex-col gap-1">
                     {item.evidence.map((span) => (
                       <li
                         key={`${span.sourceVersionId}:${span.startOffset}`}
-                        className="border-l-2 border-moss-green/40 pl-2 italic"
+                        className="border-l-2 border-interactive/40 pl-2 italic"
                         data-testid="evidence-span"
                       >
                         “{span.surfaceText}”
@@ -131,17 +145,17 @@ export function ReviewWorkbench({ cases }: { cases: readonly ReviewCase[] }) {
                 </div>
 
                 <p className="mt-3">
-                  <span className="font-medium text-moss-slate">If accepted:</span>{" "}
+                  <span className="font-medium text-text-primary">If accepted:</span>{" "}
                   {item.impactSummary}
                 </p>
 
                 {status.phase === "decided" ? (
                   <div
-                    className="mt-3 rounded-md border border-moss-green/30 bg-moss-green/5 p-3"
+                    className="mt-3 rounded-md border border-success/30 bg-success/5 p-3"
                     role="status"
                     data-testid={`receipt-${item.reviewCaseId}`}
                   >
-                    <p className="font-medium text-moss-everglade">
+                    <p className="font-medium text-success">
                       Recorded: {DISPOSITION_LABEL[status.disposition]}
                     </p>
                     <p className="mt-1 text-xs text-muted">{status.receipt.receiptId}</p>
@@ -150,7 +164,7 @@ export function ReviewWorkbench({ cases }: { cases: readonly ReviewCase[] }) {
                   <p
                     role="alert"
                     data-testid={`review-not-persisted-${item.reviewCaseId}`}
-                    className="mt-3 text-sm text-moss-coral-strong"
+                    className="mt-3 text-sm text-destructive"
                   >
                     <strong>No decision was stored.</strong> The server answered &ldquo;
                     {status.detail}&rdquo; rather than a stored decision, so this case is
@@ -196,7 +210,7 @@ export function ReviewWorkbench({ cases }: { cases: readonly ReviewCase[] }) {
                       </Button>
                     </div>
                     {status.phase === "error" ? (
-                      <p role="alert" className="mt-2 text-moss-coral-strong">
+                      <p role="alert" className="mt-2 text-destructive">
                         {status.message}
                       </p>
                     ) : null}

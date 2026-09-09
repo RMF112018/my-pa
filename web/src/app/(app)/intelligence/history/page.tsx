@@ -128,7 +128,7 @@ export default async function IntelligenceHistoryPage({
       <SurfaceState
         kind="empty"
         title="No briefings yet"
-        detail="No reports are stored for your account yet."
+        detail="None are stored for your account yet."
         testId="intelligence-history-empty"
       />,
     );
@@ -163,7 +163,7 @@ export default async function IntelligenceHistoryPage({
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <h2
                 id={`cycle-${group.cycle_run_id}`}
-                className="text-base font-semibold text-moss-slate"
+                className="text-base font-semibold text-text-primary"
               >
                 {group.business_date ?? "Business date not resolved"}
               </h2>
@@ -175,7 +175,7 @@ export default async function IntelligenceHistoryPage({
                 <p className="break-all font-mono text-xs">{group.cycle_run_id}</p>
                 <Link
                   href={intelligenceHistory(group.cycle_run_id)}
-                  className="mt-2 inline-flex min-h-[var(--control-height)] items-center text-sm text-moss-green underline"
+                  className="mt-2 inline-flex min-h-[var(--control-height)] items-center text-sm text-interactive underline"
                 >
                   Open this run
                 </Link>

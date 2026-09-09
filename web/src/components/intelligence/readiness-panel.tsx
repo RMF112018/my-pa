@@ -86,12 +86,12 @@ export function ReadinessPanel({
   return (
     <Card data-testid="intelligence-readiness" className="mb-4">
       {answer.kind === "degraded" ? (
-        <p className="mb-2 text-sm text-moss-gold-strong" role="status">
+        <p className="mb-2 text-sm text-warning" role="status">
           Readiness was returned incompletely. {answer.detail}
         </p>
       ) : null}
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <h2 className="text-base font-semibold text-moss-slate">Morning Intelligence readiness</h2>
+        <h2 className="text-base font-semibold text-text-primary">Morning Intelligence readiness</h2>
         <Badge tone={aggregateTone}>
           <span data-testid="intelligence-readiness-aggregate">{result.aggregate}</span>
         </Badge>
@@ -139,7 +139,7 @@ export function ReadinessPanel({
                   className="rounded-md border border-border p-2"
                 >
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-medium text-moss-slate">{member.member_id}</span>
+                    <span className="font-medium text-text-primary">{member.member_id}</span>
                     <Badge tone={MEMBER_TONE[member.readiness] ?? "neutral"}>
                       <span data-testid="intelligence-readiness-member-state">{member.readiness}</span>
                     </Badge>

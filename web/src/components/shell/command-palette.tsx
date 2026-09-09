@@ -7,7 +7,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { SurfaceState } from "@/components/ui/surface-state";
-import { DESTINATIONS, UTILITY_DESTINATIONS } from "@/components/shell/destinations";
+import { COMMAND_DESTINATIONS } from "@/components/shell/destinations";
 import {
   admittedEnrollmentId,
   fetchFederatedSearch,
@@ -21,7 +21,7 @@ import {
 } from "@/lib/search/presentation";
 import type { ApiFailure } from "@/lib/api/work-client";
 
-const COMMANDS = [...DESTINATIONS, ...UTILITY_DESTINATIONS];
+const COMMANDS = [...COMMAND_DESTINATIONS];
 
 type SearchAnswer =
   | { readonly kind: "idle" }

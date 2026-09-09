@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 import { canvasHome } from "@/lib/routes/canvas";
 
-/** Semantic nav grouping. Does not change hrefs, labels, or membership. */
 export type DestinationGroup = "workspace" | "global" | "utility";
 
 export interface Destination {
@@ -25,25 +24,25 @@ export interface Destination {
 
 const TODAY: Destination = { href: "/today", label: "Today", icon: Home, group: "workspace" };
 const WORK: Destination = { href: "/work", label: "Work", icon: Workflow, group: "workspace" };
-const INTELLIGENCE: Destination = {
-  href: "/intelligence",
-  label: "Intelligence",
-  icon: Brain,
-  group: "workspace",
-};
 const PEOPLE: Destination = { href: "/people", label: "People", icon: Users, group: "workspace" };
-const MAP: Destination = { href: canvasHome(), label: "Map", icon: Map, group: "workspace" };
 const KNOWLEDGE: Destination = {
   href: "/knowledge",
   label: "Knowledge",
   icon: BookOpen,
   group: "workspace",
 };
+const INTELLIGENCE: Destination = {
+  href: "/intelligence",
+  label: "Intelligence",
+  icon: Brain,
+  group: "workspace",
+};
+const MAP: Destination = { href: canvasHome(), label: "Map", icon: Map, group: "workspace" };
 const REVIEW: Destination = {
   href: "/review",
   label: "Review",
   icon: ClipboardCheck,
-  group: "workspace",
+  group: "global",
 };
 const SEARCH: Destination = {
   href: "/search",
@@ -51,31 +50,46 @@ const SEARCH: Destination = {
   icon: SearchIcon,
   group: "global",
 };
+const SYSTEM: Destination = { href: "/system", label: "System", icon: Settings, utility: true, group: "utility" };
 
+/** Desktop primary rail. Explicit — not the command-palette union. */
+export const DESKTOP_PRIMARY: readonly Destination[] = [
+  TODAY,
+  WORK,
+  PEOPLE,
+  KNOWLEDGE,
+  INTELLIGENCE,
+] as const;
+
+export const UTILITY_DESTINATIONS: readonly Destination[] = [SYSTEM] as const;
+
+/** Mobile bottom bar. More is a control, not a destination. */
+export const MOBILE_PRIMARY: readonly Destination[] = [TODAY, WORK, PEOPLE] as const;
+
+/** Mobile More sheet: workspaces, then global, then utilities. */
+export const MOBILE_MORE: readonly Destination[] = [
+  INTELLIGENCE,
+  KNOWLEDGE,
+  MAP,
+  REVIEW,
+  SEARCH,
+  SYSTEM,
+] as const;
+
+/** Palette and tests: every canonical destination remains command-reachable. */
 export const DESTINATIONS: readonly Destination[] = [
   TODAY,
   WORK,
-  INTELLIGENCE,
   PEOPLE,
-  MAP,
   KNOWLEDGE,
+  INTELLIGENCE,
+  MAP,
   REVIEW,
   SEARCH,
 ] as const;
 
-export const UTILITY_DESTINATIONS: readonly Destination[] = [
-  { href: "/system", label: "System", icon: Settings, utility: true, group: "utility" },
-] as const;
-
-/** Mobile bottom bar. Explicit — never a DESTINATIONS prefix slice. */
-export const MOBILE_PRIMARY: readonly Destination[] = [TODAY, WORK, REVIEW, SEARCH] as const;
-
-/** Mobile More sheet. People is not a primary destination. */
-export const MOBILE_MORE: readonly Destination[] = [
-  PEOPLE,
-  INTELLIGENCE,
-  KNOWLEDGE,
-  MAP,
+export const COMMAND_DESTINATIONS: readonly Destination[] = [
+  ...DESTINATIONS,
   ...UTILITY_DESTINATIONS,
 ] as const;
 
@@ -99,4 +113,13 @@ export function groupedDestinations(
   return GROUP_ORDER.map((group) => ({ group, items: destinationsByGroup(items, group) })).filter(
     (entry) => entry.items.length > 0,
   );
+}
+
+/** Which primary/global destination owns this pathname. */
+export function activeFor(pathname: string, href: string): boolean {
+  if (pathname === href || pathname.startsWith(`${href}/`)) return true;
+  if (href === "/work" && pathname.startsWith("/situations")) return true;
+  if (href === "/knowledge" && pathname.startsWith("/library")) return true;
+  if (href === "/people" && pathname.startsWith("/relationships")) return true;
+  return false;
 }

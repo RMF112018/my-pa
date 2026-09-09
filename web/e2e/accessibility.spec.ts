@@ -45,16 +45,13 @@ const PAGES = [
   "/work/projects/prj_syn_0001/constraints",
 ] as const;
 
-/** Shell destination labels. Visually icon-only when the rail is collapsed. */
+/** Desktop primary rail plus System utility. Review/Search/Map are not rail items. */
 const SHELL_DESTINATIONS = [
   "Today",
   "Work",
-  "Intelligence",
   "People",
-  "Map",
   "Knowledge",
-  "Review",
-  "Search",
+  "Intelligence",
   "System",
 ] as const;
 

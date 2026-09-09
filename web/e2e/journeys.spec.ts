@@ -122,17 +122,19 @@ test.describe("the signed-in surfaces", () => {
   });
 
   test("command menu and Inspector expose only the bounded shell behavior", async ({ page }, testInfo) => {
-    await expect(page.getByRole("link", { name: "Search" }).first()).toBeVisible();
+    await expect(page.getByRole("link", { name: "Review" }).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: /Commands/ })).toBeVisible();
     if (testInfo.project.name === "mobile") {
       const nav = page.getByRole("navigation", { name: "Primary" });
       await expect(nav.getByRole("link", { name: "Today" })).toBeVisible();
       await expect(nav.getByRole("link", { name: "Work" })).toBeVisible();
-      await expect(nav.getByRole("link", { name: "Review" })).toBeVisible();
-      await expect(nav.getByRole("link", { name: "Search" })).toBeVisible();
+      await expect(nav.getByRole("link", { name: "People" })).toBeVisible();
       await expect(nav.getByRole("button", { name: "More" })).toBeVisible();
-      await expect(nav.getByRole("link", { name: "People" })).toHaveCount(0);
+      await expect(nav.getByRole("link", { name: "Review" })).toHaveCount(0);
+      await expect(nav.getByRole("link", { name: "Search" })).toHaveCount(0);
       await page.getByRole("button", { name: "More" }).click();
-      await expect(page.getByRole("link", { name: "People" }).first()).toBeVisible();
+      await expect(page.getByRole("link", { name: "Review" }).nth(1)).toBeVisible();
+      await expect(page.getByRole("link", { name: "Search" }).first()).toBeVisible();
       await page.getByRole("button", { name: "Close panel" }).click();
     }
 

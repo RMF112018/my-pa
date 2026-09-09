@@ -10,7 +10,7 @@
  * Do not import `session-service.ts` from this file: middleware runs on Edge.
  */
 export const SESSION_COOKIE_NAME = "mypa_session";
-export const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60; // 8 hours
+export const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60; // 30 days; match Python absolute TTL
 
 const OPAQUE_SID = /^[0-9a-fA-F]{64}$/;
 const REPLAY_BINDING_PREFIX = "my-pa:offline-replay:v1:";

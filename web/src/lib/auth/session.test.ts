@@ -49,6 +49,7 @@ describe("session cookie flags", () => {
     expect(SESSION_COOKIE_OPTIONS.httpOnly).toBe(true);
     expect(SESSION_COOKIE_OPTIONS.sameSite).toBe("lax");
     expect(SESSION_COOKIE_OPTIONS.path).toBe("/");
+    expect(SESSION_COOKIE_OPTIONS.maxAge).toBe(30 * 24 * 60 * 60);
   });
 
   it("is Secure in production, SameSite Lax, HttpOnly, path /, and has no Domain", () => {

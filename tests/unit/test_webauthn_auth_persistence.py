@@ -82,6 +82,12 @@ def test_recovery_code_normalizes_grouping_before_hashing() -> None:
     assert not digests_match(digest_text(normalize_recovery_code(other)), digest)
 
 
+def test_session_ttl_policy_is_thirty_days() -> None:
+    assert timedelta(days=30) == AUTH_SESSION_ABSOLUTE_TTL
+    assert timedelta(days=30) == AUTH_SESSION_IDLE_TTL
+    assert AUTH_SESSION_IDLE_TTL <= AUTH_SESSION_ABSOLUTE_TTL
+
+
 def test_idle_expiry_never_passes_absolute_expiry() -> None:
     created = WHEN
     absolute = created + AUTH_SESSION_ABSOLUTE_TTL

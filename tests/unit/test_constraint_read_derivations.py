@@ -395,12 +395,19 @@ def test_a_data_quality_exception_is_never_emitted() -> None:
     assert all(reason.value != "data_quality_exception" for reason in reasons)
 
 
-def test_the_sync_state_vocabulary_is_exactly_the_four_derivable_names() -> None:
+def test_the_read_summary_sync_state_vocabulary_is_the_ten_state_machine() -> None:
+    """WP11 widens the WP03 roll-up into the canonical ten-state machine."""
     assert {state.value for state in ConstraintSyncStateView} == {
         "never_synced",
         "in_sync",
         "db_export_pending",
+        "external_import_pending",
         "conflict",
+        "workbook_unavailable",
+        "schema_unsupported",
+        "partial",
+        "verification_pending",
+        "verification_failed",
     }
 
 

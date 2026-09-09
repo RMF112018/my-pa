@@ -68,7 +68,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "b8e4d1a6c073"
 PULL_REVISION: Final = "6a2f9d1c4b80"
 PROMOTION_REVISION: Final = "a4d8e31b2c90"
-HEAD_REVISION: Final = "f7a2c9d51e64"
+HEAD_REVISION: Final = "b8e4d6f20a11"
 CURRENT_HEAD_REVISION: Final = HEAD_REVISION
 GRAPH_REVISION: Final = "c3f8a1d07e94"
 #: What was head until `REVISION` stacked on it, and therefore the revision
@@ -84,7 +84,7 @@ PREVIOUS_REVISION: Final = "16f05c46b8c3"
 #: Counted on the merged tree after the re-parent (RULING-M2): 88 on
 #: `origin/main` at `16f05c46b8c3` plus this revision, graph vocabulary,
 #: GoodNotes pull, promotion receipt, and canvas overlay successors.
-REVISION_FILE_COUNT: Final = 99
+REVISION_FILE_COUNT: Final = 100
 
 #: The revision's frozen salt, restated. If this and the revision ever disagree
 #: the expectations below stop matching, which is the point of restating it.
@@ -439,7 +439,8 @@ def test_the_revision_is_the_single_head_and_revises_the_prior_head() -> None:
     # `4e9a1c7b2d60` (AUTH-IMP) and then `f7a2c9d51e64` (PC-CM-IMP-WP07). Every
     # edge below is retained and the two new ones are asserted, so the chain is
     # still checked link by link rather than loosened.
-    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "4e9a1c7b2d60"
+    assert script.get_revision(CURRENT_HEAD_REVISION).down_revision == "f7a2c9d51e64"
+    assert script.get_revision("f7a2c9d51e64").down_revision == "4e9a1c7b2d60"
     assert script.get_revision("4e9a1c7b2d60").down_revision == "c5b71e0a8d43"
     assert script.get_revision("c5b71e0a8d43").down_revision == "a1c9e4b72f80"
     assert script.get_revision("a1c9e4b72f80").down_revision == "2774329487be"

@@ -52,6 +52,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "f7a2c9d51e64"
+CURRENT_HEAD: Final = "b8e4d6f20a11"
 #: The chain parent. `4e9a1c7b2d60` (AUTH-IMP) landed on `c5b71e0a8d43` while
 #: this revision was in review, so this migration was repointed onto it. The
 #: chain parent and the *vocabulary* predecessor are no longer the same
@@ -67,6 +68,7 @@ MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = (
     MIGRATIONS / "20260907_f7a2c9d51e64_admit_the_constraint_authoring_capabilities.py"
 )
+CURRENT_HEAD_MIGRATION: Final = MIGRATIONS / "20260908_b8e4d6f20a11_add_constraint_sync_backend.py"
 PREVIOUS_MIGRATION: Final = (
     MIGRATIONS / "20260906_c5b71e0a8d43_admit_the_constraint_read_capabilities.py"
 )
@@ -121,6 +123,7 @@ CONSTRAINT_TABLES: Final[frozenset[str]] = frozenset(
 #: Fixed and written out, so the recurrence guard below is a bounded check over a
 #: named list rather than a repository-wide scan.
 HEAD_PIN_FILES: Final[tuple[str, ...]] = (
+    "tests/architecture/test_constraint_read_plane_boundaries.py",
     "tests/database/test_cli_auth.py",
     "tests/database/test_entities_graph_vocabulary_migration.py",
     "tests/database/test_legacy_entity_backfill_migration.py",
@@ -128,9 +131,10 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/database/test_ri_ent_wp_10_11_vocabulary_migration.py",
     "tests/schema/test_auth_identity_and_grants_migration.py",
     "tests/schema/test_canvas_workspace_migration.py",
-    "tests/schema/test_capture_schema_migration.py",
     "tests/schema/test_constraint_management_migration.py",
     "tests/schema/test_constraint_read_capability_migration.py",
+    "tests/schema/test_constraint_sync_migration.py",
+    "tests/schema/test_extraction_schema_migration.py",
     "tests/schema/test_goodnotes_browser_contract_migration.py",
     "tests/schema/test_goodnotes_client_resume_migration.py",
     "tests/schema/test_goodnotes_content_and_durable_note_stages.py",
@@ -224,12 +228,13 @@ def _literals(block: str) -> list[str]:
 
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [REVISION]
+    assert script.get_heads() == [CURRENT_HEAD]
+    assert script.get_revision(CURRENT_HEAD).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 99
+    assert len(list(MIGRATIONS.glob("*.py"))) == 100
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -366,7 +371,7 @@ def test_no_historical_revision_was_edited() -> None:
     if changed.returncode != 0:
         pytest.skip("no merge base available in this checkout")
     touched = {line for line in changed.stdout.splitlines() if line.strip()}
-    assert touched <= {MIGRATION.relative_to(ROOT).as_posix()}, (
+    assert touched <= {CURRENT_HEAD_MIGRATION.relative_to(ROOT).as_posix()}, (
         f"a revision other than this one changed: {sorted(touched)}"
     )
 
@@ -400,7 +405,7 @@ def test_no_head_pin_file_still_names_the_previous_head_as_the_head(relative: st
     source = (ROOT / relative).read_text(encoding="utf-8")
     for constant in HEAD_CONSTANTS:
         for line in re.findall(rf"^{constant}(?::\s*Final)?\s*=.*$", source, re.M):
-            assert PREVIOUS not in line, f"{relative} still pins {PREVIOUS} as the head"
+            assert REVISION not in line, f"{relative} still pins {REVISION} as the head"
 
 
 def test_the_head_pin_list_is_the_files_that_actually_pin_the_head() -> None:
@@ -408,7 +413,7 @@ def test_the_head_pin_list_is_the_files_that_actually_pin_the_head() -> None:
     naming = sorted(
         path.relative_to(ROOT).as_posix()
         for path in (ROOT / "tests").rglob("test_*.py")
-        if REVISION in path.read_text(encoding="utf-8") and path.name != Path(__file__).name
+        if CURRENT_HEAD in path.read_text(encoding="utf-8") and path.name != Path(__file__).name
     )
     assert naming == sorted(HEAD_PIN_FILES)
 
@@ -470,6 +475,6 @@ def test_an_empty_database_upgrades_to_the_new_head(disposable_database: str) ->
             stamped = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-        assert stamped == REVISION
+        assert stamped == CURRENT_HEAD
     finally:
         engine.dispose()

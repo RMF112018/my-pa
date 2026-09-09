@@ -464,6 +464,13 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
         }
     ),
     "a1c9e4b72f80": frozenset(),
+    "b8e4d6f20a11": frozenset(
+        {
+            "constraint_sync_legacy_unbound_conflicts",
+            "constraint_sync_run_items",
+            "constraint_sync_resolution_history",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

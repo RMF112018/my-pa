@@ -23,9 +23,10 @@ manifest would pass against a constant.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest import mock
 
@@ -37,6 +38,7 @@ from tests.conftest import (
     FakeUnitOfWork,
     Scene,
     World,
+    _ConstraintReads,
     build_provider,
     build_service,
     metadata_for,
@@ -49,6 +51,8 @@ from tests.conftest import (
 from my_pa.application import service as service_module
 from my_pa.application.capabilities import build_capability_manifest
 from my_pa.application.commands import (
+    AcknowledgeConstraintSync,
+    ApplyConstraintSync,
     EnrollSource,
     FetchSource,
     GetCapabilities,
@@ -60,6 +64,7 @@ from my_pa.application.commands import (
     ListSources,
     PrepareContext,
     ReadConstraintOverview,
+    ReadConstraintSyncDelta,
     ReadKnowledge,
     RecordContextFeedback,
     Representation,
@@ -82,6 +87,7 @@ from my_pa.domain.extraction.coverage import AggregateLimitation, LimitationReas
 from my_pa.domain.extraction.text import ExtractionStatus
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.project_controls.constraint import ConstraintLifecycleState
 from my_pa.domain.source.provider import ObjectKind
 from my_pa.domain.source.registry import issue_identifier
 
@@ -124,6 +130,479 @@ def succeeded(envelope: ResponseEnvelope) -> dict[str, object]:
     assert envelope.disclosure is not None
     assert envelope.result is not None
     return envelope.result
+
+
+def test_constraint_sync_delta_maps_a_hidden_target_to_not_found_and_preserves_a_valid_page(
+    scene: Scene, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, str, str, int, str | None]] = []
+
+    def visible(
+        _self: object,
+        principal_id: str,
+        project_id: str,
+        target_id: str,
+        *,
+        limit: int,
+        cursor: str | None,
+    ) -> tuple[dict[str, object], ...]:
+        calls.append((principal_id, project_id, target_id, limit, cursor))
+        return ({"constraint_id": scene.constraint_id, "version": 1},)
+
+    monkeypatch.setattr(_ConstraintReads, "read_sync_delta", visible)
+    service = build_service(scene.world, scene.providers)
+    command = ReadConstraintSyncDelta(
+        project_id=scene.constraint_project_id,
+        target_id="csyt_12345678",
+        limit=7,
+        cursor="cst_12345678",
+    )
+    result = succeeded(
+        run(
+            service,
+            scene,
+            Capability.CONSTRAINT_SYNC_DELTA,
+            Purpose.CONSTRAINT_SYNC_READ,
+            command,
+        )
+    )
+    assert result == {
+        "items": [{"constraint_id": scene.constraint_id, "version": 1}],
+        "next_cursor": None,
+    }
+    assert calls == [
+        (
+            scene.principal.principal_id,
+            scene.constraint_project_id,
+            "csyt_12345678",
+            7,
+            "cst_12345678",
+        )
+    ]
+    monkeypatch.setattr(_ConstraintReads, "read_sync_delta", lambda *_args, **_kwargs: None)
+    hidden = run(
+        service,
+        scene,
+        Capability.CONSTRAINT_SYNC_DELTA,
+        Purpose.CONSTRAINT_SYNC_READ,
+        command,
+    )
+    assert hidden.error is not None and hidden.error.code is ErrorCode.NOT_FOUND
+
+
+@pytest.mark.parametrize("replayed", [False, True])
+def test_constraint_sync_apply_reports_the_persisted_partial_state(
+    scene: Scene, monkeypatch: pytest.MonkeyPatch, replayed: bool
+) -> None:
+    def prepare(*_args: object, **_kwargs: object) -> dict[str, object]:
+        apply_result = {
+            "run_id": "csyr_12345678",
+            "state": "partial",
+            "canonical_digest": "c" * 64,
+            "item_count": 0,
+            "action_counts": {
+                "no_op": 0,
+                "import_external": 0,
+                "export_canonical": 0,
+                "merge": 0,
+                "conflict": 0,
+            },
+            "replayed": True,
+        }
+        return {
+            "replayed": replayed,
+            "items": [],
+            "run": {"sync_state": "partial"},
+            "apply_result": apply_result if replayed else None,
+        }
+
+    def complete(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {
+            "run_id": "csyr_12345678",
+            "state": "partial",
+            "canonical_digest": "c" * 64,
+            "item_count": 0,
+            "action_counts": {
+                "no_op": 0,
+                "import_external": 0,
+                "export_canonical": 0,
+                "merge": 0,
+                "conflict": 0,
+            },
+            "replayed": False,
+        }
+
+    monkeypatch.setattr(_ConstraintReads, "prepare_sync_apply", prepare)
+    monkeypatch.setattr(_ConstraintReads, "complete_sync_apply", complete, raising=False)
+    result = succeeded(
+        run(
+            build_service(scene.world, scene.providers),
+            scene,
+            Capability.CONSTRAINT_SYNC_APPLY,
+            Purpose.CONSTRAINT_SYNC_AUTHORING,
+            ApplyConstraintSync(
+                project_id=scene.constraint_project_id,
+                target_id="csyt_12345678",
+                run_id="csyr_12345678",
+                lease_token="a" * 64,
+                preview_digest="b" * 64,
+                idempotency_key="apply_sync_12345678",
+            ),
+        )
+    )
+    assert result["state"] == "partial"
+    assert result["replayed"] is replayed
+    assert result["canonical_digest"] == "c" * 64
+    assert result["item_count"] == 0
+    assert result["action_counts"] == {
+        "no_op": 0,
+        "import_external": 0,
+        "export_canonical": 0,
+        "merge": 0,
+        "conflict": 0,
+    }
+
+
+def test_constraint_sync_merge_does_not_apply_an_unselected_external_status(
+    scene: Scene, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key = (scene.principal.principal_id, scene.constraint_id)
+    original = scene.world.project_constraints[key]
+    canonical = replace(
+        original,
+        lifecycle_state=ConstraintLifecycleState.IN_PROGRESS,
+        version=original.version + 1,
+    )
+    scene.world.project_constraints[key] = canonical
+    mutations = mock.Mock()
+    mutations.update.return_value = SimpleNamespace(
+        record=replace(canonical, description="External description", version=canonical.version + 1)
+    )
+    monkeypatch.setattr(ApplicationService, "_constraint_mutations", lambda _self: mutations)
+
+    def prepare(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {
+            "replayed": False,
+            "run": {"sync_state": "external_import_pending"},
+            "apply_result": None,
+            "items": [
+                {
+                    "external_row_key": "row-1",
+                    "constraint_id": scene.constraint_id,
+                    "action": "merge",
+                    "expected_constraint_version": canonical.version,
+                    "field_names": ["description"],
+                    "external_candidate": {
+                        "external_row_key": "row-1",
+                        "constraint_id": scene.constraint_id,
+                        "constraint_code": canonical.constraint_code,
+                        "category": canonical.category_id,
+                        "description": "External description",
+                        "date_identified": (
+                            None
+                            if canonical.date_identified is None
+                            else canonical.date_identified.isoformat()
+                        ),
+                        "status": ConstraintLifecycleState.IDENTIFIED.value,
+                        "bic": [],
+                        "responsible": [],
+                        "due_date": (
+                            None if canonical.due_date is None else canonical.due_date.isoformat()
+                        ),
+                        "reference": canonical.reference,
+                        "current_update": canonical.current_update,
+                        "completion_date": None,
+                    },
+                }
+            ],
+        }
+
+    monkeypatch.setattr(_ConstraintReads, "prepare_sync_apply", prepare)
+    monkeypatch.setattr(
+        _ConstraintReads,
+        "current_sync_revision",
+        lambda *_args: "crev_transport00000001",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        _ConstraintReads,
+        "complete_sync_apply",
+        lambda *_args, **_kwargs: {
+            "run_id": "csyr_12345678",
+            "state": "verification_pending",
+            "canonical_digest": "c" * 64,
+            "item_count": 1,
+            "action_counts": {
+                "no_op": 0,
+                "import_external": 0,
+                "export_canonical": 0,
+                "merge": 1,
+                "conflict": 0,
+            },
+            "replayed": False,
+        },
+        raising=False,
+    )
+    result = succeeded(
+        run(
+            build_service(scene.world, scene.providers),
+            scene,
+            Capability.CONSTRAINT_SYNC_APPLY,
+            Purpose.CONSTRAINT_SYNC_AUTHORING,
+            ApplyConstraintSync(
+                project_id=scene.constraint_project_id,
+                target_id="csyt_12345678",
+                run_id="csyr_12345678",
+                lease_token="a" * 64,
+                preview_digest="b" * 64,
+                idempotency_key="apply_sync_12345678",
+            ),
+        )
+    )
+    assert result["action_counts"]["merge"] == 1  # type: ignore[index]
+    mutations.update.assert_called_once()
+    mutations.transition_active.assert_not_called()
+    mutations.close.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("status", "completion_date", "field_names", "operation"),
+    [
+        (ConstraintLifecycleState.IN_PROGRESS, None, ["status"], "transition_active"),
+        (
+            ConstraintLifecycleState.CLOSED,
+            "2026-09-08",
+            ["status", "completion_date"],
+            "close",
+        ),
+    ],
+)
+def test_selected_sync_lifecycle_operation_executes_once_and_replays(
+    scene: Scene,
+    monkeypatch: pytest.MonkeyPatch,
+    status: ConstraintLifecycleState,
+    completion_date: str | None,
+    field_names: list[str],
+    operation: str,
+) -> None:
+    record = scene.world.project_constraints[(scene.principal.principal_id, scene.constraint_id)]
+    changed = replace(
+        record,
+        lifecycle_state=status,
+        completion_date=(
+            None if completion_date is None else datetime.fromisoformat(completion_date).date()
+        ),
+        version=record.version + 1,
+    )
+    mutations = mock.Mock()
+    getattr(mutations, operation).return_value = SimpleNamespace(record=changed)
+    monkeypatch.setattr(ApplicationService, "_constraint_mutations", lambda _self: mutations)
+    apply_result = {
+        "run_id": "csyr_12345678",
+        "state": "verification_pending",
+        "canonical_digest": "c" * 64,
+        "item_count": 1,
+        "action_counts": {
+            "no_op": 0,
+            "import_external": 1,
+            "export_canonical": 0,
+            "merge": 0,
+            "conflict": 0,
+        },
+        "replayed": False,
+    }
+    calls = 0
+
+    def prepare(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return {
+            "replayed": calls > 1,
+            "run": {"sync_state": "external_import_pending"},
+            "apply_result": {**apply_result, "replayed": True} if calls > 1 else None,
+            "items": [
+                {
+                    "external_row_key": "row-1",
+                    "constraint_id": scene.constraint_id,
+                    "action": "import_external",
+                    "expected_constraint_version": record.version,
+                    "field_names": field_names,
+                    "external_candidate": {
+                        "external_row_key": "row-1",
+                        "constraint_id": scene.constraint_id,
+                        "constraint_code": record.constraint_code,
+                        "category": record.category_id,
+                        "description": record.description,
+                        "date_identified": None,
+                        "status": status.value,
+                        "bic": [],
+                        "responsible": [],
+                        "due_date": None,
+                        "reference": None,
+                        "current_update": None,
+                        "completion_date": completion_date,
+                    },
+                }
+            ],
+        }
+
+    monkeypatch.setattr(_ConstraintReads, "prepare_sync_apply", prepare)
+    monkeypatch.setattr(
+        _ConstraintReads,
+        "current_sync_revision",
+        lambda *_args: "crev_transport00000001",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        _ConstraintReads,
+        "complete_sync_apply",
+        lambda *_args, **_kwargs: apply_result,
+        raising=False,
+    )
+    service = build_service(scene.world, scene.providers)
+    command = ApplyConstraintSync(
+        project_id=scene.constraint_project_id,
+        target_id="csyt_12345678",
+        run_id="csyr_12345678",
+        lease_token="a" * 64,
+        preview_digest="b" * 64,
+        idempotency_key="apply_sync_12345678",
+    )
+    initial = succeeded(
+        run(
+            service,
+            scene,
+            Capability.CONSTRAINT_SYNC_APPLY,
+            Purpose.CONSTRAINT_SYNC_AUTHORING,
+            command,
+        )
+    )
+    replay = succeeded(
+        run(
+            service,
+            scene,
+            Capability.CONSTRAINT_SYNC_APPLY,
+            Purpose.CONSTRAINT_SYNC_AUTHORING,
+            command,
+        )
+    )
+    assert initial == apply_result
+    assert replay == {**apply_result, "replayed": True}
+    getattr(mutations, operation).assert_called_once()
+    mutations.update.assert_not_called()
+
+
+def test_sync_apply_rejects_an_orphan_completion_date_selection(
+    scene: Scene, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = scene.world.project_constraints[(scene.principal.principal_id, scene.constraint_id)]
+    mutations = mock.Mock()
+    monkeypatch.setattr(ApplicationService, "_constraint_mutations", lambda _self: mutations)
+    monkeypatch.setattr(
+        _ConstraintReads,
+        "prepare_sync_apply",
+        lambda *_args, **_kwargs: {
+            "replayed": False,
+            "run": {"sync_state": "external_import_pending"},
+            "apply_result": None,
+            "items": [
+                {
+                    "external_row_key": "row-1",
+                    "constraint_id": scene.constraint_id,
+                    "action": "import_external",
+                    "expected_constraint_version": record.version,
+                    "field_names": ["completion_date"],
+                    "external_candidate": {
+                        "external_row_key": "row-1",
+                        "constraint_id": scene.constraint_id,
+                        "constraint_code": record.constraint_code,
+                        "category": record.category_id,
+                        "description": record.description,
+                        "date_identified": None,
+                        "status": record.lifecycle_state.value,
+                        "bic": [],
+                        "responsible": [],
+                        "due_date": None,
+                        "reference": None,
+                        "current_update": None,
+                        "completion_date": "2026-09-08",
+                    },
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        _ConstraintReads,
+        "complete_sync_apply",
+        mock.Mock(side_effect=AssertionError("an invalid plan must not complete")),
+        raising=False,
+    )
+    envelope = run(
+        build_service(scene.world, scene.providers),
+        scene,
+        Capability.CONSTRAINT_SYNC_APPLY,
+        Purpose.CONSTRAINT_SYNC_AUTHORING,
+        ApplyConstraintSync(
+            project_id=scene.constraint_project_id,
+            target_id="csyt_12345678",
+            run_id="csyr_12345678",
+            lease_token="a" * 64,
+            preview_digest="b" * 64,
+            idempotency_key="apply_sync_12345678",
+        ),
+    )
+    assert envelope.error is not None and envelope.error.code is ErrorCode.CONFLICT
+    mutations.update.assert_not_called()
+    mutations.transition_active.assert_not_called()
+    mutations.close.assert_not_called()
+
+
+def test_constraint_sync_acknowledge_binds_and_returns_plan_cardinality(
+    scene: Scene, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    counts = {
+        "no_op": 1,
+        "import_external": 0,
+        "export_canonical": 0,
+        "merge": 0,
+        "conflict": 0,
+    }
+    captured: dict[str, object] = {}
+
+    def acknowledge(*_args: object, **values: object) -> dict[str, object]:
+        captured.update(values)
+        return {
+            "run_id": "csyr_12345678",
+            "state": "in_sync",
+            "item_count": values["item_count"],
+            "action_counts": values["action_counts"],
+            "replayed": False,
+        }
+
+    monkeypatch.setattr(_ConstraintReads, "acknowledge_sync", acknowledge)
+    result = succeeded(
+        run(
+            build_service(scene.world, scene.providers),
+            scene,
+            Capability.CONSTRAINT_SYNC_ACKNOWLEDGE,
+            Purpose.CONSTRAINT_SYNC_AUTHORING,
+            AcknowledgeConstraintSync(
+                project_id=scene.constraint_project_id,
+                target_id="csyt_12345678",
+                run_id="csyr_12345678",
+                lease_token="a" * 64,
+                canonical_digest="c" * 64,
+                item_count=1,
+                action_counts=counts,
+                provider_version="v1",
+                idempotency_key="acknowledge_sync_12345678",
+            ),
+        )
+    )
+    assert captured["item_count"] == 1
+    assert captured["action_counts"] == counts
+    assert result["item_count"] == 1
+    assert result["action_counts"] == counts
 
 
 # ---- capabilities.get ------------------------------------------------------

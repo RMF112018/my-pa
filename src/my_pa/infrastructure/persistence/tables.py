@@ -11850,6 +11850,7 @@ constraint_sync_targets = Table(
     Column("last_verified_sync_run_id", Text),
     Column("active_run_id", Text),
     Column("active_run_lease_until", DateTime(timezone=True)),
+    Column("last_run_id", Text),
     Column("version", Integer, nullable=False, server_default=text("1")),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
@@ -11864,6 +11865,10 @@ constraint_sync_targets = Table(
         "last_verified_sync_run_id IS NULL "
         "OR last_verified_sync_run_id ~ '^csyr_[A-Za-z0-9]{8,64}$'",
         name="a_sync_target_verified_run_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        "last_run_id IS NULL OR last_run_id ~ '^csyr_[A-Za-z0-9]{8,64}$'",
+        name="a_sync_target_last_run_is_an_opaque_identifier",
     ),
     _one_of(
         "external_kind",
@@ -11903,11 +11908,19 @@ constraint_sync_targets = Table(
         "sync_target_id",
         name="constraint_sync_targets_principal_target_is_unique",
     ),
+    UniqueConstraint(
+        "principal_id",
+        "project_id",
+        "sync_target_id",
+        name="constraint_sync_targets_scope_is_unique",
+    ),
     #: The second cycle: a target names its runs and a run names its target.
     ForeignKeyConstraint(
-        ["principal_id", "active_run_id"],
+        ["principal_id", "project_id", "sync_target_id", "active_run_id"],
         [
             f"{SCHEMA}.constraint_sync_runs.principal_id",
+            f"{SCHEMA}.constraint_sync_runs.project_id",
+            f"{SCHEMA}.constraint_sync_runs.sync_target_id",
             f"{SCHEMA}.constraint_sync_runs.sync_run_id",
         ],
         use_alter=True,
@@ -11916,15 +11929,35 @@ constraint_sync_targets = Table(
         name="a_sync_target_names_an_active_run_of_its_principal",
     ),
     ForeignKeyConstraint(
-        ["principal_id", "last_verified_sync_run_id"],
+        [
+            "principal_id",
+            "project_id",
+            "sync_target_id",
+            "last_verified_sync_run_id",
+        ],
         [
             f"{SCHEMA}.constraint_sync_runs.principal_id",
+            f"{SCHEMA}.constraint_sync_runs.project_id",
+            f"{SCHEMA}.constraint_sync_runs.sync_target_id",
             f"{SCHEMA}.constraint_sync_runs.sync_run_id",
         ],
         use_alter=True,
         deferrable=True,
         initially="DEFERRED",
         name="a_sync_target_names_a_verified_run_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "project_id", "sync_target_id", "last_run_id"],
+        [
+            f"{SCHEMA}.constraint_sync_runs.principal_id",
+            f"{SCHEMA}.constraint_sync_runs.project_id",
+            f"{SCHEMA}.constraint_sync_runs.sync_target_id",
+            f"{SCHEMA}.constraint_sync_runs.sync_run_id",
+        ],
+        use_alter=True,
+        deferrable=True,
+        initially="DEFERRED",
+        name="a_sync_target_names_its_last_run_of_its_principal",
     ),
     Index("constraint_sync_targets_by_principal_project", "principal_id", "project_id"),
 )
@@ -11941,6 +11974,9 @@ constraint_sync_runs = Table(
     Column("project_id", Text, ForeignKey(f"{SCHEMA}.projects.project_id"), nullable=False),
     Column("sync_target_id", Text, nullable=False),
     Column("state", Text, nullable=False),
+    Column("sync_state", Text, nullable=False, server_default=text("'never_synced'")),
+    Column("lease_token", Text, nullable=False),
+    Column("preview_lease_until", DateTime(timezone=True), nullable=False),
     Column("started_at", DateTime(timezone=True), nullable=False),
     Column("finished_at", DateTime(timezone=True)),
     Column("provider_version_before", Text),
@@ -11950,6 +11986,15 @@ constraint_sync_runs = Table(
     Column("preview_digest", Text),
     Column("outcome", Text),
     Column("safe_failure_reason", Text),
+    Column("failure_kind", Text),
+    Column("preview_idempotency_key", Text, nullable=False),
+    Column("preview_request_digest", Text, nullable=False),
+    Column("apply_idempotency_key", Text),
+    Column("apply_request_digest", Text),
+    Column("apply_canonical_digest", Text),
+    Column("apply_sync_state", Text),
+    Column("acknowledge_idempotency_key", Text),
+    Column("acknowledge_request_digest", Text),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
     _is_identifier("sync_run_id", IdKind.CONSTRAINT_SYNC_RUN),
@@ -11960,6 +12005,74 @@ constraint_sync_runs = Table(
         "state",
         frozenset({"acknowledged", "applied", "failed", "previewed", "started"}),
         name="a_constraint_sync_run_state_is_known",
+    ),
+    _one_of(
+        "sync_state",
+        frozenset(
+            {
+                "never_synced",
+                "in_sync",
+                "db_export_pending",
+                "external_import_pending",
+                "conflict",
+                "workbook_unavailable",
+                "schema_unsupported",
+                "partial",
+                "verification_pending",
+                "verification_failed",
+            }
+        ),
+        name="a_constraint_sync_state_is_known",
+    ),
+    CheckConstraint(
+        "lease_token ~ '^[0-9a-f]{64}$'",
+        name="a_sync_run_lease_token_is_sha256",
+    ),
+    CheckConstraint(
+        "failure_kind IS NULL OR failure_kind IN "
+        "('workbook_unavailable', 'schema_unsupported', 'verification_failed')",
+        name="a_sync_run_failure_kind_is_known",
+    ),
+    CheckConstraint(
+        "preview_idempotency_key ~ '^[A-Za-z0-9_-]{8,128}$'",
+        name="a_sync_run_preview_idempotency_key_is_valid",
+    ),
+    CheckConstraint(
+        "preview_request_digest ~ '^[0-9a-f]{64}$'",
+        name="a_sync_run_preview_request_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "(apply_idempotency_key IS NULL) = (apply_request_digest IS NULL)",
+        name="a_sync_run_apply_binding_is_complete",
+    ),
+    CheckConstraint(
+        "apply_idempotency_key IS NULL OR apply_idempotency_key ~ '^[A-Za-z0-9_-]{8,128}$'",
+        name="a_sync_run_apply_idempotency_key_is_valid",
+    ),
+    CheckConstraint(
+        "apply_request_digest IS NULL OR apply_request_digest ~ '^[0-9a-f]{64}$'",
+        name="a_sync_run_apply_request_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "apply_canonical_digest IS NULL OR apply_canonical_digest ~ '^[0-9a-f]{64}$'",
+        name="a_sync_run_apply_canonical_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "apply_sync_state IS NULL OR apply_sync_state IN ('partial', 'verification_pending')",
+        name="a_sync_run_apply_sync_state_is_known",
+    ),
+    CheckConstraint(
+        "(acknowledge_idempotency_key IS NULL) = (acknowledge_request_digest IS NULL)",
+        name="a_sync_run_acknowledge_binding_is_complete",
+    ),
+    CheckConstraint(
+        "acknowledge_idempotency_key IS NULL "
+        "OR acknowledge_idempotency_key ~ '^[A-Za-z0-9_-]{8,128}$'",
+        name="a_sync_run_acknowledge_idempotency_key_is_valid",
+    ),
+    CheckConstraint(
+        "acknowledge_request_digest IS NULL OR acknowledge_request_digest ~ '^[0-9a-f]{64}$'",
+        name="a_sync_run_acknowledge_request_digest_is_sha256",
     ),
     CheckConstraint(
         "outcome IS NULL OR outcome IN ('applied', 'failed', 'no_change')",
@@ -12003,10 +12116,23 @@ constraint_sync_runs = Table(
         "sync_run_id",
         name="constraint_sync_runs_principal_run_is_unique",
     ),
+    UniqueConstraint(
+        "principal_id",
+        "project_id",
+        "sync_target_id",
+        "sync_run_id",
+        name="constraint_sync_runs_scope_is_unique",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "preview_idempotency_key",
+        name="constraint_sync_runs_principal_preview_key_is_unique",
+    ),
     ForeignKeyConstraint(
-        ["principal_id", "sync_target_id"],
+        ["principal_id", "project_id", "sync_target_id"],
         [
             f"{SCHEMA}.constraint_sync_targets.principal_id",
+            f"{SCHEMA}.constraint_sync_targets.project_id",
             f"{SCHEMA}.constraint_sync_targets.sync_target_id",
         ],
         name="a_sync_run_belongs_to_a_target_of_its_principal",
@@ -12146,7 +12272,7 @@ constraint_sync_conflicts = Table(
         name="a_sync_conflict_revision_is_an_opaque_identifier",
     ),
     CheckConstraint(
-        "resolution_history_id IS NULL OR resolution_history_id ~ '^chst_[A-Za-z0-9]{8,64}$'",
+        "resolution_history_id IS NULL OR resolution_history_id ~ '^csyrh_[A-Za-z0-9]{8,64}$'",
         name="a_sync_conflict_resolution_is_an_opaque_identifier",
     ),
     _one_of(
@@ -12157,6 +12283,8 @@ constraint_sync_conflicts = Table(
                 "deleted_in_canonical",
                 "deleted_in_external",
                 "new_in_external",
+                "identity",
+                "lifecycle",
             }
         ),
         name="a_constraint_sync_conflict_kind_is_known",
@@ -12200,6 +12328,25 @@ constraint_sync_conflicts = Table(
         "db_version IS NULL OR db_version >= 1",
         name="a_sync_conflict_db_version_is_positive",
     ),
+    UniqueConstraint(
+        "principal_id",
+        "sync_conflict_id",
+        name="constraint_sync_conflicts_principal_conflict_is_unique",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "project_id",
+        "sync_conflict_id",
+        name="constraint_sync_conflicts_scope_is_unique",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "project_id",
+        "sync_target_id",
+        "sync_run_id",
+        "sync_conflict_id",
+        name="constraint_sync_conflicts_run_scope_is_unique",
+    ),
     ForeignKeyConstraint(
         ["principal_id", "sync_target_id"],
         [
@@ -12209,9 +12356,11 @@ constraint_sync_conflicts = Table(
         name="a_sync_conflict_belongs_to_a_target_of_its_principal",
     ),
     ForeignKeyConstraint(
-        ["principal_id", "sync_run_id"],
+        ["principal_id", "project_id", "sync_target_id", "sync_run_id"],
         [
             f"{SCHEMA}.constraint_sync_runs.principal_id",
+            f"{SCHEMA}.constraint_sync_runs.project_id",
+            f"{SCHEMA}.constraint_sync_runs.sync_target_id",
             f"{SCHEMA}.constraint_sync_runs.sync_run_id",
         ],
         name="a_sync_conflict_names_a_run_of_its_principal",
@@ -12235,10 +12384,13 @@ constraint_sync_conflicts = Table(
     ForeignKeyConstraint(
         ["principal_id", "resolution_history_id"],
         [
-            f"{SCHEMA}.project_constraint_history.principal_id",
-            f"{SCHEMA}.project_constraint_history.history_id",
+            f"{SCHEMA}.constraint_sync_resolution_history.principal_id",
+            f"{SCHEMA}.constraint_sync_resolution_history.resolution_history_id",
         ],
-        name="a_sync_conflict_names_a_receipt_of_its_principal",
+        use_alter=True,
+        deferrable=True,
+        initially="DEFERRED",
+        name="a_sync_conflict_names_a_resolution_of_its_principal",
     ),
     #: One open conflict per Constraint and kind: a second row for the same
     #: disagreement would make "how many conflicts are open" a count of runs.
@@ -12255,5 +12407,201 @@ constraint_sync_conflicts = Table(
         "principal_id",
         "sync_target_id",
         "state",
+    ),
+)
+
+#: Pre-WP11 conflicts whose target and run scopes disagreed.  The predecessor
+#: permitted that relation, but the strengthened synchronization model cannot
+#: safely treat it as authority for either target.  Rows are retained exactly
+#: here with an explicit database-only disposition; no repository queries this
+#: table, and downgrade restores the predecessor representation.
+constraint_sync_legacy_unbound_conflicts = Table(
+    "constraint_sync_legacy_unbound_conflicts",
+    METADATA,
+    Column("sync_conflict_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("sync_target_id", Text, nullable=False),
+    Column("constraint_id", Text),
+    Column("sync_run_id", Text, nullable=False),
+    Column("conflict_kind", Text, nullable=False),
+    Column("field_names", JSONB, nullable=False),
+    Column("baseline_revision_id", Text),
+    Column("db_version", Integer),
+    Column("provider_version", Text),
+    Column("external_candidate", JSONB),
+    Column("external_candidate_digest", Text),
+    Column("state", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("resolved_at", DateTime(timezone=True)),
+    Column("resolution_history_id", Text),
+    Column(
+        "legacy_scope_disposition",
+        Text,
+        nullable=False,
+        server_default=text("'legacy_unbound'"),
+    ),
+    CheckConstraint(
+        "legacy_scope_disposition = 'legacy_unbound'",
+        name="legacy_sync_conflict_is_explicitly_unbound",
+    ),
+)
+
+#: A deterministic preview decision. It binds apply to the versions compared;
+#: replay therefore returns the stored plan instead of repeating a mutation.
+constraint_sync_run_items = Table(
+    "constraint_sync_run_items",
+    METADATA,
+    Column("sync_run_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("sync_target_id", Text, nullable=False),
+    Column("external_row_key", Text, nullable=False),
+    Column("constraint_id", Text),
+    Column("action", Text, nullable=False),
+    Column("expected_constraint_version", Integer),
+    Column("baseline_revision_id", Text),
+    Column("external_candidate", JSONB),
+    Column("external_candidate_digest", Text),
+    Column("field_names", JSONB, nullable=False),
+    Column("response_summary", JSONB, nullable=False),
+    Column("applied_constraint_version", Integer),
+    Column("applied_revision_id", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("sync_run_id", "external_row_key", name="one_sync_item_per_run_row"),
+    _is_identifier("sync_run_id", IdKind.CONSTRAINT_SYNC_RUN),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("sync_target_id", IdKind.CONSTRAINT_SYNC_TARGET),
+    CheckConstraint(
+        "length(trim(external_row_key)) BETWEEN 1 AND 256 AND external_row_key !~ '\\s'",
+        name="a_sync_item_row_identity_is_bounded",
+    ),
+    _one_of(
+        "action",
+        frozenset({"no_op", "import_external", "export_canonical", "merge", "conflict"}),
+        name="a_sync_item_action_is_known",
+    ),
+    CheckConstraint(
+        "constraint_id IS NULL OR constraint_id ~ '^cst_[A-Za-z0-9]{8,64}$'",
+        name="a_sync_item_constraint_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        "expected_constraint_version IS NULL OR expected_constraint_version >= 1",
+        name="a_sync_item_expected_version_is_positive",
+    ),
+    CheckConstraint(
+        "external_candidate IS NULL OR (jsonb_typeof(external_candidate) = 'object' "
+        "AND pg_column_size(external_candidate) <= 8192)",
+        name="a_sync_item_candidate_is_bounded",
+    ),
+    CheckConstraint(
+        "external_candidate_digest IS NULL OR external_candidate_digest ~ '^[0-9a-f]{64}$'",
+        name="a_sync_item_candidate_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "jsonb_typeof(field_names) = 'array' AND jsonb_array_length(field_names) <= 11",
+        name="a_sync_item_field_names_are_bounded",
+    ),
+    CheckConstraint(
+        "jsonb_typeof(response_summary) = 'object' AND pg_column_size(response_summary) <= 8192",
+        name="a_sync_item_response_summary_is_bounded",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "project_id", "sync_target_id", "sync_run_id"],
+        [
+            f"{SCHEMA}.constraint_sync_runs.principal_id",
+            f"{SCHEMA}.constraint_sync_runs.project_id",
+            f"{SCHEMA}.constraint_sync_runs.sync_target_id",
+            f"{SCHEMA}.constraint_sync_runs.sync_run_id",
+        ],
+        name="a_sync_item_belongs_to_its_principals_run",
+    ),
+    Index("constraint_sync_run_items_by_principal_target", "principal_id", "sync_target_id"),
+)
+
+#: Append-only evidence that one conflict resolution was attempted exactly once.
+constraint_sync_resolution_history = Table(
+    "constraint_sync_resolution_history",
+    METADATA,
+    Column("resolution_history_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("sync_target_id", Text, nullable=False),
+    Column("sync_conflict_id", Text, nullable=False),
+    Column("sync_run_id", Text, nullable=False),
+    Column("resolution", Text, nullable=False),
+    Column("expected_constraint_version", Integer, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("request_digest", Text, nullable=False),
+    Column("constraint_history_id", Text),
+    Column("constraint_version", Integer),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("resolution_history_id", IdKind.CONSTRAINT_SYNC_RESOLUTION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _is_identifier("sync_target_id", IdKind.CONSTRAINT_SYNC_TARGET),
+    _is_identifier("sync_conflict_id", IdKind.CONSTRAINT_SYNC_CONFLICT),
+    _is_identifier("sync_run_id", IdKind.CONSTRAINT_SYNC_RUN),
+    _one_of(
+        "resolution",
+        frozenset(
+            {"keep_canonical", "accept_external", "manual_patch", "reopen", "legacy_migrated"}
+        ),
+        name="a_sync_resolution_is_known",
+    ),
+    CheckConstraint(
+        "idempotency_key ~ '^[A-Za-z0-9_-]{8,128}$'",
+        name="a_sync_resolution_idempotency_key_is_valid",
+    ),
+    CheckConstraint(
+        "request_digest ~ '^[0-9a-f]{64}$'",
+        name="a_sync_resolution_request_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "constraint_version IS NULL OR constraint_version >= 1",
+        name="a_sync_resolution_constraint_version_is_positive",
+    ),
+    UniqueConstraint(
+        "principal_id", "idempotency_key", name="one_sync_resolution_per_principal_key"
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "resolution_history_id",
+        name="constraint_sync_resolutions_principal_id_is_unique",
+    ),
+    ForeignKeyConstraint(
+        [
+            "principal_id",
+            "project_id",
+            "sync_target_id",
+            "sync_run_id",
+            "sync_conflict_id",
+        ],
+        [
+            f"{SCHEMA}.constraint_sync_conflicts.principal_id",
+            f"{SCHEMA}.constraint_sync_conflicts.project_id",
+            f"{SCHEMA}.constraint_sync_conflicts.sync_target_id",
+            f"{SCHEMA}.constraint_sync_conflicts.sync_run_id",
+            f"{SCHEMA}.constraint_sync_conflicts.sync_conflict_id",
+        ],
+        name="a_sync_resolution_names_its_principals_conflict",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "project_id", "sync_target_id", "sync_run_id"],
+        [
+            f"{SCHEMA}.constraint_sync_runs.principal_id",
+            f"{SCHEMA}.constraint_sync_runs.project_id",
+            f"{SCHEMA}.constraint_sync_runs.sync_target_id",
+            f"{SCHEMA}.constraint_sync_runs.sync_run_id",
+        ],
+        name="a_sync_resolution_names_its_principals_run",
+    ),
+    Index(
+        "constraint_sync_resolutions_by_principal_conflict",
+        "principal_id",
+        "sync_conflict_id",
+        "created_at",
     ),
 )

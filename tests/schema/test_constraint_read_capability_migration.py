@@ -50,10 +50,11 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "c5b71e0a8d43"
 PREVIOUS: Final = "a1c9e4b72f80"
-CURRENT_HEAD: Final = "f7a2c9d51e64"
+CURRENT_HEAD: Final = "b8e4d6f20a11"
 #: The revision between this one and the head, landed by AUTH-IMP while
 #: PC-CM-IMP-WP07 was in review.
 INTERVENING: Final = "4e9a1c7b2d60"
+AUTHORING_REVISION: Final = "f7a2c9d51e64"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20260906_c5b71e0a8d43_admit_the_constraint_read_capabilities.py"
 PREVIOUS_MIGRATION: Final = (
@@ -166,7 +167,8 @@ def test_revision_sits_on_the_single_head_chain() -> None:
     # on top of this revision, so the head is no longer its direct child. The
     # path from head down to this revision is asserted link by link rather than
     # loosened to mere reachability, which would be the weaker claim.
-    assert script.get_revision(CURRENT_HEAD).down_revision == INTERVENING
+    assert script.get_revision(CURRENT_HEAD).down_revision == AUTHORING_REVISION
+    assert script.get_revision(AUTHORING_REVISION).down_revision == INTERVENING
     assert script.get_revision(INTERVENING).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 

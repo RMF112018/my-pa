@@ -392,6 +392,13 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.CONSTRAINT_CATEGORIES_UPDATE, Purpose.CONSTRAINT_AUTHORING),
         (Capability.CONSTRAINT_CATEGORIES_DEACTIVATE, Purpose.CONSTRAINT_AUTHORING),
         (Capability.CONSTRAINT_CATEGORIES_REORDER, Purpose.CONSTRAINT_AUTHORING),
+        (Capability.CONSTRAINT_SYNC_STATE, Purpose.CONSTRAINT_SYNC_READ),
+        (Capability.CONSTRAINT_SYNC_DELTA, Purpose.CONSTRAINT_SYNC_READ),
+        (Capability.CONSTRAINT_SYNC_CONFLICTS, Purpose.CONSTRAINT_SYNC_READ),
+        (Capability.CONSTRAINT_SYNC_PREVIEW, Purpose.CONSTRAINT_SYNC_AUTHORING),
+        (Capability.CONSTRAINT_SYNC_APPLY, Purpose.CONSTRAINT_SYNC_AUTHORING),
+        (Capability.CONSTRAINT_SYNC_ACKNOWLEDGE, Purpose.CONSTRAINT_SYNC_AUTHORING),
+        (Capability.CONSTRAINT_SYNC_RESOLVE, Purpose.CONSTRAINT_SYNC_AUTHORING),
     }
 )
 
@@ -461,11 +468,11 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # and to nothing else, so it contributes twelve pairs rather than the five
     # hundred and sixteen a cross product would give. No read gains the authoring
     # purpose and no write gains `constraint_read`: that disjointness is what the
-    # plane's read/authoring separation now rests on. Still no synchronisation
-    # purpose, so the sync plane has no permitted pair at all.
-    # Unioned: 154 capabilities, 43 purposes, 156 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 156
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 156 == 6466
+    # plane's read/authoring separation now rests on. WP11 adds seven sync pairs,
+    # split between its read and authoring purposes, without widening the canonical grants.
+    # Unioned: 161 capabilities, 45 purposes, 163 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 163
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 163 == 7082
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

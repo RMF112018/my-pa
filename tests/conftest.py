@@ -172,7 +172,12 @@ from my_pa.domain.capture.submission import CaptureReceipt
 from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.coverage import CoverageState
-from my_pa.domain.common.identifiers import IdKind, parse_identifier, validate_identifier
+from my_pa.domain.common.identifiers import (
+    IdKind,
+    make_identifier,
+    parse_identifier,
+    validate_identifier,
+)
 from my_pa.domain.common.provenance import Provenance, TrustLevel
 from my_pa.domain.common.time import ensure_utc, utc_now
 from my_pa.domain.context.preference import (
@@ -3290,6 +3295,85 @@ class _ConstraintReads:
             baseline_versions={},
             open_conflict_counts={},
         )
+
+    # PC-CM-IMP-WP11's transport fakes. These deliberately return small,
+    # deterministic receipts: the contract matrix is comparing transport and
+    # authorization behavior, while persistence/replay semantics are exercised
+    # by the isolated-database suite.
+    def read_sync_state(
+        self, principal_id: str, project_id: str, target_id: str
+    ) -> dict[str, object]:
+        del principal_id
+        return {"project_id": project_id, "target_id": target_id, "state": "never_synced"}
+
+    def read_sync_delta(
+        self, principal_id: str, project_id: str, target_id: str, *, limit: int, cursor: str | None
+    ) -> tuple[dict[str, object], ...]:
+        del principal_id, project_id, target_id, limit, cursor
+        return ()
+
+    def list_sync_conflicts(
+        self, principal_id: str, project_id: str, target_id: str, *, limit: int, cursor: str | None
+    ) -> tuple[dict[str, object], ...]:
+        del principal_id, project_id, target_id, limit, cursor
+        return ()
+
+    def preview_sync(
+        self, principal_id: str, project_id: str, **values: object
+    ) -> dict[str, object]:
+        del principal_id, project_id, values
+        return {
+            "target_id": make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "transporttarget000001"),
+            "run_id": make_identifier(IdKind.CONSTRAINT_SYNC_RUN, "transportrun00000001"),
+            "state": "previewed",
+            "lease_token": "a" * 64,
+            "lease_until": WHEN,
+            "preview_digest": "b" * 64,
+            "items": [],
+            "replayed": False,
+        }
+
+    def prepare_sync_apply(
+        self, principal_id: str, project_id: str, target_id: str, run_id: str, **values: object
+    ) -> dict[str, object]:
+        del principal_id, project_id, target_id, run_id, values
+        return {
+            "replayed": True,
+            "items": [],
+            "run": {"sync_state": "verification_pending"},
+            "apply_result": {
+                "run_id": make_identifier(IdKind.CONSTRAINT_SYNC_RUN, "transportrun00000001"),
+                "state": "verification_pending",
+                "canonical_digest": hashlib.sha256(b"[]").hexdigest(),
+                "item_count": 0,
+                "action_counts": {
+                    "no_op": 0,
+                    "import_external": 0,
+                    "export_canonical": 0,
+                    "merge": 0,
+                    "conflict": 0,
+                },
+                "replayed": True,
+            },
+        }
+
+    def acknowledge_sync(
+        self, principal_id: str, project_id: str, target_id: str, run_id: str, **values: object
+    ) -> dict[str, object]:
+        del principal_id, project_id, target_id
+        return {
+            "run_id": run_id,
+            "state": "in_sync",
+            "item_count": values["item_count"],
+            "action_counts": values["action_counts"],
+            "replayed": False,
+        }
+
+    def resolve_sync_conflict(
+        self, principal_id: str, project_id: str, conflict_id: str, **values: object
+    ) -> dict[str, object]:
+        del principal_id, project_id, values
+        return {"conflict_id": conflict_id, "state": "resolved", "version": 2, "replayed": False}
 
     def overview_facts(
         self,

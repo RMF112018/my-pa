@@ -834,9 +834,9 @@ class Capability(StrEnum):
     #: evaluated against, which is the property that puts `sources.enroll` and the
     #: identity-correction pair in `_OPERATOR_ONLY`.
     #:
-    #: No `constraint_sync.*` member joins them. The synchronisation plane is
-    #: `PC-CM-IMP-WP11`'s, and a capability minted here would be one nothing
-    #: dispatches.
+    #: The seven `constraint_sync.*` members below are a separate WP11 plane,
+    #: with their own read/authoring purposes; they do not widen these direct
+    #: Constraint and Category mutation grants.
     CONSTRAINTS_CREATE = "constraints.create"
     CONSTRAINTS_PUBLISH = "constraints.publish"
     CONSTRAINTS_UPDATE = "constraints.update"
@@ -849,6 +849,15 @@ class Capability(StrEnum):
     CONSTRAINT_CATEGORIES_UPDATE = "constraint_categories.update"
     CONSTRAINT_CATEGORIES_DEACTIVATE = "constraint_categories.deactivate"
     CONSTRAINT_CATEGORIES_REORDER = "constraint_categories.reorder"
+    # PC-CM-IMP-WP11. Provider-neutral synchronization receives normalized
+    # logical rows; these capabilities never read or write a workbook.
+    CONSTRAINT_SYNC_STATE = "constraint_sync.state"
+    CONSTRAINT_SYNC_DELTA = "constraint_sync.delta"
+    CONSTRAINT_SYNC_CONFLICTS = "constraint_sync.conflicts"
+    CONSTRAINT_SYNC_PREVIEW = "constraint_sync.preview"
+    CONSTRAINT_SYNC_APPLY = "constraint_sync.apply"
+    CONSTRAINT_SYNC_ACKNOWLEDGE = "constraint_sync.acknowledge"
+    CONSTRAINT_SYNC_RESOLVE = "constraint_sync.resolve"
 
 
 class NativeSourceCapability(StrEnum):
@@ -1327,6 +1336,13 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.CONSTRAINT_CATEGORIES_UPDATE: frozenset({Purpose.CONSTRAINT_AUTHORING}),
         Capability.CONSTRAINT_CATEGORIES_DEACTIVATE: frozenset({Purpose.CONSTRAINT_AUTHORING}),
         Capability.CONSTRAINT_CATEGORIES_REORDER: frozenset({Purpose.CONSTRAINT_AUTHORING}),
+        Capability.CONSTRAINT_SYNC_STATE: frozenset({Purpose.CONSTRAINT_SYNC_READ}),
+        Capability.CONSTRAINT_SYNC_DELTA: frozenset({Purpose.CONSTRAINT_SYNC_READ}),
+        Capability.CONSTRAINT_SYNC_CONFLICTS: frozenset({Purpose.CONSTRAINT_SYNC_READ}),
+        Capability.CONSTRAINT_SYNC_PREVIEW: frozenset({Purpose.CONSTRAINT_SYNC_AUTHORING}),
+        Capability.CONSTRAINT_SYNC_APPLY: frozenset({Purpose.CONSTRAINT_SYNC_AUTHORING}),
+        Capability.CONSTRAINT_SYNC_ACKNOWLEDGE: frozenset({Purpose.CONSTRAINT_SYNC_AUTHORING}),
+        Capability.CONSTRAINT_SYNC_RESOLVE: frozenset({Purpose.CONSTRAINT_SYNC_AUTHORING}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),
@@ -1456,6 +1472,10 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.CONSTRAINT_CATEGORIES_UPDATE,
         Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
         Capability.CONSTRAINT_CATEGORIES_REORDER,
+        Capability.CONSTRAINT_SYNC_PREVIEW,
+        Capability.CONSTRAINT_SYNC_APPLY,
+        Capability.CONSTRAINT_SYNC_ACKNOWLEDGE,
+        Capability.CONSTRAINT_SYNC_RESOLVE,
     }
 )
 

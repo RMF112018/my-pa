@@ -15,7 +15,7 @@ An explicitly enabled synthetic provider remains available for development and
 is refused when `NODE_ENV=production`. It does not silently replace an
 unconfigured or unavailable backend.
 
-The Python contract contains one hundred and fifty-four capability names. The System route reads
+The Python contract contains one hundred and sixty-one capability names. The System route reads
 the live `capabilities.get` manifest, including each capability's runtime
 availability, instead of restating an availability count in this tier. Six of
 those names are the managed-document lifecycle (`documents.create`,
@@ -23,6 +23,8 @@ those names are the managed-document lifecycle (`documents.create`,
 `documents.restore`). They are implemented in the Python application and become
 available only when the gateway composition has a managed root; this web package
 does not currently expose a managed-document screen or API route.
+Browser routing remains an explicitly mapped subset: the seven
+`constraint_sync.*` backend and MCP capabilities have no browser route here.
 
 ## Routes and capability mapping
 

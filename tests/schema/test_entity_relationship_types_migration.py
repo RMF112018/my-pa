@@ -297,6 +297,9 @@ def test_downgrading_one_step_removes_exactly_this_table_and_restores_the_origin
         "constraint_sync_runs",
         "constraint_sync_baselines",
         "constraint_sync_conflicts",
+        "constraint_sync_run_items",
+        "constraint_sync_resolution_history",
+        "constraint_sync_legacy_unbound_conflicts",
     }
     # The rest of the entity plane survives the downgrade of this revision alone.
     assert {

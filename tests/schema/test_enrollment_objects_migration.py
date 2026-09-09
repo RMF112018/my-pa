@@ -123,6 +123,9 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "goodnotes_region_proposals",
         "goodnotes_review_decisions",
         "goodnotes_reconciliation_receipts",
+        "constraint_sync_run_items",
+        "constraint_sync_resolution_history",
+        "constraint_sync_legacy_unbound_conflicts",
         "worker_heartbeats",
         # WP-27's managed-document plane.
         "managed_documents",

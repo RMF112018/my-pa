@@ -52,10 +52,12 @@ from tests.conftest import (
 )
 
 from my_pa.application.commands import (
+    AcknowledgeConstraintSync,
     AddEntityAddress,
     AddEntityAlias,
     AddEntityCommunicationMethod,
     AddEntityName,
+    ApplyConstraintSync,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
@@ -118,6 +120,7 @@ from my_pa.application.commands import (
     ListCommitments,
     ListConstraintCategories,
     ListConstraints,
+    ListConstraintSyncConflicts,
     ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
@@ -141,6 +144,7 @@ from my_pa.application.commands import (
     MergeEntities,
     ObserveEntityMention,
     PrepareContext,
+    PreviewConstraintSync,
     PreviewEntityMerge,
     PreviewEntitySplit,
     ProposeRelationshipMemory,
@@ -152,6 +156,8 @@ from my_pa.application.commands import (
     ReadConstraint,
     ReadConstraintHistory,
     ReadConstraintOverview,
+    ReadConstraintSyncDelta,
+    ReadConstraintSyncState,
     ReadGoodNotes,
     ReadIntelligenceArtifact,
     ReadKnowledge,
@@ -162,6 +168,7 @@ from my_pa.application.commands import (
     RecordTask,
     ReopenConstraint,
     ReorderConstraintCategories,
+    ResolveConstraintSyncConflict,
     ResolveEntity,
     ResolveIntelligenceSet,
     ResolveUnresolvedMention,
@@ -237,6 +244,10 @@ from my_pa.domain.intelligence.catalog import (
 )
 from my_pa.domain.policy.decision import DenialReason
 from my_pa.domain.project_controls.constraint import ConstraintLifecycleState
+from my_pa.domain.project_controls.sync import (
+    ConstraintSyncResolution,
+    NormalizedExternalConstraintRow,
+)
 from my_pa.domain.relationship.authoring import CallerNamespace
 from my_pa.domain.relationship.entity import (
     AddressTypeCode,
@@ -671,6 +682,57 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         ),
         Capability.CONSTRAINT_CATEGORIES_LIST: ListConstraintCategories(
             project_id=issue_identifier(IdKind.PROJECT)
+        ),
+        Capability.CONSTRAINT_SYNC_STATE: ReadConstraintSyncState(
+            project_id=issue_identifier(IdKind.PROJECT),
+            target_id=issue_identifier(IdKind.CONSTRAINT_SYNC_TARGET),
+        ),
+        Capability.CONSTRAINT_SYNC_DELTA: ReadConstraintSyncDelta(
+            project_id=issue_identifier(IdKind.PROJECT),
+            target_id=issue_identifier(IdKind.CONSTRAINT_SYNC_TARGET),
+        ),
+        Capability.CONSTRAINT_SYNC_CONFLICTS: ListConstraintSyncConflicts(
+            project_id=issue_identifier(IdKind.PROJECT),
+            target_id=issue_identifier(IdKind.CONSTRAINT_SYNC_TARGET),
+        ),
+        Capability.CONSTRAINT_SYNC_PREVIEW: PreviewConstraintSync(
+            project_id=issue_identifier(IdKind.PROJECT),
+            external_identity="synthetic.xlsx#Constraints",
+            normalization_version="1",
+            rows=(NormalizedExternalConstraintRow(external_row_key="row-1"),),
+            idempotency_key="denial-sync-preview-0001",
+        ),
+        Capability.CONSTRAINT_SYNC_APPLY: ApplyConstraintSync(
+            project_id=issue_identifier(IdKind.PROJECT),
+            target_id=issue_identifier(IdKind.CONSTRAINT_SYNC_TARGET),
+            run_id=issue_identifier(IdKind.CONSTRAINT_SYNC_RUN),
+            lease_token="a" * 64,
+            preview_digest="b" * 64,
+            idempotency_key="denial-sync-apply-0001",
+        ),
+        Capability.CONSTRAINT_SYNC_ACKNOWLEDGE: AcknowledgeConstraintSync(
+            project_id=issue_identifier(IdKind.PROJECT),
+            target_id=issue_identifier(IdKind.CONSTRAINT_SYNC_TARGET),
+            run_id=issue_identifier(IdKind.CONSTRAINT_SYNC_RUN),
+            lease_token="a" * 64,
+            canonical_digest="c" * 64,
+            item_count=0,
+            action_counts={
+                "no_op": 0,
+                "import_external": 0,
+                "export_canonical": 0,
+                "merge": 0,
+                "conflict": 0,
+            },
+            provider_version="v1",
+            idempotency_key="denial-sync-ack-0001",
+        ),
+        Capability.CONSTRAINT_SYNC_RESOLVE: ResolveConstraintSyncConflict(
+            project_id=issue_identifier(IdKind.PROJECT),
+            conflict_id=issue_identifier(IdKind.CONSTRAINT_SYNC_CONFLICT),
+            resolution=ConstraintSyncResolution.KEEP_CANONICAL,
+            expected_version=1,
+            idempotency_key="denial-sync-resolve-0001",
         ),
         # PC-CM-IMP-WP07's twelve Constraint Management mutations, on the same
         # terms: minted identifiers and a version of 1, so a denial test fails on
@@ -1380,6 +1442,13 @@ SCOPED_CAPABILITIES = [
         Capability.CONSTRAINT_CATEGORIES_UPDATE,
         Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
         Capability.CONSTRAINT_CATEGORIES_REORDER,
+        Capability.CONSTRAINT_SYNC_STATE,
+        Capability.CONSTRAINT_SYNC_DELTA,
+        Capability.CONSTRAINT_SYNC_CONFLICTS,
+        Capability.CONSTRAINT_SYNC_PREVIEW,
+        Capability.CONSTRAINT_SYNC_APPLY,
+        Capability.CONSTRAINT_SYNC_ACKNOWLEDGE,
+        Capability.CONSTRAINT_SYNC_RESOLVE,
     }
 ]
 
@@ -1622,6 +1691,13 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.CONSTRAINT_CATEGORIES_UPDATE,
         Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
         Capability.CONSTRAINT_CATEGORIES_REORDER,
+        Capability.CONSTRAINT_SYNC_STATE,
+        Capability.CONSTRAINT_SYNC_DELTA,
+        Capability.CONSTRAINT_SYNC_CONFLICTS,
+        Capability.CONSTRAINT_SYNC_PREVIEW,
+        Capability.CONSTRAINT_SYNC_APPLY,
+        Capability.CONSTRAINT_SYNC_ACKNOWLEDGE,
+        Capability.CONSTRAINT_SYNC_RESOLVE,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}
@@ -1996,6 +2072,8 @@ def test_no_constraint_read_is_granted_an_authoring_or_synchronisation_purpose()
     assert {purpose for purpose in Purpose if purpose.value.startswith("constraint_")} == {
         Purpose.CONSTRAINT_READ,
         Purpose.CONSTRAINT_AUTHORING,
+        Purpose.CONSTRAINT_SYNC_READ,
+        Purpose.CONSTRAINT_SYNC_AUTHORING,
     }
     for capability in CONSTRAINT_READS:
         granted = permitted_purposes(capability)

@@ -194,20 +194,18 @@ class ConstraintCursorError(ValueError):
 
 
 class ConstraintSyncStateView(StrEnum):
-    """The sync states derivable from persisted rows alone. Exactly four.
-
-    The frontend recognises ten names. Six of them — external import pending,
-    workbook unavailable, schema unsupported, partial, verification pending and
-    verification failed — each require a connector call, a workbook read, or a
-    live run comparison, which is WP11's behavior and not something a read plane
-    may assert. They are not members here, so no read path can emit one to
-    satisfy a fixture.
-    """
+    """The ten persisted synchronization outcomes WP11 can report safely."""
 
     NEVER_SYNCED = "never_synced"
     IN_SYNC = "in_sync"
     DB_EXPORT_PENDING = "db_export_pending"
+    EXTERNAL_IMPORT_PENDING = "external_import_pending"
     CONFLICT = "conflict"
+    WORKBOOK_UNAVAILABLE = "workbook_unavailable"
+    SCHEMA_UNSUPPORTED = "schema_unsupported"
+    PARTIAL = "partial"
+    VERIFICATION_PENDING = "verification_pending"
+    VERIFICATION_FAILED = "verification_failed"
 
 
 class ConstraintListScope(StrEnum):

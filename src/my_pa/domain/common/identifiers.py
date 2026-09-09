@@ -399,6 +399,7 @@ class IdKind(StrEnum):
     CONSTRAINT_SYNC_TARGET = "csyt"
     CONSTRAINT_SYNC_RUN = "csyr"
     CONSTRAINT_SYNC_CONFLICT = "csyc"
+    CONSTRAINT_SYNC_RESOLUTION = "csyrh"
 
 
 class InvalidIdentifierError(ValueError):

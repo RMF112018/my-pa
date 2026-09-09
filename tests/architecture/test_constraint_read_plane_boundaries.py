@@ -96,8 +96,11 @@ MIGRATIONS: Final = ROOT / "migrations" / "versions"
 #: and adds nothing beside it, so it is the one revision permitted to name a
 #: Constraint table and the one that must stay on the path to head.
 WP02_CONSTRAINT_REVISION: Final = "2774329487be"
+WP11_CONSTRAINT_SYNC_REVISION: Final = "b8e4d6f20a11"
 
-#: The fourteen tables WP02 installed. Named here rather than derived from
+#: The fourteen tables WP02 installed plus WP11's three additive sync tables,
+#: including the database-only quarantine for predecessor-unbound history.
+#: Named here rather than derived from
 #: `tables.py`, so that deleting a declaration cannot quietly shrink the set this
 #: module claims to cover.
 CONSTRAINT_TABLES: Final = frozenset(
@@ -107,7 +110,10 @@ CONSTRAINT_TABLES: Final = frozenset(
         "constraint_project_settings",
         "constraint_sync_baselines",
         "constraint_sync_conflicts",
+        "constraint_sync_legacy_unbound_conflicts",
         "constraint_sync_runs",
+        "constraint_sync_run_items",
+        "constraint_sync_resolution_history",
         "constraint_sync_targets",
         "project_constraint_evidence_links",
         "project_constraint_history",
@@ -119,14 +125,17 @@ CONSTRAINT_TABLES: Final = frozenset(
     }
 )
 
-#: The digest of those fourteen declarations on the base tree, built exactly the
+#: The digest of those declarations after WP11's bounded schema additions, built exactly the
 #: way the guard rebuilds it. Pinned rather than read back through git: CI checks
 #: out at `actions/checkout`'s default `fetch-depth: 1` and the workflow sets no
 #: depth, so the base commit is not an object the runner has. A guard that asked
 #: for it would error there, and one that skipped when it was missing would pass
 #: without looking.
+#: `legacy_migrated` is intentionally present only in the resolution-history
+#: database CHECK so predecessor receipts remain truthful; it is not a public
+#: `ConstraintSyncResolution` member.
 BASE_CONSTRAINT_TABLES_SHA256: Final = (
-    "f05660848766e21ae5bb11a6e134ff0fc464c15974d4413aa8cb64a11ecaed0a"
+    "e2e628004c39454d437de0da38a1a2141250c264ccae7ab1fab8ff4ff6bf4c17"
 )
 
 #: Package roots the application read service may never reach. `infrastructure`
@@ -614,12 +623,18 @@ def test_the_sync_state_view_holds_only_the_four_derivable_states() -> None:
         and len(statement.targets) == 1
         and isinstance(statement.targets[0], ast.Name)
     }
-    assert members == {"NEVER_SYNCED", "IN_SYNC", "DB_EXPORT_PENDING", "CONFLICT"}, (
-        f"ConstraintSyncStateView holds {sorted(members)}. Exactly the four states "
-        "derivable from persisted rows are permitted; the remaining six frontend "
-        "names are deferred to WP11 and must not be emitted before the behaviour "
-        "that substantiates them exists"
-    )
+    assert members == {
+        "NEVER_SYNCED",
+        "IN_SYNC",
+        "DB_EXPORT_PENDING",
+        "EXTERNAL_IMPORT_PENDING",
+        "CONFLICT",
+        "WORKBOOK_UNAVAILABLE",
+        "SCHEMA_UNSUPPORTED",
+        "PARTIAL",
+        "VERIFICATION_PENDING",
+        "VERIFICATION_FAILED",
+    }
 
 
 def test_the_read_plane_writes_nothing_to_the_sync_tables() -> None:
@@ -629,7 +644,9 @@ def test_the_read_plane_writes_nothing_to_the_sync_tables() -> None:
     where a read package quietly becomes the sync writer.
     """
     offending: dict[str, dict[str, list[str]]] = {}
-    for module in (APPLICATION_MODULE, PERSISTENCE_MODULE):
+    # WP11 deliberately adds synchronization writes to the shared concrete
+    # repository. The WP03 application read service remains the guarded plane.
+    for module in (APPLICATION_MODULE,):
         statements = _statements_against(_tree(module), SYNC_TABLES)
         writes = {
             table: sorted(builders & WRITE_BUILDERS)
@@ -654,7 +671,9 @@ def test_the_read_plane_names_no_lease_workbook_or_external_connector() -> None:
     why they do not touch them — and prose is not behaviour.
     """
     offending = {}
-    for module in (APPLICATION_MODULE, PERSISTENCE_MODULE, READ_MODELS_MODULE):
+    # WP11's concrete repository now owns leases; the pure WP03 application and
+    # domain modules must still remain unaware of that machinery.
+    for module in (APPLICATION_MODULE, READ_MODELS_MODULE):
         named = sorted(
             word for word in _code_words(_tree(module)) if DEFERRED_MACHINERY.search(word)
         )
@@ -667,7 +686,7 @@ def test_the_read_plane_names_no_lease_workbook_or_external_connector() -> None:
     )
 
 
-def test_no_revision_but_wp02_s_touches_a_constraint_table() -> None:
+def test_only_bounded_constraint_schema_revisions_touch_constraint_tables() -> None:
     """WP03 ships no Constraint migration.
 
     Stated as what WP03 actually promised rather than as a frozen snapshot of
@@ -695,7 +714,7 @@ def test_no_revision_but_wp02_s_touches_a_constraint_table() -> None:
     offenders: dict[str, list[str]] = {}
     for path in sorted(MIGRATIONS.glob("*.py")):
         revision = _declared_revision(path)
-        if revision == WP02_CONSTRAINT_REVISION:
+        if revision in {WP02_CONSTRAINT_REVISION, WP11_CONSTRAINT_SYNC_REVISION}:
             continue
         named = sorted(
             {table for table in CONSTRAINT_TABLES if table in _code_strings(_tree(path))}
@@ -703,7 +722,8 @@ def test_no_revision_but_wp02_s_touches_a_constraint_table() -> None:
         if named:
             offenders[path.name] = named
     assert offenders == {}, (
-        f"revisions outside WP02's {WP02_CONSTRAINT_REVISION} name Constraint "
+        f"revisions outside WP02's {WP02_CONSTRAINT_REVISION} and WP11's "
+        f"{WP11_CONSTRAINT_SYNC_REVISION} name Constraint "
         f"tables: {offenders}. WP03 is a read plane over the schema WP02 already "
         "installed. If an index or a column is genuinely needed, it is a schema "
         "change and belongs in its own reviewed migration, not in a read package"
@@ -714,6 +734,10 @@ def test_no_revision_but_wp02_s_touches_a_constraint_table() -> None:
         f"WP02's revision {WP02_CONSTRAINT_REVISION} is not in "
         "migrations/versions/, so the loop above skipped nothing and proved nothing"
     )
+    assert any(
+        _declared_revision(path) == WP11_CONSTRAINT_SYNC_REVISION
+        for path in MIGRATIONS.glob("*.py")
+    ), f"WP11's revision {WP11_CONSTRAINT_SYNC_REVISION} is missing"
 
 
 def test_the_migration_graph_has_exactly_one_head_descending_from_wp02() -> None:
@@ -757,14 +781,13 @@ def test_the_migration_graph_has_exactly_one_head_descending_from_wp02() -> None
 
 
 def test_the_constraint_table_declarations_are_unchanged() -> None:
-    """WP03 edits no Constraint table: no column, no index, no constraint.
+    """The reviewed Constraint declarations remain byte-for-byte frozen.
 
-    Digested over the fourteen Constraint `Table(...)` declarations only, not over
+    Digested over the Constraint `Table(...)` declarations only, not over
     the whole of `tables.py`. The file is twelve thousand lines shared by every
     plane in the repository, so a whole-file digest would redden on any unrelated
     table's change — the same false-positive shape the revision guard above was
-    rewritten to shed. Slicing to the declarations WP03 actually claims not to
-    have touched keeps the assertion narrow and true.
+    rewritten to shed. Slicing to the declarations keeps the assertion narrow.
 
     Pinned rather than read back through git: CI clones at `fetch-depth: 1` and
     the workflow sets no depth, so the base commit is not an object the runner
@@ -785,9 +808,8 @@ def test_the_constraint_table_declarations_are_unchanged() -> None:
         digest.update(declarations[name].encode("utf-8"))
     assert digest.hexdigest() == BASE_CONSTRAINT_TABLES_SHA256, (
         "the Constraint table declarations in "
-        "src/my_pa/infrastructure/persistence/tables.py differ from the base "
-        f"tree (base {BASE_CONSTRAINT_TABLES_SHA256[:16]}, now "
-        f"{digest.hexdigest()[:16]}). A read plane needs no schema change: WP03 "
-        "adds no migration and edits no declaration. If an index is genuinely "
-        "needed, it is a schema change and belongs in its own reviewed migration"
+        "src/my_pa/infrastructure/persistence/tables.py differ from the reviewed "
+        f"declarations (expected {BASE_CONSTRAINT_TABLES_SHA256[:16]}, now "
+        f"{digest.hexdigest()[:16]}). A genuine schema change belongs in its own "
+        "reviewed migration and must deliberately update this digest"
     )

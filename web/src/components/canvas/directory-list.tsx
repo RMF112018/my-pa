@@ -15,7 +15,7 @@ export function DirectoryList({ nodes }: { nodes: readonly GraphNode[] }) {
               <CardTitle>
                 <Link
                   href={peopleEntity(node.entity_id)}
-                  className="text-moss-slate underline decoration-moss-green/40 underline-offset-2"
+                  className="text-text-primary underline decoration-interactive/40 underline-offset-2"
                 >
                   {node.display_label}
                 </Link>

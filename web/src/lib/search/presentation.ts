@@ -141,7 +141,7 @@ function presentHit(hit: FederatedHit, enrollmentId: string | undefined): Presen
       return {
         domain: "capture",
         key: `${hit.item.capture_id}:${hit.item.version_id}`,
-        label: hit.item.capture_id,
+        label: hit.item.display_label ?? hit.item.capture_id,
         detail: `Version ${hit.item.version_number} · ${hit.item.character_count} characters · ${hit.item.recorded_at}`,
         href: captureSearchHref(hit.item.capture_id, hit.item.version_id),
       };
@@ -217,4 +217,45 @@ export function presentFederatedHits(
     if (presented.length === 0) return [];
     return [{ domain, heading: DOMAIN_HEADINGS[domain], hits: presented }];
   });
+}
+
+export type PresentedCoverage = {
+  readonly searched: readonly SearchCoverage[];
+  readonly unavailable: readonly SearchCoverage[];
+  readonly omitted: readonly SearchCoverage[];
+  readonly limited: readonly SearchCoverage[];
+};
+
+/** Omitted domains stay omitted. They are never counted as searched. */
+export function presentSearchCoverage(coverage: readonly SearchCoverage[]): PresentedCoverage {
+  const searched: SearchCoverage[] = [];
+  const unavailable: SearchCoverage[] = [];
+  const omitted: SearchCoverage[] = [];
+  const limited: SearchCoverage[] = [];
+  for (const row of coverage) {
+    if (row.state === "omitted") omitted.push(row);
+    else if (row.state === "searched" || row.state === "degraded") searched.push(row);
+    else if (row.state === "unavailable") unavailable.push(row);
+    else limited.push(row);
+  }
+  return { searched, unavailable, omitted, limited };
+}
+
+export function searchCoverageHeadline(coverage: readonly SearchCoverage[]): string {
+  const summary = presentSearchCoverage(coverage);
+  if (summary.searched.length === 0 && summary.unavailable.length > 0) {
+    return "No domain could be searched";
+  }
+  if (summary.searched.length === 0) return "No domain was searched";
+  return summary.searched.length === 1 ? "1 domain searched" : `${summary.searched.length} domains searched`;
+}
+
+export function formatCoverageRow(row: SearchCoverage): string {
+  const extra = [
+    row.reason ? `(${row.reason})` : "",
+    row.hitCount > 0 ? `· ${row.hitCount}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return extra ? `${row.domain}: ${row.state} ${extra}` : `${row.domain}: ${row.state}`;
 }

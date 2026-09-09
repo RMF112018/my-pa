@@ -23,7 +23,7 @@ export const TextField = forwardRef<HTMLTextAreaElement, TextFieldProps>(functio
 
   return (
     <div className="flex flex-col gap-1">
-      <label htmlFor={fieldId} className="text-sm font-medium text-moss-slate">
+      <label htmlFor={fieldId} className="text-sm font-medium text-text-primary">
         {label}
         {required ? (
           <span className="ml-1 font-normal text-muted" aria-hidden="true">
@@ -39,7 +39,7 @@ export const TextField = forwardRef<HTMLTextAreaElement, TextFieldProps>(functio
         aria-invalid={isInvalid || undefined}
         aria-describedby={describedBy}
         aria-required={required || undefined}
-        className="min-h-24 rounded-md border border-border bg-surface p-2 text-sm text-moss-slate aria-[invalid=true]:border-moss-coral-strong"
+        className="min-h-24 rounded-md border border-border bg-surface p-2 text-sm text-text-primary aria-[invalid=true]:border-destructive"
         {...props}
       />
       {hint ? (
@@ -48,7 +48,7 @@ export const TextField = forwardRef<HTMLTextAreaElement, TextFieldProps>(functio
         </p>
       ) : null}
       {error ? (
-        <p id={errorId} role="alert" className="text-xs text-moss-coral-strong">
+        <p id={errorId} role="alert" className="text-xs text-destructive">
           {error}
         </p>
       ) : null}

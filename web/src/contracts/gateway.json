@@ -52,7 +52,8 @@
         "context_source_object_id",
         "context_source_version_id",
         "client_created_at",
-        "occurred_at"
+        "occurred_at",
+        "display_label"
       ],
       "probe": { "text": "a synthetic capture", "idempotency_key": "idem-probe-0001" }
     },

@@ -14,6 +14,7 @@ import { resolveSessionPrincipal } from "@/lib/auth/principal";
 import { invokeGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
+import { PageHeader } from "@/components/shell/page-header";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
 import { DirectoryList } from "@/components/canvas/directory-list";
 import { CanvasMapClient } from "@/components/canvas/canvas-map-client";
@@ -35,10 +36,7 @@ const BLURB =
 function frame(children: ReactNode) {
   return (
     <section aria-labelledby="canvas-heading" className="mx-auto max-w-4xl">
-      <h1 id="canvas-heading" className="mb-1 text-2xl font-semibold tracking-tight text-moss-slate">
-        Map
-      </h1>
-      <p className="mb-6 max-w-3xl text-sm text-muted">{BLURB}</p>
+      <PageHeader headingId="canvas-heading" title="Map" description={BLURB} />
       {children}
     </section>
   );
@@ -122,7 +120,7 @@ function AsOfControl({ query }: { query: CanvasMapQuery }) {
           <input type="hidden" name="pageSize" value={String(query.pageSize)} />
         ) : null}
         <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <label htmlFor="canvas-as-of-input" className="text-sm font-medium text-moss-slate">
+          <label htmlFor="canvas-as-of-input" className="text-sm font-medium text-text-primary">
             As of
           </label>
           <Input
@@ -193,15 +191,15 @@ async function neighborhood(
           truncated={disclosure.truncated && !cursor}
         />
       ) : null}
-      <div className="grid min-w-0 gap-8 md:grid-cols-2">
+      <div className="grid min-w-0 gap-8 lg:grid-cols-2">
         <section aria-labelledby="canvas-directory-heading" className="min-w-0">
-          <h2 id="canvas-directory-heading" className="mb-3 text-base font-semibold text-moss-slate">
+          <h2 id="canvas-directory-heading" className="mb-3 text-base font-semibold text-text-primary">
             Directory
           </h2>
           <DirectoryList nodes={result.nodes} />
         </section>
         <section aria-labelledby="canvas-map-heading" className="min-w-0">
-          <h2 id="canvas-map-heading" className="mb-3 text-base font-semibold text-moss-slate">
+          <h2 id="canvas-map-heading" className="mb-3 text-base font-semibold text-text-primary">
             Neighborhood
           </h2>
           <AsOfControl query={query} />
@@ -220,7 +218,7 @@ async function neighborhood(
         <p className="mt-4 text-sm">
           <Link
             href={canvasMap({ ...query, after: cursor })}
-            className="text-moss-green underline"
+            className="text-interactive underline"
             data-testid="canvas-continue"
           >
             Continue neighborhood
@@ -269,7 +267,7 @@ export async function CanvasPage({
         testId="canvas-seed-required"
       >
         <p className="mt-3 text-sm">
-          <Link href={peopleHome()} className="text-moss-green underline">
+          <Link href={peopleHome()} className="text-interactive underline">
             Search People
           </Link>
         </p>
@@ -339,7 +337,7 @@ export async function CanvasPage({
       <SurfaceState
         kind="unavailable"
         title="That neighborhood could not be read"
-        detail={answer.error.message}
+        error={answer.error}
         limitations={answer.disclosure.limitations}
         testId="canvas-unavailable"
       />,
@@ -376,7 +374,7 @@ export async function CanvasPage({
           <p className="mt-4 text-sm">
             <Link
               href={canvasMap({ ...query, after: cursor })}
-              className="text-moss-green underline"
+              className="text-interactive underline"
               data-testid="canvas-continue"
             >
               Continue neighborhood

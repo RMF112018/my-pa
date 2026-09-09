@@ -116,6 +116,7 @@ from my_pa.contracts.ports import (
     CaptureSearchOutcome,
     CaptureSearchRequest,
 )
+from my_pa.infrastructure.persistence.capture import current_display_label
 from my_pa.infrastructure.persistence.principal_scope import (
     PrincipalContext,
     partition_criterion,
@@ -512,6 +513,7 @@ def match_statement(
             plane.table.c.version_number,
             func.length(plane.text_column).label("character_count"),
             plane.table.c.recorded_at,
+            current_display_label(plane.table.c.capture_id).label("display_label"),
         )
         .where(
             *capture_text_in_scope(context),
@@ -675,6 +677,7 @@ def search_captures(
                 version_number=int(row.version_number),
                 character_count=int(row.character_count),
                 recorded_at=row.recorded_at,
+                display_label=row.display_label,
             )
             for row in rows[: request.limit]
         ),

@@ -121,7 +121,7 @@ function ParticipationGroup({
   const { current, historical } = partitionByCurrency(rows, participationIsCurrent);
   return (
     <section className="mt-6" aria-labelledby={testId} data-testid={testId}>
-      <h3 id={testId} className="text-sm font-medium text-moss-slate">
+      <h3 id={testId} className="text-sm font-medium text-text-primary">
         {title}
       </h3>
       {current.length > 0 ? (
@@ -155,7 +155,7 @@ function ParticipationItem({ row, asProject }: { row: ParticipationView; asProje
     : row.project_display_name ?? row.role_text ?? "Project";
   return (
     <li className="text-sm">
-      <Link href={peopleEntity(counterpartId)} className="underline decoration-moss-green/40">
+      <Link href={peopleEntity(counterpartId)} className="underline decoration-interactive/40">
         {label}
       </Link>
       <span className="ml-2 text-xs text-muted">
@@ -180,7 +180,7 @@ function AffiliationGroup({
   const { current, historical } = partitionByCurrency(rows, lifecycleIsCurrent);
   return (
     <section className="mt-6" aria-labelledby={testId} data-testid={testId}>
-      <h3 id={testId} className="text-sm font-medium text-moss-slate">
+      <h3 id={testId} className="text-sm font-medium text-text-primary">
         {title}
       </h3>
       {current.length > 0 ? (
@@ -218,7 +218,7 @@ function AffiliationItem({
   return (
     <li className="text-sm">
       {counterpartId ? (
-        <Link href={peopleEntity(counterpartId)} className="underline decoration-moss-green/40">
+        <Link href={peopleEntity(counterpartId)} className="underline decoration-interactive/40">
           {row.job_title ?? codeLabel(row.affiliation_type_code)}
         </Link>
       ) : (
@@ -253,9 +253,9 @@ export function EntityProfilePanel({
         <div
           role="alert"
           data-testid="people-merged-redirect"
-          className="rounded-md border border-moss-coral/40 border-l-4 border-l-moss-coral-strong bg-moss-coral/10 p-3 text-sm"
+          className="rounded-md border border-destructive/40 border-l-4 border-l-destructive bg-destructive/10 p-3 text-sm"
         >
-          <p className="font-medium text-moss-slate">This entity was merged away.</p>
+          <p className="font-medium text-text-primary">This entity was merged away.</p>
           <p className="mt-1 text-muted">
             The page does not guess a survivor. A link appears only when the record names one.
           </p>
@@ -263,7 +263,7 @@ export function EntityProfilePanel({
             <p className="mt-2">
               <Link
                 href={peopleEntity(entity.superseded_by_entity_id)}
-                className="font-medium text-moss-green underline"
+                className="font-medium text-interactive underline"
                 data-testid="people-survivor-link"
               >
                 Open surviving entity
@@ -284,7 +284,7 @@ export function EntityProfilePanel({
         <div className="flex flex-wrap items-start justify-between gap-2">
           <Heading
             id={headingId}
-            className={`${headingLevel === 1 ? "text-2xl tracking-tight" : "text-lg"} font-semibold text-moss-slate`}
+            className={`${headingLevel === 1 ? "text-2xl tracking-tight" : "text-lg"} font-semibold text-text-primary`}
           >
             {entity.display_name}
           </Heading>
@@ -317,7 +317,7 @@ export function EntityProfilePanel({
 
       {profile.organization_profile ? (
         <section aria-labelledby="people-org-heading">
-          <h3 id="people-org-heading" className="text-sm font-medium text-moss-slate">
+          <h3 id="people-org-heading" className="text-sm font-medium text-text-primary">
             Organization
           </h3>
           <p className="mt-1 text-sm">
@@ -328,21 +328,21 @@ export function EntityProfilePanel({
       ) : null}
 
       <section aria-labelledby="people-profile-names">
-        <h3 id="people-profile-names" className="text-sm font-medium text-moss-slate">
+        <h3 id="people-profile-names" className="text-sm font-medium text-text-primary">
           Names
         </h3>
         <Names names={profile.names} />
       </section>
 
       <section aria-labelledby="people-profile-addresses">
-        <h3 id="people-profile-addresses" className="text-sm font-medium text-moss-slate">
+        <h3 id="people-profile-addresses" className="text-sm font-medium text-text-primary">
           Addresses
         </h3>
         <Addresses addresses={profile.addresses} withheld={addressWithheld} />
       </section>
 
       <section aria-labelledby="people-profile-communication">
-        <h3 id="people-profile-communication" className="text-sm font-medium text-moss-slate">
+        <h3 id="people-profile-communication" className="text-sm font-medium text-text-primary">
           Communication
         </h3>
         <CommunicationMethods methods={profile.communication_methods} withheld={commsWithheld} />
@@ -374,7 +374,7 @@ export function EntityProfilePanel({
       />
 
       <section aria-labelledby="people-profile-provenance" className="text-sm">
-        <h3 id="people-profile-provenance" className="font-medium text-moss-slate">
+        <h3 id="people-profile-provenance" className="font-medium text-text-primary">
           Provenance
         </h3>
         <p className="mt-1 text-muted">

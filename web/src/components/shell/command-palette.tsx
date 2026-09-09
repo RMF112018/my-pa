@@ -7,7 +7,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { SurfaceState } from "@/components/ui/surface-state";
-import { COMMAND_DESTINATIONS } from "@/components/shell/destinations";
+
 import {
   admittedEnrollmentId,
   fetchFederatedSearch,
@@ -20,8 +20,6 @@ import {
   type SearchCoverage,
 } from "@/lib/search/presentation";
 import type { ApiFailure } from "@/lib/api/work-client";
-
-const COMMANDS = [...COMMAND_DESTINATIONS];
 
 type SearchAnswer =
   | { readonly kind: "idle" }
@@ -95,6 +93,20 @@ export function SearchCommandPanel({
   }, [autoFocus]);
 
   useEffect(() => {
+    if (!onDismiss) return;
+    const node = inputRef.current;
+    if (!node) return;
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      // Capture-phase so Chromium cannot clear type=search before we dismiss.
+      event.preventDefault();
+      onDismiss();
+    };
+    node.addEventListener("keydown", closeOnEscape, true);
+    return () => node.removeEventListener("keydown", closeOnEscape, true);
+  }, [onDismiss]);
+
+  useEffect(() => {
     if (idle) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
@@ -121,10 +133,7 @@ export function SearchCommandPanel({
 
   const activatable = useMemo(() => {
     if (idle) {
-      return [
-        ...COMMANDS.map((item) => ({ kind: "href" as const, href: item.href, label: item.label })),
-        { kind: "capture" as const, label: "Quick Capture" },
-      ];
+      return [];
     }
     return [
       ...groups.flatMap((group) =>
@@ -170,6 +179,13 @@ export function SearchCommandPanel({
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Escape" && onDismiss) {
+      // Chromium clears a non-empty type=search field on Escape and does not
+      // fire the native <dialog> cancel. Close Search instead of clearing.
+      event.preventDefault();
+      onDismiss();
+      return;
+    }
     if (event.key === "ArrowDown") {
       event.preventDefault();
       setActiveIndex((current) => (current + 1) % Math.max(activatable.length, 1));
@@ -204,9 +220,9 @@ export function SearchCommandPanel({
   return (
     <div>
       <p className="mb-3 text-sm text-text-secondary">
-        Search my-pa. An empty query lists destinations and Quick Capture.
+        Search tasks, people, notes, and reports.
       </p>
-      <label htmlFor={inputId} className="mb-1 block text-sm font-medium text-moss-slate">
+      <label htmlFor={inputId} className="mb-1 block text-sm font-medium text-text-primary">
         Search
       </label>
       <Input
@@ -228,7 +244,7 @@ export function SearchCommandPanel({
         placeholder="Search my-pa"
       />
       <p id={`${inputId}-hint`} className="mt-1 text-xs text-muted">
-        Pick a destination, or type to search tasks, people, notes, and reports.
+        Type to search. Destinations are in navigation.
       </p>
       <div
         id={listId}
@@ -237,20 +253,7 @@ export function SearchCommandPanel({
         className="mt-3 max-h-80 space-y-1 overflow-y-auto"
       >
         {idle ? (
-          <ul className="space-y-1">
-            {COMMANDS.map((item, index) => (
-              <li key={item.href}>
-                <button type="button" {...optionProps(index)}>
-                  {item.label}
-                </button>
-              </li>
-            ))}
-            <li>
-              <button type="button" {...optionProps(COMMANDS.length, "font-medium text-interactive")}>
-                Quick Capture
-              </button>
-            </li>
-          </ul>
+          <p className="px-3 py-2 text-sm text-muted">Start typing to search.</p>
         ) : null}
         {answer.kind === "loading" ? (
           <p role="status" className="px-3 py-2 text-sm text-muted">
@@ -271,9 +274,10 @@ export function SearchCommandPanel({
           <SurfaceState
             kind="unavailable"
             title="Search could not be read"
+            error={answer.kind === "unavailable" ? answer.message : undefined}
             detail={
               answer.kind === "unavailable"
-                ? answer.message
+                ? undefined
                 : "No domain could be searched. That is not a fact about what you hold."
             }
             testId="search-unavailable"
@@ -388,7 +392,7 @@ export function CommandPalette({
   }, [onOpenChange, open]);
 
   return (
-    <Dialog open={open} onClose={() => onOpenChange(false)} title="Command menu">
+    <Dialog open={open} onClose={() => onOpenChange(false)} title="Search">
       {open ? (
         <SearchCommandPanel
           autoFocus

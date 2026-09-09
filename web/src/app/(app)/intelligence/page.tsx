@@ -16,6 +16,7 @@ import { invokeGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { FeatureRouteState } from "@/components/shell/feature-route-state";
+import { PageHeader } from "@/components/shell/page-header";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
 import { ReportListing } from "@/components/intelligence/report-card";
 import { ReadinessPanel, type ReadinessAnswer } from "@/components/intelligence/readiness-panel";
@@ -51,22 +52,19 @@ export default async function IntelligencePage() {
   if (!principal) redirect("/sign-in");
 
   const heading = (
-    <>
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 id="intelligence-heading" className="mb-1 text-xl font-semibold text-moss-slate">
-            Intelligence
-          </h1>
-          <p className="text-sm text-muted">{BLURB}</p>
-        </div>
+    <PageHeader
+      headingId="intelligence-heading"
+      title="Intelligence"
+      description={BLURB}
+      actions={
         <Link
           href={intelligenceHistory()}
-          className="inline-flex min-h-[var(--control-height)] items-center text-sm text-moss-green underline"
+          className="inline-flex min-h-[var(--control-height)] items-center text-sm text-interactive underline"
         >
           History
         </Link>
-      </div>
-    </>
+      }
+    />
   );
 
   const frame = (children: React.ReactNode) => (
@@ -98,7 +96,7 @@ export default async function IntelligencePage() {
       <SurfaceState
         kind="unavailable"
         title="Reports could not be read"
-        detail={answer.error.message}
+        error={answer.error}
         limitations={answer.disclosure.limitations}
         testId="intelligence-unavailable"
       />,
@@ -110,7 +108,7 @@ export default async function IntelligencePage() {
       <SurfaceState
         kind="empty"
         title="No briefings yet"
-        detail="No reports are stored for your account yet."
+        detail="None are stored for your account yet."
         testId="intelligence-empty"
       />,
     );
@@ -127,7 +125,7 @@ export default async function IntelligencePage() {
       {readiness && cycleRunId ? (
         <ReadinessPanel answer={readiness} cycleRunId={cycleRunId} />
       ) : null}
-      <h2 className="mb-2 text-base font-semibold text-moss-slate">Reports</h2>
+      <h2 className="mb-2 text-base font-semibold text-text-primary">Reports</h2>
       <p className="mb-3 text-sm text-muted">
         Missing specialists do not hide available reports. A morning brief is a report, not a list
         of structured brief items.

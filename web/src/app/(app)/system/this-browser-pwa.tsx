@@ -14,6 +14,7 @@
  * not rewritten here.
  */
 import { useEffect, useState } from "react";
+import { LoadingStatus } from "@/components/ui/surface-state";
 import { openOfflineDatabase } from "@/lib/offline/db";
 import { countStates, queueSnapshot, type QueueCounts } from "@/lib/offline/queue";
 
@@ -115,12 +116,9 @@ export function ThisBrowserPwaStatus() {
 
   return (
     <div className="mt-3" data-testid="system-pwa-this-browser">
-      <p className="font-medium text-moss-slate">This browser</p>
+      <p className="font-medium text-text-primary">This browser</p>
       {observation === null ? (
-        <p className="mt-1" data-testid="system-pwa-observing">
-          Observing this browser&rsquo;s service worker, Cache Storage, online bit, and
-          IndexedDB queue&hellip;
-        </p>
+        <LoadingStatus label="Observing this browser…" testId="system-pwa-observing" />
       ) : (
         <dl className="mt-1 grid grid-cols-[8rem_1fr] gap-1 font-mono text-xs break-all">
           <dt className="text-muted">network</dt>

@@ -42,7 +42,7 @@ const commitments: readonly CommitmentRow[] = [
 ];
 
 const noOp = () => undefined;
-const common = { selectedTaskIds: [] as readonly string[], onSelectTask: noOp, onOpen: noOp, onMoveTask: noOp };
+const common = { selectedTaskIds: [] as readonly string[], onSelectTask: noOp, onOpen: noOp };
 
 const meta = {
   title: "Work/Canonical states",

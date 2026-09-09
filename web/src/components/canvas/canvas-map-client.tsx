@@ -650,7 +650,7 @@ export function CanvasMapClient({
             onSubmit={onCreate}
           >
             <label className="grid gap-1">
-              <span className="font-medium text-moss-slate">From</span>
+              <span className="font-medium text-text-primary">From</span>
               <Select
                 aria-label="From"
                 value={fromEntityId}
@@ -666,7 +666,7 @@ export function CanvasMapClient({
               </Select>
             </label>
             <label className="grid gap-1">
-              <span className="font-medium text-moss-slate">To</span>
+              <span className="font-medium text-text-primary">To</span>
               <Select
                 aria-label="To"
                 value={toEntityId}
@@ -682,7 +682,7 @@ export function CanvasMapClient({
               </Select>
             </label>
             <label className="grid gap-1 sm:col-span-2">
-              <span className="font-medium text-moss-slate">Relationship type</span>
+              <span className="font-medium text-text-primary">Relationship type</span>
               <Select
                 aria-label="Relationship type"
                 value={relationshipType}
@@ -709,7 +709,7 @@ export function CanvasMapClient({
             </div>
           </form>
           <label className="grid gap-1">
-            <span className="font-medium text-moss-slate">Selected relationship</span>
+            <span className="font-medium text-text-primary">Selected relationship</span>
             <Select
               aria-label="Selected relationship"
               value={selectedEdge?.edge_id ?? ""}
@@ -741,7 +741,7 @@ export function CanvasMapClient({
                   create.
                 </p>
                 <label className="grid gap-1">
-                  <span className="font-medium text-moss-slate">Effective from</span>
+                  <span className="font-medium text-text-primary">Effective from</span>
                   <Input
                     aria-label="Effective from"
                     value={effectiveFrom}
@@ -759,7 +759,7 @@ export function CanvasMapClient({
                   Clear effective from
                 </label>
                 <label className="grid gap-1">
-                  <span className="font-medium text-moss-slate">Effective to</span>
+                  <span className="font-medium text-text-primary">Effective to</span>
                   <Input
                     aria-label="Effective to"
                     value={effectiveTo}
@@ -777,7 +777,7 @@ export function CanvasMapClient({
                   Clear effective to
                 </label>
                 <label className="grid gap-1">
-                  <span className="font-medium text-moss-slate">Evidence refs</span>
+                  <span className="font-medium text-text-primary">Evidence refs</span>
                   <Input
                     aria-label="Evidence refs"
                     value={evidenceRefs}
@@ -810,7 +810,7 @@ export function CanvasMapClient({
               </form>
               <form className="grid gap-3" onSubmit={onEnd}>
                 <label className="grid gap-1">
-                  <span className="font-medium text-moss-slate">End reason</span>
+                  <span className="font-medium text-text-primary">End reason</span>
                   <Input
                     aria-label="End reason"
                     value={endReason}
@@ -828,7 +828,7 @@ export function CanvasMapClient({
                 </label>
                 {endNow ? null : (
                   <label className="grid gap-1">
-                    <span className="font-medium text-moss-slate">Effective end</span>
+                    <span className="font-medium text-text-primary">Effective end</span>
                     <Input
                       aria-label="Effective end"
                       value={effectiveEnd}
@@ -853,17 +853,17 @@ export function CanvasMapClient({
         </div>
       ) : null}
       {conflict ? (
-        <p role="alert" data-testid="canvas-workspace-conflict" className="mb-3 text-sm text-moss-coral-strong">
+        <p role="alert" data-testid="canvas-workspace-conflict" className="mb-3 text-sm text-destructive">
           {conflict}
         </p>
       ) : null}
       {saveError ? (
-        <p role="alert" data-testid="canvas-workspace-save-error" className="mb-3 text-sm text-moss-coral-strong">
+        <p role="alert" data-testid="canvas-workspace-save-error" className="mb-3 text-sm text-destructive">
           {saveError}
         </p>
       ) : null}
       {relationshipConflict ? (
-        <p role="alert" data-testid="canvas-relationship-conflict" className="mb-3 text-sm text-moss-coral-strong">
+        <p role="alert" data-testid="canvas-relationship-conflict" className="mb-3 text-sm text-destructive">
           {relationshipConflict}
         </p>
       ) : null}
@@ -871,7 +871,7 @@ export function CanvasMapClient({
         <p
           role="alert"
           data-testid="canvas-relationship-save-error"
-          className="mb-3 text-sm text-moss-coral-strong"
+          className="mb-3 text-sm text-destructive"
         >
           {relationshipSaveError}
         </p>
@@ -880,7 +880,7 @@ export function CanvasMapClient({
         <p
           role="status"
           data-testid="canvas-map-fallback"
-          className="rounded-lg border border-moss-gold/40 border-l-4 border-l-moss-gold bg-moss-gold/10 p-3 text-sm text-moss-slate"
+          className="rounded-lg border border-warning/40 border-l-4 border-l-warning bg-warning/10 p-3 text-sm text-text-primary"
         >
           The visual map is omitted for this page size. Ring nodes on the radial
           layout would overlap their diameters. Directory still lists this returned

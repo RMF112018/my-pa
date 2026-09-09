@@ -41,7 +41,8 @@ test.describe("Work acceptance", () => {
     await expect(page.getByRole("heading", { name: "Create task" })).toHaveCount(0);
     // Creation sets no work date, so the canonical Today view must continue to
     // exclude this Task. Read it from the server-backed Unscheduled view instead.
-    await page.getByRole("button", { name: "Unscheduled" }).click();
+    await page.getByRole("button", { name: "Work views" }).click();
+    await page.getByRole("menuitem", { name: "Unscheduled" }).click();
     const trigger = page.getByRole("link", { name: new RegExp(title) });
     await expect(trigger).toBeVisible();
     await page.getByRole("checkbox", { name: `Select ${title}` }).check();
@@ -69,7 +70,7 @@ test.describe("Work acceptance", () => {
   for (const width of [390, 768, 1440] as const) {
     test(`Work keeps essential controls and reflows at ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 900 });
-      await expect(page.getByRole("navigation", { name: "Work views" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Work views" })).toBeVisible();
       await expect(page.getByRole("group", { name: "Work perspective" })).toBeVisible();
       await expect(page.getByRole("button", { name: "New task" })).toBeVisible();
       expect(await horizontalOverflow(page)).toBeLessThanOrEqual(1);
@@ -82,6 +83,7 @@ test.describe("Work acceptance", () => {
     await page.setViewportSize({ width: 720, height: 900 });
     expect(await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches)).toBe(true);
     expect(await horizontalOverflow(page)).toBeLessThanOrEqual(1);
+    await page.getByRole("button", { name: "Account" }).click();
     await page.getByRole("button", { name: "Use dark theme" }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   });

@@ -11,6 +11,7 @@ import { resolveSessionPrincipal } from "@/lib/auth/principal";
 import { invokeGateway, type GatewayOutcome } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
+import { PageHeader } from "@/components/shell/page-header";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
 import { EntityProfilePanel } from "@/components/people/entity-profile";
 import {
@@ -59,9 +60,7 @@ export async function PeopleEntityPage({
   if (syntheticDataEnabled()) {
     return (
       <section aria-labelledby="people-entity-heading" className="mx-auto max-w-4xl">
-        <h1 id="people-entity-heading" className="mb-4 text-xl font-semibold text-moss-slate">
-          Person
-        </h1>
+        <PageHeader headingId="people-entity-heading" title="Person" />
         <SurfaceState
           kind="not_implemented"
           title="People has no synthetic fixture"
@@ -89,19 +88,18 @@ export async function PeopleEntityPage({
     return (
       <section aria-labelledby="people-entity-heading" className="mx-auto max-w-4xl">
         <p className="mb-4 text-sm">
-          <Link href={peopleHome()} className="text-moss-green underline">
+          <Link href={peopleHome()} className="text-interactive underline">
             ← People
           </Link>
         </p>
-        <h1 id="people-entity-heading" className="mb-4 text-xl font-semibold text-moss-slate">
-          Person
-        </h1>
+        <PageHeader headingId="people-entity-heading" title="Person" />
         <SurfaceState
           kind="unavailable"
           title={notFound ? "That entity was not found" : "That profile could not be read"}
+          error={profileAnswer.kind === "unavailable" ? profileAnswer.error : undefined}
           detail={
             profileAnswer.kind === "unavailable"
-              ? profileAnswer.error.message
+              ? undefined
               : "The read succeeded without a profile, which is not a complete answer."
           }
           limitations={profileAnswer.disclosure.limitations}
@@ -167,13 +165,13 @@ export async function PeopleEntityPage({
   return (
     <section aria-labelledby="people-entity-heading" className="mx-auto max-w-4xl">
       <p className="mb-4 text-sm">
-        <Link href={peopleHome()} className="text-moss-green underline">
+        <Link href={peopleHome()} className="text-interactive underline">
           ← People
         </Link>
         {" · "}
         <Link
           href={canvasMap({ focusEntityId: profile.entity.entity_id })}
-          className="text-moss-green underline"
+          className="text-interactive underline"
           data-testid="people-view-map"
         >
           View map

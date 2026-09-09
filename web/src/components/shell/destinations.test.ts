@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   COMMAND_DESTINATIONS,
+  DESKTOP_GLOBAL,
   DESKTOP_PRIMARY,
   DESTINATIONS,
   MOBILE_MORE,
@@ -33,12 +34,14 @@ describe("IA destination registry", () => {
     ]);
   });
 
-  it("does not put Review, Search, or Map on the desktop rail or mobile tabs", () => {
+  it("places Search, Review, and Map in desktop global, not mobile tabs", () => {
+    expect(DESKTOP_GLOBAL.map(({ label }) => label)).toEqual(["Search", "Review", "Map"]);
     expect(DESKTOP_PRIMARY.map(({ href }) => href)).not.toContain("/review");
     expect(DESKTOP_PRIMARY.map(({ href }) => href)).not.toContain("/search");
     expect(DESKTOP_PRIMARY.map(({ href }) => href)).not.toContain("/canvas");
     expect(MOBILE_PRIMARY.map(({ href }) => href)).not.toContain("/review");
     expect(MOBILE_PRIMARY.map(({ href }) => href)).not.toContain("/search");
+    expect(MOBILE_PRIMARY.map(({ href }) => href)).not.toContain("/canvas");
   });
 
   it("keeps every canonical href command-reachable under current names", () => {

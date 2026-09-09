@@ -11,7 +11,7 @@ export function PulseList({ items }: { items: readonly PulseItem[] }) {
   const [revealSubject, setRevealSubject] = useState<string | null>(null);
 
   if (items.length === 0) {
-    return <p className="text-sm text-muted">Nothing needs your attention right now.</p>;
+    return <p className="text-sm text-muted">Nothing needs attention right now.</p>;
   }
 
   return (
@@ -27,19 +27,19 @@ export function PulseList({ items }: { items: readonly PulseItem[] }) {
             </div>
             <CardBody>
               <p>
-                <span className="font-medium text-moss-slate">Why:</span> {item.reason}
+                <span className="font-medium text-text-primary">Why:</span> {item.reason}
               </p>
               <p className="mt-1">
-                <span className="font-medium text-moss-slate">If ignored:</span>{" "}
+                <span className="font-medium text-text-primary">If ignored:</span>{" "}
                 {item.consequence}
               </p>
               {item.uncertainty ? (
-                <p className="mt-1 text-moss-gold-strong">
+                <p className="mt-1 text-warning">
                   <span className="font-medium">Uncertain:</span> {item.uncertainty}
                 </p>
               ) : null}
-              <p className="mt-1">
-                <span className="font-medium text-moss-slate">Next step:</span> {item.nextStep}
+              <p className="mt-3 font-medium text-text-primary" data-testid="pulse-next-step">
+                {item.nextStep}
               </p>
               <div className="mt-3">
                 <Button

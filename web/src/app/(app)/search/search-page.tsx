@@ -11,18 +11,15 @@ export function SearchPage({
   initialQuery: string;
   enrollmentId?: string;
 }) {
-  const openCapture = useOpenCapture();
+  const onCapture = useOpenCapture();
   return (
     <section className="mx-auto max-w-3xl">
-      <PageHeader
-        title="Search"
-        description="Search tasks, people, notes, and reports."
-      />
+      <PageHeader title="Search" />
       <SearchCommandPanel
         autoFocus
         initialQuery={initialQuery}
         enrollmentId={enrollmentId}
-        onCapture={openCapture}
+        onCapture={onCapture}
       />
     </section>
   );

@@ -34,7 +34,8 @@ describe("BackendPulseList", () => {
     );
     expect(card.textContent).toContain("Why now:");
     expect(card.textContent).toContain("If ignored:");
-    expect(card.textContent).toContain("Next step:");
+    expect(within(card).getByTestId("pulse-next-step").textContent).toBe("Close it or re-date it.");
+    expect(within(card).queryByText(/urgency/i)).toBeNull();
   });
 
   it("does not use item refs or basis refs as the title", () => {
@@ -99,6 +100,29 @@ describe("BackendPulseList", () => {
     );
     const titles = screen.getAllByRole("heading", { level: 3 }).map((node) => node.textContent);
     expect(titles).toEqual(["Later rank", "Earlier rank"]);
+  });
+
+  it("presents nextStep as the primary action, not a buried field", () => {
+    render(
+      <BackendPulseList
+        items={[item({ itemType: "task", itemRef: "tsk_link_me", nextStep: "Open the task." })]}
+      />,
+    );
+    const action = screen.getByTestId("pulse-next-step-link");
+    expect(action).toHaveAttribute("href", "/work?task=tsk_link_me");
+    expect(action.textContent).toBe("Open the task.");
+    expect(screen.getByTestId("pulse-next-step").textContent).toBe("Open the task.");
+  });
+
+  it("keeps urgency rank behind Evidence/Details rather than as a heading badge", () => {
+    render(<BackendPulseList items={[item({ subjectTitle: "Named task", priority: 8 })]} />);
+    const card = screen.getByTestId("pulse-item");
+    expect(within(card).getByRole("heading", { level: 3 }).textContent).toBe("Named task");
+    expect(card.textContent).not.toMatch(/urgency/i);
+    const details = screen.getByTestId("pulse-basis");
+    expect(details).toHaveAttribute("data-testid", "pulse-basis");
+    expect(within(details).getByTestId("pulse-rank").textContent).toBe("Rank 8");
+    expect(details).not.toHaveAttribute("open");
   });
 
   it("links a task next step through the Work task query", () => {

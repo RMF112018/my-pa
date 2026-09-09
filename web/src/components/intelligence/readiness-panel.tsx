@@ -2,6 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardBody } from "@/components/ui/card";
 import { EpistemicLabel, type EpistemicRole } from "@/components/ui/epistemic-label";
 import { SurfaceState } from "@/components/ui/surface-state";
+import type { ErrorEnvelope } from "@/contracts/envelope";
 import type { ReportsResolveSetResult } from "@/lib/api/decode/capabilities/reports.resolve_set";
 import { MORNING_BRIEF_SET_ID, nonReadyRequiredCount } from "@/components/intelligence/cycle-selection";
 
@@ -39,7 +40,7 @@ function memberEpistemic(readiness: string): EpistemicRole | null {
 
 export type ReadinessAnswer =
   | { readonly kind: "resolved"; readonly result: ReportsResolveSetResult }
-  | { readonly kind: "unavailable"; readonly detail: string }
+  | { readonly kind: "unavailable"; readonly detail: string; readonly error?: ErrorEnvelope }
   | { readonly kind: "degraded"; readonly result: ReportsResolveSetResult; readonly detail: string };
 
 function freshnessCopy(result: ReportsResolveSetResult): string {
@@ -71,7 +72,8 @@ export function ReadinessPanel({
       <SurfaceState
         kind="unavailable"
         title="Specialist readiness could not be read"
-        detail={answer.detail}
+        error={answer.error}
+        detail={answer.error ? undefined : answer.detail}
         testId="intelligence-readiness-unavailable"
       />
     );
@@ -84,12 +86,12 @@ export function ReadinessPanel({
   return (
     <Card data-testid="intelligence-readiness" className="mb-4">
       {answer.kind === "degraded" ? (
-        <p className="mb-2 text-sm text-moss-gold-strong" role="status">
+        <p className="mb-2 text-sm text-warning" role="status">
           Readiness was returned incompletely. {answer.detail}
         </p>
       ) : null}
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <h2 className="text-base font-semibold text-moss-slate">Morning Intelligence readiness</h2>
+        <h2 className="text-base font-semibold text-text-primary">Morning Intelligence readiness</h2>
         <Badge tone={aggregateTone}>
           <span data-testid="intelligence-readiness-aggregate">{result.aggregate}</span>
         </Badge>
@@ -137,7 +139,7 @@ export function ReadinessPanel({
                   className="rounded-md border border-border p-2"
                 >
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-medium text-moss-slate">{member.member_id}</span>
+                    <span className="font-medium text-text-primary">{member.member_id}</span>
                     <Badge tone={MEMBER_TONE[member.readiness] ?? "neutral"}>
                       <span data-testid="intelligence-readiness-member-state">{member.readiness}</span>
                     </Badge>

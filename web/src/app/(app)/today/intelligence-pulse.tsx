@@ -14,6 +14,7 @@ import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { Card, CardBody, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { LiveAnnouncement } from "@/components/ui/live-region";
+import { SurfaceState } from "@/components/ui/surface-state";
 import type { PrincipalSession } from "@/contracts/identity";
 import {
   currentCycleRunId,
@@ -29,6 +30,17 @@ const AGGREGATE_TONE: Record<string, "green" | "gold" | "coral" | "neutral"> = {
   BLOCKED: "coral",
 };
 
+function OpenIntelligenceLink() {
+  return (
+    <Link
+      href={intelligenceHome()}
+      className="mt-2 inline-flex min-h-[var(--control-height)] items-center text-sm text-interactive underline"
+    >
+      Open Intelligence
+    </Link>
+  );
+}
+
 export async function IntelligencePulse({
   principal,
 }: {
@@ -42,72 +54,63 @@ export async function IntelligencePulse({
 
   if (listAnswer.kind === "unavailable") {
     return (
-      <Card className="mt-6" data-testid="intelligence-pulse" data-state="unavailable">
-        <CardTitle>Morning Intelligence</CardTitle>
-        <CardBody>
+      <div className="mt-6">
+        <SurfaceState
+          kind="unavailable"
+          title="Morning Intelligence could not be read"
+          detail="That is not all-clear."
+          error={listAnswer.error}
+          testId="intelligence-pulse"
+        >
           <LiveAnnouncement tone="alert" testId="intelligence-pulse-unavailable">
             Morning Intelligence could not be read. That is not all-clear.
           </LiveAnnouncement>
-          <p className="mt-2 text-xs">{listAnswer.error.message}</p>
-          <Link
-            href={intelligenceHome()}
-            className="mt-2 inline-flex min-h-[var(--control-height)] items-center text-sm text-moss-green underline"
-          >
-            Open Intelligence
-          </Link>
-        </CardBody>
-      </Card>
+          <OpenIntelligenceLink />
+        </SurfaceState>
+      </div>
     );
   }
 
   if (listAnswer.kind === "empty") {
     return (
-      <Card className="mt-6" data-testid="intelligence-pulse" data-state="empty">
-        <CardTitle>Morning Intelligence</CardTitle>
-        <CardBody>
+      <div className="mt-6">
+        <SurfaceState kind="empty" title="Morning Intelligence" testId="intelligence-pulse">
           <p data-testid="intelligence-pulse-none" role="status">
             No briefings yet. That is not all-clear and not a Pulse error.
           </p>
           <details className="mt-2" data-testid="intelligence-pulse-details">
-            <summary className="cursor-pointer font-medium text-moss-slate">Details</summary>
+            <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
             <p className="mt-2 text-xs text-muted">
               The report list was read and holds no briefing for your account.
             </p>
           </details>
-          <Link
-            href={intelligenceHome()}
-            className="mt-2 inline-flex min-h-[var(--control-height)] items-center text-sm text-moss-green underline"
-          >
-            Open Intelligence
-          </Link>
-        </CardBody>
-      </Card>
+          <OpenIntelligenceLink />
+        </SurfaceState>
+      </div>
     );
   }
 
   if (listAnswer.kind === "degraded" && listAnswer.rowCount === 0) {
     return (
-      <Card className="mt-6" data-testid="intelligence-pulse" data-state="degraded">
-        <CardTitle>Morning Intelligence</CardTitle>
-        <CardBody>
+      <div className="mt-6">
+        <SurfaceState
+          kind="degraded"
+          title="Morning Intelligence"
+          testId="intelligence-pulse"
+        >
           <LiveAnnouncement tone="status" testId="intelligence-pulse-degraded">
             This briefing could not be read completely and returned nothing. That is not all-clear.
           </LiveAnnouncement>
           <details className="mt-2" data-testid="intelligence-pulse-details">
-            <summary className="cursor-pointer font-medium text-moss-slate">Details</summary>
+            <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
             <p className="mt-2 text-xs text-muted">
               The report plane was read incompletely. An empty listing is not established by an
               incomplete read.
             </p>
           </details>
-          <Link
-            href={intelligenceHome()}
-            className="mt-2 inline-flex min-h-[var(--control-height)] items-center text-sm text-moss-green underline"
-          >
-            Open Intelligence
-          </Link>
-        </CardBody>
-      </Card>
+          <OpenIntelligenceLink />
+        </SurfaceState>
+      </div>
     );
   }
 
@@ -115,20 +118,19 @@ export async function IntelligencePulse({
   const cycleRunId = currentCycleRunId(items);
   if (cycleRunId === null) {
     return (
-      <Card className="mt-6" data-testid="intelligence-pulse" data-state="empty">
-        <CardTitle>Morning Intelligence</CardTitle>
-        <CardBody>
+      <div className="mt-6">
+        <SurfaceState kind="empty" title="Morning Intelligence" testId="intelligence-pulse">
           <p data-testid="intelligence-pulse-none" role="status">
             No briefings yet. That is not all-clear and not a Pulse error.
           </p>
           <details className="mt-2" data-testid="intelligence-pulse-details">
-            <summary className="cursor-pointer font-medium text-moss-slate">Details</summary>
+            <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
             <p className="mt-2 text-xs text-muted">
               Listed reports have no cycle, so no briefing set can be selected.
             </p>
           </details>
-        </CardBody>
-      </Card>
+        </SurfaceState>
+      </div>
     );
   }
 
@@ -139,24 +141,24 @@ export async function IntelligencePulse({
 
   if (readinessAnswer.kind === "unavailable") {
     return (
-      <Card className="mt-6" data-testid="intelligence-pulse" data-state="unavailable">
-        <CardTitle>Morning Intelligence</CardTitle>
-        <CardBody>
+      <div className="mt-6">
+        <SurfaceState
+          kind="unavailable"
+          title="Specialist readiness could not be read"
+          detail="Listed reports are not all-clear."
+          error={readinessAnswer.error}
+          testId="intelligence-pulse"
+        >
           <LiveAnnouncement tone="alert" testId="intelligence-pulse-unavailable">
             Specialist readiness could not be read. Listed reports are not all-clear.
           </LiveAnnouncement>
           <details className="mt-2" data-testid="intelligence-pulse-details">
-            <summary className="cursor-pointer font-medium text-moss-slate">Details</summary>
+            <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
             <p className="mt-2 text-xs text-muted">cycle {cycleRunId}</p>
           </details>
-          <Link
-            href={intelligenceHome()}
-            className="mt-2 inline-flex min-h-[var(--control-height)] items-center text-sm text-moss-green underline"
-          >
-            Open Intelligence
-          </Link>
-        </CardBody>
-      </Card>
+          <OpenIntelligenceLink />
+        </SurfaceState>
+      </div>
     );
   }
 
@@ -178,12 +180,7 @@ export async function IntelligencePulse({
             ? ` — ${missing} required member${missing === 1 ? " is" : "s are"} not READY. Not all-clear.`
             : " — Brief/specialist coverage ready, not system healthy."}
         </p>
-        <Link
-          href={intelligenceHome()}
-          className="mt-2 inline-flex min-h-[var(--control-height)] items-center text-sm text-moss-green underline"
-        >
-          Open Intelligence
-        </Link>
+        <OpenIntelligenceLink />
       </CardBody>
     </Card>
   );

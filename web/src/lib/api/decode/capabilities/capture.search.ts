@@ -3,6 +3,7 @@ import type { Decoder } from "../types";
 import {
   decodeItems,
   fail,
+  optionalNullableString,
   pick,
   requiredInt,
   requiredString,
@@ -14,6 +15,7 @@ export interface CaptureSearchMatch {
   readonly version_number: number;
   readonly character_count: number;
   readonly recorded_at: string;
+  readonly display_label: string | null;
 }
 
 export interface CaptureSearchResult {
@@ -28,6 +30,7 @@ const MATCH_KEYS = [
   "version_number",
   "character_count",
   "recorded_at",
+  "display_label",
 ] as const;
 
 function decodeMatch(input: unknown): DecodeResult<CaptureSearchMatch> {
@@ -43,12 +46,15 @@ function decodeMatch(input: unknown): DecodeResult<CaptureSearchMatch> {
   if (!characterCount.ok) return characterCount;
   const recordedAt = requiredString(known.value.recorded_at);
   if (!recordedAt.ok) return recordedAt;
+  const displayLabel = optionalNullableString(known.value.display_label);
+  if (!displayLabel.ok) return displayLabel;
   return ok({
     capture_id: captureId.value,
     version_id: versionId.value,
     version_number: versionNumber.value,
     character_count: characterCount.value,
     recorded_at: recordedAt.value,
+    display_label: displayLabel.value,
   });
 }
 

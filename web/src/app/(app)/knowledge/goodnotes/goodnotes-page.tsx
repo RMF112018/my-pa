@@ -19,6 +19,7 @@ import { resolveSessionPrincipal } from "@/lib/auth/principal";
 import { invokeGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
+import { PageHeader } from "@/components/shell/page-header";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
 import { NotebookList, PageList, RunList } from "@/components/goodnotes/catalog";
 import { EvidenceSplit } from "@/components/goodnotes/evidence-split";
@@ -80,20 +81,19 @@ export async function GoodNotesPage({
   const contentSha256 = firstParam(params, "contentSha256");
 
   const heading = (
-    <>
-      <h1 id="goodnotes-heading" className="mb-1 text-xl font-semibold text-moss-slate">
-        GoodNotes
-      </h1>
-      <p className="mb-4 text-sm text-muted">{BLURB}</p>
-      <p className="mb-4">
+    <PageHeader
+      headingId="goodnotes-heading"
+      title="GoodNotes"
+      description={BLURB}
+      actions={
         <a
           href="/knowledge"
-          className="inline-flex min-h-11 items-center text-sm font-medium text-moss-green underline"
+          className="inline-flex min-h-11 items-center text-sm font-medium text-interactive underline"
         >
           Back to Knowledge
         </a>
-      </p>
-    </>
+      }
+    />
   );
 
   const frame = (children: React.ReactNode) => (
@@ -147,7 +147,7 @@ export async function GoodNotesPage({
         <SurfaceState
           kind="unavailable"
           title="This GoodNotes page could not be read"
-          detail={answer.error.message}
+          error={answer.error}
           limitations={answer.disclosure.limitations}
           testId="goodnotes-item-unavailable"
         />,
@@ -228,7 +228,7 @@ export async function GoodNotesPage({
         <SurfaceState
           kind="unavailable"
           title="GoodNotes notebooks could not be read"
-          detail={notebooksAnswer.error.message}
+          error={notebooksAnswer.error}
           limitations={notebooksAnswer.disclosure.limitations}
           testId="goodnotes-notebooks-unavailable"
         />
@@ -280,7 +280,7 @@ export async function GoodNotesPage({
             <SurfaceState
               kind="unavailable"
               title="Pages for this notebook could not be read"
-              detail={pagesAnswer.error.message}
+              error={pagesAnswer.error}
               limitations={pagesAnswer.disclosure.limitations}
               testId="goodnotes-pages-unavailable"
             />
@@ -330,7 +330,7 @@ export async function GoodNotesPage({
             <SurfaceState
               kind="unavailable"
               title="Runs for this notebook could not be read"
-              detail={runsAnswer.error.message}
+              error={runsAnswer.error}
               limitations={runsAnswer.disclosure.limitations}
               testId="goodnotes-runs-unavailable"
             />

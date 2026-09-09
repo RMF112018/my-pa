@@ -24,6 +24,7 @@ import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { PulseList } from "@/components/pulse/pulse-list";
 import { BackendPulseList } from "@/components/pulse/backend-pulse-list";
+import { PageHeader } from "@/components/shell/page-header";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
 import { IntelligencePulse } from "./intelligence-pulse";
 import type { PulseItem } from "@/lib/api/decode/capabilities/continuity.pulse";
@@ -56,12 +57,7 @@ export default async function TodayPage() {
   if (!principal) redirect("/sign-in");
 
   const heading = (
-    <>
-      <h1 id="today-heading" className="mb-1 text-xl font-semibold text-moss-slate">
-        Today
-      </h1>
-      <p className="mb-4 text-sm text-muted">What needs you today.</p>
-    </>
+    <PageHeader headingId="today-heading" title="Today" description="What needs you today." />
   );
 
   if (syntheticDataEnabled()) {
@@ -87,7 +83,7 @@ export default async function TodayPage() {
         <SurfaceState
           kind="unavailable"
           title="Today could not be derived"
-          detail={answer.error.message}
+          error={answer.error}
           limitations={answer.disclosure.limitations}
           testId="today-unavailable"
         />
@@ -96,16 +92,12 @@ export default async function TodayPage() {
           kind="empty"
           title="Nothing needs attention right now"
           detail="This is about today, not everything you hold."
+          diagnostic={
+            "The derivation ran and found no accepted commitment, decision, task or situation that " +
+            "a named condition holds about right now."
+          }
           testId="today-empty"
-        >
-          <details className="mt-2">
-            <summary className="cursor-pointer font-medium text-moss-slate">Details</summary>
-            <p className="mt-2">
-              The derivation ran and found no accepted commitment, decision, task or situation that
-              a named condition holds about right now.
-            </p>
-          </details>
-        </SurfaceState>
+        />
       ) : answer.kind === "degraded" ? (
         <>
           <DegradedBanner
@@ -118,16 +110,12 @@ export default async function TodayPage() {
               kind="degraded"
               title="Today is incomplete"
               detail="A quiet day is not established. Something may still need you."
+              diagnostic={
+                "The derivation was incomplete and surfaced nothing. A partial read does not " +
+                "establish that nothing needs attention."
+              }
               testId="today-degraded-empty"
-            >
-              <details className="mt-2">
-                <summary className="cursor-pointer font-medium text-moss-slate">Details</summary>
-                <p className="mt-2">
-                  The derivation was incomplete and surfaced nothing. A partial read does not
-                  establish that nothing needs attention.
-                </p>
-              </details>
-            </SurfaceState>
+            />
           ) : (
             // The gateway's order, untouched. See `BackendPulseList`.
             <BackendPulseList items={answer.result.pulse_items.map(toItem)} />

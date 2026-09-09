@@ -6,6 +6,10 @@ import { parseWorkUrlState } from "@/lib/api/work-url";
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); history.replaceState(null, "", "/"); });
 function renderFromUrl() { return render(<Workbench initialState={parseWorkUrlState(Object.fromEntries(new URLSearchParams(location.search)))} />); }
+async function chooseWorkView(label: string) {
+  await userEvent.click(screen.getByRole("button", { name: "Work views" }));
+  await userEvent.click(await screen.findByRole("menuitem", { name: label }));
+}
 
 describe("Work surface", () => {
   it("reserves the shell capture clearance below scrollable Work content", async () => {
@@ -33,14 +37,18 @@ describe("Work surface", () => {
     await screen.findByText("No today tasks");
   });
 
-  it("keeps the approved view order and asks the server for exact Today semantics", async () => {
+  it("keeps compact selectors without a horizontal work-views carousel", async () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } })); vi.stubGlobal("fetch", fetcher); history.replaceState(null, "", "/work?view=today");
     renderFromUrl();
-    const navigation = screen.getByRole("navigation", { name: "Work views" });
-    expect(Array.from(navigation.querySelectorAll("button"), (button) => button.textContent)).toEqual([
-      "Overdue", "Today", "Upcoming", "Unscheduled", "Waiting", "Blocked", "Recently updated", "All open", "Completed", "Commitments",
-    ]);
     expect(await screen.findByText("No today tasks")).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "Work views" })).toBeNull();
+    expect(screen.getByRole("region", { name: "Work" }).innerHTML).not.toMatch(/overflow-x-auto/);
+    expect(screen.getByRole("button", { name: "Tasks" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Commitments" })).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(screen.getByRole("button", { name: "Work views" }));
+    expect(Array.from(screen.getAllByRole("menuitem"), (item) => item.textContent)).toEqual([
+      "Overdue", "Today", "Upcoming", "Unscheduled", "Waiting", "Blocked", "Recently updated", "All open", "Completed",
+    ]);
     const path = String(fetcher.mock.calls[0]?.[0]);
     expect(path).toContain("/api/tasks?pageSize=50&workView=today&archived=exclude");
     expect(path).toMatch(/workDate=\d{4}-\d{2}-\d{2}/);
@@ -58,7 +66,9 @@ describe("Work surface", () => {
     const checkbox = await screen.findByRole("checkbox", { name: "Select Prepare permit set" });
     await userEvent.click(checkbox);
     await userEvent.click(screen.getByRole("button", { name: "Board" }));
-    expect(await screen.findByRole("region", { name: "Task lifecycle board" })).toBeTruthy();
+    const board = await screen.findByRole("region", { name: "Task lifecycle board" });
+    expect(board.className).not.toMatch(/overflow-x-auto|snap-x/);
+    expect(screen.queryByLabelText(/Move .* lifecycle/)).toBeNull();
     expect(screen.getByRole("checkbox", { name: "Select Prepare permit set" })).toBeChecked();
     expect(location.search).toContain("q=permit"); expect(location.search).toContain("perspective=board");
     await userEvent.click(screen.getByRole("button", { name: "Calendar" }));
@@ -104,7 +114,7 @@ describe("Work surface", () => {
   it("loads an executable lifecycle view without deriving it in the browser", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ tasks: [{ task_id: "tsk_aaaaaaaa11111111", title: "Synthetic follow up", lifecycle_state: "waiting", priority: "p2", due_at: null, archived_at: null, created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z" }] }), { status: 200, headers: { "content-type": "application/json" } })));
     history.replaceState(null, "", "/work?view=today"); renderFromUrl();
-    await userEvent.click(screen.getByRole("button", { name: "Waiting" }));
+    await chooseWorkView("Waiting");
     expect((await screen.findByRole("link", { name: /Synthetic follow up/ })).getAttribute("href")).toBe("/work/tasks/tsk_aaaaaaaa11111111");
     await waitFor(() => expect(fetch).toHaveBeenCalledWith("/api/tasks?pageSize=50&workView=waiting&archived=exclude", expect.objectContaining({ cache: "no-store" })));
   });
@@ -277,7 +287,7 @@ describe("Work surface", () => {
     await userEvent.click(screen.getByRole("button", { name: "New commitment" }));
     expect(await screen.findByRole("option", { name: "Sam Rivera" })).toBeTruthy();
     expect(screen.queryByLabelText(/person ID/i)).toBeNull();
-    await userEvent.click(screen.getByRole("button", { name: "Today" }));
+    await userEvent.click(screen.getByRole("button", { name: "Tasks" }));
     expect(await screen.findByRole("option", { name: "Revised schedule" })).toBeTruthy();
     expect(screen.queryByLabelText(/Commitment ID/i)).toBeNull();
   });
@@ -288,5 +298,37 @@ describe("Work surface", () => {
     await screen.findByText("No matching upcoming tasks");
     const path = String(fetcher.mock.calls[0]?.[0]); expect(path).toContain("workView=upcoming"); expect(path).toContain("q=plan"); expect(path).toContain("archived=only"); expect(path).toContain("timezone=America%2FNew_York");
     expect((screen.getByLabelText("Archive") as HTMLSelectElement).value).toBe("only");
+  });
+
+  it("updates the URL from compact mode, scope, and presentation selectors", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input) => {
+      const path = String(input);
+      const body = path.includes("waiting-on") ? { waiting_on: [] } : path.includes("/api/commitments") ? { commitments: [] } : { tasks: [] };
+      return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+    }));
+    history.replaceState(null, "", "/work?view=today");
+    renderFromUrl();
+    await screen.findByText("No today tasks");
+    await chooseWorkView("Overdue");
+    expect(location.search).toContain("view=overdue");
+    await userEvent.click(screen.getByRole("button", { name: "Commitments" }));
+    await screen.findByText("No commitments");
+    expect(location.search).toContain("view=commitments");
+    await userEvent.click(screen.getByRole("button", { name: "Commitment filter" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Waiting on" }));
+    expect(location.search).toContain("commitment=waiting-on");
+    await userEvent.click(screen.getByRole("button", { name: "Board" }));
+    expect(location.search).toContain("perspective=board");
+  });
+
+  it("does not treat a failed Work read as an empty view", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { code: "unavailable", message: "gateway down" } }), { status: 503, headers: { "content-type": "application/json" } })));
+    history.replaceState(null, "", "/work?view=today");
+    renderFromUrl();
+    expect(await screen.findByText("This could not be read")).toBeTruthy();
+    expect(screen.getByRole("alert")).toBeTruthy();
+    expect(screen.getByTestId("surface-state-detail").textContent).toBe("This could not be read. Try again.");
+    expect(screen.getByTestId("surface-state-diagnostic").textContent).toBe("gateway down");
+    expect(screen.queryByText("No today tasks")).toBeNull();
   });
 });

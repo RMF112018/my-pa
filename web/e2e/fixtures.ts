@@ -57,7 +57,29 @@ export async function signIn(page: Page, origin?: string): Promise<void> {
   await expect(button).toBeVisible();
   await button.click();
   await page.waitForURL("**/today");
-  await expect(page.getByTestId("capture-button")).toBeVisible();
+  await expect(visibleCaptureButton(page)).toBeVisible();
+}
+
+/** Desktop rail and mobile tab both expose Capture; only one is in the viewport. */
+export function visibleCaptureButton(page: Page) {
+  return page
+    .locator('[data-testid="capture-button-desktop"], [data-testid="capture-button-mobile"]')
+    .filter({ visible: true });
+}
+
+export async function openAccount(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "Account" }).click();
+  await expect(page.getByRole("dialog", { name: "Account" })).toBeVisible();
+}
+
+export async function pinInspector(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const key = "my-pa:shell-preferences:v1";
+    const current = JSON.parse(localStorage.getItem(key) ?? "{}") as Record<string, unknown>;
+    localStorage.setItem(key, JSON.stringify({ ...current, utilityPinned: true }));
+  });
+  await page.reload();
+  await expect(visibleCaptureButton(page)).toBeVisible();
 }
 
 type SecretStoreDump = {

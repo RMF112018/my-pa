@@ -26,13 +26,13 @@ export function ReportCard({
       data-testid="intelligence-report"
       data-report-id={row.report_id}
       data-brief-artifact={isBrief ? "true" : undefined}
-      className={isBrief ? "border-moss-green/50" : undefined}
+      className={isBrief ? "border-interactive/50" : undefined}
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <CardTitle>
           <Link
             href={intelligenceReport(row.report_id)}
-            className="inline-flex min-h-[var(--control-height)] items-center text-moss-green underline-offset-2 hover:underline"
+            className="inline-flex min-h-[var(--control-height)] items-center text-interactive underline-offset-2 hover:underline"
           >
             {row.title}
           </Link>
@@ -60,7 +60,7 @@ export function ReportCard({
           </dd>
         </dl>
         <details className="mt-2" data-testid="intelligence-report-details">
-          <summary className="cursor-pointer font-medium text-moss-slate">Details</summary>
+          <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
           <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 break-words text-xs">
             <dt>Identifier</dt>
             <dd data-testid="intelligence-report-id">{row.report_id}</dd>

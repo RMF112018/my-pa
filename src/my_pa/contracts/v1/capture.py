@@ -10,12 +10,13 @@ happened to build it cannot be checked against anything.
 **Only one of the three carries text.** `CaptureVersionView` does, because
 reading a capture back is what `capture.read` is for and `QC-AC-010` requires
 the original to be independently retrievable. `CaptureReceiptView` and
-`CaptureListEntry` carry identifiers, a digest, counts, and times — and this is
-structural rather than a convention, because neither model has a field text
-could go in. `QC-AC-041` says no capture text appears in logs, telemetry, event
-payloads, URL parameters, or lock-screen notifications; a receipt is the thing a
-caller keeps and a listing is the thing a caller sees most often, so those are
-the two answers most worth making incapable of carrying it.
+`CaptureListEntry` carry identifiers, a digest, counts, times, and — on the
+listing only — an optional `display_label` that is caller-supplied metadata,
+not a snippet of the note. Neither model has a field capture text could go in.
+`QC-AC-041` says no capture text appears in logs, telemetry, event payloads,
+URL parameters, or lock-screen notifications; a receipt is the thing a caller
+keeps and a listing is the thing a caller sees most often, so those are the
+two answers most worth making incapable of carrying it.
 
 **The digest is published and the text is not, on the receipt.** That is what
 lets a caller verify that what was stored is what it sent — `QC-AC-031`'s
@@ -115,7 +116,12 @@ class CaptureVersionView(StrictModel):
 
 
 class CaptureListEntry(StrictModel):
-    """One capture in a listing: identity, owner, and where its chain has got to."""
+    """One capture in a listing: identity, owner, and where its chain has got to.
+
+    `display_label` is the latest append-only label for this capture, or `null`
+    when none has been recorded. It is not capture text and is never derived
+    from `capture.read`.
+    """
 
     capture_id: str
     owner_principal_id: str
@@ -124,6 +130,7 @@ class CaptureListEntry(StrictModel):
     latest_version_id: str
     latest_version_number: int = Field(ge=1)
     latest_recorded_at: UtcDatetime
+    display_label: str | None = Field(default=None, min_length=1, max_length=120)
 
     @model_validator(mode="after")
     def _check(self) -> CaptureListEntry:

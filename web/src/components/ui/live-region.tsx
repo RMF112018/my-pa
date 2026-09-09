@@ -24,7 +24,7 @@ export function LiveAnnouncement({
       aria-live={isAlert ? "assertive" : "polite"}
       aria-atomic="true"
       data-testid={testId ?? `live-${tone}`}
-      className={isAlert ? "text-sm text-moss-coral-strong" : "text-sm text-muted"}
+      className={isAlert ? "text-sm text-destructive" : "text-sm text-muted"}
     >
       {children}
     </p>

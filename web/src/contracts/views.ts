@@ -276,6 +276,7 @@ export interface BackendCaptureEntry {
   readonly latestVersionId: OpaqueId;
   readonly latestVersionNumber: number;
   readonly latestRecordedAt: IsoTimestamp;
+  readonly displayLabel: string | null;
 }
 
 /**
@@ -292,4 +293,5 @@ export interface BackendCaptureMatch {
   readonly versionNumber: number;
   readonly characterCount: number;
   readonly recordedAt: IsoTimestamp;
+  readonly displayLabel: string | null;
 }

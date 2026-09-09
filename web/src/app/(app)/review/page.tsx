@@ -30,6 +30,7 @@ import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { ReviewWorkbench } from "@/components/review/review-workbench";
 import { BackendReviewWorkbench } from "@/components/review/backend-review-workbench";
+import { PageHeader } from "@/components/shell/page-header";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
 import { toBackendReviewCase } from "@/components/review/to-backend-case";
 
@@ -47,14 +48,7 @@ export default async function ReviewPage() {
   const principal = await resolveSessionPrincipal(cookieStore.get(SESSION_COOKIE_NAME)?.value);
   if (!principal) redirect("/sign-in");
 
-  const heading = (
-    <>
-      <h1 id="review-heading" className="mb-1 text-xl font-semibold text-moss-slate">
-        Review
-      </h1>
-      <p className="mb-4 text-sm text-muted">{BLURB}</p>
-    </>
-  );
+  const heading = <PageHeader headingId="review-heading" title="Review" description={BLURB} />;
 
   const frame = (children: React.ReactNode) => (
     <section aria-labelledby="review-heading" className="mx-auto max-w-2xl">
@@ -86,7 +80,7 @@ export default async function ReviewPage() {
       <SurfaceState
         kind="unavailable"
         title="Your review queue could not be read"
-        detail={answer.error.message}
+        error={answer.error}
         limitations={answer.disclosure.limitations}
         testId="review-queue-unavailable"
       />,
@@ -97,7 +91,7 @@ export default async function ReviewPage() {
     return frame(
       <SurfaceState
         kind="empty"
-        title="Nothing to review right now."
+        title="Nothing to review right now"
         detail="Proposals appear here when something needs a decision."
         testId="review-queue-empty"
       />,

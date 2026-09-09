@@ -38,14 +38,14 @@ export function ReportDetailView({ report }: { readonly report: ReportsReadResul
       <p className="mb-3">
         <Link
           href={intelligenceHome()}
-          className="inline-flex min-h-[var(--control-height)] items-center text-sm text-moss-green underline"
+          className="inline-flex min-h-[var(--control-height)] items-center text-sm text-interactive underline"
         >
           ← Intelligence
         </Link>
       </p>
       <header className="mb-4">
         <div className="flex flex-wrap items-start justify-between gap-2">
-          <h1 id="intelligence-report-heading" className="text-xl font-semibold text-moss-slate">
+          <h1 id="intelligence-report-heading" className="text-xl font-semibold text-text-primary">
             {report.title}
           </h1>
           <div className="flex flex-wrap gap-1">
@@ -88,7 +88,7 @@ export function ReportDetailView({ report }: { readonly report: ReportsReadResul
             <dt>Supersedes</dt>
             <dd data-testid="intelligence-supersedes">
               {report.supersedes_report_id ? (
-                <Link href={hrefFor(report.supersedes_report_id)} className="text-moss-green underline">
+                <Link href={hrefFor(report.supersedes_report_id)} className="text-interactive underline">
                   {report.supersedes_report_id}
                 </Link>
               ) : (
@@ -101,7 +101,7 @@ export function ReportDetailView({ report }: { readonly report: ReportsReadResul
                 ? "none"
                 : report.dependency_report_ids.map((id) => (
                     <span key={id} className="mr-2 inline-block">
-                      <Link href={hrefFor(id)} className="text-moss-green underline">
+                      <Link href={hrefFor(id)} className="text-interactive underline">
                         {id}
                       </Link>
                     </span>
@@ -112,7 +112,7 @@ export function ReportDetailView({ report }: { readonly report: ReportsReadResul
       </Card>
 
       <section aria-labelledby="intelligence-body-heading" className="mt-4">
-        <h2 id="intelligence-body-heading" className="mb-2 text-base font-semibold text-moss-slate">
+        <h2 id="intelligence-body-heading" className="mb-2 text-base font-semibold text-text-primary">
           Secondary body
         </h2>
         {report.body_markdown === undefined ? (
@@ -134,7 +134,7 @@ export function ReportDetailView({ report }: { readonly report: ReportsReadResul
       </section>
 
       <details className="mt-4 rounded-lg border border-border bg-surface p-3" data-testid="intelligence-structured">
-        <summary className="cursor-pointer text-sm font-medium text-moss-slate">
+        <summary className="cursor-pointer text-sm font-medium text-text-primary">
           Persisted structured content
         </summary>
         {structuredKeys.length === 0 ? (
@@ -158,7 +158,7 @@ export function ReportDetailView({ report }: { readonly report: ReportsReadResul
       </details>
 
       <details className="mt-3 rounded-lg border border-border bg-surface p-3" data-testid="intelligence-provenance">
-        <summary className="cursor-pointer text-sm font-medium text-moss-slate">
+        <summary className="cursor-pointer text-sm font-medium text-text-primary">
           Report-level provenance
         </summary>
         <p className="mt-2 text-xs text-muted">
@@ -182,7 +182,7 @@ export function ReportDetailView({ report }: { readonly report: ReportsReadResul
                     </span>
                   </div>
                   {href ? (
-                    <a href={href} className="text-moss-green underline" rel="noreferrer">
+                    <a href={href} className="text-interactive underline" rel="noreferrer">
                       {href}
                     </a>
                   ) : null}

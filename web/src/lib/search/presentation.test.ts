@@ -11,7 +11,10 @@ import {
   goodnotesSearchHref,
   knowledgeSearchHref,
   federatedZeroHitKind,
+  formatCoverageRow,
   presentFederatedHits,
+  presentSearchCoverage,
+  searchCoverageHeadline,
   SEARCH_DOMAIN_ORDER,
   type FederatedHit,
   type SearchCoverage,
@@ -57,6 +60,7 @@ const CAPTURE: CaptureSearchMatch = {
   version_number: 2,
   character_count: 48,
   recorded_at: "2026-01-01T00:00:00Z",
+  display_label: null,
 };
 
 const REPORT: ReportSearchMatch = {
@@ -142,6 +146,28 @@ describe("federated search presentation", () => {
     expect(presented?.href).not.toContain("text=");
     expect(JSON.stringify(groups)).not.toContain(secret);
     expect(JSON.stringify(groups)).not.toContain("SECRET");
+  });
+
+  it("prefers a capture display label without putting it or capture text in the href", () => {
+    const secret = "SECRET_CAPTURE_BODY_MUST_NOT_LEAK";
+    const groups = presentFederatedHits([
+      {
+        domain: "capture",
+        item: { ...CAPTURE, display_label: "Board pack", text: secret },
+      } as FederatedHit,
+    ]);
+    const presented = groups[0]?.hits[0];
+    expect(presented?.label).toBe("Board pack");
+    expect(presented?.href).toBe(
+      "/knowledge?captureId=cap_aaaaaaaa11111111&versionId=capver_aaaaaaaa11111111",
+    );
+    expect(presented?.href).not.toContain("Board");
+    expect(JSON.stringify(groups)).not.toContain(secret);
+  });
+
+  it("falls back to the capture ID when display_label is null", () => {
+    const groups = presentFederatedHits([{ domain: "capture", item: CAPTURE }]);
+    expect(groups[0]?.hits[0]?.label).toBe(CAPTURE.capture_id);
   });
 
   it("omits a knowledge href unless the search request actually had enrollmentId", () => {
@@ -261,5 +287,31 @@ describe("federatedZeroHitKind", () => {
     expect(
       federatedZeroHitKind([row("tasks", "searched"), row("capture", "unavailable")], 0),
     ).toBe("empty");
+  });
+});
+
+describe("search coverage summary", () => {
+  const row = (domain: string, state: string, reason?: string): SearchCoverage => ({
+    domain,
+    state,
+    hitCount: 0,
+    ...(reason ? { reason } : {}),
+  });
+
+  it("does not count omitted domains as searched", () => {
+    const coverage = [
+      row("tasks", "searched"),
+      row("goodnotes", "searched"),
+      row("knowledge", "knowledge_not_enrolled"),
+      row("meetings", "omitted", "no_search_capability"),
+      row("projects", "omitted", "no_search_capability"),
+    ];
+    const summary = presentSearchCoverage(coverage);
+    expect(summary.searched.map((item) => item.domain)).toEqual(["tasks", "goodnotes"]);
+    expect(summary.omitted.map((item) => item.domain)).toEqual(["meetings", "projects"]);
+    expect(summary.limited.map((item) => item.domain)).toEqual(["knowledge"]);
+    expect(searchCoverageHeadline(coverage)).toBe("2 domains searched");
+    expect(formatCoverageRow(coverage[3]!)).toBe("meetings: omitted (no_search_capability)");
+    expect(summary.omitted.every((item) => item.state === "omitted")).toBe(true);
   });
 });

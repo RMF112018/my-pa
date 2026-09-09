@@ -527,6 +527,9 @@ describe("Review distinguishes an empty queue from an unread one", () => {
     );
     // A full queue misreported as clear is the specific harm here.
     expect(screen.queryByText(/nothing is waiting/i)).toBeNull();
+    expect(screen.queryByTestId("review-queue-empty")).toBeNull();
+    expect(screen.queryByText(/nothing to review/i)).toBeNull();
+    expect(screen.queryByText(/all-clear/i)).toBeNull();
   });
 });
 

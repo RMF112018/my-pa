@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { signIn } from "./fixtures";
+import { signIn, openAccount, pinInspector } from "./fixtures";
 
 async function stableFrame(page: Page) {
   await page.addStyleTag({ content: "nextjs-portal { display: none !important; }" });
@@ -26,17 +26,18 @@ test("light successor shell is visually reviewable", async ({ page }) => {
 test("dark shell captures responsive navigation and Inspector states", async ({ page }, testInfo) => {
   await page.goto("/people");
   await stableFrame(page);
+  await openAccount(page);
   await page.getByRole("button", { name: "Use dark theme" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.getByRole("button", { name: "Close panel" }).click();
 
+  await pinInspector(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   if (testInfo.project.name === "mobile") {
-    await page.getByRole("button", { name: "Open Inspector" }).click();
     await expect(page.getByRole("dialog", { name: "Inspector" })).toBeVisible();
   } else {
     await page.getByRole("button", { name: "Collapse navigation" }).click();
-    await page.getByRole("complementary", { name: "Utility region" }).getByRole("button", {
-      name: "Open Inspector",
-    }).click();
+    await expect(page.getByRole("complementary", { name: "Utility region" })).toBeVisible();
   }
 
   await expect(page).toHaveScreenshot("shell-dark-inspector.png", {
@@ -47,7 +48,7 @@ test("dark shell captures responsive navigation and Inspector states", async ({ 
 
 test("command overlay has a deterministic reduced-motion state", async ({ page }) => {
   await page.keyboard.press("Control+K");
-  await expect(page.getByRole("dialog", { name: "Command menu" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Search" })).toBeVisible();
   await expect(page).toHaveScreenshot("shell-command-menu.png", {
     animations: "disabled",
     fullPage: true,

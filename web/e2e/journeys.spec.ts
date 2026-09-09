@@ -8,7 +8,12 @@
  * only way that can happen is if it was committed.
  */
 import { test, expect } from "@playwright/test";
-import { signIn, syntheticNote, expectState } from "./fixtures";
+import { signIn, syntheticNote, expectState, visibleCaptureButton, pinInspector } from "./fixtures";
+
+/** Chrome below the `lg` (1024) split: rail hidden, Knowledge lives in More. */
+function belowLgChrome(projectName: string): boolean {
+  return projectName === "mobile" || projectName === "tablet";
+}
 
 test.describe("an unauthenticated visitor reaches no destination", () => {
   test("every app route redirects to sign-in", async ({ page }) => {
@@ -112,7 +117,7 @@ test.describe("the signed-in surfaces", () => {
     await expect(page.getByRole("searchbox", { name: "Search your captures" })).toHaveValue(
       "synthetic",
     );
-    if (testInfo.project.name === "mobile") {
+    if (belowLgChrome(testInfo.project.name)) {
       await page.getByRole("button", { name: "More" }).click();
     }
     await expect(page.getByRole("link", { name: "Knowledge" }).first()).toHaveAttribute(
@@ -121,10 +126,10 @@ test.describe("the signed-in surfaces", () => {
     );
   });
 
-  test("command menu and Inspector expose only the bounded shell behavior", async ({ page }, testInfo) => {
+  test("Search palette and Inspector expose only the bounded shell behavior", async ({ page }, testInfo) => {
     await expect(page.getByRole("link", { name: "Review" }).first()).toBeVisible();
-    await expect(page.getByRole("button", { name: /Commands/ })).toBeVisible();
-    if (testInfo.project.name === "mobile") {
+    await expect(page.getByRole("button", { name: /Commands/ })).toHaveCount(0);
+    if (belowLgChrome(testInfo.project.name)) {
       const nav = page.getByRole("navigation", { name: "Primary" });
       await expect(nav.getByRole("link", { name: "Today" })).toBeVisible();
       await expect(nav.getByRole("link", { name: "Work" })).toBeVisible();
@@ -141,34 +146,41 @@ test.describe("the signed-in surfaces", () => {
     }
 
     await page.keyboard.press("Control+K");
-    const commands = page.getByRole("dialog", { name: "Command menu" });
-    await expect(commands).toBeVisible();
-    await expect(commands).not.toContainText(/cross-feature search is not available/i);
-    const searchbox = commands.getByRole("searchbox", { name: "Search" });
+    const search = page.getByRole("dialog", { name: "Search" });
+    await expect(search).toBeVisible();
+    await expect(search).not.toContainText(/cross-feature search is not available/i);
+    await expect(search).toContainText("Start typing to search.");
+    await expect(search.getByRole("button", { name: "Knowledge" })).toHaveCount(0);
+    const searchbox = search.getByRole("searchbox", { name: "Search" });
     await expect(searchbox).toBeVisible();
     await searchbox.fill("morning brief");
     await expect(
-      commands.locator(
+      search.locator(
         "[data-testid='search-coverage'], [data-testid='search-not-implemented'], [data-testid='search-unavailable']",
       ).first(),
     ).toBeVisible({ timeout: 30_000 });
-    const coverage = commands.getByTestId("search-coverage");
+    const coverage = search.getByTestId("search-coverage");
     if ((await coverage.count()) > 0) {
       await expect(coverage).toContainText("omitted");
     }
-    await searchbox.fill("");
-    await commands.getByRole("button", { name: "Knowledge" }).click();
+    await page.keyboard.press("Escape");
+    await expect(search).toHaveCount(0);
+    if (belowLgChrome(testInfo.project.name)) {
+      await page.getByRole("button", { name: "More" }).click();
+      await page.getByRole("dialog", { name: "More" }).getByRole("link", { name: "Knowledge" }).click();
+    } else {
+      await page.getByRole("link", { name: "Knowledge" }).first().click();
+    }
     await page.waitForURL("**/knowledge");
 
-    await page.getByRole("button", { name: "Open Inspector" }).click();
+    await pinInspector(page);
     if (testInfo.project.name === "mobile") {
       await expect(page.getByRole("dialog", { name: "Inspector" })).toBeVisible();
-      await page.getByRole("button", { name: "Close panel" }).click();
+      await page.getByRole("button", { name: "Unpin Inspector" }).click();
       await expect(page.getByRole("dialog", { name: "Inspector" })).toHaveCount(0);
     } else {
       const utility = page.getByRole("complementary", { name: "Utility region" });
       await expect(utility.getByRole("slider", { name: "Inspector width" })).toBeVisible();
-      await utility.getByRole("button", { name: "Pin Inspector" }).click();
       await expect(utility.getByRole("button", { name: "Unpin Inspector" })).toBeVisible();
     }
   });
@@ -176,7 +188,7 @@ test.describe("the signed-in surfaces", () => {
   test("tablet landscape keeps Inspector in the utility region", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "tablet", "tablet inspector orientation");
     await page.setViewportSize({ width: 1024, height: 768 });
-    await page.getByRole("button", { name: "Open Inspector" }).click();
+    await pinInspector(page);
     const utility = page.getByRole("complementary", { name: "Utility region" });
     await expect(utility.getByRole("slider", { name: "Inspector width" })).toBeVisible();
     await expect(page.getByRole("dialog", { name: "Inspector" })).toHaveCount(0);
@@ -240,7 +252,7 @@ test.describe("the signed-in surfaces", () => {
 
   test("a capture is persisted, and the Library proves it", async ({ page }) => {
     const marker = `${Date.now()}`;
-    await page.getByTestId("capture-button").click();
+    await visibleCaptureButton(page).click();
     const field = page.getByTestId("capture-field");
     await expect(field).toBeFocused();
     await field.fill(syntheticNote(marker));
@@ -264,7 +276,7 @@ test.describe("the signed-in surfaces", () => {
   });
 
   test("focus returns to the capture button when the dialog closes", async ({ page }) => {
-    const opener = page.getByTestId("capture-button");
+    const opener = visibleCaptureButton(page);
     await opener.click();
     await expect(page.getByTestId("capture-field")).toBeFocused();
     await page.keyboard.press("Escape");
@@ -379,7 +391,7 @@ test.describe("keyboard-only navigation", () => {
     await expect(page).toHaveURL(/#main$/);
 
     // Every destination in the rail is reachable and activatable by keyboard.
-    if (testInfo.project.name === "mobile") {
+    if (belowLgChrome(testInfo.project.name)) {
       await page.getByRole("button", { name: "More" }).focus();
       await page.keyboard.press("Enter");
     }
@@ -389,7 +401,7 @@ test.describe("keyboard-only navigation", () => {
     await expect(page.getByRole("heading", { name: "Knowledge", level: 1 })).toBeVisible();
 
     // And the capture dialog opens, takes focus, and closes on Escape.
-    await page.getByTestId("capture-button").focus();
+    await visibleCaptureButton(page).focus();
     await page.keyboard.press("Enter");
     await expect(page.getByTestId("capture-field")).toBeFocused();
     await page.keyboard.press("Escape");
@@ -404,7 +416,7 @@ test.describe("keyboard-only navigation", () => {
     // `element.focus()`. Asserting against `.focus()` would either fail on a
     // correct build or push someone to widen the rule to `:focus`, which is the
     // wrong direction. So the ring is measured the way a keyboard user gets it.
-    const button = page.getByTestId("capture-button");
+    const button = visibleCaptureButton(page);
     await button.evaluate((element) => (element as HTMLElement).blur());
     await page.keyboard.press("Tab");
     let focused = false;

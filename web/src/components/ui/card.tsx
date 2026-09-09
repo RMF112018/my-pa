@@ -10,7 +10,7 @@ export function Card({ className = "", ...props }: HTMLAttributes<HTMLDivElement
 }
 
 export function CardTitle({ children }: { children: ReactNode }) {
-  return <h3 className="text-base font-semibold text-moss-slate">{children}</h3>;
+  return <h3 className="text-base font-semibold text-text-primary">{children}</h3>;
 }
 
 export function CardBody({ children }: { children: ReactNode }) {

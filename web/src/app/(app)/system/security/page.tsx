@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resolveSessionPrincipal } from "@/lib/auth/principal";
 import { callWebAuthnGateway } from "@/lib/auth/webauthn-server";
+import { PageHeader } from "@/components/shell/page-header";
 import {
   SecuritySettings,
   type CredentialRow,
@@ -38,15 +39,13 @@ export default async function SecurityPage() {
     initialCredentials = [];
   }
   return (
-    <main id="main" className="mx-auto flex max-w-2xl flex-col gap-6 p-6">
-      <header>
-        <h1 className="text-2xl font-semibold">Security</h1>
-        <p className="mt-2 text-sm">
-          Passkeys sign you in with this device. Recovery codes are shown once. Sensitive
-          changes require a fresh passkey confirmation.
-        </p>
-      </header>
+    <section aria-labelledby="security-heading" className="mx-auto flex max-w-2xl flex-col gap-6">
+      <PageHeader
+        headingId="security-heading"
+        title="Security"
+        description="Passkeys sign you in with this device. Recovery codes are shown once. Sensitive changes require a fresh passkey confirmation."
+      />
       <SecuritySettings initialCredentials={initialCredentials} />
-    </main>
+    </section>
   );
 }

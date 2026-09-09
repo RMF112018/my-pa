@@ -471,6 +471,7 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "constraint_sync_resolution_history",
         }
     ),
+    "c1a8e4d70b29": frozenset({"capture_labels"}),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

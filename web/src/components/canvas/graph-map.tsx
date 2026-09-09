@@ -10,8 +10,8 @@ import {
 
 const NODE_R = 16;
 const FOCUS_R = 22;
-const OPERABLE_NODE_FOCUS = "outline-none focus-visible:[&>circle]:stroke-moss-gold";
-const OPERABLE_EDGE_FOCUS = "outline-none focus-visible:[&>line:last-of-type]:stroke-moss-gold";
+const OPERABLE_NODE_FOCUS = "outline-none focus-visible:[&>circle]:stroke-focus";
+const OPERABLE_EDGE_FOCUS = "outline-none focus-visible:[&>line:last-of-type]:stroke-focus";
 
 function shortLabel(label: string): string {
   return label.length > 22 ? `${label.slice(0, 21)}…` : label;
@@ -28,10 +28,10 @@ function edgeCurrentness(isCurrent: boolean | null): "true" | "false" | "unspeci
 }
 
 function edgeStrokeClass(isCurrent: boolean | null, selected: boolean): string {
-  if (selected) return "stroke-moss-green";
-  if (isCurrent === true) return "stroke-moss-slate/55";
-  if (isCurrent === false) return "stroke-moss-slate/20";
-  return "stroke-moss-slate/30";
+  if (selected) return "stroke-interactive";
+  if (isCurrent === true) return "stroke-text-primary/55";
+  if (isCurrent === false) return "stroke-text-primary/20";
+  return "stroke-text-primary/30";
 }
 
 function edgeStrokeWidth(isCurrent: boolean | null, selected: boolean): number {
@@ -178,14 +178,14 @@ export function GraphMap({
                 cx={point.x}
                 cy={point.y}
                 r={r}
-                className={focused ? "fill-moss-green/15 stroke-moss-green" : "fill-surface stroke-moss-green"}
+                className={focused ? "fill-interactive/15 stroke-interactive" : "fill-surface stroke-interactive"}
                 strokeWidth={highlight ? 3 : 2}
               />
               <text
                 x={point.x}
                 y={point.y + r + 16}
                 textAnchor="middle"
-                className="fill-moss-slate"
+                className="fill-text-primary"
                 fontSize={11}
               >
                 {shortLabel(node.display_label)}

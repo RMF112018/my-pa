@@ -5,6 +5,7 @@ import {
   expectNoSecretInBrowserStores,
   hideNextjsDevOverlay,
   signIn,
+  visibleCaptureButton,
 } from "./fixtures";
 
 const OPAQUE_SID = /^[0-9a-f]{64}$/;
@@ -107,7 +108,7 @@ test.describe("opaque session cookie", () => {
     expect(cookie!.value.split(".")).toHaveLength(1);
 
     await page.goto("/today");
-    await expect(page.getByTestId("capture-button")).toBeVisible();
+    await expect(visibleCaptureButton(page)).toBeVisible();
     const sid = cookie!.value;
     const visibleCookie = await page.evaluate(() => document.cookie);
     expect(visibleCookie, "HttpOnly SID must not appear on document.cookie").not.toContain(
@@ -164,7 +165,7 @@ test.describe("opaque session cookie", () => {
     // signed-in shell must not appear for a revoked cookie.
     await page.goto("/today");
     if (new URL(page.url()).pathname === "/today") {
-      await expect(page.getByTestId("capture-button")).toHaveCount(0);
+      await expect(visibleCaptureButton(page)).toHaveCount(0);
     } else {
       await expect(page).toHaveURL(/\/sign-in/);
     }

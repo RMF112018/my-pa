@@ -21,14 +21,18 @@ function ShellHarness({ initialCollapsed = false }: { initialCollapsed?: boolean
   const [commandOpen, setCommandOpen] = useState(false);
   return (
     <div className="flex min-h-[680px] bg-canvas text-text-primary">
-      <NavRail collapsed={collapsed} onCollapsedChange={setCollapsed} />
+      <NavRail
+        collapsed={collapsed}
+        onCollapsedChange={setCollapsed}
+        onCapture={() => undefined}
+      />
       <main className="min-w-0 flex-1 p-6">
         <h1 className="text-2xl font-semibold">Today</h1>
         <p className="mt-2 text-text-secondary">
           Deterministic synthetic shell state for visual and accessibility review.
         </p>
         <Button className="mt-6" onClick={() => setCommandOpen(true)}>
-          Open command menu
+          Open Search
         </Button>
       </main>
       <UtilityRegion

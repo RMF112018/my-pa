@@ -15,7 +15,7 @@ export function SearchHits({ entities }: { entities: readonly EntitySummary[] })
               <CardTitle>
                 <Link
                   href={peopleEntity(row.entity_id)}
-                  className="text-moss-slate underline decoration-moss-green/40 underline-offset-2"
+                  className="text-text-primary underline decoration-interactive/40 underline-offset-2"
                 >
                   {row.display_name}
                 </Link>

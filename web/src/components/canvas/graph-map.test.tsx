@@ -283,10 +283,10 @@ describe("GraphMap keyboard, focus, and axe", () => {
       />,
     );
     expect(screen.getByTestId(`canvas-node-${FOCUS}`).getAttribute("class")).toContain(
-      "focus-visible:[&>circle]:stroke-moss-gold",
+      "focus-visible:[&>circle]:stroke-focus",
     );
     expect(screen.getByTestId(`canvas-edge-${REL_EDGE}`).getAttribute("class")).toContain(
-      "focus-visible:[&>line:last-of-type]:stroke-moss-gold",
+      "focus-visible:[&>line:last-of-type]:stroke-focus",
     );
   });
 });

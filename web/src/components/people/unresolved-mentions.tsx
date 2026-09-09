@@ -21,7 +21,7 @@ export function UnresolvedMentionsPanel({
 
   return (
     <section className="mt-6" aria-labelledby="people-unresolved-heading" data-testid="people-unresolved">
-      <h2 id="people-unresolved-heading" className="text-base font-semibold text-moss-slate">
+      <h2 id="people-unresolved-heading" className="text-base font-semibold text-text-primary">
         Unresolved mentions
       </h2>
       <p className="mt-1 text-sm text-muted">
@@ -52,7 +52,7 @@ export function UnresolvedMentionsPanel({
         <p className="mt-3 text-sm">
           <a
             href={`${peopleHome()}?mentionsAfter=${encodeURIComponent(disclosure.nextCursor)}`}
-            className="text-moss-green underline"
+            className="text-interactive underline"
           >
             Continue unresolved mentions
           </a>

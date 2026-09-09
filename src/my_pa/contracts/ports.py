@@ -3582,6 +3582,9 @@ class CaptureAdmissionRequest:
     capture_kind: CaptureKind = CaptureKind.QUICK_NOTE
     context_source_object_id: str | None = None
     context_source_version_id: str | None = None
+    #: Caller-supplied list-safe title for `capture.create`. `None` writes no
+    #: label row. Never copied from `content`.
+    display_label: str | None = None
     #: How the submission reached this process, established by the transport and
     #: never stated by the caller (WP-10). It defaults to `LOCAL` because that is
     #: what every path that does not say otherwise is: the loopback gateway, MCP
@@ -3603,13 +3606,20 @@ class CaptureAdmissionRequest:
     @property
     def payload_digest(self) -> str:
         """Digest every material admission input without copying source text."""
+        payload: dict[str, object] = {
+            "content_sha256": self.content.digest,
+            "capture_kind": self.capture_kind.value,
+            "context_source_object_id": self.context_source_object_id,
+            "context_source_version_id": self.context_source_version_id,
+        }
+        # Unlabelled admissions keep the historical digest so an in-flight
+        # retry of a pre-label request is still a replay. A supplied label is
+        # material: two creates under one key that differ only by title are a
+        # conflict, not a replay.
+        if self.display_label is not None:
+            payload["display_label"] = self.display_label
         canonical = json.dumps(
-            {
-                "content_sha256": self.content.digest,
-                "capture_kind": self.capture_kind.value,
-                "context_source_object_id": self.context_source_object_id,
-                "context_source_version_id": self.context_source_version_id,
-            },
+            payload,
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
@@ -3650,7 +3660,8 @@ class CaptureSummary:
 
     No content and no digest of a version the caller did not ask for. A listing
     that carried text would put every capture's content into one response, which
-    is the opposite of what `capture.read` exists to bound.
+    is the opposite of what `capture.read` exists to bound. `display_label` is
+    optional list-safe metadata and is never copied from that text.
     """
 
     capture_id: str
@@ -3660,6 +3671,7 @@ class CaptureSummary:
     latest_version_id: str
     latest_version_number: int
     latest_recorded_at: datetime
+    display_label: str | None = None
 
     def __post_init__(self) -> None:
         validate_identifier(self.capture_id, IdKind.CAPTURE)
@@ -3700,7 +3712,8 @@ class CaptureSearchMatch:
     often, and a search result is one of those; the caller obtains the text
     through `capture.read`, under its own capability and its own audit event.
     `character_count` is the size of what matched, which is a count rather than
-    the content.
+    the content. `display_label` is the capture's current list-safe title, or
+    `None`; search still matches stored text, not the label.
     """
 
     capture_id: str
@@ -3708,6 +3721,7 @@ class CaptureSearchMatch:
     version_number: int
     character_count: int
     recorded_at: datetime
+    display_label: str | None = None
 
     def __post_init__(self) -> None:
         validate_identifier(self.capture_id, IdKind.CAPTURE)

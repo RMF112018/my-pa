@@ -37,6 +37,7 @@ import { Button } from "@/components/ui/button";
 import { TextField } from "@/components/ui/field";
 import { RevealDialog } from "@/components/shell/reveal-dialog";
 import { apiPost } from "@/lib/api/client";
+import { mapUserError } from "@/lib/ui/user-error";
 
 /** The five verbs this tier may submit, and the words a person reads. */
 const DISPOSITIONS = [
@@ -218,19 +219,24 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
         });
         return;
       }
-      const message = answer.error ?? "the request did not complete";
+      const presented = mapUserError({
+        status: answer.status,
+        errorClass: answer.errorClass,
+        code: answer.code,
+        message: answer.error,
+      });
       setState(
         row.reviewCaseId,
         answer.errorClass === "conflict"
-          ? { phase: "conflict", message }
+          ? { phase: "conflict", message: presented.message }
           : answer.errorClass === "unavailable"
-            ? { phase: "unavailable", message }
-            : { phase: "refused", message },
+            ? { phase: "unavailable", message: presented.message }
+            : { phase: "refused", message: presented.message },
       );
-    } catch {
+    } catch (error) {
       setState(row.reviewCaseId, {
         phase: "unavailable",
-        message: "the request never reached the server, so nothing was decided",
+        message: mapUserError(error).message,
       });
     }
   }
@@ -238,7 +244,7 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
   return (
     <>
       <p
-        className="mb-3 rounded-md border border-moss-gold/40 border-l-4 border-l-moss-gold bg-moss-gold/10 p-3 text-sm"
+        className="mb-3 rounded-md border border-warning/40 border-l-4 border-l-warning bg-warning/10 p-3 text-sm"
         data-testid="review-listing-limitation"
       >
         <strong>This listing carries no proposal text.</strong> Open <em>Reveal</em> on a capture
@@ -290,7 +296,7 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
                     <p
                       role="status"
                       data-testid="review-decided"
-                      className="mt-3 text-sm text-moss-green"
+                      className="mt-3 text-sm text-success"
                     >
                       Decided and stored. The proposal is now <strong>{state.proposalState}</strong>
                       , at review version {state.reviewVersion}.
@@ -305,7 +311,7 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
                     <p
                       role="alert"
                       data-testid="review-not-persisted"
-                      className="mt-3 text-sm text-moss-coral-strong"
+                      className="mt-3 text-sm text-destructive"
                     >
                       <strong>No decision was stored.</strong> The server answered &ldquo;
                       {state.detail}&rdquo; rather than a stored decision, so this case is
@@ -315,7 +321,7 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
                     <p
                       role="alert"
                       data-testid="review-conflict"
-                      className="mt-3 text-sm text-moss-coral-strong"
+                      className="mt-3 text-sm text-destructive"
                     >
                       <strong>Not decided — this case moved.</strong> {state.message} Reload the
                       list so you decide against what the case says now.
@@ -324,7 +330,7 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
                     <p
                       role="alert"
                       data-testid="review-unavailable"
-                      className="mt-3 text-sm text-moss-coral-strong"
+                      className="mt-3 text-sm text-destructive"
                     >
                       <strong>Not decided — the service could not be reached.</strong>{" "}
                       {state.message}
@@ -333,7 +339,7 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
                     <p
                       role="alert"
                       data-testid="review-refused"
-                      className="mt-3 text-sm text-moss-coral-strong"
+                      className="mt-3 text-sm text-destructive"
                     >
                       <strong>Refused, and nothing was stored.</strong> {state.message}
                     </p>
@@ -341,7 +347,7 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
                     <p
                       role="status"
                       data-testid="review-already-decided"
-                      className="mt-3 text-sm text-moss-green"
+                      className="mt-3 text-sm text-success"
                     >
                       This case already has a stored {row.latestDisposition} disposition.
                     </p>
@@ -387,7 +393,7 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
                     {isGoodNotesCase(row) ? (
                       <Link
                         href={goodnotesKnowledgeHref(row)}
-                        className="inline-flex min-h-[var(--control-height)] items-center text-sm font-medium text-moss-green underline decoration-moss-green/40 underline-offset-2"
+                        className="inline-flex min-h-[var(--control-height)] items-center text-sm font-medium text-interactive underline decoration-interactive/40 underline-offset-2"
                         data-testid="review-goodnotes-link"
                       >
                         Open GoodNotes page

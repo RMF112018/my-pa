@@ -489,6 +489,8 @@ class World:
     #: independent admissions and never a replay; a fake that decided that some
     #: other way would let a test prove a behaviour the constraint does not give.
     captures: dict[str, tuple[str, datetime]] = field(default_factory=dict)
+    #: Append-only display labels, newest last. Not capture text.
+    capture_labels: dict[str, list[str]] = field(default_factory=dict)
     capture_versions: list[CaptureVersion] = field(default_factory=list)
     capture_receipts: dict[str, CaptureReceipt] = field(default_factory=dict)
     capture_keys: dict[tuple[str, str], tuple[str, str]] = field(default_factory=dict)
@@ -1142,6 +1144,8 @@ class _Captures(CaptureRepository):
             request.payload_digest,
             receipt.receipt_id,
         )
+        if request.capture_id is None and request.display_label is not None:
+            self._world.capture_labels.setdefault(capture_id, []).append(request.display_label)
         return CaptureAdmission(receipt=receipt, created=True)
 
     def version(
@@ -1184,6 +1188,7 @@ class _Captures(CaptureRepository):
                     latest_version_id=head.version_id,
                     latest_version_number=head.version_number,
                     latest_recorded_at=head.recorded_at,
+                    display_label=self._latest_label(capture_id),
                 )
             )
         summaries.sort(key=lambda s: (s.created_at, s.capture_id), reverse=True)
@@ -1245,6 +1250,7 @@ class _Captures(CaptureRepository):
                     version_number=version.version_number,
                     character_count=version.content.character_count,
                     recorded_at=version.recorded_at,
+                    display_label=self._latest_label(version.capture_id),
                 )
                 for version in found[: request.limit]
             ),
@@ -1391,6 +1397,10 @@ class _Captures(CaptureRepository):
             if v.capture_id == capture_id and v.owner_principal_id == principal_id
         ]
         return max(held, key=lambda v: v.version_number) if held else None
+
+    def _latest_label(self, capture_id: str) -> str | None:
+        chain = self._world.capture_labels.get(capture_id)
+        return chain[-1] if chain else None
 
 
 class _Reviews(ReviewRepository):

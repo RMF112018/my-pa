@@ -25,6 +25,7 @@ import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { SituationBoard } from "@/components/situation/situation-board";
 import { BackendSituationBoard } from "@/components/situation/backend-situation-board";
+import { PageHeader } from "@/components/shell/page-header";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
 import type { ContinuityWorkspace, SituationRow } from "@/lib/api/decode/capabilities/continuity.situations";
 import type { ProjectRow } from "@/lib/api/decode/capabilities/continuity.projects";
@@ -97,14 +98,7 @@ export async function WorkPage() {
   const principal = await resolveSessionPrincipal(cookieStore.get(SESSION_COOKIE_NAME)?.value);
   if (!principal) redirect("/sign-in");
 
-  const heading = (
-    <>
-      <h1 id="work-heading" className="mb-1 text-xl font-semibold text-moss-slate">
-        Situations
-      </h1>
-      <p className="mb-4 text-sm text-muted">{BLURB}</p>
-    </>
-  );
+  const heading = <PageHeader headingId="work-heading" title="Situations" description={BLURB} />;
 
   if (syntheticDataEnabled()) {
     const personId = syntheticPersonId(principal);
@@ -159,7 +153,7 @@ export async function WorkPage() {
         <SurfaceState
           kind="unavailable"
           title="Situations could not be read"
-          detail={failure.kind === "unavailable" ? failure.error.message : ""}
+          error={failure.kind === "unavailable" ? failure.error : undefined}
           limitations={failure.disclosure.limitations}
           testId="situations-unavailable"
         />

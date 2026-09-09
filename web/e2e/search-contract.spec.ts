@@ -164,15 +164,16 @@ test("Cmd/Ctrl+K opens the same SearchCommandPanel as /search", async ({ page })
   test.setTimeout(180_000);
   await page.locator("body").click();
   await page.keyboard.press("ControlOrMeta+k");
-  const palette = page.getByRole("dialog", { name: "Command menu" });
+  const palette = page.getByRole("dialog", { name: "Search" });
   await expect(palette).toBeVisible();
   await expect(palette.getByTestId("search-command-input")).toBeVisible();
   await expect(palette.getByTestId("search-command-list")).toBeVisible();
   await expect(palette.getByRole("searchbox", { name: "Search" })).toBeFocused();
-  const paletteDestinations = (await palette.getByTestId("search-command-list").textContent()) ?? "";
-  expect(paletteDestinations).toMatch(/Today/);
-  expect(paletteDestinations).toMatch(/Knowledge/);
-  expect(paletteDestinations).not.toMatch(RESURRECTED_SURFACES);
+  const paletteIdle = (await palette.getByTestId("search-command-list").textContent()) ?? "";
+  expect(paletteIdle).toMatch(/Start typing to search/);
+  expect(paletteIdle).not.toMatch(/Today/);
+  expect(paletteIdle).not.toMatch(/Knowledge/);
+  expect(paletteIdle).not.toMatch(RESURRECTED_SURFACES);
 
   await page.keyboard.press("Escape");
   await expect(palette).toHaveCount(0);
@@ -181,10 +182,11 @@ test("Cmd/Ctrl+K opens the same SearchCommandPanel as /search", async ({ page })
   await expect(page.getByRole("heading", { name: "Search", level: 1 })).toBeVisible();
   await expect(page.getByTestId("search-command-input")).toBeVisible();
   await expect(page.getByTestId("search-command-list")).toBeVisible();
-  const pageDestinations = (await page.getByTestId("search-command-list").textContent()) ?? "";
-  expect(pageDestinations).toMatch(/Today/);
-  expect(pageDestinations).toMatch(/Knowledge/);
-  expect(pageDestinations).not.toMatch(RESURRECTED_SURFACES);
+  const pageIdle = (await page.getByTestId("search-command-list").textContent()) ?? "";
+  expect(pageIdle).toMatch(/Start typing to search/);
+  expect(pageIdle).not.toMatch(/Today/);
+  expect(pageIdle).not.toMatch(/Knowledge/);
+  expect(pageIdle).not.toMatch(RESURRECTED_SURFACES);
 });
 
 test("a stale out-of-order search response does not replace a newer query", async ({ page }) => {

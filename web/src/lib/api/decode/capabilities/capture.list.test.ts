@@ -16,7 +16,19 @@ describe("decodeCaptureList", () => {
   it("accepts a Python-derived success payload without text", () => {
     const decoded = decodeCaptureList({ captures: [ENTRY] });
     expect(decoded.ok).toBe(true);
-    if (decoded.ok) expect("text" in decoded.value.captures[0]!).toBe(false);
+    if (decoded.ok) {
+      expect("text" in decoded.value.captures[0]!).toBe(false);
+      expect(decoded.value.captures[0]!.display_label).toBeNull();
+    }
+  });
+
+  it("accepts a null or present display_label without treating it as text", () => {
+    const labelled = decodeCaptureList({ captures: [{ ...ENTRY, display_label: "Board pack" }] });
+    expect(labelled.ok).toBe(true);
+    if (labelled.ok) expect(labelled.value.captures[0]!.display_label).toBe("Board pack");
+    const explicitNull = decodeCaptureList({ captures: [{ ...ENTRY, display_label: null }] });
+    expect(explicitNull.ok).toBe(true);
+    if (explicitNull.ok) expect(explicitNull.value.captures[0]!.display_label).toBeNull();
   });
 
   it("ignores unknown extra fields including a smuggled text field", () => {

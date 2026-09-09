@@ -13,6 +13,7 @@ import { invokeGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { FeatureRouteState } from "@/components/shell/feature-route-state";
+import { PageHeader } from "@/components/shell/page-header";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardBody, CardTitle } from "@/components/ui/card";
@@ -69,20 +70,19 @@ export default async function IntelligenceHistoryPage({
     typeof requested === "string" && REPORT_IDENTIFIER.test(requested) ? requested : undefined;
 
   const heading = (
-    <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <h1 id="intelligence-history-heading" className="mb-1 text-xl font-semibold text-moss-slate">
-          Intelligence history
-        </h1>
-        <p className="text-sm text-muted">{BLURB}</p>
-      </div>
-      <Link
-        href={intelligenceHome()}
-        className="inline-flex min-h-[var(--control-height)] items-center text-sm text-moss-green underline"
-      >
-        Current Intelligence
-      </Link>
-    </div>
+    <PageHeader
+      headingId="intelligence-history-heading"
+      title="Intelligence history"
+      description={BLURB}
+      actions={
+        <Link
+          href={intelligenceHome()}
+          className="inline-flex min-h-[var(--control-height)] items-center text-sm text-interactive underline"
+        >
+          Current Intelligence
+        </Link>
+      }
+    />
   );
 
   const frame = (children: React.ReactNode) => (
@@ -116,7 +116,7 @@ export default async function IntelligenceHistoryPage({
       <SurfaceState
         kind="unavailable"
         title="Report history could not be read"
-        detail={answer.error.message}
+        error={answer.error}
         limitations={answer.disclosure.limitations}
         testId="intelligence-history-unavailable"
       />,
@@ -128,7 +128,7 @@ export default async function IntelligenceHistoryPage({
       <SurfaceState
         kind="empty"
         title="No briefings yet"
-        detail="No reports are stored for your account yet."
+        detail="None are stored for your account yet."
         testId="intelligence-history-empty"
       />,
     );
@@ -163,7 +163,7 @@ export default async function IntelligenceHistoryPage({
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <h2
                 id={`cycle-${group.cycle_run_id}`}
-                className="text-base font-semibold text-moss-slate"
+                className="text-base font-semibold text-text-primary"
               >
                 {group.business_date ?? "Business date not resolved"}
               </h2>
@@ -175,7 +175,7 @@ export default async function IntelligenceHistoryPage({
                 <p className="break-all font-mono text-xs">{group.cycle_run_id}</p>
                 <Link
                   href={intelligenceHistory(group.cycle_run_id)}
-                  className="mt-2 inline-flex min-h-[var(--control-height)] items-center text-sm text-moss-green underline"
+                  className="mt-2 inline-flex min-h-[var(--control-height)] items-center text-sm text-interactive underline"
                 >
                   Open this run
                 </Link>

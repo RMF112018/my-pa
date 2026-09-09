@@ -5,15 +5,15 @@
  * **The order is the backend's and this component does not touch it.** No
  * `sort`, no `reverse`, no grouping by date. The rank is by evidentiary urgency
  * and it is the answer; re-ordering here — by `generatedAt`, say, which is
- * identical on every item — would discard it.
+ * identical on every item — would discard it. The rank itself is not the
+ * primary visual; it stays behind Details.
  *
  * Titles come from `subjectTitle` when the backend named the subject. Identifiers
- * and basis refs are never used as a title.
+ * and basis refs are never used as a title. `nextStep` is the one primary action.
  */
 import Link from "next/link";
 import type { BackendPulseItem } from "@/contracts/views";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { safeHref } from "@/lib/http/safe-href";
 
 const TYPE_LABEL: Record<string, string> = {
@@ -24,6 +24,9 @@ const TYPE_LABEL: Record<string, string> = {
   relationship_event: "Relationship event",
   situation: "Situation",
 };
+
+const NEXT_STEP_LINK_CLASS =
+  "mt-3 inline-flex min-h-[var(--control-height)] items-center justify-center rounded-[var(--radius-md)] bg-interactive px-4 text-sm font-medium text-on-interactive hover:bg-interactive-hover";
 
 function typeLabel(itemType: string): string {
   return TYPE_LABEL[itemType] ?? "Item";
@@ -52,7 +55,7 @@ export function BackendPulseList({ items }: { items: readonly BackendPulseItem[]
   if (items.length === 0) {
     return (
       <p className="text-sm text-muted" data-testid="pulse-empty">
-        Nothing needs attention right now. This is about today, not everything you hold.
+        Nothing needs attention right now.
       </p>
     );
   }
@@ -65,43 +68,41 @@ export function BackendPulseList({ items }: { items: readonly BackendPulseItem[]
         return (
           <li key={item.pulseId}>
             <Card data-testid="pulse-item">
-              <div className="flex items-start justify-between gap-2">
-                <CardTitle>{pulseTitle(item)}</CardTitle>
-                <Badge tone="neutral">Urgency {item.priority}</Badge>
-              </div>
+              <CardTitle>{pulseTitle(item)}</CardTitle>
               <CardBody>
                 <p data-testid="pulse-reason">
-                  <span className="font-medium text-moss-slate">Why now:</span> {item.reason}
+                  <span className="font-medium text-text-primary">Why now:</span> {item.reason}
                 </p>
                 {item.consequence ? (
                   <p className="mt-1">
-                    <span className="font-medium text-moss-slate">If ignored:</span>{" "}
+                    <span className="font-medium text-text-primary">If ignored:</span>{" "}
                     {item.consequence}
                   </p>
                 ) : null}
                 {item.nextStep ? (
-                  <p className="mt-1" data-testid="pulse-next-step">
-                    <span className="font-medium text-moss-slate">Next step:</span> {item.nextStep}
-                    {href ? (
-                      <>
-                        {" "}
-                        <Link
-                          href={href}
-                          className="text-moss-green underline"
-                          data-testid="pulse-next-step-link"
-                        >
-                          Open {typeLabel(item.itemType)}
-                        </Link>
-                      </>
-                    ) : null}
-                  </p>
+                  href ? (
+                    <Link
+                      href={href}
+                      className={NEXT_STEP_LINK_CLASS}
+                      data-testid="pulse-next-step-link"
+                    >
+                      <span data-testid="pulse-next-step">{item.nextStep}</span>
+                    </Link>
+                  ) : (
+                    <p className="mt-3 font-medium text-text-primary" data-testid="pulse-next-step">
+                      {item.nextStep}
+                    </p>
+                  )
                 ) : null}
                 <details className="mt-2 text-xs text-muted" data-testid="pulse-basis">
-                  <summary className="cursor-pointer font-medium text-moss-slate">
+                  <summary className="cursor-pointer font-medium text-text-primary">
                     Evidence/Details
                   </summary>
                   <p className="mt-2">
                     <span className="font-medium">Basis:</span> {item.basisRefs.join(", ")}
+                  </p>
+                  <p className="mt-1" data-testid="pulse-rank">
+                    Rank {item.priority}
                   </p>
                 </details>
               </CardBody>

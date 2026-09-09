@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { LoadingStatus } from "@/components/ui/surface-state";
 import { useInspectorSelection } from "@/components/shell/inspector-selection";
 import { apiGet } from "@/lib/api/client";
 import { decodeEntitiesIdentityHistory } from "@/lib/api/decode/capabilities/entities.identity_history";
@@ -17,7 +18,7 @@ function Field({ label, value }: { label: string; value: string }) {
   return (
     <div className="grid gap-0.5" data-testid={`inspector-field-${label}`}>
       <dt className="text-xs text-text-muted">{label}</dt>
-      <dd className="break-all text-sm text-moss-slate">{value}</dd>
+      <dd className="break-all text-sm text-text-primary">{value}</dd>
     </div>
   );
 }
@@ -116,16 +117,16 @@ function NodeInspector({ node }: { node: GraphNode }) {
       <p className="text-sm">
         <Link
           href={peopleEntity(node.entity_id)}
-          className="text-moss-green underline decoration-moss-green/40 underline-offset-2"
+          className="text-interactive underline decoration-interactive/40 underline-offset-2"
         >
           {node.display_label}
         </Link>
       </p>
       {history.status === "loading" ? (
-        <p className="text-sm text-text-muted">Reading identity history…</p>
+        <LoadingStatus label="Reading identity history…" />
       ) : (
         <div data-testid="inspector-changes" className="grid gap-2">
-          <h3 className="text-sm font-medium text-moss-slate">Identity history</h3>
+          <h3 className="text-sm font-medium text-text-primary">Identity history</h3>
           {history.status === "unavailable" ? (
             <p className="text-sm text-text-secondary">Identity history could not be read.</p>
           ) : (
@@ -139,8 +140,8 @@ function NodeInspector({ node }: { node: GraphNode }) {
                 <ol className="grid gap-2">
                   {history.entries.map((entry) => (
                     <li key={entry.history_id} className="grid gap-1 rounded border border-border p-2">
-                      <p className="font-mono text-xs text-moss-slate">{entry.history_id}</p>
-                      <p className="text-sm text-moss-slate">{entry.operation}</p>
+                      <p className="font-mono text-xs text-text-primary">{entry.history_id}</p>
+                      <p className="text-sm text-text-primary">{entry.operation}</p>
                       <p className="text-xs text-text-muted">{entry.occurred_at}</p>
                     </li>
                   ))}

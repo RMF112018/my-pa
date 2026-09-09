@@ -19,6 +19,7 @@ import { resolveSessionPrincipal } from "@/lib/auth/principal";
 import { invokeGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
+import { PageHeader } from "@/components/shell/page-header";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
 import { PeopleLookupForms } from "@/components/people/people-forms";
 import { SearchHits } from "@/components/people/search-hits";
@@ -29,16 +30,14 @@ import type { PrincipalSession } from "@/contracts/identity";
 
 const SCOPE = "people";
 
-const BLURB =
-  "Find a person already in your records. Search by name. This is not a directory of everyone.";
+/** One user-facing caveat. Forms and idle copy must not repeat it. */
+const PEOPLE_CAVEAT =
+  "This is not a directory of everyone. Ambiguous identities stay visible; nothing here merges two people.";
 
 function frame(children: React.ReactNode) {
   return (
     <section aria-labelledby="people-heading" className="mx-auto max-w-3xl">
-      <h1 id="people-heading" className="mb-1 text-2xl font-semibold tracking-tight text-moss-slate">
-        People
-      </h1>
-      <p className="mb-6 max-w-3xl text-sm text-muted">{BLURB}</p>
+      <PageHeader headingId="people-heading" title="People" description={PEOPLE_CAVEAT} />
       {children}
     </section>
   );
@@ -108,7 +107,7 @@ export async function PeoplePage({
           <SurfaceState
             kind="unavailable"
             title="That reference was not a valid resolve query"
-            detail={outcome.error.message}
+            error={outcome.error}
             testId="people-resolve-invalid"
           />
         </>,
@@ -122,7 +121,7 @@ export async function PeoplePage({
           <SurfaceState
             kind="unavailable"
             title="That reference could not be resolved"
-            detail={answer.error.message}
+            error={answer.error}
             limitations={answer.disclosure.limitations}
             testId="people-resolve-unavailable"
           />
@@ -160,7 +159,7 @@ export async function PeoplePage({
           <SurfaceState
             kind="unavailable"
             title="That search was not a valid query"
-            detail={outcome.error.message}
+            error={outcome.error}
             testId="people-search-invalid"
           />
         </>,
@@ -178,7 +177,7 @@ export async function PeoplePage({
           <SurfaceState
             kind="unavailable"
             title="Your people could not be searched"
-            detail={answer.error.message}
+            error={answer.error}
             limitations={answer.disclosure.limitations}
             testId="people-search-unavailable"
           />
@@ -220,12 +219,7 @@ export async function PeoplePage({
   return frame(
     <>
       {forms}
-      <SurfaceState
-        kind="empty"
-        title="Search for a person by name."
-        detail="This is not a directory of everyone. Ambiguous answers stay visible; nothing here merges two people."
-        testId="people-idle"
-      />
+      <SurfaceState kind="empty" title="Search for a person by name." testId="people-idle" />
       {mentions}
     </>,
   );

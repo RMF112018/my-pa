@@ -32,6 +32,7 @@ function ControlGallery() {
       <div className="flex flex-wrap items-center gap-3">
         <Button>Primary action</Button>
         <Button variant="secondary">Secondary</Button>
+        <Button variant="accent">Accent</Button>
         <Button variant="danger">Destructive</Button>
         <Button pending>Working</Button>
         <IconButton label="Search">
@@ -110,6 +111,7 @@ function ControlGallery() {
         onOpenChange={setSheetOpen}
         title="Inspector"
         description="Synthetic component-review content"
+        placement="inspector"
       >
         Source, freshness, provenance, and limitations appear here.
       </Sheet>

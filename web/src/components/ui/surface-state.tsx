@@ -119,13 +119,13 @@ function StateDetails({
 }) {
   return (
     <details className="mt-2" data-testid="surface-state-details">
-      <summary className="cursor-pointer font-medium text-moss-slate">Details</summary>
+      <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
       <p className="mt-2" data-testid="surface-state-clarification">
         {clarification}
       </p>
       {limitations.length > 0 ? (
         <>
-          <p className="mt-2 font-medium text-moss-slate">What is missing from this answer:</p>
+          <p className="mt-2 font-medium text-text-primary">What is missing from this answer:</p>
           <ul className="mt-1 list-inside list-disc" data-testid="surface-state-limitations">
             {limitations.map((limitation) => (
               <li key={limitation}>{limitation}</li>
@@ -202,9 +202,9 @@ export function DegradedBanner({
       role="status"
       data-state="degraded"
       data-testid="degraded-banner"
-      className="mb-3 rounded-md border border-moss-gold/40 border-l-4 border-l-moss-gold bg-moss-gold/10 p-3 text-sm"
+      className="mb-3 rounded-md border border-warning/40 border-l-4 border-l-warning bg-warning/10 p-3 text-sm"
     >
-      <p className="font-medium text-moss-slate">
+      <p className="font-medium text-text-primary">
         Partial answer — {scope} returned less than the whole.
       </p>
       <p className="mt-1 text-muted">The records below are real. They are not all of them.</p>
@@ -222,7 +222,7 @@ export function DegradedBanner({
         </ul>
       ) : null}
       <details className="mt-2" data-testid="surface-state-details">
-        <summary className="cursor-pointer font-medium text-moss-slate">Details</summary>
+        <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
         <p className="mt-2 text-muted">
           The backend said so rather than this page guessing it.
         </p>

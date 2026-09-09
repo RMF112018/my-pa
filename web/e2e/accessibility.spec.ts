@@ -21,7 +21,7 @@
  */
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import { signIn, syntheticNote } from "./fixtures";
+import { signIn, syntheticNote, visibleCaptureButton, openAccount, pinInspector } from "./fixtures";
 
 const WCAG = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 
@@ -79,8 +79,10 @@ async function scan(page: Page): Promise<string[]> {
 }
 
 async function useDarkTheme(page: Page): Promise<void> {
+  await openAccount(page);
   await page.getByRole("button", { name: "Use dark theme" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.getByRole("button", { name: "Close panel" }).click();
 }
 
 test.describe("axe-core, in Chromium, against the rendered page", () => {
@@ -121,7 +123,7 @@ test.describe("axe-core, in Chromium, against the rendered page", () => {
 
   test("the capture dialog, open, has no detectable violation", async ({ page }) => {
     await signIn(page);
-    await page.getByTestId("capture-button").click();
+    await visibleCaptureButton(page).click();
     await expect(page.getByTestId("capture-field")).toBeFocused();
     expect(await scan(page), "capture dialog accessibility violations").toEqual([]);
   });
@@ -153,7 +155,7 @@ test.describe("axe-core, in Chromium, against the rendered page", () => {
     await useDarkTheme(page);
     await context.setOffline(true);
 
-    await page.getByTestId("capture-button").click();
+    await visibleCaptureButton(page).click();
     await page.getByTestId("capture-field").fill(syntheticNote("dark-accessibility"));
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByTestId("capture-queued")).toBeVisible({ timeout: 30_000 });
@@ -193,9 +195,10 @@ test.describe("what axe cannot decide", () => {
   });
 
   test("command palette search takes focus and restores it on Escape", async ({ page }) => {
-    const opener = page.getByRole("button", { name: /Commands/ });
-    await opener.click();
-    const dialog = page.getByRole("dialog", { name: "Command menu" });
+    const opener = page.getByRole("button", { name: "Account" });
+    await opener.focus();
+    await page.keyboard.press("Control+K");
+    const dialog = page.getByRole("dialog", { name: "Search" });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByRole("searchbox", { name: "Search" })).toBeFocused();
     await page.keyboard.press("Escape");
@@ -207,11 +210,11 @@ test.describe("what axe cannot decide", () => {
     // Native <dialog> returns focus to the invoking element. Control+K is the
     // chord the overlay listens for (meta or ctrl); this is not screen-reader
     // proof and does not claim WCAG 2.2 AA.
-    const opener = page.getByRole("button", { name: /Commands/ });
+    const opener = page.getByRole("button", { name: "Account" });
     await opener.focus();
     await expect(opener).toBeFocused();
     await page.keyboard.press("Control+K");
-    const dialog = page.getByRole("dialog", { name: "Command menu" });
+    const dialog = page.getByRole("dialog", { name: "Search" });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByRole("searchbox", { name: "Search" })).toBeFocused();
     await page.keyboard.press("Escape");
@@ -220,34 +223,42 @@ test.describe("what axe cannot decide", () => {
   });
 
   test("shell dialogs expose an accessible name", async ({ page }) => {
-    await page.getByTestId("capture-button").click();
+    await visibleCaptureButton(page).click();
     await expect(page.getByRole("dialog", { name: "Capture" })).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog", { name: "Capture" })).toHaveCount(0);
 
     await page.keyboard.press("Control+K");
-    await expect(page.getByRole("dialog", { name: "Command menu" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Search" })).toBeVisible();
     await page.keyboard.press("Escape");
-    await expect(page.getByRole("dialog", { name: "Command menu" })).toHaveCount(0);
+    await expect(page.getByRole("dialog", { name: "Search" })).toHaveCount(0);
   });
 
   test("icon-only shell chrome and collapsed destinations have accessible names", async ({
     page,
   }) => {
+    await expect(page.getByRole("button", { name: "Account" })).toBeVisible();
+    await openAccount(page);
     await expect(page.getByRole("button", { name: "Use dark theme" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Open Inspector" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Use compact density" })).toBeVisible();
+    await page.getByRole("button", { name: "Close panel" }).click();
+    await expect(page.getByRole("button", { name: /Commands/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Open Inspector" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Collapse navigation" })).toBeVisible();
 
     await page.getByRole("button", { name: "Collapse navigation" }).click();
     await expect(page.getByRole("button", { name: "Expand navigation" })).toBeVisible();
-    const rail = page.getByRole("navigation", { name: "Primary" });
+    const rail = page.getByRole("navigation", { name: "Primary" }).first();
     for (const name of SHELL_DESTINATIONS) {
       await expect(rail.getByRole("link", { name })).toBeVisible();
     }
+    await expect(rail.getByRole("link", { name: "Search" })).toBeVisible();
+    await expect(rail.getByRole("link", { name: "Review" })).toBeVisible();
+    await expect(rail.getByRole("link", { name: "Map" })).toBeVisible();
   });
 
   test("a state change is announced, not merely rendered", async ({ page }) => {
-    await page.getByTestId("capture-button").click();
+    await visibleCaptureButton(page).click();
     await page.getByTestId("capture-field").fill("E2E synthetic note — announcement check.");
     await page.getByRole("button", { name: "Save" }).click();
     // Live-region role is what automation can see. That is not screen-reader
@@ -305,7 +316,7 @@ test.describe("touch targets at a phone viewport", () => {
   });
 
   test("the Inspector sheet is a named dialog at a phone viewport", async ({ page }) => {
-    await page.getByRole("button", { name: "Open Inspector" }).click();
+    await pinInspector(page);
     await expect(page.getByRole("dialog", { name: "Inspector" })).toBeVisible();
   });
 });

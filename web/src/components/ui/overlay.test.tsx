@@ -24,12 +24,28 @@ describe("overlay close targets and dismissal", () => {
 
   it("keeps the sheet close control at the shared 44px target", () => {
     render(
-      <Sheet open onOpenChange={() => undefined} title="Inspector">
+      <Sheet open onOpenChange={() => undefined} title="Inspector" placement="inspector">
         Synthetic sheet
       </Sheet>,
     );
     const close = screen.getByRole("button", { name: "Close panel" });
     expect(close.className).toMatch(/min-h-11/);
     expect(close.className).toMatch(/min-w-11/);
+    expect(screen.getByRole("dialog").getAttribute("data-placement")).toBe("inspector");
+  });
+
+  it("marks menu and detail placements distinctly", () => {
+    const { rerender } = render(
+      <Sheet open onOpenChange={() => undefined} title="Account" placement="menu">
+        Menu sheet
+      </Sheet>,
+    );
+    expect(screen.getByRole("dialog").getAttribute("data-placement")).toBe("menu");
+    rerender(
+      <Sheet open onOpenChange={() => undefined} title="Work detail" placement="detail">
+        Detail sheet
+      </Sheet>,
+    );
+    expect(screen.getByRole("dialog").getAttribute("data-placement")).toBe("detail");
   });
 });

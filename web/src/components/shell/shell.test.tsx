@@ -72,12 +72,17 @@ describe("app shell", () => {
       "People",
       "Knowledge",
       "Intelligence",
+      "Search",
+      "Review",
+      "Map",
       "System",
     ]);
     const mobileLabels = within(navs[1]!).getAllByRole("link").map((el) => el.textContent?.trim());
     expect(mobileLabels).toEqual(["Today", "Work", "People"]);
-    expect(screen.getByRole("link", { name: "Review" })).toHaveAttribute("href", "/review");
-    expect(screen.getByTestId("capture-button")).toBeTruthy();
+    expect(screen.getAllByRole("link", { name: "Review" })[0]).toHaveAttribute("href", "/review");
+    expect(screen.getByTestId("capture-button-desktop")).toBeTruthy();
+    expect(screen.getByTestId("capture-button-mobile")).toBeTruthy();
+    expect(screen.queryByTestId("capture-button")).toBeNull();
   });
 
   it("groups More into Workspaces, Global, and Utilities", async () => {
@@ -113,19 +118,39 @@ describe("app shell", () => {
     expect(todayLinks.some((l) => l.getAttribute("aria-current") === "page")).toBe(true);
   });
 
-  it("opens the command menu from the keyboard and navigates only to supported routes", async () => {
-    const user = userEvent.setup();
+  it("opens Search from the keyboard with idle copy, not a destination launcher", async () => {
     render(<AppShell principal={PRINCIPAL}>content</AppShell>);
 
     fireEvent.keyDown(window, { key: "k", metaKey: true });
-    const dialog = await screen.findByRole("dialog", { name: "Command menu" });
+    const dialog = await screen.findByRole("dialog", { name: "Search" });
     expect(dialog).toBeInTheDocument();
     expect(dialog).not.toHaveTextContent(/cross-feature search is not available/i);
     expect(screen.getByRole("searchbox", { name: "Search" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Knowledge" }));
+    expect(dialog).toHaveTextContent("Start typing to search.");
+    expect(within(dialog).queryByRole("link", { name: "Knowledge" })).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: "Knowledge" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Commands/ })).toBeNull();
+  });
 
-    expect(navigation.push).toHaveBeenCalledWith("/knowledge");
-    expect(screen.queryByRole("dialog", { name: "Command menu" })).toBeNull();
+  it("keeps Appearance inside Account and collapses the rail from System", async () => {
+    const user = userEvent.setup();
+    render(<AppShell principal={PRINCIPAL}>content</AppShell>);
+    expect(screen.queryByRole("button", { name: "Use dark theme" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Commands/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open Inspector" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Account" }));
+    const account = screen.getByRole("dialog", { name: "Account" });
+    expect(within(account).getByRole("button", { name: "Use dark theme" })).toBeTruthy();
+    expect(within(account).getByRole("button", { name: "Use compact density" })).toBeTruthy();
+    await user.click(within(account).getByRole("button", { name: "Use dark theme" }));
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
+    await user.click(within(account).getByRole("button", { name: "Use compact density" }));
+    await waitFor(() => expect(document.documentElement.dataset.density).toBe("compact"));
+    await user.click(screen.getByRole("button", { name: "Close panel" }));
+
+    await user.click(screen.getByRole("button", { name: "Collapse navigation" }));
+    expect(screen.getByRole("button", { name: "Expand navigation" })).toBeTruthy();
   });
 
   it("federates a typed query through GET /api/search and keeps omitted coverage honest", async () => {
@@ -165,7 +190,7 @@ describe("app shell", () => {
 
     render(<AppShell principal={PRINCIPAL}>content</AppShell>);
     fireEvent.keyDown(window, { key: "k", metaKey: true });
-    await screen.findByRole("dialog", { name: "Command menu" });
+    await screen.findByRole("dialog", { name: "Search" });
     await user.type(screen.getByRole("searchbox", { name: "Search" }), "morning");
 
     expect(await screen.findByTestId("search-group-tasks")).toHaveTextContent("Morning task");
@@ -173,7 +198,7 @@ describe("app shell", () => {
     expect(screen.getByTestId("search-coverage")).not.toHaveTextContent("goodnotes: omitted");
     expect(screen.getByTestId("search-coverage")).not.toHaveTextContent("goodnotes_not_activated");
     expect(screen.getByTestId("search-coverage")).toHaveTextContent("knowledge_not_enrolled");
-    expect(screen.getByRole("dialog", { name: "Command menu" })).not.toHaveTextContent(
+    expect(screen.getByRole("dialog", { name: "Search" })).not.toHaveTextContent(
       /cross-feature search is not available/i,
     );
     expect(fetchSpy).toHaveBeenCalledWith(
@@ -200,7 +225,7 @@ describe("app shell", () => {
 
     render(<AppShell principal={PRINCIPAL}>content</AppShell>);
     fireEvent.keyDown(window, { key: "k", metaKey: true });
-    await screen.findByRole("dialog", { name: "Command menu" });
+    await screen.findByRole("dialog", { name: "Search" });
     await user.type(screen.getByRole("searchbox", { name: "Search" }), "morning");
 
     expect(await screen.findByTestId("search-not-implemented")).toBeInTheDocument();
@@ -223,7 +248,7 @@ describe("app shell", () => {
     );
 
     render(<AppShell principal={PRINCIPAL}>content</AppShell>);
-    await user.click(screen.getByTestId("capture-button"));
+    await user.click(screen.getByTestId("capture-button-desktop"));
 
     const field = screen.getByTestId("capture-field");
     await waitFor(() => expect(field).toHaveFocus());
@@ -248,5 +273,12 @@ describe("app shell", () => {
     // The payload must never carry identity fields.
     expect(Object.keys(body)).not.toContain("principalId");
     expect(Object.keys(body)).not.toContain("oid");
+  });
+
+  it("opens Capture from the mobile tab", async () => {
+    const user = userEvent.setup();
+    render(<AppShell principal={PRINCIPAL}>content</AppShell>);
+    await user.click(screen.getByTestId("capture-button-mobile"));
+    expect(screen.getByRole("dialog", { name: "Capture" })).toBeInTheDocument();
   });
 });

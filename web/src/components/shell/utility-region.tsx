@@ -109,7 +109,7 @@ export function UtilityRegion({
         ) : null}
       </aside>
       {mobile ? (
-        <Sheet open={open} onOpenChange={onOpenChange} title="Inspector">
+        <Sheet open={open} onOpenChange={onOpenChange} title="Inspector" placement="inspector">
           <InspectorContent pinned={pinned} onPinnedChange={onPinnedChange} />
         </Sheet>
       ) : null}

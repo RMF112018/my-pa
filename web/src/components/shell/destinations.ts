@@ -61,6 +61,8 @@ export const DESKTOP_PRIMARY: readonly Destination[] = [
   INTELLIGENCE,
 ] as const;
 
+export const DESKTOP_GLOBAL: readonly Destination[] = [SEARCH, REVIEW, MAP] as const;
+
 export const UTILITY_DESTINATIONS: readonly Destination[] = [SYSTEM] as const;
 
 /** Mobile bottom bar. More is a control, not a destination. */

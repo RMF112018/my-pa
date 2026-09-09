@@ -18,6 +18,10 @@ export const Secondary: Story = {
   args: { variant: "secondary" },
 };
 
+export const Accent: Story = {
+  args: { variant: "accent" },
+};
+
 export const Disabled: Story = {
   args: { disabled: true },
 };

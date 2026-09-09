@@ -290,7 +290,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
     {partial ? <SurfaceState kind="degraded" title="More Work is available" detail="There are more results. Continue to the next page." /> : null}
     {nextCursor ? <Button variant="secondary" onClick={() => { sync({ cursor: nextCursor }); setCursor(nextCursor); }}>Next page</Button> : null}
     {view !== "commitments" && selectedTaskIds.length > 0 ? <BulkTaskEditor key={selectedTaskIds.join("|")} taskIds={selectedTaskIds} onConfirmed={() => { void load(); }} /> : null}
-    <Sheet open={Boolean(detail)} onOpenChange={(open) => { if (!open) closeDetail(); }} title={detail?.title ?? "Work detail"} description="Closing restores your place in Work.">
+    <Sheet open={Boolean(detail)} onOpenChange={(open) => { if (!open) closeDetail(); }} title={detail?.title ?? "Work detail"} description="Closing restores your place in Work." placement="detail">
       {detail?.type === "task" ? <TaskDetailView taskId={detail.id} embedded /> : null}
       {detail?.type === "commitment" ? <CommitmentDetailView commitmentId={detail.id} embedded /> : null}
     </Sheet>

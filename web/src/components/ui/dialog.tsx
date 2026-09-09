@@ -38,15 +38,15 @@ export function Dialog({ open, onClose, title, children }: DialogProps) {
       onClose={onClose}
       onCancel={onClose}
       aria-label={title}
-      className="m-auto w-full max-w-md rounded-lg border border-border bg-surface p-0 shadow-lg backdrop:bg-moss-slate/50"
+      className="m-auto w-full max-w-md rounded-lg border border-border bg-surface p-0 shadow-lg backdrop:bg-text-primary/50"
     >
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        <h2 className="text-base font-semibold text-moss-slate">{title}</h2>
+        <h2 className="text-base font-semibold text-text-primary">{title}</h2>
         <button
           type="button"
           onClick={onClose}
           aria-label="Close dialog"
-          className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--radius-md)] text-muted hover:bg-moss-sand"
+          className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--radius-md)] text-muted hover:bg-surface-subtle"
         >
           ✕
         </button>

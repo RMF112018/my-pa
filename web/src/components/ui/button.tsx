@@ -1,15 +1,17 @@
 import { forwardRef, type ButtonHTMLAttributes } from "react";
 
-type Variant = "primary" | "secondary" | "ghost" | "danger";
+type Variant = "primary" | "secondary" | "ghost" | "danger" | "accent";
 type Size = "sm" | "md" | "lg";
 
 const VARIANT_CLASSES: Record<Variant, string> = {
   primary:
-    "bg-moss-green text-on-interactive hover:bg-moss-everglade disabled:bg-moss-green/50",
+    "bg-interactive text-on-interactive hover:bg-interactive-hover disabled:bg-interactive/50",
   secondary:
-    "border border-moss-green text-moss-green bg-surface hover:bg-moss-sand disabled:opacity-50",
-  ghost: "text-moss-slate hover:bg-moss-sand disabled:opacity-50",
-  danger: "bg-moss-coral-strong text-on-destructive hover:opacity-90 disabled:opacity-50",
+    "border border-interactive text-interactive bg-surface hover:bg-interactive-subtle disabled:opacity-50",
+  ghost: "text-text-primary hover:bg-surface-subtle disabled:opacity-50",
+  danger: "bg-destructive text-on-destructive hover:opacity-90 disabled:opacity-50",
+  accent:
+    "bg-brand-accent text-on-brand-accent hover:bg-brand-accent-hover disabled:bg-brand-accent/50",
 };
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {

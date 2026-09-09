@@ -3,13 +3,13 @@ import "./globals.css";
 import { ServiceWorkerRegister } from "@/components/pwa/sw-register";
 
 export const metadata: Metadata = {
-  title: "my-pa",
+  title: "My PA",
   description: "Evidence-first, principal-scoped personal assistant.",
   manifest: "/manifest.webmanifest",
 };
 
 export const viewport: Viewport = {
-  themeColor: "#1D6B4F",
+  themeColor: "#173F67",
 };
 
 export default function RootLayout({

@@ -82,6 +82,7 @@ test.describe("Work acceptance", () => {
     await page.setViewportSize({ width: 720, height: 900 });
     expect(await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches)).toBe(true);
     expect(await horizontalOverflow(page)).toBeLessThanOrEqual(1);
+    await page.getByRole("button", { name: "Account" }).click();
     await page.getByRole("button", { name: "Use dark theme" }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   });

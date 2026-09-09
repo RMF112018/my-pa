@@ -63,6 +63,11 @@ describe("app shell", () => {
       "Review",
       "Search",
     ]);
+    const header = screen.getByRole("banner");
+    expect(header).toHaveClass("lg:hidden");
+    expect(within(header).getByText("My PA")).toBeTruthy();
+    expect(within(header).getByRole("link", { name: "Review" })).toHaveAttribute("href", "/review");
+    expect(within(header).getByRole("button", { name: "Account" })).toBeTruthy();
     const navs = screen.getAllByRole("navigation", { name: "Primary" });
     expect(navs).toHaveLength(2);
     const desktopLabels = within(navs[0]!).getAllByRole("link").map((el) => el.textContent?.trim());
@@ -77,6 +82,7 @@ describe("app shell", () => {
       "Map",
       "System",
     ]);
+    expect(within(navs[0]!).getByRole("button", { name: "Account" })).toBeTruthy();
     const mobileLabels = within(navs[1]!).getAllByRole("link").map((el) => el.textContent?.trim());
     expect(mobileLabels).toEqual(["Today", "Work", "People"]);
     expect(screen.getAllByRole("link", { name: "Review" })[0]).toHaveAttribute("href", "/review");
@@ -106,7 +112,7 @@ describe("app shell", () => {
   it("shows the signed-in principal and the synthetic badge", async () => {
     const user = userEvent.setup();
     render(<AppShell principal={PRINCIPAL}>content</AppShell>);
-    await user.click(screen.getByRole("button", { name: "Account" }));
+    await user.click(within(screen.getByRole("banner")).getByRole("button", { name: "Account" }));
     expect(screen.getByTestId("principal-name")).toHaveTextContent("Synthetic A");
     expect(screen.getByTestId("principal-upn")).toHaveTextContent("synthetic.a@moss.example");
     expect(screen.getByText("Synthetic identity")).toBeInTheDocument();
@@ -139,10 +145,14 @@ describe("app shell", () => {
     expect(screen.queryByRole("button", { name: /Commands/ })).toBeNull();
     expect(screen.queryByRole("button", { name: "Open Inspector" })).toBeNull();
 
-    await user.click(screen.getByRole("button", { name: "Account" }));
+    const header = screen.getByRole("banner");
+    expect(header).toHaveClass("lg:hidden");
+    const rail = screen.getAllByRole("navigation", { name: "Primary" })[0]!;
+    await user.click(within(rail).getByRole("button", { name: "Account" }));
     const account = screen.getByRole("dialog", { name: "Account" });
     expect(within(account).getByRole("button", { name: "Use dark theme" })).toBeTruthy();
     expect(within(account).getByRole("button", { name: "Use compact density" })).toBeTruthy();
+    expect(within(account).getByRole("button", { name: "Sign out" })).toBeTruthy();
     await user.click(within(account).getByRole("button", { name: "Use dark theme" }));
     await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
     await user.click(within(account).getByRole("button", { name: "Use compact density" }));
@@ -151,6 +161,7 @@ describe("app shell", () => {
 
     await user.click(screen.getByRole("button", { name: "Collapse navigation" }));
     expect(screen.getByRole("button", { name: "Expand navigation" })).toBeTruthy();
+    expect(within(rail).getByRole("button", { name: "Account" })).toBeTruthy();
   });
 
   it("federates a typed query through GET /api/search and keeps omitted coverage honest", async () => {

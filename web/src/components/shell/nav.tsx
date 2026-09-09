@@ -15,6 +15,7 @@ import {
   type Destination,
   type DestinationGroup,
 } from "@/components/shell/destinations";
+import { AccountMenu, type AccountMenuProps } from "@/components/shell/context-header";
 import { Icon } from "@/components/ui/icon";
 import { IconButton } from "@/components/ui/icon-button";
 import { Button } from "@/components/ui/button";
@@ -62,10 +63,12 @@ export function NavRail({
   collapsed,
   onCollapsedChange,
   onCapture,
+  account,
 }: {
   collapsed: boolean;
   onCollapsedChange: (value: boolean) => void;
   onCapture: () => void;
+  account?: Omit<AccountMenuProps, "collapsed" | "labeled">;
 }) {
   const pathname = usePathname() ?? "";
   return (
@@ -100,6 +103,7 @@ export function NavRail({
         {UTILITY_DESTINATIONS.map((item) => (
           <NavLink key={item.href} item={item} pathname={pathname} collapsed={collapsed} />
         ))}
+        {account ? <AccountMenu {...account} collapsed={collapsed} labeled /> : null}
         <IconButton
           label={collapsed ? "Expand navigation" : "Collapse navigation"}
           onClick={() => onCollapsedChange(!collapsed)}

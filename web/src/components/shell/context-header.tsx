@@ -12,23 +12,27 @@ import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Sheet } from "@/components/ui/sheet";
 
-export function ContextHeader({
-  principal,
-  theme,
-  density,
-  onToggleTheme,
-  onToggleDensity,
-}: {
+export type AccountMenuProps = {
   principal: PrincipalSession;
   theme: Theme;
   density: Density;
   onToggleTheme: () => void;
   onToggleDensity: () => void;
-}) {
+  collapsed?: boolean;
+  labeled?: boolean;
+};
+
+export function AccountMenu({
+  principal,
+  theme,
+  density,
+  onToggleTheme,
+  onToggleDensity,
+  collapsed = false,
+  labeled = false,
+}: AccountMenuProps) {
   const router = useRouter();
-  const pathname = usePathname() ?? "";
   const [accountOpen, setAccountOpen] = useState(false);
-  const reviewActive = activeFor(pathname, "/review");
 
   async function signOut() {
     await fetch("/api/session", { method: "DELETE", credentials: "same-origin" });
@@ -37,23 +41,23 @@ export function ContextHeader({
   }
 
   return (
-    <header className="flex min-h-12 items-center justify-between gap-2 border-b border-border bg-surface px-3 py-1.5">
-      <span className="shrink-0 text-lg font-semibold text-interactive lg:sr-only">My PA</span>
-      <div className="ml-auto flex min-w-0 items-center justify-end gap-1">
-        <Link
-          href="/review"
-          aria-label="Review"
-          aria-current={reviewActive ? "page" : undefined}
-          className={`inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--radius-md)] lg:hidden ${
-            reviewActive ? "bg-interactive-subtle text-interactive" : "text-text-secondary"
-          }`}
+    <>
+      {labeled ? (
+        <button
+          type="button"
+          aria-haspopup="dialog"
+          title={collapsed ? "Account" : undefined}
+          onClick={() => setAccountOpen(true)}
+          className="flex min-h-11 items-center gap-3 rounded-[var(--radius-md)] px-3 text-sm font-medium text-text-secondary hover:bg-surface-subtle hover:text-text-primary"
         >
-          <ClipboardCheck size={18} />
-        </Link>
+          <User size={19} />
+          <span className={collapsed ? "sr-only" : ""}>Account</span>
+        </button>
+      ) : (
         <IconButton label="Account" aria-haspopup="dialog" onClick={() => setAccountOpen(true)}>
           <User size={18} />
         </IconButton>
-      </div>
+      )}
       <Sheet open={accountOpen} onOpenChange={setAccountOpen} title="Account" placement="menu">
         {principal.synthetic ? (
           <div className="mb-3">
@@ -89,6 +93,48 @@ export function ContextHeader({
           Sign out
         </Button>
       </Sheet>
+    </>
+  );
+}
+
+export function ContextHeader({
+  principal,
+  theme,
+  density,
+  onToggleTheme,
+  onToggleDensity,
+}: {
+  principal: PrincipalSession;
+  theme: Theme;
+  density: Density;
+  onToggleTheme: () => void;
+  onToggleDensity: () => void;
+}) {
+  const pathname = usePathname() ?? "";
+  const reviewActive = activeFor(pathname, "/review");
+
+  return (
+    <header className="flex min-h-12 items-center justify-between gap-2 border-b border-border bg-surface px-3 py-1.5 lg:hidden">
+      <span className="shrink-0 text-lg font-semibold text-interactive">My PA</span>
+      <div className="ml-auto flex min-w-0 items-center justify-end gap-1">
+        <Link
+          href="/review"
+          aria-label="Review"
+          aria-current={reviewActive ? "page" : undefined}
+          className={`inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--radius-md)] ${
+            reviewActive ? "bg-interactive-subtle text-interactive" : "text-text-secondary"
+          }`}
+        >
+          <ClipboardCheck size={18} />
+        </Link>
+        <AccountMenu
+          principal={principal}
+          theme={theme}
+          density={density}
+          onToggleTheme={onToggleTheme}
+          onToggleDensity={onToggleDensity}
+        />
+      </div>
     </header>
   );
 }

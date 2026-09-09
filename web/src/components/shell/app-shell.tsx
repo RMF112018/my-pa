@@ -36,27 +36,32 @@ export function AppShell({
   const { preferences, update } = useShellPreferences();
 
   const openCapture = () => setCaptureOpen(true);
+  const account = {
+    principal,
+    theme: preferences.theme,
+    density: preferences.density,
+    onToggleTheme: () => update({ theme: preferences.theme === "light" ? "dark" : "light" }),
+    onToggleDensity: () =>
+      update({ density: preferences.density === "comfortable" ? "compact" : "comfortable" }),
+  };
 
   return (
     <OpenCaptureContext.Provider value={openCapture}>
       <InspectorSelectionProvider onSelectionPublished={() => setUtilityOpen(true)}>
         <div className="flex min-h-screen flex-col">
           <ContextHeader
-            principal={principal}
-            theme={preferences.theme}
-            density={preferences.density}
-            onToggleTheme={() =>
-              update({ theme: preferences.theme === "light" ? "dark" : "light" })
-            }
-            onToggleDensity={() =>
-              update({ density: preferences.density === "comfortable" ? "compact" : "comfortable" })
-            }
+            principal={account.principal}
+            theme={account.theme}
+            density={account.density}
+            onToggleTheme={account.onToggleTheme}
+            onToggleDensity={account.onToggleDensity}
           />
           <div className="flex flex-1">
             <NavRail
               collapsed={preferences.navCollapsed}
               onCollapsedChange={(navCollapsed) => update({ navCollapsed })}
               onCapture={openCapture}
+              account={account}
             />
             <div className="min-w-0 flex-1">
               <main

@@ -60,6 +60,7 @@ const CAPTURE: CaptureSearchMatch = {
   version_number: 2,
   character_count: 48,
   recorded_at: "2026-01-01T00:00:00Z",
+  display_label: null,
 };
 
 const REPORT: ReportSearchMatch = {

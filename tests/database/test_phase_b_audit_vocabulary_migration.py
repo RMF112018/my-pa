@@ -63,7 +63,7 @@ HEAD_REVISION: Final = "b8e4d1a6c073"
 GRAPH_REVISION: Final = "c3f8a1d07e94"
 PULL_REVISION: Final = "6a2f9d1c4b80"
 PROMOTION_REVISION: Final = "a4d8e31b2c90"
-CURRENT_HEAD_REVISION: Final = "b8e4d6f20a11"
+CURRENT_HEAD_REVISION: Final = "c1a8e4d70b29"
 #: What was head until `HEAD_REVISION` stacked on it (RI-ENT-WP-10/11, widening
 #: three closed-set CHECKs to admit that phase's capability names and record
 #: families, creating and altering no table).

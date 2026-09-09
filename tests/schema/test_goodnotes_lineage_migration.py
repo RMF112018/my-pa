@@ -86,7 +86,7 @@ PHASE_B_START: Final = "c7a1f04b9e63"
 #: renames the seeded `entity_relationship_types` row `design_coordinates_with` to
 #: `design_coordination_with`; that in turn stacked on `1cda4d536268` (RI-ENT-WP-07).
 #: Written out rather than derived so chain drift fails here rather than passing.
-HEAD_REVISION: Final = "b8e4d6f20a11"
+HEAD_REVISION: Final = "c1a8e4d70b29"
 PRIOR: Final = "d4a8c1e7b930"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260816_f8c3a1e6b247_add_goodnotes_notebook_lineage_logical_.py"

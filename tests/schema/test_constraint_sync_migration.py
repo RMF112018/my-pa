@@ -39,6 +39,7 @@ from my_pa.infrastructure.persistence.tables import (
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "b8e4d6f20a11"
+CURRENT_HEAD: Final = "c1a8e4d70b29"
 PREVIOUS: Final = "f7a2c9d51e64"
 MIGRATION: Final = ROOT / "migrations/versions/20260908_b8e4d6f20a11_add_constraint_sync_backend.py"
 TABLES: Final = (
@@ -78,7 +79,7 @@ def _offline(target: str, *, down: bool = False) -> str:
 
 def test_revision_is_the_only_head_and_directly_follows_wp07() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [REVISION]
+    assert script.get_heads() == [CURRENT_HEAD]
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert len(list(script.walk_revisions())) == 101
 

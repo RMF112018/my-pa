@@ -46,7 +46,7 @@ GRAPH_REVISION: Final = "c3f8a1d07e94"
 #: GoodNotes pull/review, then R8 promotion receipts, then canvas overlay head.
 GOODNOTES_REVISION: Final = "6a2f9d1c4b80"
 PROMOTION_REVISION: Final = "a4d8e31b2c90"
-CURRENT_HEAD_REVISION: Final = "b8e4d6f20a11"
+CURRENT_HEAD_REVISION: Final = "c1a8e4d70b29"
 NEW_TABLES: Final = frozenset(
     {
         "webauthn_credentials",

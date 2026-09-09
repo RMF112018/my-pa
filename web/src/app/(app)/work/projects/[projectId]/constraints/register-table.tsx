@@ -55,6 +55,7 @@ export interface RegisterTableProps {
   readonly caption: string;
   readonly onSelect: (constraintId: string) => void;
   readonly onSort: (sort: ConstraintUrlState["sort"]) => void;
+  readonly onTriggerMount?: (constraintId: string, node: HTMLButtonElement | null) => void;
 }
 
 interface Column {
@@ -161,6 +162,7 @@ export function RegisterTable({
   caption,
   onSelect,
   onSort,
+  onTriggerMount,
 }: RegisterTableProps) {
   const columns = visibleColumns(state, viewport);
   return (
@@ -209,6 +211,7 @@ export function RegisterTable({
                     <button
                       type="button"
                       id={rowTriggerId(entry.constraintId)}
+                      ref={(node) => onTriggerMount?.(entry.constraintId, node)}
                       onClick={() => onSelect(entry.constraintId)}
                       className="inline-flex min-h-11 items-center rounded text-left font-medium text-moss-green underline"
                     >
@@ -248,10 +251,12 @@ export function RegisterCardList({
   entries,
   state,
   onSelect,
+  onTriggerMount,
 }: {
   readonly entries: readonly ConstraintListEntry[];
   readonly state: ConstraintUrlState;
   readonly onSelect: (constraintId: string) => void;
+  readonly onTriggerMount?: (constraintId: string, node: HTMLButtonElement | null) => void;
 }) {
   return (
     <ul className="grid gap-2" data-testid="register-card-list">
@@ -266,6 +271,7 @@ export function RegisterCardList({
             <button
               type="button"
               id={rowTriggerId(entry.constraintId)}
+              ref={(node) => onTriggerMount?.(entry.constraintId, node)}
               onClick={() => onSelect(entry.constraintId)}
               className="min-h-11 rounded text-left font-medium text-moss-green underline"
             >

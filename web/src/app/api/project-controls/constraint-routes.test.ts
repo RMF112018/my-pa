@@ -152,6 +152,7 @@ describe("route to capability mapping", () => {
       "http://127.0.0.1:8000/v1/constraints.list",
       "http://127.0.0.1:8000/v1/constraints.search",
       "http://127.0.0.1:8000/v1/constraints.read",
+      "http://127.0.0.1:8000/v1/constraints.read",
       "http://127.0.0.1:8000/v1/constraints.history",
       "http://127.0.0.1:8000/v1/constraints.overview",
       "http://127.0.0.1:8000/v1/constraint_categories.list",
@@ -182,6 +183,40 @@ describe("route to capability mapping", () => {
       { params: params({ constraintId: CONSTRAINT }) },
     );
     expect(sent[0].document.payload).toEqual({ constraint_id: CONSTRAINT });
+  });
+
+  it("refuses same-Principal detail when the Constraint belongs to another Project", async () => {
+    const session = await cookie();
+    const foreignProject = "prj_bbbbbbbb22222222";
+    const foreignDetail = structuredClone(PYTHON["constraints.read"]) as {
+      constraint: Record<string, unknown>;
+    };
+    foreignDetail.constraint.project_id = foreignProject;
+    const { sent } = stubGateway(() => body(foreignDetail));
+
+    const response = await detail(
+      get(session, `/api/project-controls/projects/${PROJECT}/constraints/${CONSTRAINT}`),
+      { params: params({ constraintId: CONSTRAINT }) },
+    );
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    const responseBody = await response.json();
+    expect(responseBody).toEqual({
+      error: {
+        errorClass: "not_found",
+        code: "not_found",
+        message: "Constraint was not found",
+      },
+    });
+    expect(sent.map((call) => call.url)).toEqual([
+      "http://127.0.0.1:8000/v1/constraints.read",
+    ]);
+    const serialized = JSON.stringify(responseBody);
+    expect(serialized).not.toContain(foreignProject);
+    expect(serialized).not.toContain(CONSTRAINT);
+    expect(serialized).not.toContain("relationships");
+    expect(serialized).not.toContain("evidenceLinks");
   });
 });
 
@@ -377,7 +412,7 @@ describe("the query allowlist is closed", () => {
 
   it("admits only pageSize and cursor on history, renaming pageSize to page_size", async () => {
     const session = await cookie();
-    const { sent } = stubGateway(() => success("constraints.history"));
+    const { sent } = stubGateway((url) => success(url.split("/v1/")[1]));
     const response = await history(
       get(
         session,
@@ -386,11 +421,45 @@ describe("the query allowlist is closed", () => {
       { params: params({ constraintId: CONSTRAINT }) },
     );
     expect(response.status).toBe(200);
-    expect(sent[0].document.payload).toEqual({
+    expect(sent.map((call) => call.document.payload)).toEqual([
+      { constraint_id: CONSTRAINT },
+      {
       constraint_id: CONSTRAINT,
       page_size: 5,
       cursor: "h1",
+      },
+    ]);
+  });
+
+  it("refuses same-Principal history when the Constraint belongs to another Project", async () => {
+    const session = await cookie();
+    const foreignProject = "prj_bbbbbbbb22222222";
+    const foreignDetail = structuredClone(PYTHON["constraints.read"]) as {
+      constraint: Record<string, unknown>;
+    };
+    foreignDetail.constraint.project_id = foreignProject;
+    const { sent } = stubGateway((url) => {
+      const capability = url.split("/v1/")[1];
+      return capability === "constraints.read"
+        ? body(foreignDetail)
+        : success(capability);
     });
+    const response = await history(
+      get(
+        session,
+        `/api/project-controls/projects/${PROJECT}/constraints/${CONSTRAINT}/history?pageSize=5`,
+      ),
+      { params: params({ constraintId: CONSTRAINT }) },
+    );
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    const responseBody = await response.json();
+    expect(responseBody).toMatchObject({ error: { code: "not_found" } });
+    expect(sent.map((call) => call.url)).toEqual([
+      "http://127.0.0.1:8000/v1/constraints.read",
+    ]);
+    expect(JSON.stringify(responseBody)).not.toContain(foreignProject);
   });
 
   it("admits only the closed state filter on categories, renaming state to states", async () => {

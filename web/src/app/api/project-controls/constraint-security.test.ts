@@ -155,18 +155,19 @@ describe("the fixture boundary holds", () => {
     }
   });
 
-  it("the WP05 shell is still fixture-only and is not wired to these routes", () => {
+  it("keeps fixtures behind the explicit synthetic page branch", () => {
     const page = text(WP05_PAGE);
     expect(page).toMatch(/@\/lib\/fixtures\/constraints/);
     expect(page).not.toMatch(/project-controls/);
     expect(page).not.toMatch(/\bfetch\(/);
   });
 
-  it("no page or component fetches a Constraint BFF route yet: that wiring is WP09", () => {
-    const offenders = sources(join(SRC, "app"))
-      .filter((path) => !path.startsWith(PROJECT_CONTROLS))
-      .filter((path) => /api\/project-controls/.test(text(path)));
-    expect(offenders).toEqual([]);
+  it("wires live reads only through the same-origin Constraint BFF client", () => {
+    const client = text(join(SRC, "app/(app)/work/projects/[projectId]/constraints/constraint-live.ts"));
+    expect(client).toMatch(/\/api\/project-controls\/projects\//);
+    expect(client).toMatch(/cache: "no-store"/);
+    expect(client).not.toMatch(/lib\/fixtures/);
+    expect(client).not.toMatch(/method: "POST"|method: "PATCH"|method: "DELETE"/);
   });
 });
 

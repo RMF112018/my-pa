@@ -16,6 +16,12 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
+vi.mock("./live-constraints-workspace", () => ({
+  LiveConstraintsWorkspace: ({ projectId }: { projectId: string }) => (
+    <div data-testid="constraints-live-workspace">Live Constraint reads for {projectId}</div>
+  ),
+}));
+
 import ConstraintsPage from "./page";
 
 beforeEach(() => {
@@ -36,21 +42,14 @@ async function renderPage(projectId: string, query: Record<string, string> = {})
 }
 
 describe("the canonical Constraint route", () => {
-  it("states that this build serves no Constraint capability, rather than showing zero rows", async () => {
+  it("serves the live read workspace when synthetic fixtures are disabled", async () => {
     await renderPage("prj_syn_0001");
-    const state = screen.getByTestId("constraints-not-implemented");
-    expect(state).toHaveAttribute("data-state", "not_implemented");
-    expect(state).toHaveTextContent(/no Constraint read capability/i);
-    // Nothing on the page claims the Project holds nothing.
-    expect(screen.queryByTestId("register-table")).toBeNull();
-    for (const claim of [/holds nothing/i, /you have none/i, /no results/i]) {
-      expect(screen.getByTestId("constraints-not-implemented").textContent).not.toMatch(claim);
-    }
+    expect(screen.getByTestId("constraints-live-workspace")).toHaveTextContent("prj_syn_0001");
   });
 
   it("keeps the Project visible even when it cannot serve the workspace", async () => {
     await renderPage("prj_syn_0001");
-    expect(screen.getByText(/Project Controls · prj_syn_0001/)).toBeInTheDocument();
+    expect(screen.getByTestId("constraints-live-workspace")).toHaveTextContent("prj_syn_0001");
   });
 
   it("says a Project could not be read rather than showing it as empty", async () => {

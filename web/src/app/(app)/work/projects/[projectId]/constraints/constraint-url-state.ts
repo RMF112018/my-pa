@@ -59,6 +59,7 @@ export interface ConstraintUrlState {
   readonly inMyCourt: boolean;
   readonly needsAttention: boolean;
   readonly sync: ConstraintSyncState | null;
+  readonly quality: "NORMAL" | "LEGACY_INCOMPLETE" | null;
   readonly search: string;
   readonly group: ConstraintGrouping;
   readonly sort: ConstraintSort;
@@ -83,6 +84,7 @@ export const DEFAULT_CONSTRAINT_URL_STATE: ConstraintUrlState = {
   inMyCourt: false,
   needsAttention: false,
   sync: null,
+  quality: null,
   search: "",
   group: "category",
   sort: "code",
@@ -178,6 +180,7 @@ export function parseConstraintUrlState(params: RawSearchParams): ConstraintUrlS
     inMyCourt: flag(first(params.inMyCourt)),
     needsAttention: flag(first(params.needsAttention)),
     sync: optionalOneOf(first(params.sync), SYNC_STATES),
+    quality: optionalOneOf(first(params.quality), ["NORMAL", "LEGACY_INCOMPLETE"] as const),
     search: first(params.q)?.slice(0, 200) ?? "",
     group: oneOf(first(params.group), GROUPINGS, DEFAULT_CONSTRAINT_URL_STATE.group),
     sort: oneOf(first(params.sort), SORTS, DEFAULT_CONSTRAINT_URL_STATE.sort),
@@ -214,6 +217,7 @@ export function serializeConstraintUrlState(state: ConstraintUrlState): string {
   if (state.inMyCourt) params.set("inMyCourt", "1");
   if (state.needsAttention) params.set("needsAttention", "1");
   if (state.sync !== null) params.set("sync", state.sync);
+  if (state.quality !== null) params.set("quality", state.quality);
   if (state.search.trim().length > 0) params.set("q", state.search.trim());
   if (state.group !== d.group) params.set("group", state.group);
   if (state.sort !== d.sort) params.set("sort", state.sort);
@@ -316,12 +320,47 @@ export function hasActiveFilters(state: ConstraintUrlState): boolean {
     state.inMyCourt ||
     state.needsAttention ||
     state.sync !== null ||
+    state.quality !== null ||
     state.search.trim().length > 0 ||
     state.scope !== DEFAULT_CONSTRAINT_URL_STATE.scope
   );
 }
 
-/** Clear every filter, keeping the tab, grouping, sort and selection. */
+/** Search uses the narrower WP08 capability, so incompatible list controls are cleared. */
+export function searchRegisterState(
+  state: ConstraintUrlState,
+  search: string,
+  options: { readonly preserveSelection?: boolean } = {},
+): ConstraintUrlState {
+  return {
+    ...state,
+    search,
+    status: null,
+    categoryId: null,
+    bic: null,
+    responsible: null,
+    overdue: false,
+    dueSoon: false,
+    inMyCourt: false,
+    needsAttention: false,
+    sync: null,
+    quality: null,
+    group: search.trim() ? "none" : state.group,
+    sort: search.trim() ? DEFAULT_CONSTRAINT_URL_STATE.sort : state.sort,
+    dir: search.trim() ? DEFAULT_CONSTRAINT_URL_STATE.dir : state.dir,
+    selectedConstraintId: options.preserveSelection ? state.selectedConstraintId : null,
+  };
+}
+
+/** A list-only control cancels search rather than asking the narrower search route to ignore it. */
+export function listRegisterState(
+  state: ConstraintUrlState,
+  next: Partial<ConstraintUrlState>,
+): ConstraintUrlState {
+  return { ...state, search: "", ...next, selectedConstraintId: null };
+}
+
+/** Clear every filter, keeping the tab, grouping and sort preferences. */
 export function clearedFilters(state: ConstraintUrlState): ConstraintUrlState {
   return {
     ...DEFAULT_CONSTRAINT_URL_STATE,
@@ -329,7 +368,6 @@ export function clearedFilters(state: ConstraintUrlState): ConstraintUrlState {
     group: state.group,
     sort: state.sort,
     dir: state.dir,
-    selectedConstraintId: state.selectedConstraintId,
   };
 }
 

@@ -132,9 +132,11 @@ test.describe("the signed-in surfaces", () => {
       await expect(nav.getByRole("button", { name: "More" })).toBeVisible();
       await expect(nav.getByRole("link", { name: "Review" })).toHaveCount(0);
       await expect(nav.getByRole("link", { name: "Search" })).toHaveCount(0);
-      await page.getByRole("button", { name: "More" }).click();
-      await expect(page.getByRole("link", { name: "Review" }).nth(1)).toBeVisible();
-      await expect(page.getByRole("link", { name: "Search" }).first()).toBeVisible();
+      await nav.getByRole("button", { name: "More" }).click();
+      const more = page.getByRole("dialog", { name: "More" });
+      await expect(more).toBeVisible();
+      await expect(more.getByRole("link", { name: "Review", exact: true })).toBeVisible();
+      await expect(more.getByRole("link", { name: "Search", exact: true })).toBeVisible();
       await page.getByRole("button", { name: "Close panel" }).click();
     }
 
@@ -457,38 +459,44 @@ test.describe("the page body reflows rather than scrolling sideways", () => {
 
 test.describe("the canonical Constraint route", () => {
   /**
-   * The route, the Project context, and the answer a build with no Constraint
-   * capability behind it must give.
+   * The route, the Project context, and the live answer from the disposable
+   * real stack.
    *
-   * This suite runs a default build — `playwright.config.ts` deliberately does
-   * not set `MYPA_DATA_PROVIDER`, so no fixture can reach a page here. What is
-   * provable in a real browser is therefore the part that matters most: the
-   * address is the one the accepted package froze, the Project stays visible,
-   * and the surface says it cannot ask rather than showing an empty Register.
+   * This suite deliberately leaves `MYPA_DATA_PROVIDER` unset: these figures
+   * and rows come from the synthetic PostgreSQL catalog seeded by `stack.sh`,
+   * through the Python gateway and same-origin BFF, never from a UI fixture.
    */
-  test("resolves, keeps the Project visible, and states that it cannot ask", async ({ page }) => {
+  test("resolves, keeps the Project visible, and renders the live Overview", async ({ page }) => {
     await signIn(page);
-    await page.goto("/work/projects/prj_syn_0001/constraints");
-    await expect(page).toHaveURL(/\/work\/projects\/prj_syn_0001\/constraints$/);
+    await page.goto("/work/projects/prj_e2ecst0000000001/constraints");
+    await expect(page).toHaveURL(/\/work\/projects\/prj_e2ecst0000000001\/constraints$/);
     await expect(page.getByRole("heading", { level: 1, name: "Constraints" })).toBeVisible();
-    await expect(page.getByText("Project Controls · prj_syn_0001")).toBeVisible();
-    await expectState(page, "constraints-not-implemented", "not_implemented");
-    // Never an empty Register in place of a capability that does not exist.
-    await expect(page.getByTestId("register-table")).toHaveCount(0);
+    await expect(page.getByText("Project Controls · E2E Synthetic Project")).toBeVisible();
+    await expect(page.getByTestId("kpi-totalOpen")).toContainText("2");
+    await expect(page.getByTestId("overview-unavailable")).toHaveCount(0);
   });
 
   test("adds no top-level destination of its own", async ({ page }) => {
     await signIn(page);
-    await page.goto("/work/projects/prj_syn_0001/constraints");
+    await page.goto("/work/projects/prj_e2ecst0000000001/constraints");
     await expect(page.getByRole("link", { name: "Constraints" })).toHaveCount(0);
     await expect(page.getByRole("link", { name: "Work" }).first()).toBeVisible();
   });
 
-  test("a deep-linked view state does not change the address it resolves to", async ({ page }) => {
+  test("a deep-linked view state does not change the address it resolves to", async ({ page }, testInfo) => {
     await signIn(page);
-    await page.goto("/work/projects/prj_syn_0001/constraints?view=register&scope=open&overdue=1");
+    await page.goto("/work/projects/prj_e2ecst0000000001/constraints?view=register&scope=open&overdue=1");
     await expect(page).toHaveURL(/view=register/);
     await expect(page).toHaveURL(/overdue=1/);
-    await expectState(page, "constraints-not-implemented", "not_implemented");
+    const workspace = page.getByTestId("constraints-live-workspace");
+    await expect(workspace.getByTestId("register-loading")).toHaveCount(0);
+    await expect(page.getByTestId("register-unavailable")).toHaveCount(0);
+    await expect(
+      workspace.getByTestId(
+        testInfo.project.name === "mobile"
+          ? "register-card-cst_e2ecst0000000001"
+          : "register-row-cst_e2ecst0000000001",
+      ),
+    ).toBeVisible();
   });
 });

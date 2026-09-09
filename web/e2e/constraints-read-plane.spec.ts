@@ -140,12 +140,53 @@ test("the Register refuses an undeclared or out-of-vocabulary query at the BFF",
   }
 });
 
-test("the WP05 shell is still fixture-only and reads none of these routes", async ({ page }) => {
+test("the live shell renders Overview, server-filtered Register, and lazy Inspector reads", async ({ page }) => {
   const seen: string[] = [];
   page.on("request", (request) => {
     if (request.url().includes("/api/project-controls/")) seen.push(request.url());
   });
   await page.goto(`/work/projects/${PROJECT}/constraints`);
-  await expect(page.getByTestId("constraints-not-implemented")).toBeVisible();
-  expect(seen).toEqual([]);
+  const workspace = page.locator("#main").getByTestId("constraints-live-workspace");
+  await expect(workspace).toBeVisible();
+  await expect(workspace.getByTestId("kpi-totalOpen")).toContainText("2");
+  await expect(workspace.getByTestId(`overview-category-${CATEGORY}`)).toContainText("View in Register");
+
+  await workspace.getByTestId(`overview-category-${CATEGORY}`).click();
+  await expect(page).toHaveURL(new RegExp(`category=${CATEGORY}`));
+  const firstItem = workspace.locator(
+    `[data-testid="register-row-${FIRST}"], [data-testid="register-card-${FIRST}"]`,
+  );
+  await expect(firstItem).toBeVisible();
+  await expect(workspace.getByTestId("register-new-constraint")).toHaveCount(0);
+
+  await firstItem.getByRole("button", { name: "1.01" }).click();
+  await expect(page.getByTestId("constraint-inspector")).toBeVisible();
+  await expect(page.getByTestId("inspector-details")).toContainText(PROJECT);
+  await expect(page.getByTestId("inspector-history")).toContainText("Version 2 → 2");
+  await expect(page.getByTestId("inspector-evidence")).toBeVisible();
+  expect(seen.some((url) => url.includes(`/constraints/${FIRST}`))).toBe(true);
+});
+
+test("search canonicalizes incompatible list controls and remains responsive", async ({ page }) => {
+  await page.goto(`/work/projects/${PROJECT}/constraints?view=register&overdue=1&group=status`);
+  const workspace = page.locator("#main").getByTestId("constraints-live-workspace");
+  await expect(workspace.getByTestId("register-loading")).toHaveCount(0);
+  const search = workspace.getByTestId("register-search");
+  await search.fill("Crane");
+  await expect(page).toHaveURL(/q=Crane/);
+  await expect(page).not.toHaveURL(/overdue=1|group=status/);
+  await expect(
+    workspace.locator(
+      `[data-testid="register-row-${SECOND}"], [data-testid="register-card-${SECOND}"]`,
+    ),
+  ).toBeVisible();
+  await expect(
+    workspace.locator(
+      `[data-testid="register-row-${FIRST}"], [data-testid="register-card-${FIRST}"]`,
+    ),
+  ).toHaveCount(0);
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(1);
 });

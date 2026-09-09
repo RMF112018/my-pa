@@ -302,6 +302,43 @@ describe("the Register", () => {
     expect(screen.getByTestId("register-active-filters")).toHaveTextContent("My Court");
   });
 
+  it.each(["closed", "all", "draft"] as const)(
+    "clears the %s scope and every filter while preserving Register presentation state",
+    async (scope) => {
+      const user = userEvent.setup();
+      mount(
+        `view=register&scope=${scope}&overdue=1&dueSoon=1&inMyCourt=1&needsAttention=1&status=ON_HOLD&category=cat_syn_0001&bic=principal&responsible=principal&quality=LEGACY_INCOMPLETE&sync=CONFLICT&constraint=cst_syn_0001&group=status&sort=due&dir=desc`,
+      );
+
+      await user.click(screen.getByTestId("register-clear-filters"));
+
+      expect([...urlStore.snapshot().entries()]).toEqual([
+        ["view", "register"],
+        ["group", "status"],
+        ["sort", "due"],
+        ["dir", "desc"],
+      ]);
+      expect(screen.getByTestId("register-scope-open")).toHaveAttribute("aria-pressed", "true");
+    },
+  );
+
+  it("uses the filtered-empty Clear action as the same explicit routed transition", async () => {
+    const user = userEvent.setup();
+    mount("view=register&scope=all&q=zzz-nothing-matches-zzz&group=none&sort=updated&dir=desc");
+    const empty = await screen.findByTestId("register-empty-filtered");
+
+    await user.click(within(empty).getByRole("button", { name: "Clear filters" }));
+
+    expect([...urlStore.snapshot().entries()]).toEqual([
+      ["view", "register"],
+      ["group", "none"],
+      ["sort", "updated"],
+      ["dir", "desc"],
+    ]);
+    expect(screen.getByTestId("register-scope-open")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("register-search")).toHaveValue("");
+  });
+
   it("distinguishes no matching rows from an unavailable read", async () => {
     const user = userEvent.setup();
     mount("view=register");
@@ -416,7 +453,6 @@ describe("the shared Inspector", () => {
   });
 
   it("links validated evidence and leaves unvalidated reference text unlinked", async () => {
-    const user = userEvent.setup();
     mount("view=register&group=none&constraint=cst_syn_0001");
     const evidence = await screen.findByTestId("inspector-evidence");
     expect(within(evidence).getByRole("link", { name: /synthetic.example\/rfi/ })).toBeInTheDocument();

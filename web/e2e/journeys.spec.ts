@@ -10,6 +10,11 @@
 import { test, expect } from "@playwright/test";
 import { signIn, syntheticNote, expectState, visibleCaptureButton, pinInspector } from "./fixtures";
 
+/** Chrome below the `lg` (1024) split: rail hidden, Knowledge lives in More. */
+function belowLgChrome(projectName: string): boolean {
+  return projectName === "mobile" || projectName === "tablet";
+}
+
 test.describe("an unauthenticated visitor reaches no destination", () => {
   test("every app route redirects to sign-in", async ({ page }) => {
     for (const path of [
@@ -112,7 +117,7 @@ test.describe("the signed-in surfaces", () => {
     await expect(page.getByRole("searchbox", { name: "Search your captures" })).toHaveValue(
       "synthetic",
     );
-    if (testInfo.project.name === "mobile") {
+    if (belowLgChrome(testInfo.project.name)) {
       await page.getByRole("button", { name: "More" }).click();
     }
     await expect(page.getByRole("link", { name: "Knowledge" }).first()).toHaveAttribute(
@@ -124,7 +129,7 @@ test.describe("the signed-in surfaces", () => {
   test("Search palette and Inspector expose only the bounded shell behavior", async ({ page }, testInfo) => {
     await expect(page.getByRole("link", { name: "Review" }).first()).toBeVisible();
     await expect(page.getByRole("button", { name: /Commands/ })).toHaveCount(0);
-    if (testInfo.project.name === "mobile") {
+    if (belowLgChrome(testInfo.project.name)) {
       const nav = page.getByRole("navigation", { name: "Primary" });
       await expect(nav.getByRole("link", { name: "Today" })).toBeVisible();
       await expect(nav.getByRole("link", { name: "Work" })).toBeVisible();
@@ -160,7 +165,7 @@ test.describe("the signed-in surfaces", () => {
     }
     await page.keyboard.press("Escape");
     await expect(search).toHaveCount(0);
-    if (testInfo.project.name === "mobile") {
+    if (belowLgChrome(testInfo.project.name)) {
       await page.getByRole("button", { name: "More" }).click();
       await page.getByRole("dialog", { name: "More" }).getByRole("link", { name: "Knowledge" }).click();
     } else {
@@ -386,7 +391,7 @@ test.describe("keyboard-only navigation", () => {
     await expect(page).toHaveURL(/#main$/);
 
     // Every destination in the rail is reachable and activatable by keyboard.
-    if (testInfo.project.name === "mobile") {
+    if (belowLgChrome(testInfo.project.name)) {
       await page.getByRole("button", { name: "More" }).focus();
       await page.keyboard.press("Enter");
     }

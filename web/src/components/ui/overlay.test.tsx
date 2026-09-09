@@ -34,6 +34,19 @@ describe("overlay close targets and dismissal", () => {
     expect(screen.getByRole("dialog").getAttribute("data-placement")).toBe("inspector");
   });
 
+  it("closes from Escape even when a search field holds a query", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <Dialog open title="Search" onClose={onClose}>
+        <input type="search" aria-label="Search" defaultValue="morning brief" />
+      </Dialog>,
+    );
+    screen.getByRole("searchbox", { name: "Search" }).focus();
+    await user.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalled();
+  });
+
   it("marks menu and detail placements distinctly", () => {
     const { rerender } = render(
       <Sheet open onOpenChange={() => undefined} title="Account" placement="menu">

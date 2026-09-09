@@ -64,7 +64,7 @@ describe("app shell", () => {
       "Search",
     ]);
     const header = screen.getByRole("banner");
-    expect(header).toHaveClass("lg:hidden");
+    expect(header).not.toHaveClass("lg:hidden");
     expect(within(header).getByText("My PA")).toBeTruthy();
     expect(within(header).getByRole("link", { name: "Review" })).toHaveAttribute("href", "/review");
     expect(within(header).getByRole("button", { name: "Account" })).toBeTruthy();
@@ -144,6 +144,22 @@ describe("app shell", () => {
     expect(screen.queryByRole("button", { name: /Commands/ })).toBeNull();
   });
 
+  it("closes Search on Escape even when the query field is not empty", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ shape: "backend", query: "morning brief", hits: [], coverage: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    render(<AppShell principal={PRINCIPAL}>content</AppShell>);
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    await screen.findByRole("dialog", { name: "Search" });
+    await user.type(screen.getByRole("searchbox", { name: "Search" }), "morning brief");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Search" })).toBeNull();
+  });
+
   it("keeps Appearance inside Account and collapses the rail from System", async () => {
     const user = userEvent.setup();
     render(<AppShell principal={PRINCIPAL}>content</AppShell>);
@@ -152,7 +168,7 @@ describe("app shell", () => {
     expect(screen.queryByRole("button", { name: "Open Inspector" })).toBeNull();
 
     const header = screen.getByRole("banner");
-    expect(header).toHaveClass("lg:hidden");
+    expect(header).not.toHaveClass("lg:hidden");
     const rail = screen.getAllByRole("navigation", { name: "Primary" })[0]!;
     await user.click(within(rail).getByRole("button", { name: "Account" }));
     const account = screen.getByRole("dialog", { name: "Account" });

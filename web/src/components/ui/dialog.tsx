@@ -5,7 +5,7 @@
  * Escape closes; focus moves into the dialog on open and returns to the
  * invoking element on close (native <dialog> behavior).
  */
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 
 export interface DialogProps {
   open: boolean;
@@ -32,11 +32,20 @@ export function Dialog({ open, onClose, title, children }: DialogProps) {
     }
   }, [open]);
 
+  function onKeyDown(event: KeyboardEvent<HTMLDialogElement>) {
+    if (event.key !== "Escape") return;
+    // type=search consumes Escape to clear the field and skips native cancel.
+    // Own the close in React so the dialog actually dismisses.
+    event.preventDefault();
+    onClose();
+  }
+
   return (
     <dialog
       ref={ref}
       onClose={onClose}
       onCancel={onClose}
+      onKeyDown={onKeyDown}
       aria-label={title}
       className="m-auto w-full max-w-md rounded-lg border border-border bg-surface p-0 shadow-lg backdrop:bg-text-primary/50"
     >

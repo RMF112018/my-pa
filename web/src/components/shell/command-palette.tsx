@@ -93,6 +93,20 @@ export function SearchCommandPanel({
   }, [autoFocus]);
 
   useEffect(() => {
+    if (!onDismiss) return;
+    const node = inputRef.current;
+    if (!node) return;
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      // Capture-phase so Chromium cannot clear type=search before we dismiss.
+      event.preventDefault();
+      onDismiss();
+    };
+    node.addEventListener("keydown", closeOnEscape, true);
+    return () => node.removeEventListener("keydown", closeOnEscape, true);
+  }, [onDismiss]);
+
+  useEffect(() => {
     if (idle) return;
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
@@ -165,6 +179,13 @@ export function SearchCommandPanel({
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Escape" && onDismiss) {
+      // Chromium clears a non-empty type=search field on Escape and does not
+      // fire the native <dialog> cancel. Close Search instead of clearing.
+      event.preventDefault();
+      onDismiss();
+      return;
+    }
     if (event.key === "ArrowDown") {
       event.preventDefault();
       setActiveIndex((current) => (current + 1) % Math.max(activatable.length, 1));

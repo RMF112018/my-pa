@@ -114,9 +114,9 @@ export function ContextHeader({
   const reviewActive = activeFor(pathname, "/review");
 
   return (
-    <header className="flex min-h-12 items-center justify-between gap-2 border-b border-border bg-surface px-3 py-1.5 lg:hidden">
+    <header className="flex min-h-12 items-center justify-between gap-2 border-b border-border bg-surface px-3 py-1.5">
       <span className="shrink-0 text-lg font-semibold text-interactive">My PA</span>
-      <div className="ml-auto flex min-w-0 items-center justify-end gap-1">
+      <div className="ml-auto flex min-w-0 items-center justify-end gap-1 lg:hidden">
         <Link
           href="/review"
           aria-label="Review"

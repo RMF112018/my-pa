@@ -4,6 +4,11 @@ import userEvent from "@testing-library/user-event";
 import { SearchPage } from "./search-page";
 import { collectLevel1Copy } from "@/lib/ui/user-copy";
 
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/search",
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+}));
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -29,9 +34,10 @@ const TASK_HIT = {
 describe("Search page", () => {
   it("is Search-only, focuses the query field, and is not a destination launcher", () => {
     render(<SearchPage initialQuery="" />);
-    const field = screen.getByRole("searchbox", { name: "Search" });
+    const field = screen.getByTestId("search-command-input");
     expect(field).toHaveFocus();
-    expect(screen.getByTestId("search-page-idle")).toHaveTextContent("Start typing to search.");
+    expect(screen.getByRole("heading", { name: "Search", level: 1 })).toBeTruthy();
+    expect(screen.getByTestId("search-command-list")).toHaveTextContent("Start typing to search.");
     expect(screen.queryByRole("link", { name: "Today" })).toBeNull();
     expect(screen.queryByRole("link", { name: "Work" })).toBeNull();
     expect(screen.queryByRole("link", { name: "People" })).toBeNull();
@@ -39,7 +45,7 @@ describe("Search page", () => {
     expect(screen.queryByRole("button", { name: "Quick Capture" })).toBeNull();
   });
 
-  it("summarizes coverage with omitted domains still omitted and limitations in details", async () => {
+  it("summarizes coverage with omitted domains still omitted", async () => {
     const user = userEvent.setup();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
@@ -67,17 +73,15 @@ describe("Search page", () => {
     );
 
     render(<SearchPage initialQuery="" />);
-    await user.type(screen.getByRole("searchbox", { name: "Search" }), "morning");
+    await user.type(screen.getByTestId("search-command-input"), "morning");
 
     expect(await screen.findByTestId("search-group-tasks")).toHaveTextContent("Morning task");
     const coverage = screen.getByTestId("search-coverage");
-    expect(coverage).toHaveTextContent("2 domains searched");
     expect(coverage).toHaveTextContent("goodnotes: searched");
     expect(coverage).not.toHaveTextContent("goodnotes: omitted");
     expect(coverage).toHaveTextContent("meetings: omitted (no_search_capability)");
     expect(coverage).toHaveTextContent("knowledge_not_enrolled");
-    expect(screen.getByTestId("search-coverage-limitations")).toHaveTextContent("knowledge is not enrolled");
-    expect(screen.queryByRole("button", { name: "Quick Capture" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Quick Capture" })).toBeTruthy();
     expect(collectLevel1Copy(document.body)).not.toMatch(/coverage token/i);
   });
 

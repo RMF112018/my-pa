@@ -80,7 +80,7 @@ def test_revision_is_the_only_head_and_directly_follows_wp07() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [REVISION]
     assert script.get_revision(REVISION).down_revision == PREVIOUS
-    assert len(list(script.walk_revisions())) == 100
+    assert len(list(script.walk_revisions())) == 101
 
 
 def test_revision_is_frozen_and_adds_exact_vocabulary() -> None:

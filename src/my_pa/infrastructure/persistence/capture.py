@@ -52,7 +52,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Final, NamedTuple
 
-from sqlalchemy import Connection, Row, func, select
+from sqlalchemy import ColumnElement, Connection, Row, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from my_pa.contracts.ports import (
@@ -62,6 +62,7 @@ from my_pa.contracts.ports import (
     UnknownScopeError,
 )
 from my_pa.domain.capture.context import ContextLinkAuthority, ContextLinkRole, ContextLinkTarget
+from my_pa.domain.capture.display_label import normalize_display_label
 from my_pa.domain.capture.errors import CaptureConflictError
 from my_pa.domain.capture.submission import (
     AdmissionResult,
@@ -87,6 +88,7 @@ from my_pa.infrastructure.persistence.review import mark_changed_assertions_for_
 from my_pa.infrastructure.persistence.tables import (
     capture_context_links,
     capture_conversations,
+    capture_labels,
     capture_receipts,
     capture_submissions,
     capture_versions,
@@ -96,8 +98,10 @@ from my_pa.infrastructure.persistence.tables import (
 
 __all__ = [
     "admit_capture",
+    "append_capture_label",
     "capture_page",
     "capture_version",
+    "current_display_label",
 ]
 
 #: The columns a stored version is rebuilt from. Written out rather than
@@ -149,6 +153,71 @@ def _to_version(row: Row[tuple[object, ...]]) -> CaptureVersion:
         occurred_at=mapping["occurred_at"],
         accepted_at=mapping["accepted_at"],
         recorded_at=mapping["recorded_at"],
+    )
+
+
+def current_display_label(capture_id_column: ColumnElement[str]) -> ColumnElement[str | None]:
+    """Scalar subquery: the latest list-safe label for one capture, or NULL.
+
+    Ordered by `recorded_at` then `label_id`, both descending, so two rows
+    recorded in one transaction still have a total order. Does not read
+    `capture_versions.content`.
+    """
+    return (
+        select(capture_labels.c.display_label)
+        .where(capture_labels.c.capture_id == capture_id_column)
+        .order_by(capture_labels.c.recorded_at.desc(), capture_labels.c.label_id.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+
+
+def append_capture_label(
+    connection: Connection,
+    capture_id: str,
+    display_label: str,
+    *,
+    context: PrincipalContext,
+) -> str | None:
+    """Append one label row for a capture this Principal owns.
+
+    Returns the stored label, or `None` when normalisation omitted it. Raises
+    `UnknownScopeError` when `capture_id` names no capture this Principal owns.
+    Inserts only: there is no `UPDATE` of `captures` and no write to
+    `capture_versions.content`.
+    """
+    resolved = require_principal_context(context)
+    owner = resolved.capture_principal_id
+    if owner is None:  # pragma: no cover - require_principal_context already bound
+        raise UnknownScopeError("the request names no stored capture")
+    label = normalize_display_label(display_label)
+    if label is None:
+        return None
+    capture_id = validate_identifier(capture_id, IdKind.CAPTURE)
+    owned = connection.execute(
+        principal_scoped(
+            select(captures.c.capture_id).where(captures.c.capture_id == capture_id),
+            captures,
+            context,
+        )
+    ).one_or_none()
+    if owned is None:
+        raise UnknownScopeError("the request names no stored capture")
+    _insert_label(connection, capture_id=capture_id, owner_principal_id=owner, display_label=label)
+    return label
+
+
+def _insert_label(
+    connection: Connection, *, capture_id: str, owner_principal_id: str, display_label: str
+) -> None:
+    connection.execute(
+        capture_labels.insert().values(
+            label_id=issue_identifier(IdKind.CAPTURE_LABEL),
+            capture_id=capture_id,
+            owner_principal_id=owner_principal_id,
+            display_label=display_label,
+            recorded_at=func.now(),
+        )
     )
 
 
@@ -269,6 +338,17 @@ def admit_capture(
     capture_id, prior = _chain(
         connection, request, version_id=version_id, digest=content_digest, context=resolved
     )
+    if request.capture_id is None and request.display_label is not None:
+        # First label of a new chain, same transaction as identity + version.
+        # The stored value is the caller-supplied title, never a copy of the
+        # note. A revise does not write a label: renaming appends through
+        # `append_capture_label` instead of inventing a dummy text version.
+        _insert_label(
+            connection,
+            capture_id=capture_id,
+            owner_principal_id=request.principal_id,
+            display_label=request.display_label,
+        )
     if request.capture_id is None and request.capture_kind is CaptureKind.CONVERSATION_LOG:
         connection.execute(
             capture_conversations.insert().values(
@@ -491,6 +571,7 @@ def capture_page(
                 captures.c.created_at,
                 func.count().label("version_count"),
                 latest_number.label("latest_version_number"),
+                current_display_label(captures.c.capture_id).label("display_label"),
             ).join(capture_versions, capture_versions.c.capture_id == captures.c.capture_id),
             captures,
             context,
@@ -520,4 +601,5 @@ def _summary(connection: Connection, row: Row[tuple[object, ...]]) -> CaptureSum
         latest_version_id=str(head[0]),
         latest_version_number=int(mapping["latest_version_number"]),
         latest_recorded_at=head[1],
+        display_label=mapping["display_label"],
     )

@@ -74,6 +74,7 @@ class SafeDetail(StrEnum):
     CONTEXT_SOURCE_OBJECT_ID = "context_source_object_id"
     CONTEXT_SOURCE_VERSION_ID = "context_source_version_id"
     TEXT = "text"
+    DISPLAY_LABEL = "display_label"
     CLIENT_CREATED_AT = "client_created_at"
     OCCURRED_AT = "occurred_at"
     QUERY = "query"
@@ -113,6 +114,7 @@ class SafeDetail(StrEnum):
     #: Which bound refused the request.
     MAX_ENROLLMENT_DEPTH = "max_enrollment_depth"
     MAX_CAPTURE_CHARACTERS = "max_capture_characters"
+    MAX_DISPLAY_LABEL_CHARACTERS = "max_display_label_characters"
     #: Why a scope could not be resolved to exactly one grant.
     MULTIPLE_ENROLLMENTS_COVER_THE_SCOPE = "multiple_enrollments_cover_the_scope"
     #: What the extractor said about an object's content type.

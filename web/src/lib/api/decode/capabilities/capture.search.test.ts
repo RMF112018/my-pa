@@ -16,6 +16,19 @@ describe("decodeCaptureSearch", () => {
   it("accepts a Python-derived success payload", () => {
     const decoded = decodeCaptureSearch(VALID);
     expect(decoded.ok).toBe(true);
+    if (decoded.ok) {
+      expect("text" in decoded.value.matches[0]!).toBe(false);
+      expect(decoded.value.matches[0]!.display_label).toBeNull();
+    }
+  });
+
+  it("accepts an optional display_label", () => {
+    const labelled = decodeCaptureSearch({
+      ...VALID,
+      matches: [{ ...MATCH, display_label: "Board pack" }],
+    });
+    expect(labelled.ok).toBe(true);
+    if (labelled.ok) expect(labelled.value.matches[0]!.display_label).toBe("Board pack");
   });
 
   it("ignores unknown extra fields", () => {

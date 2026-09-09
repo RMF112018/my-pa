@@ -201,7 +201,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     # and RI-ENT-WP-12's integration counted 89 from the merged tree rather
     # than adding one to either side (RULING-M2).
     # R8 adds one receipt migration on the previous 91-revision chain.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 100
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 101
 
 
 @pytest.mark.database

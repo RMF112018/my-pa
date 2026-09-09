@@ -1158,6 +1158,7 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             "project_constraint_history_are_immutable",
             "constraint_category_history_are_immutable",
             "constraint_sync_resolution_history_is_append_only",
+            "capture_labels_are_append_only",
         }
         for name in ("a_proposal_cites_at_least_one_span", "a_span_link_leaves_its_proposal_cited"):
             assert "CONSTRAINT TRIGGER" in triggers[name]

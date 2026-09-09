@@ -101,6 +101,7 @@ from my_pa.domain.capture.context import (
     ContextLinkRole,
     ContextLinkTarget,
 )
+from my_pa.domain.capture.display_label import MAX_DISPLAY_LABEL_CHARACTERS
 from my_pa.domain.capture.pipeline import (
     MAX_PIPELINE_VERSION_CHARACTERS,
     PipelineStage,
@@ -1106,6 +1107,40 @@ capture_versions = Table(
     ),
     UniqueConstraint("capture_id", "version_number", name="one_version_number_per_capture"),
     Index("capture_versions_by_capture", "capture_id", "version_number"),
+)
+
+#: One row per recorded display label of one capture. Insert only, enforced by
+#: the server: the revision that creates this table adds a `BEFORE UPDATE OR
+#: DELETE` trigger, the same mechanism `capture_versions` uses, because no
+#: CHECK can express "no UPDATE" and a rename must append rather than
+#: overwrite. The current label is the latest `recorded_at` (then `label_id`)
+#: for the capture, or absent when no row exists — never a pointer on
+#: `captures`, which remains insert-only identity.
+#:
+#: **This is not a content column.** `display_label` is caller-supplied
+#: list-safe metadata; it is not copied from `capture_versions.content` and is
+#: not a snippet of it. `QC-AC-041` still has exactly the five content columns
+#: the module docstring enumerates.
+capture_labels = Table(
+    "capture_labels",
+    METADATA,
+    Column("label_id", Text, primary_key=True),
+    Column(
+        "capture_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.captures.capture_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("owner_principal_id", Text, nullable=False),
+    Column("display_label", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("label_id", IdKind.CAPTURE_LABEL),
+    _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    CheckConstraint(
+        f"char_length(display_label) BETWEEN 1 AND {MAX_DISPLAY_LABEL_CHARACTERS}",
+        name="capture_display_label_is_bounded",
+    ),
+    Index("capture_labels_by_capture", "capture_id", "recorded_at", "label_id"),
 )
 
 #: One row per admitted submission: how a capture arrived and that it was

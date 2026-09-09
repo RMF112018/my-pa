@@ -74,6 +74,7 @@ function toEntry(row: CaptureListEntry): BackendCaptureEntry {
     latestVersionId: row.latest_version_id,
     latestVersionNumber: row.latest_version_number,
     latestRecordedAt: row.latest_recorded_at,
+    displayLabel: row.display_label,
   };
 }
 
@@ -84,6 +85,7 @@ function toMatch(row: CaptureSearchMatch): BackendCaptureMatch {
     versionNumber: row.version_number,
     characterCount: row.character_count,
     recordedAt: row.recorded_at,
+    displayLabel: row.display_label,
   };
 }
 

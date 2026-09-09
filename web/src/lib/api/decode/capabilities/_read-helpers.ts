@@ -51,6 +51,13 @@ export function requiredNullableString(value: unknown): DecodeResult<string | nu
   return ok(value);
 }
 
+/** Optional key: omitted and `null` are both `null`; a present value must be a string. */
+export function optionalNullableString(value: unknown): DecodeResult<string | null> {
+  if (value === undefined || value === null) return ok(null);
+  if (!isString(value)) return fail("a required field was not the expected type");
+  return ok(value);
+}
+
 export function requiredBoolean(value: unknown): DecodeResult<boolean> {
   if (value === undefined) return fail("a required field was missing");
   if (!isBoolean(value)) return fail("a required field was not the expected type");

@@ -135,7 +135,7 @@ def test_the_chain_has_exactly_one_head_and_this_revision_is_beneath_it() -> Non
     assert script.get_revision(HEAD).down_revision == SUCCESSOR
     assert script.get_revision(SUCCESSOR).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 100
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 101
 
 
 def test_revision_imports_no_domain_or_persistence_modules() -> None:

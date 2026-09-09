@@ -3,6 +3,7 @@ import type { Decoder } from "../types";
 import {
   decodeItems,
   fail,
+  optionalNullableString,
   pick,
   requiredInt,
   requiredString,
@@ -16,6 +17,7 @@ export interface CaptureListEntry {
   readonly latest_version_id: string;
   readonly latest_version_number: number;
   readonly latest_recorded_at: string;
+  readonly display_label: string | null;
 }
 
 export interface CaptureListResult {
@@ -30,6 +32,7 @@ const ENTRY_KEYS = [
   "latest_version_id",
   "latest_version_number",
   "latest_recorded_at",
+  "display_label",
 ] as const;
 
 function decodeEntry(input: unknown): DecodeResult<CaptureListEntry> {
@@ -49,6 +52,8 @@ function decodeEntry(input: unknown): DecodeResult<CaptureListEntry> {
   if (!latestVersionNumber.ok) return latestVersionNumber;
   const latestRecordedAt = requiredString(known.value.latest_recorded_at);
   if (!latestRecordedAt.ok) return latestRecordedAt;
+  const displayLabel = optionalNullableString(known.value.display_label);
+  if (!displayLabel.ok) return displayLabel;
   return ok({
     capture_id: captureId.value,
     owner_principal_id: owner.value,
@@ -57,6 +62,7 @@ function decodeEntry(input: unknown): DecodeResult<CaptureListEntry> {
     latest_version_id: latestVersionId.value,
     latest_version_number: latestVersionNumber.value,
     latest_recorded_at: latestRecordedAt.value,
+    display_label: displayLabel.value,
   });
 }
 

@@ -58,6 +58,7 @@ def test_contract_prefixes_are_stable() -> None:
         "corr",
         "cap",
         "capver",
+        "clbl",
         "rcpt",
         "sub",
         "ptext",

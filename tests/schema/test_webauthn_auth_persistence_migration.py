@@ -115,7 +115,7 @@ def test_the_chain_has_one_head_and_this_revision_is_five_links_beneath_it() -> 
     # 91 on the merged tree: 88 at `16f05c46b8c3`, plus `b8e4d1a6c073`, the
     # graph vocabulary admission, and additive GoodNotes successor.
     # R8 adds one receipt migration on the previous 91-revision chain.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 100
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 101
 
 
 @pytest.mark.database

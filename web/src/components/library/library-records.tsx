@@ -24,6 +24,11 @@ function moment(value: string): string {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString().replace("T", " ").slice(0, 16) + " UTC";
 }
 
+function captureTitle(label: string | null | undefined, fallback: string): string {
+  const trimmed = label?.trim() ?? "";
+  return trimmed.length > 0 ? trimmed : `Capture · ${moment(fallback)}`;
+}
+
 function captureHref(captureId: string, versionId?: string): string {
   const query = `captureId=${encodeURIComponent(captureId)}`;
   return versionId
@@ -49,7 +54,7 @@ export function CaptureListing({ entries }: { entries: readonly BackendCaptureEn
         <li key={entry.captureId}>
           <Card data-testid="library-capture">
             <div className="flex flex-wrap items-start justify-between gap-2">
-              <CardTitle>{`Capture · ${moment(entry.createdAt)}`}</CardTitle>
+              <CardTitle>{captureTitle(entry.displayLabel, entry.createdAt)}</CardTitle>
               <Badge tone={entry.versionCount > 1 ? "gold" : "neutral"}>
                 {entry.versionCount === 1 ? "1 version" : `${entry.versionCount} versions`}
               </Badge>
@@ -90,7 +95,7 @@ export function CaptureMatches({ matches }: { matches: readonly BackendCaptureMa
         <li key={match.versionId}>
           <Card data-testid="library-match">
             <div className="flex flex-wrap items-start justify-between gap-2">
-              <CardTitle>{`Capture · ${moment(match.recordedAt)}`}</CardTitle>
+              <CardTitle>{captureTitle(match.displayLabel, match.recordedAt)}</CardTitle>
               <Badge tone="neutral">version {match.versionNumber}</Badge>
             </div>
             <CardBody>

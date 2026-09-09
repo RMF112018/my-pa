@@ -4180,6 +4180,7 @@ class ApplicationService:
             capture_kind=command.capture_kind,
             context_source_object_id=command.context_source_object_id,
             context_source_version_id=command.context_source_version_id,
+            display_label=command.display_label,
         )
 
     def _capture_revise(
@@ -4264,6 +4265,7 @@ class ApplicationService:
                         latest_version_id=summary.latest_version_id,
                         latest_version_number=summary.latest_version_number,
                         latest_recorded_at=summary.latest_recorded_at,
+                        display_label=summary.display_label,
                     ).to_canonical_dict()
                     for summary in page
                 ]
@@ -4356,6 +4358,7 @@ class ApplicationService:
                         "version_number": match.version_number,
                         "character_count": match.character_count,
                         "recorded_at": format_rfc3339(match.recorded_at),
+                        "display_label": match.display_label,
                     }
                     for match in outcome.matches
                 ],
@@ -10283,6 +10286,7 @@ class ApplicationService:
         capture_kind: CaptureKind,
         context_source_object_id: str | None,
         context_source_version_id: str | None,
+        display_label: str | None = None,
     ) -> _Result:
         """The one write path both `capture.create` and `capture.revise` take.
 
@@ -10335,6 +10339,7 @@ class ApplicationService:
             # method depends on it. That is what makes a remote submission the
             # same transaction rather than a parallel one.
             transport=authorization.transport,
+            display_label=display_label,
         )
         admission: CaptureAdmission | None = None
         conflict: ApplicationError | None = None

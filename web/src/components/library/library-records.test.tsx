@@ -14,6 +14,7 @@ const ENTRY: BackendCaptureEntry = {
   latestVersionId: "capver_aaaa0001aaaa0001aaaa0001",
   latestVersionNumber: 2,
   latestRecordedAt: "2026-01-02T00:00:00Z",
+  displayLabel: null,
 };
 
 const MATCH: BackendCaptureMatch = {
@@ -22,11 +23,18 @@ const MATCH: BackendCaptureMatch = {
   versionNumber: 3,
   characterCount: 42,
   recordedAt: "2026-03-04T15:30:00Z",
+  displayLabel: null,
 };
 
 const BODY_LEAK = "SECRET BODY TEXT THAT MUST NOT LEAK";
 
 describe("CaptureListing cards", () => {
+  it("titles the card with the display label when one is present", () => {
+    render(<CaptureListing entries={[{ ...ENTRY, displayLabel: "Board pack" }]} />);
+    const title = within(screen.getByTestId("library-capture")).getByRole("heading", { level: 3 });
+    expect(title.textContent).toBe("Board pack");
+  });
+
   it("titles the card with a human date, not the captureId", () => {
     render(<CaptureListing entries={[ENTRY]} />);
     const card = screen.getByTestId("library-capture");

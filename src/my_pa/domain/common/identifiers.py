@@ -42,6 +42,14 @@ class IdKind(StrEnum):
     #: distinction.
     CAPTURE = "cap"
     CAPTURE_VERSION = "capver"
+    #: One append-only display-label row (`capture_labels`). Its own prefix
+    #: rather than a reuse of `CAPTURE` or `CAPTURE_VERSION`: a stored
+    #: reference has to say which row it names, and this is not a capture
+    #: identity and not a text version. It is also not `CaptureLabel` in
+    #: `domain.capture.classification`, which is a processing-match enum.
+    #: Checked against every prior member of this enum before use: `clbl`
+    #: collides with none (`clink` / `ccls` / `cclt` differ).
+    CAPTURE_LABEL = "clbl"
     RECEIPT = "rcpt"
     SUBMISSION = "sub"
     #: A registered remote capture client (WP-10). Its own prefix rather than a

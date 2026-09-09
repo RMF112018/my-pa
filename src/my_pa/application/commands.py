@@ -46,6 +46,8 @@ from my_pa.application import goodnotes_note_unit_contract as _note_unit
 from my_pa.application.errors import InvalidRequestError, SafeDetail
 from my_pa.application.goodnotes_pull_orchestration import MAX_PULL_BATCH_SIZE
 from my_pa.application.identity_correction import ConflictChoice
+from my_pa.domain.capture.display_label import normalize_display_label
+from my_pa.domain.capture.errors import CaptureBoundsError, CaptureError
 from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS, ProposalState
 from my_pa.domain.capture.review import (
     REVIEW_REASON_LIMIT,
@@ -415,6 +417,24 @@ def _text(value: str, detail: SafeDetail) -> str:
     if not isinstance(value, str):
         raise InvalidRequestError(detail)
     return value
+
+
+def _display_label(value: str | None, detail: SafeDetail) -> str | None:
+    """Normalise an optional list-safe title, without reading it into a message.
+
+    Type first, then the domain rule. Empty after normalisation is omitted
+    (`None`), which is how a caller says "no label" without inventing one.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise InvalidRequestError(detail)
+    try:
+        return normalize_display_label(value)
+    except CaptureBoundsError:
+        raise InvalidRequestError(detail, SafeDetail.MAX_DISPLAY_LABEL_CHARACTERS) from None
+    except CaptureError:
+        raise InvalidRequestError(detail) from None
 
 
 _GOODNOTES_BROWSER_MAX_PAGE_SIZE = 100
@@ -1140,10 +1160,16 @@ class CreateCapture:
     context_source_version_id: str | None = None
     client_created_at: datetime | None = None
     occurred_at: datetime | None = None
+    display_label: str | None = None
 
     def __post_init__(self) -> None:
         _text(self.text, SafeDetail.TEXT)
         _idempotency_key(self.idempotency_key)
+        object.__setattr__(
+            self,
+            "display_label",
+            _display_label(self.display_label, SafeDetail.DISPLAY_LABEL),
+        )
         if not isinstance(self.capture_kind, CaptureKind):
             raise InvalidRequestError(SafeDetail.CAPTURE_KIND)
         if (self.context_source_object_id is None) is not (self.context_source_version_id is None):

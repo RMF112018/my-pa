@@ -234,7 +234,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 100
+    assert len(list(MIGRATIONS.glob("*.py"))) == 101
 
 
 # ---- the freeze -------------------------------------------------------------

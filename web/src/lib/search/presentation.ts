@@ -141,7 +141,7 @@ function presentHit(hit: FederatedHit, enrollmentId: string | undefined): Presen
       return {
         domain: "capture",
         key: `${hit.item.capture_id}:${hit.item.version_id}`,
-        label: hit.item.capture_id,
+        label: hit.item.display_label ?? hit.item.capture_id,
         detail: `Version ${hit.item.version_number} · ${hit.item.character_count} characters · ${hit.item.recorded_at}`,
         href: captureSearchHref(hit.item.capture_id, hit.item.version_id),
       };

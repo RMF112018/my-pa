@@ -11,12 +11,14 @@ from tests.capture.conftest import counts, invoke, succeeded
 from my_pa.application.commands import CreateCapture, ListCaptures, SearchCaptures
 from my_pa.bootstrap.gateway import GatewayRuntime
 from my_pa.domain.identity.operation import Capability
+from my_pa.infrastructure.persistence import capture as capture_store
 from my_pa.infrastructure.persistence.capture import append_capture_label
 from my_pa.infrastructure.persistence.principal_scope import capture_context
 
 NOTE: Final = "the quarterly figures live in the red folder"
 LABEL: Final = "Quarterly figures"
 RENAMED: Final = "Board pack"
+RENAMED_AGAIN: Final = "Final board pack"
 
 
 def _create(
@@ -146,6 +148,45 @@ def test_append_rename_does_not_update_captures_or_copy_text(runtime: GatewayRun
     assert after_xmin == before_xmin, "appending a label mutated the captures identity row"
     assert after_content == before_content == NOTE
     assert labels == [LABEL, RENAMED]
+
+
+@pytest.mark.database
+def test_second_label_appended_in_one_transaction_is_current(
+    runtime: GatewayRuntime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    created = _create(runtime, key="label-same-transaction")
+    capture_id = created["capture_id"]
+    principal_id = runtime.principal.principal_id
+    label_ids = iter(("clbl_zzzzzzzz", "clbl_aaaaaaaa"))
+    monkeypatch.setattr(capture_store, "issue_identifier", lambda _kind: next(label_ids))
+
+    with runtime.work_engine.begin() as connection:
+        append_capture_label(
+            connection,
+            capture_id,
+            RENAMED,
+            context=capture_context(principal_id),
+        )
+        append_capture_label(
+            connection,
+            capture_id,
+            RENAMED_AGAIN,
+            context=capture_context(principal_id),
+        )
+
+    assert _listed(runtime)[0]["display_label"] == RENAMED_AGAIN
+    with runtime.work_engine.connect() as connection:
+        labels = list(
+            connection.execute(
+                text(
+                    "SELECT display_label, recorded_at FROM knowledge.capture_labels "
+                    "WHERE capture_id = :id ORDER BY recorded_at, label_id"
+                ),
+                {"id": capture_id},
+            )
+        )
+    assert [row.display_label for row in labels] == [RENAMED, RENAMED_AGAIN]
+    assert labels[0].recorded_at < labels[1].recorded_at
 
 
 @pytest.mark.database

@@ -148,6 +148,28 @@ describe("federated search presentation", () => {
     expect(JSON.stringify(groups)).not.toContain("SECRET");
   });
 
+  it("prefers a capture display label without putting it or capture text in the href", () => {
+    const secret = "SECRET_CAPTURE_BODY_MUST_NOT_LEAK";
+    const groups = presentFederatedHits([
+      {
+        domain: "capture",
+        item: { ...CAPTURE, display_label: "Board pack", text: secret },
+      } as FederatedHit,
+    ]);
+    const presented = groups[0]?.hits[0];
+    expect(presented?.label).toBe("Board pack");
+    expect(presented?.href).toBe(
+      "/knowledge?captureId=cap_aaaaaaaa11111111&versionId=capver_aaaaaaaa11111111",
+    );
+    expect(presented?.href).not.toContain("Board");
+    expect(JSON.stringify(groups)).not.toContain(secret);
+  });
+
+  it("falls back to the capture ID when display_label is null", () => {
+    const groups = presentFederatedHits([{ domain: "capture", item: CAPTURE }]);
+    expect(groups[0]?.hits[0]?.label).toBe(CAPTURE.capture_id);
+  });
+
   it("omits a knowledge href unless the search request actually had enrollmentId", () => {
     const without = presentFederatedHits([{ domain: "knowledge", item: KNOWLEDGE }]);
     expect(knowledgeSearchHref(KNOWLEDGE.knowledge_id, undefined)).toBeNull();

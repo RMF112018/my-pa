@@ -49,7 +49,7 @@ Principal's replay can never return another's receipt.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Final, NamedTuple
 
 from sqlalchemy import ColumnElement, Connection, Row, func, select
@@ -159,9 +159,9 @@ def _to_version(row: Row[tuple[object, ...]]) -> CaptureVersion:
 def current_display_label(capture_id_column: ColumnElement[str]) -> ColumnElement[str | None]:
     """Scalar subquery: the latest list-safe label for one capture, or NULL.
 
-    Ordered by `recorded_at` then `label_id`, both descending, so two rows
-    recorded in one transaction still have a total order. Does not read
-    `capture_versions.content`.
+    `_insert_label` advances `recorded_at` monotonically for the capture, including
+    for two appends in one transaction. `label_id` is only a defensive total-order
+    fallback. Does not read `capture_versions.content`.
     """
     return (
         select(capture_labels.c.display_label)
@@ -210,13 +210,25 @@ def append_capture_label(
 def _insert_label(
     connection: Connection, *, capture_id: str, owner_principal_id: str, display_label: str
 ) -> None:
+    previous_recorded_at = (
+        select(func.max(capture_labels.c.recorded_at))
+        .where(capture_labels.c.capture_id == capture_id)
+        .scalar_subquery()
+    )
+    recorded_at = func.greatest(
+        func.clock_timestamp(),
+        func.coalesce(
+            previous_recorded_at + timedelta(microseconds=1),
+            func.clock_timestamp(),
+        ),
+    )
     connection.execute(
         capture_labels.insert().values(
             label_id=issue_identifier(IdKind.CAPTURE_LABEL),
             capture_id=capture_id,
             owner_principal_id=owner_principal_id,
             display_label=display_label,
-            recorded_at=func.now(),
+            recorded_at=recorded_at,
         )
     )
 

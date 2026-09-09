@@ -87,7 +87,13 @@ describe("app shell", () => {
     expect(mobileLabels).toEqual(["Today", "Work", "People"]);
     expect(screen.getAllByRole("link", { name: "Review" })[0]).toHaveAttribute("href", "/review");
     expect(screen.getByTestId("capture-button-desktop")).toBeTruthy();
-    expect(screen.getByTestId("capture-button-mobile")).toBeTruthy();
+    const mobileCapture = screen.getByTestId("capture-button-mobile");
+    expect(mobileCapture).toHaveClass("text-text-muted");
+    expect(mobileCapture).not.toHaveClass("text-on-brand-accent");
+    expect(mobileCapture.querySelector("span")).toHaveClass(
+      "bg-brand-accent",
+      "text-on-brand-accent",
+    );
     expect(screen.queryByTestId("capture-button")).toBeNull();
   });
 

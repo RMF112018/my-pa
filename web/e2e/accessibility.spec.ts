@@ -176,7 +176,7 @@ test.describe("what axe cannot decide", () => {
   });
 
   test("every destination exposes banner, navigation and main exactly once", async ({ page }) => {
-    for (const path of PAGES) {
+    const assertLandmarks = async (path: string) => {
       await page.goto(path);
       await expect(page.getByRole("banner"), `${path} banner count`).toHaveCount(1);
       await expect(page.getByRole("main"), `${path} main count`).toHaveCount(1);
@@ -184,6 +184,14 @@ test.describe("what axe cannot decide", () => {
       // bar — and only one of them is rendered at any viewport.
       const navs = page.getByRole("navigation");
       expect(await navs.count()).toBeGreaterThanOrEqual(1);
+    };
+
+    await expect(page).toHaveURL(/\/today$/);
+    await expect(page.getByRole("banner"), "/today banner count").toHaveCount(1);
+    await expect(page.getByRole("main"), "/today main count").toHaveCount(1);
+    expect(await page.getByRole("navigation").count()).toBeGreaterThanOrEqual(1);
+    for (const path of PAGES.slice(1)) {
+      await assertLandmarks(path);
     }
   });
 

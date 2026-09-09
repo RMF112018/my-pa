@@ -144,12 +144,12 @@ export function MobileNav({ onCapture }: { onCapture: () => void }) {
         })}
         <button
           type="button"
-          className="flex min-h-14 flex-1 flex-col items-center justify-center gap-1 text-[11px] text-on-brand-accent"
+          className="flex min-h-14 flex-1 flex-col items-center justify-center gap-1 text-[11px] text-text-muted"
           aria-haspopup="dialog"
           data-testid="capture-button-mobile"
           onClick={onCapture}
         >
-          <span className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-accent">
+          <span className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-accent text-on-brand-accent">
             <Plus size={20} />
           </span>
           Capture

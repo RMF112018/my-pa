@@ -43,8 +43,8 @@ describe("Work surface", () => {
     expect(await screen.findByText("No today tasks")).toBeTruthy();
     expect(screen.queryByRole("navigation", { name: "Work views" })).toBeNull();
     expect(screen.getByRole("region", { name: "Work" }).innerHTML).not.toMatch(/overflow-x-auto/);
-    expect(screen.getByRole("tab", { name: "Tasks" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Commitments" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Tasks" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Commitments" })).toHaveAttribute("aria-pressed", "false");
     await userEvent.click(screen.getByRole("button", { name: "Work views" }));
     expect(Array.from(screen.getAllByRole("menuitem"), (item) => item.textContent)).toEqual([
       "Overdue", "Today", "Upcoming", "Unscheduled", "Waiting", "Blocked", "Recently updated", "All open", "Completed",
@@ -65,13 +65,13 @@ describe("Work surface", () => {
     history.replaceState(null, "", "/work?view=all-open&q=permit&archived=exclude"); renderFromUrl();
     const checkbox = await screen.findByRole("checkbox", { name: "Select Prepare permit set" });
     await userEvent.click(checkbox);
-    await userEvent.click(screen.getByRole("tab", { name: "Board" }));
+    await userEvent.click(screen.getByRole("button", { name: "Board" }));
     const board = await screen.findByRole("region", { name: "Task lifecycle board" });
     expect(board.className).not.toMatch(/overflow-x-auto|snap-x/);
     expect(screen.queryByLabelText(/Move .* lifecycle/)).toBeNull();
     expect(screen.getByRole("checkbox", { name: "Select Prepare permit set" })).toBeChecked();
     expect(location.search).toContain("q=permit"); expect(location.search).toContain("perspective=board");
-    await userEvent.click(screen.getByRole("tab", { name: "Calendar" }));
+    await userEvent.click(screen.getByRole("button", { name: "Calendar" }));
     expect(await screen.findByText("Deadline")).toBeTruthy();
     expect(screen.getByText("Planned work")).toBeTruthy();
     expect(screen.getByText("Available after")).toBeTruthy();
@@ -287,7 +287,7 @@ describe("Work surface", () => {
     await userEvent.click(screen.getByRole("button", { name: "New commitment" }));
     expect(await screen.findByRole("option", { name: "Sam Rivera" })).toBeTruthy();
     expect(screen.queryByLabelText(/person ID/i)).toBeNull();
-    await userEvent.click(screen.getByRole("tab", { name: "Tasks" }));
+    await userEvent.click(screen.getByRole("button", { name: "Tasks" }));
     expect(await screen.findByRole("option", { name: "Revised schedule" })).toBeTruthy();
     expect(screen.queryByLabelText(/Commitment ID/i)).toBeNull();
   });
@@ -311,13 +311,13 @@ describe("Work surface", () => {
     await screen.findByText("No today tasks");
     await chooseWorkView("Overdue");
     expect(location.search).toContain("view=overdue");
-    await userEvent.click(screen.getByRole("tab", { name: "Commitments" }));
+    await userEvent.click(screen.getByRole("button", { name: "Commitments" }));
     await screen.findByText("No commitments");
     expect(location.search).toContain("view=commitments");
     await userEvent.click(screen.getByRole("button", { name: "Commitment filter" }));
     await userEvent.click(await screen.findByRole("menuitem", { name: "Waiting on" }));
     expect(location.search).toContain("commitment=waiting-on");
-    await userEvent.click(screen.getByRole("tab", { name: "Board" }));
+    await userEvent.click(screen.getByRole("button", { name: "Board" }));
     expect(location.search).toContain("perspective=board");
   });
 

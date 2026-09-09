@@ -69,7 +69,9 @@ MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = (
     MIGRATIONS / "20260907_f7a2c9d51e64_admit_the_constraint_authoring_capabilities.py"
 )
-CURRENT_HEAD_MIGRATION: Final = MIGRATIONS / "20260909_c1a8e4d70b29_add_append_only_capture_labels.py"
+CURRENT_HEAD_MIGRATION: Final = (
+    MIGRATIONS / "20260909_c1a8e4d70b29_add_append_only_capture_labels.py"
+)
 PREVIOUS_MIGRATION: Final = (
     MIGRATIONS / "20260906_c5b71e0a8d43_admit_the_constraint_read_capabilities.py"
 )

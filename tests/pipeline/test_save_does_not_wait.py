@@ -56,6 +56,7 @@ from my_pa.infrastructure.persistence.tables import (
     capture_context_links,
     capture_conversations,
     capture_entity_mentions,
+    capture_labels,
     capture_processing_text,
     capture_promotion_receipts,
     capture_proposal_spans,
@@ -111,6 +112,7 @@ DOWNSTREAM_OUTPUTS: tuple[Table, ...] = (
 SYNCHRONOUS_CAPTURE_METADATA: tuple[Table, ...] = (
     capture_context_links,
     capture_conversations,
+    capture_labels,
 )
 
 #: The operator-owned control plane the save never touches (WP-10).

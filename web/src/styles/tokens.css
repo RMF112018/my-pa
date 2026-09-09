@@ -1,7 +1,7 @@
 :root {
   color-scheme: light;
   --canvas: #f6f8fb; --surface: #ffffff; --surface-subtle: #eef2f7; --surface-elevated: #ffffff;
-  --border-subtle: #d8e0ea; --border-strong: #a9b7c6; --text-primary: #13263d; --text-secondary: #4b6075; --text-muted: #6c7d8f;
+  --border-subtle: #d8e0ea; --border-strong: #a9b7c6; --text-primary: #13263d; --text-secondary: #4b6075; --text-muted: #5b6d80;
   --interactive: #173f67; --interactive-hover: #102f4e; --interactive-subtle: #e8eff7; --on-interactive: #ffffff; --focus: #c99728;
   --brand-primary: #173f67; --brand-accent: #b8891f; --brand-accent-hover: #9e7417; --brand-accent-subtle: #f7eed5; --on-brand-accent: #172536;
   --success: #26734d; --warning: #8a5a12; --destructive: #b33a3a; --on-destructive: #ffffff; --information: #2769a8;

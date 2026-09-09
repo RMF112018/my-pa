@@ -7,7 +7,6 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Sheet } from "@/components/ui/sheet";
 import { LoadingStatus, SurfaceState } from "@/components/ui/surface-state";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { CommitmentDetailView, TaskDetailView } from "@/components/work/work-detail";
 import { WorkPerspectives } from "@/components/work/work-perspectives";
@@ -197,12 +196,28 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
       <Button onClick={() => setCreating((open) => !open)}>{creating ? "Cancel" : view === "commitments" ? "New commitment" : "New task"}</Button>
     </div>
     <div className="mt-6 flex flex-wrap items-center gap-2">
-      <Tabs value={taskMode ? "tasks" : "commitments"} onValueChange={(value) => chooseMode(value === "commitments" ? "commitments" : "tasks")}>
-        <TabsList aria-label="Work mode">
-          <TabsTrigger value="tasks">Tasks</TabsTrigger>
-          <TabsTrigger value="commitments">Commitments</TabsTrigger>
-        </TabsList>
-      </Tabs>
+      <div
+        role="group"
+        aria-label="Work mode"
+        className="inline-flex gap-1 rounded-[var(--radius-md)] bg-surface-subtle p-1"
+      >
+        <Button
+          variant={taskMode ? "secondary" : "ghost"}
+          size="sm"
+          aria-pressed={taskMode}
+          onClick={() => chooseMode("tasks")}
+        >
+          Tasks
+        </Button>
+        <Button
+          variant={taskMode ? "ghost" : "secondary"}
+          size="sm"
+          aria-pressed={!taskMode}
+          onClick={() => chooseMode("commitments")}
+        >
+          Commitments
+        </Button>
+      </div>
       {taskMode ? (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -226,11 +241,23 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
           </DropdownMenuContent>
         </DropdownMenu>
       )}
-      <Tabs value={perspective} onValueChange={choosePerspective}>
-        <TabsList aria-label="Work perspective">
-          {WORK_PERSPECTIVES.map((item) => <TabsTrigger key={item} value={item}>{PERSPECTIVE_LABEL[item]}</TabsTrigger>)}
-        </TabsList>
-      </Tabs>
+      <div
+        role="group"
+        aria-label="Work perspective"
+        className="inline-flex gap-1 rounded-[var(--radius-md)] bg-surface-subtle p-1"
+      >
+        {WORK_PERSPECTIVES.map((item) => (
+          <Button
+            key={item}
+            variant={perspective === item ? "secondary" : "ghost"}
+            size="sm"
+            aria-pressed={perspective === item}
+            onClick={() => choosePerspective(item)}
+          >
+            {PERSPECTIVE_LABEL[item]}
+          </Button>
+        ))}
+      </div>
       {selectedTaskIds.length > 0 ? <p className="text-xs text-muted">{selectedTaskIds.length} task{selectedTaskIds.length === 1 ? "" : "s"} selected</p> : null}
     </div>
     {creating ? (view === "commitments" ? <CommitmentCreate onDone={() => { setCreating(false); void load(); }} /> : <TaskCreate onDone={() => { setCreating(false); void load(); }} />) : null}

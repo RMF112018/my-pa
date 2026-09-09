@@ -483,7 +483,7 @@ describe("Canvas page", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("places Directory before Neighborhood in a md two-column grid", async () => {
+  it("places Directory before Neighborhood and stacks them below the desktop breakpoint", async () => {
     answerGraph(TWO_NODES);
     await renderServerPage(() => CanvasPage({ searchParams: seededParams() }));
     const directoryHeading = screen.getByRole("heading", { name: "Directory", level: 2 });
@@ -492,9 +492,11 @@ describe("Canvas page", () => {
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
     const grid = directoryHeading.closest("div");
-    expect(grid?.className).toContain("md:grid-cols-2");
+    expect(grid?.className).toContain("lg:grid-cols-2");
+    expect(grid?.className).not.toContain("md:grid-cols-2");
     const source = readFileSync("src/app/(app)/canvas/canvas-page.tsx", "utf8");
-    expect(source).toContain("md:grid-cols-2");
+    expect(source).toContain("lg:grid-cols-2");
+    expect(source).not.toContain("md:grid-cols-2");
     expect(source).toContain('data-testid="canvas-continue"');
     expect(source).not.toContain("entities.list");
     expect(source).toContain('oneParam(params, "focusEntityId")');

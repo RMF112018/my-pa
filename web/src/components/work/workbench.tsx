@@ -6,13 +6,14 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Sheet } from "@/components/ui/sheet";
-import { SurfaceState } from "@/components/ui/surface-state";
+import { LoadingStatus, SurfaceState } from "@/components/ui/surface-state";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { CommitmentDetailView, TaskDetailView } from "@/components/work/work-detail";
 import { WorkPerspectives } from "@/components/work/work-perspectives";
-import { browserWorkClock, captureEvidence, createAttemptKey, isDefinitiveAttemptFailure, requiredCollection, workRequest, type ApiFailure } from "@/lib/api/work-client";
+import { browserWorkClock, captureEvidence, createAttemptKey, isDefinitiveAttemptFailure, requiredCollection, workRequest } from "@/lib/api/work-client";
 import { COMMITMENT_FILTERS, parseWorkUrlState, TASK_VIEWS, WORK_PERSPECTIVES, type CommitmentFilter, type TaskView, type WorkPerspective, type WorkUrlState, type WorkView } from "@/lib/api/work-url";
+import { mapUserError } from "@/lib/ui/user-error";
 import type { DisclosureEnvelope } from "@/contracts/envelope";
 import type {
   CommitmentRow,
@@ -25,27 +26,6 @@ import type {
   TaskRow,
   WaitingOnRow,
 } from "@/contracts/work";
-
-type ReadFailureKind = "authentication" | "authorization" | "not_found" | "validation" | "offline" | "unavailable";
-
-function classifyReadFailure(error: unknown): ReadFailureKind {
-  const failure = error as ApiFailure;
-  if (failure.status === 401 || failure.errorClass === "authentication") return "authentication";
-  if (failure.status === 403 || failure.errorClass === "authorization" || failure.errorClass === "policy_denied") return "authorization";
-  if (failure.status === 404 || failure.errorClass === "not_found") return "not_found";
-  if (failure.status === 400 || failure.status === 422 || failure.errorClass === "validation") return "validation";
-  if (failure.status === undefined) return "offline";
-  return "unavailable";
-}
-
-const FAILURE_TITLE: Record<ReadFailureKind, string> = {
-  authentication: "Session expired",
-  authorization: "Work access was refused",
-  not_found: "Work record was not found",
-  validation: "Work filters were not valid",
-  offline: "You appear to be offline",
-  unavailable: "Work is unavailable",
-};
 
 function Labeled({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
   return <label className="grid gap-1 text-sm font-medium text-text-primary"><span>{label}</span>{children}{hint ? <span className="text-xs font-normal text-muted">{hint}</span> : null}</label>;
@@ -76,9 +56,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   const [perspective, setPerspective] = useState<WorkPerspective>(initialState.perspective);
   const [rows, setRows] = useState<readonly TaskRow[] | readonly CommitmentRow[] | readonly WaitingOnRow[]>([]);
   const [state, setState] = useState<"loading" | "ready" | "empty" | "failed">("loading");
-  const [message, setMessage] = useState("");
-  const [messageDetails, setMessageDetails] = useState("");
-  const [failureKind, setFailureKind] = useState<ReadFailureKind>("unavailable");
+  const [readError, setReadError] = useState<unknown>();
   const [disclosure, setDisclosure] = useState<DisclosureEnvelope>();
   const [queryDraft, setQueryDraft] = useState(initialState.q);
   const [committedQuery, setCommittedQuery] = useState(initialState.q);
@@ -106,7 +84,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
     const controller = new AbortController();
     activeRead.current = controller;
     const generation = ++readGeneration.current;
-    setState("loading"); setMessage(""); setMessageDetails("");
+    setState("loading"); setReadError(undefined);
     try {
       if (view === "commitments") {
         const parameters = new URLSearchParams({ pageSize: "50" });
@@ -146,7 +124,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
       }
     } catch (error) {
       if (generation !== readGeneration.current || controller.signal.aborted) return;
-      setFailureKind(classifyReadFailure(error)); setMessage(error instanceof Error ? error.message : "Work could not be read"); setMessageDetails(""); setState("failed");
+      setReadError(error); setState("failed");
     }
   }, [archiveMode, commitmentFilter, committedQuery, cursor, timezone, view]);
   useEffect(() => {
@@ -277,10 +255,9 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
         </details>
       ) : null}
     </div>
-    {state !== "failed" ? <StatusNote message={message} details={messageDetails} /> : null}
     <div className="mt-5" aria-live="polite">
-      {state === "loading" ? <p role="status" className="rounded-xl border border-border bg-surface p-4 text-sm text-muted">Loading work…</p> : null}
-      {state === "failed" ? <SurfaceState kind="unavailable" title={FAILURE_TITLE[failureKind]} detail={message}><Button className="mt-3" variant="secondary" onClick={() => void load()}>Try again</Button></SurfaceState> : null}
+      {state === "loading" ? <LoadingStatus label="Loading work…" testId="work-loading" /> : null}
+      {state === "failed" ? <SurfaceState kind="unavailable" title={mapUserError(readError).title} error={readError}><Button className="mt-3" variant="secondary" onClick={() => void load()}>Try again</Button></SurfaceState> : null}
       {state === "empty" ? <SurfaceState kind="empty" title={`${committedQuery || archiveMode === "only" || (view === "commitments" && commitmentFilter !== "all-open") ? "No matching" : "No"} ${view === "commitments" ? "commitments" : LABEL[view].toLowerCase() + " tasks"}`} detail={committedQuery || archiveMode === "only" || (view === "commitments" && commitmentFilter !== "all-open") ? "Nothing matched these filters." : "Nothing is in this view yet."} /> : null}
       {state === "ready" ? <WorkPerspectives perspective={perspective} rows={rows} commitments={view === "commitments"} selectedTaskIds={selectedTaskIds} onSelectTask={toggleTask} onOpen={openDetail} /> : null}
     </div>

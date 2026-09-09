@@ -88,7 +88,7 @@ const MEMBER_TONE: Record<string, "green" | "gold" | "coral" | "neutral"> = {
 type IntelligenceTruth =
   | { state: "resolved"; result: ReportsResolveSetResult }
   | { state: "no_cycle"; detail: string }
-  | { state: "unavailable"; detail: string };
+  | { state: "unavailable"; error: unknown };
 
 /**
  * Discover `cycle_run_id` from `reports.list` (first listed item), then resolve
@@ -99,7 +99,7 @@ async function loadMorningBriefIntelligence(
 ): Promise<IntelligenceTruth> {
   const listed = await invokeGateway(principal, "reports.list");
   if (!listed.ok) {
-    return { state: "unavailable", detail: listed.error.message };
+    return { state: "unavailable", error: listed.error };
   }
   const cycleRunId = listed.result.items[0]?.cycle_run_id;
   if (typeof cycleRunId !== "string") {
@@ -115,7 +115,7 @@ async function loadMorningBriefIntelligence(
     set_id: MORNING_BRIEF_SET_ID,
   });
   if (!resolved.ok) {
-    return { state: "unavailable", detail: resolved.error.message };
+    return { state: "unavailable", error: resolved.error };
   }
   return { state: "resolved", result: resolved.result };
 }
@@ -333,7 +333,7 @@ export default async function SystemPage() {
               ) : null}
               {available.length > 0 ? (
                 <>
-                  <p className="mt-3 font-medium text-moss-slate">Available</p>
+                  <p className="mt-3 font-medium text-text-primary">Available</p>
                   <ul className="mt-1 flex flex-wrap gap-1" data-testid="system-available">
                     {available.map((entry) => (
                       <li key={entry.name}>
@@ -345,7 +345,7 @@ export default async function SystemPage() {
               ) : null}
               {unavailable.length > 0 ? (
                 <>
-                  <p className="mt-3 font-medium text-moss-slate">Not available in this build</p>
+                  <p className="mt-3 font-medium text-text-primary">Not available in this build</p>
                   <ul className="mt-1 flex flex-wrap gap-1" data-testid="system-unavailable-caps">
                     {unavailable.map((entry) => (
                       <li key={entry.name}>
@@ -439,9 +439,14 @@ export default async function SystemPage() {
               the system is healthy. BLOCKED, DEGRADED, and MISSING members stay visible.
             </p>
             {intelligence.state === "unavailable" ? (
-              <p className="mt-2" role="alert" data-testid="system-intelligence-unavailable">
-                Morning Intelligence readiness could not be resolved. {intelligence.detail}
-              </p>
+              <div className="mt-2">
+                <SurfaceState
+                  kind="unavailable"
+                  title="Morning Intelligence readiness could not be resolved"
+                  error={intelligence.error}
+                  testId="system-intelligence-unavailable"
+                />
+              </div>
             ) : intelligence.state === "no_cycle" ? (
               <p className="mt-2" role="alert" data-testid="system-intelligence-no-cycle">
                 {intelligence.detail}

@@ -325,8 +325,10 @@ describe("Work surface", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { code: "unavailable", message: "gateway down" } }), { status: 503, headers: { "content-type": "application/json" } })));
     history.replaceState(null, "", "/work?view=today");
     renderFromUrl();
-    expect(await screen.findByText("Work is unavailable")).toBeTruthy();
+    expect(await screen.findByText("This could not be read")).toBeTruthy();
     expect(screen.getByRole("alert")).toBeTruthy();
+    expect(screen.getByTestId("surface-state-detail").textContent).toBe("This could not be read. Try again.");
+    expect(screen.getByTestId("surface-state-diagnostic").textContent).toBe("gateway down");
     expect(screen.queryByText("No today tasks")).toBeNull();
   });
 });

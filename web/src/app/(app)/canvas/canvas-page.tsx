@@ -14,6 +14,7 @@ import { resolveSessionPrincipal } from "@/lib/auth/principal";
 import { invokeGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
+import { PageHeader } from "@/components/shell/page-header";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
 import { DirectoryList } from "@/components/canvas/directory-list";
 import { CanvasMapClient } from "@/components/canvas/canvas-map-client";
@@ -35,10 +36,7 @@ const BLURB =
 function frame(children: ReactNode) {
   return (
     <section aria-labelledby="canvas-heading" className="mx-auto max-w-4xl">
-      <h1 id="canvas-heading" className="mb-1 text-2xl font-semibold tracking-tight text-moss-slate">
-        Map
-      </h1>
-      <p className="mb-6 max-w-3xl text-sm text-muted">{BLURB}</p>
+      <PageHeader headingId="canvas-heading" title="Map" description={BLURB} />
       {children}
     </section>
   );
@@ -339,7 +337,7 @@ export async function CanvasPage({
       <SurfaceState
         kind="unavailable"
         title="That neighborhood could not be read"
-        detail={answer.error.message}
+        error={answer.error}
         limitations={answer.disclosure.limitations}
         testId="canvas-unavailable"
       />,

@@ -24,6 +24,7 @@ import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { PulseList } from "@/components/pulse/pulse-list";
 import { BackendPulseList } from "@/components/pulse/backend-pulse-list";
+import { PageHeader } from "@/components/shell/page-header";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
 import { IntelligencePulse } from "./intelligence-pulse";
 import type { PulseItem } from "@/lib/api/decode/capabilities/continuity.pulse";
@@ -56,12 +57,7 @@ export default async function TodayPage() {
   if (!principal) redirect("/sign-in");
 
   const heading = (
-    <>
-      <h1 id="today-heading" className="mb-1 text-xl font-semibold text-moss-slate">
-        Today
-      </h1>
-      <p className="mb-4 text-sm text-muted">What needs you today.</p>
-    </>
+    <PageHeader headingId="today-heading" title="Today" description="What needs you today." />
   );
 
   if (syntheticDataEnabled()) {
@@ -87,7 +83,7 @@ export default async function TodayPage() {
         <SurfaceState
           kind="unavailable"
           title="Today could not be derived"
-          detail={answer.error.message}
+          error={answer.error}
           limitations={answer.disclosure.limitations}
           testId="today-unavailable"
         />

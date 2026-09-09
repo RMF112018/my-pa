@@ -9,6 +9,7 @@ import { resolveSessionPrincipal } from "@/lib/auth/principal";
 import { invokeGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { FeatureRouteState } from "@/components/shell/feature-route-state";
+import { PageHeader } from "@/components/shell/page-header";
 import { SurfaceState } from "@/components/ui/surface-state";
 import { ReportDetailView } from "@/components/intelligence/report-detail-view";
 import { REPORT_IDENTIFIER } from "@/components/intelligence/cycle-selection";
@@ -43,9 +44,7 @@ export default async function IntelligenceReportPage({
   if (!REPORT_IDENTIFIER.test(reportId)) {
     return (
       <section className="mx-auto max-w-4xl">
-        <h1 id="intelligence-report-heading" className="mb-4 text-xl font-semibold text-moss-slate">
-          Intelligence report
-        </h1>
+        <PageHeader headingId="intelligence-report-heading" title="Intelligence report" />
         <SurfaceState
           kind="unavailable"
           title="This report could not be read"
@@ -64,13 +63,11 @@ export default async function IntelligenceReportPage({
   if (!outcome.ok) {
     return (
       <section className="mx-auto max-w-4xl">
-        <h1 id="intelligence-report-heading" className="mb-4 text-xl font-semibold text-moss-slate">
-          Intelligence report
-        </h1>
+        <PageHeader headingId="intelligence-report-heading" title="Intelligence report" />
         <SurfaceState
           kind="unavailable"
           title="This report could not be read"
-          detail={outcome.error.message}
+          error={outcome.error}
           testId="intelligence-report-unavailable"
         />
       </section>

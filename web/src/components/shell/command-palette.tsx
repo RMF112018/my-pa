@@ -253,9 +253,10 @@ export function SearchCommandPanel({
           <SurfaceState
             kind="unavailable"
             title="Search could not be read"
+            error={answer.kind === "unavailable" ? answer.message : undefined}
             detail={
               answer.kind === "unavailable"
-                ? answer.message
+                ? undefined
                 : "No domain could be searched. That is not a fact about what you hold."
             }
             testId="search-unavailable"

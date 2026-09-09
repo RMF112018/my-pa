@@ -2,6 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardBody } from "@/components/ui/card";
 import { EpistemicLabel, type EpistemicRole } from "@/components/ui/epistemic-label";
 import { SurfaceState } from "@/components/ui/surface-state";
+import type { ErrorEnvelope } from "@/contracts/envelope";
 import type { ReportsResolveSetResult } from "@/lib/api/decode/capabilities/reports.resolve_set";
 import { MORNING_BRIEF_SET_ID, nonReadyRequiredCount } from "@/components/intelligence/cycle-selection";
 
@@ -39,7 +40,7 @@ function memberEpistemic(readiness: string): EpistemicRole | null {
 
 export type ReadinessAnswer =
   | { readonly kind: "resolved"; readonly result: ReportsResolveSetResult }
-  | { readonly kind: "unavailable"; readonly detail: string }
+  | { readonly kind: "unavailable"; readonly detail: string; readonly error?: ErrorEnvelope }
   | { readonly kind: "degraded"; readonly result: ReportsResolveSetResult; readonly detail: string };
 
 function freshnessCopy(result: ReportsResolveSetResult): string {
@@ -71,7 +72,8 @@ export function ReadinessPanel({
       <SurfaceState
         kind="unavailable"
         title="Specialist readiness could not be read"
-        detail={answer.detail}
+        error={answer.error}
+        detail={answer.error ? undefined : answer.detail}
         testId="intelligence-readiness-unavailable"
       />
     );

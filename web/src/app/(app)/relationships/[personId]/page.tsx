@@ -7,6 +7,7 @@ import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { invokeGateway } from "@/lib/api/gateway";
 import { acceptedTimeline, syntheticPersonId } from "@/lib/fixtures/situation";
 import { RelationshipTimeline } from "@/components/relationship/relationship-timeline";
+import { PageHeader } from "@/components/shell/page-header";
 import { SurfaceState } from "@/components/ui/surface-state";
 
 export const metadata = { title: "Relationship — my-pa" };
@@ -23,14 +24,11 @@ export default async function RelationshipPage({
   const { personId } = await params;
 
   const heading = (
-    <>
-      <h1 id="relationship-heading" className="mb-1 text-xl font-semibold text-moss-slate">
-        Relationship timeline
-      </h1>
-      <p className="mb-4 text-sm text-muted">
-        A continuity view of accepted interactions, meetings, and commitments for one person.
-      </p>
-    </>
+    <PageHeader
+      headingId="relationship-heading"
+      title="Relationship timeline"
+      description="A continuity view of accepted interactions, meetings, and commitments for one person."
+    />
   );
 
   if (!syntheticDataEnabled()) {
@@ -42,7 +40,7 @@ export default async function RelationshipPage({
           <SurfaceState
             kind="unavailable"
             title="Relationship timeline could not be read"
-            detail={outcome.error.message}
+            error={outcome.error}
             testId="relationship-unavailable"
           />
         </section>
@@ -56,7 +54,7 @@ export default async function RelationshipPage({
           <SurfaceState
             kind="unavailable"
             title="Relationship timeline could not be read"
-            detail="the gateway result did not match the capability contract"
+            error="the gateway result did not match the capability contract"
             testId="relationship-unavailable"
           />
         </section>

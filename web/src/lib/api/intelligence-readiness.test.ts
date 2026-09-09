@@ -52,6 +52,11 @@ describe("readinessAnswerFromOutcome", () => {
     expect(readinessAnswerFromOutcome("intelligence:reports.resolve_set", outcome)).toEqual({
       kind: "unavailable",
       detail: "the application gateway did not answer",
+      error: {
+        errorClass: "unavailable",
+        code: "gateway_unreachable",
+        message: "the application gateway did not answer",
+      },
     });
   });
 });

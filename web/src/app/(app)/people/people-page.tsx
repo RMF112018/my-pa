@@ -19,6 +19,7 @@ import { resolveSessionPrincipal } from "@/lib/auth/principal";
 import { invokeGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
+import { PageHeader } from "@/components/shell/page-header";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
 import { PeopleLookupForms } from "@/components/people/people-forms";
 import { SearchHits } from "@/components/people/search-hits";
@@ -35,10 +36,7 @@ const BLURB =
 function frame(children: React.ReactNode) {
   return (
     <section aria-labelledby="people-heading" className="mx-auto max-w-3xl">
-      <h1 id="people-heading" className="mb-1 text-2xl font-semibold tracking-tight text-moss-slate">
-        People
-      </h1>
-      <p className="mb-6 max-w-3xl text-sm text-muted">{BLURB}</p>
+      <PageHeader headingId="people-heading" title="People" description={BLURB} />
       {children}
     </section>
   );
@@ -108,7 +106,7 @@ export async function PeoplePage({
           <SurfaceState
             kind="unavailable"
             title="That reference was not a valid resolve query"
-            detail={outcome.error.message}
+            error={outcome.error}
             testId="people-resolve-invalid"
           />
         </>,
@@ -122,7 +120,7 @@ export async function PeoplePage({
           <SurfaceState
             kind="unavailable"
             title="That reference could not be resolved"
-            detail={answer.error.message}
+            error={answer.error}
             limitations={answer.disclosure.limitations}
             testId="people-resolve-unavailable"
           />
@@ -160,7 +158,7 @@ export async function PeoplePage({
           <SurfaceState
             kind="unavailable"
             title="That search was not a valid query"
-            detail={outcome.error.message}
+            error={outcome.error}
             testId="people-search-invalid"
           />
         </>,
@@ -178,7 +176,7 @@ export async function PeoplePage({
           <SurfaceState
             kind="unavailable"
             title="Your people could not be searched"
-            detail={answer.error.message}
+            error={answer.error}
             limitations={answer.disclosure.limitations}
             testId="people-search-unavailable"
           />

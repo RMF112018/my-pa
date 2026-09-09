@@ -45,6 +45,7 @@ import { resolveSessionPrincipal } from "@/lib/auth/principal";
 import { invokeGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
+import { PageHeader } from "@/components/shell/page-header";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
 import {
   CaptureItem,
@@ -150,10 +151,7 @@ export async function KnowledgePage({
 
   const heading = (
     <>
-      <h1 id="knowledge-heading" className="mb-1 text-xl font-semibold text-moss-slate">
-        Knowledge
-      </h1>
-      <p className="mb-2 text-sm text-muted">{BLURB}</p>
+      <PageHeader headingId="knowledge-heading" title="Knowledge" description={BLURB} />
       <details className="mb-4" data-testid="library-listing-help">
         <summary className="cursor-pointer text-sm font-medium text-moss-slate">
           Why text is not shown
@@ -220,7 +218,7 @@ export async function KnowledgePage({
         <SurfaceState
           kind="unavailable"
           title="This capture could not be read"
-          detail={answer.error.message}
+          error={answer.error}
           limitations={answer.disclosure.limitations}
           testId="library-capture-unavailable"
         />
@@ -275,7 +273,7 @@ export async function KnowledgePage({
         <SurfaceState
           kind="unavailable"
           title="This knowledge record could not be read"
-          detail={answer.error.message}
+          error={answer.error}
           limitations={answer.disclosure.limitations}
           testId="library-knowledge-unavailable"
         />
@@ -317,7 +315,7 @@ export async function KnowledgePage({
           <SurfaceState
             kind="unavailable"
             title="Your captures could not be searched"
-            detail={answer.error.message}
+            error={answer.error}
             limitations={answer.disclosure.limitations}
             testId="library-search-unavailable"
           />
@@ -370,7 +368,7 @@ export async function KnowledgePage({
         <SurfaceState
           kind="unavailable"
           title="Your library could not be read"
-          detail={answer.error.message}
+          error={answer.error}
           limitations={answer.disclosure.limitations}
           testId="library-unavailable"
         />

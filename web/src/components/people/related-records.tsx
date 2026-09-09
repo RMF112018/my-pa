@@ -33,7 +33,7 @@ export function AssignmentsPanel({
           <SurfaceState
             kind="unavailable"
             title="Assignments could not be read"
-            detail={unavailable}
+            error={unavailable}
             testId="people-assignments-unavailable"
           />
         </div>
@@ -137,7 +137,7 @@ export function RelationshipsPanel({
           <SurfaceState
             kind="unavailable"
             title="Relationships could not be read"
-            detail={unavailable}
+            error={unavailable}
             testId="people-relationships-unavailable"
           />
         </div>
@@ -246,7 +246,7 @@ export function IdentityHistoryPanel({
           <SurfaceState
             kind="unavailable"
             title="Identity history could not be read"
-            detail={unavailable}
+            error={unavailable}
             testId="people-history-unavailable"
           />
         </div>

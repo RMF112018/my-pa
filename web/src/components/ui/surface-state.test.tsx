@@ -18,7 +18,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
-import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
+import { SurfaceState, DegradedBanner, LoadingStatus } from "@/components/ui/surface-state";
 
 afterEach(() => {
   cleanup();
@@ -55,7 +55,12 @@ describe("the four non-record answers are four different answers", () => {
     unmount();
 
     render(
-      <SurfaceState kind="unavailable" title="Your library could not be read" detail="boom" />,
+      <SurfaceState
+        kind="unavailable"
+        title="Your library could not be read"
+        detail="This could not be read. Try again."
+        diagnostic="boom"
+      />,
     );
     const unavailable = screen.getByTestId("state-unavailable");
     expect(unavailable).toHaveAttribute("data-state", "unavailable");
@@ -64,7 +69,13 @@ describe("the four non-record answers are four different answers", () => {
     const unavailableDetails = within(unavailable).getByTestId("surface-state-details");
     expect(unavailableDetails).toHaveTextContent(/nothing was retrieved/i);
     expect(unavailableDetails).toHaveTextContent(/read that did not happen/i);
-    expect(within(unavailable).getByTestId("surface-state-detail")).toHaveTextContent("boom");
+    expect(firstParagraphOutsideDetails(unavailable)).toHaveTextContent(
+      "This could not be read. Try again.",
+    );
+    expect(within(unavailable).getByTestId("surface-state-diagnostic")).toHaveTextContent("boom");
+    expect(unavailableDetails.contains(within(unavailable).getByTestId("surface-state-diagnostic"))).toBe(
+      true,
+    );
 
     // The whole point: a failure never carries the vocabulary of emptiness.
     for (const claim of EMPTINESS_CLAIMS) {
@@ -182,5 +193,45 @@ describe("the degraded banner sits above real records", () => {
     unmount();
     render(<DegradedBanner scope="s" limitations={[]} truncated />);
     expect(screen.getByTestId("degraded-truncated").textContent).toMatch(/no continuation token/i);
+  });
+});
+
+describe("compact empty is not an alert card", () => {
+  it("keeps empty without a left-border card while unavailable stays an alert", () => {
+    const { unmount } = render(<SurfaceState kind="empty" title="You have not captured anything yet" />);
+    const empty = screen.getByTestId("state-empty");
+    expect(empty.className).not.toMatch(/border-l-4/);
+    expect(empty.tagName).toBe("DIV");
+    unmount();
+
+    render(<SurfaceState kind="unavailable" title="Your library could not be read" />);
+    const unavailable = screen.getByTestId("state-unavailable");
+    expect(unavailable.className).toMatch(/border-l-4/);
+    expect(unavailable.getAttribute("role")).toBe("alert");
+  });
+
+  it("maps a transport error into Level 1 and keeps the raw string in Diagnostics", () => {
+    render(
+      <SurfaceState
+        kind="unavailable"
+        title="Today could not be derived"
+        error={{ message: "session authority unavailable", code: "authority_unavailable" }}
+      />,
+    );
+    const root = screen.getByTestId("state-unavailable");
+    expect(firstParagraphOutsideDetails(root)).toHaveTextContent(/couldn't verify your session/i);
+    expect(within(root).getByTestId("surface-state-diagnostic")).toHaveTextContent(
+      "session authority unavailable",
+    );
+    expect(firstParagraphOutsideDetails(root)?.textContent).not.toMatch(/session authority/i);
+  });
+});
+
+describe("loading is a status, not a bordered essay", () => {
+  it("announces the label without a card border", () => {
+    render(<LoadingStatus label="Loading work…" />);
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Loading work…");
+    expect(status.className).not.toMatch(/border/);
   });
 });

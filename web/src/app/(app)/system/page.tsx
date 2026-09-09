@@ -46,6 +46,7 @@ import { syntheticDataEnabled, gatewayAuthMode } from "@/lib/api/gateway-config"
 import { runtimeIdentity } from "@/lib/runtime-identity";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/shell/page-header";
 import { SurfaceState } from "@/components/ui/surface-state";
 import type { ReportsResolveSetResult } from "@/lib/api/decode/capabilities/reports.resolve_set";
 import type { PrincipalSession } from "@/contracts/identity";
@@ -158,12 +159,7 @@ export default async function SystemPage() {
 
   return (
     <section aria-labelledby="system-heading" className="mx-auto flex max-w-2xl flex-col gap-3">
-      <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-        <h1 id="system-heading" className="text-xl font-semibold text-moss-slate">
-          System
-        </h1>
-        <SystemRefresh />
-      </div>
+      <PageHeader headingId="system-heading" title="System" actions={<SystemRefresh />} />
 
       <Card>
         <CardTitle>Who you are to this system</CardTitle>
@@ -291,7 +287,7 @@ export default async function SystemPage() {
         <SurfaceState
           kind="unavailable"
           title="The build could not describe itself"
-          detail={outcome.error.message}
+          error={outcome.error}
           testId="system-unavailable"
         />
       ) : (

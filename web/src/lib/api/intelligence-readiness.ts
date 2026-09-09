@@ -11,7 +11,7 @@ export function readinessAnswerFromOutcome(
   outcome: GatewayOutcome<ReportsResolveSetResult>,
 ): ReadinessAnswer {
   if (!outcome.ok) {
-    return { kind: "unavailable", detail: outcome.error.message };
+    return { kind: "unavailable", detail: outcome.error.message, error: outcome.error };
   }
   const disclosure = backendDisclosure(scope, outcome.disclosure, transportLimitations());
   if (disclosure.coverage === "unavailable") {

@@ -29,9 +29,10 @@
  *   implies a retry could succeed and this does not.
  *
  * Level 1 is title, badge, optional caller `detail`, and children (retry).
- * Generic clarification and diagnostic extras sit behind a native Details
- * disclosure so they remain in the accessibility tree without being the first
- * visible paragraph.
+ * Generic clarification, limitations, and raw transport (`diagnostic` / `error`)
+ * sit behind a native Details disclosure so they remain in the accessibility
+ * tree without being the first visible paragraph. Empty and not-built are
+ * compact; unavailable keeps the stronger alert treatment.
  *
  * **Nothing here is conveyed by colour alone.** Every state carries a word (the
  * badge label), a distinct heading, and a distinct `data-state` attribute, so a
@@ -48,6 +49,7 @@
 import type { ReactNode } from "react";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { mapUserError, type UserErrorInput } from "@/lib/ui/user-error";
 
 /** The four answers. There is deliberately no fifth and no default. */
 export type SurfaceStateKind = "empty" | "unavailable" | "degraded" | "not_implemented";
@@ -100,8 +102,12 @@ export interface SurfaceStateProps {
   readonly kind: SurfaceStateKind;
   /** The heading. Distinct per state per surface; it is the accessible name. */
   readonly title: string;
-  /** What the backend, or this tier, actually said. Rendered verbatim. */
+  /** User-facing one sentence. Not raw transport. */
   readonly detail?: string | null;
+  /** Raw/transport string. Details only. */
+  readonly diagnostic?: string | null;
+  /** BFF/client failure. Mapped to Level-1 copy; raw message stays in Details. */
+  readonly error?: UserErrorInput;
   /** Limitations the backend disclosed. Shown for `degraded` above all. */
   readonly limitations?: readonly string[];
   /** Extra content — a retry affordance, a link — placed after the sentences. */
@@ -110,17 +116,45 @@ export interface SurfaceStateProps {
   readonly testId?: string;
 }
 
+function compactKind(kind: SurfaceStateKind): boolean {
+  return kind === "empty" || kind === "not_implemented";
+}
+
+/** Raw/transport copy, always behind a native Details disclosure. */
+export function DiagnosticsDetails({
+  diagnostic,
+  children,
+}: {
+  diagnostic?: string | null;
+  children?: ReactNode;
+}) {
+  if (!diagnostic && !children) return null;
+  return (
+    <div className="mt-2" data-testid="surface-state-diagnostics">
+      <p className="font-medium text-text-primary">Diagnostics</p>
+      {diagnostic ? (
+        <p className="mt-1 font-mono text-xs text-text-muted" data-testid="surface-state-diagnostic">
+          {diagnostic}
+        </p>
+      ) : null}
+      {children}
+    </div>
+  );
+}
+
 function StateDetails({
   clarification,
   limitations,
+  diagnostic,
 }: {
   clarification: string;
   limitations: readonly string[];
+  diagnostic?: string | null;
 }) {
   return (
     <details className="mt-2" data-testid="surface-state-details">
-      <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
-      <p className="mt-2" data-testid="surface-state-clarification">
+      <summary className="cursor-pointer text-sm font-medium text-text-primary">Details</summary>
+      <p className="mt-2 text-sm" data-testid="surface-state-clarification">
         {clarification}
       </p>
       {limitations.length > 0 ? (
@@ -133,6 +167,7 @@ function StateDetails({
           </ul>
         </>
       ) : null}
+      <DiagnosticsDetails diagnostic={diagnostic} />
     </details>
   );
 }
@@ -147,20 +182,25 @@ export function SurfaceState({
   kind,
   title,
   detail,
+  diagnostic,
+  error,
   limitations = [],
   children,
   testId,
 }: SurfaceStateProps) {
   const presentation = PRESENTATION[kind];
   const headingId = `surface-state-${testId ?? kind}`;
-  return (
-    <Card
-      role={presentation.role}
-      aria-labelledby={headingId}
-      data-state={kind}
-      data-testid={testId ?? `state-${kind}`}
-      className="border-l-4"
-    >
+  const presented = error !== undefined ? mapUserError(error) : null;
+  const level1 = detail ?? presented?.message ?? null;
+  const diagnosticText = diagnostic ?? presented?.diagnostic ?? null;
+  const compact = compactKind(kind);
+  const frameClass = compact
+    ? "py-3"
+    : kind === "unavailable"
+      ? "border-l-4 border-l-destructive"
+      : "border-l-4 border-l-warning";
+  const body = (
+    <>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span id={headingId}>
           <CardTitle>{title}</CardTitle>
@@ -168,14 +208,27 @@ export function SurfaceState({
         <Badge tone={presentation.tone}>{presentation.badge}</Badge>
       </div>
       <CardBody>
-        {detail ? (
-          <p data-testid="surface-state-detail">{detail}</p>
-        ) : null}
+        {level1 ? <p data-testid="surface-state-detail">{level1}</p> : null}
         {children}
-        <StateDetails clarification={presentation.clarification} limitations={limitations} />
+        <StateDetails
+          clarification={presentation.clarification}
+          limitations={limitations}
+          diagnostic={diagnosticText}
+        />
       </CardBody>
-    </Card>
+    </>
   );
+  const frameProps = {
+    role: presentation.role,
+    "aria-labelledby": headingId,
+    "data-state": kind,
+    "data-testid": testId ?? `state-${kind}`,
+    className: frameClass,
+  } as const;
+  if (compact) {
+    return <div {...frameProps}>{body}</div>;
+  }
+  return <Card {...frameProps}>{body}</Card>;
 }
 
 /**
@@ -228,5 +281,20 @@ export function DegradedBanner({
         </p>
       </details>
     </div>
+  );
+}
+
+/** Compact loading copy. Not a bordered essay. */
+export function LoadingStatus({
+  label,
+  testId = "surface-loading",
+}: {
+  label: string;
+  testId?: string;
+}) {
+  return (
+    <p role="status" data-testid={testId} className="py-2 text-sm text-text-muted">
+      {label}
+    </p>
   );
 }

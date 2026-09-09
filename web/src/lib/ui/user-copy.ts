@@ -29,6 +29,13 @@ function hasStorageArtifact(text: string): boolean {
   return /\bartifacts?\b/i.test(text) && /\b(storage|stored|persisted|persist)\b/i.test(text);
 }
 
+/** Visible Level-1 copy: Details/diagnostics nodes are excluded. */
+export function collectLevel1Copy(root: ParentNode): string {
+  const clone = (root as Element).cloneNode(true) as HTMLElement;
+  clone.querySelectorAll("details").forEach((node) => node.remove());
+  return (clone.textContent ?? "").replace(/\s+/g, " ").trim();
+}
+
 /** Returns the forbidden Level-1 terms found in `text`. System surfaces are skipped. */
 export function classifyForbiddenLevel1Copy(
   text: string,

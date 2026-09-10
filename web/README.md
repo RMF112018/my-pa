@@ -177,6 +177,7 @@ export MYPA_AUTH_MODE=synthetic
 export MYPA_GATEWAY_URL=http://127.0.0.1:8000
 export MYPA_GATEWAY_AUTH_MODE=local_operator
 export MYPA_DATA_PROVIDER=synthetic
+export MYPA_CANONICAL_ORIGIN=http://localhost:3000
 npm run dev
 ```
 

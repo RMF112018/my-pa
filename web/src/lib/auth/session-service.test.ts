@@ -266,9 +266,11 @@ describe("sessionCallOrigin contract", () => {
     expect(await originSentFor(request)).toBe("http://pa.example.test");
   });
 
-  it("uses the canonical origin when a same-origin GET omits Origin", async () => {
+  it("uses the canonical origin, not the request host, when a GET omits Origin", async () => {
+    // The request URL deliberately differs from the canonical origin: were the
+    // request still consulted, this would send `https://other.example.test`.
     vi.stubEnv("MYPA_CANONICAL_ORIGIN", "https://pa.example.test");
-    const request = new Request("https://pa.example.test/api/tasks");
+    const request = new Request("https://other.example.test/api/tasks");
     expect(await originSentFor(request)).toBe("https://pa.example.test");
   });
 
@@ -299,6 +301,16 @@ describe("sessionCallOrigin contract", () => {
     await expect(callSessionService("sessions/touch", { sid: SID }, request)).rejects.toBeInstanceOf(
       SessionServiceUnavailableError,
     );
+  });
+
+  it("honours an explicit Origin even when the canonical origin is unusable", async () => {
+    // The header is checked before the environment is read, so a caller that
+    // supplies its own Origin does not depend on canonical configuration.
+    vi.stubEnv("MYPA_CANONICAL_ORIGIN", "");
+    const request = new Request("https://pa.example.test/api/tasks", {
+      headers: { origin: "https://pa.example.test" },
+    });
+    expect(await originSentFor(request)).toBe("https://pa.example.test");
   });
 
   it("fails closed when the canonical origin is unparseable", async () => {

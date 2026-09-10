@@ -4,6 +4,7 @@ import {
   InvalidSessionServiceUrlError,
   MissingSessionServiceSecretError,
   SESSION_SERVICE_HEADER,
+  SessionServiceUnavailableError,
   callSessionService,
   issueSessionServiceToken,
   sessionServiceBaseUrl,
@@ -236,5 +237,76 @@ describe("mapSessionPrincipal", () => {
         lifecycleState: "active",
       }),
     ).toBeNull();
+  });
+});
+
+describe("sessionCallOrigin contract", () => {
+  async function originSentFor(request?: Request): Promise<string | null> {
+    const fetchStub = stubFetch(200, { principal: PRINCIPAL });
+    await callSessionService("sessions/touch", { sid: SID }, request);
+    const [, init] = fetchStub.mock.calls[0] as [string, RequestInit];
+    return new Headers(init.headers).get("origin");
+  }
+
+  it("forwards an explicit https Origin verbatim", async () => {
+    vi.stubEnv("MYPA_CANONICAL_ORIGIN", "https://pa.example.test");
+    const request = new Request("https://pa.example.test/api/tasks", {
+      headers: { origin: "https://pa.example.test" },
+    });
+    expect(await originSentFor(request)).toBe("https://pa.example.test");
+  });
+
+  it("forwards an explicit http Origin verbatim, never normalising the scheme", async () => {
+    vi.stubEnv("MYPA_CANONICAL_ORIGIN", "https://pa.example.test");
+    const request = new Request("https://pa.example.test/api/tasks", {
+      headers: { origin: "http://pa.example.test" },
+    });
+    // The session-service is the authority and refuses this by exact match; the
+    // BFF must not quietly upgrade it to the canonical origin.
+    expect(await originSentFor(request)).toBe("http://pa.example.test");
+  });
+
+  it("uses the canonical origin when a same-origin GET omits Origin", async () => {
+    vi.stubEnv("MYPA_CANONICAL_ORIGIN", "https://pa.example.test");
+    const request = new Request("https://pa.example.test/api/tasks");
+    expect(await originSentFor(request)).toBe("https://pa.example.test");
+  });
+
+  it("does not let an http-schemed request.url override the canonical https origin", async () => {
+    // Regression lock. Behind the public proxy the external scheme is not
+    // forwarded, so request.url is reconstructed as http://. Deriving the origin
+    // from it produced wrong_origin, surfacing as a 503 authority outage.
+    vi.stubEnv("MYPA_CANONICAL_ORIGIN", "https://pa.example.test");
+    const request = new Request("http://pa.example.test/api/tasks");
+    expect(await originSentFor(request)).toBe("https://pa.example.test");
+  });
+
+  it("ignores an internal container request.url entirely", async () => {
+    vi.stubEnv("MYPA_CANONICAL_ORIGIN", "https://pa.example.test");
+    const request = new Request("http://web:3000/api/tasks");
+    expect(await originSentFor(request)).toBe("https://pa.example.test");
+  });
+
+  it("still uses the canonical origin when no Request is supplied", async () => {
+    vi.stubEnv("MYPA_CANONICAL_ORIGIN", "https://pa.example.test");
+    expect(await originSentFor()).toBe("https://pa.example.test");
+  });
+
+  it("fails closed when the canonical origin is missing", async () => {
+    vi.stubEnv("MYPA_CANONICAL_ORIGIN", "");
+    stubFetch(200, { principal: PRINCIPAL });
+    const request = new Request("http://pa.example.test/api/tasks");
+    await expect(callSessionService("sessions/touch", { sid: SID }, request)).rejects.toBeInstanceOf(
+      SessionServiceUnavailableError,
+    );
+  });
+
+  it("fails closed when the canonical origin is unparseable", async () => {
+    vi.stubEnv("MYPA_CANONICAL_ORIGIN", "not-a-url");
+    stubFetch(200, { principal: PRINCIPAL });
+    const request = new Request("http://pa.example.test/api/tasks");
+    await expect(callSessionService("sessions/touch", { sid: SID }, request)).rejects.toBeInstanceOf(
+      SessionServiceUnavailableError,
+    );
   });
 });

@@ -56,16 +56,27 @@ function sessionServiceSecret(): string {
   return configured;
 }
 
+/**
+ * The origin presented to the session-service, for every caller.
+ *
+ * An explicit `Origin` header wins and is forwarded verbatim; the session-service
+ * validates it by exact match, so nothing is normalised here. Otherwise the
+ * configured canonical origin is used — including for BFF routes, where a
+ * `Request` exists but carries no `Origin` because browsers omit it on
+ * same-origin GET `fetch`.
+ *
+ * `request.url` is deliberately not a fallback. Behind the public reverse proxy
+ * the external scheme is not forwarded, so Next reconstructs `request.url` as
+ * `http://…`; the session-service admits only the canonical `https://…` origin
+ * and refused those calls with `wrong_origin`, surfacing as a 503 authority
+ * outage on every client-fetched `/api/*` read while server-rendered routes,
+ * which already resolved through the canonical origin, kept working.
+ *
+ * A missing or unparseable canonical origin fails closed.
+ */
 function sessionCallOrigin(request?: Request): string {
-  if (request) {
-    const header = request.headers.get("origin");
-    if (header) return header;
-    try {
-      return new URL(request.url).origin;
-    } catch {
-      throw new SessionServiceUnavailableError();
-    }
-  }
+  const header = request?.headers.get("origin");
+  if (header) return header;
   const configured = process.env.MYPA_CANONICAL_ORIGIN?.trim();
   if (!configured) throw new SessionServiceUnavailableError();
   try {

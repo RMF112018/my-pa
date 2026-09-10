@@ -159,7 +159,7 @@ values out of band and never commit them.
 | `MYPA_SESSION_SERVICE_SECRET` | At least 32 characters; BFF→Python session-service HMAC; distinct from the WebAuthn BFF secret |
 | `MYPA_WEBAUTHN_BFF_SECRET` | At least 32 characters; WebAuthn BFF ceremony HMAC; distinct from the session-service secret |
 | `MYPA_AUTH_MODE` | `synthetic` or `passkey`; no default |
-| `MYPA_CANONICAL_ORIGIN` | Browser origin the BFF treats as canonical; production is `https://pa.bobby-fetting.me` |
+| `MYPA_CANONICAL_ORIGIN` | Required. Origin the BFF sends to the session-service whenever the incoming request carries no `Origin` header — server components, and BFF routes reached by a same-origin GET. Session resolution fails closed without it, and the scheme is significant because the session-service matches origins exactly. Production is `https://pa.bobby-fetting.me` |
 | `MYPA_GATEWAY_URL` | Absolute HTTP(S) URL for the Python gateway; no default |
 | `MYPA_SESSION_SERVICE_URL` | Optional absolute HTTP(S) URL for session-service; unset uses `MYPA_GATEWAY_URL`. Production leaves this unset |
 | `MYPA_SOURCE_COMMIT` | Optional 40–64 hex source commit from the image label; unset or invalid reports as `unknown` |
@@ -177,6 +177,7 @@ export MYPA_AUTH_MODE=synthetic
 export MYPA_GATEWAY_URL=http://127.0.0.1:8000
 export MYPA_GATEWAY_AUTH_MODE=local_operator
 export MYPA_DATA_PROVIDER=synthetic
+export MYPA_CANONICAL_ORIGIN=http://localhost:3000
 npm run dev
 ```
 

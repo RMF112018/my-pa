@@ -132,12 +132,14 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/database/test_legacy_entity_backfill_migration.py",
     "tests/database/test_phase_b_audit_vocabulary_migration.py",
     "tests/database/test_ri_ent_wp_10_11_vocabulary_migration.py",
+    "tests/schema/test_audit_schema_migration.py",
     "tests/schema/test_auth_identity_and_grants_migration.py",
     "tests/schema/test_canvas_workspace_migration.py",
-    "tests/schema/test_wp_tux_01_task_origin_closure_comments_migration.py",
+    "tests/schema/test_capture_schema_migration.py",
     "tests/schema/test_constraint_management_migration.py",
     "tests/schema/test_constraint_read_capability_migration.py",
     "tests/schema/test_constraint_sync_migration.py",
+    "tests/schema/test_enrollment_objects_migration.py",
     "tests/schema/test_extraction_schema_migration.py",
     "tests/schema/test_goodnotes_browser_contract_migration.py",
     "tests/schema/test_goodnotes_client_resume_migration.py",
@@ -155,6 +157,7 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_oauth_refresh_migration.py",
     "tests/schema/test_webauthn_auth_persistence_migration.py",
     "tests/schema/test_work_task_commitment_migration.py",
+    "tests/schema/test_wp_tux_01_task_origin_closure_comments_migration.py",
     "tests/unit/test_cli_auth.py",
 )
 

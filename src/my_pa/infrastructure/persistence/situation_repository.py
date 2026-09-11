@@ -94,6 +94,7 @@ from my_pa.domain.situation.situation import (
     Trace,
 )
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.domain.task.lifecycle import TaskOriginKind
 from my_pa.infrastructure.persistence.tables import (
     capture_review_decisions,
     commitments,
@@ -1098,6 +1099,7 @@ class SqlContinuityRepository(ContinuityRepository):
                 title=title,
                 state=TaskState.OPEN.value,
                 evidence_state=ContinuityEvidenceState.PROPOSED.value,
+                origin_kind=TaskOriginKind.EVIDENCE.value,
                 origin_evidence_ref=origin_evidence_ref,
                 project_id=project_id,
                 situation_id=situation_id,

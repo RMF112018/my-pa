@@ -727,7 +727,9 @@ class SqlTaskManagementRepository(TaskManagementRepository):
 
         Idempotent at the unique constraint: a concurrent insert that lost the
         race is answered by looking the surviving row back up rather than by
-        raising. A digest mismatch is the caller's problem to refuse at the
+        raising. The insert runs in a savepoint so PostgreSQL can recover from
+        the unique violation without aborting the outer unit-of-work
+        transaction. A digest mismatch is the caller's problem to refuse at the
         application boundary; this adapter preserves the stored receipt.
         """
         existing = self.find_comment_by_idempotency_key(
@@ -736,19 +738,20 @@ class SqlTaskManagementRepository(TaskManagementRepository):
         if existing is not None:
             return existing
         try:
-            self._connection.execute(
-                insert(task_comments).values(
-                    comment_id=comment.comment_id,
-                    principal_id=comment.principal_id,
-                    task_id=comment.task_id,
-                    body=comment.body,
-                    author_kind=comment.author_kind.value,
-                    author_id=comment.author_id,
-                    created_at=comment.created_at,
-                    idempotency_key=comment.idempotency_key,
-                    request_digest=comment.request_digest,
+            with self._connection.begin_nested():
+                self._connection.execute(
+                    insert(task_comments).values(
+                        comment_id=comment.comment_id,
+                        principal_id=comment.principal_id,
+                        task_id=comment.task_id,
+                        body=comment.body,
+                        author_kind=comment.author_kind.value,
+                        author_id=comment.author_id,
+                        created_at=comment.created_at,
+                        idempotency_key=comment.idempotency_key,
+                        request_digest=comment.request_digest,
+                    )
                 )
-            )
         except IntegrityError as error:
             if _constraint_name(error) == "task_comments_idempotency_key_is_unique_per_principal":
                 replayed = self.find_comment_by_idempotency_key(

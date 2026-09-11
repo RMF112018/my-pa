@@ -39,7 +39,11 @@ from alembic.config import Config
 from sqlalchemy import Engine, text
 
 from my_pa.application.commitments import CommitmentManagementService
-from my_pa.application.tasks import TaskManagementService, TaskVersionConflictError
+from my_pa.application.tasks import (
+    TaskIdempotencyConflictError,
+    TaskManagementService,
+    TaskVersionConflictError,
+)
 from my_pa.contracts.ports import BulkIdempotencyConflictError, WorkCursorError
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.situation.continuity import (
@@ -50,6 +54,7 @@ from my_pa.domain.situation.continuity import (
 )
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.bulk import TaskBulkOperation
+from my_pa.domain.task.comment import TaskComment
 from my_pa.domain.task.history import (
     TaskHistoryEntry,
     TaskMutationAction,
@@ -703,3 +708,224 @@ def test_list_and_get_hydrate_a_direct_principal_accepted_task(migrated_engine: 
     assert read is not None
     assert read.task_id == task_id
     assert read.title == "Verify ChatLLM write behavior on pulse"
+
+
+def test_concurrent_comment_same_digest_race_replays_the_winner(
+    migrated_engine: Engine,
+) -> None:
+    """A unique-key loser recovers via savepoint and returns the winner row."""
+    service = _service(migrated_engine)
+    created = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Comment race same digest",
+        origin_kind=TaskOriginKind.DIRECT_PRINCIPAL,
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key=_idempotency_key("comment-race-task-same"),
+    )
+    now = datetime(2026, 8, 10, 12, tzinfo=UTC)
+    key = _idempotency_key("comment-race-same")
+    digest = "a" * 64
+    first = TaskComment(
+        comment_id=issue_identifier(IdKind.TASK_COMMENT),
+        principal_id=PRINCIPAL_A,
+        task_id=created.task.task_id,
+        body="Same body under one key",
+        author_kind=TaskMutationActor.PRINCIPAL,
+        author_id=PRINCIPAL_A,
+        created_at=now,
+        idempotency_key=key,
+        request_digest=digest,
+    )
+    second = TaskComment(
+        comment_id=issue_identifier(IdKind.TASK_COMMENT),
+        principal_id=PRINCIPAL_A,
+        task_id=created.task.task_id,
+        body="Same body under one key",
+        author_kind=TaskMutationActor.PRINCIPAL,
+        author_id=PRINCIPAL_A,
+        created_at=now,
+        idempotency_key=key,
+        request_digest=digest,
+    )
+    first_inserted = threading.Event()
+    second_attempting = threading.Event()
+    release_first = threading.Event()
+    results: list[TaskComment] = []
+    failures: list[BaseException] = []
+
+    def winner() -> None:
+        with migrated_engine.begin() as connection:
+            stored = SqlTaskManagementRepository(connection).create_comment(first)
+            results.append(stored)
+            first_inserted.set()
+            assert release_first.wait(timeout=5)
+
+    def contender() -> None:
+        assert first_inserted.wait(timeout=5)
+        try:
+            with migrated_engine.begin() as connection:
+                second_attempting.set()
+                results.append(SqlTaskManagementRepository(connection).create_comment(second))
+        except BaseException as error:
+            failures.append(error)
+
+    first_thread = threading.Thread(target=winner)
+    second_thread = threading.Thread(target=contender)
+    first_thread.start()
+    second_thread.start()
+    assert second_attempting.wait(timeout=5)
+    release_first.set()
+    first_thread.join(timeout=5)
+    second_thread.join(timeout=5)
+
+    assert not first_thread.is_alive() and not second_thread.is_alive()
+    assert failures == []
+    assert len(results) == 2
+    assert {comment.comment_id for comment in results} == {first.comment_id}
+    assert _row_count(migrated_engine, "task_comments") == 1
+
+
+def test_concurrent_comment_different_digest_race_conflicts_at_service(
+    migrated_engine: Engine,
+) -> None:
+    """Savepoint recovery surfaces the winner so the service can refuse digest mismatch."""
+    service = _service(migrated_engine)
+    created = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Comment race different digest",
+        origin_kind=TaskOriginKind.DIRECT_PRINCIPAL,
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key=_idempotency_key("comment-race-task-diff"),
+    )
+    key = _idempotency_key("comment-race-diff")
+    first_inserted = threading.Event()
+    second_attempting = threading.Event()
+    release_first = threading.Event()
+    failures: list[BaseException] = []
+    winner_id: list[str] = []
+
+    def winner() -> None:
+        with migrated_engine.begin() as connection:
+            comment = TaskComment(
+                comment_id=issue_identifier(IdKind.TASK_COMMENT),
+                principal_id=PRINCIPAL_A,
+                task_id=created.task.task_id,
+                body="Winner body",
+                author_kind=TaskMutationActor.PRINCIPAL,
+                author_id=PRINCIPAL_A,
+                created_at=datetime(2026, 8, 10, 12, tzinfo=UTC),
+                idempotency_key=key,
+                request_digest="b" * 64,
+            )
+            stored = SqlTaskManagementRepository(connection).create_comment(comment)
+            winner_id.append(stored.comment_id)
+            first_inserted.set()
+            assert release_first.wait(timeout=5)
+
+    def contender() -> None:
+        assert first_inserted.wait(timeout=5)
+        second_attempting.set()
+        try:
+            service.create_task_comment(
+                principal_id=PRINCIPAL_A,
+                task_id=created.task.task_id,
+                body="Loser body under the same key",
+                actor=TaskMutationActor.PRINCIPAL,
+                idempotency_key=key,
+            )
+        except BaseException as error:
+            failures.append(error)
+
+    first_thread = threading.Thread(target=winner)
+    second_thread = threading.Thread(target=contender)
+    first_thread.start()
+    second_thread.start()
+    assert second_attempting.wait(timeout=5)
+    release_first.set()
+    first_thread.join(timeout=5)
+    second_thread.join(timeout=5)
+
+    assert not first_thread.is_alive() and not second_thread.is_alive()
+    assert len(failures) == 1
+    assert isinstance(failures[0], TaskIdempotencyConflictError)
+    assert _row_count(migrated_engine, "task_comments") == 1
+    listed = service.list_task_comments(
+        principal_id=PRINCIPAL_A,
+        task_id=created.task.task_id,
+        page_size=10,
+    )
+    assert [comment.comment_id for comment in listed] == winner_id
+
+
+def test_concurrent_comment_different_digest_repo_returns_winner(
+    migrated_engine: Engine,
+) -> None:
+    """After IntegrityError the adapter returns the survivor without aborting the UoW."""
+    service = _service(migrated_engine)
+    created = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Comment race repo digest",
+        origin_kind=TaskOriginKind.DIRECT_PRINCIPAL,
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key=_idempotency_key("comment-race-task-repo"),
+    )
+    now = datetime(2026, 8, 10, 12, tzinfo=UTC)
+    key = _idempotency_key("comment-race-repo")
+    first = TaskComment(
+        comment_id=issue_identifier(IdKind.TASK_COMMENT),
+        principal_id=PRINCIPAL_A,
+        task_id=created.task.task_id,
+        body="Winner body",
+        author_kind=TaskMutationActor.PRINCIPAL,
+        author_id=PRINCIPAL_A,
+        created_at=now,
+        idempotency_key=key,
+        request_digest="c" * 64,
+    )
+    second = TaskComment(
+        comment_id=issue_identifier(IdKind.TASK_COMMENT),
+        principal_id=PRINCIPAL_A,
+        task_id=created.task.task_id,
+        body="Loser body",
+        author_kind=TaskMutationActor.PRINCIPAL,
+        author_id=PRINCIPAL_A,
+        created_at=now,
+        idempotency_key=key,
+        request_digest="d" * 64,
+    )
+    first_inserted = threading.Event()
+    second_attempting = threading.Event()
+    release_first = threading.Event()
+    results: list[TaskComment] = []
+    failures: list[BaseException] = []
+
+    def winner() -> None:
+        with migrated_engine.begin() as connection:
+            results.append(SqlTaskManagementRepository(connection).create_comment(first))
+            first_inserted.set()
+            assert release_first.wait(timeout=5)
+
+    def contender() -> None:
+        assert first_inserted.wait(timeout=5)
+        try:
+            with migrated_engine.begin() as connection:
+                second_attempting.set()
+                results.append(SqlTaskManagementRepository(connection).create_comment(second))
+        except BaseException as error:
+            failures.append(error)
+
+    first_thread = threading.Thread(target=winner)
+    second_thread = threading.Thread(target=contender)
+    first_thread.start()
+    second_thread.start()
+    assert second_attempting.wait(timeout=5)
+    release_first.set()
+    first_thread.join(timeout=5)
+    second_thread.join(timeout=5)
+
+    assert not first_thread.is_alive() and not second_thread.is_alive()
+    assert failures == []
+    assert len(results) == 2
+    assert {comment.comment_id for comment in results} == {first.comment_id}
+    assert {comment.request_digest for comment in results} == {"c" * 64}
+    assert _row_count(migrated_engine, "task_comments") == 1

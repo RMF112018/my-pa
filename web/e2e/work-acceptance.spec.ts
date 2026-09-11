@@ -36,7 +36,6 @@ test.describe("Work acceptance", () => {
     const title = `E2E synthetic Work task ${Date.now()}`;
     await page.getByRole("button", { name: "New task" }).click();
     await page.getByLabel("Title").fill(title);
-    await page.getByLabel("Origin note").fill("Synthetic acceptance evidence; disposable database only.");
     await page.getByRole("button", { name: "Create task" }).click();
     await expect(page.getByRole("heading", { name: "Create task" })).toHaveCount(0);
     // Creation sets no work date, so the canonical Today view must continue to

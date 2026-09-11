@@ -135,6 +135,9 @@ export type ContinuityAcceptanceKind = (typeof ACCEPTANCE_KINDS)[number];
 export const TASK_ROLES = ["follow_up"] as const;
 export type TaskRole = (typeof TASK_ROLES)[number];
 
+export const TASK_ORIGIN_KINDS = ["direct_principal", "evidence"] as const;
+export type TaskOriginKind = (typeof TASK_ORIGIN_KINDS)[number];
+
 export const TASK_MUTATION_ACTIONS = [
   "create",
   "update",
@@ -188,7 +191,8 @@ export interface TaskView {
   readonly description: string | null;
   readonly lifecycle_state: TaskLifecycleState;
   readonly evidence_state: ContinuityEvidenceState;
-  readonly origin_evidence_ref: string;
+  readonly origin_kind: TaskOriginKind;
+  readonly origin_evidence_ref: string | null;
   readonly closure_evidence_ref: string | null;
   readonly accepted_by_review_decision_id: string | null;
   readonly acceptance_kind: ContinuityAcceptanceKind | null;
@@ -216,6 +220,7 @@ const TASK_VIEW_KEYS = [
   "description",
   "lifecycle_state",
   "evidence_state",
+  "origin_kind",
   "origin_evidence_ref",
   "closure_evidence_ref",
   "accepted_by_review_decision_id",
@@ -251,7 +256,9 @@ export function decodeTaskView(input: unknown): DecodeResult<TaskView> {
   if (!lifecycle.ok) return lifecycle;
   const evidence = oneOf(known.value.evidence_state, EVIDENCE_STATES);
   if (!evidence.ok) return evidence;
-  const origin = requiredString(known.value.origin_evidence_ref);
+  const originKind = oneOf(known.value.origin_kind, TASK_ORIGIN_KINDS);
+  if (!originKind.ok) return originKind;
+  const origin = requiredNullableString(known.value.origin_evidence_ref);
   if (!origin.ok) return origin;
   const closureRef = requiredNullableString(known.value.closure_evidence_ref);
   if (!closureRef.ok) return closureRef;
@@ -297,6 +304,7 @@ export function decodeTaskView(input: unknown): DecodeResult<TaskView> {
     description: description.value,
     lifecycle_state: lifecycle.value,
     evidence_state: evidence.value,
+    origin_kind: originKind.value,
     origin_evidence_ref: origin.value,
     closure_evidence_ref: closureRef.value,
     accepted_by_review_decision_id: acceptedBy.value,

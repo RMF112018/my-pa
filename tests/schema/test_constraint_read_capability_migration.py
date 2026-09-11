@@ -50,7 +50,8 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "c5b71e0a8d43"
 PREVIOUS: Final = "a1c9e4b72f80"
-CURRENT_HEAD: Final = "c1a8e4d70b29"
+CURRENT_HEAD: Final = "de5ec1c65857"
+CAPTURE_LABELS: Final = "c1a8e4d70b29"
 CONSTRAINT_SYNC: Final = "b8e4d6f20a11"
 #: The revision between this one and the head, landed by AUTH-IMP while
 #: PC-CM-IMP-WP07 was in review.
@@ -164,12 +165,14 @@ def _literals(block: str) -> list[str]:
 def test_revision_sits_on_the_single_head_chain() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    # `4e9a1c7b2d60` (AUTH-IMP), `f7a2c9d51e64` (PC-CM-IMP-WP07), then
-    # `b8e4d6f20a11` (PC-CM-IMP-WP11) landed on top of this revision, so the
-    # head is no longer its direct child. The path from head down to this
-    # revision is asserted link by link rather than loosened to mere
-    # reachability, which would be the weaker claim.
-    assert script.get_revision(CURRENT_HEAD).down_revision == CONSTRAINT_SYNC
+    # `4e9a1c7b2d60` (AUTH-IMP), `f7a2c9d51e64` (PC-CM-IMP-WP07),
+    # `b8e4d6f20a11` (PC-CM-IMP-WP11), `c1a8e4d70b29` (capture labels), then
+    # `de5ec1c65857` (WP-TUX-01) landed on top of this revision, so the head is
+    # no longer its direct child. The path from head down to this revision is
+    # asserted link by link rather than loosened to mere reachability, which
+    # would be the weaker claim.
+    assert script.get_revision(CURRENT_HEAD).down_revision == CAPTURE_LABELS
+    assert script.get_revision(CAPTURE_LABELS).down_revision == CONSTRAINT_SYNC
     assert script.get_revision(CONSTRAINT_SYNC).down_revision == AUTHORING_REVISION
     assert script.get_revision(AUTHORING_REVISION).down_revision == INTERVENING
     assert script.get_revision(INTERVENING).down_revision == REVISION

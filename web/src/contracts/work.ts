@@ -13,7 +13,8 @@ export interface TaskRow {
   version?: number;
 }
 export interface TaskDetail extends TaskRow {
-  description: string | null; evidence_state: string; origin_evidence_ref: string;
+  description: string | null; evidence_state: string; origin_kind: "direct_principal" | "evidence";
+  origin_evidence_ref: string | null;
   closure_evidence_ref: string | null; accepted_by_review_decision_id: string | null;
   acceptance_kind: string | null; closure_history_id: string | null; version: number;
   scheduled_at: string | null; deferred_until: string | null; commitment_id: string | null;

@@ -128,10 +128,20 @@
       "payloadFields": ["task_id", "page_size", "after"],
       "probe": { "task_id": "tsk_aaaaaaaa11111111", "page_size": 25 }
     },
+    "tasks.comments.list": {
+      "purpose": "task_read",
+      "payloadFields": ["task_id", "page_size", "after"],
+      "probe": { "task_id": "tsk_aaaaaaaa11111111", "page_size": 25 }
+    },
+    "tasks.comments.create": {
+      "purpose": "task_authoring",
+      "payloadFields": ["task_id", "body", "idempotency_key", "client_context"],
+      "probe": { "task_id": "tsk_aaaaaaaa11111111", "body": "Synthetic task comment", "idempotency_key": "idem-task-comment-0001" }
+    },
     "tasks.create": {
       "purpose": "task_authoring",
-      "payloadFields": ["title", "origin_evidence_ref", "idempotency_key", "description", "priority", "due_at", "project_id", "situation_id", "accepted_by_review_decision_id", "commitment_id", "role", "client_context"],
-      "probe": { "title": "Synthetic task", "origin_evidence_ref": "cap_aaaaaaaa11111111", "idempotency_key": "idem-task-create-0001" }
+      "payloadFields": ["title", "origin_kind", "origin_evidence_ref", "idempotency_key", "description", "priority", "due_at", "project_id", "situation_id", "accepted_by_review_decision_id", "commitment_id", "role", "client_context"],
+      "probe": { "title": "Synthetic task", "origin_kind": "direct_principal", "idempotency_key": "idem-task-create-0001" }
     },
     "tasks.update": {
       "purpose": "task_authoring",

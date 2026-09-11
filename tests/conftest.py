@@ -369,12 +369,14 @@ from my_pa.domain.source.provider import (
 )
 from my_pa.domain.source.registry import ConfiguredSource, SourceProviderKind, issue_identifier
 from my_pa.domain.task.bulk import TaskBulkOperation
+from my_pa.domain.task.comment import TaskComment
 from my_pa.domain.task.commitment import Commitment as CommitmentV2
 from my_pa.domain.task.commitment_history import CommitmentHistoryEntry
 from my_pa.domain.task.history import TaskHistoryEntry, TaskMutationActor
 from my_pa.domain.task.lifecycle import (
     TaskArchiveMode,
     TaskLifecycleState,
+    TaskOriginKind,
     TaskPriority,
     TaskWorkView,
 )
@@ -602,6 +604,7 @@ class World:
     tasks_v2: list[TaskV2] = field(default_factory=list)
     task_history_v2: list[TaskHistoryEntry] = field(default_factory=list)
     task_bulk_operations: dict[tuple[str, str], TaskBulkOperation] = field(default_factory=dict)
+    task_comments: list[TaskComment] = field(default_factory=list)
     commitments_v2: list[CommitmentV2] = field(default_factory=list)
     commitment_history_v2: list[CommitmentHistoryEntry] = field(default_factory=list)
     current_counterparties: set[tuple[str, str]] = field(default_factory=set)
@@ -2318,44 +2321,32 @@ class _TasksRead(TaskManagementRepository):
         else:
             owned = [task for task in owned if task.archived_at is not None]
 
-        def effective(task: TaskV2) -> datetime | None:
-            due_or_scheduled = min(
-                (value for value in (task.due_at, task.scheduled_at) if value), default=None
-            )
-            return max(
-                (value for value in (due_or_scheduled, task.deferred_until) if value),
-                default=None,
-            )
-
+        # WP-TUX-01: civil-day buckets match SQL `_extend_work_view_conditions`.
+        # `work_now` is presentation-only and must not gate OVERDUE/TODAY/UPCOMING.
+        del work_now
         if work_view is TaskWorkView.OVERDUE:
+            if work_start is None or work_end is None:
+                raise ValueError("date-bounded Work views require both UTC boundaries")
             owned = [
                 task
                 for task in owned
                 if task.lifecycle_state
                 not in {TaskLifecycleState.COMPLETED, TaskLifecycleState.CANCELLED}
                 and task.due_at is not None
-                and work_now is not None
-                and task.due_at < work_now
+                and task.due_at < work_start
             ]
         elif work_view is TaskWorkView.TODAY:
+            if work_start is None or work_end is None:
+                raise ValueError("date-bounded Work views require both UTC boundaries")
             owned = [
                 task
                 for task in owned
                 if task.lifecycle_state
                 not in {TaskLifecycleState.COMPLETED, TaskLifecycleState.CANCELLED}
-                and (task.due_at is None or (work_now is not None and task.due_at >= work_now))
                 and (
-                    (
-                        task.due_at is not None
-                        and work_start is not None
-                        and work_end is not None
-                        and work_start <= task.due_at < work_end
-                    )
+                    (task.due_at is not None and work_start <= task.due_at < work_end)
                     or (
-                        task.scheduled_at is not None
-                        and work_start is not None
-                        and work_end is not None
-                        and work_start <= task.scheduled_at < work_end
+                        task.scheduled_at is not None and work_start <= task.scheduled_at < work_end
                     )
                 )
             ]
@@ -2376,15 +2367,17 @@ class _TasksRead(TaskManagementRepository):
                 and work_start <= task.updated_at < work_end
             ]
         elif work_view is TaskWorkView.UPCOMING:
+            if work_start is None or work_end is None:
+                raise ValueError("date-bounded Work views require both UTC boundaries")
             owned = [
                 task
                 for task in owned
                 if task.lifecycle_state
                 not in {TaskLifecycleState.COMPLETED, TaskLifecycleState.CANCELLED}
-                and (moment := effective(task)) is not None
-                and work_end is not None
-                and moment >= work_end
-                and (task.due_at is None or (work_now is not None and task.due_at >= work_now))
+                and (
+                    (task.due_at is not None and task.due_at >= work_end)
+                    or (task.scheduled_at is not None and task.scheduled_at >= work_end)
+                )
             ]
         elif work_view is TaskWorkView.WAITING:
             owned = [task for task in owned if task.lifecycle_state is TaskLifecycleState.WAITING]
@@ -2547,6 +2540,60 @@ class _TasksRead(TaskManagementRepository):
             iter(sorted(candidates, key=lambda task: (-task.created_at.timestamp(), task.task_id))),
             None,
         )
+
+    def create_comment(self, comment: TaskComment) -> TaskComment:
+        existing = next(
+            (
+                row
+                for row in self._world.task_comments
+                if row.principal_id == comment.principal_id
+                and row.idempotency_key == comment.idempotency_key
+            ),
+            None,
+        )
+        if existing is not None:
+            return existing
+        self._world.task_comments.append(comment)
+        return comment
+
+    def find_comment_by_idempotency_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> TaskComment | None:
+        return next(
+            (
+                row
+                for row in self._world.task_comments
+                if row.principal_id == principal_id and row.idempotency_key == idempotency_key
+            ),
+            None,
+        )
+
+    def list_comments(
+        self,
+        principal_id: str,
+        task_id: str,
+        *,
+        after: str | None = None,
+        limit: int,
+    ) -> tuple[TaskComment, ...]:
+        rows = [
+            row
+            for row in self._world.task_comments
+            if row.principal_id == principal_id and row.task_id == task_id
+        ]
+        rows.sort(key=lambda row: (row.created_at, row.comment_id))
+        if after is not None:
+            if not any(row.comment_id == after for row in rows):
+                raise WorkCursorError
+            found = False
+            kept: list[TaskComment] = []
+            for row in rows:
+                if found:
+                    kept.append(row)
+                elif row.comment_id == after:
+                    found = True
+            rows = kept
+        return tuple(rows[:limit])
 
 
 class _CommitmentsRead(CommitmentManagementRepository):
@@ -2849,6 +2896,60 @@ class _TasksWrite(TaskManagementRepository):
         self, principal_id: str, task_id: str
     ) -> TaskHistoryEntry | None:
         raise NotImplementedError("the write plane's fake does not serve history reads")
+
+    def create_comment(self, comment: TaskComment) -> TaskComment:
+        existing = next(
+            (
+                row
+                for row in self._world.task_comments
+                if row.principal_id == comment.principal_id
+                and row.idempotency_key == comment.idempotency_key
+            ),
+            None,
+        )
+        if existing is not None:
+            return existing
+        self._world.task_comments.append(comment)
+        return comment
+
+    def find_comment_by_idempotency_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> TaskComment | None:
+        return next(
+            (
+                row
+                for row in self._world.task_comments
+                if row.principal_id == principal_id and row.idempotency_key == idempotency_key
+            ),
+            None,
+        )
+
+    def list_comments(
+        self,
+        principal_id: str,
+        task_id: str,
+        *,
+        after: str | None = None,
+        limit: int,
+    ) -> tuple[TaskComment, ...]:
+        rows = [
+            row
+            for row in self._world.task_comments
+            if row.principal_id == principal_id and row.task_id == task_id
+        ]
+        rows.sort(key=lambda row: (row.created_at, row.comment_id))
+        if after is not None:
+            if not any(row.comment_id == after for row in rows):
+                raise WorkCursorError
+            found = False
+            kept: list[TaskComment] = []
+            for row in rows:
+                if found:
+                    kept.append(row)
+                elif row.comment_id == after:
+                    found = True
+            rows = kept
+        return tuple(rows[:limit])
 
 
 class FakeTaskManagementUnitOfWork(TaskManagementUnitOfWork):
@@ -3686,7 +3787,7 @@ class _ContinuityAuthoring(ContinuityAuthoringRepository):
             title=title,
             state=TaskState.OPEN,
             evidence_state=ContinuityEvidenceState.ACCEPTED,
-            origin_evidence_ref=origin_evidence_ref,
+            origin_evidence_ref=None,
             opened_at=now,
             created_at=now,
             updated_at=now,
@@ -8797,6 +8898,7 @@ def staged_task(scene: Scene, *, title: str = "a synthetic task") -> TaskV2:
     receipt = service.create_task(
         principal_id=scene.principal.principal_id,
         title=title,
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref="cap_origin0001origin0001",
         actor=TaskMutationActor.PRINCIPAL,
         idempotency_key=f"staged-task-{len(scene.world.tasks_v2)}",

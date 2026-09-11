@@ -2,8 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { POST as signInRoute } from "@/app/api/session/route";
-import { GET as listTasks } from "@/app/api/tasks/route";
+import { GET as listTasks, POST as createTask } from "@/app/api/tasks/route";
 import { PATCH as patchTask } from "@/app/api/tasks/[taskId]/route";
+import { GET as listTaskComments, POST as createTaskComment } from "@/app/api/tasks/[taskId]/comments/route";
 import { PATCH as patchCommitment } from "@/app/api/commitments/[commitmentId]/route";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resetSessionRegistry } from "@/lib/auth/session-registry";
@@ -20,6 +21,7 @@ function taskView(overrides: Record<string, unknown> = {}) {
     description: null,
     lifecycle_state: "open",
     evidence_state: "accepted",
+    origin_kind: "evidence",
     origin_evidence_ref: "cap_aaaaaaaa11111111",
     closure_evidence_ref: null,
     accepted_by_review_decision_id: null,
@@ -275,5 +277,59 @@ describe("Work BFF request normalization", () => {
     expect(response.status).toBe(409); const body = await response.json();
     expect(body.current).toMatchObject({ commitment_id: "cmt_aaaaaaaa11111111", title: "Canonical", version: 4 });
     expect(JSON.stringify(body)).not.toContain("prn_secret"); expect(gateway).toHaveBeenCalledTimes(2);
+  });
+
+  it("injects direct_principal origin on ordinary Task create and refuses browser provenance fields", async () => {
+    const sent: Record<string, unknown>[] = [];
+    stubWorkGateway(async (_url, init) => {
+      sent.push(JSON.parse(String(init?.body)));
+      return gatewayOk({ task: taskView({ origin_kind: "direct_principal", origin_evidence_ref: null }), history: taskHistory({ action: "create", before_version: 0, after_version: 1 }), replayed: false });
+    });
+    const ok = await createTask(request(await cookie(), "/api/tasks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "Direct create", idempotencyKey: "attempt-direct-create" }),
+    }));
+    expect(ok.status).toBe(200);
+    expect(sent[0]?.payload).toMatchObject({ title: "Direct create", origin_kind: "direct_principal", idempotency_key: "attempt-direct-create" });
+    expect(sent[0]?.payload).not.toHaveProperty("origin_evidence_ref");
+
+    const gateway = stubWorkGateway();
+    const refused = await createTask(request(await cookie(), "/api/tasks", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "Widened", originEvidenceRef: "cap_bbbbbbbb22222222", idempotencyKey: "attempt-refuse-origin" }),
+    }));
+    expect(refused.status).toBe(400);
+    expect(await refused.json()).toMatchObject({ error: { message: expect.stringMatching(/unknown fields: originEvidenceRef/) } });
+    expect(gateway).not.toHaveBeenCalled();
+  });
+
+  it("routes Task comments through gateway capabilities with fixed task_id", async () => {
+    const sent: Record<string, unknown>[] = [];
+    stubWorkGateway(async (url, init) => {
+      sent.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+      if (String(url).endsWith("tasks.comments.list")) {
+        return gatewayOk({ comments: [{ comment_id: "tcm_aaaaaaaa11111111", task_id: "tsk_aaaaaaaa11111111", body: "Note", author_kind: "principal", author_id: "prn_aaaaaaaa11111111aaaaaaaa11111111", created_at: AT }] });
+      }
+      return gatewayOk({ comment: { comment_id: "tcm_aaaaaaaa11111111", task_id: "tsk_aaaaaaaa11111111", body: "Note", author_kind: "principal", author_id: "prn_aaaaaaaa11111111aaaaaaaa11111111", created_at: AT }, replayed: false });
+    });
+    const listed = await listTaskComments(request(await cookie(), "/api/tasks/tsk_aaaaaaaa11111111/comments?pageSize=25"), { params: Promise.resolve({ taskId: "tsk_aaaaaaaa11111111" }) });
+    expect(listed.status).toBe(200);
+    expect(sent[0]?.url).toMatch(/tasks\.comments\.list$/);
+    expect((sent[0]?.body as { payload: Record<string, unknown> }).payload).toMatchObject({ task_id: "tsk_aaaaaaaa11111111", page_size: 25 });
+
+    const created = await createTaskComment(request(await cookie(), "/api/tasks/tsk_aaaaaaaa11111111/comments", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ body: "Note", idempotencyKey: "attempt-comment" }),
+    }), { params: Promise.resolve({ taskId: "tsk_aaaaaaaa11111111" }) });
+    expect(created.status).toBe(200);
+    expect(sent[1]?.url).toMatch(/tasks\.comments\.create$/);
+    expect((sent[1]?.body as { payload: Record<string, unknown> }).payload).toMatchObject({
+      task_id: "tsk_aaaaaaaa11111111",
+      body: "Note",
+      idempotency_key: "attempt-comment",
+    });
   });
 });

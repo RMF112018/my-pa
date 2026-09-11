@@ -233,16 +233,19 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.TASKS_LIST, Purpose.TASK_READ),
         (Capability.TASKS_SEARCH, Purpose.TASK_READ),
         (Capability.TASKS_HISTORY, Purpose.TASK_READ),
+        (Capability.TASKS_COMMENTS_LIST, Purpose.TASK_READ),
         # WP-TM-04's task-write plane. All five capabilities share the single
         # `task_authoring` purpose, exactly as the managed-document writes share
         # `document_authoring` and the capture writes share `capture_authoring`.
         # A purpose wide enough to cover writing and reading is a purpose that
         # grants both, so the write purpose is separate from the read purpose.
+        # WP-TUX-01's comment create joins the same authoring purpose.
         (Capability.TASKS_CREATE, Purpose.TASK_AUTHORING),
         (Capability.TASKS_UPDATE, Purpose.TASK_AUTHORING),
         (Capability.TASKS_TRANSITION, Purpose.TASK_AUTHORING),
         (Capability.TASKS_BULK_PREVIEW, Purpose.TASK_AUTHORING),
         (Capability.TASKS_BULK_CONFIRM, Purpose.TASK_AUTHORING),
+        (Capability.TASKS_COMMENTS_CREATE, Purpose.TASK_AUTHORING),
         # WP-TM-05's commitment plane. Three reads share `commitment_read`,
         # two writes share `commitment_authoring`, exactly paralleling the
         # task plane's read/authoring split.
@@ -470,9 +473,9 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # purpose and no write gains `constraint_read`: that disjointness is what the
     # plane's read/authoring separation now rests on. WP11 adds seven sync pairs,
     # split between its read and authoring purposes, without widening the canonical grants.
-    # Unioned: 161 capabilities, 45 purposes, 163 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 163
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 163 == 7082
+    # Unioned: 163 capabilities, 45 purposes, 165 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 165
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 165 == 7170
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

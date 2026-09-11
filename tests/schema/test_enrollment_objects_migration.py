@@ -110,6 +110,10 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "task_recurrences",
         "task_history",
         "task_bulk_operations",
+        # WP-TUX-01. `de5ec1c65857` adds append-only comments above this
+        # revision; name them so a head→this-revision downgrade equality
+        # still catches unnamed leftovers without absorbing capture_labels.
+        "task_comments",
         "commitment_history",
         "situations",
         "frames",

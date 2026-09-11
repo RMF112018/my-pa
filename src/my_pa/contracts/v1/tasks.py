@@ -9,6 +9,11 @@ dictionaries assembled in the use case, for the reason `contracts.v1.documents`
 gives: the shape of a public answer is a contract, and a contract that exists
 only as the code that happened to build it cannot be checked against anything.
 
+WP-TUX-01 adds `origin_kind` on the full read view (nullable
+`origin_evidence_ref` follows the domain provenance pairing) and the two
+comment-read shapes `TaskCommentView` / `TaskCommentListEntry` for
+`tasks.comments.list` (and the create answer that returns one comment).
+
 **No owner, on all three.** `domain.task.task.Task` and
 `domain.task.history.TaskHistoryEntry` both carry `principal_id`, and none of
 these views does. A caller reaches only its own tasks — every
@@ -17,7 +22,8 @@ partition — so echoing the owner back would tell the caller nothing it did not
 already know about itself, while making every answer a place another
 Principal's identifier could appear if the filter ever broke. The safe
 direction is the one where the field does not exist, exactly as
-`contracts.v1.documents` argues for its own three views.
+`contracts.v1.documents` argues for its own three views. Comment views follow
+the same rule: `principal_id` stays off the wire.
 
 **No `client_context` on `TaskHistoryEntryView`.** `TaskHistoryEntry`'s own
 module docstring is explicit that the field names a client or tool, a short
@@ -36,10 +42,17 @@ from pydantic import Field, model_validator
 from my_pa.contracts.v1.base import StrictModel, UtcDatetime
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
+from my_pa.domain.task.comment import MAX_TASK_COMMENT_BODY_CHARACTERS
 from my_pa.domain.task.history import TaskMutationAction, TaskMutationActor, TaskMutationOutcome
-from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskPriority
+from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskOriginKind, TaskPriority
 
-__all__ = ["TaskHistoryEntryView", "TaskListEntry", "TaskView"]
+__all__ = [
+    "TaskCommentListEntry",
+    "TaskCommentView",
+    "TaskHistoryEntryView",
+    "TaskListEntry",
+    "TaskView",
+]
 
 
 class TaskView(StrictModel):
@@ -50,7 +63,8 @@ class TaskView(StrictModel):
     description: str | None = None
     lifecycle_state: TaskLifecycleState
     evidence_state: ContinuityEvidenceState
-    origin_evidence_ref: str = Field(min_length=1)
+    origin_kind: TaskOriginKind
+    origin_evidence_ref: str | None = None
     closure_evidence_ref: str | None = None
     accepted_by_review_decision_id: str | None = None
     acceptance_kind: ContinuityAcceptanceKind | None = None
@@ -74,6 +88,11 @@ class TaskView(StrictModel):
     @model_validator(mode="after")
     def _check(self) -> TaskView:
         validate_identifier(self.task_id, IdKind.TASK)
+        if self.origin_kind is TaskOriginKind.EVIDENCE:
+            if self.origin_evidence_ref is None or not self.origin_evidence_ref.strip():
+                raise ValueError("an evidence-origin task records the evidence it was read out of")
+        elif self.origin_evidence_ref is not None:
+            raise ValueError("a direct-principal task carries no origin evidence reference")
         if self.project_id is not None:
             validate_identifier(self.project_id, IdKind.PROJECT)
         if self.situation_id is not None:
@@ -93,7 +112,7 @@ class TaskListEntry(StrictModel):
     """One task as `tasks.list`/`tasks.search` present it: a page row, not the full record.
 
     Deliberately narrower than `TaskView` — no `evidence_state`,
-    `origin_evidence_ref`, `closure_evidence_ref`, or
+    `origin_kind`, `origin_evidence_ref`, `closure_evidence_ref`, or
     `accepted_by_review_decision_id` — because a page of many rows is read for
     triage, not for the evidentiary detail `tasks.read` returns about the one
     task a caller already named. The fields kept are exactly the ones a caller
@@ -142,4 +161,61 @@ class TaskHistoryEntryView(StrictModel):
     def _check(self) -> TaskHistoryEntryView:
         validate_identifier(self.history_id, IdKind.TASK_HISTORY)
         validate_identifier(self.task_id, IdKind.TASK)
+        return self
+
+
+class TaskCommentView(StrictModel):
+    """One Task comment, exactly as a single-comment read or create answers it.
+
+    `body` is published as stored data — never as trusted HTML. `author_kind`
+    reuses `TaskMutationActor` so the wire vocabulary matches Task mutation
+    history. Idempotency and digest fields stay off this view: they are write
+    mechanics, not something a reader of the comment thread needs.
+    """
+
+    comment_id: str
+    task_id: str
+    body: str = Field(min_length=1, max_length=MAX_TASK_COMMENT_BODY_CHARACTERS)
+    author_kind: TaskMutationActor
+    author_id: str
+    created_at: UtcDatetime
+
+    @model_validator(mode="after")
+    def _check(self) -> TaskCommentView:
+        validate_identifier(self.comment_id, IdKind.TASK_COMMENT)
+        validate_identifier(self.task_id, IdKind.TASK)
+        if not self.body.strip():
+            raise ValueError("a task comment carries a non-blank body")
+        if self.author_kind is TaskMutationActor.PRINCIPAL:
+            validate_identifier(self.author_id, IdKind.PRINCIPAL)
+        else:
+            validate_identifier(self.author_id)
+        return self
+
+
+class TaskCommentListEntry(StrictModel):
+    """One comment as `tasks.comments.list` presents it: a page row.
+
+    Same fields as `TaskCommentView` for v1 — a comment page row is already the
+    full comment a caller needs to render the thread, and narrowing further
+    would only force a follow-up read for every row.
+    """
+
+    comment_id: str
+    task_id: str
+    body: str = Field(min_length=1, max_length=MAX_TASK_COMMENT_BODY_CHARACTERS)
+    author_kind: TaskMutationActor
+    author_id: str
+    created_at: UtcDatetime
+
+    @model_validator(mode="after")
+    def _check(self) -> TaskCommentListEntry:
+        validate_identifier(self.comment_id, IdKind.TASK_COMMENT)
+        validate_identifier(self.task_id, IdKind.TASK)
+        if not self.body.strip():
+            raise ValueError("a task comment carries a non-blank body")
+        if self.author_kind is TaskMutationActor.PRINCIPAL:
+            validate_identifier(self.author_id, IdKind.PRINCIPAL)
+        else:
+            validate_identifier(self.author_id)
         return self

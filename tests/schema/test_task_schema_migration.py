@@ -464,10 +464,10 @@ def test_task_history_enforces_the_version_pairing_at_the_server(
             connection.execute(
                 text(
                     f"INSERT INTO {SCHEMA}.tasks "  # noqa: S608
-                    "(task_id, principal_id, title, origin_evidence_ref, opened_at, "
-                    "created_at, updated_at) VALUES "
+                    "(task_id, principal_id, title, origin_kind, origin_evidence_ref, "
+                    "opened_at, created_at, updated_at) VALUES "
                     "('tsk_hist0001aaaa0001aaaa', 'prn_aaaa0001aaaa0001aaaa0001', "
-                    "'a task', 'cap_legacy0001aaaa0001a', now(), now(), now())"
+                    "'a task', 'evidence', 'cap_legacy0001aaaa0001a', now(), now(), now())"
                 )
             )
             connection.execute(

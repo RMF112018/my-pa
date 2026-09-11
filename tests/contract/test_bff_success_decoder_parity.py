@@ -40,7 +40,12 @@ from my_pa.contracts.v1.commitments import (
     WaitingOnEntry,
 )
 from my_pa.contracts.v1.reveal import RevealView
-from my_pa.contracts.v1.tasks import TaskHistoryEntryView, TaskListEntry, TaskView
+from my_pa.contracts.v1.tasks import (
+    TaskCommentView,
+    TaskHistoryEntryView,
+    TaskListEntry,
+    TaskView,
+)
 from my_pa.domain.capture.proposal import ProposalState, ProposalType, RiskClass
 from my_pa.domain.capture.reveal import EvidenceGap, EvidenceState
 from my_pa.domain.capture.review import ReviewCase, ReviewSubjectKind
@@ -83,7 +88,7 @@ from my_pa.domain.relationship.entity import RelationshipState
 from my_pa.domain.search.query import RankCategory, SearchMatch, label_for_media_type
 from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
 from my_pa.domain.task.history import TaskMutationAction, TaskMutationActor, TaskMutationOutcome
-from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskPriority
+from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskOriginKind, TaskPriority
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 FIXTURE_DIR: Final = ROOT / "web" / "src" / "lib" / "api" / "decode" / "fixtures" / "python"
@@ -145,6 +150,8 @@ def _task_view(
     *,
     lifecycle_state: TaskLifecycleState = TaskLifecycleState.OPEN,
     version: int = 1,
+    origin_kind: TaskOriginKind = TaskOriginKind.EVIDENCE,
+    origin_evidence_ref: str | None = "asr_aaaa0001aaaa0001aaaa0001",
     closure_evidence_ref: str | None = None,
     closed_at: datetime | None = None,
     closure_history_id: str | None = None,
@@ -155,7 +162,8 @@ def _task_view(
         description=None,
         lifecycle_state=lifecycle_state,
         evidence_state=ContinuityEvidenceState.ACCEPTED,
-        origin_evidence_ref="asr_aaaa0001aaaa0001aaaa0001",
+        origin_kind=origin_kind,
+        origin_evidence_ref=origin_evidence_ref,
         closure_evidence_ref=closure_evidence_ref,
         accepted_by_review_decision_id=None,
         acceptance_kind=ContinuityAcceptanceKind.DIRECT_PRINCIPAL,
@@ -175,6 +183,17 @@ def _task_view(
         updated_at=datetime(2026, 1, 1, tzinfo=UTC),
         commitment_id=None,
         role=None,
+    ).model_dump(mode="json")
+
+
+def _task_comment_view() -> dict[str, Any]:
+    return TaskCommentView(
+        comment_id="tcm_aaaa0001aaaa0001aaaa0001",
+        task_id="tsk_aaaa0001aaaa0001aaaa0001",
+        body="Synthetic follow-up note",
+        author_kind=TaskMutationActor.PRINCIPAL,
+        author_id="prn_aaaa0001aaaa0001aaaa0001aaaa0001",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
     ).model_dump(mode="json")
 
 
@@ -555,7 +574,10 @@ def _continuity_projects() -> dict[str, Any]:
 def _tasks_create() -> dict[str, Any]:
     """Handler-identical `_tasks_create` mutation receipt."""
     return {
-        "task": _task_view(),
+        "task": _task_view(
+            origin_kind=TaskOriginKind.DIRECT_PRINCIPAL,
+            origin_evidence_ref=None,
+        ),
         "history": _task_history_entry(),
         "replayed": False,
     }
@@ -1308,6 +1330,11 @@ def python_success_payloads() -> dict[str, dict[str, Any]]:
         "tasks.transition": _tasks_transition(),
         "tasks.bulk_preview": _tasks_bulk_preview(),
         "tasks.bulk_confirm": _tasks_bulk_confirm(),
+        "tasks.comments.list": {"comments": [_task_comment_view()]},
+        "tasks.comments.create": {
+            "comment": _task_comment_view(),
+            "replayed": False,
+        },
         "knowledge.search": _knowledge_search(),
         "knowledge.read": _knowledge_read(),
         "knowledge.reveal": _reveal_unavailable(),

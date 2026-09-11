@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-one hundred and sixty-one capabilities. There are two ways to prove that and only one stays
+one hundred and sixty-three capabilities. There are two ways to prove that and only one stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -1025,6 +1025,12 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "idempotency_key": "parity-task-bulk-confirm-0001",
             "mutations": bulk_mutations,
         },
+        Capability.TASKS_COMMENTS_LIST: {"task_id": task.task_id},
+        Capability.TASKS_COMMENTS_CREATE: {
+            "task_id": task.task_id,
+            "body": "parity task-plane comment",
+            "idempotency_key": "parity-task-comment-create-0001",
+        },
         Capability.COMMITMENTS_READ: {"commitment_id": commitment.commitment_id},
         Capability.COMMITMENTS_LIST: {},
         Capability.COMMITMENTS_SEARCH: {"query": "synthetic", "page_size": 10},
@@ -1919,7 +1925,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 162, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 164, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))

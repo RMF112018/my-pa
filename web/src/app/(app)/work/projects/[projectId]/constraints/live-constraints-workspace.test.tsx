@@ -230,6 +230,9 @@ describe("the live read-only workspace", () => {
     ]));
     const view = mount("view=register&group=none");
     const selector = await screen.findByTestId("project-selector");
+    await waitFor(() => {
+      expect(selector.querySelectorAll("option")).toHaveLength(2);
+    });
     await user.selectOptions(selector, secondProject.projectId);
     view.rerender(content(secondProject.projectId));
 

@@ -232,6 +232,8 @@ def test_downgrading_one_step_removes_exactly_these_two_tables(migrated_engine: 
         "constraint_sync_run_items",
         "constraint_sync_resolution_history",
         "constraint_sync_legacy_unbound_conflicts",
+        # WP-TUX-01. Head stacks `task_comments` above this revision.
+        "task_comments",
     }
     assert {
         "entities",

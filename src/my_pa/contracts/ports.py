@@ -229,6 +229,7 @@ from my_pa.domain.source.enrollment import Enrollment, EnrollmentRequest
 from my_pa.domain.source.provider import SourceProvider
 from my_pa.domain.source.registry import ConfiguredSource
 from my_pa.domain.task.bulk import TaskBulkOperation
+from my_pa.domain.task.comment import TaskComment
 from my_pa.domain.task.commitment import Commitment as CommitmentAggregate
 from my_pa.domain.task.commitment_history import CommitmentHistoryEntry
 from my_pa.domain.task.history import TaskHistoryEntry
@@ -6340,6 +6341,34 @@ class TaskManagementRepository(ABC):
         self, principal_id: str, commitment_id: str
     ) -> TaskAggregate | None:
         """The deterministic follow-up Task for one Principal-owned Commitment, if present."""
+        raise NotImplementedError
+
+    # --- WP-TUX-01: append-only Task comments --------------------------------
+    #
+    # Comments are their own immutable receipts. They do not advance
+    # `Task.version` and do not write `task_history`. Application dispatch of
+    # comment commands is owned elsewhere; this port only names the persistence
+    # surface the repository must provide.
+
+    def find_comment_by_idempotency_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> TaskComment | None:
+        """The one prior comment recorded under this Principal/key, or `None`."""
+        raise NotImplementedError
+
+    def create_comment(self, comment: TaskComment) -> TaskComment:
+        """Insert one comment, or return the prior row for the same Principal/key."""
+        raise NotImplementedError
+
+    def list_comments(
+        self,
+        principal_id: str,
+        task_id: str,
+        *,
+        after: str | None = None,
+        limit: int,
+    ) -> tuple[TaskComment, ...]:
+        """One bounded page of comments for a Principal-owned Task, oldest first."""
         raise NotImplementedError
 
 

@@ -52,7 +52,8 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "f7a2c9d51e64"
-CURRENT_HEAD: Final = "c1a8e4d70b29"
+CURRENT_HEAD: Final = "de5ec1c65857"
+CAPTURE_LABELS: Final = "c1a8e4d70b29"
 CONSTRAINT_SYNC: Final = "b8e4d6f20a11"
 #: The chain parent. `4e9a1c7b2d60` (AUTH-IMP) landed on `c5b71e0a8d43` while
 #: this revision was in review, so this migration was repointed onto it. The
@@ -70,7 +71,7 @@ MIGRATION: Final = (
     MIGRATIONS / "20260907_f7a2c9d51e64_admit_the_constraint_authoring_capabilities.py"
 )
 CURRENT_HEAD_MIGRATION: Final = (
-    MIGRATIONS / "20260909_c1a8e4d70b29_add_append_only_capture_labels.py"
+    MIGRATIONS / "20260911_de5ec1c65857_wp_tux_01_task_origin_closure_comments.py"
 )
 PREVIOUS_MIGRATION: Final = (
     MIGRATIONS / "20260906_c5b71e0a8d43_admit_the_constraint_read_capabilities.py"
@@ -131,12 +132,14 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/database/test_legacy_entity_backfill_migration.py",
     "tests/database/test_phase_b_audit_vocabulary_migration.py",
     "tests/database/test_ri_ent_wp_10_11_vocabulary_migration.py",
+    "tests/schema/test_audit_schema_migration.py",
     "tests/schema/test_auth_identity_and_grants_migration.py",
     "tests/schema/test_canvas_workspace_migration.py",
-    "tests/schema/test_capture_labels_migration.py",
+    "tests/schema/test_capture_schema_migration.py",
     "tests/schema/test_constraint_management_migration.py",
     "tests/schema/test_constraint_read_capability_migration.py",
     "tests/schema/test_constraint_sync_migration.py",
+    "tests/schema/test_enrollment_objects_migration.py",
     "tests/schema/test_extraction_schema_migration.py",
     "tests/schema/test_goodnotes_browser_contract_migration.py",
     "tests/schema/test_goodnotes_client_resume_migration.py",
@@ -154,6 +157,7 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_oauth_refresh_migration.py",
     "tests/schema/test_webauthn_auth_persistence_migration.py",
     "tests/schema/test_work_task_commitment_migration.py",
+    "tests/schema/test_wp_tux_01_task_origin_closure_comments_migration.py",
     "tests/unit/test_cli_auth.py",
 )
 
@@ -232,13 +236,14 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == CONSTRAINT_SYNC
+    assert script.get_revision(CURRENT_HEAD).down_revision == CAPTURE_LABELS
+    assert script.get_revision(CAPTURE_LABELS).down_revision == CONSTRAINT_SYNC
     assert script.get_revision(CONSTRAINT_SYNC).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 101
+    assert len(list(MIGRATIONS.glob("*.py"))) == 102
 
 
 # ---- the freeze -------------------------------------------------------------

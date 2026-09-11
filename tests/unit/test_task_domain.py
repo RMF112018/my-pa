@@ -23,6 +23,7 @@ from my_pa.domain.task.history import (
 from my_pa.domain.task.lifecycle import (
     TERMINAL_TASK_LIFECYCLE_STATES,
     TaskLifecycleState,
+    TaskOriginKind,
     TaskPriority,
     legacy_state_for,
 )
@@ -71,6 +72,9 @@ class TestTaskLifecycleState:
 
     def test_task_priority_has_four_members(self) -> None:
         assert {member.value for member in TaskPriority} == {"p1", "p2", "p3", "p4"}
+
+    def test_task_origin_kind_has_two_members(self) -> None:
+        assert {member.value for member in TaskOriginKind} == {"direct_principal", "evidence"}
 
 
 class TestRecurrenceRuleValidation:
@@ -308,6 +312,7 @@ class TestTask:
             "title": "Draft the remediation checkpoint",
             "lifecycle_state": TaskLifecycleState.OPEN,
             "evidence_state": ContinuityEvidenceState.PROPOSED,
+            "origin_kind": TaskOriginKind.EVIDENCE,
             "origin_evidence_ref": EVIDENCE_REF,
             "opened_at": _instant(2027, 1, 1),
             "created_at": _instant(2027, 1, 1),
@@ -320,6 +325,7 @@ class TestTask:
         task = self._task()
         assert task.version == 1
         assert task.closed_at is None
+        assert task.origin_kind is TaskOriginKind.EVIDENCE
 
     def test_blank_title_is_rejected(self) -> None:
         with pytest.raises(ValueError, match="non-blank title"):
@@ -343,12 +349,40 @@ class TestTask:
         with pytest.raises(ValueError, match="records when it closed"):
             self._task(closed_at=_instant(2027, 1, 2))
 
-    def test_terminal_state_requires_closure_evidence(self) -> None:
-        with pytest.raises(ValueError, match="evidence that closed it"):
+    def test_an_evidence_origin_task_constructs_with_origin_evidence(self) -> None:
+        task = self._task(
+            origin_kind=TaskOriginKind.EVIDENCE,
+            origin_evidence_ref=EVIDENCE_REF,
+        )
+        assert task.origin_kind is TaskOriginKind.EVIDENCE
+        assert task.origin_evidence_ref == EVIDENCE_REF
+
+    def test_a_direct_principal_origin_task_constructs_without_origin_evidence(self) -> None:
+        task = self._task(
+            origin_kind=TaskOriginKind.DIRECT_PRINCIPAL,
+            origin_evidence_ref=None,
+        )
+        assert task.origin_kind is TaskOriginKind.DIRECT_PRINCIPAL
+        assert task.origin_evidence_ref is None
+
+    def test_evidence_origin_rejects_missing_origin_evidence(self) -> None:
+        with pytest.raises(ValueError, match="evidence it was read out of"):
+            self._task(origin_kind=TaskOriginKind.EVIDENCE, origin_evidence_ref=None)
+
+    def test_evidence_origin_rejects_blank_origin_evidence(self) -> None:
+        with pytest.raises(ValueError, match="evidence it was read out of"):
+            self._task(origin_kind=TaskOriginKind.EVIDENCE, origin_evidence_ref="  ")
+
+    def test_direct_principal_origin_rejects_origin_evidence(self) -> None:
+        with pytest.raises(ValueError, match="no origin evidence"):
             self._task(
-                lifecycle_state=TaskLifecycleState.CANCELLED,
-                closed_at=_instant(2027, 1, 2),
+                origin_kind=TaskOriginKind.DIRECT_PRINCIPAL,
+                origin_evidence_ref=EVIDENCE_REF,
             )
+
+    def test_non_terminal_state_rejects_closure_evidence(self) -> None:
+        with pytest.raises(ValueError, match="no closure evidence"):
+            self._task(closure_evidence_ref=EVIDENCE_REF)
 
     def test_a_completed_task_with_closure_evidence_constructs(self) -> None:
         task = self._task(
@@ -357,6 +391,32 @@ class TestTask:
             closure_evidence_ref=EVIDENCE_REF,
         )
         assert task.closed_at is not None
+        assert task.closure_evidence_ref == EVIDENCE_REF
+
+    def test_a_completed_task_without_closure_evidence_constructs(self) -> None:
+        task = self._task(
+            lifecycle_state=TaskLifecycleState.COMPLETED,
+            closed_at=_instant(2027, 1, 2),
+            closure_evidence_ref=None,
+        )
+        assert task.closed_at is not None
+        assert task.closure_evidence_ref is None
+
+    def test_a_cancelled_task_without_closure_evidence_constructs(self) -> None:
+        task = self._task(
+            lifecycle_state=TaskLifecycleState.CANCELLED,
+            closed_at=_instant(2027, 1, 2),
+        )
+        assert task.lifecycle_state is TaskLifecycleState.CANCELLED
+        assert task.closure_evidence_ref is None
+
+    def test_blank_closure_evidence_when_present_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="closure evidence, when present"):
+            self._task(
+                lifecycle_state=TaskLifecycleState.COMPLETED,
+                closed_at=_instant(2027, 1, 2),
+                closure_evidence_ref="  ",
+            )
 
     def test_accepted_evidence_state_requires_a_review_decision(self) -> None:
         with pytest.raises(ValueError, match="review decision"):
@@ -392,7 +452,3 @@ class TestTask:
     def test_invalid_recurrence_id_is_rejected(self) -> None:
         with pytest.raises(InvalidIdentifierError):
             self._task(recurrence_id="not-an-id")
-
-    def test_blank_origin_evidence_ref_is_rejected(self) -> None:
-        with pytest.raises(ValueError, match="evidence it was read out of"):
-            self._task(origin_evidence_ref="  ")

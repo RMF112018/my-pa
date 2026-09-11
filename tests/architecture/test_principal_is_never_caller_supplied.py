@@ -1019,6 +1019,12 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # Principal's repository partition. The two reads verify the record still
     # belongs to the acting Principal before update or confirmation.
     "infrastructure/persistence/task_management.py": (
+        # WP-TUX-01 comment rows: three reads of `comment.principal_id` verify
+        # the stored comment still belongs to the acting Principal before
+        # idempotency replay or insert (find / create conflict lookup / create).
+        ("comment", "principal_id"),
+        ("comment", "principal_id"),
+        ("comment", "principal_id"),
         ("operation", "principal_id"),
         ("operation", "principal_id"),
     ),

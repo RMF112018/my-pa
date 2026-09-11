@@ -27,25 +27,48 @@ export function TaskDetailView({ taskId, embedded = false }: { taskId: string; e
   const [history, setHistory] = useState<readonly WorkHistoryRow[]>([]); const [historyDisclosure, setHistoryDisclosure] = useState<DisclosureEnvelope>();
   const [status, setStatus] = useState("Loading task…"); const [failure, setFailure] = useState<UserErrorPresentation>();
   const [conflict, setConflict] = useState(false); const [proposal, setProposal] = useState<Record<string, unknown>>();
-  const [transitionState, setTransitionState] = useState("open"); const [closureNote, setClosureNote] = useState("");
+  const [transitionState, setTransitionState] = useState("open");
   const [commitments, setCommitments] = useState<readonly CommitmentRow[]>([]);
-  const updateAttempt = useRef(createAttemptKey("task-update")); const transitionAttempt = useRef(createAttemptKey("task-transition")); const closureCaptureAttempt = useRef(createAttemptKey("task-closure"));
+  const updateAttempt = useRef(createAttemptKey("task-update")); const transitionAttempt = useRef(createAttemptKey("task-transition"));
   const load = useCallback(async () => { try { const [detail, trail, choices] = await Promise.all([workRequest<{ task: TaskDetail }>(`/api/tasks/${encodeURIComponent(taskId)}`), workRequest<{ history: readonly WorkHistoryRow[]; disclosure?: DisclosureEnvelope }>(`/api/tasks/${encodeURIComponent(taskId)}/history?pageSize=50`), workRequest<{ commitments: readonly CommitmentRow[] }>("/api/commitments?pageSize=100")]); let available = requiredCollection(choices.commitments, "commitments"); if (detail.task.commitment_id && !available.some((item) => item.commitment_id === detail.task.commitment_id)) { const linked = await workRequest<{ commitment: CommitmentRow }>(`/api/commitments/${encodeURIComponent(detail.task.commitment_id)}`); available = [...available, linked.commitment]; } setCommitments(available); setTask(detail.task); setDraft(taskDraft(detail.task)); setTransitionState(detail.task.lifecycle_state); setHistory(requiredCollection(trail.history, "history")); setHistoryDisclosure(trail.disclosure); setStatus(""); setFailure(undefined); } catch (error) { setFailure(mapUserError(error)); } }, [taskId]);
   useEffect(() => { void Promise.resolve().then(load); }, [load]);
   async function loadMoreHistory() { const after = historyDisclosure?.nextCursor; if (!after) return; setStatus("Reading more Task history…"); try { const trail = await workRequest<{ history: readonly WorkHistoryRow[]; disclosure?: DisclosureEnvelope }>(`/api/tasks/${encodeURIComponent(taskId)}/history?pageSize=50&after=${encodeURIComponent(after)}`); setHistory((current) => [...current, ...requiredCollection(trail.history, "history").filter((row) => !current.some((existing) => existing.history_id === row.history_id))]); setHistoryDisclosure(trail.disclosure); setStatus(""); } catch (error) { setStatus(mapUserError(error).message); } }
   async function applyProposal(values: Record<string, unknown>) { if (!task) return; const material = { ...values, expectedVersion: task.version }; setStatus("Saving one atomic patch…"); setConflict(false); try { await workRequest(`/api/tasks/${encodeURIComponent(taskId)}`, { method: "PATCH", body: JSON.stringify({ ...material, idempotencyKey: updateAttempt.current.forPayload(material) }) }); updateAttempt.current.succeeded(); setProposal(undefined); await load(); setStatus("Task update persisted."); } catch (error) { const problem = error as ApiFailure; const isConflict = problem.status === 409; setConflict(isConflict); setProposal(isConflict ? values : undefined); if (isConflict && problem.current) setTask(problem.current as TaskDetail); if (isDefinitiveAttemptFailure(error)) updateAttempt.current.succeeded(); setStatus(isConflict ? "The task changed on the server. Compare the canonical record with the controlled proposal, then reapply deliberately." : mapUserError(problem).message); } }
   async function update(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!draft) return; await applyProposal({ title: draft.title, description: draft.description || undefined, priority: draft.priority || undefined, dueAt: draft.dueAt ? new Date(draft.dueAt).toISOString() : undefined, scheduledAt: draft.scheduledAt ? new Date(draft.scheduledAt).toISOString() : undefined, deferredUntil: draft.deferredUntil ? new Date(draft.deferredUntil).toISOString() : undefined, commitmentId: draft.commitmentId || undefined, role: draft.role || undefined, archived: draft.archived, clearFields: [!draft.description && "description", !draft.priority && "priority", !draft.dueAt && "due_at", !draft.scheduledAt && "scheduled_at", !draft.deferredUntil && "deferred_until", !draft.commitmentId && "commitment_id", !draft.role && "role"].filter(Boolean) }); }
-  async function transition(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!task) return; setStatus("Preparing transition…"); try { const terminal = transitionState === "completed" || transitionState === "cancelled"; const closureEvidenceRef = terminal ? await captureEvidence(closureNote, "task-closure", closureCaptureAttempt.current.forPayload({ note: closureNote })) : undefined; const material = { toState: transitionState, closureEvidenceRef, expectedVersion: task.version }; await workRequest(`/api/tasks/${encodeURIComponent(taskId)}/transition`, { method: "POST", body: JSON.stringify({ ...material, idempotencyKey: transitionAttempt.current.forPayload(material) }) }); closureCaptureAttempt.current.succeeded(); transitionAttempt.current.succeeded(); setClosureNote(""); setStatus("Task transition persisted. A linked commitment was not changed."); await load(); } catch (error) { const problem = error as ApiFailure; if (problem.status === 409 && problem.current) { setTask(problem.current as TaskDetail); setDraft(taskDraft(problem.current as TaskDetail)); } if (isDefinitiveAttemptFailure(error)) transitionAttempt.current.succeeded(); setStatus(mapUserError(problem).message); } }
+  async function transition(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!task) return;
+    setStatus("Preparing transition…");
+    try {
+      const material = { toState: transitionState, expectedVersion: task.version };
+      await workRequest(`/api/tasks/${encodeURIComponent(taskId)}/transition`, {
+        method: "POST",
+        body: JSON.stringify({ ...material, idempotencyKey: transitionAttempt.current.forPayload(material) }),
+      });
+      transitionAttempt.current.succeeded();
+      setStatus("Task transition persisted. A linked commitment was not changed.");
+      await load();
+    } catch (error) {
+      const problem = error as ApiFailure;
+      if (problem.status === 409 && problem.current) {
+        setTask(problem.current as TaskDetail);
+        setDraft(taskDraft(problem.current as TaskDetail));
+      }
+      if (isDefinitiveAttemptFailure(error)) transitionAttempt.current.succeeded();
+      setStatus(mapUserError(problem).message);
+    }
+  }
   if (failure) return <SurfaceState kind="unavailable" title={failure.title} detail={failure.message} diagnostic={failure.diagnostic}><Button className="mt-3" variant="secondary" onClick={() => void load()}>Retry Task read</Button></SurfaceState>;
   if (!task || !draft) return <LoadingStatus label={status} />;
   return <article className="mx-auto max-w-4xl">{embedded ? null : <Link href="/work?view=all-open" className="text-sm text-moss-green underline">← Work</Link>}<header className={embedded ? "" : "mt-4"}><h1 className="text-2xl font-semibold text-moss-slate">{task.title}</h1><p className="mt-1 text-sm text-muted">{display(task.lifecycle_state)} · version {task.version} · evidence {display(task.evidence_state)}</p></header>
     {conflict && proposal ? <Conflict title="Canonical versus proposed"><p>Canonical version {task.version}. Every editable field is compared before reapply.</p><dl className="mt-2 grid gap-2"><dt>Title</dt><dd>Canonical: {task.title} · Proposed: {String(proposal.title ?? task.title)}</dd><dt>Description</dt><dd>Canonical: {task.description ?? "Not set"} · Proposed: {String(proposal.description ?? "Clear")}</dd><dt>Priority</dt><dd>Canonical: {task.priority ?? "Not set"} · Proposed: {String(proposal.priority ?? "Clear")}</dd><dt>Due</dt><dd>Canonical: {task.due_at ?? "Not set"} · Proposed: {String(proposal.dueAt ?? "Clear")}</dd><dt>Scheduled</dt><dd>Canonical: {task.scheduled_at ?? "Not set"} · Proposed: {String(proposal.scheduledAt ?? "Clear")}</dd><dt>Deferred until</dt><dd>Canonical: {task.deferred_until ?? "Not set"} · Proposed: {String(proposal.deferredUntil ?? "Clear")}</dd><dt>Archived</dt><dd>Canonical: {task.archived_at ? "Yes" : "No"} · Proposed: {proposal.archived ? "Yes" : "No"}</dd><dt>Commitment</dt><dd>Canonical: {commitmentLabel(task.commitment_id, commitments)} · Proposed: {commitmentLabel(proposal.commitmentId, commitments)}</dd><dt>Role</dt><dd>Canonical: {task.role ?? "Not set"} · Proposed: {String(proposal.role ?? "Clear")}</dd></dl><Button type="button" variant="secondary" onClick={() => void applyProposal(proposal)}>Reapply proposed patch to version {task.version}</Button></Conflict> : null}
     <p role="status" className="mt-4 text-sm text-muted">{status}</p><div className="mt-6 grid gap-6 lg:grid-cols-2"><form onSubmit={update} className="grid gap-4 rounded-xl border border-moss-slate/15 bg-surface p-4"><h2 className="font-semibold">Edit task</h2><Labeled label="Title"><Input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} required /></Labeled><Labeled label="Description"><Textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></Labeled><Labeled label="Priority"><select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: event.target.value })} className="h-10 rounded-md border bg-surface px-3"><option value="">Unset</option>{["p1","p2","p3","p4"].map((p)=><option key={p}>{p}</option>)}</select></Labeled><Labeled label="Due"><Input type="datetime-local" value={draft.dueAt} onChange={(event) => setDraft({ ...draft, dueAt: event.target.value })} /></Labeled><Labeled label="Scheduled"><Input type="datetime-local" value={draft.scheduledAt} onChange={(event) => setDraft({ ...draft, scheduledAt: event.target.value })} /></Labeled><Labeled label="Deferred until"><Input type="datetime-local" value={draft.deferredUntil} onChange={(event) => setDraft({ ...draft, deferredUntil: event.target.value })} /></Labeled><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.archived} onChange={(event) => setDraft({ ...draft, archived: event.target.checked })} /> Archived</label><Labeled label="Commitment"><select value={draft.commitmentId} onChange={(event) => setDraft({ ...draft, commitmentId: event.target.value })} className="h-10 rounded-md border bg-surface px-3"><option value="">None</option>{commitments.map((item) => <option key={item.commitment_id} value={item.commitment_id}>{item.title}</option>)}</select></Labeled><Labeled label="Role"><select value={draft.role} onChange={(event) => setDraft({ ...draft, role: event.target.value })} className="h-10 rounded-md border bg-surface px-3"><option value="">None</option><option value="follow_up">Follow up</option></select></Labeled><Button type="submit">Save atomic patch</Button></form>
-      <form onSubmit={transition} className="grid content-start gap-4 rounded-xl border border-moss-slate/15 bg-surface p-4"><h2 className="font-semibold">Lifecycle</h2><Labeled label="Move to"><select value={transitionState} onChange={(event) => setTransitionState(event.target.value)} className="h-10 rounded-md border bg-surface px-3">{["open","in_progress","waiting","blocked","completed","cancelled"].map((value)=><option key={value}>{value}</option>)}</select></Labeled><Labeled label="Closure note"><Textarea value={closureNote} onChange={(event) => setClosureNote(event.target.value)} placeholder="Required for completed or cancelled" /></Labeled><Button type="submit">Apply transition</Button><p className="text-xs text-muted">Completing this Task never closes its linked Commitment.</p></form></div>
+      <form onSubmit={transition} className="grid content-start gap-4 rounded-xl border border-moss-slate/15 bg-surface p-4"><h2 className="font-semibold">Lifecycle</h2><Labeled label="Move to"><select value={transitionState} onChange={(event) => setTransitionState(event.target.value)} className="h-10 rounded-md border bg-surface px-3">{["open","in_progress","waiting","blocked","completed","cancelled"].map((value)=><option key={value}>{value}</option>)}</select></Labeled><Button type="submit">Apply transition</Button><p className="text-xs text-muted">Completing this Task never closes its linked Commitment. Terminal transitions do not invent closure evidence.</p></form></div>
     <TaskContext projectId={task.project_id} situationId={task.situation_id} />
     <Evidence
       subject="Task"
       state={task.evidence_state}
+      originKind={task.origin_kind}
       origin={task.origin_evidence_ref}
       closure={task.closure_evidence_ref}
       closedAt={task.closed_at}
@@ -90,7 +113,8 @@ function CommitmentFollowUpPanel({ projection }: { projection: CommitmentFollowU
 interface EvidenceProps {
   subject: "Task" | "Commitment";
   state: string;
-  origin: string;
+  originKind?: "direct_principal" | "evidence" | string | null;
+  origin: string | null;
   closure: string | null;
   closedAt: string | null;
   acceptanceKind?: string | null;
@@ -98,15 +122,30 @@ interface EvidenceProps {
   closureHistoryId?: string | null;
 }
 
-function Evidence({ subject, state, origin, closure, closedAt, acceptanceKind, reviewDecisionId, closureHistoryId }: EvidenceProps) {
+function Evidence({ subject, state, originKind, origin, closure, closedAt, acceptanceKind, reviewDecisionId, closureHistoryId }: EvidenceProps) {
   const [revealSubject, setRevealSubject] = useState<string | null>(null);
+  const hasOriginEvidence = typeof origin === "string" && origin.length > 0;
   return <>
     <section aria-labelledby="evidence-heading" className="mt-6 rounded-xl border border-moss-slate/15 bg-surface p-4">
       <h2 id="evidence-heading" className="font-semibold">Why / provenance</h2>
       <p className="mt-1 text-xs text-muted">Evidence content is never loaded automatically. Reveal is an explicit, server-governed read.</p>
       <dl className="mt-3 grid gap-3 text-sm">
         <div><dt className="text-muted">Evidence state</dt><dd>{display(state)}</dd></div>
-        <div><dt className="text-muted">Origin</dt><dd>Recorded origin evidence</dd><dd className="break-all font-mono text-xs text-muted">Reference {origin}</dd><Button className="mt-2" type="button" variant="secondary" onClick={() => setRevealSubject(origin)}>View origin evidence</Button></div>
+        <div>
+          <dt className="text-muted">Origin</dt>
+          {hasOriginEvidence ? (
+            <>
+              <dd>Recorded origin evidence</dd>
+              <dd className="break-all font-mono text-xs text-muted">Reference {origin}</dd>
+              <Button className="mt-2" type="button" variant="secondary" onClick={() => setRevealSubject(origin)}>View origin evidence</Button>
+            </>
+          ) : (
+            <>
+              <dd>Direct principal authoring</dd>
+              {originKind ? <dd className="text-xs text-muted">{display(originKind)}</dd> : null}
+            </>
+          )}
+        </div>
         <div><dt className="text-muted">Acceptance</dt><dd>{acceptanceKind ? display(acceptanceKind) : reviewDecisionId ? "Accepted through review" : "No review acceptance was returned"}</dd>{reviewDecisionId ? <dd className="break-all font-mono text-xs text-muted">Review decision {reviewDecisionId}</dd> : null}</div>
         <div><dt className="text-muted">Closure</dt>{closure ? <><dd>Closure evidence recorded{closedAt ? <> at <time dateTime={closedAt}>{new Date(closedAt).toLocaleString()}</time></> : ""}</dd><dd className="break-all font-mono text-xs text-muted">Reference {closure}</dd>{closureHistoryId ? <dd className="break-all font-mono text-xs text-muted">History receipt {closureHistoryId}</dd> : null}<Button className="mt-2" type="button" variant="secondary" onClick={() => setRevealSubject(closure)}>View closure evidence</Button></> : <dd>{closedAt ? `${subject} is terminal, but closure evidence metadata was unavailable.` : `${subject} is not closed.`}</dd>}</div>
       </dl>

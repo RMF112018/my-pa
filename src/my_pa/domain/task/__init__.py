@@ -3,12 +3,18 @@
 `task.py` is the extended `Task` model; `lifecycle.py` names its lifecycle and
 priority vocabulary; `recurrence.py` names recurring series and computes the one
 actionable next occurrence for one; `history.py` names one append-only mutation
-receipt. See `task.py`'s module docstring for how this relates to
+receipt; `comment.py` names one append-only Task comment (WP-TUX-01). See
+`task.py`'s module docstring for how this relates to
 `domain.situation.continuity.Task`, which this package does not replace.
 """
 
 from __future__ import annotations
 
+from my_pa.domain.task.comment import (
+    MAX_TASK_COMMENT_BODY_CHARACTERS,
+    TaskComment,
+    validate_task_comment_body,
+)
 from my_pa.domain.task.commitment import Commitment
 from my_pa.domain.task.commitment_history import CommitmentHistoryEntry, CommitmentMutationAction
 from my_pa.domain.task.history import (
@@ -22,6 +28,7 @@ from my_pa.domain.task.history import (
 from my_pa.domain.task.lifecycle import (
     TERMINAL_TASK_LIFECYCLE_STATES,
     TaskLifecycleState,
+    TaskOriginKind,
     TaskPriority,
     legacy_state_for,
 )
@@ -40,6 +47,7 @@ __all__ = [
     "IDEMPOTENCY_KEY_PATTERN",
     "MAX_CLIENT_CONTEXT_CHARACTERS",
     "MAX_RECURRENCE_SEARCH_STEPS",
+    "MAX_TASK_COMMENT_BODY_CHARACTERS",
     "TERMINAL_TASK_LIFECYCLE_STATES",
     "Commitment",
     "CommitmentHistoryEntry",
@@ -48,14 +56,17 @@ __all__ = [
     "RecurrenceFrequency",
     "RecurrenceRule",
     "Task",
+    "TaskComment",
     "TaskHistoryEntry",
     "TaskLifecycleState",
     "TaskMutationAction",
     "TaskMutationActor",
     "TaskMutationOutcome",
+    "TaskOriginKind",
     "TaskPriority",
     "TaskRole",
     "Weekday",
     "legacy_state_for",
     "next_occurrence",
+    "validate_task_comment_body",
 ]

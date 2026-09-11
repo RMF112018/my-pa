@@ -10,6 +10,7 @@ afterEach(() => {
 const TASK = {
   task_id: "tsk_aaaaaaaa11111111", title: "Coordinate review", description: null,
   lifecycle_state: "open", evidence_state: "accepted",
+  origin_kind: "evidence",
   origin_evidence_ref: "cap_origin0001origin0001", closure_evidence_ref: null,
   accepted_by_review_decision_id: "rdec_aaaaaaaa11111111", acceptance_kind: "review",
   closure_history_id: null, version: 2, priority: null, due_at: null, scheduled_at: null,

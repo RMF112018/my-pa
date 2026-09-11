@@ -11,6 +11,7 @@ function task(overrides: Record<string, unknown> = {}) {
     description: null,
     lifecycle_state: "completed",
     evidence_state: "accepted",
+    origin_kind: "evidence",
     origin_evidence_ref: "cap_aaaaaaaa11111111",
     closure_evidence_ref: "cap_bbbbbbbb22222222",
     accepted_by_review_decision_id: null,

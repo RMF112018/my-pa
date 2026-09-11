@@ -70,6 +70,8 @@ import type { ReviewDecideResult } from "./capabilities/review.decide";
 import type { ReviewListResult } from "./capabilities/review.list";
 import type { TasksBulkConfirmResult } from "./capabilities/tasks.bulk_confirm";
 import type { TasksBulkPreviewResult } from "./capabilities/tasks.bulk_preview";
+import type { TasksCommentsCreateResult } from "./capabilities/tasks.comments.create";
+import type { TasksCommentsListResult } from "./capabilities/tasks.comments.list";
 import type { TasksCreateResult } from "./capabilities/tasks.create";
 import type { TasksHistoryResult } from "./capabilities/tasks.history";
 import type { TasksListResult } from "./capabilities/tasks.list";
@@ -151,6 +153,8 @@ export type CapabilityResults = {
   readonly "review.list": ReviewListResult;
   readonly "tasks.bulk_confirm": TasksBulkConfirmResult;
   readonly "tasks.bulk_preview": TasksBulkPreviewResult;
+  readonly "tasks.comments.create": TasksCommentsCreateResult;
+  readonly "tasks.comments.list": TasksCommentsListResult;
   readonly "tasks.create": TasksCreateResult;
   readonly "tasks.history": TasksHistoryResult;
   readonly "tasks.list": TasksListResult;

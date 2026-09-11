@@ -710,6 +710,11 @@ HAND_WRITTEN_COMPARISONS: Final = {
         ("task_bulk_operations", "principal_id"),
         ("task_bulk_operations", "principal_id"),
         ("task_bulk_operations", "principal_id"),
+        # WP-TUX-01: three hand-written `task_comments.principal_id` predicates
+        # (idempotency lookup, insert conflict re-read, and keyset list).
+        ("task_comments", "principal_id"),
+        ("task_comments", "principal_id"),
+        ("task_comments", "principal_id"),
         ("task_history", "principal_id"),
         ("task_history", "principal_id"),
         ("task_history", "principal_id"),

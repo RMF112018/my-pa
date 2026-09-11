@@ -35,6 +35,7 @@ from my_pa.domain.situation.continuity import (
     Commitment,
     CommitmentDirection,
     CommitmentState,
+    ContinuityAcceptanceKind,
     ContinuityEvidenceState,
     Decision,
     DecisionState,
@@ -395,3 +396,24 @@ def test_a_framed_obligation_must_stand_for_at_least_one_obligation() -> None:
             frame_id="frm_zero00001zero00001aa",
             obligation_count=0,
         )
+
+
+def test_direct_principal_task_with_null_origin_still_derives_pulse() -> None:
+    """WP-TUX-01: pulse must not crash when mapping direct-Principal tasks."""
+    task = Task(
+        task_id="tsk_direct001direct0001",
+        principal_id=PRINCIPAL_A,
+        title="Direct principal overdue",
+        state=TaskState.OPEN,
+        evidence_state=ContinuityEvidenceState.ACCEPTED,
+        origin_evidence_ref=None,
+        opened_at=NOW - timedelta(days=3),
+        created_at=NOW - timedelta(days=3),
+        updated_at=NOW - timedelta(days=3),
+        due_at=NOW - timedelta(days=1),
+        acceptance_kind=ContinuityAcceptanceKind.DIRECT_PRINCIPAL,
+    )
+    items = derive_pulse(principal_id=PRINCIPAL_A, now=NOW, tasks=[task])
+    assert len(items) == 1
+    assert items[0].basis_refs == (task.task_id,)
+    assert items[0].subject_title == "Direct principal overdue"

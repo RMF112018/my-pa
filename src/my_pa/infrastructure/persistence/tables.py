@@ -298,13 +298,14 @@ from my_pa.domain.source.enrollment import (
 )
 from my_pa.domain.source.provider import ObjectKind
 from my_pa.domain.source.registry import SourceProviderKind
+from my_pa.domain.task.comment import MAX_TASK_COMMENT_BODY_CHARACTERS
 from my_pa.domain.task.history import (
     MAX_CLIENT_CONTEXT_CHARACTERS,
     TaskMutationAction,
     TaskMutationActor,
     TaskMutationOutcome,
 )
-from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskPriority
+from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskOriginKind, TaskPriority
 from my_pa.domain.task.recurrence import RecurrenceFrequency
 from my_pa.domain.task.role import TaskRole
 
@@ -6767,6 +6768,14 @@ decisions = Table(
 #: `recurrence_id` is nullable and names the series a generated occurrence
 #: belongs to, if any; a Task with no `recurrence_id` is simply not part of a
 #: series.
+#:
+#: WP-TUX-01: `origin_kind` is required and pairs with `origin_evidence_ref` —
+#: evidence origin requires a non-blank reference; direct-Principal origin
+#: requires a null reference. Terminal closure may omit `closure_evidence_ref`;
+#: a nonterminal Task still refuses any closure reference. The
+#: `(principal_id, task_id)` unique is what lets `task_comments` take a
+#: same-Principal composite foreign key without inventing a second ownership
+#: column.
 tasks = Table(
     "tasks",
     METADATA,
@@ -6776,7 +6785,8 @@ tasks = Table(
     Column("description", Text),
     Column("state", Text, nullable=False, server_default=text("'open'")),
     Column("evidence_state", Text, nullable=False, server_default=text("'proposed'")),
-    Column("origin_evidence_ref", Text, nullable=False),
+    Column("origin_kind", Text, nullable=False),
+    Column("origin_evidence_ref", Text),
     Column("project_id", Text, ForeignKey(f"{SCHEMA}.projects.project_id")),
     Column("situation_id", Text, ForeignKey(f"{SCHEMA}.situations.situation_id")),
     Column("due_at", DateTime(timezone=True)),
@@ -6811,17 +6821,33 @@ tasks = Table(
     _one_of("state", TaskState, name="a_task_state_is_known"),
     _one_of("evidence_state", ContinuityEvidenceState, name="a_task_evidence_state_is_known"),
     _one_of("acceptance_kind", ContinuityAcceptanceKind, name="a_task_acceptance_kind_is_known"),
+    _one_of("origin_kind", TaskOriginKind, name="a_task_origin_kind_is_known"),
     CheckConstraint("length(trim(title)) > 0", name="a_task_title_is_not_blank"),
     CheckConstraint(
-        "length(trim(origin_evidence_ref)) > 0", name="a_task_cites_its_origin_evidence"
+        "("
+        "origin_kind = 'evidence' AND origin_evidence_ref IS NOT NULL "
+        "AND length(trim(origin_evidence_ref)) > 0"
+        ") OR ("
+        "origin_kind = 'direct_principal' AND origin_evidence_ref IS NULL"
+        ")",
+        name="a_task_origin_matches_its_provenance",
     ),
     CheckConstraint(
         "(state = 'closed') = (closed_at IS NOT NULL)",
         name="a_closed_task_records_when_it_closed",
     ),
+    #: Nonterminal Tasks refuse any closure reference; terminal Tasks may carry
+    #: one or omit it (direct Principal close). A present reference must still
+    #: be non-blank — blank is never a valid evidence citation.
     CheckConstraint(
-        "state <> 'closed' OR length(trim(coalesce(closure_evidence_ref, ''))) > 0",
-        name="a_closed_task_carries_closure_evidence",
+        "("
+        "state <> 'closed' AND closure_evidence_ref IS NULL"
+        ") OR ("
+        "state = 'closed' AND ("
+        "closure_evidence_ref IS NULL OR length(trim(closure_evidence_ref)) > 0"
+        ")"
+        ")",
+        name="a_task_closure_evidence_matches_its_state",
     ),
     #: Review-accepted tasks still name the decision. Direct Principal
     #: authoring is accepted without one, because the write is the instruction.
@@ -6864,6 +6890,11 @@ tasks = Table(
     CheckConstraint(
         f"role IS NULL OR role IN ({_literals(TaskRole)})",
         name="a_task_role_is_known",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "task_id",
+        name="tasks_principal_task_is_unique",
     ),
     ForeignKeyConstraint(
         ["principal_id", "commitment_id"],
@@ -6921,6 +6952,67 @@ task_recurrences = Table(
         name="a_cancelled_task_recurrence_holds_no_next_occurrence",
     ),
     Index("task_recurrences_by_principal", "principal_id"),
+)
+
+#: `task_comments`: one append-only comment the Principal (or another admitted
+#: actor) authors against one Task. WP-TUX-01. Not a Task-state mutation: comment
+#: append does not advance `tasks.version` and does not write `task_history`.
+#: The composite FK `(principal_id, task_id)` is what keeps a comment inside the
+#: same Principal partition as its Task; `ON DELETE RESTRICT` refuses deleting a
+#: Task that still has comments rather than cascading away immutable receipts.
+#: Server append-only enforcement is the capture_labels pattern: a BEFORE UPDATE
+#: OR DELETE trigger, installed by the admitting revision rather than declared
+#: here (SQLAlchemy Table objects do not carry triggers).
+task_comments = Table(
+    "task_comments",
+    METADATA,
+    Column("comment_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("task_id", Text, nullable=False),
+    Column("body", Text, nullable=False),
+    Column("author_kind", Text, nullable=False),
+    Column("author_id", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("request_digest", Text, nullable=False),
+    _is_identifier("comment_id", IdKind.TASK_COMMENT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("task_id", IdKind.TASK),
+    _one_of("author_kind", TaskMutationActor, name="a_task_comment_author_kind_is_known"),
+    CheckConstraint(
+        f"length(trim(body)) > 0 AND char_length(body) <= {MAX_TASK_COMMENT_BODY_CHARACTERS}",
+        name="a_task_comment_body_is_bounded",
+    ),
+    CheckConstraint(
+        f"author_id ~ '^[a-z]+_{_IDENTIFIER_SUFFIX}$'",
+        name="a_task_comment_author_id_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        "idempotency_key ~ '^[A-Za-z0-9_-]{8,128}$'",
+        name="a_task_comment_idempotency_key_is_bounded",
+    ),
+    CheckConstraint(
+        "request_digest ~ '^[0-9a-f]{64}$'",
+        name="a_task_comment_request_digest_is_sha256",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "task_id"],
+        [f"{SCHEMA}.tasks.principal_id", f"{SCHEMA}.tasks.task_id"],
+        name="task_comments_task_is_same_principal",
+        ondelete="RESTRICT",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "idempotency_key",
+        name="task_comments_idempotency_key_is_unique_per_principal",
+    ),
+    Index(
+        "task_comments_by_principal_task_created",
+        "principal_id",
+        "task_id",
+        "created_at",
+        "comment_id",
+    ),
 )
 
 #: `task_history`: one append-only mutation receipt per attempted `Task` write.

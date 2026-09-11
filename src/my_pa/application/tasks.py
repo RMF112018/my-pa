@@ -32,15 +32,25 @@ first attempt. Reusing the key for a different normalized digest conflicts.
 `domain.task.history.TaskMutationAction` is a closed, ten-member vocabulary
 `tables.py`'s CHECK constraint restates verbatim, and it has no member for
 "accepted on creation" — reopening that migration to add one is exactly the
-kind of change this package does not make. `domain.task.task.Task` already
-requires (`__post_init__`'s acceptance pairing) that an
-`ContinuityEvidenceState.ACCEPTED` task names the review decision that
+kind of change this package does not make. For an evidence-origin create,
+`domain.task.task.Task` already requires (`__post_init__`'s acceptance pairing)
+that an `ContinuityEvidenceState.ACCEPTED` task names the review decision that
 accepted it, so `create_task`'s `accepted_by_review_decision_id` parameter is
-the whole "direct acceptance path": passing it creates the task already
-accepted, under the ordinary `CREATE` action, in the one call. This module
-never creates, resolves, or validates a review decision itself — the
-Review/AI-proposal promotion workflow that would produce one is out of scope
-here, exactly as recurrence generation and the Daily Brief projection are.
+the whole "direct acceptance path" on that origin: passing it creates the task
+already accepted, under the ordinary `CREATE` action, in the one call. A
+`TaskOriginKind.DIRECT_PRINCIPAL` create is different: it is already accepted
+under `ContinuityAcceptanceKind.DIRECT_PRINCIPAL` with no review decision and
+no origin evidence reference — the write is the instruction. This module never
+creates, resolves, or validates a review decision itself — the Review/AI-
+proposal promotion workflow that would produce one is out of scope here,
+exactly as recurrence generation and the Daily Brief projection are.
+
+**Task comments (WP-TUX-01) are not Task mutations.** `create_task_comment` /
+`list_task_comments` write and read `TaskComment` rows without advancing
+`Task.version` and without writing `TaskHistoryEntry`. Idempotency for comment
+create is Principal-scoped and digest-bound to `task_id` plus the validated
+body, using the repository port methods
+(`create_comment` / `find_comment_by_idempotency_key` / `list_comments`).
 
 **Errors here are plain exceptions, not `application.errors` codes.** The
 existing precedent is `domain.source.provider.VersionChangedError`: a plain
@@ -66,6 +76,7 @@ from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import utc_now
 from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.domain.task.comment import TaskComment, validate_task_comment_body
 from my_pa.domain.task.history import (
     TaskHistoryEntry,
     TaskMutationAction,
@@ -75,6 +86,7 @@ from my_pa.domain.task.history import (
 from my_pa.domain.task.lifecycle import (
     TERMINAL_TASK_LIFECYCLE_STATES,
     TaskLifecycleState,
+    TaskOriginKind,
     TaskPriority,
 )
 from my_pa.domain.task.role import TaskRole
@@ -82,6 +94,7 @@ from my_pa.domain.task.task import Task
 
 __all__ = [
     "IllegalTaskTransitionError",
+    "TaskCommentReceipt",
     "TaskIdempotencyConflictError",
     "TaskManagementService",
     "TaskMutationReceipt",
@@ -132,6 +145,14 @@ class TaskMutationReceipt:
     replayed: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class TaskCommentReceipt:
+    """What a comment-create attempt returns: the comment row, and whether it was a replay."""
+
+    comment: TaskComment
+    replayed: bool = False
+
+
 class TaskManagementService:
     """The one canonical entry point for creating, updating, and transitioning a Task."""
 
@@ -149,8 +170,9 @@ class TaskManagementService:
         *,
         principal_id: str,
         title: str,
-        origin_evidence_ref: str,
+        origin_kind: TaskOriginKind,
         actor: TaskMutationActor,
+        origin_evidence_ref: str | None = None,
         description: str | None = None,
         priority: TaskPriority | None = None,
         due_at: datetime | None = None,
@@ -164,30 +186,49 @@ class TaskManagementService:
         active_uow: _ActiveTaskUnitOfWork | None = None,
         validate_first_write: Callable[[], None] | None = None,
     ) -> TaskMutationReceipt:
-        """Create a new task. The direct-acceptance path: pass `accepted_by_review_decision_id`.
+        """Create a new task under one origin kind.
 
-        A caller that passes `accepted_by_review_decision_id` gets a task
-        created already `ContinuityEvidenceState.ACCEPTED`, in this one call,
-        under the ordinary `CREATE` action — see this module's docstring for
-        why that is the whole "direct acceptance path" this package builds.
-        Omit it and the task is created `PROPOSED`, exactly as `create_task`
-        with no acceptance argument would suggest.
+        Evidence origin keeps the prior review/proposed pairing: pass
+        `accepted_by_review_decision_id` for `ACCEPTED`/`REVIEW`, omit it for
+        `PROPOSED`/`NONE`. Direct-Principal origin creates an already-accepted
+        task under `DIRECT_PRINCIPAL` with no origin evidence and no review
+        decision — ordinary Principal authoring, not invented evidence.
         """
-
-        def change(current: Task | None) -> Task:
-            del current  # a creation attempt never reads an existing row
-            now = self._clock()
+        if origin_kind is TaskOriginKind.DIRECT_PRINCIPAL:
+            if origin_evidence_ref is not None:
+                raise ValueError("a direct-principal task carries no origin evidence reference")
+            if accepted_by_review_decision_id is not None:
+                raise ValueError("a directly authored task does not cite a review decision")
+            resolved_ref: str | None = None
+            evidence_state = ContinuityEvidenceState.ACCEPTED
+            acceptance_kind = ContinuityAcceptanceKind.DIRECT_PRINCIPAL
+            review_id: str | None = None
+        elif origin_kind is TaskOriginKind.EVIDENCE:
+            if origin_evidence_ref is None or not origin_evidence_ref.strip():
+                raise ValueError("an evidence-origin task records the evidence it was read out of")
+            resolved_ref = origin_evidence_ref
             accepted = accepted_by_review_decision_id is not None
             evidence_state = (
                 ContinuityEvidenceState.ACCEPTED if accepted else ContinuityEvidenceState.PROPOSED
             )
+            acceptance_kind = (
+                ContinuityAcceptanceKind.REVIEW if accepted else ContinuityAcceptanceKind.NONE
+            )
+            review_id = accepted_by_review_decision_id
+        else:
+            raise ValueError("a task names one known origin kind")
+
+        def change(current: Task | None) -> Task:
+            del current  # a creation attempt never reads an existing row
+            now = self._clock()
             return Task(
                 task_id=issue_identifier(IdKind.TASK),
                 principal_id=principal_id,
                 title=title,
                 lifecycle_state=TaskLifecycleState.OPEN,
                 evidence_state=evidence_state,
-                origin_evidence_ref=origin_evidence_ref,
+                origin_kind=origin_kind,
+                origin_evidence_ref=resolved_ref,
                 opened_at=now,
                 created_at=now,
                 updated_at=now,
@@ -196,10 +237,8 @@ class TaskManagementService:
                 due_at=due_at,
                 project_id=project_id,
                 situation_id=situation_id,
-                accepted_by_review_decision_id=accepted_by_review_decision_id,
-                acceptance_kind=(
-                    ContinuityAcceptanceKind.REVIEW if accepted else ContinuityAcceptanceKind.NONE
-                ),
+                accepted_by_review_decision_id=review_id,
+                acceptance_kind=acceptance_kind,
                 commitment_id=commitment_id,
                 role=role,
             )
@@ -222,8 +261,9 @@ class TaskManagementService:
                 situation_id=situation_id,
                 commitment_id=commitment_id,
                 role=role,
-                origin_evidence_ref=origin_evidence_ref,
-                accepted_by_review_decision_id=accepted_by_review_decision_id,
+                origin_kind=origin_kind,
+                origin_evidence_ref=resolved_ref,
+                accepted_by_review_decision_id=review_id,
             ),
             active_uow=active_uow,
             validate_first_write=validate_first_write,
@@ -466,10 +506,11 @@ class TaskManagementService:
         build refuses to transition a task out of `COMPLETED` or `CANCELLED`,
         raising `IllegalTaskTransitionError` rather than silently no-opting,
         because reopening a closed task is a decision this package does not
-        make on a caller's behalf. Transitioning *into* a terminal state
-        requires `closure_evidence_ref`, for the same reason
-        `domain.task.task.Task.__post_init__` already enforces it. Requesting
-        the state the task is already in is recorded `NO_OP`.
+        make on a caller's behalf. Transitioning *into* a terminal state sets
+        `closed_at` from the clock and may carry a null `closure_evidence_ref`
+        (WP-TUX-01 direct Principal close); a blank string is still refused by
+        the domain model. Digest still binds `closure_evidence_ref` including
+        null. Requesting the state the task is already in is recorded `NO_OP`.
         """
 
         def change(current: Task) -> Task:
@@ -480,10 +521,8 @@ class TaskManagementService:
                     "a task in a terminal lifecycle state cannot be transitioned further"
                 )
             if to_state in TERMINAL_TASK_LIFECYCLE_STATES and not unchanged:
-                if not (closure_evidence_ref or "").strip():
-                    raise IllegalTaskTransitionError(
-                        "closing a task requires the evidence that closed it"
-                    )
+                if closure_evidence_ref is not None and not closure_evidence_ref.strip():
+                    raise IllegalTaskTransitionError("closure evidence, when present, is non-blank")
                 return dataclasses.replace(
                     current,
                     lifecycle_state=to_state,
@@ -562,6 +601,81 @@ class TaskManagementService:
             client_context=client_context,
             change=lambda current: dataclasses.replace(current, role=role),
         )
+
+    def create_task_comment(
+        self,
+        *,
+        principal_id: str,
+        task_id: str,
+        body: str,
+        actor: TaskMutationActor,
+        idempotency_key: str,
+        author_id: str | None = None,
+        active_uow: _ActiveTaskUnitOfWork | None = None,
+    ) -> TaskCommentReceipt:
+        """Append one Task comment without bumping `Task.version` or history.
+
+        Principal-scoped idempotency: the same key with the same digest
+        (`task_id` + validated body) replays the original comment; a different
+        digest under the same key conflicts.
+        """
+        validated_body = validate_task_comment_body(body)
+        digest = _request_digest(task_id=task_id, body=validated_body)
+        resolved_author = author_id if author_id is not None else principal_id
+
+        context = self._unit_of_work() if active_uow is None else nullcontext(active_uow)
+        with context as uow:
+            prior = uow.tasks.find_comment_by_idempotency_key(principal_id, idempotency_key)
+            if prior is not None:
+                if prior.request_digest != digest:
+                    raise TaskIdempotencyConflictError(
+                        "the idempotency key was used for different normalized content"
+                    )
+                return TaskCommentReceipt(comment=prior, replayed=True)
+            if uow.tasks.get(principal_id, task_id) is None:
+                raise TaskNotFoundError()
+            comment = TaskComment(
+                comment_id=issue_identifier(IdKind.TASK_COMMENT),
+                principal_id=principal_id,
+                task_id=task_id,
+                body=validated_body,
+                author_kind=actor,
+                author_id=resolved_author,
+                created_at=self._clock(),
+                idempotency_key=idempotency_key,
+                request_digest=digest,
+            )
+            stored = uow.tasks.create_comment(comment)
+            # Concurrent insert may return the winner's row; refuse when that
+            # receipt was for different content under the same Principal key.
+            if stored.request_digest != digest:
+                raise TaskIdempotencyConflictError(
+                    "the idempotency key was used for different normalized content"
+                )
+            return TaskCommentReceipt(
+                comment=stored, replayed=stored.comment_id != comment.comment_id
+            )
+
+    def list_task_comments(
+        self,
+        *,
+        principal_id: str,
+        task_id: str,
+        page_size: int,
+        after_cursor: str | None = None,
+        active_uow: _ActiveTaskUnitOfWork | None = None,
+    ) -> tuple[TaskComment, ...]:
+        """One bounded page of comments on a Principal-owned Task, oldest first."""
+        context = self._unit_of_work() if active_uow is None else nullcontext(active_uow)
+        with context as uow:
+            if uow.tasks.get(principal_id, task_id) is None:
+                raise TaskNotFoundError()
+            return uow.tasks.list_comments(
+                principal_id,
+                task_id,
+                after=after_cursor,
+                limit=page_size,
+            )
 
     def _mutate(
         self,

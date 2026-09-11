@@ -94,6 +94,7 @@ from my_pa.application.commands import (
     CreateRelationshipMemory,
     CreateSituation,
     CreateTask,
+    CreateTaskComment,
     DeactivateConstraintCategory,
     DecideReviewCase,
     EndEntityAffiliation,
@@ -146,6 +147,7 @@ from my_pa.application.commands import (
     ListReviewCases,
     ListSituations,
     ListSources,
+    ListTaskComments,
     ListTasks,
     ListUnresolvedMentions,
     MergeEntities,
@@ -300,6 +302,7 @@ from my_pa.domain.source.enrollment import MAX_ENROLLMENT_ITEMS
 from my_pa.domain.task.lifecycle import (
     TaskArchiveMode,
     TaskLifecycleState,
+    TaskOriginKind,
     TaskPriority,
     TaskWorkView,
 )
@@ -677,7 +680,21 @@ def _create_task(payload: Mapping[str, Any]) -> Command:
             converted["role"] = TaskRole(named)
         except ValueError:
             raise InvalidRequestError(SafeDetail.SELECTOR) from None
+    named = converted.get("origin_kind")
+    if isinstance(named, str):
+        try:
+            converted["origin_kind"] = TaskOriginKind(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.ORIGIN_KIND) from None
     return CreateTask(**converted)
+
+
+def _list_task_comments(payload: Mapping[str, Any]) -> Command:
+    return ListTaskComments(**payload)
+
+
+def _create_task_comment(payload: Mapping[str, Any]) -> Command:
+    return CreateTaskComment(**payload)
 
 
 def _update_task(payload: Mapping[str, Any]) -> Command:
@@ -2227,6 +2244,8 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.TASKS_TRANSITION: _transition_task,
         Capability.TASKS_BULK_PREVIEW: _bulk_preview_tasks,
         Capability.TASKS_BULK_CONFIRM: _bulk_confirm_tasks,
+        Capability.TASKS_COMMENTS_LIST: _list_task_comments,
+        Capability.TASKS_COMMENTS_CREATE: _create_task_comment,
         Capability.COMMITMENTS_READ: _read_commitment,
         Capability.COMMITMENTS_LIST: _list_commitments,
         Capability.COMMITMENTS_SEARCH: _search_commitments,

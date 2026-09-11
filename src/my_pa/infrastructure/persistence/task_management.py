@@ -28,7 +28,20 @@ from datetime import datetime
 from types import TracebackType
 from typing import Any
 
-from sqlalchemy import Engine, and_, asc, case, desc, false, func, insert, or_, select, update
+from sqlalchemy import (
+    ColumnElement,
+    Engine,
+    and_,
+    asc,
+    case,
+    desc,
+    false,
+    func,
+    insert,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy.engine import Connection, Row
 from sqlalchemy.exc import IntegrityError
 
@@ -40,19 +53,26 @@ from my_pa.contracts.ports import (
 )
 from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
 from my_pa.domain.task.bulk import TaskBulkOperation
+from my_pa.domain.task.comment import TaskComment
 from my_pa.domain.task.history import TaskHistoryEntry, TaskMutationAction, TaskMutationActor
 from my_pa.domain.task.history import TaskMutationOutcome as _TaskMutationOutcome
 from my_pa.domain.task.lifecycle import (
     TERMINAL_TASK_LIFECYCLE_STATES,
     TaskArchiveMode,
     TaskLifecycleState,
+    TaskOriginKind,
     TaskPriority,
     TaskWorkView,
     legacy_state_for,
 )
 from my_pa.domain.task.role import TaskRole
 from my_pa.domain.task.task import Task
-from my_pa.infrastructure.persistence.tables import task_bulk_operations, task_history, tasks
+from my_pa.infrastructure.persistence.tables import (
+    task_bulk_operations,
+    task_comments,
+    task_history,
+    tasks,
+)
 
 __all__ = ["SqlAlchemyTaskManagementUnitOfWork", "SqlTaskManagementRepository"]
 
@@ -93,6 +113,7 @@ class SqlTaskManagementRepository(TaskManagementRepository):
                 description=task.description,
                 state=legacy_state_for(task.lifecycle_state),
                 evidence_state=task.evidence_state.value,
+                origin_kind=task.origin_kind.value,
                 origin_evidence_ref=task.origin_evidence_ref,
                 project_id=task.project_id,
                 situation_id=task.situation_id,
@@ -198,107 +219,16 @@ class SqlTaskManagementRepository(TaskManagementRepository):
             else_=5,
         )
         order_columns: tuple[Any, ...]
-        if work_view in {
-            TaskWorkView.OVERDUE,
-            TaskWorkView.TODAY,
-            TaskWorkView.UPCOMING,
-            TaskWorkView.RECENTLY_UPDATED,
-        }:
-            if work_start is None or work_end is None:
-                raise ValueError("date-bounded Work views require both UTC boundaries")
-            if work_view is not TaskWorkView.RECENTLY_UPDATED and work_now is None:
-                raise ValueError("time-sensitive Work views require trusted current time")
-            if work_view is TaskWorkView.RECENTLY_UPDATED:
-                conditions.extend((tasks.c.updated_at >= work_start, tasks.c.updated_at < work_end))
-                order_columns = (desc(tasks.c.updated_at), asc(tasks.c.task_id))
-            else:
-                conditions.append(
-                    tasks.c.lifecycle_state.not_in(
-                        tuple(state.value for state in TERMINAL_TASK_LIFECYCLE_STATES)
-                    )
-                )
-                if work_view is TaskWorkView.OVERDUE:
-                    conditions.extend((tasks.c.due_at.is_not(None), tasks.c.due_at < work_now))
-                    order_columns = (
-                        asc(tasks.c.due_at),
-                        asc(priority_rank),
-                        asc(tasks.c.task_id),
-                    )
-                elif work_view is TaskWorkView.TODAY:
-                    conditions.extend(
-                        (
-                            or_(tasks.c.due_at.is_(None), tasks.c.due_at >= work_now),
-                            or_(
-                                and_(tasks.c.due_at >= work_start, tasks.c.due_at < work_end),
-                                and_(
-                                    tasks.c.scheduled_at >= work_start,
-                                    tasks.c.scheduled_at < work_end,
-                                ),
-                            ),
-                        )
-                    )
-                    order_columns = (
-                        asc(calendar_at),
-                        asc(priority_rank),
-                        asc(tasks.c.task_id),
-                    )
-                else:
-                    conditions.extend(
-                        (
-                            or_(tasks.c.due_at.is_(None), tasks.c.due_at >= work_now),
-                            or_(tasks.c.due_at >= work_end, tasks.c.scheduled_at >= work_end),
-                        )
-                    )
-                    order_columns = (
-                        asc(calendar_at),
-                        asc(priority_rank),
-                        asc(tasks.c.task_id),
-                    )
-        elif work_view is TaskWorkView.UNSCHEDULED:
-            conditions.extend(
-                (
-                    tasks.c.lifecycle_state.not_in(
-                        tuple(state.value for state in TERMINAL_TASK_LIFECYCLE_STATES)
-                    ),
-                    tasks.c.scheduled_at.is_(None),
-                )
-            )
-            order_columns = (
-                asc(tasks.c.due_at).nullslast(),
-                asc(priority_rank),
-                asc(tasks.c.task_id),
-            )
-        elif work_view is TaskWorkView.WAITING:
-            conditions.append(tasks.c.lifecycle_state == TaskLifecycleState.WAITING.value)
-            order_columns = (
-                asc(priority_rank),
-                asc(effective_at).nullslast(),
-                desc(tasks.c.created_at),
-                asc(tasks.c.task_id),
-            )
-        elif work_view is TaskWorkView.BLOCKED:
-            conditions.append(tasks.c.lifecycle_state == TaskLifecycleState.BLOCKED.value)
-            order_columns = (
-                asc(priority_rank),
-                asc(effective_at).nullslast(),
-                desc(tasks.c.created_at),
-                asc(tasks.c.task_id),
-            )
-        elif work_view is TaskWorkView.ALL_OPEN:
-            conditions.append(
-                tasks.c.lifecycle_state.in_(("open", "in_progress", "waiting", "blocked"))
-            )
-            order_columns = (
-                asc(priority_rank),
-                asc(effective_at).nullslast(),
-                desc(tasks.c.created_at),
-                asc(tasks.c.task_id),
-            )
-        elif work_view is TaskWorkView.COMPLETED:
-            conditions.append(tasks.c.lifecycle_state.in_(("completed", "cancelled")))
-            order_columns = (desc(tasks.c.closed_at), asc(tasks.c.task_id))
-        else:
-            order_columns = (desc(tasks.c.created_at), asc(tasks.c.task_id))
+        order_columns = _extend_work_view_conditions(
+            conditions,
+            work_view=work_view,
+            work_start=work_start,
+            work_end=work_end,
+            work_now=work_now,
+            effective_at=effective_at,
+            calendar_at=calendar_at,
+            priority_rank=priority_rank,
+        )
         if after is not None:
             anchor = self._connection.execute(
                 select(
@@ -464,110 +394,16 @@ class SqlTaskManagementRepository(TaskManagementRepository):
             (tasks.c.priority == "p4", 4),
             else_=5,
         )
-        if work_view in {
-            TaskWorkView.OVERDUE,
-            TaskWorkView.TODAY,
-            TaskWorkView.UPCOMING,
-            TaskWorkView.RECENTLY_UPDATED,
-        }:
-            if work_start is None or work_end is None:
-                raise ValueError("date-bounded Work views require both UTC boundaries")
-            if work_view is not TaskWorkView.RECENTLY_UPDATED and work_now is None:
-                raise ValueError("time-sensitive Work views require trusted current time")
-            if work_view is TaskWorkView.RECENTLY_UPDATED:
-                conditions.extend((tasks.c.updated_at >= work_start, tasks.c.updated_at < work_end))
-                order_columns: tuple[Any, ...] = (
-                    desc(tasks.c.updated_at),
-                    asc(tasks.c.task_id),
-                )
-            else:
-                conditions.append(
-                    tasks.c.lifecycle_state.not_in(
-                        tuple(state.value for state in TERMINAL_TASK_LIFECYCLE_STATES)
-                    )
-                )
-                if work_view is TaskWorkView.OVERDUE:
-                    conditions.extend((tasks.c.due_at.is_not(None), tasks.c.due_at < work_now))
-                    order_columns = (
-                        asc(tasks.c.due_at),
-                        asc(priority_rank),
-                        asc(tasks.c.task_id),
-                    )
-                elif work_view is TaskWorkView.TODAY:
-                    conditions.extend(
-                        (
-                            or_(tasks.c.due_at.is_(None), tasks.c.due_at >= work_now),
-                            or_(
-                                and_(tasks.c.due_at >= work_start, tasks.c.due_at < work_end),
-                                and_(
-                                    tasks.c.scheduled_at >= work_start,
-                                    tasks.c.scheduled_at < work_end,
-                                ),
-                            ),
-                        )
-                    )
-                    order_columns = (
-                        asc(calendar_at),
-                        asc(priority_rank),
-                        asc(tasks.c.task_id),
-                    )
-                else:
-                    conditions.extend(
-                        (
-                            or_(tasks.c.due_at.is_(None), tasks.c.due_at >= work_now),
-                            or_(tasks.c.due_at >= work_end, tasks.c.scheduled_at >= work_end),
-                        )
-                    )
-                    order_columns = (
-                        asc(calendar_at),
-                        asc(priority_rank),
-                        asc(tasks.c.task_id),
-                    )
-        elif work_view is TaskWorkView.UNSCHEDULED:
-            conditions.extend(
-                (
-                    tasks.c.lifecycle_state.not_in(
-                        tuple(state.value for state in TERMINAL_TASK_LIFECYCLE_STATES)
-                    ),
-                    tasks.c.scheduled_at.is_(None),
-                )
-            )
-            order_columns = (
-                asc(tasks.c.due_at).nullslast(),
-                asc(priority_rank),
-                asc(tasks.c.task_id),
-            )
-        elif work_view is TaskWorkView.WAITING:
-            conditions.append(tasks.c.lifecycle_state == TaskLifecycleState.WAITING.value)
-            order_columns = (
-                asc(priority_rank),
-                asc(effective_at).nullslast(),
-                desc(tasks.c.created_at),
-                asc(tasks.c.task_id),
-            )
-        elif work_view is TaskWorkView.BLOCKED:
-            conditions.append(tasks.c.lifecycle_state == TaskLifecycleState.BLOCKED.value)
-            order_columns = (
-                asc(priority_rank),
-                asc(effective_at).nullslast(),
-                desc(tasks.c.created_at),
-                asc(tasks.c.task_id),
-            )
-        elif work_view is TaskWorkView.ALL_OPEN:
-            conditions.append(
-                tasks.c.lifecycle_state.in_(("open", "in_progress", "waiting", "blocked"))
-            )
-            order_columns = (
-                asc(priority_rank),
-                asc(effective_at).nullslast(),
-                desc(tasks.c.created_at),
-                asc(tasks.c.task_id),
-            )
-        elif work_view is TaskWorkView.COMPLETED:
-            conditions.append(tasks.c.lifecycle_state.in_(("completed", "cancelled")))
-            order_columns = (desc(tasks.c.closed_at), asc(tasks.c.task_id))
-        else:
-            order_columns = (desc(tasks.c.created_at), asc(tasks.c.task_id))
+        order_columns = _extend_work_view_conditions(
+            conditions,
+            work_view=work_view,
+            work_start=work_start,
+            work_end=work_end,
+            work_now=work_now,
+            effective_at=effective_at,
+            calendar_at=calendar_at,
+            priority_rank=priority_rank,
+        )
         if after is not None:
             anchor = self._connection.execute(
                 select(
@@ -871,6 +707,108 @@ class SqlTaskManagementRepository(TaskManagementRepository):
                 raise BulkIdempotencyConflictError from error
             raise
 
+    # --- WP-TUX-01: append-only comments ------------------------------------
+
+    def find_comment_by_idempotency_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> TaskComment | None:
+        row = self._connection.execute(
+            select(*task_comments.c).where(
+                and_(
+                    task_comments.c.principal_id == principal_id,
+                    task_comments.c.idempotency_key == idempotency_key,
+                )
+            )
+        ).one_or_none()
+        return None if row is None else _to_comment(row)
+
+    def create_comment(self, comment: TaskComment) -> TaskComment:
+        """Insert one comment, or return the prior row for the same Principal/key.
+
+        Idempotent at the unique constraint: a concurrent insert that lost the
+        race is answered by looking the surviving row back up rather than by
+        raising. The insert runs in a savepoint so PostgreSQL can recover from
+        the unique violation without aborting the outer unit-of-work
+        transaction. A digest mismatch is the caller's problem to refuse at the
+        application boundary; this adapter preserves the stored receipt.
+        """
+        existing = self.find_comment_by_idempotency_key(
+            comment.principal_id, comment.idempotency_key
+        )
+        if existing is not None:
+            return existing
+        try:
+            with self._connection.begin_nested():
+                self._connection.execute(
+                    insert(task_comments).values(
+                        comment_id=comment.comment_id,
+                        principal_id=comment.principal_id,
+                        task_id=comment.task_id,
+                        body=comment.body,
+                        author_kind=comment.author_kind.value,
+                        author_id=comment.author_id,
+                        created_at=comment.created_at,
+                        idempotency_key=comment.idempotency_key,
+                        request_digest=comment.request_digest,
+                    )
+                )
+        except IntegrityError as error:
+            if _constraint_name(error) == "task_comments_idempotency_key_is_unique_per_principal":
+                replayed = self.find_comment_by_idempotency_key(
+                    comment.principal_id, comment.idempotency_key
+                )
+                if replayed is not None:
+                    return replayed
+            raise
+        return comment
+
+    def list_comments(
+        self,
+        principal_id: str,
+        task_id: str,
+        *,
+        after: str | None = None,
+        limit: int,
+    ) -> tuple[TaskComment, ...]:
+        """One bounded page of comments for a Principal-owned Task, oldest first.
+
+        Keyset on `(created_at ASC, comment_id ASC)`. `after` is a comment_id
+        that must already belong to this Principal/Task pair; an absent anchor
+        is answered as `WorkCursorError`, the same refusal `list_tasks` uses.
+        """
+        conditions = [
+            task_comments.c.principal_id == principal_id,
+            task_comments.c.task_id == task_id,
+        ]
+        if after is not None:
+            anchor = self._connection.execute(
+                select(*task_comments.c).where(
+                    and_(
+                        task_comments.c.principal_id == principal_id,
+                        task_comments.c.task_id == task_id,
+                        task_comments.c.comment_id == after,
+                    )
+                )
+            ).one_or_none()
+            if anchor is None:
+                raise WorkCursorError
+            conditions.append(
+                or_(
+                    task_comments.c.created_at > anchor.created_at,
+                    and_(
+                        task_comments.c.created_at == anchor.created_at,
+                        task_comments.c.comment_id > anchor.comment_id,
+                    ),
+                )
+            )
+        rows = self._connection.execute(
+            select(*task_comments.c)
+            .where(and_(*conditions))
+            .order_by(asc(task_comments.c.created_at), asc(task_comments.c.comment_id))
+            .limit(limit)
+        ).all()
+        return tuple(_to_comment(row) for row in rows)
+
     def get_follow_up_for_commitment(self, principal_id: str, commitment_id: str) -> Task | None:
         row = self._connection.execute(
             select(*tasks.c)
@@ -899,8 +837,115 @@ def _acceptance_kind_value(task: Task) -> str:
     return ContinuityAcceptanceKind.NONE.value
 
 
+def _extend_work_view_conditions(
+    conditions: list[ColumnElement[bool]],
+    *,
+    work_view: TaskWorkView | None,
+    work_start: datetime | None,
+    work_end: datetime | None,
+    work_now: datetime | None,
+    effective_at: ColumnElement[Any],
+    calendar_at: ColumnElement[Any],
+    priority_rank: ColumnElement[Any],
+) -> tuple[Any, ...]:
+    """Append Work-view predicates shared by `list_tasks` and `search`.
+
+    WP-TUX-01 civil-day buckets use `work_start`/`work_end` only:
+
+    * OVERDUE: `due_at < work_start` (not wall-clock `work_now`);
+    * TODAY: due or scheduled inside `[work_start, work_end)`, including due
+      times earlier the same civil day than `work_now`;
+    * UPCOMING: due or scheduled at/after `work_end`.
+
+    `work_now` remains accepted for call-site compatibility (visual overdue is
+    presentation, not a persisted bucket) but is not consulted here.
+    """
+    del work_now  # presentation-only; bucket membership is civil-day.
+    if work_view in {
+        TaskWorkView.OVERDUE,
+        TaskWorkView.TODAY,
+        TaskWorkView.UPCOMING,
+        TaskWorkView.RECENTLY_UPDATED,
+    }:
+        if work_start is None or work_end is None:
+            raise ValueError("date-bounded Work views require both UTC boundaries")
+        if work_view is TaskWorkView.RECENTLY_UPDATED:
+            conditions.extend((tasks.c.updated_at >= work_start, tasks.c.updated_at < work_end))
+            return (desc(tasks.c.updated_at), asc(tasks.c.task_id))
+        conditions.append(
+            tasks.c.lifecycle_state.not_in(
+                tuple(state.value for state in TERMINAL_TASK_LIFECYCLE_STATES)
+            )
+        )
+        if work_view is TaskWorkView.OVERDUE:
+            conditions.extend((tasks.c.due_at.is_not(None), tasks.c.due_at < work_start))
+            return (asc(tasks.c.due_at), asc(priority_rank), asc(tasks.c.task_id))
+        if work_view is TaskWorkView.TODAY:
+            conditions.append(
+                or_(
+                    and_(tasks.c.due_at >= work_start, tasks.c.due_at < work_end),
+                    and_(
+                        tasks.c.scheduled_at >= work_start,
+                        tasks.c.scheduled_at < work_end,
+                    ),
+                )
+            )
+            return (asc(calendar_at), asc(priority_rank), asc(tasks.c.task_id))
+        conditions.append(or_(tasks.c.due_at >= work_end, tasks.c.scheduled_at >= work_end))
+        return (asc(calendar_at), asc(priority_rank), asc(tasks.c.task_id))
+    if work_view is TaskWorkView.UNSCHEDULED:
+        conditions.extend(
+            (
+                tasks.c.lifecycle_state.not_in(
+                    tuple(state.value for state in TERMINAL_TASK_LIFECYCLE_STATES)
+                ),
+                tasks.c.scheduled_at.is_(None),
+            )
+        )
+        return (
+            asc(tasks.c.due_at).nullslast(),
+            asc(priority_rank),
+            asc(tasks.c.task_id),
+        )
+    if work_view is TaskWorkView.WAITING:
+        conditions.append(tasks.c.lifecycle_state == TaskLifecycleState.WAITING.value)
+        return (
+            asc(priority_rank),
+            asc(effective_at).nullslast(),
+            desc(tasks.c.created_at),
+            asc(tasks.c.task_id),
+        )
+    if work_view is TaskWorkView.BLOCKED:
+        conditions.append(tasks.c.lifecycle_state == TaskLifecycleState.BLOCKED.value)
+        return (
+            asc(priority_rank),
+            asc(effective_at).nullslast(),
+            desc(tasks.c.created_at),
+            asc(tasks.c.task_id),
+        )
+    if work_view is TaskWorkView.ALL_OPEN:
+        conditions.append(
+            tasks.c.lifecycle_state.in_(("open", "in_progress", "waiting", "blocked"))
+        )
+        return (
+            asc(priority_rank),
+            asc(effective_at).nullslast(),
+            desc(tasks.c.created_at),
+            asc(tasks.c.task_id),
+        )
+    if work_view is TaskWorkView.COMPLETED:
+        conditions.append(tasks.c.lifecycle_state.in_(("completed", "cancelled")))
+        return (desc(tasks.c.closed_at), asc(tasks.c.task_id))
+    return (desc(tasks.c.created_at), asc(tasks.c.task_id))
+
+
 def _to_task(row: Row[Any]) -> Task:
     mapping = row._mapping
+    raw_origin = mapping.get("origin_kind")
+    # Transition safety only: writers must set origin_kind after the WP-TUX-01
+    # migration. A legacy evidence row is the only shape that could ever reach
+    # here without the column.
+    origin_kind = TaskOriginKind.EVIDENCE if raw_origin is None else TaskOriginKind(raw_origin)
     return Task(
         task_id=mapping["task_id"],
         principal_id=mapping["principal_id"],
@@ -908,6 +953,7 @@ def _to_task(row: Row[Any]) -> Task:
         description=mapping["description"],
         lifecycle_state=TaskLifecycleState(mapping["lifecycle_state"]),
         evidence_state=ContinuityEvidenceState(mapping["evidence_state"]),
+        origin_kind=origin_kind,
         origin_evidence_ref=mapping["origin_evidence_ref"],
         opened_at=mapping["opened_at"],
         created_at=mapping["created_at"],
@@ -931,6 +977,21 @@ def _to_task(row: Row[Any]) -> Task:
         ),
         commitment_id=mapping.get("commitment_id"),
         role=None if mapping.get("role") is None else TaskRole(mapping["role"]),
+    )
+
+
+def _to_comment(row: Row[Any]) -> TaskComment:
+    mapping = row._mapping
+    return TaskComment(
+        comment_id=mapping["comment_id"],
+        principal_id=mapping["principal_id"],
+        task_id=mapping["task_id"],
+        body=mapping["body"],
+        author_kind=TaskMutationActor(mapping["author_kind"]),
+        author_id=mapping["author_id"],
+        created_at=mapping["created_at"],
+        idempotency_key=mapping["idempotency_key"],
+        request_digest=mapping["request_digest"],
     )
 
 

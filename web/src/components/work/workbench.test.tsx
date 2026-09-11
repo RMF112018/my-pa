@@ -84,7 +84,7 @@ describe("Work surface", () => {
       due_at: null, scheduled_at: null, deferred_until: null, archived_at: null,
       created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-22T12:00:00Z", version: 2,
     };
-    const detail = { ...task, description: null, evidence_state: "proposed", origin_evidence_ref: "cap_origin0001origin0001", closure_evidence_ref: null, closure_history_id: null, commitment_id: null, role: null, opened_at: task.created_at, closed_at: null };
+    const detail = { ...task, description: null, evidence_state: "proposed", origin_kind: "evidence", origin_evidence_ref: "cap_origin0001origin0001", closure_evidence_ref: null, closure_history_id: null, commitment_id: null, role: null, opened_at: task.created_at, closed_at: null };
     const fetcher = vi.fn<typeof fetch>(async (input) => {
       const path = String(input);
       if (path === "/api/tasks/tsk_aaaaaaaa11111111") return new Response(JSON.stringify({ task: detail }), { status: 200, headers: { "content-type": "application/json" } });
@@ -290,6 +290,35 @@ describe("Work surface", () => {
     await userEvent.click(screen.getByRole("button", { name: "Tasks" }));
     expect(await screen.findByRole("option", { name: "Revised schedule" })).toBeTruthy();
     expect(screen.queryByLabelText(/Commitment ID/i)).toBeNull();
+  });
+
+  it("creates a Task without capture evidence or an origin note field", async () => {
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      if (path === "/api/tasks" && init?.method === "POST") {
+        return new Response(JSON.stringify({ task: { task_id: "tsk_aaaaaaaa11111111" }, history: {}, replayed: false }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (path.startsWith("/api/commitments")) return new Response(JSON.stringify({ commitments: [] }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetcher);
+    history.replaceState(null, "", "/work?view=all-open");
+    renderFromUrl();
+    await screen.findByText("No all open tasks");
+    await userEvent.click(screen.getByRole("button", { name: "New task" }));
+    expect(screen.queryByLabelText("Origin note")).toBeNull();
+    await userEvent.type(screen.getByLabelText("Title"), "Direct task");
+    await userEvent.click(screen.getByRole("button", { name: "Create task" }));
+    await waitFor(() => {
+      expect(fetcher.mock.calls.some(([path, init]) => String(path) === "/api/tasks" && init?.method === "POST")).toBe(true);
+    });
+    const createCall = fetcher.mock.calls.find(([path, init]) => String(path) === "/api/tasks" && init?.method === "POST");
+    expect(createCall).toBeTruthy();
+    const body = JSON.parse(String(createCall?.[1]?.body));
+    expect(body).toMatchObject({ title: "Direct task", idempotencyKey: expect.any(String) });
+    expect(body).not.toHaveProperty("originEvidenceRef");
+    expect(body).not.toHaveProperty("originKind");
+    expect(fetcher.mock.calls.some(([path]) => String(path) === "/api/capture")).toBe(false);
   });
 
   it("hydrates exact URL state and honors a validated timezone", async () => {

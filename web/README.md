@@ -15,7 +15,7 @@ An explicitly enabled synthetic provider remains available for development and
 is refused when `NODE_ENV=production`. It does not silently replace an
 unconfigured or unavailable backend.
 
-The Python contract contains one hundred and sixty-one capability names. The System route reads
+The Python contract contains one hundred and sixty-three capability names. The System route reads
 the live `capabilities.get` manifest, including each capability's runtime
 availability, instead of restating an availability count in this tier. Six of
 those names are the managed-document lifecycle (`documents.create`,
@@ -81,6 +81,7 @@ All application pages require a verified session. `/sign-in`, `/setup`, and
 | `PATCH /api/tasks/:taskId` | `tasks.update` | Applies one expected-version atomic Task patch |
 | `GET /api/tasks/:taskId/history` | `tasks.history` | Reads the Task's append-only mutation history |
 | `POST /api/tasks/:taskId/transition` | `tasks.transition` | Applies one lifecycle transition with closure evidence when terminal |
+| `GET /api/tasks/:taskId/comments`, `POST /api/tasks/:taskId/comments` | `tasks.comments.list`, `tasks.comments.create` | Lists or appends Principal-authored comments on one same-Principal Task |
 | `GET /api/commitments` | `commitments.list`, `commitments.search` | Lists or searches server-owned Commitments with opaque cursors |
 | `POST /api/commitments` | `commitments.create` | Creates a Commitment with server-validated origin evidence and idempotency |
 | `GET /api/commitments/:commitmentId` | `commitments.read` | Reads one same-Principal Commitment |

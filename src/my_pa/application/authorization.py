@@ -84,6 +84,7 @@ from my_pa.application.commands import (
     CreateRelationshipMemory,
     CreateSituation,
     CreateTask,
+    CreateTaskComment,
     DeactivateConstraintCategory,
     DecideReviewCase,
     EndEntityAffiliation,
@@ -136,6 +137,7 @@ from my_pa.application.commands import (
     ListReviewCases,
     ListSituations,
     ListSources,
+    ListTaskComments,
     ListTasks,
     ListUnresolvedMentions,
     MergeEntities,
@@ -367,7 +369,7 @@ def _requested_scope(
             # a managed document does not — its rows carry no `source_id` for a
             # scope to be compared against. The same measurement, for the same
             # reason, and `_SCOPELESS` in `domain.policy.decision` is where all
-            # nine `tasks.*` capabilities (four reads and five writes) are read
+            # eleven `tasks.*` capabilities (reads, writes, and comments) are read
             # that way.
             | ReadTask()
             | ListTasks()
@@ -376,6 +378,8 @@ def _requested_scope(
             | CreateTask()
             | UpdateTask()
             | TransitionTask()
+            | ListTaskComments()
+            | CreateTaskComment()
             | BulkPreviewTasks()
             | BulkConfirmTasks()
             | ReadCommitment()

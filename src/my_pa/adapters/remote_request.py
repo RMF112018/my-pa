@@ -118,6 +118,7 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.TASKS_TRANSITION,
         Capability.TASKS_BULK_PREVIEW,
         Capability.TASKS_BULK_CONFIRM,
+        Capability.TASKS_COMMENTS_CREATE,
         Capability.COMMITMENTS_CREATE,
         Capability.COMMITMENTS_UPDATE,
         Capability.COMMITMENTS_CLOSE,

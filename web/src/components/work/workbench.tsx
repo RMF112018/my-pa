@@ -427,7 +427,6 @@ function TaskCreate({ onDone }: { onDone: () => void }) {
   const [status, setStatus] = useState("");
   const [commitments, setCommitments] = useState<readonly CommitmentRow[]>([]);
   const [optionsStatus, setOptionsStatus] = useState("Loading verified commitments…");
-  const captureAttempt = useRef(createAttemptKey("task-origin"));
   const createAttempt = useRef(createAttemptKey("task-create"));
   useEffect(() => {
     const controller = new AbortController();
@@ -437,13 +436,28 @@ function TaskCreate({ onDone }: { onDone: () => void }) {
     return () => controller.abort();
   }, []);
   async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setStatus("Saving evidence…"); const form = new FormData(event.currentTarget);
-    const note = String(form.get("origin"));
+    event.preventDefault(); setStatus("Creating task…"); const form = new FormData(event.currentTarget);
     const commitmentId = String(form.get("commitmentId") ?? "");
     if (commitmentId && !commitments.some((item) => item.commitment_id === commitmentId)) { setStatus("Choose a verified commitment from the list."); return; }
-    try { const origin = await captureEvidence(note, "task-origin", captureAttempt.current.forPayload({ note })); setStatus("Creating task…"); const payload = { title: form.get("title"), description: form.get("description") || undefined, priority: form.get("priority") || undefined, dueAt: form.get("dueAt") ? new Date(String(form.get("dueAt"))).toISOString() : undefined, commitmentId: commitmentId || undefined, role: form.get("role") || undefined, originEvidenceRef: origin }; await workRequest("/api/tasks", { method: "POST", body: JSON.stringify({ ...payload, idempotencyKey: createAttempt.current.forPayload(payload) }) }); captureAttempt.current.succeeded(); createAttempt.current.succeeded(); setStatus("Task created."); onDone(); } catch (error) { if (isDefinitiveAttemptFailure(error)) { captureAttempt.current.succeeded(); createAttempt.current.succeeded(); } setStatus(error instanceof Error ? error.message : "Task was not created"); }
+    try {
+      const payload = {
+        title: form.get("title"),
+        description: form.get("description") || undefined,
+        priority: form.get("priority") || undefined,
+        dueAt: form.get("dueAt") ? new Date(String(form.get("dueAt"))).toISOString() : undefined,
+        commitmentId: commitmentId || undefined,
+        role: form.get("role") || undefined,
+      };
+      await workRequest("/api/tasks", { method: "POST", body: JSON.stringify({ ...payload, idempotencyKey: createAttempt.current.forPayload(payload) }) });
+      createAttempt.current.succeeded();
+      setStatus("Task created.");
+      onDone();
+    } catch (error) {
+      if (isDefinitiveAttemptFailure(error)) createAttempt.current.succeeded();
+      setStatus(error instanceof Error ? error.message : "Task was not created");
+    }
   }
-  return <form onSubmit={submit} className="mt-5 grid gap-4 rounded-xl border border-border bg-surface p-4"><h2 className="font-semibold">Create task</h2><Labeled label="Title"><Input name="title" required /></Labeled><Labeled label="Description"><Textarea name="description" /></Labeled><div className="grid gap-4 sm:grid-cols-2"><Labeled label="Priority"><select name="priority" className="h-10 rounded-md border bg-surface px-3"><option value="">Unset</option>{["p1","p2","p3","p4"].map((p)=><option key={p}>{p}</option>)}</select></Labeled><Labeled label="Due"><Input name="dueAt" type="datetime-local" /></Labeled><Labeled label="Commitment"><select name="commitmentId" disabled={Boolean(optionsStatus)} className="h-10 rounded-md border bg-surface px-3"><option value="">None</option>{commitments.map((item) => <option key={item.commitment_id} value={item.commitment_id}>{item.title}</option>)}</select></Labeled><Labeled label="Role"><select name="role" className="h-10 rounded-md border bg-surface px-3"><option value="">None</option><option value="follow_up">Follow up</option></select></Labeled></div>{optionsStatus ? <p role="status" className="text-sm text-muted">{optionsStatus}</p> : null}<Labeled label="Origin note" hint="Saved through Quick Capture before the task is attempted."><Textarea name="origin" required /></Labeled><Button type="submit">Create task</Button><p role="status" className="text-sm text-muted">{status}</p></form>;
+  return <form onSubmit={submit} className="mt-5 grid gap-4 rounded-xl border border-border bg-surface p-4"><h2 className="font-semibold">Create task</h2><Labeled label="Title"><Input name="title" required /></Labeled><Labeled label="Description"><Textarea name="description" /></Labeled><div className="grid gap-4 sm:grid-cols-2"><Labeled label="Priority"><select name="priority" className="h-10 rounded-md border bg-surface px-3"><option value="">Unset</option>{["p1","p2","p3","p4"].map((p)=><option key={p}>{p}</option>)}</select></Labeled><Labeled label="Due"><Input name="dueAt" type="datetime-local" /></Labeled><Labeled label="Commitment"><select name="commitmentId" disabled={Boolean(optionsStatus)} className="h-10 rounded-md border bg-surface px-3"><option value="">None</option>{commitments.map((item) => <option key={item.commitment_id} value={item.commitment_id}>{item.title}</option>)}</select></Labeled><Labeled label="Role"><select name="role" className="h-10 rounded-md border bg-surface px-3"><option value="">None</option><option value="follow_up">Follow up</option></select></Labeled></div>{optionsStatus ? <p role="status" className="text-sm text-muted">{optionsStatus}</p> : null}<Button type="submit">Create task</Button><p role="status" className="text-sm text-muted">{status}</p></form>;
 }
 
 function CommitmentCreate({ onDone }: { onDone: () => void }) {

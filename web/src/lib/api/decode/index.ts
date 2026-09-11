@@ -21,6 +21,8 @@ import { decodeTasksRead } from "./capabilities/tasks.read";
 import { decodeTasksList } from "./capabilities/tasks.list";
 import { decodeTasksSearch } from "./capabilities/tasks.search";
 import { decodeTasksHistory } from "./capabilities/tasks.history";
+import { decodeTasksCommentsList } from "./capabilities/tasks.comments.list";
+import { decodeTasksCommentsCreate } from "./capabilities/tasks.comments.create";
 import { decodeTasksCreate } from "./capabilities/tasks.create";
 import { decodeTasksUpdate } from "./capabilities/tasks.update";
 import { decodeTasksTransition } from "./capabilities/tasks.transition";
@@ -101,6 +103,8 @@ export const DECODERS = {
   "tasks.list": decodeTasksList,
   "tasks.search": decodeTasksSearch,
   "tasks.history": decodeTasksHistory,
+  "tasks.comments.list": decodeTasksCommentsList,
+  "tasks.comments.create": decodeTasksCommentsCreate,
   "tasks.create": decodeTasksCreate,
   "tasks.update": decodeTasksUpdate,
   "tasks.transition": decodeTasksTransition,

@@ -13,7 +13,6 @@ const LIST_FIELDS = {
 } as const;
 const CREATE_FIELDS = {
   title: { gateway: "title", type: "string" },
-  originEvidenceRef: { gateway: "origin_evidence_ref", type: "string" },
   idempotencyKey: { gateway: "idempotency_key", type: "string" },
   description: { gateway: "description", type: "string" },
   priority: { gateway: "priority", type: "string" },
@@ -31,5 +30,7 @@ export function GET(request: NextRequest) {
   return workGet(request, "tasks", q ? "tasks.search" : "tasks.list", q ? { ...LIST_FIELDS, q: { gateway: "query", type: "string" } } : LIST_FIELDS);
 }
 export function POST(request: NextRequest) {
-  return workPost(request, "tasks", "tasks.create", CREATE_FIELDS);
+  return workPost(request, "tasks", "tasks.create", CREATE_FIELDS, {
+    origin_kind: "direct_principal",
+  });
 }

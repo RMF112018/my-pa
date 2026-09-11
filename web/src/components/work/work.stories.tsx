@@ -13,7 +13,7 @@ const task: TaskDetailContract = {
   lifecycle_state: "in_progress", priority: "p1", due_at: "2026-08-22T17:00:00Z",
   scheduled_at: "2026-08-22T13:00:00Z", deferred_until: "2026-08-21T13:00:00Z",
   archived_at: null, created_at: "2026-08-20T12:00:00Z", updated_at: "2026-08-22T12:00:00Z",
-  evidence_state: "accepted", origin_evidence_ref: "cap_story_origin_0001", closure_evidence_ref: null,
+  evidence_state: "accepted", origin_kind: "evidence", origin_evidence_ref: "cap_story_origin_0001", closure_evidence_ref: null,
   accepted_by_review_decision_id: "rdec_story0000000001", acceptance_kind: "review",
   closure_history_id: null, version: 3, commitment_id: "cmt_story000000000001", role: "follow_up",
   project_id: "prj_story000000000001", situation_id: "sit_story000000000001",

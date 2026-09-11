@@ -52,6 +52,11 @@ export const MUTATION_ROUTE_MANIFEST: readonly MutationRouteManifestEntry[] = [
     classification: "AUTHENTICATED_BROWSER_MUTATION",
   },
   {
+    method: "POST",
+    path: "src/app/api/tasks/[taskId]/comments/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
     method: "PATCH",
     path: "src/app/api/tasks/[taskId]/route.ts",
     classification: "AUTHENTICATED_BROWSER_MUTATION",

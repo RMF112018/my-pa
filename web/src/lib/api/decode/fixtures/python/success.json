@@ -63,6 +63,7 @@
       "description": null,
       "lifecycle_state": "open",
       "evidence_state": "accepted",
+      "origin_kind": "evidence",
       "origin_evidence_ref": "asr_aaaa0001aaaa0001aaaa0001",
       "closure_evidence_ref": null,
       "accepted_by_review_decision_id": null,
@@ -134,6 +135,29 @@
       }
     ]
   },
+  "tasks.comments.list": {
+    "comments": [
+      {
+        "comment_id": "tcm_aaaa0001aaaa0001aaaa0001",
+        "task_id": "tsk_aaaa0001aaaa0001aaaa0001",
+        "body": "Synthetic follow-up note",
+        "author_kind": "principal",
+        "author_id": "prn_aaaa0001aaaa0001aaaa0001aaaa0001",
+        "created_at": "2026-01-01T00:00:00.000Z"
+      }
+    ]
+  },
+  "tasks.comments.create": {
+    "comment": {
+      "comment_id": "tcm_aaaa0001aaaa0001aaaa0001",
+      "task_id": "tsk_aaaa0001aaaa0001aaaa0001",
+      "body": "Synthetic follow-up note",
+      "author_kind": "principal",
+      "author_id": "prn_aaaa0001aaaa0001aaaa0001aaaa0001",
+      "created_at": "2026-01-01T00:00:00.000Z"
+    },
+    "replayed": false
+  },
   "tasks.create": {
     "task": {
       "task_id": "tsk_aaaa0001aaaa0001aaaa0001",
@@ -141,7 +165,8 @@
       "description": null,
       "lifecycle_state": "open",
       "evidence_state": "accepted",
-      "origin_evidence_ref": "asr_aaaa0001aaaa0001aaaa0001",
+      "origin_kind": "direct_principal",
+      "origin_evidence_ref": null,
       "closure_evidence_ref": null,
       "accepted_by_review_decision_id": null,
       "acceptance_kind": "direct_principal",
@@ -182,6 +207,7 @@
       "description": null,
       "lifecycle_state": "open",
       "evidence_state": "accepted",
+      "origin_kind": "evidence",
       "origin_evidence_ref": "asr_aaaa0001aaaa0001aaaa0001",
       "closure_evidence_ref": null,
       "accepted_by_review_decision_id": null,
@@ -223,6 +249,7 @@
       "description": null,
       "lifecycle_state": "completed",
       "evidence_state": "accepted",
+      "origin_kind": "evidence",
       "origin_evidence_ref": "asr_aaaa0001aaaa0001aaaa0001",
       "closure_evidence_ref": "asr_aaaa0001aaaa0001aaaa0001",
       "accepted_by_review_decision_id": null,

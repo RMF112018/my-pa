@@ -62,7 +62,6 @@ test("real stack preserves deliberate Task and Commitment mutation semantics", a
   await taskCreate.getByLabel("Title").fill(taskTitle);
   await taskCreate.getByLabel("Commitment").selectOption({ label: commitmentTitle });
   await taskCreate.getByLabel("Role").selectOption("follow_up");
-  await taskCreate.getByLabel("Origin note").fill("Synthetic Task evidence in the disposable browser database.");
   await taskCreate.getByRole("button", { name: "Create task" }).click();
   const taskTrigger = page.getByRole("link", { name: new RegExp(taskTitle) });
   await expect(taskTrigger).toBeVisible();
@@ -78,10 +77,6 @@ test("real stack preserves deliberate Task and Commitment mutation semantics", a
   await taskTrigger.click();
   const taskDialog = page.getByRole("dialog");
   await expect(taskDialog.getByRole("heading", { name: taskTitle })).toBeVisible();
-  let revealRequests = 0;
-  page.on("request", (request) => {
-    if (new URL(request.url()).pathname === "/api/reveal") revealRequests += 1;
-  });
 
   await taskDialog.getByLabel("Description").fill("Safe atomic browser edit");
   await taskDialog.getByLabel("Priority").selectOption("p2");
@@ -124,22 +119,15 @@ test("real stack preserves deliberate Task and Commitment mutation semantics", a
   await taskDialog.getByRole("button", { name: "Apply transition" }).click();
   await expect(taskDialog.getByText(/in progress · version/)).toBeVisible();
   await taskDialog.getByLabel("Move to").selectOption("completed");
-  await taskDialog.getByLabel("Closure note").fill("Synthetic terminal evidence from the browser acceptance flow.");
   await taskDialog.getByRole("button", { name: "Apply transition" }).click();
   await expect(taskDialog.getByText(/completed · version/)).toBeVisible();
-  const completed = await api<{ task: { lifecycle_state: string; closure_evidence_ref: string | null } }>(page, `/api/tasks/${taskId}`);
+  const completed = await api<{ task: { lifecycle_state: string; closure_evidence_ref: string | null; origin_kind: string } }>(page, `/api/tasks/${taskId}`);
   expect(completed.body.task.lifecycle_state).toBe("completed");
-  expect(completed.body.task.closure_evidence_ref).toMatch(/^cap_/);
-
-  await taskDialog.getByRole("button", { name: "View closure evidence" }).click();
-  await expect(page.getByRole("heading", { name: "Why am I seeing this?" })).toBeVisible();
-  expect(revealRequests).toBe(0);
-  await page.getByRole("button", { name: "Reveal", exact: true }).click();
-  await expect.poll(() => revealRequests).toBe(1);
-  await expect(
-    page.locator('[data-testid="reveal-evidence"], [data-testid="reveal-no-evidence"], [data-testid="reveal-unavailable"], [role="alert"]').last(),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Close", exact: true }).last().click();
+  expect(completed.body.task.closure_evidence_ref).toBeNull();
+  expect(completed.body.task.origin_kind).toBe("direct_principal");
+  await expect(taskDialog.getByText("Task is terminal, but closure evidence metadata was unavailable.")).toBeVisible();
+  await expect(taskDialog.getByRole("button", { name: "View closure evidence" })).toHaveCount(0);
+  await expect(taskDialog.getByText("Direct principal authoring")).toBeVisible();
 
   const stillOpen = await api<{ commitment: { state: string } }>(
     page,
@@ -174,7 +162,6 @@ test("BFF refuses browser Principal selection and foreign opaque identifiers wit
     body: {
       principalId: "prn_bbbbbbbb22222222",
       title: "must not be attempted",
-      originEvidenceRef: "cap_bbbbbbbb22222222",
       idempotencyKey: key("e2e-principal-widen"),
     },
   });

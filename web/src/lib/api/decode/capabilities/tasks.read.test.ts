@@ -8,6 +8,7 @@ export const TASK_VIEW = {
   description: null,
   lifecycle_state: "open",
   evidence_state: "accepted",
+  origin_kind: "evidence",
   origin_evidence_ref: "asr_aaaa0001aaaa0001aaaa0001",
   closure_evidence_ref: null,
   accepted_by_review_decision_id: null,

@@ -646,6 +646,12 @@ class TaskManagementService:
                 request_digest=digest,
             )
             stored = uow.tasks.create_comment(comment)
+            # Concurrent insert may return the winner's row; refuse when that
+            # receipt was for different content under the same Principal key.
+            if stored.request_digest != digest:
+                raise TaskIdempotencyConflictError(
+                    "the idempotency key was used for different normalized content"
+                )
             return TaskCommentReceipt(
                 comment=stored, replayed=stored.comment_id != comment.comment_id
             )

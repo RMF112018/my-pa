@@ -925,3 +925,63 @@ def test_create_task_comment_does_not_bump_task_version_or_history() -> None:
     )
     assert len(listed) == 1
     assert listed[0].comment_id == receipt.comment.comment_id
+
+
+def test_create_task_comment_conflicts_when_create_race_returns_different_digest() -> None:
+    """Same Principal/key + different body must conflict even on insert race.
+
+    The persistence adapter may return the winner's row after a unique-key
+    race without comparing digests. The service must refuse that receipt.
+    """
+    from my_pa.application.tasks import _request_digest
+
+    world = _World()
+    service = _service(world)
+    created = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Draft the synthetic summary",
+        origin_kind=TaskOriginKind.EVIDENCE,
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+    )
+    key = _idempotency_key("comment-race")
+    winner_body = "Winner body under the same key"
+    winner = TaskComment(
+        comment_id=issue_identifier(IdKind.TASK_COMMENT),
+        principal_id=PRINCIPAL_A,
+        task_id=created.task.task_id,
+        body=winner_body,
+        author_kind=TaskMutationActor.PRINCIPAL,
+        author_id=PRINCIPAL_A,
+        created_at=NOW,
+        idempotency_key=key,
+        request_digest=_request_digest(task_id=created.task.task_id, body=winner_body),
+    )
+
+    class _RacingRepository(_FakeRepository):
+        def find_comment_by_idempotency_key(
+            self, principal_id: str, idempotency_key: str
+        ) -> TaskComment | None:
+            # First lookup misses so the service proceeds to create; the race
+            # surfaces only from create_comment.
+            return None
+
+        def create_comment(self, comment: TaskComment) -> TaskComment:
+            self._world.comments_by_key[(comment.principal_id, comment.idempotency_key)] = winner
+            self._world.comments_all.append(winner)
+            return winner
+
+    class _RacingUnitOfWork(_FakeUnitOfWork):
+        @property
+        def tasks(self) -> TaskManagementRepository:
+            return _RacingRepository(self._world)
+
+    racing = TaskManagementService(unit_of_work=lambda: _RacingUnitOfWork(world), clock=lambda: NOW)
+    with pytest.raises(TaskIdempotencyConflictError):
+        racing.create_task_comment(
+            principal_id=PRINCIPAL_A,
+            task_id=created.task.task_id,
+            body="Loser body under the same key",
+            actor=TaskMutationActor.PRINCIPAL,
+            idempotency_key=key,
+        )

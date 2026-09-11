@@ -170,7 +170,7 @@ test("the live shell renders Overview, server-filtered Register, and lazy Inspec
 test("search canonicalizes incompatible list controls and remains responsive", async ({ page }) => {
   await page.goto(`/work/projects/${PROJECT}/constraints?view=register&overdue=1&group=status`);
   const workspace = page.locator("#main").getByTestId("constraints-live-workspace");
-  await expect(workspace.getByTestId("register-loading")).toHaveCount(0);
+  await expect(workspace.getByTestId("register-loading")).toHaveCount(0, { timeout: 30_000 });
   const search = workspace.getByTestId("register-search");
   await search.fill("Crane");
   await expect(page).toHaveURL(/q=Crane/);

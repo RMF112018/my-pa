@@ -3787,7 +3787,7 @@ class _ContinuityAuthoring(ContinuityAuthoringRepository):
             title=title,
             state=TaskState.OPEN,
             evidence_state=ContinuityEvidenceState.ACCEPTED,
-            origin_evidence_ref=origin_evidence_ref,
+            origin_evidence_ref=None,
             opened_at=now,
             created_at=now,
             updated_at=now,

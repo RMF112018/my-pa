@@ -30,6 +30,7 @@ from my_pa.domain.situation.continuity import (
     TaskState,
 )
 from my_pa.domain.situation.situation import Project, ProjectState, Situation, SituationState
+from my_pa.domain.task.lifecycle import TaskOriginKind
 from my_pa.infrastructure.persistence.situation_repository import _append_lifecycle_event
 from my_pa.infrastructure.persistence.tables import (
     continuity_authoring_submissions,
@@ -172,6 +173,8 @@ class SqlContinuityAuthoringRepository(ContinuityAuthoringRepository):
         due_at: datetime | None = None,
     ) -> Task:
         now = utc_now()
+        # WP-TUX-01: direct-Principal rows store origin_kind + null origin_evidence_ref.
+        # The statement that authorized the write remains on the OPENED lifecycle event.
         self._connection.execute(
             tasks.insert().values(
                 task_id=task_id,
@@ -179,7 +182,8 @@ class SqlContinuityAuthoringRepository(ContinuityAuthoringRepository):
                 title=title,
                 state=TaskState.OPEN.value,
                 evidence_state=ContinuityEvidenceState.ACCEPTED.value,
-                origin_evidence_ref=origin_evidence_ref,
+                origin_kind=TaskOriginKind.DIRECT_PRINCIPAL.value,
+                origin_evidence_ref=None,
                 project_id=project_id,
                 situation_id=situation_id,
                 due_at=due_at,
@@ -223,7 +227,7 @@ class SqlContinuityAuthoringRepository(ContinuityAuthoringRepository):
             title=title,
             state=TaskState.OPEN,
             evidence_state=ContinuityEvidenceState.ACCEPTED,
-            origin_evidence_ref=origin_evidence_ref,
+            origin_evidence_ref=None,
             opened_at=now,
             created_at=now,
             updated_at=now,

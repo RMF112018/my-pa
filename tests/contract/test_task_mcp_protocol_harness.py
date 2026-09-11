@@ -319,7 +319,7 @@ def test_pulse_items_for_tasks_carry_subject_title(scene: Scene) -> None:
         title="Overdue harness task for pulse",
         state=TaskState.OPEN,
         evidence_state=ContinuityEvidenceState.ACCEPTED,
-        origin_evidence_ref="cap_origin0001origin0001",
+        origin_evidence_ref=None,
         opened_at=WHEN - timedelta(days=3),
         created_at=WHEN - timedelta(days=3),
         updated_at=WHEN - timedelta(days=3),

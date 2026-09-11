@@ -2016,23 +2016,25 @@ class CreateTask:
         if not self.title.strip():
             raise InvalidRequestError(SafeDetail.TITLE)
         kind = self.origin_kind
-        ref = self.origin_evidence_ref
+        origin_ref = self.origin_evidence_ref
         if kind is None:
-            if ref is None:
-                # Generic `tasks.create` must not invent direct-Principal origin.
-                raise InvalidRequestError(SafeDetail.ORIGIN_KIND)
-            # After the None check, ref is str (field type is str | None).
-            if not ref.strip():
+            # Type before content: a non-string must not AttributeError on .strip().
+            if not isinstance(origin_ref, str):
+                if origin_ref is None:
+                    # Generic `tasks.create` must not invent direct-Principal origin.
+                    raise InvalidRequestError(SafeDetail.ORIGIN_KIND)
+                raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
+            if not origin_ref.strip():
                 raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
             object.__setattr__(self, "origin_kind", TaskOriginKind.EVIDENCE)
             kind = TaskOriginKind.EVIDENCE
         elif not isinstance(kind, TaskOriginKind):
             raise InvalidRequestError(SafeDetail.ORIGIN_KIND)
         if kind is TaskOriginKind.EVIDENCE:
-            if not isinstance(ref, str) or not ref.strip():
+            if not isinstance(origin_ref, str) or not origin_ref.strip():
                 raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
         elif kind is TaskOriginKind.DIRECT_PRINCIPAL:
-            if ref is not None:
+            if origin_ref is not None:
                 raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
         else:
             raise InvalidRequestError(SafeDetail.ORIGIN_KIND)

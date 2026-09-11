@@ -366,7 +366,7 @@ class Task:
     title: str
     state: TaskState
     evidence_state: ContinuityEvidenceState
-    origin_evidence_ref: str
+    origin_evidence_ref: str | None
     opened_at: datetime
     created_at: datetime
     updated_at: datetime
@@ -393,7 +393,12 @@ class Task:
             "task",
             self.acceptance_kind,
         )
-        if not self.origin_evidence_ref.strip():
+        # WP-TUX-01: direct-Principal tasks carry no origin evidence; evidence-
+        # backed continuity tasks still require a non-blank origin citation.
+        if self.acceptance_kind is ContinuityAcceptanceKind.DIRECT_PRINCIPAL:
+            if self.origin_evidence_ref is not None:
+                raise ValueError("a direct-Principal task does not cite origin evidence")
+        elif self.origin_evidence_ref is None or not self.origin_evidence_ref.strip():
             raise ValueError("a task records the evidence it was read out of")
         if self.project_id is not None:
             validate_identifier(self.project_id, IdKind.PROJECT)
@@ -407,7 +412,12 @@ class Task:
         if self.closed_at is not None:
             ensure_utc(self.closed_at)
         _require_closure_pairing(self.state is TaskState.CLOSED, self.closed_at, "task")
-        if self.state is TaskState.CLOSED and not (self.closure_evidence_ref or "").strip():
+        # WP-TUX-01: direct-Principal closure may omit closure evidence.
+        if (
+            self.state is TaskState.CLOSED
+            and self.acceptance_kind is not ContinuityAcceptanceKind.DIRECT_PRINCIPAL
+            and not (self.closure_evidence_ref or "").strip()
+        ):
             raise ValueError("a closed task carries the evidence that closed it")
 
 

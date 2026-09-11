@@ -29,6 +29,7 @@ from my_pa.domain.situation.continuity import (
     Commitment,
     CommitmentDirection,
     CommitmentState,
+    ContinuityAcceptanceKind,
     ContinuityEvidenceState,
     ContinuityLifecycleEvent,
     ContinuityObjectKind,
@@ -146,6 +147,65 @@ def test_every_continuity_object_cites_the_evidence_it_was_read_out_of() -> None
             opened_at=WHEN,
             created_at=WHEN,
             updated_at=WHEN,
+        )
+    with pytest.raises(ValueError, match="read out of"):
+        Task(
+            task_id="tsk_base00001base00001bb",
+            principal_id=PRINCIPAL_A,
+            title="Evidence-backed task without origin",
+            state=TaskState.OPEN,
+            evidence_state=ContinuityEvidenceState.PROPOSED,
+            origin_evidence_ref=None,
+            opened_at=WHEN,
+            created_at=WHEN,
+            updated_at=WHEN,
+        )
+
+
+def test_direct_principal_task_allows_null_origin_and_closure_evidence() -> None:
+    """WP-TUX-01: Continuity.Task must map direct-Principal rows for pulse."""
+    task = Task(
+        task_id="tsk_base00001base00001cc",
+        principal_id=PRINCIPAL_A,
+        title="Direct principal draft",
+        state=TaskState.OPEN,
+        evidence_state=ContinuityEvidenceState.ACCEPTED,
+        origin_evidence_ref=None,
+        opened_at=WHEN,
+        created_at=WHEN,
+        updated_at=WHEN,
+        acceptance_kind=ContinuityAcceptanceKind.DIRECT_PRINCIPAL,
+    )
+    assert task.origin_evidence_ref is None
+
+    closed = Task(
+        task_id="tsk_base00001base00001dd",
+        principal_id=PRINCIPAL_A,
+        title="Direct principal closed",
+        state=TaskState.CLOSED,
+        evidence_state=ContinuityEvidenceState.ACCEPTED,
+        origin_evidence_ref=None,
+        opened_at=WHEN,
+        created_at=WHEN,
+        updated_at=WHEN,
+        closed_at=WHEN,
+        closure_evidence_ref=None,
+        acceptance_kind=ContinuityAcceptanceKind.DIRECT_PRINCIPAL,
+    )
+    assert closed.closure_evidence_ref is None
+
+    with pytest.raises(ValueError, match="does not cite origin evidence"):
+        Task(
+            task_id="tsk_base00001base00001ee",
+            principal_id=PRINCIPAL_A,
+            title="Direct principal with origin",
+            state=TaskState.OPEN,
+            evidence_state=ContinuityEvidenceState.ACCEPTED,
+            origin_evidence_ref=ORIGIN,
+            opened_at=WHEN,
+            created_at=WHEN,
+            updated_at=WHEN,
+            acceptance_kind=ContinuityAcceptanceKind.DIRECT_PRINCIPAL,
         )
 
 

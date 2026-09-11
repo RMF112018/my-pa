@@ -273,7 +273,11 @@ def _from_task(task: ContinuityTask, *, principal_id: str, now: datetime) -> _Ca
     """
     if task.state is not TaskState.OPEN or task.due_at is None:
         return None
-    basis = (task.task_id, task.origin_evidence_ref)
+    basis = (
+        (task.task_id,)
+        if task.origin_evidence_ref is None
+        else (task.task_id, task.origin_evidence_ref)
+    )
     if task.due_at <= now:
         overdue = now - task.due_at
         return _Candidate(

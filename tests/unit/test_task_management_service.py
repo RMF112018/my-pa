@@ -181,6 +181,8 @@ class _FakeRepository(TaskManagementRepository):
         after: str | None = None,
         limit: int,
     ) -> tuple[TaskComment, ...]:
+        from my_pa.contracts.ports import WorkCursorError
+
         rows = [
             c
             for c in self._world.comments_all
@@ -188,6 +190,8 @@ class _FakeRepository(TaskManagementRepository):
         ]
         rows.sort(key=lambda c: (c.created_at, c.comment_id))
         if after is not None:
+            if not any(c.comment_id == after for c in rows):
+                raise WorkCursorError
             found = False
             kept: list[TaskComment] = []
             for c in rows:

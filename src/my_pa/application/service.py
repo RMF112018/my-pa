@@ -8261,7 +8261,7 @@ class ApplicationService:
         from my_pa.application.tasks import TaskNotFoundError
 
         try:
-            with _translated():
+            with _work_cursor_translated(), _translated():
                 found = self._tasks.list_task_comments(
                     principal_id=principal_id,
                     task_id=command.task_id,

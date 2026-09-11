@@ -2594,6 +2594,8 @@ class _TasksRead(TaskManagementRepository):
         ]
         rows.sort(key=lambda row: (row.created_at, row.comment_id))
         if after is not None:
+            if not any(row.comment_id == after for row in rows):
+                raise WorkCursorError
             found = False
             kept: list[TaskComment] = []
             for row in rows:
@@ -2950,6 +2952,8 @@ class _TasksWrite(TaskManagementRepository):
         ]
         rows.sort(key=lambda row: (row.created_at, row.comment_id))
         if after is not None:
+            if not any(row.comment_id == after for row in rows):
+                raise WorkCursorError
             found = False
             kept: list[TaskComment] = []
             for row in rows:

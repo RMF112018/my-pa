@@ -2321,44 +2321,32 @@ class _TasksRead(TaskManagementRepository):
         else:
             owned = [task for task in owned if task.archived_at is not None]
 
-        def effective(task: TaskV2) -> datetime | None:
-            due_or_scheduled = min(
-                (value for value in (task.due_at, task.scheduled_at) if value), default=None
-            )
-            return max(
-                (value for value in (due_or_scheduled, task.deferred_until) if value),
-                default=None,
-            )
-
+        # WP-TUX-01: civil-day buckets match SQL `_extend_work_view_conditions`.
+        # `work_now` is presentation-only and must not gate OVERDUE/TODAY/UPCOMING.
+        del work_now
         if work_view is TaskWorkView.OVERDUE:
+            if work_start is None or work_end is None:
+                raise ValueError("date-bounded Work views require both UTC boundaries")
             owned = [
                 task
                 for task in owned
                 if task.lifecycle_state
                 not in {TaskLifecycleState.COMPLETED, TaskLifecycleState.CANCELLED}
                 and task.due_at is not None
-                and work_now is not None
-                and task.due_at < work_now
+                and task.due_at < work_start
             ]
         elif work_view is TaskWorkView.TODAY:
+            if work_start is None or work_end is None:
+                raise ValueError("date-bounded Work views require both UTC boundaries")
             owned = [
                 task
                 for task in owned
                 if task.lifecycle_state
                 not in {TaskLifecycleState.COMPLETED, TaskLifecycleState.CANCELLED}
-                and (task.due_at is None or (work_now is not None and task.due_at >= work_now))
                 and (
-                    (
-                        task.due_at is not None
-                        and work_start is not None
-                        and work_end is not None
-                        and work_start <= task.due_at < work_end
-                    )
+                    (task.due_at is not None and work_start <= task.due_at < work_end)
                     or (
-                        task.scheduled_at is not None
-                        and work_start is not None
-                        and work_end is not None
-                        and work_start <= task.scheduled_at < work_end
+                        task.scheduled_at is not None and work_start <= task.scheduled_at < work_end
                     )
                 )
             ]
@@ -2379,15 +2367,17 @@ class _TasksRead(TaskManagementRepository):
                 and work_start <= task.updated_at < work_end
             ]
         elif work_view is TaskWorkView.UPCOMING:
+            if work_start is None or work_end is None:
+                raise ValueError("date-bounded Work views require both UTC boundaries")
             owned = [
                 task
                 for task in owned
                 if task.lifecycle_state
                 not in {TaskLifecycleState.COMPLETED, TaskLifecycleState.CANCELLED}
-                and (moment := effective(task)) is not None
-                and work_end is not None
-                and moment >= work_end
-                and (task.due_at is None or (work_now is not None and task.due_at >= work_now))
+                and (
+                    (task.due_at is not None and task.due_at >= work_end)
+                    or (task.scheduled_at is not None and task.scheduled_at >= work_end)
+                )
             ]
         elif work_view is TaskWorkView.WAITING:
             owned = [task for task in owned if task.lifecycle_state is TaskLifecycleState.WAITING]

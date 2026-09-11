@@ -2864,8 +2864,17 @@ def test_work_views_use_trusted_now_civil_bounds_and_stable_cursor_order(
         seed,
         task_id=issue_identifier(IdKind.TASK),
         title="overdue",
+        due_at=day_start - timedelta(minutes=1),
+        scheduled_at=None,
+        updated_at=day_start - timedelta(days=7),
+    )
+    # Same civil day, earlier than trusted work_now: Today membership, not Overdue.
+    earlier_today = replace(
+        seed,
+        task_id=issue_identifier(IdKind.TASK),
+        title="earlier today",
         due_at=WHEN - timedelta(minutes=1),
-        scheduled_at=WHEN + timedelta(hours=1),
+        scheduled_at=None,
         updated_at=day_start - timedelta(days=7),
     )
     today = replace(
@@ -2914,6 +2923,7 @@ def test_work_views_use_trusted_now_civil_bounds_and_stable_cursor_order(
     )
     scene.world.tasks_v2[:] = [
         overdue,
+        earlier_today,
         today,
         due_only,
         scheduled,
@@ -2923,11 +2933,17 @@ def test_work_views_use_trusted_now_civil_bounds_and_stable_cursor_order(
     ]
     tasks = FakeUnitOfWork(scene.world).tasks
     bounds = {"work_start": day_start, "work_end": day_end, "work_now": WHEN, "limit": 20}
-    assert overdue in tasks.list_tasks(principal_id, work_view=TaskWorkView.OVERDUE, **bounds)
-    assert overdue not in tasks.list_tasks(principal_id, work_view=TaskWorkView.TODAY, **bounds)
-    assert future_with_overdue_due not in tasks.list_tasks(
-        principal_id, work_view=TaskWorkView.UPCOMING, **bounds
-    )
+    overdue_view = tasks.list_tasks(principal_id, work_view=TaskWorkView.OVERDUE, **bounds)
+    today_view = tasks.list_tasks(principal_id, work_view=TaskWorkView.TODAY, **bounds)
+    upcoming_view = tasks.list_tasks(principal_id, work_view=TaskWorkView.UPCOMING, **bounds)
+    assert overdue in overdue_view
+    assert overdue not in today_view
+    assert earlier_today not in overdue_view
+    assert earlier_today in today_view
+    assert today in today_view
+    # Civil-day UPCOMING admits future schedule even when due is already overdue.
+    assert future_with_overdue_due in overdue_view
+    assert future_with_overdue_due in upcoming_view
     unscheduled = tasks.list_tasks(principal_id, work_view=TaskWorkView.UNSCHEDULED, limit=20)
     assert due_only in unscheduled
     assert scheduled not in unscheduled

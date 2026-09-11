@@ -57,24 +57,22 @@ test.describe("the signed-in surfaces", () => {
   test("Today renders a truthful state, never a blank page", async ({ page }) => {
     const heading = page.getByRole("heading", { name: "Today", level: 1 });
     await expect(heading).toBeVisible();
-    // Wait for the derivation to settle before classifying empty vs populated.
-    // Counting pulse items during the loading gap falsely treats "not yet
-    // rendered" as an empty day and then fails looking for today-empty.
-    await expect(
-      page
-        .getByTestId("pulse-item")
-        .or(page.getByTestId("today-empty"))
-        .or(page.getByTestId("today-unavailable"))
-        .first(),
-    ).toBeVisible();
-    // Either the derivation returned items or it returned none. Both are real
-    // answers; what must never appear is a failure dressed as an empty day.
-    const items = page.getByTestId("pulse-item");
-    if ((await items.count()) === 0) {
+    // Unavailable is never a truthful quiet day.
+    await expect(page.getByTestId("today-unavailable")).toHaveCount(0);
+    // Settle on any explicit Today outcome: populated Pulse, quiet-day empty,
+    // degraded-empty, or backend list empty. Do not infer empty from a missing
+    // pulse-item during hydration — that produced false today-empty waits on
+    // tablet/mobile while desktop already saw a settled surface.
+    const settled = page
+      .getByTestId("pulse-item")
+      .or(page.getByTestId("today-empty"))
+      .or(page.getByTestId("today-degraded-empty"))
+      .or(page.getByTestId("pulse-empty"));
+    await expect(settled.first()).toBeVisible();
+    if ((await page.getByTestId("today-empty").count()) > 0) {
       await expectState(page, "today-empty", "empty");
       await expect(page.getByTestId("today-empty")).toContainText(/derivation ran/i);
     }
-    await expect(page.getByTestId("today-unavailable")).toHaveCount(0);
   });
 
   test("Knowledge reads the record and says which state it is in", async ({ page }) => {

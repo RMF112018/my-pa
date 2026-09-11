@@ -150,6 +150,14 @@ class IdKind(StrEnum):
     #: kinds it names.
     TASK_RECURRENCE = "trec"
     TASK_HISTORY = "thst"
+    #: WP-TUX-01: one append-only Task comment row. Its own prefix rather than a
+    #: reuse of `TASK` or `TASK_HISTORY`: a comment is not a Task and is not a
+    #: Task-state mutation receipt (comment append does not advance
+    #: `Task.version` and does not write `task_history`), so a stored reference
+    #: has to say which of the three it names. Checked against every prior
+    #: member of this enum before use: `tcm` collides with none (`tsk` / `thst`
+    #: / `trec` / `tli` / `trc` differ).
+    TASK_COMMENT = "tcm"
     #: WP-TM-05: one append-only mutation receipt per Commitment write, the
     #: same shape `TASK_HISTORY` names for a Task. Its own prefix rather than a
     #: reuse of `TASK_HISTORY`, for the same reason `TASK_HISTORY` is not

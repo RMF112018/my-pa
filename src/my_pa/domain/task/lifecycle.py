@@ -41,6 +41,7 @@ __all__ = [
     "TERMINAL_TASK_LIFECYCLE_STATES",
     "TaskArchiveMode",
     "TaskLifecycleState",
+    "TaskOriginKind",
     "TaskPriority",
     "TaskWorkView",
     "legacy_state_for",
@@ -66,6 +67,22 @@ class TaskLifecycleState(StrEnum):
     BLOCKED = "blocked"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
+
+
+class TaskOriginKind(StrEnum):
+    """How a Task entered the product, closed to the two provenance paths WP-TUX-01 admits.
+
+    `evidence` names a Task read out of a durable evidence reference (capture,
+    review promotion, or another evidence-backed write). `direct_principal` is
+    an explicit Principal-authored create at a trusted boundary: the Principal
+    instructed the create, which is not the same act as promoting a Task from
+    evidence. The two stay distinguishable so a reader of the row never has to
+    infer which path produced it, and so an evidence-required caller cannot
+    silently become a direct create merely by omitting a reference.
+    """
+
+    DIRECT_PRINCIPAL = "direct_principal"
+    EVIDENCE = "evidence"
 
 
 #: The two lifecycle states that correspond to legacy `state = 'closed'`.

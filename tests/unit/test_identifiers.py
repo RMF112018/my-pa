@@ -115,6 +115,8 @@ def test_contract_prefixes_are_stable() -> None:
         "lce",
         "trec",
         "thst",
+        # WP-TUX-01: one append-only Task comment row (`task_comments`).
+        "tcm",
         "bulk",
         "ctxm",
         "cpref",

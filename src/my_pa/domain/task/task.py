@@ -12,6 +12,12 @@ foundation adds *alongside* it, over the same row: every field
 surface to read and write through *this* model instead of `continuity.Task` is
 a later work package's job, not this one's.
 
+WP-TUX-01 adds `origin_kind` and relaxes provenance pairing: an evidence-origin
+Task still carries a non-empty `origin_evidence_ref`, while a direct-Principal
+Task carries none. Terminal closure likewise admits a null
+`closure_evidence_ref` for direct Principal close; nonterminal Tasks still
+refuse any closure reference.
+
 `__post_init__` enforces exactly the invariants
 `tables.py`'s CHECK constraints enforce at the server, restated here so a
 caller gets the same refusal in-process before a write is even attempted.
@@ -32,6 +38,7 @@ from my_pa.domain.situation.continuity import (
 from my_pa.domain.task.lifecycle import (
     TERMINAL_TASK_LIFECYCLE_STATES,
     TaskLifecycleState,
+    TaskOriginKind,
     TaskPriority,
 )
 from my_pa.domain.task.role import TaskRole
@@ -55,12 +62,13 @@ class Task:
     title: str
     lifecycle_state: TaskLifecycleState
     evidence_state: ContinuityEvidenceState
-    origin_evidence_ref: str
+    origin_kind: TaskOriginKind
     opened_at: datetime
     created_at: datetime
     updated_at: datetime
     version: int = 1
     description: str | None = None
+    origin_evidence_ref: str | None = None
     priority: TaskPriority | None = None
     due_at: datetime | None = None
     scheduled_at: datetime | None = None
@@ -90,8 +98,13 @@ class Task:
             raise ValueError("a task names one known lifecycle state")
         if not isinstance(self.evidence_state, ContinuityEvidenceState):
             raise ValueError("a task names one known evidence state")
-        if not self.origin_evidence_ref.strip():
-            raise ValueError("a task records the evidence it was read out of")
+        if not isinstance(self.origin_kind, TaskOriginKind):
+            raise ValueError("a task names one known origin kind")
+        if self.origin_kind is TaskOriginKind.EVIDENCE:
+            if self.origin_evidence_ref is None or not self.origin_evidence_ref.strip():
+                raise ValueError("an evidence-origin task records the evidence it was read out of")
+        elif self.origin_evidence_ref is not None:
+            raise ValueError("a direct-principal task carries no origin evidence reference")
         if self.version < 1:
             raise ValueError("a task version starts at one and only increases")
         if self.priority is not None and not isinstance(self.priority, TaskPriority):
@@ -133,5 +146,7 @@ class Task:
         is_terminal = self.lifecycle_state in TERMINAL_TASK_LIFECYCLE_STATES
         if is_terminal is not (self.closed_at is not None):
             raise ValueError("a terminal task records when it closed, and only then")
-        if is_terminal and not (self.closure_evidence_ref or "").strip():
-            raise ValueError("a terminal task carries the evidence that closed it")
+        if not is_terminal and self.closure_evidence_ref is not None:
+            raise ValueError("an open task carries no closure evidence")
+        if self.closure_evidence_ref is not None and not self.closure_evidence_ref.strip():
+            raise ValueError("closure evidence, when present, is non-blank")

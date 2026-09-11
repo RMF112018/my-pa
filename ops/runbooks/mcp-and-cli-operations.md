@@ -181,14 +181,14 @@ one declared capability, `tools`, and nothing else.
 ## The tool list
 
 `tools/list` returns the tools **this process can serve**, and that is not the
-same as the tools this build implements. The build declares **161** capability
+same as the tools this build implements. The build declares **163** capability
 names. The measured application composition with GoodNotes pull enabled has
-**91 application-available capabilities**: 161 less the six `documents.`,
+**93 application-available capabilities**: 163 less the six `documents.`,
 fifty-five `entities.`, and nine `relationship_memory.` capabilities whose
 composition gates remain off. A local stdio MCP session has no authenticated
 client identity, so it additionally withholds the three client-bound GoodNotes
-pull operations and publishes **88 tools**. An authenticated MCP client against
-that same 91-capability application composition sees all 91. These figures are
+pull operations and publishes **90 tools**. An authenticated MCP client against
+that same 93-capability application composition sees all 93. These figures are
 derived in `test_current_state_docs_derive_the_default_capability_split` from a
 real `ApplicationService` and `published_tools`, not from a second list.
 
@@ -215,10 +215,10 @@ the same gating and the plane's limits.)
 Measured against a real child process — `.venv/bin/python apps/gateway.py mcp`
 — by
 `tests/contract/test_mcp_transport.py::test_a_real_child_process_publishes_only_what_it_was_composed_with`
-(unconfigured local stdio: 88, with the three authenticated-client capabilities
+(unconfigured local stdio: 90, with the three authenticated-client capabilities
 absent) and
 `::test_a_child_with_a_managed_root_publishes_every_locally_available_capability`
-(fully feature-composed local stdio: 158, again excluding exactly those three).
+(fully feature-composed local stdio: 160, again excluding exactly those three).
 
 **Current-state correction (2026-09-08):** earlier snapshots in this section
 mixed declared capability totals, application availability, feature-gated

@@ -1025,6 +1025,12 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "idempotency_key": "parity-task-bulk-confirm-0001",
             "mutations": bulk_mutations,
         },
+        Capability.TASKS_COMMENTS_LIST: {"task_id": task.task_id},
+        Capability.TASKS_COMMENTS_CREATE: {
+            "task_id": task.task_id,
+            "body": "parity task-plane comment",
+            "idempotency_key": "parity-task-comment-create-0001",
+        },
         Capability.COMMITMENTS_READ: {"commitment_id": commitment.commitment_id},
         Capability.COMMITMENTS_LIST: {},
         Capability.COMMITMENTS_SEARCH: {"query": "synthetic", "page_size": 10},

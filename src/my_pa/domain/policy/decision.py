@@ -229,6 +229,7 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.TASKS_LIST,
         Capability.TASKS_SEARCH,
         Capability.TASKS_HISTORY,
+        Capability.TASKS_COMMENTS_LIST,
         # The task plane's five write capabilities (WP-TM-04) belong here for
         # the identical reason its four reads do, immediately above: a task's
         # rows carry no `source_id` and no `enrollment_id` for a scope to be
@@ -243,11 +244,13 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         # surfaced it, by being the first test in this build to invoke task
         # mutation through `ApplicationService.invoke`'s full authorize path
         # rather than only through `TaskManagementService` directly.
+        # WP-TUX-01's comment list/create join the same scopeless set.
         Capability.TASKS_CREATE,
         Capability.TASKS_UPDATE,
         Capability.TASKS_TRANSITION,
         Capability.TASKS_BULK_PREVIEW,
         Capability.TASKS_BULK_CONFIRM,
+        Capability.TASKS_COMMENTS_CREATE,
         # The Commitment plane (WP-TM-05) names a Principal, not a source, for
         # the identical reason the task plane does: a Commitment is opened
         # directly by a Principal or accepted through an accepted review

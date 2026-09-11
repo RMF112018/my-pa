@@ -371,8 +371,10 @@ from my_pa.domain.source.registry import ConfiguredSource, SourceProviderKind, i
 from my_pa.domain.task.bulk import TaskBulkOperation
 from my_pa.domain.task.commitment import Commitment as CommitmentV2
 from my_pa.domain.task.commitment_history import CommitmentHistoryEntry
+from my_pa.domain.task.comment import TaskComment
 from my_pa.domain.task.history import TaskHistoryEntry, TaskMutationActor
 from my_pa.domain.task.lifecycle import (
+    TaskOriginKind,
     TaskArchiveMode,
     TaskLifecycleState,
     TaskPriority,
@@ -602,6 +604,7 @@ class World:
     tasks_v2: list[TaskV2] = field(default_factory=list)
     task_history_v2: list[TaskHistoryEntry] = field(default_factory=list)
     task_bulk_operations: dict[tuple[str, str], TaskBulkOperation] = field(default_factory=dict)
+    task_comments: list[TaskComment] = field(default_factory=list)
     commitments_v2: list[CommitmentV2] = field(default_factory=list)
     commitment_history_v2: list[CommitmentHistoryEntry] = field(default_factory=list)
     current_counterparties: set[tuple[str, str]] = field(default_factory=set)
@@ -2548,6 +2551,46 @@ class _TasksRead(TaskManagementRepository):
             None,
         )
 
+    def create_task_comment(self, comment: TaskComment) -> None:
+        self._world.task_comments.append(comment)
+
+    def get_task_comment_by_idempotency(
+        self, principal_id: str, idempotency_key: str
+    ) -> TaskComment | None:
+        return next(
+            (
+                row
+                for row in self._world.task_comments
+                if row.principal_id == principal_id and row.idempotency_key == idempotency_key
+            ),
+            None,
+        )
+
+    def list_task_comments(
+        self,
+        principal_id: str,
+        task_id: str,
+        *,
+        after_cursor: str | None,
+        page_size: int,
+    ) -> tuple[TaskComment, ...]:
+        rows = [
+            row
+            for row in self._world.task_comments
+            if row.principal_id == principal_id and row.task_id == task_id
+        ]
+        rows.sort(key=lambda row: (row.created_at, row.comment_id))
+        if after_cursor is not None:
+            found = False
+            kept: list[TaskComment] = []
+            for row in rows:
+                if found:
+                    kept.append(row)
+                elif row.comment_id == after_cursor:
+                    found = True
+            rows = kept
+        return tuple(rows[:page_size])
+
 
 class _CommitmentsRead(CommitmentManagementRepository):
     """The WP-TM-05 read plane over `World.commitments_v2`/`commitment_history_v2`.
@@ -2849,6 +2892,48 @@ class _TasksWrite(TaskManagementRepository):
         self, principal_id: str, task_id: str
     ) -> TaskHistoryEntry | None:
         raise NotImplementedError("the write plane's fake does not serve history reads")
+
+
+
+    def create_task_comment(self, comment: TaskComment) -> None:
+        self._world.task_comments.append(comment)
+
+    def get_task_comment_by_idempotency(
+        self, principal_id: str, idempotency_key: str
+    ) -> TaskComment | None:
+        return next(
+            (
+                row
+                for row in self._world.task_comments
+                if row.principal_id == principal_id and row.idempotency_key == idempotency_key
+            ),
+            None,
+        )
+
+    def list_task_comments(
+        self,
+        principal_id: str,
+        task_id: str,
+        *,
+        after_cursor: str | None,
+        page_size: int,
+    ) -> tuple[TaskComment, ...]:
+        rows = [
+            row
+            for row in self._world.task_comments
+            if row.principal_id == principal_id and row.task_id == task_id
+        ]
+        rows.sort(key=lambda row: (row.created_at, row.comment_id))
+        if after_cursor is not None:
+            found = False
+            kept: list[TaskComment] = []
+            for row in rows:
+                if found:
+                    kept.append(row)
+                elif row.comment_id == after_cursor:
+                    found = True
+            rows = kept
+        return tuple(rows[:page_size])
 
 
 class FakeTaskManagementUnitOfWork(TaskManagementUnitOfWork):
@@ -8797,6 +8882,7 @@ def staged_task(scene: Scene, *, title: str = "a synthetic task") -> TaskV2:
     receipt = service.create_task(
         principal_id=scene.principal.principal_id,
         title=title,
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref="cap_origin0001origin0001",
         actor=TaskMutationActor.PRINCIPAL,
         idempotency_key=f"staged-task-{len(scene.world.tasks_v2)}",

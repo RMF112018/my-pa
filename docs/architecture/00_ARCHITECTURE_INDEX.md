@@ -35,8 +35,8 @@ See [`../decisions/00_ADR_INDEX.md`](../decisions/00_ADR_INDEX.md) and the unres
 ## Implementation boundary
 
 This index records architecture direction and current composition. The `my_pa`
-package defines one hundred and sixty-one capabilities and exposes them through the HTTP,
-MCP, and operator-CLI adapters; a default composition serves 91 of
+package defines one hundred and sixty-three capabilities and exposes them through the HTTP,
+MCP, and operator-CLI adapters; a default composition serves 93 of
 them, because the `documents.`, `entities.` and `relationship_memory.` families
 each require an environment variable that has no default. The gateway and worker
 composition roots use the same PostgreSQL-backed policy and application seams.

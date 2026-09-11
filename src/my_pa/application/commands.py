@@ -203,10 +203,15 @@ from my_pa.domain.situation.continuity import (
 from my_pa.domain.task.lifecycle import (
     TaskArchiveMode,
     TaskLifecycleState,
+    TaskOriginKind,
     TaskPriority,
     TaskWorkView,
 )
 from my_pa.domain.task.role import TaskRole
+from my_pa.domain.task.comment import (
+    MAX_TASK_COMMENT_BODY_CHARACTERS,
+    validate_task_comment_body,
+)
 
 __all__ = [
     "AddEntityAlias",
@@ -232,6 +237,7 @@ __all__ = [
     "CreateProject",
     "CreateSituation",
     "CreateTask",
+    "CreateTaskComment",
     "DecideReviewCase",
     "EnrollSource",
     "EnterFrameCommand",
@@ -269,6 +275,7 @@ __all__ = [
     "ListSituations",
     "ListSources",
     "ListTasks",
+    "ListTaskComments",
     "OpenSituationCommand",
     "PrepareContext",
     "PullGoodNotesWork",
@@ -1970,11 +1977,14 @@ class GetTaskHistory:
 class CreateTask:
     """`tasks.create`: create a new task.
 
-    `origin_evidence_ref` is required and has no default, because a task
-    created inside this product must cite what prompted its creation — a
-    capture, a situation, a relationship event, or another task. Omitting it
-    would be a task with no recorded justification, which is exactly what the
-    append-only history exists to prevent.
+    WP-TUX-01 admits two origin kinds. An evidence-origin task still cites the
+    capture, situation, relationship event, or other record that prompted it.
+    A direct-Principal task cites none: the write *is* the instruction. Omitting
+    both `origin_kind` and `origin_evidence_ref` at this generic capability
+    boundary is refused rather than silently becoming `direct_principal` — a
+    trusted adapter that intends direct authoring must set
+    `origin_kind=direct_principal` explicitly. Omitting `origin_kind` while
+    supplying a non-empty evidence ref remains the legacy evidence path.
 
     `idempotency_key` is required and has no default, for the same reason
     `EnrollSource` requires it: a write that did not state its own idempotency
@@ -1985,8 +1995,9 @@ class CreateTask:
     capability: ClassVar[Capability] = Capability.TASKS_CREATE
 
     title: str
-    origin_evidence_ref: str
     idempotency_key: str
+    origin_kind: TaskOriginKind | None = None
+    origin_evidence_ref: str | None = None
     description: str | None = None
     priority: TaskPriority | None = None
     due_at: datetime | None = None
@@ -2004,10 +2015,26 @@ class CreateTask:
             raise InvalidRequestError(SafeDetail.TITLE)
         if not self.title.strip():
             raise InvalidRequestError(SafeDetail.TITLE)
-        if not isinstance(self.origin_evidence_ref, str):
-            raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
-        if not self.origin_evidence_ref.strip():
-            raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
+        kind = self.origin_kind
+        ref = self.origin_evidence_ref
+        if kind is None:
+            if ref is None:
+                # Generic `tasks.create` must not invent direct-Principal origin.
+                raise InvalidRequestError(SafeDetail.ORIGIN_KIND)
+            if not isinstance(ref, str) or not ref.strip():
+                raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
+            object.__setattr__(self, "origin_kind", TaskOriginKind.EVIDENCE)
+            kind = TaskOriginKind.EVIDENCE
+        elif not isinstance(kind, TaskOriginKind):
+            raise InvalidRequestError(SafeDetail.ORIGIN_KIND)
+        if kind is TaskOriginKind.EVIDENCE:
+            if not isinstance(ref, str) or not ref.strip():
+                raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
+        elif kind is TaskOriginKind.DIRECT_PRINCIPAL:
+            if ref is not None:
+                raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
+        else:
+            raise InvalidRequestError(SafeDetail.ORIGIN_KIND)
         _idempotency_key(self.idempotency_key)
         if self.priority is not None and not isinstance(self.priority, TaskPriority):
             raise InvalidRequestError(SafeDetail.PRIORITY)
@@ -2118,10 +2145,9 @@ class TransitionTask:
     `to_state` is required and has no default, because a transition that did
     not state where it is going would be a no-op by definition.
 
-    `closure_evidence_ref` is required when transitioning to a terminal state
-    (`COMPLETED` or `CANCELLED`), and the service enforces this. Omitting it
-    when required raises `IllegalTaskTransitionError`, which the handler
-    translates to `InvalidRequestError`.
+    `closure_evidence_ref` is optional when transitioning to a terminal state
+    (`COMPLETED` or `CANCELLED`): WP-TUX-01 admits a null closure reference for
+    direct Principal close. A blank string, when supplied, is still refused.
     """
 
     capability: ClassVar[Capability] = Capability.TASKS_TRANSITION
@@ -2144,6 +2170,54 @@ class TransitionTask:
             _text(self.closure_evidence_ref, SafeDetail.CLOSURE_EVIDENCE_REF)
             if not self.closure_evidence_ref.strip():
                 raise InvalidRequestError(SafeDetail.CLOSURE_EVIDENCE_REF)
+
+
+@dataclass(frozen=True, slots=True)
+class ListTaskComments:
+    """`tasks.comments.list`: one bounded page of comments on one Principal-owned Task.
+
+    Oldest first, cursor by `comment_id`, matching `tasks.history`'s direction:
+    a comment thread is read in the order comments were appended.
+    """
+
+    capability: ClassVar[Capability] = Capability.TASKS_COMMENTS_LIST
+
+    task_id: str
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.task_id, IdKind.TASK, SafeDetail.TASK_ID)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.TASK_COMMENT, SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class CreateTaskComment:
+    """`tasks.comments.create`: append one comment to a Principal-owned Task.
+
+    Does not advance `Task.version` and does not write `TaskHistoryEntry` —
+    comments are their own append-only receipt stream. `idempotency_key` is
+    required for the same reason every other task write requires it.
+    """
+
+    capability: ClassVar[Capability] = Capability.TASKS_COMMENTS_CREATE
+
+    task_id: str
+    body: str
+    idempotency_key: str
+    client_context: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.task_id, IdKind.TASK, SafeDetail.TASK_ID)
+        try:
+            validate_task_comment_body(self.body)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.COMMENT_BODY) from None
+        if len(self.body) > MAX_TASK_COMMENT_BODY_CHARACTERS:
+            raise InvalidRequestError(SafeDetail.COMMENT_BODY)
+        _idempotency_key(self.idempotency_key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -9140,6 +9214,8 @@ type Command = (
     | CreateTask
     | UpdateTask
     | TransitionTask
+    | ListTaskComments
+    | CreateTaskComment
     | BulkPreviewTasks
     | BulkConfirmTasks
     | ReadCommitment

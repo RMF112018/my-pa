@@ -57,6 +57,7 @@ from my_pa.domain.task.history import (
     TaskMutationOutcome,
 )
 from my_pa.domain.task.lifecycle import (
+    TaskOriginKind,
     TaskArchiveMode,
     TaskPriority,
     TaskWorkView,
@@ -155,6 +156,7 @@ def test_a_replayed_create_writes_exactly_one_task_and_one_history_row(
     first = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Draft the synthetic summary",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
         idempotency_key=key,
@@ -162,6 +164,7 @@ def test_a_replayed_create_writes_exactly_one_task_and_one_history_row(
     second = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Draft the synthetic summary",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
         idempotency_key=key,
@@ -191,6 +194,7 @@ def test_a_stale_expected_version_leaves_the_stored_row_unchanged(
     created = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Original title",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
     )
@@ -226,6 +230,7 @@ def test_a_rejected_attempt_leaves_no_row_beyond_its_own_rejected_history_entry(
     created = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Original title",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
     )
@@ -308,7 +313,8 @@ def test_concurrent_bulk_confirm_key_race_rolls_back_losing_task_and_history(
         service.create_task(
             principal_id=PRINCIPAL_A,
             title=f"Race task {index}",
-            origin_evidence_ref=ORIGIN,
+            origin_kind=TaskOriginKind.EVIDENCE,
+        origin_evidence_ref=ORIGIN,
             actor=TaskMutationActor.PRINCIPAL,
             idempotency_key=_idempotency_key(f"bulk-race-create-{index}"),
         )
@@ -399,6 +405,7 @@ def test_sql_task_cursors_refuse_absent_and_foreign_anchors(
     mine = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Mine",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
         idempotency_key=_idempotency_key("cursor-mine"),
@@ -406,6 +413,7 @@ def test_sql_task_cursors_refuse_absent_and_foreign_anchors(
     foreign = service.create_task(
         principal_id=PRINCIPAL_B,
         title="Foreign",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
         idempotency_key=_idempotency_key("cursor-foreign"),
@@ -413,6 +421,7 @@ def test_sql_task_cursors_refuse_absent_and_foreign_anchors(
     wrong_query = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Different result set",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
         idempotency_key=_idempotency_key("cursor-wrong-query"),
@@ -420,6 +429,7 @@ def test_sql_task_cursors_refuse_absent_and_foreign_anchors(
     wrong_priority = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Needle priority mismatch",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
         priority=TaskPriority.P2,
@@ -428,6 +438,7 @@ def test_sql_task_cursors_refuse_absent_and_foreign_anchors(
     archived = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Needle archived",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
         priority=TaskPriority.P1,
@@ -444,6 +455,7 @@ def test_sql_task_cursors_refuse_absent_and_foreign_anchors(
     waiting = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Needle waiting",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
         priority=TaskPriority.P1,
@@ -453,7 +465,8 @@ def test_sql_task_cursors_refuse_absent_and_foreign_anchors(
         service.create_task(
             principal_id=PRINCIPAL_A,
             title=f"Needle continuation {index}",
-            origin_evidence_ref=ORIGIN,
+            origin_kind=TaskOriginKind.EVIDENCE,
+        origin_evidence_ref=ORIGIN,
             actor=TaskMutationActor.PRINCIPAL,
             priority=TaskPriority.P1,
             idempotency_key=_idempotency_key(f"cursor-needle-{index}"),

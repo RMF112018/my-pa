@@ -396,6 +396,7 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     159: "One hundred and fifty-nine",
     160: "One hundred and sixty",
     161: "One hundred and sixty-one",
+    163: "One hundred and sixty-three",
 }
 
 
@@ -534,7 +535,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # by six while the withheld figure is unchanged. `PC-CM-IMP-WP07`'s twelve
     # Constraint mutations arrive on the served side for the same reason, and
     # the withheld figure is again unchanged.
-    assert default == 91 and total == 161 and withheld == 70
+    assert default == 93 and total == 163 and withheld == 70
 
     # Exercise the same application and MCP publication composition that owns
     # the current 91-tool measurement. GoodNotes pull is part of that measured
@@ -561,7 +562,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert authenticated_mcp_capabilities == {
         capability.value for capability in application_capabilities
     }
-    assert len(local_mcp_capabilities) == default - 3 == 88
+    assert len(local_mcp_capabilities) == default - 3 == 90
     assert authenticated_mcp_capabilities - local_mcp_capabilities == {
         "goodnotes.pull",
         "goodnotes.complete",
@@ -587,7 +588,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert "twenty-nine writes" not in readme
 
     system_context = SYSTEM_CONTEXT.read_text(encoding="utf-8").lower()
-    assert "one hundred and sixty-one capabilities" in system_context
+    assert "one hundred and sixty-three capabilities" in system_context
     assert f"exposes {default} of them" in system_context
 
     architecture_index = (ROOT / "docs/architecture/00_ARCHITECTURE_INDEX.md").read_text(
@@ -597,11 +598,11 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert f"default composition serves {default} of" in architecture_index
     assert f"**{default} application-available capabilities**" in runbook
     assert f"publishes **{default - 3} tools**" in runbook
-    assert "unconfigured local stdio: 88" in runbook
-    assert "fully feature-composed local stdio: 158" in runbook
+    assert "unconfigured local stdio: 90" in runbook
+    assert "fully feature-composed local stdio: 160" in runbook
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
-    assert "one hundred and sixty-one capabilities" in module_boundaries
+    assert "one hundred and sixty-three capabilities" in module_boundaries
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:

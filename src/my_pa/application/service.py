@@ -160,6 +160,7 @@ from my_pa.application.commands import (
     CreateRelationshipMemory,
     CreateSituation,
     CreateTask,
+    CreateTaskComment,
     DeactivateConstraintCategory,
     DecideReviewCase,
     EndEntityAffiliation,
@@ -213,6 +214,7 @@ from my_pa.application.commands import (
     ListReviewCases,
     ListSituations,
     ListSources,
+    ListTaskComments,
     ListTasks,
     ListUnresolvedMentions,
     MergeEntities,
@@ -497,7 +499,13 @@ from my_pa.contracts.v1.documents import (
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.contracts.v1.reveal import RevealView
 from my_pa.contracts.v1.status import SourceStatusState
-from my_pa.contracts.v1.tasks import TaskHistoryEntryView, TaskListEntry, TaskView
+from my_pa.contracts.v1.tasks import (
+    TaskCommentListEntry,
+    TaskCommentView,
+    TaskHistoryEntryView,
+    TaskListEntry,
+    TaskView,
+)
 from my_pa.domain.audit.events import AuditEvent, AuditOutcome
 from my_pa.domain.capture.errors import (
     CaptureBoundsError,
@@ -673,6 +681,7 @@ from my_pa.domain.task.history import (
 from my_pa.domain.task.lifecycle import (
     TERMINAL_TASK_LIFECYCLE_STATES,
     TaskLifecycleState,
+    TaskOriginKind,
     TaskPriority,
     TaskWorkView,
 )
@@ -1264,6 +1273,7 @@ def _task_view(task: TaskManagementTask) -> TaskView:
         description=task.description,
         lifecycle_state=task.lifecycle_state,
         evidence_state=task.evidence_state,
+        origin_kind=task.origin_kind,
         origin_evidence_ref=task.origin_evidence_ref,
         closure_evidence_ref=task.closure_evidence_ref,
         accepted_by_review_decision_id=task.accepted_by_review_decision_id,
@@ -1306,7 +1316,13 @@ def _task_list_entry(task: TaskManagementTask) -> TaskListEntry:
 def _work_window(
     work_date: date, timezone: str, *, recent: bool = False
 ) -> tuple[datetime, datetime]:
-    """Return DST-correct UTC bounds for one civil day or its seven-day lookback."""
+    """Return DST-correct UTC bounds for one civil day or its seven-day lookback.
+
+    Independent local midnights at D 00:00 and (D+1) 00:00 in `timezone`, then
+    converted to UTC — DST-correct by construction. Application does not apply a
+    wall-clock cutoff when building TODAY membership bounds; `work_now` is passed
+    through for repository predicates PERSIST owns.
+    """
     zone = ZoneInfo(timezone)
     first_date = work_date - timedelta(days=6) if recent else work_date
     local_start = datetime.combine(first_date, datetime.min.time(), zone)
@@ -8043,9 +8059,22 @@ class ApplicationService:
 
         try:
             with _translated():
+                # Command __post_init__ resolves omitted origin_kind + evidence_ref
+                # to EVIDENCE; both omitted is refused. Direct requires explicit kind.
+                assert command.origin_kind is not None
+                origin_kind = command.origin_kind
+                evidence_gate = (
+                    None
+                    if origin_kind is TaskOriginKind.DIRECT_PRINCIPAL
+                    or command.origin_evidence_ref is None
+                    else lambda: self._require_work_evidence(
+                        unit_of_work, principal_id, command.origin_evidence_ref or ""
+                    )
+                )
                 receipt = self._tasks.create_task(
                     principal_id=principal_id,
                     title=command.title,
+                    origin_kind=origin_kind,
                     origin_evidence_ref=command.origin_evidence_ref,
                     actor=TaskMutationActor.PRINCIPAL,
                     description=command.description,
@@ -8059,9 +8088,7 @@ class ApplicationService:
                     commitment_id=command.commitment_id,
                     role=command.role,
                     active_uow=unit_of_work,
-                    validate_first_write=lambda: self._require_work_evidence(
-                        unit_of_work, principal_id, command.origin_evidence_ref
-                    ),
+                    validate_first_write=evidence_gate,
                 )
         except TaskIdempotencyConflictError:
             raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
@@ -8218,6 +8245,94 @@ class ApplicationService:
             payload={
                 "task": _task_view(receipt.task).to_canonical_dict(),
                 "history": _task_history_view(receipt.history).to_canonical_dict(),
+                "replayed": receipt.replayed,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
+        )
+
+    def _tasks_comments_list(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListTaskComments
+    ) -> _Result:
+        """`tasks.comments.list`: one bounded page of comments on one Task."""
+        if self._tasks is None:
+            raise InternalError()
+        principal_id = authorization.principal.principal_id
+        page_size = self._page_size(command.page_size)
+        from my_pa.application.tasks import TaskNotFoundError
+
+        try:
+            with _translated():
+                found = self._tasks.list_task_comments(
+                    principal_id=principal_id,
+                    task_id=command.task_id,
+                    page_size=page_size + 1,
+                    after_cursor=command.after,
+                    active_uow=unit_of_work,
+                )
+        except TaskNotFoundError:
+            raise NotFoundError(SafeDetail.TASK_ID) from None
+        truncated = len(found) > page_size
+        page = found[:page_size]
+        return _Result(
+            payload={
+                "comments": [
+                    TaskCommentListEntry(
+                        comment_id=c.comment_id,
+                        task_id=c.task_id,
+                        body=c.body,
+                        author_kind=c.author_kind,
+                        author_id=c.author_id,
+                        created_at=c.created_at,
+                    ).to_canonical_dict()
+                    for c in page
+                ]
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_TASK_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                    next_cursor=page[-1].comment_id if truncated and page else None,
+                ),
+            ),
+        )
+
+    def _tasks_comments_create(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: CreateTaskComment
+    ) -> _Result:
+        """`tasks.comments.create`: append one comment without Task version/history."""
+        if self._tasks is None:
+            raise InternalError()
+        principal_id = authorization.principal.principal_id
+        from my_pa.application.tasks import TaskIdempotencyConflictError, TaskNotFoundError
+        from my_pa.domain.task.history import TaskMutationActor
+
+        try:
+            with _translated():
+                receipt = self._tasks.create_task_comment(
+                    principal_id=principal_id,
+                    task_id=command.task_id,
+                    body=command.body,
+                    actor=TaskMutationActor.PRINCIPAL,
+                    idempotency_key=command.idempotency_key,
+                    active_uow=unit_of_work,
+                )
+        except TaskNotFoundError:
+            raise NotFoundError(SafeDetail.TASK_ID) from None
+        except TaskIdempotencyConflictError:
+            raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
+        comment = receipt.comment
+        return _Result(
+            payload={
+                "comment": TaskCommentView(
+                    comment_id=comment.comment_id,
+                    task_id=comment.task_id,
+                    body=comment.body,
+                    author_kind=comment.author_kind,
+                    author_id=comment.author_id,
+                    created_at=comment.created_at,
+                ).to_canonical_dict(),
                 "replayed": receipt.replayed,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
@@ -11841,6 +11956,8 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.TASKS_TRANSITION: ApplicationService._tasks_transition,
         Capability.TASKS_BULK_PREVIEW: ApplicationService._tasks_bulk_preview,
         Capability.TASKS_BULK_CONFIRM: ApplicationService._tasks_bulk_confirm,
+        Capability.TASKS_COMMENTS_LIST: ApplicationService._tasks_comments_list,
+        Capability.TASKS_COMMENTS_CREATE: ApplicationService._tasks_comments_create,
         Capability.COMMITMENTS_READ: ApplicationService._commitments_read,
         Capability.COMMITMENTS_LIST: ApplicationService._commitments_list,
         Capability.COMMITMENTS_SEARCH: ApplicationService._commitments_search,

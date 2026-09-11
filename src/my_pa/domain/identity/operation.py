@@ -291,6 +291,13 @@ class Capability(StrEnum):
     TASKS_TRANSITION = "tasks.transition"
     TASKS_BULK_PREVIEW = "tasks.bulk_preview"
     TASKS_BULK_CONFIRM = "tasks.bulk_confirm"
+    # WP-TUX-01: append-only Task comments. `list` is a read over the comment
+    # child of a Principal-owned Task; `create` inserts one comment row and
+    # never advances `Task.version` or writes `TaskHistoryEntry`. Separate from
+    # `tasks.read`/`tasks.create` by `D-91`: a grant to read or create a Task
+    # is not a grant to read or append its comment thread.
+    TASKS_COMMENTS_LIST = "tasks.comments.list"
+    TASKS_COMMENTS_CREATE = "tasks.comments.create"
     # The Commitment plane (WP-TM-05). `COMMITMENTS_READ`/`COMMITMENTS_LIST`
     # are the two direct reads, over `knowledge.commitments`, exactly
     # parallel to `TASKS_READ`/`TASKS_LIST`. `COMMITMENTS_WAITING_ON` is a
@@ -1080,6 +1087,7 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.TASKS_LIST: frozenset({Purpose.TASK_READ}),
         Capability.TASKS_SEARCH: frozenset({Purpose.TASK_READ}),
         Capability.TASKS_HISTORY: frozenset({Purpose.TASK_READ}),
+        Capability.TASKS_COMMENTS_LIST: frozenset({Purpose.TASK_READ}),
         # The five `tasks.` write capabilities map to `task_authoring`, and all
         # five are covered by one purpose for the reason `document_authoring`
         # covers `documents.create`, `documents.revise`, `documents.archive`,
@@ -1092,12 +1100,14 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         # task mutations themselves — and a grant issued to preview changes
         # should not also authorize applying them without the caller's explicit
         # confirmation, so they are separate capabilities, but they are not
-        # separate purposes.
+        # separate purposes. WP-TUX-01's `tasks.comments.create` joins the same
+        # purpose: it appends a Principal-owned comment child of a Task.
         Capability.TASKS_CREATE: frozenset({Purpose.TASK_AUTHORING}),
         Capability.TASKS_UPDATE: frozenset({Purpose.TASK_AUTHORING}),
         Capability.TASKS_TRANSITION: frozenset({Purpose.TASK_AUTHORING}),
         Capability.TASKS_BULK_PREVIEW: frozenset({Purpose.TASK_AUTHORING}),
         Capability.TASKS_BULK_CONFIRM: frozenset({Purpose.TASK_AUTHORING}),
+        Capability.TASKS_COMMENTS_CREATE: frozenset({Purpose.TASK_AUTHORING}),
         # The Commitment plane's purpose pair (WP-TM-05): `commitment_read`
         # covers the three reads (`commitments.read`, `commitments.list`,
         # and the derived `commitments.waiting_on`), and `commitment_authoring`
@@ -1377,6 +1387,7 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.TASKS_TRANSITION,
         Capability.TASKS_BULK_PREVIEW,
         Capability.TASKS_BULK_CONFIRM,
+        Capability.TASKS_COMMENTS_CREATE,
         Capability.COMMITMENTS_CREATE,
         Capability.COMMITMENTS_UPDATE,
         Capability.COMMITMENTS_CLOSE,
@@ -1491,6 +1502,7 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.DOCUMENTS_CREATE,
         Capability.TASKS_CREATE,
         Capability.TASKS_BULK_PREVIEW,
+        Capability.TASKS_COMMENTS_CREATE,
         Capability.COMMITMENTS_CREATE,
         Capability.GOODNOTES_PROPOSE,
         Capability.GOODNOTES_CORRECT,

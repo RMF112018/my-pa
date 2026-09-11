@@ -32,6 +32,7 @@ from my_pa.contracts.ports import TaskManagementRepository, TaskManagementUnitOf
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.domain.task.comment import TaskComment
 from my_pa.domain.task.history import (
     TaskHistoryEntry,
     TaskMutationAction,
@@ -41,6 +42,7 @@ from my_pa.domain.task.history import (
 from my_pa.domain.task.lifecycle import (
     TaskArchiveMode,
     TaskLifecycleState,
+    TaskOriginKind,
     TaskPriority,
     TaskWorkView,
 )
@@ -70,6 +72,9 @@ class _World:
         self.insert_task_calls = 0
         self.update_task_calls = 0
         self.insert_history_calls = 0
+        self.comments_by_key: dict[tuple[str, str], TaskComment] = {}
+        self.comments_all: list[TaskComment] = []
+        self.insert_comment_calls = 0
         self.commits = 0
         self.rollbacks = 0
 
@@ -147,10 +152,47 @@ class _FakeRepository(TaskManagementRepository):
     ) -> tuple[TaskHistoryEntry, ...]:
         raise NotImplementedError("this suite does not exercise the read plane")
 
+
     def latest_applied_terminal_history(
         self, principal_id: str, task_id: str
     ) -> TaskHistoryEntry | None:
         raise NotImplementedError("this suite does not exercise the read plane")
+
+    def create_task_comment(self, comment: TaskComment) -> None:
+        self._world.insert_comment_calls += 1
+        key = (comment.principal_id, comment.idempotency_key)
+        self._world.comments_by_key[key] = comment
+        self._world.comments_all.append(comment)
+
+    def get_task_comment_by_idempotency(
+        self, principal_id: str, idempotency_key: str
+    ) -> TaskComment | None:
+        return self._world.comments_by_key.get((principal_id, idempotency_key))
+
+    def list_task_comments(
+        self,
+        principal_id: str,
+        task_id: str,
+        *,
+        after_cursor: str | None,
+        page_size: int,
+    ) -> tuple[TaskComment, ...]:
+        rows = [
+            c
+            for c in self._world.comments_all
+            if c.principal_id == principal_id and c.task_id == task_id
+        ]
+        rows.sort(key=lambda c: (c.created_at, c.comment_id))
+        if after_cursor is not None:
+            found = False
+            kept: list[TaskComment] = []
+            for c in rows:
+                if found:
+                    kept.append(c)
+                elif c.comment_id == after_cursor:
+                    found = True
+            rows = kept
+        return tuple(rows[:page_size])
 
 
 class _FakeUnitOfWork(TaskManagementUnitOfWork):
@@ -194,6 +236,7 @@ def test_create_task_produces_a_fresh_proposed_task_and_an_applied_receipt() -> 
     receipt = _service(world).create_task(
         principal_id=PRINCIPAL_A,
         title="Draft the synthetic summary",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
     )
@@ -214,6 +257,7 @@ def test_create_task_with_a_review_decision_produces_an_accepted_task() -> None:
     receipt = _service(world).create_task(
         principal_id=PRINCIPAL_A,
         title="Draft the synthetic summary",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
         accepted_by_review_decision_id=decision_id,
@@ -232,6 +276,7 @@ def test_update_title_applies_a_real_change_and_advances_the_version() -> None:
     created = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Original title",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
     )
@@ -253,6 +298,7 @@ def test_update_title_with_the_same_title_is_recorded_no_op() -> None:
     created = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Original title",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
     )
@@ -276,6 +322,7 @@ def test_create_task_with_description_roundtrips() -> None:
     receipt = _service(world).create_task(
         principal_id=PRINCIPAL_A,
         title="Draft the synthetic summary",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
         description="A longer explanation of what to draft and why.",
@@ -290,6 +337,7 @@ def test_create_task_without_description_defaults_to_none() -> None:
     receipt = _service(world).create_task(
         principal_id=PRINCIPAL_A,
         title="Draft the synthetic summary",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
     )
@@ -302,6 +350,7 @@ def test_update_description_applies_a_real_change_and_advances_the_version() -> 
     created = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Original title",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
     )
@@ -323,6 +372,7 @@ def test_update_description_with_same_value_is_no_op() -> None:
     created = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Original title",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
         description="Existing description.",
@@ -348,6 +398,7 @@ def test_set_priority_applies_and_stores_the_new_priority() -> None:
     created = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Draft the synthetic summary",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
     )
@@ -368,6 +419,7 @@ def test_schedule_sets_and_clears_the_scheduled_instant() -> None:
     created = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Draft the synthetic summary",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
     )
@@ -395,6 +447,7 @@ def test_defer_sets_and_clears_the_deferred_until_instant() -> None:
     created = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Draft the synthetic summary",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
     )
@@ -417,6 +470,7 @@ def test_archive_applies_once_and_unarchive_clears_it() -> None:
     created = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Draft the synthetic summary",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
     )
@@ -445,6 +499,7 @@ def test_unarchive_of_an_already_unarchived_task_is_no_op() -> None:
     created = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Draft the synthetic summary",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
     )
@@ -463,6 +518,7 @@ def test_archive_of_an_already_archived_task_is_no_op() -> None:
     created = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Draft the synthetic summary",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
     )
@@ -490,6 +546,7 @@ def test_a_legal_transition_applies_and_a_repeat_request_is_no_op() -> None:
     created = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Draft the synthetic summary",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
     )
@@ -519,6 +576,7 @@ def test_a_terminal_task_cannot_be_transitioned_further() -> None:
     created = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Draft the synthetic summary",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
     )
@@ -542,12 +600,36 @@ def test_a_terminal_task_cannot_be_transitioned_further() -> None:
         )
 
 
-def test_entering_a_terminal_state_with_no_closure_evidence_is_refused() -> None:
+def test_entering_a_terminal_state_without_closure_evidence_is_allowed() -> None:
     world = _World()
     service = _service(world)
     created = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Draft the synthetic summary",
+        origin_kind=TaskOriginKind.EVIDENCE,
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+    )
+    completed = service.transition_lifecycle(
+        principal_id=PRINCIPAL_A,
+        task_id=created.task.task_id,
+        to_state=TaskLifecycleState.CANCELLED,
+        expected_version=created.task.version,
+        actor=TaskMutationActor.PRINCIPAL,
+        closure_evidence_ref=None,
+    )
+    assert completed.task.lifecycle_state is TaskLifecycleState.CANCELLED
+    assert completed.task.closure_evidence_ref is None
+    assert completed.task.closed_at == NOW
+
+
+def test_entering_a_terminal_state_with_blank_closure_evidence_is_refused() -> None:
+    world = _World()
+    service = _service(world)
+    created = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Draft the synthetic summary",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
     )
@@ -558,8 +640,8 @@ def test_entering_a_terminal_state_with_no_closure_evidence_is_refused() -> None
             to_state=TaskLifecycleState.CANCELLED,
             expected_version=created.task.version,
             actor=TaskMutationActor.PRINCIPAL,
+            closure_evidence_ref="   ",
         )
-    # And the refusal wrote nothing: the task is still at its original version.
     stored = world.tasks[(PRINCIPAL_A, created.task.task_id)]
     assert stored.version == created.task.version
     assert stored.lifecycle_state is TaskLifecycleState.OPEN
@@ -571,6 +653,7 @@ def test_a_terminal_transition_with_evidence_succeeds_and_records_closure() -> N
     created = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Draft the synthetic summary",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
     )
@@ -596,6 +679,7 @@ def test_a_stale_expected_version_is_rejected_and_leaves_the_row_untouched() -> 
     created = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Original title",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
     )
@@ -628,6 +712,7 @@ def test_an_idempotency_key_reused_for_different_content_conflicts() -> None:
     service.create_task(
         principal_id=PRINCIPAL_A,
         title="Draft the synthetic summary",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
         idempotency_key=key,
@@ -639,7 +724,8 @@ def test_an_idempotency_key_reused_for_different_content_conflicts() -> None:
         service.create_task(
             principal_id=PRINCIPAL_A,
             title="A materially different title that must not be applied",
-            origin_evidence_ref=ORIGIN,
+            origin_kind=TaskOriginKind.EVIDENCE,
+        origin_evidence_ref=ORIGIN,
             actor=TaskMutationActor.PRINCIPAL,
             idempotency_key=key,
         )
@@ -656,6 +742,7 @@ def test_atomic_patch_changes_multiple_fields_with_one_version_and_receipt() -> 
         principal_id=PRINCIPAL_A,
         title="Original",
         description="clear me",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
         idempotency_key=_idempotency_key("atomic-create"),
@@ -693,6 +780,7 @@ def test_idempotency_replay_also_applies_to_a_mutation_on_an_existing_task() -> 
     created = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Original title",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
     )
@@ -749,6 +837,7 @@ def test_a_task_belonging_to_another_principal_is_not_found_either() -> None:
     created = service.create_task(
         principal_id=PRINCIPAL_A,
         title="Draft the synthetic summary",
+        origin_kind=TaskOriginKind.EVIDENCE,
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
     )
@@ -760,3 +849,72 @@ def test_a_task_belonging_to_another_principal_is_not_found_either() -> None:
             expected_version=created.task.version,
             actor=TaskMutationActor.PRINCIPAL,
         )
+
+def test_create_task_direct_principal_is_accepted_without_evidence() -> None:
+    world = _World()
+    receipt = _service(world).create_task(
+        principal_id=PRINCIPAL_A,
+        title="Direct principal note",
+        origin_kind=TaskOriginKind.DIRECT_PRINCIPAL,
+        actor=TaskMutationActor.PRINCIPAL,
+    )
+    assert receipt.task.origin_kind is TaskOriginKind.DIRECT_PRINCIPAL
+    assert receipt.task.origin_evidence_ref is None
+    assert receipt.task.evidence_state is ContinuityEvidenceState.ACCEPTED
+    assert receipt.task.acceptance_kind is ContinuityAcceptanceKind.DIRECT_PRINCIPAL
+    assert receipt.task.accepted_by_review_decision_id is None
+
+
+def test_create_task_comment_does_not_bump_task_version_or_history() -> None:
+    world = _World()
+    service = _service(world)
+    created = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Draft the synthetic summary",
+        origin_kind=TaskOriginKind.EVIDENCE,
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+    )
+    before_version = created.task.version
+    history_before = world.insert_history_calls
+    receipt = service.create_task_comment(
+        principal_id=PRINCIPAL_A,
+        task_id=created.task.task_id,
+        body="A working note",
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key=_idempotency_key("comment-1"),
+    )
+    assert receipt.replayed is False
+    assert receipt.comment.body == "A working note"
+    assert world.tasks[(PRINCIPAL_A, created.task.task_id)].version == before_version
+    assert world.insert_history_calls == history_before
+    assert world.insert_comment_calls == 1
+
+    replay = service.create_task_comment(
+        principal_id=PRINCIPAL_A,
+        task_id=created.task.task_id,
+        body="A working note",
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key=_idempotency_key("comment-1"),
+    )
+    assert replay.replayed is True
+    assert replay.comment.comment_id == receipt.comment.comment_id
+    assert world.insert_comment_calls == 1
+
+    with pytest.raises(TaskIdempotencyConflictError):
+        service.create_task_comment(
+            principal_id=PRINCIPAL_A,
+            task_id=created.task.task_id,
+            body="A different note",
+            actor=TaskMutationActor.PRINCIPAL,
+            idempotency_key=_idempotency_key("comment-1"),
+        )
+
+    listed = service.list_task_comments(
+        principal_id=PRINCIPAL_A,
+        task_id=created.task.task_id,
+        page_size=10,
+    )
+    assert len(listed) == 1
+    assert listed[0].comment_id == receipt.comment.comment_id
+

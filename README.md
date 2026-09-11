@@ -147,10 +147,10 @@ true only of a process given all required composition gates. None is set by defa
 (`managed_document_root` defaults to `""`, and `relationship_intelligence_enabled`
 and `relationship_memory_enabled` to `False`, in `bootstrap/settings.py`), so a
 default process publishes a manifest
-in which 91 of the 161 capabilities are `available` and 70 — the six `documents.`
+in which 93 of the 163 capabilities are `available` and 70 — the six `documents.`
 names, the fifty-five `entities.` names, and the nine `relationship_memory.` names — are
 `not_implemented`, and readiness is `degraded` with the limitation
-`70 of 161 capabilities are unwired.` Derived by building the manifest both ways
+`70 of 163 capabilities are unwired.` Derived by building the manifest both ways
 from the dispatch table, exactly as `_capabilities_get` does:
 `build_capability_manifest(implemented=frozenset(_HANDLERS) - _ENTITY_CAPABILITIES
 - _MANAGED_CAPABILITIES - _RELATIONSHIP_MEMORY_CAPABILITIES, limits=...)`.

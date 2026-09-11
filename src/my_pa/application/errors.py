@@ -137,9 +137,12 @@ class SafeDetail(StrEnum):
     #: says the mutations list was rejected.
     EXPECTED_VERSION = "expected_version"
     ORIGIN_EVIDENCE_REF = "origin_evidence_ref"
+    ORIGIN_KIND = "origin_kind"
     SCHEDULED_AT = "scheduled_at"
     DEFERRED_UNTIL = "deferred_until"
     CLOSURE_EVIDENCE_REF = "closure_evidence_ref"
+    #: WP-TUX-01 Task comment body field name only — never the authored text.
+    COMMENT_BODY = "body"
     INVALID_EVIDENCE_REFERENCE = "invalid_evidence_reference"
     REVIEW_DECISION_ID = "review_decision_id"
     BULK_OPERATION_ID = "bulk_operation_id"

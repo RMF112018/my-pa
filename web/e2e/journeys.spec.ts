@@ -57,6 +57,16 @@ test.describe("the signed-in surfaces", () => {
   test("Today renders a truthful state, never a blank page", async ({ page }) => {
     const heading = page.getByRole("heading", { name: "Today", level: 1 });
     await expect(heading).toBeVisible();
+    // Wait for the derivation to settle before classifying empty vs populated.
+    // Counting pulse items during the loading gap falsely treats "not yet
+    // rendered" as an empty day and then fails looking for today-empty.
+    await expect(
+      page
+        .getByTestId("pulse-item")
+        .or(page.getByTestId("today-empty"))
+        .or(page.getByTestId("today-unavailable"))
+        .first(),
+    ).toBeVisible();
     // Either the derivation returned items or it returned none. Both are real
     // answers; what must never appear is a failure dressed as an empty day.
     const items = page.getByTestId("pulse-item");

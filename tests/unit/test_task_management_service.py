@@ -158,24 +158,28 @@ class _FakeRepository(TaskManagementRepository):
     ) -> TaskHistoryEntry | None:
         raise NotImplementedError("this suite does not exercise the read plane")
 
-    def create_task_comment(self, comment: TaskComment) -> None:
-        self._world.insert_comment_calls += 1
+    def create_comment(self, comment: TaskComment) -> TaskComment:
         key = (comment.principal_id, comment.idempotency_key)
+        existing = self._world.comments_by_key.get(key)
+        if existing is not None:
+            return existing
+        self._world.insert_comment_calls += 1
         self._world.comments_by_key[key] = comment
         self._world.comments_all.append(comment)
+        return comment
 
-    def get_task_comment_by_idempotency(
+    def find_comment_by_idempotency_key(
         self, principal_id: str, idempotency_key: str
     ) -> TaskComment | None:
         return self._world.comments_by_key.get((principal_id, idempotency_key))
 
-    def list_task_comments(
+    def list_comments(
         self,
         principal_id: str,
         task_id: str,
         *,
-        after_cursor: str | None,
-        page_size: int,
+        after: str | None = None,
+        limit: int,
     ) -> tuple[TaskComment, ...]:
         rows = [
             c
@@ -183,16 +187,16 @@ class _FakeRepository(TaskManagementRepository):
             if c.principal_id == principal_id and c.task_id == task_id
         ]
         rows.sort(key=lambda c: (c.created_at, c.comment_id))
-        if after_cursor is not None:
+        if after is not None:
             found = False
             kept: list[TaskComment] = []
             for c in rows:
                 if found:
                     kept.append(c)
-                elif c.comment_id == after_cursor:
+                elif c.comment_id == after:
                     found = True
             rows = kept
-        return tuple(rows[:page_size])
+        return tuple(rows[:limit])
 
 
 class _FakeUnitOfWork(TaskManagementUnitOfWork):

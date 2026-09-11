@@ -49,9 +49,8 @@ exactly as recurrence generation and the Daily Brief projection are.
 `list_task_comments` write and read `TaskComment` rows without advancing
 `Task.version` and without writing `TaskHistoryEntry`. Idempotency for comment
 create is Principal-scoped and digest-bound to `task_id` plus the validated
-body, using the repository methods PERSIST owns
-(`create_task_comment` / `get_task_comment_by_idempotency` /
-`list_task_comments`).
+body, using the repository port methods
+(`create_comment` / `find_comment_by_idempotency_key` / `list_comments`).
 
 **Errors here are plain exceptions, not `application.errors` codes.** The
 existing precedent is `domain.source.provider.VersionChangedError`: a plain
@@ -70,7 +69,7 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol, cast
+from typing import Any, Protocol
 
 from my_pa.contracts.ports import TaskManagementRepository, TaskManagementUnitOfWork
 from my_pa.domain.common.identifiers import IdKind
@@ -134,29 +133,6 @@ class _ActiveTaskUnitOfWork(Protocol):
     @property
     def tasks(self) -> TaskManagementRepository: ...
 
-
-class _TaskCommentStore(Protocol):
-    """Comment persistence PERSIST adds on `TaskManagementRepository`.
-
-    Named here so application can call the expected methods without fighting
-    over `contracts/ports.py` mid-flight. When PERSIST lands the ABC methods,
-    these calls resolve against the real repository.
-    """
-
-    def create_task_comment(self, comment: TaskComment) -> None: ...
-
-    def get_task_comment_by_idempotency(
-        self, principal_id: str, idempotency_key: str
-    ) -> TaskComment | None: ...
-
-    def list_task_comments(
-        self,
-        principal_id: str,
-        task_id: str,
-        *,
-        after_cursor: str | None,
-        page_size: int,
-    ) -> tuple[TaskComment, ...]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -652,8 +628,7 @@ class TaskManagementService:
 
         context = self._unit_of_work() if active_uow is None else nullcontext(active_uow)
         with context as uow:
-            comments = cast(_TaskCommentStore, uow.tasks)
-            prior = comments.get_task_comment_by_idempotency(principal_id, idempotency_key)
+            prior = uow.tasks.find_comment_by_idempotency_key(principal_id, idempotency_key)
             if prior is not None:
                 if prior.request_digest != digest:
                     raise TaskIdempotencyConflictError(
@@ -673,8 +648,10 @@ class TaskManagementService:
                 idempotency_key=idempotency_key,
                 request_digest=digest,
             )
-            comments.create_task_comment(comment)
-            return TaskCommentReceipt(comment=comment, replayed=False)
+            stored = uow.tasks.create_comment(comment)
+            return TaskCommentReceipt(
+                comment=stored, replayed=stored.comment_id != comment.comment_id
+            )
 
     def list_task_comments(
         self,
@@ -690,12 +667,11 @@ class TaskManagementService:
         with context as uow:
             if uow.tasks.get(principal_id, task_id) is None:
                 raise TaskNotFoundError()
-            comments = cast(_TaskCommentStore, uow.tasks)
-            return comments.list_task_comments(
+            return uow.tasks.list_comments(
                 principal_id,
                 task_id,
-                after_cursor=after_cursor,
-                page_size=page_size,
+                after=after_cursor,
+                limit=page_size,
             )
 
     def _mutate(

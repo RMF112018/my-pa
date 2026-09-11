@@ -8061,8 +8061,9 @@ class ApplicationService:
             with _translated():
                 # Command __post_init__ resolves omitted origin_kind + evidence_ref
                 # to EVIDENCE; both omitted is refused. Direct requires explicit kind.
-                assert command.origin_kind is not None
                 origin_kind = command.origin_kind
+                if origin_kind is None:
+                    raise InvalidRequestError(SafeDetail.ORIGIN_KIND)
                 evidence_gate = (
                     None
                     if origin_kind is TaskOriginKind.DIRECT_PRINCIPAL

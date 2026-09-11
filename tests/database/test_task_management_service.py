@@ -57,8 +57,8 @@ from my_pa.domain.task.history import (
     TaskMutationOutcome,
 )
 from my_pa.domain.task.lifecycle import (
-    TaskOriginKind,
     TaskArchiveMode,
+    TaskOriginKind,
     TaskPriority,
     TaskWorkView,
 )
@@ -314,7 +314,7 @@ def test_concurrent_bulk_confirm_key_race_rolls_back_losing_task_and_history(
             principal_id=PRINCIPAL_A,
             title=f"Race task {index}",
             origin_kind=TaskOriginKind.EVIDENCE,
-        origin_evidence_ref=ORIGIN,
+            origin_evidence_ref=ORIGIN,
             actor=TaskMutationActor.PRINCIPAL,
             idempotency_key=_idempotency_key(f"bulk-race-create-{index}"),
         )
@@ -466,7 +466,7 @@ def test_sql_task_cursors_refuse_absent_and_foreign_anchors(
             principal_id=PRINCIPAL_A,
             title=f"Needle continuation {index}",
             origin_kind=TaskOriginKind.EVIDENCE,
-        origin_evidence_ref=ORIGIN,
+            origin_evidence_ref=ORIGIN,
             actor=TaskMutationActor.PRINCIPAL,
             priority=TaskPriority.P1,
             idempotency_key=_idempotency_key(f"cursor-needle-{index}"),

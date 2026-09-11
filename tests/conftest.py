@@ -369,14 +369,14 @@ from my_pa.domain.source.provider import (
 )
 from my_pa.domain.source.registry import ConfiguredSource, SourceProviderKind, issue_identifier
 from my_pa.domain.task.bulk import TaskBulkOperation
+from my_pa.domain.task.comment import TaskComment
 from my_pa.domain.task.commitment import Commitment as CommitmentV2
 from my_pa.domain.task.commitment_history import CommitmentHistoryEntry
-from my_pa.domain.task.comment import TaskComment
 from my_pa.domain.task.history import TaskHistoryEntry, TaskMutationActor
 from my_pa.domain.task.lifecycle import (
-    TaskOriginKind,
     TaskArchiveMode,
     TaskLifecycleState,
+    TaskOriginKind,
     TaskPriority,
     TaskWorkView,
 )
@@ -2552,7 +2552,6 @@ class _TasksRead(TaskManagementRepository):
         )
 
     def create_comment(self, comment: TaskComment) -> TaskComment:
-        key = (comment.principal_id, comment.idempotency_key)
         existing = next(
             (
                 row
@@ -2907,8 +2906,6 @@ class _TasksWrite(TaskManagementRepository):
         self, principal_id: str, task_id: str
     ) -> TaskHistoryEntry | None:
         raise NotImplementedError("the write plane's fake does not serve history reads")
-
-
 
     def create_comment(self, comment: TaskComment) -> TaskComment:
         existing = next(

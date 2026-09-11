@@ -152,7 +152,6 @@ class _FakeRepository(TaskManagementRepository):
     ) -> tuple[TaskHistoryEntry, ...]:
         raise NotImplementedError("this suite does not exercise the read plane")
 
-
     def latest_applied_terminal_history(
         self, principal_id: str, task_id: str
     ) -> TaskHistoryEntry | None:
@@ -733,7 +732,7 @@ def test_an_idempotency_key_reused_for_different_content_conflicts() -> None:
             principal_id=PRINCIPAL_A,
             title="A materially different title that must not be applied",
             origin_kind=TaskOriginKind.EVIDENCE,
-        origin_evidence_ref=ORIGIN,
+            origin_evidence_ref=ORIGIN,
             actor=TaskMutationActor.PRINCIPAL,
             idempotency_key=key,
         )
@@ -858,6 +857,7 @@ def test_a_task_belonging_to_another_principal_is_not_found_either() -> None:
             actor=TaskMutationActor.PRINCIPAL,
         )
 
+
 def test_create_task_direct_principal_is_accepted_without_evidence() -> None:
     world = _World()
     receipt = _service(world).create_task(
@@ -925,4 +925,3 @@ def test_create_task_comment_does_not_bump_task_version_or_history() -> None:
     )
     assert len(listed) == 1
     assert listed[0].comment_id == receipt.comment.comment_id
-

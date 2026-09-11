@@ -200,6 +200,10 @@ from my_pa.domain.situation.continuity import (
     CommitmentState,
     CommitmentWorkView,
 )
+from my_pa.domain.task.comment import (
+    MAX_TASK_COMMENT_BODY_CHARACTERS,
+    validate_task_comment_body,
+)
 from my_pa.domain.task.lifecycle import (
     TaskArchiveMode,
     TaskLifecycleState,
@@ -208,10 +212,6 @@ from my_pa.domain.task.lifecycle import (
     TaskWorkView,
 )
 from my_pa.domain.task.role import TaskRole
-from my_pa.domain.task.comment import (
-    MAX_TASK_COMMENT_BODY_CHARACTERS,
-    validate_task_comment_body,
-)
 
 __all__ = [
     "AddEntityAlias",
@@ -274,8 +274,8 @@ __all__ = [
     "ListReviewCases",
     "ListSituations",
     "ListSources",
-    "ListTasks",
     "ListTaskComments",
+    "ListTasks",
     "OpenSituationCommand",
     "PrepareContext",
     "PullGoodNotesWork",
@@ -2021,7 +2021,8 @@ class CreateTask:
             if ref is None:
                 # Generic `tasks.create` must not invent direct-Principal origin.
                 raise InvalidRequestError(SafeDetail.ORIGIN_KIND)
-            if not isinstance(ref, str) or not ref.strip():
+            # After the None check, ref is str (field type is str | None).
+            if not ref.strip():
                 raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
             object.__setattr__(self, "origin_kind", TaskOriginKind.EVIDENCE)
             kind = TaskOriginKind.EVIDENCE

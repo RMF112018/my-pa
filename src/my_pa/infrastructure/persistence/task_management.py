@@ -28,7 +28,20 @@ from datetime import datetime
 from types import TracebackType
 from typing import Any
 
-from sqlalchemy import Engine, and_, asc, case, desc, false, func, insert, or_, select, update
+from sqlalchemy import (
+    ColumnElement,
+    Engine,
+    and_,
+    asc,
+    case,
+    desc,
+    false,
+    func,
+    insert,
+    or_,
+    select,
+    update,
+)
 from sqlalchemy.engine import Connection, Row
 from sqlalchemy.exc import IntegrityError
 
@@ -822,16 +835,16 @@ def _acceptance_kind_value(task: Task) -> str:
 
 
 def _extend_work_view_conditions(
-    conditions: list[object],
+    conditions: list[ColumnElement[bool]],
     *,
     work_view: TaskWorkView | None,
     work_start: datetime | None,
     work_end: datetime | None,
     work_now: datetime | None,
-    effective_at: object,
-    calendar_at: object,
-    priority_rank: object,
-) -> tuple[object, ...]:
+    effective_at: ColumnElement[Any],
+    calendar_at: ColumnElement[Any],
+    priority_rank: ColumnElement[Any],
+) -> tuple[Any, ...]:
     """Append Work-view predicates shared by `list_tasks` and `search`.
 
     WP-TUX-01 civil-day buckets use `work_start`/`work_end` only:

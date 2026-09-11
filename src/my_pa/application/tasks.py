@@ -134,7 +134,6 @@ class _ActiveTaskUnitOfWork(Protocol):
     def tasks(self) -> TaskManagementRepository: ...
 
 
-
 @dataclass(frozen=True, slots=True)
 class TaskMutationReceipt:
     """What a mutation attempt returns: the history row produced, and the task as it now stands."""
@@ -523,9 +522,7 @@ class TaskManagementService:
                 )
             if to_state in TERMINAL_TASK_LIFECYCLE_STATES and not unchanged:
                 if closure_evidence_ref is not None and not closure_evidence_ref.strip():
-                    raise IllegalTaskTransitionError(
-                        "closure evidence, when present, is non-blank"
-                    )
+                    raise IllegalTaskTransitionError("closure evidence, when present, is non-blank")
                 return dataclasses.replace(
                     current,
                     lifecycle_state=to_state,

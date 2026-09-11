@@ -140,7 +140,8 @@ describe("Work evidence", () => {
       acceptance_kind: "direct_principal", closure_history_id: null, version: 1, priority: null,
       due_at: null, scheduled_at: null, deferred_until: null, archived_at: null, commitment_id: null,
       role: null, project_id: null, situation_id: null, opened_at: "2026-08-20T12:00:00Z",
-      closed_at: null, created_at: "2026-08-20T12:00:00Z", updated_at: "2026-08-20T12:00:00Z",
+      closed_at: null as string | null, created_at: "2026-08-20T12:00:00Z",
+      updated_at: "2026-08-20T12:00:00Z",
     };
     let current = task;
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {

@@ -300,6 +300,8 @@ def test_downgrading_one_step_removes_exactly_this_table_and_restores_the_origin
         "constraint_sync_run_items",
         "constraint_sync_resolution_history",
         "constraint_sync_legacy_unbound_conflicts",
+        # WP-TUX-01. Head stacks `task_comments` above this revision.
+        "task_comments",
     }
     # The rest of the entity plane survives the downgrade of this revision alone.
     assert {

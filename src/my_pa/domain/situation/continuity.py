@@ -412,13 +412,13 @@ class Task:
         if self.closed_at is not None:
             ensure_utc(self.closed_at)
         _require_closure_pairing(self.state is TaskState.CLOSED, self.closed_at, "task")
-        # WP-TUX-01: direct-Principal closure may omit closure evidence.
-        if (
-            self.state is TaskState.CLOSED
-            and self.acceptance_kind is not ContinuityAcceptanceKind.DIRECT_PRINCIPAL
-            and not (self.closure_evidence_ref or "").strip()
-        ):
-            raise ValueError("a closed task carries the evidence that closed it")
+        # WP-TUX-01: terminal Task rows may omit closure evidence (direct or
+        # evidence-origin). Nonterminal rows still refuse a closure citation.
+        # Acceptance kind is create-time provenance, not a closure gate.
+        if self.state is not TaskState.CLOSED and (self.closure_evidence_ref or "").strip():
+            raise ValueError("an open task does not carry closure evidence")
+        if self.closure_evidence_ref is not None and not self.closure_evidence_ref.strip():
+            raise ValueError("closure evidence, when present, is non-blank")
 
 
 @dataclass(frozen=True, slots=True)

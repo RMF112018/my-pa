@@ -6,7 +6,8 @@ outside this process meets, and the `__post_init__` is what a caller inside it
 meets, and a rule that lived in only one of the two would be a rule someone can
 route around.
 
-* a closed commitment, decision or task carries the evidence that closed it;
+* a closed commitment or decision carries the evidence that closed it; a closed
+  task may omit closure evidence (WP-TUX-01 terminal-null contract);
 * accepted continuity names the review decision that accepted it, and a proposal
   names none — a biconditional, so a half-finished promotion is unrepresentable;
 * a commitment names a counterparty, which is what makes it a social obligation
@@ -206,6 +207,46 @@ def test_direct_principal_task_allows_null_origin_and_closure_evidence() -> None
             created_at=WHEN,
             updated_at=WHEN,
             acceptance_kind=ContinuityAcceptanceKind.DIRECT_PRINCIPAL,
+        )
+
+
+def test_closed_evidence_origin_task_may_omit_closure_evidence() -> None:
+    """WP-TUX-01: Continuity hydrates Work-closed rows with null closure evidence.
+
+    Schema and Task-management allow terminal null closure evidence for any
+    origin; Continuity must not refuse those shared-table rows on read.
+    """
+    closed = Task(
+        task_id="tsk_base00001base00001ff",
+        principal_id=PRINCIPAL_A,
+        title="Evidence-origin closed without fabricated closure",
+        state=TaskState.CLOSED,
+        evidence_state=ContinuityEvidenceState.ACCEPTED,
+        origin_evidence_ref=ORIGIN,
+        opened_at=WHEN,
+        created_at=WHEN,
+        updated_at=WHEN,
+        closed_at=WHEN,
+        closure_evidence_ref=None,
+        accepted_by_review_decision_id="rdec_accept0001accept0001",
+        acceptance_kind=ContinuityAcceptanceKind.REVIEW,
+    )
+    assert closed.closure_evidence_ref is None
+
+    with pytest.raises(ValueError, match="does not carry closure evidence"):
+        Task(
+            task_id="tsk_base00001base00001gg",
+            principal_id=PRINCIPAL_A,
+            title="Open with closure citation",
+            state=TaskState.OPEN,
+            evidence_state=ContinuityEvidenceState.ACCEPTED,
+            origin_evidence_ref=ORIGIN,
+            opened_at=WHEN,
+            created_at=WHEN,
+            updated_at=WHEN,
+            closure_evidence_ref="rdec_closure0001closure01",
+            accepted_by_review_decision_id="rdec_accept0001accept0001",
+            acceptance_kind=ContinuityAcceptanceKind.REVIEW,
         )
 
 

@@ -2551,10 +2551,23 @@ class _TasksRead(TaskManagementRepository):
             None,
         )
 
-    def create_task_comment(self, comment: TaskComment) -> None:
+    def create_comment(self, comment: TaskComment) -> TaskComment:
+        key = (comment.principal_id, comment.idempotency_key)
+        existing = next(
+            (
+                row
+                for row in self._world.task_comments
+                if row.principal_id == comment.principal_id
+                and row.idempotency_key == comment.idempotency_key
+            ),
+            None,
+        )
+        if existing is not None:
+            return existing
         self._world.task_comments.append(comment)
+        return comment
 
-    def get_task_comment_by_idempotency(
+    def find_comment_by_idempotency_key(
         self, principal_id: str, idempotency_key: str
     ) -> TaskComment | None:
         return next(
@@ -2566,13 +2579,13 @@ class _TasksRead(TaskManagementRepository):
             None,
         )
 
-    def list_task_comments(
+    def list_comments(
         self,
         principal_id: str,
         task_id: str,
         *,
-        after_cursor: str | None,
-        page_size: int,
+        after: str | None = None,
+        limit: int,
     ) -> tuple[TaskComment, ...]:
         rows = [
             row
@@ -2580,16 +2593,16 @@ class _TasksRead(TaskManagementRepository):
             if row.principal_id == principal_id and row.task_id == task_id
         ]
         rows.sort(key=lambda row: (row.created_at, row.comment_id))
-        if after_cursor is not None:
+        if after is not None:
             found = False
             kept: list[TaskComment] = []
             for row in rows:
                 if found:
                     kept.append(row)
-                elif row.comment_id == after_cursor:
+                elif row.comment_id == after:
                     found = True
             rows = kept
-        return tuple(rows[:page_size])
+        return tuple(rows[:limit])
 
 
 class _CommitmentsRead(CommitmentManagementRepository):
@@ -2895,10 +2908,22 @@ class _TasksWrite(TaskManagementRepository):
 
 
 
-    def create_task_comment(self, comment: TaskComment) -> None:
+    def create_comment(self, comment: TaskComment) -> TaskComment:
+        existing = next(
+            (
+                row
+                for row in self._world.task_comments
+                if row.principal_id == comment.principal_id
+                and row.idempotency_key == comment.idempotency_key
+            ),
+            None,
+        )
+        if existing is not None:
+            return existing
         self._world.task_comments.append(comment)
+        return comment
 
-    def get_task_comment_by_idempotency(
+    def find_comment_by_idempotency_key(
         self, principal_id: str, idempotency_key: str
     ) -> TaskComment | None:
         return next(
@@ -2910,13 +2935,13 @@ class _TasksWrite(TaskManagementRepository):
             None,
         )
 
-    def list_task_comments(
+    def list_comments(
         self,
         principal_id: str,
         task_id: str,
         *,
-        after_cursor: str | None,
-        page_size: int,
+        after: str | None = None,
+        limit: int,
     ) -> tuple[TaskComment, ...]:
         rows = [
             row
@@ -2924,16 +2949,16 @@ class _TasksWrite(TaskManagementRepository):
             if row.principal_id == principal_id and row.task_id == task_id
         ]
         rows.sort(key=lambda row: (row.created_at, row.comment_id))
-        if after_cursor is not None:
+        if after is not None:
             found = False
             kept: list[TaskComment] = []
             for row in rows:
                 if found:
                     kept.append(row)
-                elif row.comment_id == after_cursor:
+                elif row.comment_id == after:
                     found = True
             rows = kept
-        return tuple(rows[:page_size])
+        return tuple(rows[:limit])
 
 
 class FakeTaskManagementUnitOfWork(TaskManagementUnitOfWork):

@@ -108,7 +108,7 @@ def test_no_authoring_payload_accepts_a_caller_supplied_principal(
     """`CM-BE-AC-083`, stated about the payload and not about the envelope.
 
     The envelope's `principal_id` is a required v1 contract field and is
-    published on all one hundred and sixty-one tools; it is correlation input.
+    published on all one hundred and sixty-three tools; it is correlation input.
     What must not exist is a *command* field a caller could set.
     """
     payload = _payload_schema(capability)

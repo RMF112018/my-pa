@@ -2211,6 +2211,8 @@ class CreateTaskComment:
 
     def __post_init__(self) -> None:
         _identifier(self.task_id, IdKind.TASK, SafeDetail.TASK_ID)
+        if not isinstance(self.body, str):
+            raise InvalidRequestError(SafeDetail.COMMENT_BODY)
         try:
             validate_task_comment_body(self.body)
         except ValueError:

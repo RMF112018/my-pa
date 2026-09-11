@@ -2,7 +2,7 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the one hundred and sixty-one capabilities is addressable
+**Reachability.** Every one of the one hundred and sixty-three capabilities is addressable
 over HTTP and answers. Parametrised over `Capability` rather than over a list
 written here, so the next capability added to the domain arrives as
 a failing row instead of as an untested one. Fourteen of the one hundred and forty-two answer a

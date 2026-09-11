@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes one hundred and sixty-one capability names and none of them
+  ends: the transport routes one hundred and sixty-three capability names and none of them
   mutates a source, and every capability driven over the wire is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -511,6 +511,12 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "bulk_operation_id": bulk_operation_id,
             "idempotency_key": "wire-task-bulk-confirm-0001",
             "mutations": bulk_mutations,
+        },
+        Capability.TASKS_COMMENTS_LIST: {"task_id": task.task_id},
+        Capability.TASKS_COMMENTS_CREATE: {
+            "task_id": task.task_id,
+            "body": "Marked task comment",
+            "idempotency_key": "wire-task-comment-create-0001",
         },
         Capability.COMMITMENTS_READ: {"commitment_id": commitment.commitment_id},
         Capability.COMMITMENTS_LIST: {},
@@ -1661,6 +1667,8 @@ SCOPED_CAPABILITIES = [
         Capability.TASKS_TRANSITION,
         Capability.TASKS_BULK_PREVIEW,
         Capability.TASKS_BULK_CONFIRM,
+        Capability.TASKS_COMMENTS_LIST,
+        Capability.TASKS_COMMENTS_CREATE,
         Capability.COMMITMENTS_READ,
         Capability.COMMITMENTS_LIST,
         Capability.COMMITMENTS_SEARCH,
@@ -1963,6 +1971,7 @@ TASK_MANAGEMENT_EXEMPTION = frozenset(
     {
         Capability.TASKS_CREATE,
         Capability.TASKS_UPDATE,
+        Capability.TASKS_COMMENTS_CREATE,
         Capability.COMMITMENTS_CREATE,
         Capability.COMMITMENTS_UPDATE,
     }

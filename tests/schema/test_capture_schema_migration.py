@@ -260,6 +260,10 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "tasks.create",
         "tasks.transition",
         "tasks.update",
+        # WP-TUX-01. `de5ec1c65857` is the forward `ALTER` that admits the
+        # append-only Task comment plane.
+        "tasks.comments.create",
+        "tasks.comments.list",
         # `8a1c4e7b2d90` is the forward `ALTER` that admits it.
         "context.prepare",
         # `c6f1a8d3e204` is the forward `ALTER` that admits it.
@@ -1159,6 +1163,10 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             "constraint_category_history_are_immutable",
             "constraint_sync_resolution_history_is_append_only",
             "capture_labels_are_append_only",
+            # WP-TUX-01. `de5ec1c65857` installs the append-only guard on
+            # `knowledge.task_comments` using the same trigger pattern as
+            # `capture_labels`; name it so the equality stays an equality.
+            "task_comments_are_append_only",
         }
         for name in ("a_proposal_cites_at_least_one_span", "a_span_link_leaves_its_proposal_cited"):
             assert "CONSTRAINT TRIGGER" in triggers[name]

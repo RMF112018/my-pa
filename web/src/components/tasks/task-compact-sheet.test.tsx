@@ -134,7 +134,7 @@ describe("TaskCompactSheet", () => {
 
     const { onOpenChange } = renderSheet(SEED);
     release();
-    await screen.findByTestId("task-compact-sheet");
+    await screen.findByTestId("task-status-control");
 
     // Radix dialog semantics come from the shared Sheet, not from a new overlay.
     expect(screen.getByRole("dialog", { name: "Coordinate the review" })).toBeTruthy();
@@ -150,7 +150,10 @@ describe("TaskCompactSheet", () => {
 
     renderSheet(SEED);
     release();
-    const sheet = await screen.findByTestId("task-compact-sheet");
+    // A mutation control only mounts after canonical hydration, so this is the
+    // earliest point at which the hydrated Task view is fully rendered.
+    await screen.findByTestId("task-status-control");
+    const sheet = screen.getByTestId("task-compact-sheet");
 
     expect(sheet.textContent).not.toContain(TASK_ID);
     expect(sheet.textContent).not.toMatch(/in_progress|\bp2\b/);

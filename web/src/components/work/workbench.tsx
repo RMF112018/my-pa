@@ -102,6 +102,45 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   const commitmentGeneration = useRef(0);
   const activeCommitmentRead = useRef<AbortController | null>(null);
   const detailTrigger = useRef<HTMLElement | null>(null);
+  const workHeading = useRef<HTMLHeadingElement | null>(null);
+  /** The Task a dispatched mutation may move, and where it sat when it was dispatched. */
+  const pendingMovement = useRef<{ readonly taskId: string; readonly index: number } | null>(null);
+  /** Live rows, so focus resolution after reconciliation never reads a stale closure. */
+  const rowsRef = useRef<readonly unknown[]>([]);
+  useEffect(() => {
+    rowsRef.current = rows;
+  }, [rows]);
+
+  /*
+    Resolve focus once the reconciled list has painted.
+
+    Runs on the rows the server returned, not on a mutation callback: the row
+    that was mutated may already be unmounted by then, so nothing it fires can
+    be relied on. Focus lands on whatever now occupies its place, then the row
+    before it, and only then the heading — never on nothing.
+  */
+  useEffect(() => {
+    const moved = pendingMovement.current;
+    if (!moved) return;
+    const present = rows.some((row) => taskIdOf(row) === moved.taskId);
+    if (present) return;
+    pendingMovement.current = null;
+    const frame = requestAnimationFrame(() => {
+      const after = visibleRowElements();
+      const sameIndex = rowTarget(after[moved.index]);
+      if (sameIndex) {
+        sameIndex.focus();
+        return;
+      }
+      const previous = moved.index > 0 ? rowTarget(after[moved.index - 1]) : null;
+      if (previous) {
+        previous.focus();
+        return;
+      }
+      workHeading.current?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [rows]);
   const newTaskTrigger = useRef<HTMLButtonElement | null>(null);
 
   const taskMode = view !== "commitments";
@@ -334,6 +373,48 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
     sync({ task: type === "task" ? id : undefined, commitmentId: type === "commitment" ? id : undefined });
   }
 
+  /** The Task rows currently on screen, in the order the server returned them. */
+  function visibleRowElements(): readonly HTMLElement[] {
+    const list = document.querySelector('[aria-label="Work list"]');
+    return list ? Array.from(list.querySelectorAll<HTMLElement>("[data-work-item]")) : [];
+  }
+
+  /** The title/details trigger of a row — the stable thing to hand focus to. */
+  function rowTarget(row: HTMLElement | undefined): HTMLElement | null {
+    return row?.querySelector<HTMLElement>("a[href]") ?? null;
+  }
+
+  /**
+   * A Task mutation is on its way.
+   *
+   * The ordering is captured now, while it is still what the user is looking at.
+   * By the time the write confirms, reconciliation may already have taken this
+   * row away — and with it whichever control had focus.
+   */
+  function onTaskMutationDispatched(input: { taskId: string; kind: string }) {
+    const rows = visibleRowElements();
+    const index = rows.findIndex((row) => row.getAttribute("data-work-item") === input.taskId);
+    pendingMovement.current = { taskId: input.taskId, index: Math.max(0, index) };
+  }
+
+  /**
+   * A Task mutation was confirmed by the server.
+   *
+   * Reconciliation is authoritative — the server decides whether the Task still
+   * belongs in this filter, and nothing is inserted or removed locally.
+   */
+  function onTaskMutationConfirmed() {
+    void Promise.resolve(notifyMutationConfirmed()).catch(() => undefined);
+  }
+
+  /**
+   * The Comment affordance. Opens the Task's own Activity rather than giving the
+   * row a second comments implementation to keep in step with the first.
+   */
+  function openActivity(taskId: string, title: string, trigger: HTMLElement) {
+    openDetail("task", taskId, title, trigger);
+  }
+
   function closeDetail() {
     setDetail(undefined);
     sync({ task: undefined, commitmentId: undefined });
@@ -345,7 +426,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
     <section aria-labelledby="work-heading" className="mx-auto max-w-5xl pb-24">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 id="work-heading" className="text-2xl font-semibold text-text-primary">Work</h1>
+          <h1 id="work-heading" ref={workHeading} tabIndex={-1} className="text-2xl font-semibold text-text-primary">Work</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted">Tasks and commitments you are tracking.</p>
         </div>
         <Button
@@ -500,6 +581,9 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
             selectedTaskIds={selectedTaskIds}
             onSelectTask={toggleTask}
             onOpen={openDetail}
+            onOpenActivity={openActivity}
+            onTaskMutationConfirmed={onTaskMutationConfirmed}
+            onTaskMutationDispatched={onTaskMutationDispatched}
           />
         ) : null}
       </div>
@@ -579,6 +663,11 @@ function taskSeed(
 ): TaskRow | null {
   const match = (rows as readonly { task_id?: string }[]).find((row) => row.task_id === taskId);
   return match && "lifecycle_state" in match ? (match as TaskRow) : null;
+}
+
+function taskIdOf(row: unknown): string | undefined {
+  const id = (row as { task_id?: unknown } | null)?.task_id;
+  return typeof id === "string" ? id : undefined;
 }
 
 function Disclosure({ details }: { details: DisclosureEnvelope }) {

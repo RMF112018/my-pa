@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Workbench } from "@/components/work/workbench";
 import { TaskRuntimeProvider } from "@/components/work/task-runtime-provider";
@@ -181,8 +181,106 @@ describe("Work surface", () => {
       { task_id: "tsk_bbbbbbbb22222222", title: "Withdrawn", lifecycle_state: "cancelled", priority: null, due_at: null, archived_at: null, created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z" },
     ] }), { status: 200, headers: { "content-type": "application/json" } })));
     history.replaceState(null, "", "/work?view=completed"); renderFromUrl();
-    expect(await screen.findByText(/terminal completion/)).toBeTruthy();
-    expect(screen.getByText(/terminal cancellation/)).toBeTruthy();
+    /*
+      Same guarantee, said in product language. The operational row states the
+      terminal outcome as Closed or Cancelled rather than as "terminal
+      completion" / "terminal cancellation", and the two remain distinguishable —
+      which is what this test has always been for. The row deliberately shows no
+      raw lifecycle token, so the backend words are asserted absent too.
+    */
+    const rows = await screen.findAllByTestId("task-list-row");
+    expect(rows).toHaveLength(2);
+    const finished = rows.find((row) => row.textContent?.includes("Finished"));
+    const withdrawn = rows.find((row) => row.textContent?.includes("Withdrawn"));
+    expect(finished?.textContent).toContain("Closed");
+    expect(withdrawn?.textContent).toContain("Cancelled");
+    expect(finished?.textContent).not.toContain("completed");
+    expect(withdrawn?.textContent).not.toContain("cancelled");
+  });
+
+  it("moves focus to the Task that takes the place of one that left the filter", async () => {
+    /*
+      The package's primary acceptance gate. Closing a Task from an open view
+      removes the row the user was standing on, and with it the control that had
+      focus. Focus must land on whatever now occupies that place — never on
+      `document.body`, where a keyboard user would be stranded at the top of the
+      document with no idea the action succeeded.
+    */
+    const rowOf = (id: string, title: string) => ({
+      task_id: id, title, lifecycle_state: "open", priority: null, due_at: null,
+      scheduled_at: null, deferred_until: null, archived_at: null,
+      created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z", version: 2,
+    });
+    const first = rowOf("tsk_aaaaaaaa11111111", "Leaves the filter");
+    const second = rowOf("tsk_bbbbbbbb22222222", "Takes its place");
+    let closed = false;
+    const body = (data: unknown) =>
+      new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
+
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (path.includes("/transition") && method === "POST") {
+        closed = true;
+        return body({ task: { ...first, version: 3, lifecycle_state: "completed" } });
+      }
+      if (path === `/api/tasks/${first.task_id}`) return body({ task: first });
+      if (path === `/api/tasks/${second.task_id}`) return body({ task: second });
+      if (path.includes("/comments")) return body({ comments: [] });
+      // The server decides membership: once closed, the Task is gone from an open view.
+      return body({ tasks: closed ? [second] : [first, second] });
+    }));
+
+    history.replaceState(null, "", "/work?view=all-open");
+    renderFromUrl();
+    await screen.findByText("Leaves the filter");
+
+    const user = userEvent.setup();
+    const rows = screen.getAllByTestId("task-list-row");
+    await user.click(within(rows[0]).getByTestId("task-close-trigger"));
+    await user.click(within(rows[0]).getByTestId("task-close-confirm"));
+
+    // The row that remains now holds focus at the place the closed one left.
+    await waitFor(() => expect(screen.queryByText("Leaves the filter")).toBeNull());
+    await waitFor(() => {
+      expect(document.activeElement).not.toBe(document.body);
+      expect(document.activeElement?.textContent).toContain("Takes its place");
+    });
+  });
+
+  it("falls back to the Work heading when nothing is left to focus", async () => {
+    const only = {
+      task_id: "tsk_aaaaaaaa11111111", title: "The last one", lifecycle_state: "open",
+      priority: null, due_at: null, scheduled_at: null, deferred_until: null, archived_at: null,
+      created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z", version: 2,
+    };
+    let closed = false;
+    const body = (data: unknown) =>
+      new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
+
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (path.includes("/transition") && method === "POST") {
+        closed = true;
+        return body({ task: { ...only, version: 3, lifecycle_state: "completed" } });
+      }
+      if (path === `/api/tasks/${only.task_id}`) return body({ task: only });
+      if (path.includes("/comments")) return body({ comments: [] });
+      return body({ tasks: closed ? [] : [only] });
+    }));
+
+    history.replaceState(null, "", "/work?view=all-open");
+    renderFromUrl();
+    await screen.findByText("The last one");
+
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId("task-close-trigger"));
+    await user.click(screen.getByTestId("task-close-confirm"));
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Work", level: 1 }));
+    });
   });
 
   it("previews and confirms the exact same bounded mutation list", async () => {

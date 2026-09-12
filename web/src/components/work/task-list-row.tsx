@@ -55,6 +55,15 @@ export interface TaskListRowProps {
   onOpenActivity?(taskId: string, title: string, trigger: HTMLElement): void;
   /** Fired once a mutation is confirmed by the server, for filter/focus handling. */
   onMutationConfirmed?(input: { taskId: string; kind: string }): void;
+  /**
+   * Fired synchronously when a mutation is dispatched, before anything moves.
+   *
+   * Focus handling needs the list as the user last saw it: once the write
+   * confirms, reconciliation may already have removed this row, taking the
+   * control that had focus with it. The ordering has to be captured while it is
+   * still true.
+   */
+  onMutationDispatched?(input: { taskId: string; kind: string }): void;
   /** Civil-day context. Defaults to the browser clock. */
   clock?: TaskCivilClock;
 }
@@ -77,6 +86,7 @@ export function TaskListRow({
   onOpen,
   onOpenActivity,
   onMutationConfirmed,
+  onMutationDispatched,
   clock,
 }: TaskListRowProps): React.JSX.Element {
   const browserClock = useMemo<TaskCivilClock>(() => browserWorkClock(), []);
@@ -127,9 +137,13 @@ export function TaskListRow({
     }
   }, [canonical, onMutationConfirmed]);
 
-  const await_ = useCallback((entry: AwaitedConfirmation) => {
-    awaitingRef.current = [...awaitingRef.current, entry];
-  }, []);
+  const await_ = useCallback(
+    (entry: AwaitedConfirmation) => {
+      awaitingRef.current = [...awaitingRef.current, entry];
+      onMutationDispatched?.({ taskId: task.task_id, kind: entry.kind });
+    },
+    [onMutationDispatched, task.task_id],
+  );
 
   const handleStatus = useCallback(
     (next: TaskActiveStatus) => {

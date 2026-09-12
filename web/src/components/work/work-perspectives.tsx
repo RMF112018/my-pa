@@ -1,5 +1,6 @@
 "use client";
 
+import { TaskListRow } from "@/components/work/task-list-row";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import type { CommitmentRow, TaskLifecycle, TaskRow, WaitingOnRow } from "@/contracts/work";
@@ -92,7 +93,25 @@ function ListPerspective(props: WorkPerspectivesProps) {
     <ul aria-label="Work list" className="grid gap-2">
       {props.commitments
         ? commitmentRows.map((row) => <li key={row.commitment_id}><CommitmentCard row={row} onOpen={props.onOpen} /></li>)
-        : taskRows.map((task) => <li key={task.task_id}><TaskCard task={task} selected={props.selectedTaskIds.includes(task.task_id)} onSelect={props.onSelectTask} onOpen={props.onOpen} /></li>)}
+        : taskRows.map((task) => (
+            <li key={task.task_id}>
+              {/*
+                List gets the operational row; Board and Calendar keep the shared
+                read-only card. The card is one component across all three
+                perspectives, so putting operations on it would hand Board and
+                Calendar a surface that belongs to a later package.
+              */}
+              <TaskListRow
+                task={task}
+                selected={props.selectedTaskIds.includes(task.task_id)}
+                onSelect={props.onSelectTask}
+                onOpen={props.onOpen}
+                onOpenActivity={props.onOpenActivity}
+                onMutationConfirmed={props.onTaskMutationConfirmed}
+                onMutationDispatched={props.onTaskMutationDispatched}
+              />
+            </li>
+          ))}
     </ul>
   );
 }
@@ -132,6 +151,12 @@ export interface WorkPerspectivesProps {
   selectedTaskIds: readonly string[];
   onSelectTask: (taskId: string) => void;
   onOpen: (type: "task" | "commitment", id: string, title: string, trigger: HTMLElement) => void;
+  /** Opens the Task Activity surface. List only. */
+  onOpenActivity?: (taskId: string, title: string, trigger: HTMLElement) => void;
+  /** A confirmed Task mutation, so Work can reconcile the query. List only. */
+  onTaskMutationConfirmed?: () => void;
+  /** A dispatched Task mutation, so Work can capture ordering before anything moves. List only. */
+  onTaskMutationDispatched?: (input: { taskId: string; kind: string }) => void;
 }
 
 export function WorkPerspectives(props: WorkPerspectivesProps) {

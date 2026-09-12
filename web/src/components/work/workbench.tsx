@@ -11,12 +11,12 @@ import { LoadingStatus, SurfaceState } from "@/components/ui/surface-state";
 import { Textarea } from "@/components/ui/textarea";
 import { CommitmentDetailView } from "@/components/work/work-detail";
 import { TaskCompactSheet } from "@/components/tasks/task-compact-sheet";
+import { TaskCreateSheet } from "@/components/tasks/task-create-sheet";
 import { WorkPerspectives } from "@/components/work/work-perspectives";
 import { useTaskRuntime } from "@/components/work/task-runtime-provider";
 import { useTaskFreshness } from "@/components/work/use-task-freshness";
 import { browserWorkClock, captureEvidence, createAttemptKey, isDefinitiveAttemptFailure, requiredCollection, workRequest } from "@/lib/api/work-client";
 import { COMMITMENT_FILTERS, parseWorkUrlState, TASK_VIEWS, WORK_PERSPECTIVES, type CommitmentFilter, type TaskView, type WorkPerspective, type WorkUrlState, type WorkView } from "@/lib/api/work-url";
-import type { CreateIntentSession, TaskCreateRequest } from "@/lib/task/create-intent";
 import { buildTaskQueryKey, serializeTaskQueryKey } from "@/lib/task/query-key";
 import type { TaskReadCoordinator } from "@/lib/task/read-coordinator";
 import { mapUserError } from "@/lib/ui/user-error";
@@ -87,7 +87,8 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   const [timezone, setTimezone] = useState(initialState.tz);
   const [nextCursor, setNextCursor] = useState("");
   const [partial, setPartial] = useState(false);
-  const [creating, setCreating] = useState(false);
+  const [creatingCommitment, setCreatingCommitment] = useState(false);
+  const [taskCreateOpen, setTaskCreateOpen] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(initialState.archived === "only");
   const [lastTaskView, setLastTaskView] = useState<TaskView>(
     initialState.view === "commitments" ? "today" : (initialState.view as TaskView),
@@ -101,6 +102,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   const commitmentGeneration = useRef(0);
   const activeCommitmentRead = useRef<AbortController | null>(null);
   const detailTrigger = useRef<HTMLElement | null>(null);
+  const newTaskTrigger = useRef<HTMLButtonElement | null>(null);
 
   const taskMode = view !== "commitments";
   const taskViewForQuery: TaskView = taskMode ? (view as TaskView) : lastTaskView;
@@ -215,6 +217,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
     fetcher: taskListFetcher,
     onResult: onTaskResult,
     onNotice: onTaskNotice,
+    reconciliation: runtime.reconciliation,
   });
 
   // Freshness revalidates when `taskQueryKey` changes; filter/view handlers set loading.
@@ -345,8 +348,17 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
           <h1 id="work-heading" className="text-2xl font-semibold text-text-primary">Work</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted">Tasks and commitments you are tracking.</p>
         </div>
-        <Button onClick={() => setCreating((open) => !open)}>
-          {creating ? "Cancel" : view === "commitments" ? "New commitment" : "New task"}
+        <Button
+          ref={newTaskTrigger}
+          onClick={() => {
+            if (view === "commitments") {
+              setCreatingCommitment((open) => !open);
+              return;
+            }
+            setTaskCreateOpen(true);
+          }}
+        >
+          {view === "commitments" ? (creatingCommitment ? "Cancel" : "New commitment") : "New task"}
         </Button>
       </div>
       <div className="mt-6 flex flex-wrap items-center gap-2">
@@ -408,18 +420,8 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
           </p>
         ) : null}
       </div>
-      {creating ? (
-        view === "commitments" ? (
-          <CommitmentCreate onDone={() => { setCreating(false); void loadCommitments(); }} />
-        ) : (
-          <TaskCreate
-            onReconcile={() => notifyMutationConfirmed()}
-            onDone={() => {
-              setCreating(false);
-              void notifyMutationConfirmed();
-            }}
-          />
-        )
+      {view === "commitments" && creatingCommitment ? (
+        <CommitmentCreate onDone={() => { setCreatingCommitment(false); void loadCommitments(); }} />
       ) : null}
       <div className="mt-5 flex flex-wrap items-end gap-3">
         <div className="min-w-0 max-w-sm flex-1">
@@ -533,6 +535,24 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
           seed={taskSeed(rows, detail.id)}
         />
       ) : null}
+      {/*
+        Canonical Task create. Work prefills nothing from the current view or
+        filter, and owns no create reconciliation of its own. The canonical create
+        notifies the session-scoped runtime seam itself, so every launcher — Work
+        here, Capture from the shell — reconciles identically and none can forget
+        to. Work bucket/filter membership is the server's answer, so nothing is
+        merged into the list here.
+      */}
+      <TaskCreateSheet
+        open={taskCreateOpen}
+        onOpenChange={(open) => {
+          setTaskCreateOpen(open);
+          if (!open) {
+            requestAnimationFrame(() => newTaskTrigger.current?.focus());
+          }
+        }}
+        entry="work"
+      />
       <Sheet
         open={detail?.type === "commitment"}
         onOpenChange={(open) => {
@@ -795,178 +815,6 @@ function BulkTaskEditor({ taskIds, onConfirmed }: { taskIds: readonly string[]; 
       </div>
       <StatusNote message={status} details={statusDetails} className="mt-3" />
     </section>
-  );
-}
-
-function TaskCreate({
-  onDone,
-  onReconcile,
-}: {
-  onDone: () => void;
-  onReconcile: () => void | Promise<unknown>;
-}) {
-  const runtime = useTaskRuntime();
-  const [session, setSession] = useState<CreateIntentSession>(
-    () => runtime.createIntents.getUnresolvedSession() ?? runtime.createIntents.openSession(),
-  );
-  const [status, setStatus] = useState("");
-  const [pending, setPending] = useState(false);
-  const [commitments, setCommitments] = useState<readonly CommitmentRow[]>([]);
-  const [optionsStatus, setOptionsStatus] = useState("Loading verified commitments…");
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void workRequest<{ commitments: readonly CommitmentRow[] }>("/api/commitments?pageSize=100", {
-      signal: controller.signal,
-    })
-      .then((answer) => {
-        setCommitments(requiredCollection(answer.commitments, "commitments"));
-        setOptionsStatus("");
-      })
-      .catch((error) => {
-        if (!controller.signal.aborted) {
-          setOptionsStatus(error instanceof Error ? error.message : "Verified commitments are unavailable");
-        }
-      });
-    return () => controller.abort();
-  }, []);
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (pending) return;
-    const form = new FormData(event.currentTarget);
-    const commitmentId = String(form.get("commitmentId") ?? "");
-    if (commitmentId && !commitments.some((item) => item.commitment_id === commitmentId)) {
-      setStatus("Choose a verified commitment from the list.");
-      return;
-    }
-    const request: TaskCreateRequest = {
-      title: String(form.get("title") ?? ""),
-      description: String(form.get("description") || "") || undefined,
-      priority: String(form.get("priority") || "") || undefined,
-      dueAt: form.get("dueAt") ? new Date(String(form.get("dueAt"))).toISOString() : undefined,
-      commitmentId: commitmentId || undefined,
-      role: String(form.get("role") || "") || undefined,
-    };
-
-    let active = session;
-    const phase = active.getPhase();
-    // Ambiguous / pending: never mutate the draft — submit() retries the frozen request/key.
-    if (phase === "failed") {
-      active = runtime.createIntents.replaceAfterMaterialEdit(active, request);
-      setSession(active);
-    } else if (phase !== "ambiguous" && phase !== "pending") {
-      try {
-        active.updateDraft(request);
-      } catch (error) {
-        setStatus(error instanceof Error ? error.message : "Draft could not be updated");
-        return;
-      }
-    }
-
-    setPending(true);
-    setStatus(phase === "ambiguous" ? "Retrying the same create…" : "Creating task…");
-    try {
-      const outcome = await active.submit(
-        async ({ request: frozen, idempotencyKey }) =>
-          workRequest("/api/tasks", {
-            method: "POST",
-            body: JSON.stringify({ ...frozen, idempotencyKey }),
-          }),
-        {
-          reconcile: async () => {
-            // Do not await list revalidation here — a hung/disposed freshness
-            // read must not keep the create form open after POST succeeded.
-            void Promise.resolve(onReconcile()).catch(() => undefined);
-          },
-          feedback: async () => {
-            runtime.feedback.publish({
-              eventId: MutationFeedbackEvent.createConfirmed(active.intentId),
-              kind: "success",
-              message: "Task created.",
-            });
-          },
-        },
-      );
-      if (outcome.refused) {
-        if (outcome.reason === "create dispatch already in flight") return;
-        setStatus(outcome.reason);
-        return;
-      }
-      setStatus("Task created.");
-      runtime.createIntents.pruneTerminal();
-      onDone();
-    } catch (error) {
-      if (active.getPhase() === "ambiguous") {
-        setStatus(
-          "Create may still have succeeded. Retry with the same intent — do not edit the frozen request until this resolves.",
-        );
-      } else {
-        setStatus(error instanceof Error ? error.message : "Task was not created");
-      }
-    } finally {
-      setPending(false);
-    }
-  }
-
-  const draft = session.getDraft();
-  const phase = session.getPhase();
-  const frozen = phase === "ambiguous" || phase === "pending";
-  return (
-    <form
-      onSubmit={(event) => void submit(event)}
-      aria-busy={pending || undefined}
-      className="mt-5 grid gap-4 rounded-xl border border-border bg-surface p-4"
-    >
-      <h2 className="font-semibold">Create task</h2>
-      <Labeled label="Title">
-        <Input name="title" required disabled={pending || frozen} defaultValue={draft?.title ?? ""} readOnly={frozen} />
-      </Labeled>
-      <Labeled label="Description">
-        <Textarea name="description" disabled={pending || frozen} defaultValue={draft?.description ?? ""} readOnly={frozen} />
-      </Labeled>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Labeled label="Priority">
-          <select name="priority" disabled={pending || frozen} defaultValue={draft?.priority ?? ""} className="h-10 rounded-md border bg-surface px-3">
-            <option value="">Unset</option>
-            {["p1", "p2", "p3", "p4"].map((p) => (
-              <option key={p}>{p}</option>
-            ))}
-          </select>
-        </Labeled>
-        <Labeled label="Due">
-          <Input name="dueAt" type="datetime-local" disabled={pending || frozen} readOnly={frozen} />
-        </Labeled>
-        <Labeled label="Commitment">
-          <select
-            name="commitmentId"
-            disabled={pending || frozen || Boolean(optionsStatus)}
-            defaultValue={draft?.commitmentId ?? ""}
-            className="h-10 rounded-md border bg-surface px-3"
-          >
-            <option value="">None</option>
-            {commitments.map((item) => (
-              <option key={item.commitment_id} value={item.commitment_id}>
-                {item.title}
-              </option>
-            ))}
-          </select>
-        </Labeled>
-        <Labeled label="Role">
-          <select name="role" disabled={pending || frozen} defaultValue={draft?.role ?? ""} className="h-10 rounded-md border bg-surface px-3">
-            <option value="">None</option>
-            <option value="follow_up">Follow up</option>
-          </select>
-        </Labeled>
-      </div>
-      {optionsStatus ? <p role="status" className="text-sm text-muted">{optionsStatus}</p> : null}
-      <Button type="submit" disabled={pending} aria-busy={pending || undefined}>
-        {pending ? "Creating…" : phase === "ambiguous" ? "Retry same create" : "Create task"}
-      </Button>
-      <p role="status" className="text-sm text-muted">
-        {status}
-      </p>
-    </form>
   );
 }
 

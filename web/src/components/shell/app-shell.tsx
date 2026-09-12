@@ -4,7 +4,7 @@
  * AppShell — persistent chrome around every signed-in destination.
  * Landmarks: banner (header), navigation, main. Capture is always reachable.
  */
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { createContext, useContext, useRef, useState, type ReactNode } from "react";
 import type { PrincipalSession } from "@/contracts/identity";
 import { ContextHeader } from "@/components/shell/context-header";
 import { NavRail, MobileNav } from "@/components/shell/nav";
@@ -15,6 +15,7 @@ import { UtilityRegion } from "@/components/shell/utility-region";
 import { InspectorSelectionProvider } from "@/components/shell/inspector-selection";
 import { useShellPreferences } from "@/components/shell/shell-preferences";
 import { TaskRuntimeProvider } from "@/components/work/task-runtime-provider";
+import { TaskCreateSheet } from "@/components/tasks/task-create-sheet";
 
 const OpenCaptureContext = createContext<() => void>(() => {
   throw new Error("useOpenCapture is only valid inside AppShell");
@@ -32,11 +33,48 @@ export function AppShell({
   children: ReactNode;
 }) {
   const [captureOpen, setCaptureOpen] = useState(false);
+  // Capture and the Task sheet are two overlays that are never open together:
+  // the handoff below closes one before it opens the other, so there is exactly
+  // one modal owner at a time and no nested dialog stack to trap focus in.
+  const [taskCreateOpen, setTaskCreateOpen] = useState(false);
+  // Whatever had focus when Capture was opened, so closing the Task sheet the
+  // Capture chooser handed off to returns focus where the person started.
+  const captureInvokerRef = useRef<HTMLElement | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [utilityOpen, setUtilityOpen] = useState(false);
   const { preferences, update } = useShellPreferences();
 
-  const openCapture = () => setCaptureOpen(true);
+  const openCapture = () => {
+    captureInvokerRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setCaptureOpen(true);
+  };
+
+  /**
+   * Capture reported Create Task. Nothing was captured and nothing was queued —
+   * this is only a change of surface. Capture closes first, then the canonical
+   * Task sheet opens; Task creation never enters the capture offline queue.
+   */
+  const handleCreateTaskFromCapture = () => {
+    setCaptureOpen(false);
+    setTaskCreateOpen(true);
+  };
+
+  /** Back out of a Capture-launched Task sheet: return to the Capture chooser. */
+  const backToCapture = () => {
+    setTaskCreateOpen(false);
+    setCaptureOpen(true);
+  };
+
+  const handleTaskCreateOpenChange = (next: boolean) => {
+    setTaskCreateOpen(next);
+    if (next) return;
+    // The sheet returns focus to whatever it took it from, which for a
+    // Capture-launched sheet is a control that is now unmounted. Take focus
+    // back after that has run so it lands on the button the person pressed.
+    const invoker = captureInvokerRef.current;
+    if (invoker?.isConnected) window.setTimeout(() => invoker.focus(), 0);
+  };
   const account = {
     principal,
     theme: preferences.theme,
@@ -93,6 +131,13 @@ export function AppShell({
               open={captureOpen}
               onClose={() => setCaptureOpen(false)}
               principalId={principal.principalId}
+              onCreateTask={handleCreateTaskFromCapture}
+            />
+            <TaskCreateSheet
+              open={taskCreateOpen}
+              onOpenChange={handleTaskCreateOpenChange}
+              entry="capture"
+              onBack={backToCapture}
             />
             <CommandPalette open={searchOpen} onOpenChange={setSearchOpen} onCapture={openCapture} />
             <OfflineQueueStatus principalId={principal.principalId} />

@@ -73,6 +73,76 @@ function createDefaultMutationCoordinatorHandle(): TaskMutationCoordinatorHandle
   };
 }
 
+/**
+ * A currently-mounted Task query's own revalidation hook. Called with no
+ * arguments: the confirmed Task is never handed to a list query, because only
+ * the server decides which Work bucket/filter the new Task belongs to.
+ */
+export type TaskQueryRevalidator = () => void | Promise<unknown>;
+
+/**
+ * Session-scoped confirmed-create reconciliation seam.
+ *
+ * Any surface that can confirm a Task create — Work's own sheet or a
+ * shell-launched Capture create that Work does not own — calls
+ * `notifyCreateConfirmed`. Every Task query that is mounted right now is asked
+ * to revalidate against the server. This is not a cache: nothing is stored,
+ * nothing is merged client-side, and no timer is owned. Registrations live only
+ * as long as this session bundle and are dropped on principal/epoch replacement.
+ */
+export interface TaskReconciliationRegistry {
+  /** Register a mounted query's revalidation hook. Returns its unregister fn. */
+  registerActiveTaskQuery: (queryId: string, revalidate: TaskQueryRevalidator) => () => void;
+  unregisterActiveTaskQuery: (queryId: string) => void;
+  /** Fire-and-forget: a create must confirm even with zero active queries. */
+  notifyCreateConfirmed: (confirmedTask?: unknown) => void;
+  /** Registration ids currently active — diagnostics and tests only. */
+  activeTaskQueryIds: () => readonly string[];
+  isDisposed: () => boolean;
+  dispose: () => void;
+}
+
+function createTaskReconciliationRegistry(): TaskReconciliationRegistry {
+  const queries = new Map<string, TaskQueryRevalidator>();
+  let disposed = false;
+
+  return {
+    registerActiveTaskQuery(queryId, revalidate) {
+      if (disposed) return () => undefined;
+      queries.set(queryId, revalidate);
+      return () => {
+        if (queries.get(queryId) === revalidate) queries.delete(queryId);
+      };
+    },
+    unregisterActiveTaskQuery(queryId) {
+      queries.delete(queryId);
+    },
+    notifyCreateConfirmed(confirmedTask?: unknown) {
+      // The confirmed Task is deliberately not applied to any list: Work bucket
+      // and filter membership is a server answer, never a client derivation.
+      void confirmedTask;
+      if (disposed) return;
+      for (const revalidate of Array.from(queries.values())) {
+        try {
+          void Promise.resolve(revalidate()).catch(() => undefined);
+        } catch {
+          // A failing query revalidation must never fail a confirmed create.
+        }
+      }
+    },
+    activeTaskQueryIds() {
+      return Array.from(queries.keys());
+    },
+    isDisposed() {
+      return disposed;
+    },
+    dispose() {
+      disposed = true;
+      queries.clear();
+    },
+  };
+}
+
 export interface TaskRuntimeValue {
   /** Opaque session key: principalId + epoch. Never an API credential. */
   readonly sessionKey: string;
@@ -81,6 +151,8 @@ export interface TaskRuntimeValue {
   readonly createIntents: CreateIntentStore;
   readonly readCoordinator: TaskReadCoordinator;
   readonly mutationCoordinator: TaskMutationCoordinatorHandle;
+  /** Confirmed-create → active-Task-query reconciliation seam (session-scoped). */
+  readonly reconciliation: TaskReconciliationRegistry;
   readonly feedback: MutationFeedbackValue;
 }
 
@@ -97,6 +169,7 @@ interface TaskRuntimeBundle {
   readonly createIntents: CreateIntentStore;
   readonly readCoordinator: TaskReadCoordinator;
   readonly mutationCoordinator: TaskMutationCoordinatorHandle;
+  readonly reconciliation: TaskReconciliationRegistry;
 }
 
 function createBundle(
@@ -112,6 +185,7 @@ function createBundle(
     readCoordinator: createTaskReadCoordinator(),
     mutationCoordinator:
       createMutationCoordinator?.() ?? createDefaultMutationCoordinatorHandle(),
+    reconciliation: createTaskReconciliationRegistry(),
   };
 }
 
@@ -128,6 +202,12 @@ function disposeBundle(bundle: TaskRuntimeBundle): void {
   }
   try {
     bundle.createIntents.clearAll();
+  } catch {
+    // same
+  }
+  try {
+    // Drops every active-query registration made under the replaced session.
+    bundle.reconciliation.dispose();
   } catch {
     // same
   }
@@ -206,6 +286,7 @@ function TaskRuntimeInner({
       createIntents: bundle.createIntents,
       readCoordinator: bundle.readCoordinator,
       mutationCoordinator: bundle.mutationCoordinator,
+      reconciliation: bundle.reconciliation,
       feedback,
     }),
     [bundle, feedback],

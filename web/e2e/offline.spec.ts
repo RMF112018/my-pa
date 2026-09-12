@@ -41,7 +41,7 @@
  * person is looking at, is correct and is asserted below.
  */
 import { test, expect } from "@playwright/test";
-import { signIn, syntheticNote, visibleCaptureButton } from "./fixtures";
+import { signIn, syntheticNote, openCaptureNote } from "./fixtures";
 
 test.describe("offline capture and reconnect", () => {
   test("a note captured offline is held, then replayed, then durable", async ({
@@ -62,7 +62,7 @@ test.describe("offline capture and reconnect", () => {
     await page.goto("/today");
     await context.setOffline(true);
 
-    await visibleCaptureButton(page).click();
+    await openCaptureNote(page);
     await page.getByTestId("capture-field").fill(syntheticNote(marker));
     await page.getByRole("button", { name: "Save" }).click();
 
@@ -136,7 +136,7 @@ test.describe("offline capture and reconnect", () => {
     await signIn(page);
     await context.setOffline(true);
 
-    await visibleCaptureButton(page).click();
+    await openCaptureNote(page);
     await page.getByTestId("capture-field").fill(syntheticNote(`wording-${Date.now()}`));
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByTestId("capture-queued")).toBeVisible({ timeout: 30_000 });

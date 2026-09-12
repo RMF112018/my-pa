@@ -58,11 +58,16 @@ test("real stack preserves deliberate Task and Commitment mutation semantics", a
 
   await page.goto(`/work?view=unscheduled&q=${encodeURIComponent(marker)}`);
   await page.getByRole("button", { name: "New task" }).click();
-  const taskCreate = page.getByRole("heading", { name: "Create task" }).locator("..");
+  const taskCreate = page.getByTestId("task-create-sheet");
+  // WP-TUX-04. Ordinary create is four fields. Commitment and Role were removed
+  // from it deliberately, so their absence is asserted here rather than silently
+  // dropped, and the linkage this spec guards is established through the
+  // canonical endpoint below instead of through the create form.
+  await expect(taskCreate.getByLabel("Commitment")).toHaveCount(0);
+  await expect(taskCreate.getByLabel("Role")).toHaveCount(0);
+  await expect(taskCreate.getByLabel("Origin note")).toHaveCount(0);
   await taskCreate.getByLabel("Title").fill(taskTitle);
-  await taskCreate.getByLabel("Commitment").selectOption({ label: commitmentTitle });
-  await taskCreate.getByLabel("Role").selectOption("follow_up");
-  await taskCreate.getByRole("button", { name: "Create task" }).click();
+  await taskCreate.getByRole("button", { name: "Create", exact: true }).click();
   const taskTrigger = page.getByRole("link", { name: new RegExp(taskTitle) });
   await expect(taskTrigger).toBeVisible();
 
@@ -79,6 +84,19 @@ test("real stack preserves deliberate Task and Commitment mutation semantics", a
   // semantics this spec has always guarded are therefore driven through the
   // canonical endpoint, and the resulting *product language* is read back from
   // the Context disclosure.
+  // Establish the linkage the create form used to carry.
+  const created = await api<{ task: { version: number } }>(page, `/api/tasks/${taskId}`);
+  const link = await api<Record<string, unknown>>(page, `/api/tasks/${taskId}`, {
+    method: "PATCH",
+    body: {
+      commitmentId: commitment!.commitment_id,
+      role: "follow_up",
+      expectedVersion: created.body.task.version,
+      idempotencyKey: key("e2e-link-task"),
+    },
+  });
+  expect(link.status).toBe(200);
+
   const linkedBefore = await api<{ task: { version: number; commitment_id: string | null } }>(
     page,
     `/api/tasks/${taskId}`,

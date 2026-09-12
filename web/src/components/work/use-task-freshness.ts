@@ -48,6 +48,21 @@ export interface TaskFreshnessNotice {
   readonly message: string;
 }
 
+/**
+ * Minimal structural view of the session-scoped reconciliation seam owned by
+ * `TaskRuntimeProvider`. Declared structurally so this hook keeps no dependency
+ * on the provider module and stays usable in isolation.
+ */
+export interface TaskQueryReconciliationRegistrar {
+  readonly registerActiveTaskQuery: (
+    queryId: string,
+    revalidate: () => void | Promise<unknown>,
+  ) => () => void;
+  readonly unregisterActiveTaskQuery: (queryId: string) => void;
+}
+
+let registrationSequence = 0;
+
 export interface UseTaskFreshnessOptions<T> {
   readonly queryKey: TaskQueryKey;
   /** Authenticated Task surface is mounted and eligible to poll. */
@@ -56,6 +71,13 @@ export interface UseTaskFreshnessOptions<T> {
   readonly fetcher: TaskReadFetcher<T>;
   readonly onResult?: (result: TaskReadResult<T>, snapshot: TaskQuerySnapshot<T>) => void;
   readonly onNotice?: (notice: TaskFreshnessNotice) => void;
+  /**
+   * Session-scoped confirmed-create reconciliation seam. While this query is
+   * mounted and enabled it registers its own `notifyMutationConfirmed` so any
+   * confirmed Task create — including one launched from the shell, outside Work
+   * — revalidates it. Registration owns no timer of its own.
+   */
+  readonly reconciliation?: TaskQueryReconciliationRegistrar;
   /** Wall-clock / interval overrides for tests. */
   readonly intervalMs?: number;
   readonly backoffMs?: readonly number[];
@@ -111,6 +133,7 @@ export function useTaskFreshness<T>(options: UseTaskFreshnessOptions<T>): UseTas
     fetcher,
     onResult,
     onNotice,
+    reconciliation,
     intervalMs = TASK_FRESHNESS_INTERVAL_MS,
     backoffMs = TASK_FRESHNESS_BACKOFF_MS,
   } = options;
@@ -363,6 +386,20 @@ export function useTaskFreshness<T>(options: UseTaskFreshnessOptions<T>): UseTas
       }
     };
   }, [backoffMs, coordinator, enabled, intervalMs, keyId]);
+
+  useEffect(() => {
+    if (!reconciliation || !enabled) return;
+    // One registration per mounted hook instance, so two hooks sharing a query
+    // identity cannot unregister one another.
+    registrationSequence += 1;
+    const queryId = `${keyId}#${registrationSequence}`;
+    // Called with no argument on purpose: a confirmed create is never applied
+    // as list data — it raises the mutation barrier and re-reads the server.
+    reconciliation.registerActiveTaskQuery(queryId, () => notifyMutationRef.current());
+    return () => {
+      reconciliation.unregisterActiveTaskQuery(queryId);
+    };
+  }, [enabled, keyId, reconciliation]);
 
   return {
     freshness,

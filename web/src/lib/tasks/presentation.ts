@@ -329,3 +329,43 @@ export function toTaskPresentationModel(
     contextLabel: options.contextLabel ?? null,
   };
 }
+
+/* ------------------------------------------------------------------ *
+ * Civil-day end (WP-TUX-04)
+ * ------------------------------------------------------------------ */
+
+const CIVIL_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * The instant at which a civil date ends in a zone, as an ISO timestamp.
+ *
+ * A date-only Due is authored as a civil day, so it becomes `D 23:59:59` local
+ * in the Principal's zone — never a UTC midnight, never `${workDate}T23:59:59Z`,
+ * and never a truncated or string-patched timestamp. The civil date is read as
+ * numeric parts and placed at 23:59:59 on a naive UTC instant, which is then
+ * corrected by the zone offset exactly as `civilDayStartIso` does, including the
+ * second pass that settles a correction landing across an offset transition.
+ */
+export function civilDayEndIso(workDate: string, timezone: string): string {
+  const parts = CIVIL_DATE_PATTERN.exec(workDate);
+  if (!parts) throw new TypeError(`unreadable civil date: ${workDate}`);
+  const year = Number(parts[1]);
+  const month = Number(parts[2]);
+  const day = Number(parts[3]);
+  const naive = new Date(Date.UTC(year, month - 1, day, 23, 59, 59));
+  if (
+    Number.isNaN(naive.getTime()) ||
+    naive.getUTCFullYear() !== year ||
+    naive.getUTCMonth() !== month - 1 ||
+    naive.getUTCDate() !== day
+  ) {
+    throw new TypeError(`unreadable civil date: ${workDate}`);
+  }
+  const firstOffset = zoneOffsetMs(naive, timezone);
+  let instant = new Date(naive.getTime() - firstOffset);
+  const settledOffset = zoneOffsetMs(instant, timezone);
+  if (settledOffset !== firstOffset) {
+    instant = new Date(naive.getTime() - settledOffset);
+  }
+  return instant.toISOString();
+}

@@ -343,12 +343,18 @@ describe("Work surface", () => {
     await userEvent.click(screen.getByRole("button", { name: "New commitment" }));
     expect(await screen.findByRole("option", { name: "Sam Rivera" })).toBeTruthy();
     expect(screen.queryByLabelText(/person ID/i)).toBeNull();
+    // Work create is the canonical sheet: Commitment and Role are runtime/server
+    // decisions and have no field here, so no Commitment can be offered at all.
     await userEvent.click(screen.getByRole("button", { name: "Tasks" }));
-    expect(await screen.findByRole("option", { name: "Revised schedule" })).toBeTruthy();
+    await userEvent.click(await screen.findByRole("button", { name: "New task" }));
+    expect(await screen.findByTestId("task-create-sheet")).toBeTruthy();
+    expect(screen.queryByRole("option", { name: "Revised schedule" })).toBeNull();
+    expect(screen.queryByLabelText(/^Commitment$/i)).toBeNull();
+    expect(screen.queryByLabelText(/^Role$/i)).toBeNull();
     expect(screen.queryByLabelText(/Commitment ID/i)).toBeNull();
   });
 
-  it("creates a Task without capture evidence or an origin note field", async () => {
+  it("creates a Task through the canonical sheet without capture evidence, commitments or an origin note", async () => {
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       const path = String(input);
       if (path === "/api/tasks" && init?.method === "POST") {
@@ -362,9 +368,10 @@ describe("Work surface", () => {
     renderFromUrl();
     await screen.findByText("No all open tasks");
     await userEvent.click(screen.getByRole("button", { name: "New task" }));
+    expect(await screen.findByTestId("task-create-sheet")).toBeTruthy();
     expect(screen.queryByLabelText("Origin note")).toBeNull();
     await userEvent.type(screen.getByLabelText("Title"), "Direct task");
-    await userEvent.click(screen.getByRole("button", { name: "Create task" }));
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
     await waitFor(() => {
       expect(fetcher.mock.calls.some(([path, init]) => String(path) === "/api/tasks" && init?.method === "POST")).toBe(true);
     });
@@ -374,7 +381,10 @@ describe("Work surface", () => {
     expect(body).toMatchObject({ title: "Direct task", idempotencyKey: expect.any(String) });
     expect(body).not.toHaveProperty("originEvidenceRef");
     expect(body).not.toHaveProperty("originKind");
+    expect(body).not.toHaveProperty("commitmentId");
+    expect(body).not.toHaveProperty("role");
     expect(fetcher.mock.calls.some(([path]) => String(path) === "/api/capture")).toBe(false);
+    expect(fetcher.mock.calls.some(([path]) => String(path).startsWith("/api/commitments"))).toBe(false);
   });
 
   it("hydrates exact URL state and honors a validated timezone", async () => {
@@ -435,11 +445,12 @@ describe("Work surface", () => {
     renderFromUrl();
     await screen.findByText("No all open tasks");
     await userEvent.click(screen.getByRole("button", { name: "New task" }));
-    await userEvent.type(screen.getByLabelText("Title"), "Only once");
-    const form = screen.getByLabelText("Title").closest("form");
+    await userEvent.type(await screen.findByLabelText("Title"), "Only once");
+    // Same guarantee as the retired embedded Work form, now through the shared sheet.
+    const form = screen.getByTestId("task-create-sheet");
     expect(form).toBeTruthy();
-    fireEvent.submit(form!);
-    fireEvent.submit(form!);
+    fireEvent.submit(form);
+    fireEvent.submit(form);
     await waitFor(() => {
       expect(fetcher.mock.calls.filter(([path, init]) => String(path) === "/api/tasks" && init?.method === "POST")).toHaveLength(1);
     });
@@ -451,7 +462,7 @@ describe("Work surface", () => {
         }),
       );
     });
-    await waitFor(() => expect(screen.queryByText("Create task")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("task-create-sheet")).toBeNull());
   });
 
   it("retains confirmed rows when a background poll returns 503", async () => {
@@ -552,8 +563,8 @@ describe("Work surface", () => {
     renderFromUrl();
     await screen.findByText("No all open tasks");
     await userEvent.click(screen.getByRole("button", { name: "New task" }));
-    await userEvent.type(screen.getByLabelText("Title"), "Ambiguous retry");
-    await userEvent.click(screen.getByRole("button", { name: "Create task" }));
+    await userEvent.type(await screen.findByLabelText("Title"), "Ambiguous retry");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
     expect(
       await screen.findByText(/Create may still have succeeded\. Retry with the same intent/i),
     ).toBeTruthy();
@@ -614,10 +625,107 @@ describe("Work surface", () => {
       return new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } });
     });
     await userEvent.click(screen.getByRole("button", { name: "New task" }));
-    await userEvent.type(screen.getByLabelText("Title"), "Must close");
-    await userEvent.click(screen.getByRole("button", { name: "Create task" }));
+    await userEvent.type(await screen.findByLabelText("Title"), "Must close");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
     await waitFor(() => expect(createPosts).toBe(1));
-    await waitFor(() => expect(screen.queryByRole("heading", { name: "Create task" })).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("task-create-sheet")).toBeNull());
+  });
+
+  it("opens the canonical Task create sheet from New task without reading commitments", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    history.replaceState(null, "", "/work?view=all-open");
+    renderFromUrl();
+    await screen.findByText("No all open tasks");
+
+    await userEvent.click(screen.getByRole("button", { name: "New task" }));
+
+    expect(await screen.findByTestId("task-create-sheet")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Create task" })).toBeTruthy();
+    // The retired embedded form fetched up to 100 commitments just to paint a field.
+    expect(fetcher.mock.calls.filter(([path]) => String(path).startsWith("/api/commitments"))).toHaveLength(0);
+    // Commitment and Role are not principal-authored on the canonical surface.
+    expect(screen.queryByLabelText(/^Commitment$/i)).toBeNull();
+    expect(screen.queryByLabelText(/^Role$/i)).toBeNull();
+  });
+
+  it("does not prefill create from the current Work view, filter or search", async () => {
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      if (path === "/api/tasks" && init?.method === "POST") {
+        return new Response(JSON.stringify({ task: { task_id: "tsk_aaaaaaaa11111111" }, history: {}, replayed: false }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetcher);
+    history.replaceState(null, "", "/work?view=upcoming&q=plan&archived=only&tz=America%2FNew_York");
+    renderFromUrl();
+    await screen.findByText("No matching upcoming tasks");
+
+    await userEvent.click(screen.getByRole("button", { name: "New task" }));
+    expect(await screen.findByTestId("task-create-sheet")).toBeTruthy();
+
+    expect((screen.getByLabelText("Due") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Priority") as HTMLSelectElement).value).toBe("");
+    expect((screen.getByLabelText("Title") as HTMLInputElement).value).toBe("");
+
+    await userEvent.type(screen.getByLabelText("Title"), "No prefill");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => {
+      expect(fetcher.mock.calls.some(([path, init]) => String(path) === "/api/tasks" && init?.method === "POST")).toBe(true);
+    });
+    const createCall = fetcher.mock.calls.find(([path, init]) => String(path) === "/api/tasks" && init?.method === "POST");
+    const body = JSON.parse(String(createCall?.[1]?.body));
+    expect(body).toMatchObject({ title: "No prefill" });
+    for (const field of ["dueAt", "priority", "projectId", "situationId", "commitmentId", "role"]) {
+      expect(body).not.toHaveProperty(field);
+    }
+  });
+
+  it("restores focus to New task when create closes", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } }),
+    ));
+    history.replaceState(null, "", "/work?view=all-open");
+    renderFromUrl();
+    await screen.findByText("No all open tasks");
+    const trigger = screen.getByRole("button", { name: "New task" });
+
+    await userEvent.click(trigger);
+    expect(await screen.findByTestId("task-create-sheet")).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("button", { name: "Close panel" }));
+    await waitFor(() => expect(screen.queryByTestId("task-create-sheet")).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it("revalidates the active Work query exactly once through the runtime seam on confirmed create", async () => {
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      if (path === "/api/tasks" && init?.method === "POST") {
+        return new Response(JSON.stringify({ task: { task_id: "tsk_aaaaaaaa11111111" }, history: {}, replayed: false }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetcher);
+    history.replaceState(null, "", "/work?view=all-open");
+    renderFromUrl();
+    await screen.findByText("No all open tasks");
+    const before = listTaskGets(fetcher).length;
+
+    await userEvent.click(screen.getByRole("button", { name: "New task" }));
+    await userEvent.type(await screen.findByLabelText("Title"), "Reconciled");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+
+    await waitFor(() => expect(listTaskGets(fetcher).length).toBe(before + 1));
+    // No extra list read is invented: the one post-create read is the seam's.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(listTaskGets(fetcher).length).toBe(before + 1);
   });
 
   it("publishes create success into the mutation feedback live region", async () => {
@@ -639,11 +747,11 @@ describe("Work surface", () => {
     renderFromUrl();
     await screen.findByText("No all open tasks");
     await userEvent.click(screen.getByRole("button", { name: "New task" }));
-    await userEvent.type(screen.getByLabelText("Title"), "Feedback task");
-    await userEvent.click(screen.getByRole("button", { name: "Create task" }));
+    await userEvent.type(await screen.findByLabelText("Title"), "Feedback task");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
     expect(await screen.findByTestId("mutation-feedback-region")).toBeTruthy();
     expect(screen.getByTestId(/^mutation-feedback-live-task:create:confirmed:/)).toHaveTextContent(
-      "Task created.",
+      /Task created/,
     );
   });
 });

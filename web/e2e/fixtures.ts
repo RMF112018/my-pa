@@ -67,6 +67,22 @@ export function visibleCaptureButton(page: Page) {
     .filter({ visible: true });
 }
 
+/**
+ * Open Capture and enter the note branch.
+ *
+ * WP-TUX-04 put an action chooser in front of Capture so a Task can be created
+ * from the same entry point. Quick note and Conversation log still reach the
+ * capture field they always did; they are now one deliberate choice away.
+ */
+export async function openCaptureNote(
+  page: Page,
+  kind: "Quick note" | "Conversation log" = "Quick note",
+): Promise<void> {
+  await visibleCaptureButton(page).click();
+  await page.getByTestId("capture-chooser").getByRole("button", { name: kind }).click();
+  await expect(page.getByTestId("capture-field")).toBeVisible();
+}
+
 export async function openAccount(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Account" }).click();
   await expect(page.getByRole("dialog", { name: "Account" })).toBeVisible();

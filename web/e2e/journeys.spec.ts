@@ -8,7 +8,7 @@
  * only way that can happen is if it was committed.
  */
 import { test, expect } from "@playwright/test";
-import { signIn, syntheticNote, expectState, visibleCaptureButton, pinInspector } from "./fixtures";
+import { signIn, syntheticNote, expectState, visibleCaptureButton, openCaptureNote, pinInspector } from "./fixtures";
 
 /** Chrome below the `lg` (1024) split: rail hidden, Knowledge lives in More. */
 function belowLgChrome(projectName: string): boolean {
@@ -269,7 +269,7 @@ test.describe("the signed-in surfaces", () => {
 
   test("a capture is persisted, and the Library proves it", async ({ page }) => {
     const marker = `${Date.now()}`;
-    await visibleCaptureButton(page).click();
+    await openCaptureNote(page);
     const field = page.getByTestId("capture-field");
     await expect(field).toBeFocused();
     await field.fill(syntheticNote(marker));
@@ -295,6 +295,20 @@ test.describe("the signed-in surfaces", () => {
   test("focus returns to the capture button when the dialog closes", async ({ page }) => {
     const opener = visibleCaptureButton(page);
     await opener.click();
+    // WP-TUX-04. Capture opens on its action chooser, so focus lands on the
+    // chooser's first action rather than the note field. Asserting focus — not
+    // mere visibility — is the point: a native <dialog> restores focus to its
+    // invoker on close by itself, so the closing assertion below would pass even
+    // if focus had never entered the dialog at all.
+    await expect(page.getByTestId("capture-choice-create_task")).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("capture-chooser")).toBeHidden();
+    await expect(opener).toBeFocused();
+  });
+
+  test("focus returns to the capture button from the note branch too", async ({ page }) => {
+    const opener = visibleCaptureButton(page);
+    await openCaptureNote(page);
     await expect(page.getByTestId("capture-field")).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("capture-field")).toBeHidden();
@@ -417,12 +431,14 @@ test.describe("keyboard-only navigation", () => {
     await page.waitForURL("**/knowledge");
     await expect(page.getByRole("heading", { name: "Knowledge", level: 1 })).toBeVisible();
 
-    // And the capture dialog opens, takes focus, and closes on Escape.
+    // And the capture dialog opens, takes focus, and closes on Escape. The
+    // chooser is the dialog's first stop, so that is where focus must land for a
+    // keyboard-only user; reaching the note field is one choice further in.
     await visibleCaptureButton(page).focus();
     await page.keyboard.press("Enter");
-    await expect(page.getByTestId("capture-field")).toBeFocused();
+    await expect(page.getByTestId("capture-choice-create_task")).toBeFocused();
     await page.keyboard.press("Escape");
-    await expect(page.getByTestId("capture-field")).toBeHidden();
+    await expect(page.getByTestId("capture-chooser")).toBeHidden();
   });
 
   test("the focused element is always visibly focused", async ({ page }) => {

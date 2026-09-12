@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import type { TaskDetail, TaskLifecycle, TaskPriority } from "@/contracts/work";
 import {
   addCivilDays,
+  civilDayEndIso,
   civilDayInZone,
   civilDayOffset,
   civilDayStartIso,
@@ -285,5 +286,139 @@ describe("presentation module boundaries", () => {
     expect(source).not.toMatch(/from "@\/lib\/task\//);
     expect(source).not.toMatch(/from "@\/components\//);
     expect(source).not.toMatch(/XMLHttpRequest|WebSocket/);
+  });
+});
+
+describe("civil day end (WP-TUX-04)", () => {
+  const NY = "America/New_York";
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** Wall-clock parts of an instant in a zone, read back independently of the helper. */
+  function wallClock(iso: string, timezone: string) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      hour12: false,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }).formatToParts(new Date(iso));
+    const read = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? "-1");
+    return {
+      hour: read("hour") % 24,
+      minute: read("minute"),
+      second: read("second"),
+    };
+  }
+
+  it("ends an ordinary day at the zone's own 23:59:59 and round-trips to the same civil date", () => {
+    const result = civilDayEndIso("2026-09-15", NY);
+    expect(result).toBe("2026-09-16T03:59:59.000Z");
+    expect(civilDayInZone(result, NY)).toBe("2026-09-15");
+  });
+
+  it("stays 23:59:59 local across the spring-forward boundary", () => {
+    const result = civilDayEndIso("2026-03-08", NY);
+    expect(result).toBe("2026-03-09T03:59:59.000Z");
+    expect(civilDayInZone(result, NY)).toBe("2026-03-08");
+    expect(wallClock(result, NY)).toEqual({ hour: 23, minute: 59, second: 59 });
+  });
+
+  it("stays 23:59:59 local across the fall-back boundary", () => {
+    const result = civilDayEndIso("2026-11-01", NY);
+    expect(result).toBe("2026-11-02T04:59:59.000Z");
+    expect(civilDayInZone(result, NY)).toBe("2026-11-01");
+    expect(wallClock(result, NY)).toEqual({ hour: 23, minute: 59, second: 59 });
+  });
+
+  it("keeps a UTC-positive zone's end of day on its own UTC day, never later", () => {
+    // Tokyo is UTC+9 year round: 23:59:59 local is 14:59:59 the same UTC day.
+    const tokyo = civilDayEndIso("2026-06-15", "Asia/Tokyo");
+    expect(tokyo).toBe("2026-06-15T14:59:59.000Z");
+    expect(civilDayInZone(tokyo, "Asia/Tokyo")).toBe("2026-06-15");
+    // The instant is never on a UTC day after the civil date it ends.
+    expect(tokyo.slice(0, 10) <= "2026-06-15").toBe(true);
+
+    // Sydney observes DST; both offsets keep the instant on the same UTC day,
+    // and the start of the same civil day does land on the previous UTC day.
+    const sydneyWinter = civilDayEndIso("2026-06-15", "Australia/Sydney");
+    expect(sydneyWinter).toBe("2026-06-15T13:59:59.000Z");
+    expect(civilDayStartIso("2026-06-15", "Australia/Sydney").slice(0, 10)).toBe("2026-06-14");
+    const sydneySummer = civilDayEndIso("2026-12-15", "Australia/Sydney");
+    expect(sydneySummer).toBe("2026-12-15T12:59:59.000Z");
+    expect(civilDayInZone(sydneySummer, "Australia/Sydney")).toBe("2026-12-15");
+  });
+
+  it("pushes a UTC-negative zone's end of day onto the next UTC day", () => {
+    const result = civilDayEndIso("2026-06-15", "America/Los_Angeles");
+    expect(result).toBe("2026-06-16T06:59:59.000Z");
+    expect(result.slice(0, 10)).toBe("2026-06-16");
+    expect(civilDayInZone(result, "America/Los_Angeles")).toBe("2026-06-15");
+  });
+
+  it("handles a leap day", () => {
+    const result = civilDayEndIso("2028-02-29", NY);
+    expect(result).toBe("2028-03-01T04:59:59.000Z");
+    expect(civilDayInZone(result, NY)).toBe("2028-02-29");
+    expect(wallClock(result, NY)).toEqual({ hour: 23, minute: 59, second: 59 });
+  });
+
+  it("handles a year boundary on both sides", () => {
+    const lastDay = civilDayEndIso("2026-12-31", NY);
+    expect(lastDay).toBe("2027-01-01T04:59:59.000Z");
+    expect(civilDayInZone(lastDay, NY)).toBe("2026-12-31");
+
+    const firstDay = civilDayEndIso("2027-01-01", NY);
+    expect(firstDay).toBe("2027-01-02T04:59:59.000Z");
+    expect(civilDayInZone(firstDay, NY)).toBe("2027-01-01");
+  });
+
+  it("never reads the current clock", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2001-05-04T01:02:03.000Z"));
+    const early = civilDayEndIso("2026-09-15", NY);
+    vi.setSystemTime(new Date("2099-12-31T22:11:00.000Z"));
+    const late = civilDayEndIso("2026-09-15", NY);
+    expect(late).toBe(early);
+    expect(late).toBe("2026-09-16T03:59:59.000Z");
+  });
+
+  it("is strictly later than the start of the same civil day, on the same civil day", () => {
+    for (const workDate of ["2026-03-08", "2026-06-15", "2026-11-01", "2026-12-31"]) {
+      const start = civilDayStartIso(workDate, NY);
+      const end = civilDayEndIso(workDate, NY);
+      expect(Date.parse(end)).toBeGreaterThan(Date.parse(start));
+      expect(civilDayInZone(start, NY)).toBe(workDate);
+      expect(civilDayInZone(end, NY)).toBe(workDate);
+    }
+  });
+
+  it("refuses an unreadable civil date", () => {
+    expect(() => civilDayEndIso("not-a-date", NY)).toThrow(TypeError);
+    expect(() => civilDayEndIso("", NY)).toThrow(TypeError);
+    expect(() => civilDayEndIso("2026-02-31", NY)).toThrow(TypeError);
+    expect(() => civilDayEndIso("2026-13-01", NY)).toThrow(TypeError);
+    expect(() => civilDayEndIso("2026-9-15", NY)).toThrow(TypeError);
+  });
+
+  it("really is 23:59:59 on the local wall clock in every zone tested", () => {
+    const cases: readonly (readonly [string, string])[] = [
+      ["2026-09-15", NY],
+      ["2026-06-15", "America/Los_Angeles"],
+      ["2026-06-15", "Asia/Tokyo"],
+      ["2026-12-15", "Australia/Sydney"],
+      ["2028-02-29", "UTC"],
+      ["2026-12-31", "Europe/London"],
+    ];
+    for (const [workDate, timezone] of cases) {
+      const result = civilDayEndIso(workDate, timezone);
+      expect(wallClock(result, timezone)).toEqual({ hour: 23, minute: 59, second: 59 });
+      expect(civilDayInZone(result, timezone)).toBe(workDate);
+    }
   });
 });

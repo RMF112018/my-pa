@@ -122,9 +122,20 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   useEffect(() => {
     const moved = pendingMovement.current;
     if (!moved) return;
+    /*
+      Single-shot. This rows update is the dispatched mutation's only chance to
+      move focus, and the entry is dropped either way — including when the Task
+      is still here, which is the ordinary outcome of a Status or Due edit that
+      does not change membership.
+
+      Leaving it armed was a real bug: `rows` also changes on the five-second
+      freshness poll and on any other Task mutation in the session, so a stale
+      entry would later be read as "this mutation removed the Task" and pull
+      focus somewhere the user was not working.
+    */
+    pendingMovement.current = null;
     const present = rows.some((row) => taskIdOf(row) === moved.taskId);
     if (present) return;
-    pendingMovement.current = null;
     const frame = requestAnimationFrame(() => {
       const after = visibleRowElements();
       const sameIndex = rowTarget(after[moved.index]);
@@ -325,11 +336,16 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   }
 
   function select(next: WorkView) {
+    // Deliberate navigation ends any pending focus handoff: the user has chosen
+    // where to be, and a mutation dispatched in the view they just left must not
+    // reach forward and move focus in the one they arrived at.
+    pendingMovement.current = null;
     if (next !== "commitments") setLastTaskView(next as TaskView);
     setState("loading");
     setRows([]);
     setView(next);
-    setCursor("");
+    abandonPendingMovement();
+            setCursor("");
     const url = new URL(window.location.href);
     url.searchParams.set("view", next);
     url.searchParams.delete("cursor");
@@ -344,10 +360,17 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
     if (view === "commitments") select(lastTaskView);
   }
 
+  /** Any deliberate change of what the list is showing drops a pending handoff. */
+  function abandonPendingMovement() {
+    pendingMovement.current = null;
+  }
+
   function chooseCommitmentFilter(value: CommitmentFilter) {
+    abandonPendingMovement();
     sync({ commitment: value, cursor: undefined, q: value === "waiting-on" ? undefined : committedQuery || undefined });
     setCommitmentFilter(value);
-    setCursor("");
+    abandonPendingMovement();
+            setCursor("");
     if (value === "waiting-on") {
       setQueryDraft("");
       setCommittedQuery("");
@@ -355,6 +378,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   }
 
   function choosePerspective(next: string) {
+    abandonPendingMovement();
     if (!WORK_PERSPECTIVES.includes(next as WorkPerspective)) return;
     const perspectiveValue = next as WorkPerspective;
     setPerspective(perspectiveValue);
@@ -524,6 +548,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
           disabled={waitingOnSearch}
           onClick={() => {
             sync({ q: queryDraft || undefined, cursor: undefined });
+            abandonPendingMovement();
             setCursor("");
             setCommittedQuery(queryDraft);
           }}
@@ -542,7 +567,8 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
                     const value = event.target.value as typeof archiveMode;
                     sync({ archived: value, cursor: undefined });
                     setArchiveMode(value);
-                    setCursor("");
+                    abandonPendingMovement();
+            setCursor("");
                   }}
                 >
                   <option value="exclude">Active only</option>

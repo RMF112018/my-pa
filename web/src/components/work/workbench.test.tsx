@@ -248,6 +248,87 @@ describe("Work surface", () => {
     });
   });
 
+  it("does not move focus on a later refresh after a mutation that kept the Task", async () => {
+    /*
+      The dangling-handoff case. A Status change usually leaves the Task right
+      where it was, so no focus move is owed. But `rows` keeps changing for
+      reasons of its own — the freshness poll, another Task's mutation — and if
+      the handoff armed at dispatch were still sitting there, one of those later
+      refreshes would be read as "this mutation removed the Task" and pull focus
+      somewhere the user was not working.
+    */
+    const rowOf = (id: string, title: string) => ({
+      task_id: id, title, lifecycle_state: "open", priority: null, due_at: null,
+      scheduled_at: null, deferred_until: null, archived_at: null,
+      created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z", version: 2,
+    });
+    const kept = rowOf("tsk_aaaaaaaa11111111", "Stays put");
+    const other = rowOf("tsk_bbbbbbbb22222222", "Someone else");
+    let listed = [kept, other];
+    const body = (data: unknown) =>
+      new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
+
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (path.includes("/transition") && method === "POST") {
+        return body({ task: { ...kept, version: 3, lifecycle_state: "waiting" } });
+      }
+      if (path === `/api/tasks/${kept.task_id}`) return body({ task: kept });
+      if (path === `/api/tasks/${other.task_id}`) return body({ task: other });
+      if (path.includes("/comments")) return body({ comments: [] });
+      return body({ tasks: listed });
+    }));
+
+    history.replaceState(null, "", "/work?view=all-open");
+    renderFromUrl();
+    await screen.findByText("Stays put");
+
+    const user = userEvent.setup();
+    const rows = screen.getAllByTestId("task-list-row");
+    // Status change that does not remove the Task from this view.
+    await user.selectOptions(within(rows[0]).getByRole("combobox"), "waiting");
+    await waitFor(() =>
+      expect(screen.getByTestId("mutation-feedback-region").textContent).toContain("Status changed to"),
+    );
+
+    // Park focus somewhere deliberate, then let the freshness poll bring back a
+    // list this Task is no longer in — an ordinary background refresh, nothing
+    // to do with the Status change that already settled.
+    const parked = screen.getByRole("heading", { name: "Work", level: 1 });
+    parked.focus();
+    expect(document.activeElement).toBe(parked);
+
+    const listReads = () =>
+      (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([input, init]) =>
+          String(input).startsWith("/api/tasks?") && (init?.method ?? "GET").toUpperCase() === "GET",
+      ).length;
+    const before = listReads();
+
+    // A plain background refresh, with no mutation in front of it: the window
+    // regains focus and the active query re-reads. By then the Task has moved
+    // elsewhere for reasons of its own.
+    listed = [other];
+    await act(async () => {
+      fireEvent(window, new Event("focus"));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(listReads()).toBeGreaterThan(before));
+    await waitFor(() => expect(screen.queryByText("Stays put")).toBeNull());
+
+    // Focus placement runs inside a frame, so give it one before judging.
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+
+    // Focus was not stolen by a handoff that no longer had anything to do.
+    expect(document.activeElement).toBe(parked);
+  });
+
   it("falls back to the Work heading when nothing is left to focus", async () => {
     const only = {
       task_id: "tsk_aaaaaaaa11111111", title: "The last one", lifecycle_state: "open",

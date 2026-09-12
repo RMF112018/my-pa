@@ -116,13 +116,22 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
    * whichever row the user is actually in, and it is only acted on when that
    * exact row leaves and focus has genuinely fallen to the document body.
    */
-  const focusedRow = useRef<{ readonly taskId: string; readonly index: number } | null>(null);
+  const focusedRow = useRef<{ readonly taskId: string; readonly index: number; readonly element: HTMLElement } | null>(null);
+  /** The rendered perspective, whichever it is — the only place Task rows live. */
+  const perspectiveRegion = useRef<HTMLDivElement | null>(null);
 
 
-  /** The Task rows currently on screen, in the order the server returned them. */
+  /**
+   * The Task rows currently on screen, in the order the server returned them.
+   *
+   * Scoped to the rendered perspective rather than to a document-wide lookup for
+   * one perspective's label: Board and Calendar lay their Tasks out differently
+   * and carry the same `data-work-item`, and a List-only query found none of
+   * them — so every restore in those two fell through to the heading.
+   */
   function visibleRowElements(): readonly HTMLElement[] {
-    const list = document.querySelector('[aria-label="Work list"]');
-    return list ? Array.from(list.querySelectorAll<HTMLElement>("[data-work-item]")) : [];
+    const container = perspectiveRegion.current;
+    return container ? Array.from(container.querySelectorAll<HTMLElement>("[data-work-item]")) : [];
   }
 
   /** The title/details trigger of a row — the stable thing to hand focus to. */
@@ -143,7 +152,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
     const index = visibleRowElements().findIndex(
       (candidate) => candidate.getAttribute("data-work-item") === taskId,
     );
-    focusedRow.current = { taskId, index: Math.max(0, index) };
+    focusedRow.current = { taskId, index: Math.max(0, index), element: event.target as HTMLElement };
   }
 
   /*
@@ -153,16 +162,17 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
     that was mutated may already be unmounted by then, so nothing it fires can
     be relied on.
 
-    There is exactly one condition, and it is the whole of the design: focus
-    must have actually fallen to the document body. That is what makes this
-    safe for any list change whatever its cause — a write confirming, a
-    freshness poll, pagination, a change of view, a second row's write landing
-    first. A change that does not cost the user their focus is left alone, so
-    nothing has to be armed when a write is dispatched, stood down when it
-    fails, or cleared on navigation. An earlier design predicted which write
-    would cost focus and armed a handoff for it; because a list change carries
-    no Task identity, an unrelated read could spend the handoff armed for
-    another row, and focus was lost precisely when it mattered most.
+    Two conditions, and together they are the whole of the design: focus must
+    have fallen to the document body, and the element that was holding it must
+    have actually left the document. That is what makes this safe for any list
+    change whatever its cause — a write confirming, a freshness poll,
+    pagination, a change of view, a second row's write landing first. A change
+    that does not cost the user their focus is left alone, so nothing has to be
+    armed when a write is dispatched, stood down when it fails, or cleared on
+    navigation. An earlier design predicted which write would cost focus and
+    armed a handoff for it; because a list change carries no Task identity, an
+    unrelated read could spend the handoff armed for another row, and focus was
+    lost precisely when it mattered most.
 
     Placement prefers the Task the user was actually in, if the list still has
     it; otherwise whatever now occupies its place, then the row before it, and
@@ -179,6 +189,14 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
       */
       const active = document.activeElement;
       if (active && active !== document.body) return;
+      /*
+        Focus is on the body, but the control the user was in is still right
+        there — so they put it down themselves, by clicking the page background
+        or dismissing something. Nothing was taken from them and nothing is owed.
+        Without this a plain freshness poll would haul focus back into the list
+        against the user's own action, and do it again on every poll after.
+      */
+      if (lost.element.isConnected) return;
       focusedRow.current = null;
       const after = visibleRowElements();
       const survivor = after.find(
@@ -621,7 +639,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
             sees focus land anywhere in the list, including on controls a row
             mounts later. It is a listener, not an interactive element.
           */
-          <div onFocus={rememberFocusedRow}>
+          <div ref={perspectiveRegion} onFocus={rememberFocusedRow}>
             <WorkPerspectives
               perspective={perspective}
               rows={rows}

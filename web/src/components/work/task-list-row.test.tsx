@@ -349,6 +349,77 @@ describe("TaskListRow", () => {
     await waitFor(() => expect(row().getAttribute("aria-busy")).toBeNull());
   });
 
+  it("unlocks the row when the canonical read it needs cannot be had", async () => {
+    /*
+      The row locks from the activation, before the canonical Task it needs has
+      been read. If that read fails there is no write to settle and nothing else
+      will clear the lock — so the unlock on that path is the only thing standing
+      between a refused read and a row whose every control is disabled for good,
+      with no way back short of a reload.
+    */
+    stubFetch({
+      detail: () =>
+        new Response(JSON.stringify({ error: { message: "unavailable", code: "unavailable" } }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    renderRow();
+
+    await userEvent.click(await screen.findByTestId("task-close-trigger"));
+    await userEvent.click(await screen.findByTestId("task-close-confirm"));
+
+    // The read is refused, and the row comes back under the user's hand.
+    await waitFor(() => expect(row().getAttribute("aria-busy")).toBeNull());
+    await waitFor(() =>
+      expect(screen.getByTestId("task-close-trigger")).not.toHaveProperty("disabled", true),
+    );
+  });
+
+  it("gives focus back to the row when a write is refused after focus was lost", async () => {
+    /*
+      A keyboard user starts a write from within the row. Browsers drop focus to
+      the document body when the element holding it is disabled, which is exactly
+      what locking does to the control they just operated. If the write is then
+      refused the Task does not move, the list does not change, and nothing else
+      will put the user back — they are left on the body with the row still in
+      front of them.
+
+      jsdom will not blur a disabled element, so the disabling itself cannot be
+      simulated here; the loss is driven through an element in the row that jsdom
+      will blur, which exercises the same hold-and-return path.
+    */
+    const refusal = gate();
+    stubFetch({
+      transition: async () => {
+        await refusal.wait;
+        return new Response(JSON.stringify({ error: { message: "nope", code: "invalid" } }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    renderRow();
+    await hydrated();
+
+    const anchor = within(row()).getByRole("link");
+    anchor.focus();
+    await userEvent.selectOptions(within(row()).getByRole("combobox"), "blocked");
+    await waitFor(() => expect(row().getAttribute("aria-busy")).toBe("true"));
+
+    // Focus is lost to the body while the write is in flight.
+    anchor.focus();
+    anchor.blur();
+    expect(document.activeElement).toBe(document.body);
+
+    refusal.release();
+    await waitFor(() => expect(row().getAttribute("aria-busy")).toBeNull());
+
+    // The refusal left the Task where it was, and the user back in the row.
+    expect(document.activeElement).not.toBe(document.body);
+    expect(row().contains(document.activeElement)).toBe(true);
+  });
+
   it("reports a confirmed mutation so Work can move the row", async () => {
     stubFetch();
     const handles = renderRow();

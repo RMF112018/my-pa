@@ -55,8 +55,6 @@ export interface TaskListRowProps {
   onOpenActivity?(taskId: string, title: string, trigger: HTMLElement): void;
   /** Fired once a mutation is confirmed by the server, for filter/focus handling. */
   onMutationConfirmed?(input: { taskId: string; kind: string }): void;
-  /**
-   * Fired when a dispatched mutation settles without confirming — a definitive
   /** Civil-day context. Defaults to the browser clock. */
   clock?: TaskCivilClock;
 }
@@ -135,6 +133,7 @@ export function TaskListRow({
     result. Drop it, so a later canonical read for an unrelated reason cannot
     satisfy an intent that never took effect and report it as confirmed.
   */
+  const rowRef = useRef<HTMLDivElement | null>(null);
   const pendingKind = ops.pending;
   useEffect(() => {
     if (pendingKind !== null) return;
@@ -187,8 +186,36 @@ export function TaskListRow({
   const conflict = ops.conflict !== null;
   const busy = ops.pending !== null;
 
+  /*
+    Give the control back to the hand that was on it.
+
+    Locking disables the control the user just operated, and disabling the
+    focused element drops focus to the document body — so the write they started
+    with the keyboard costs them their place for as long as it runs. If it is
+    then refused, nothing changes the list and nothing else will put them back:
+    they are simply stranded. Hold the element while it is disabled and return
+    focus to it on unlock, but only if focus is still lying on the body, so a
+    user who moved on in the meantime is never pulled back.
+  */
+  const lockedFocus = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (locked) {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && rowRef.current?.contains(active)) {
+        lockedFocus.current = active;
+      }
+      return;
+    }
+    const held = lockedFocus.current;
+    lockedFocus.current = null;
+    if (!held || !held.isConnected) return;
+    if (document.activeElement !== document.body) return;
+    held.focus();
+  }, [locked]);
+
   return (
     <div
+      ref={rowRef}
       data-testid="task-list-row"
       data-work-item={task.task_id}
       aria-busy={busy || undefined}

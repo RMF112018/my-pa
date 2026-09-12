@@ -97,7 +97,8 @@ function mintAttemptId(): string {
 
 function mintMutationKey(kind: MutationKind, intentId?: string): string {
   const id = intentId ?? crypto.randomUUID();
-  return `task-${kind}:${id}`;
+  // Domain IDEMPOTENCY_KEY_PATTERN is [A-Za-z0-9_-]{8,128} — no colons.
+  return `task-${kind}-${id}`;
 }
 
 function isVersionedKind(kind: MutationKind): boolean {

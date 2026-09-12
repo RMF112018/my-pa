@@ -24,7 +24,8 @@ describe("CreateIntentStore", () => {
     const store = createIntentStore();
     const session = store.openSession({ title: "Call Sam" });
     expect(session.intentId).toBe("11111111-1111-4111-8111-111111111111");
-    expect(session.idempotencyKey).toBe("task-create:11111111-1111-4111-8111-111111111111");
+    expect(session.idempotencyKey).toBe("task-create-11111111-1111-4111-8111-111111111111");
+    expect(session.idempotencyKey).toMatch(/^[A-Za-z0-9_-]{8,128}$/);
     expect(session.getPhase()).toBe("draft");
     expect(session.snapshot().dispatching).toBe(false);
   });

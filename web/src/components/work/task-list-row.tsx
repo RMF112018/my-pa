@@ -136,6 +136,8 @@ export function TaskListRow({
     satisfy an intent that never took effect and report it as confirmed.
   */
   const rowRef = useRef<HTMLDivElement | null>(null);
+  /** The control the user operated, held while the row's write disables it. */
+  const lockedFocus = useRef<HTMLElement | null>(null);
   const pendingKind = ops.pending;
   const conflictOutstanding = ops.conflict !== null;
   useEffect(() => {
@@ -154,6 +156,21 @@ export function TaskListRow({
   const await_ = useCallback(
     (entry: AwaitedConfirmation) => {
       awaitingRef.current = [...awaitingRef.current, entry];
+      /*
+        Remember the control the user is on, here, in their own event.
+
+        This cannot be read from an effect. A browser blurs a focused element
+        the instant `disabled` is applied to it, and React applies that while
+        committing — so by the time any effect runs the answer is already
+        `document.body` and there is nothing left to remember. Read after the
+        fact, this captured nothing at all in a browser, and the whole return
+        was dead code that only looked alive under a test environment which
+        does not implement that blur.
+      */
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && rowRef.current?.contains(active)) {
+        lockedFocus.current = active;
+      }
     },
     [],
   );
@@ -213,24 +230,21 @@ export function TaskListRow({
     down — and until that has happened focus still reads as theirs, so the check
     would decline and then the element would vanish underneath it.
   */
-  const lockedFocus = useRef<HTMLElement | null>(null);
   useEffect(() => {
-    if (locked) {
-      const active = document.activeElement;
-      if (active instanceof HTMLElement && rowRef.current?.contains(active)) {
-        lockedFocus.current = active;
-      }
-      return;
-    }
+    if (locked) return;
     const held = lockedFocus.current;
     lockedFocus.current = null;
     if (!held) return;
-    const frame = requestAnimationFrame(() => {
-      if (!held.isConnected) return;
-      if (document.activeElement !== document.body) return;
-      held.focus();
-    });
-    return () => cancelAnimationFrame(frame);
+    /*
+      Only focus that is lying on the body is ours to place: a user who moved on
+      during the write chose where they are. Whatever unlocking unmounted — the
+      conflict panel's own buttons, when the user answers it — is already gone by
+      the time this runs, so the answer here is the settled one. Focusing a node
+      that has since been replaced is a silent no-op, which is the same outcome
+      as declining, so nothing is gained by checking for it.
+    */
+    if (document.activeElement !== document.body) return;
+    held.focus();
   }, [locked]);
 
   /*
@@ -245,6 +259,13 @@ export function TaskListRow({
   const conflictRecovery = useRef<HTMLButtonElement | null>(null);
   useEffect(() => {
     if (!conflict) return;
+    /*
+      If the user has two writes in flight and both are refused for version, the
+      row whose frame runs first takes them to its question rather than the other
+      one. Both are questions about their own action, and a conflict cannot arise
+      in a row they never wrote to, so this is an ordering the user can follow
+      rather than a place they did not ask to be. Left deliberately.
+    */
     const frame = requestAnimationFrame(() => {
       if (document.activeElement !== document.body) return;
       conflictRecovery.current?.focus();

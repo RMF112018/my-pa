@@ -688,19 +688,26 @@ export function useTaskOperations(
       const localId = `outbound-${crypto.randomUUID()}`;
       const idempotencyKey = mutationKey("task-comment");
       setPendingComments((current) => [...current, { localId, body, state: "pending" }]);
-      setPending("commentCreate");
-      const outcome = await runtime.mutationCoordinator.coordinator.mutate({
-        kind: "commentCreate",
-        taskId,
-        idempotencyKey,
-        request: { body },
-        dispatch: async ({ request, idempotencyKey: key }) =>
-          workRequest(`/api/tasks/${encodeURIComponent(taskId)}/comments`, {
-            method: "POST",
-            body: JSON.stringify({ ...request, idempotencyKey: key }),
-          }),
-      });
-      settleComment(localId, idempotencyKey, outcome);
+      // Same single unwind as every other write here: the lock is the only thing
+      // disabling this surface, and a throw that skips lowering it leaves the
+      // user with nothing that works and no way back.
+      try {
+        setPending("commentCreate");
+        const outcome = await runtime.mutationCoordinator.coordinator.mutate({
+          kind: "commentCreate",
+          taskId,
+          idempotencyKey,
+          request: { body },
+          dispatch: async ({ request, idempotencyKey: key }) =>
+            workRequest(`/api/tasks/${encodeURIComponent(taskId)}/comments`, {
+              method: "POST",
+              body: JSON.stringify({ ...request, idempotencyKey: key }),
+            }),
+        });
+        settleComment(localId, idempotencyKey, outcome);
+      } finally {
+        if (mountedRef.current) setPending(null);
+      }
     },
     [runtime.mutationCoordinator, settleComment, taskId],
   );
@@ -710,10 +717,14 @@ export function useTaskOperations(
       const record = commentAttemptsRef.current.get(localId);
       if (!record || !record.ambiguous) return;
       markComment(localId, "pending");
-      setPending("commentCreate");
-      // Same attempt identity, therefore the same idempotency key on the wire.
-      const outcome = await runtime.mutationCoordinator.coordinator.retry(record.attemptId);
-      settleComment(localId, `retry:${record.attemptId}`, outcome);
+      try {
+        setPending("commentCreate");
+        // Same attempt identity, therefore the same idempotency key on the wire.
+        const outcome = await runtime.mutationCoordinator.coordinator.retry(record.attemptId);
+        settleComment(localId, `retry:${record.attemptId}`, outcome);
+      } finally {
+        if (mountedRef.current) setPending(null);
+      }
     },
     [markComment, runtime.mutationCoordinator, settleComment],
   );

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { TaskListRow, type TaskListRowProps } from "@/components/work/task-list-row";
@@ -57,6 +57,31 @@ function ok(data: unknown): Response {
     status: 200,
     headers: { "content-type": "application/json" },
   });
+}
+
+/*
+  jsdom does not implement one browser behaviour these tests turn on: focus
+  leaves an element at the moment it is disabled. Without it, a test can only
+  reach states a browser never produces — and a green test that depends on such
+  a state is worse than no test, because it reports a mechanism as working when
+  in a browser it does nothing at all.
+
+  React applies `disabled` through `setAttribute` while committing, so that is
+  where the blur belongs. The element is blurred just before it is disabled,
+  which leaves exactly the state a browser leaves: focus on the body, and the
+  control it let go of disabled.
+*/
+function emulateDisableBlur(): () => void {
+  const original = Element.prototype.setAttribute;
+  Element.prototype.setAttribute = function patched(name: string, value: string) {
+    if (name === "disabled" && document.activeElement === this) {
+      (this as HTMLElement).blur();
+    }
+    return original.call(this, name, value);
+  };
+  return () => {
+    Element.prototype.setAttribute = original;
+  };
 }
 
 function gate(): { wait: Promise<void>; release: () => void } {
@@ -376,93 +401,144 @@ describe("TaskListRow", () => {
     );
   });
 
-  it("gives focus back to the row when a write is refused after focus was lost", async () => {
+  it("gives focus back to the control when a write is refused", async () => {
     /*
-      A keyboard user starts a write from within the row. Browsers drop focus to
-      the document body when the element holding it is disabled, which is exactly
-      what locking does to the control they just operated. If the write is then
-      refused the Task does not move, the list does not change, and nothing else
-      will put the user back — they are left on the body with the row still in
-      front of them.
-
-      jsdom will not blur a disabled element, so the disabling itself cannot be
-      simulated here; the loss is driven through an element in the row that jsdom
-      will blur, which exercises the same hold-and-return path.
+      A keyboard user changes Status. The control is disabled while the write
+      runs, and a browser lets go of a focused element the instant that happens.
+      If the write is then refused the Task does not move, the list does not
+      change, and nothing else will put the user back — they are left on the
+      document body with the control they were operating right in front of them.
     */
-    const refusal = gate();
-    stubFetch({
-      transition: async () => {
-        await refusal.wait;
-        return new Response(JSON.stringify({ error: { message: "nope", code: "invalid" } }), {
-          status: 400,
-          headers: { "content-type": "application/json" },
-        });
-      },
-    });
-    renderRow();
-    await hydrated();
-
-    const anchor = within(row()).getByRole("link");
-    anchor.focus();
-    await userEvent.selectOptions(within(row()).getByRole("combobox"), "blocked");
-    await waitFor(() => expect(row().getAttribute("aria-busy")).toBe("true"));
-
-    // Focus is lost to the body while the write is in flight.
-    anchor.focus();
-    anchor.blur();
-    expect(document.activeElement).toBe(document.body);
-
-    refusal.release();
-    await waitFor(() => expect(row().getAttribute("aria-busy")).toBeNull());
-    await act(async () => {
-      await new Promise<void>((resolve) => {
-        requestAnimationFrame(() => resolve());
+    const restore = emulateDisableBlur();
+    try {
+      const refusal = gate();
+      stubFetch({
+        transition: async () => {
+          await refusal.wait;
+          return new Response(JSON.stringify({ error: { message: "nope", code: "invalid" } }), {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          });
+        },
       });
-    });
+      renderRow();
+      await hydrated();
 
-    // The refusal left the Task where it was, and the user back in the row.
-    expect(document.activeElement).not.toBe(document.body);
-    expect(row().contains(document.activeElement)).toBe(true);
+      const status = within(row()).getByRole("combobox");
+      status.focus();
+      await userEvent.selectOptions(status, "blocked");
+
+      // The browser has let go of the control, exactly as it does.
+      await waitFor(() => expect(row().getAttribute("aria-busy")).toBe("true"));
+      expect(document.activeElement).toBe(document.body);
+
+      refusal.release();
+      await waitFor(() => expect(row().getAttribute("aria-busy")).toBeNull());
+      await act(async () => {
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+      });
+
+      // The refusal left the Task where it was, and the user where they were.
+      expect(document.activeElement).toBe(status);
+    } finally {
+      restore();
+    }
   });
 
-  it("offers a way out of a conflict instead of locking the row for good", async () => {
+  it("gives focus back to the control when a conflict is stood down", async () => {
     /*
-      A conflict is the user's to resolve, and until it is resolved this row's
-      writes stay shut. With nothing offered to resolve it, the row simply
-      stopped working — every control disabled, no explanation, nothing to
-      press — and it stayed that way, because a row is keyed by Task and never
-      remounts while it is in the list.
+      Standing a conflict down unmounts the panel the user is standing in, so
+      the act of answering the question costs them their place a second time.
+      They are returned to the control the conflict was about.
     */
-    stubFetch({
-      transition: () =>
-        new Response(
-          JSON.stringify({
-            error: { message: "version conflict", code: "conflict" },
-            current: { ...CANONICAL, version: 9, lifecycle_state: "blocked" },
-          }),
-          { status: 409, headers: { "content-type": "application/json" } },
-        ),
-    });
-    renderRow();
-    await hydrated();
+    const restore = emulateDisableBlur();
+    try {
+      stubFetch({
+        transition: () =>
+          new Response(
+            JSON.stringify({
+              error: { message: "version conflict", code: "conflict" },
+              current: { ...CANONICAL, version: 9, lifecycle_state: "blocked" },
+            }),
+            { status: 409, headers: { "content-type": "application/json" } },
+          ),
+      });
+      renderRow();
+      await hydrated();
 
-    await userEvent.selectOptions(within(row()).getByRole("combobox"), "blocked");
+      const status = within(row()).getByRole("combobox");
+      status.focus();
+      await userEvent.selectOptions(status, "blocked");
 
-    // The conflict is stated, and both ways out are offered.
-    const recovery = await screen.findByTestId("task-list-row-conflict");
-    expect(recovery.textContent).toContain("changed elsewhere");
-    expect(screen.getByTestId("task-list-row-conflict-reapply")).toBeTruthy();
+      const dismiss = await screen.findByTestId("task-list-row-conflict-dismiss");
+      await userEvent.click(dismiss);
+      await waitFor(() => expect(screen.queryByTestId("task-list-row-conflict")).toBeNull());
+      await act(async () => {
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+      });
 
-    // Standing down clears it, and the row is usable again.
-    await userEvent.click(screen.getByTestId("task-list-row-conflict-dismiss"));
-    await waitFor(() => expect(screen.queryByTestId("task-list-row-conflict")).toBeNull());
-    expect(screen.getByTestId("task-close-trigger")).not.toHaveProperty("disabled", true);
+      expect(document.activeElement).not.toBe(document.body);
+      expect(document.activeElement).toBe(within(row()).getByRole("combobox"));
+    } finally {
+      restore();
+    }
+  });
+
+  it("gives focus back to the control when a conflict is recovered", async () => {
+    /*
+      The same on the other answer: a successful reapply unmounts the panel, and
+      when the Task stays in this filter there is no list change to catch the
+      user. They are returned to the control they operated.
+    */
+    const restore = emulateDisableBlur();
+    try {
+      let attempts = 0;
+      stubFetch({
+        transition: (body) => {
+          attempts += 1;
+          if (attempts === 1) {
+            return new Response(
+              JSON.stringify({
+                error: { message: "version conflict", code: "conflict" },
+                current: { ...CANONICAL, version: 9, lifecycle_state: "in_progress" },
+              }),
+              { status: 409, headers: { "content-type": "application/json" } },
+            );
+          }
+          return ok({ task: { ...CANONICAL, version: 10, lifecycle_state: body.toState } });
+        },
+      });
+      renderRow();
+      await hydrated();
+
+      const status = within(row()).getByRole("combobox");
+      status.focus();
+      await userEvent.selectOptions(status, "blocked");
+
+      await userEvent.click(await screen.findByTestId("task-list-row-conflict-reapply"));
+      await waitFor(() => expect(attempts).toBe(2));
+      await waitFor(() => expect(screen.queryByTestId("task-list-row-conflict")).toBeNull());
+      await act(async () => {
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+      });
+
+      expect(document.activeElement).not.toBe(document.body);
+      expect(row().contains(document.activeElement)).toBe(true);
+    } finally {
+      restore();
+    }
   });
 
   it("does not pull a user back into the row if they moved on while it ran", async () => {
     /*
-      The row holds the element that had focus when it locked so it can give it
-      back. It must only do so if focus is still lying on the body: a user who
+      The row holds the control the user operated so it can give it back. It
+      must only do so if focus is still lying on the body: a user who
       moved on to something else during the write chose where they are, and
       yanking them back into a row they have finished with is worse than never
       having held the element at all.
@@ -480,9 +556,9 @@ describe("TaskListRow", () => {
     renderRow();
     await hydrated();
 
-    const anchorLink = within(row()).getByRole("link");
-    anchorLink.focus();
-    await userEvent.selectOptions(within(row()).getByRole("combobox"), "blocked");
+    const status = within(row()).getByRole("combobox");
+    status.focus();
+    await userEvent.selectOptions(status, "blocked");
     await waitFor(() => expect(row().getAttribute("aria-busy")).toBe("true"));
 
     // The user moves on somewhere else entirely while the write runs.
@@ -494,6 +570,16 @@ describe("TaskListRow", () => {
 
     refusal.release();
     await waitFor(() => expect(row().getAttribute("aria-busy")).toBeNull());
+    /*
+      The return is deferred a frame, so the frame has to run before this can be
+      believed. Asserting sooner cannot observe the steal it rules out, which is
+      what made an earlier version of this test pass with its guard deleted.
+    */
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
 
     // They are left where they chose to be.
     expect(document.activeElement).toBe(elsewhere);
@@ -509,6 +595,8 @@ describe("TaskListRow", () => {
       they are left at the top of the document, tabbing down to a panel that
       appeared without them.
     */
+    const restore = emulateDisableBlur();
+    try {
     stubFetch({
       transition: () =>
         new Response(
@@ -522,15 +610,11 @@ describe("TaskListRow", () => {
     renderRow();
     await hydrated();
 
-    /*
-      jsdom will not blur a disabled element, and the control is disabled from
-      the moment the write is dispatched — so the browser's own forced blur
-      cannot be simulated. Start from the state it produces: focus on the body,
-      and the change driven without moving it.
-    */
     const status = within(row()).getByRole("combobox");
+    status.focus();
+    await userEvent.selectOptions(status, "blocked");
+    // The browser has let go of the control, which is how the user lost focus.
     expect(document.activeElement).toBe(document.body);
-    fireEvent.change(status, { target: { value: "blocked" } });
 
     await screen.findByTestId("task-list-row-conflict");
     await act(async () => {
@@ -541,6 +625,9 @@ describe("TaskListRow", () => {
 
     expect(document.activeElement).not.toBe(document.body);
     expect(document.activeElement).toBe(screen.getByTestId("task-list-row-conflict-reapply"));
+    } finally {
+      restore();
+    }
   });
 
   it("reconciles the list when a conflict is recovered, not only when it is avoided", async () => {

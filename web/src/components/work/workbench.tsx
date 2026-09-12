@@ -166,7 +166,10 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
       the top, then sent there when their marker left.
     */
     const index = visibleRowElements().indexOf(row);
-    focusedRow.current = { taskId, index: Math.max(0, index), element: event.target as HTMLElement };
+    // A row this surface cannot place is a row it cannot restore. Record nothing
+    // rather than a position that means nothing.
+    if (index < 0) return;
+    focusedRow.current = { taskId, index, element: event.target as HTMLElement };
   }
 
   /*
@@ -264,10 +267,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
           perfectly good rows in front of them.
         */
         const clamped = Math.min(lost.index, after.length - 1);
-        const target =
-          rowTarget(survivor) ??
-          rowTarget(after[clamped]) ??
-          (clamped > 0 ? rowTarget(after[clamped - 1]) : null);
+        const target = rowTarget(survivor) ?? rowTarget(after[clamped]);
         if (target) {
           target.focus();
           return;

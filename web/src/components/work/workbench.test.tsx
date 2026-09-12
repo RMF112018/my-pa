@@ -709,33 +709,31 @@ describe("Work surface", () => {
     expect(document.activeElement).toBe(document.body);
   });
 
-  it("follows the row as others leave from above it", async () => {
+  it("follows the row as the list changes around it", async () => {
     /*
-      Where a row sits is remembered when focus arrives, and rows above it leave
-      without the user touching anything — no focus event fires to correct it. By
-      the time the user's own row goes, a remembered position points at somebody
-      else's row, or past the end of a shortened list, and the user is dumped on
-      the heading with a perfectly good neighbour sitting right there.
+      Where a row sits is remembered when focus arrives, and the list moves
+      underneath it: rows leave from above, others arrive, and none of it fires a
+      focus event to correct the remembered position. By the time the user's own
+      row goes, a stale position names somebody else's row — and because it names
+      a row that really is there, nothing downstream can notice it is wrong.
     */
     const rowOf = (id: string, title: string) => ({
       task_id: id, title, lifecycle_state: "open", priority: null, due_at: null,
       scheduled_at: null, deferred_until: null, archived_at: null,
       created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z", version: 2,
     });
-    const all = [
-      rowOf("tsk_aaaaaaaa11111111", "Leaves one"),
-      rowOf("tsk_bbbbbbbb22222222", "Leaves two"),
-      rowOf("tsk_cccccccc33333333", "Leaves three"),
-      rowOf("tsk_dddddddd44444444", "The neighbour"),
-      rowOf("tsk_eeeeeeee55555555", "Where the user is"),
-    ];
-    let listed = all;
+    const above = [rowOf("tsk_aaaaaaaa11111111", "Above one"), rowOf("tsk_bbbbbbbb22222222", "Above two")];
+    const kept = [rowOf("tsk_cccccccc33333333", "Kept one"), rowOf("tsk_dddddddd44444444", "Kept two")];
+    const standing = rowOf("tsk_eeeeeeee55555555", "Where the user is");
+    const arrived = [rowOf("tsk_ffffffff66666666", "Arrived one"), rowOf("tsk_99999999aaaaaaaa", "Arrived two")];
+    const everything = [...above, ...kept, standing, ...arrived];
+    let listed = [...above, ...kept, standing];
     const body = (data: unknown) =>
       new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
 
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
       const path = String(input);
-      for (const row of all) {
+      for (const row of everything) {
         if (path === `/api/tasks/${row.task_id}`) return body({ task: row });
       }
       if (path.includes("/comments")) return body({ comments: [] });
@@ -746,18 +744,19 @@ describe("Work surface", () => {
     renderFromUrl();
     await screen.findByText("Where the user is");
 
-    // The user is in the last row, holding a control that survives re-render.
+    // The user is in the last row of five, at position 4.
     const rows = screen.getAllByTestId("task-list-row");
     const held = within(rows[4]).getByRole("link");
     held.focus();
 
-    // Three rows above leave. The user keeps focus and touches nothing.
-    listed = [all[3], all[4]];
+    // The two rows above leave and two more arrive below. The user touches
+    // nothing and keeps focus; their row is now at position 2, not 4.
+    listed = [...kept, standing, ...arrived];
     await act(async () => {
       fireEvent(window, new Event("focus"));
       await Promise.resolve();
     });
-    await waitFor(() => expect(screen.queryByText("Leaves one")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("Above one")).toBeNull());
     await act(async () => {
       await new Promise<void>((resolve) => {
         requestAnimationFrame(() => resolve());
@@ -765,8 +764,9 @@ describe("Work surface", () => {
     });
     expect(document.activeElement).toBe(held);
 
-    // Now their own row goes, and the neighbour is what is left.
-    listed = [all[3]];
+    // Now their own row goes. The list is long enough that a stale position
+    // still names a real row, so only a refreshed one gives the right answer.
+    listed = [...kept, ...arrived];
     await act(async () => {
       fireEvent(window, new Event("focus"));
       await Promise.resolve();
@@ -778,8 +778,8 @@ describe("Work surface", () => {
       });
     });
 
-    expect(document.activeElement?.tagName).not.toBe("H1");
-    expect(document.activeElement?.textContent).toContain("The neighbour");
+    // Focus lands on what took their place, not on a row two positions further on.
+    expect(document.activeElement?.textContent).toContain("Arrived one");
   });
 
   it("catches focus in the Calendar perspective too", async () => {

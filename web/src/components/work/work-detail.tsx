@@ -229,6 +229,7 @@ function TaskDetailViewInner({
   const [commitments, setCommitments] = useState<readonly CommitmentRow[]>([]);
   const [mutationPending, setMutationPending] = useState(false);
   const [readPending, setReadPending] = useState(false);
+  const [ambiguousAttemptId, setAmbiguousAttemptId] = useState<string | null>(null);
 
   const updateAttempt = useRef(createAttemptKey("task-update"));
   const transitionAttempt = useRef(createAttemptKey("task-transition"));
@@ -402,42 +403,44 @@ function TaskDetailViewInner({
     setMutationPending(true);
 
     const draftSnapshot = { ...draft };
-    const outcome = await mutationCoordinator.mutate({
-      kind: "update",
-      taskId,
-      expectedVersion,
-      idempotencyKey,
-      request: material,
-      draft: draftSnapshot,
-      hooks: {
-        fetchCurrent: async () => fetchCurrentTask(),
-        barriers: {
-          onMutationStart: () => {
-            readCoordinator.raiseMutationBarrier(detailKey, { entityId: taskId });
+    const outcome = ambiguousAttemptId
+      ? await mutationCoordinator.retry(ambiguousAttemptId)
+      : await mutationCoordinator.mutate({
+          kind: "update",
+          taskId,
+          expectedVersion,
+          idempotencyKey,
+          request: material,
+          draft: draftSnapshot,
+          hooks: {
+            fetchCurrent: async () => fetchCurrentTask(),
+            barriers: {
+              onMutationStart: () => {
+                readCoordinator.raiseMutationBarrier(detailKey, { entityId: taskId });
+              },
+            },
+            reconcile: async (result) => {
+              const confirmed = taskFromUnknown(result);
+              if (confirmed) {
+                readCoordinator.applyConfirmed(detailKey, confirmed, { entityId: taskId });
+                applyCanonical(confirmed, { forceDraft: true });
+              } else {
+                readCoordinator.raiseMutationBarrier(detailKey, { entityId: taskId });
+                await loadTaskBundle({ forceDraft: true });
+              }
+            },
+            feedback: async (_result, phase: MutationPhase) => {
+              if (phase === "confirmed") {
+                publishFeedback("success", "Task update persisted.", `task-update-ok:${idempotencyKey}`);
+              }
+            },
           },
-        },
-        reconcile: async (result) => {
-          const confirmed = taskFromUnknown(result);
-          if (confirmed) {
-            readCoordinator.applyConfirmed(detailKey, confirmed, { entityId: taskId });
-            applyCanonical(confirmed, { forceDraft: true });
-          } else {
-            readCoordinator.raiseMutationBarrier(detailKey, { entityId: taskId });
-            await loadTaskBundle({ forceDraft: true });
-          }
-        },
-        feedback: async (_result, phase: MutationPhase) => {
-          if (phase === "confirmed") {
-            publishFeedback("success", "Task update persisted.", `task-update-ok:${idempotencyKey}`);
-          }
-        },
-      },
-      dispatch: async ({ request, idempotencyKey: key, expectedVersion: version }) =>
-        workRequest(`/api/tasks/${encodeURIComponent(taskId)}`, {
-          method: "PATCH",
-          body: JSON.stringify({ ...request, expectedVersion: version, idempotencyKey: key }),
-        }),
-    });
+          dispatch: async ({ request, idempotencyKey: key, expectedVersion: version }) =>
+            workRequest(`/api/tasks/${encodeURIComponent(taskId)}`, {
+              method: "PATCH",
+              body: JSON.stringify({ ...request, expectedVersion: version, idempotencyKey: key }),
+            }),
+        });
 
     setMutationPending(false);
 
@@ -455,12 +458,14 @@ function TaskDetailViewInner({
     if (outcome.state.phase === "conflict") {
       // Conflict is definitive for the stale version; rotate attempt identity for the next deliberate try.
       updateAttempt.current.succeeded();
+      setAmbiguousAttemptId(null);
       handleConflict(outcome.state.conflictCurrent, values);
       return;
     }
 
     if (outcome.state.phase === "confirmed") {
       updateAttempt.current.succeeded();
+      setAmbiguousAttemptId(null);
       setProposal(undefined);
       setChangedElsewhere(false);
       setConflict(false);
@@ -469,12 +474,14 @@ function TaskDetailViewInner({
     }
 
     if (outcome.state.phase === "ambiguous") {
+      setAmbiguousAttemptId(outcome.attemptId);
       setStatus("The update may have applied. Retry only if the Task still shows the prior version.");
       publishFeedback("error", "Task update outcome is ambiguous.", `task-update-ambiguous:${idempotencyKey}`);
       return;
     }
 
     updateAttempt.current.succeeded();
+    setAmbiguousAttemptId(null);
     setStatus(outcome.state.error?.message ?? "Task update failed.");
     publishFeedback("error", outcome.state.error?.message ?? "Task update failed.", `task-update-fail:${idempotencyKey}`);
   }
@@ -583,6 +590,16 @@ function TaskDetailViewInner({
       setChangedElsewhere(false);
       setConflict(false);
       setStatus("Task transition persisted. A linked commitment was not changed.");
+      return;
+    }
+
+    if (outcome.state.phase === "ambiguous") {
+      setStatus("The transition may have applied. Retry only if the Task still shows the prior state.");
+      publishFeedback(
+        "error",
+        "Task transition outcome is ambiguous.",
+        `task-transition-ambiguous:${idempotencyKey}`,
+      );
       return;
     }
 

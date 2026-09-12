@@ -825,10 +825,11 @@ function TaskCreate({
 
     let active = session;
     const phase = active.getPhase();
+    // Ambiguous / pending: never mutate the draft — submit() retries the frozen request/key.
     if (phase === "failed") {
       active = runtime.createIntents.replaceAfterMaterialEdit(active, request);
       setSession(active);
-    } else {
+    } else if (phase !== "ambiguous" && phase !== "pending") {
       try {
         active.updateDraft(request);
       } catch (error) {
@@ -838,7 +839,7 @@ function TaskCreate({
     }
 
     setPending(true);
-    setStatus("Creating task…");
+    setStatus(phase === "ambiguous" ? "Retrying the same create…" : "Creating task…");
     try {
       const outcome = await active.submit(
         async ({ request: frozen, idempotencyKey }) =>
@@ -868,13 +869,21 @@ function TaskCreate({
       runtime.createIntents.pruneTerminal();
       onDone();
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Task was not created");
+      if (active.getPhase() === "ambiguous") {
+        setStatus(
+          "Create may still have succeeded. Retry with the same intent — do not edit the frozen request until this resolves.",
+        );
+      } else {
+        setStatus(error instanceof Error ? error.message : "Task was not created");
+      }
     } finally {
       setPending(false);
     }
   }
 
-  const draft = session?.getDraft();
+  const draft = session.getDraft();
+  const phase = session.getPhase();
+  const frozen = phase === "ambiguous" || phase === "pending";
   return (
     <form
       onSubmit={(event) => void submit(event)}
@@ -883,14 +892,14 @@ function TaskCreate({
     >
       <h2 className="font-semibold">Create task</h2>
       <Labeled label="Title">
-        <Input name="title" required disabled={pending} defaultValue={draft?.title ?? ""} />
+        <Input name="title" required disabled={pending || frozen} defaultValue={draft?.title ?? ""} readOnly={frozen} />
       </Labeled>
       <Labeled label="Description">
-        <Textarea name="description" disabled={pending} defaultValue={draft?.description ?? ""} />
+        <Textarea name="description" disabled={pending || frozen} defaultValue={draft?.description ?? ""} readOnly={frozen} />
       </Labeled>
       <div className="grid gap-4 sm:grid-cols-2">
         <Labeled label="Priority">
-          <select name="priority" disabled={pending} defaultValue={draft?.priority ?? ""} className="h-10 rounded-md border bg-surface px-3">
+          <select name="priority" disabled={pending || frozen} defaultValue={draft?.priority ?? ""} className="h-10 rounded-md border bg-surface px-3">
             <option value="">Unset</option>
             {["p1", "p2", "p3", "p4"].map((p) => (
               <option key={p}>{p}</option>
@@ -898,12 +907,12 @@ function TaskCreate({
           </select>
         </Labeled>
         <Labeled label="Due">
-          <Input name="dueAt" type="datetime-local" disabled={pending} />
+          <Input name="dueAt" type="datetime-local" disabled={pending || frozen} readOnly={frozen} />
         </Labeled>
         <Labeled label="Commitment">
           <select
             name="commitmentId"
-            disabled={pending || Boolean(optionsStatus)}
+            disabled={pending || frozen || Boolean(optionsStatus)}
             defaultValue={draft?.commitmentId ?? ""}
             className="h-10 rounded-md border bg-surface px-3"
           >
@@ -916,7 +925,7 @@ function TaskCreate({
           </select>
         </Labeled>
         <Labeled label="Role">
-          <select name="role" disabled={pending} defaultValue={draft?.role ?? ""} className="h-10 rounded-md border bg-surface px-3">
+          <select name="role" disabled={pending || frozen} defaultValue={draft?.role ?? ""} className="h-10 rounded-md border bg-surface px-3">
             <option value="">None</option>
             <option value="follow_up">Follow up</option>
           </select>
@@ -924,7 +933,7 @@ function TaskCreate({
       </div>
       {optionsStatus ? <p role="status" className="text-sm text-muted">{optionsStatus}</p> : null}
       <Button type="submit" disabled={pending} aria-busy={pending || undefined}>
-        {pending ? "Creating…" : "Create task"}
+        {pending ? "Creating…" : phase === "ambiguous" ? "Retry same create" : "Create task"}
       </Button>
       <p role="status" className="text-sm text-muted">
         {status}

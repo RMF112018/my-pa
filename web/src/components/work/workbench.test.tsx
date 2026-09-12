@@ -489,6 +489,51 @@ describe("Work surface", () => {
     expect(listTaskGets(fetcher).length).toBe(1);
   });
 
+  it("retries an ambiguous create with the same idempotency key", async () => {
+    let createPosts = 0;
+    const keys: string[] = [];
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      if (path === "/api/tasks" && init?.method === "POST") {
+        createPosts += 1;
+        const body = JSON.parse(String(init.body)) as { idempotencyKey: string; title: string };
+        keys.push(body.idempotencyKey);
+        if (createPosts === 1) {
+          return new Response(JSON.stringify({ error: { code: "unavailable", message: "gateway timeout" } }), {
+            status: 504,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(
+          JSON.stringify({ task: { task_id: "tsk_aaaaaaaa11111111" }, history: {}, replayed: false }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (path.startsWith("/api/commitments")) {
+        return new Response(JSON.stringify({ commitments: [] }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetcher);
+    history.replaceState(null, "", "/work?view=all-open");
+    renderFromUrl();
+    await screen.findByText("No all open tasks");
+    await userEvent.click(screen.getByRole("button", { name: "New task" }));
+    await userEvent.type(screen.getByLabelText("Title"), "Ambiguous retry");
+    await userEvent.click(screen.getByRole("button", { name: "Create task" }));
+    expect(
+      await screen.findByText(/Create may still have succeeded\. Retry with the same intent/i),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry same create" })).toBeTruthy();
+    expect(createPosts).toBe(1);
+    await userEvent.click(screen.getByRole("button", { name: "Retry same create" }));
+    await waitFor(() => expect(createPosts).toBe(2));
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toBe(keys[1]);
+    expect(keys[0]).toMatch(/\S/);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Retry same create" })).toBeNull());
+  });
+
   it("publishes create success into the mutation feedback live region", async () => {
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       const path = String(input);

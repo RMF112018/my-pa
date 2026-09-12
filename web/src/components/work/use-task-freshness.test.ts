@@ -325,4 +325,94 @@ describe("useTaskFreshness", () => {
     expect(coordinator.getSnapshot(KEY)?.mutationBarrier).toBeGreaterThan(0);
     coordinator.dispose();
   });
+
+  it("registers its own revalidation with the reconciliation seam while mounted", async () => {
+    const coordinator = new TaskReadCoordinator<string>();
+    const fetcher = vi.fn(async () => "rows");
+    const registered = new Map<string, () => void | Promise<unknown>>();
+    const reconciliation = {
+      registerActiveTaskQuery: vi.fn((queryId: string, revalidate: () => void | Promise<unknown>) => {
+        registered.set(queryId, revalidate);
+        return () => registered.delete(queryId);
+      }),
+      unregisterActiveTaskQuery: vi.fn((queryId: string) => {
+        registered.delete(queryId);
+      }),
+    };
+
+    const { unmount } = renderHook(() =>
+      useTaskFreshness({
+        queryKey: KEY,
+        enabled: true,
+        coordinator,
+        fetcher,
+        reconciliation,
+      }),
+    );
+
+    await flushMountRead();
+    expect(reconciliation.registerActiveTaskQuery).toHaveBeenCalledTimes(1);
+    expect(registered.size).toBe(1);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+
+    // A confirmed create reaches this query as a barrier + immediate re-read.
+    const [revalidate] = Array.from(registered.values());
+    await act(async () => {
+      await revalidate!();
+    });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+
+    unmount();
+    expect(reconciliation.unregisterActiveTaskQuery).toHaveBeenCalledTimes(1);
+    expect(registered.size).toBe(0);
+  });
+
+  it("adds no timer of its own for reconciliation registration", async () => {
+    const coordinator = new TaskReadCoordinator<string>();
+    const fetcher = vi.fn(async () => "rows");
+    const plain = renderHook(() =>
+      useTaskFreshness({ queryKey: KEY, enabled: true, coordinator, fetcher }),
+    );
+    await flushMountRead();
+    const timersWithoutSeam = vi.getTimerCount();
+    plain.unmount();
+
+    const registrar = new TaskReadCoordinator<string>();
+    const registeredHook = renderHook(() =>
+      useTaskFreshness({
+        queryKey: KEY,
+        enabled: true,
+        coordinator: registrar,
+        fetcher,
+        reconciliation: {
+          registerActiveTaskQuery: () => () => undefined,
+          unregisterActiveTaskQuery: () => undefined,
+        },
+      }),
+    );
+    await flushMountRead();
+    expect(vi.getTimerCount()).toBe(timersWithoutSeam);
+    registeredHook.unmount();
+  });
+
+  it("does not register a disabled query", async () => {
+    const coordinator = new TaskReadCoordinator<string>();
+    const fetcher = vi.fn(async () => "rows");
+    const registerActiveTaskQuery = vi.fn(() => () => undefined);
+
+    const { unmount } = renderHook(() =>
+      useTaskFreshness({
+        queryKey: KEY,
+        enabled: false,
+        coordinator,
+        fetcher,
+        reconciliation: { registerActiveTaskQuery, unregisterActiveTaskQuery: () => undefined },
+      }),
+    );
+
+    await flushMountRead();
+    expect(registerActiveTaskQuery).not.toHaveBeenCalled();
+    unmount();
+  });
+
 });

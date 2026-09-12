@@ -12,9 +12,15 @@
  *   the reason is named, because implying a hold that did not happen is the
  *   worse failure of the two.
  *
+ * A third case joins them, and it is a negative one: **Create Task is not a
+ * capture and can never enter this queue.** Choosing it while the network is
+ * down must leave the store empty, because an entry here is replayed as a
+ * `POST /api/capture` on reconnect — a Task that leaked into the queue would
+ * come back as a note.
+ *
  * These run against the real dialog, the real queue, and a real IndexedDB
  * (`fake-indexeddb`). The network is the only thing faked. Every note is
- * synthetic.
+ * synthetic, and each case takes the chooser's note branch first.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
@@ -39,6 +45,7 @@ afterEach(() => {
 async function saveWhileOffline(note = NOTE) {
   const user = userEvent.setup();
   render(<CaptureDialog open onClose={() => {}} principalId={PRINCIPAL_ID} />);
+  await user.click(await screen.findByTestId("capture-choice-quick_note"));
   await user.type(screen.getByTestId("capture-field"), note);
   await user.click(screen.getByRole("button", { name: "Save" }));
   return user;
@@ -112,5 +119,33 @@ describe("a note that could not even be held says so, and keeps the note in the 
     } finally {
       withoutIndexedDb.indexedDB = real;
     }
+  });
+});
+
+describe("Create Task is not a capture and cannot enter the offline queue", () => {
+  it("queues nothing when the network is down and Create Task is chosen", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new TypeError("synthetic network failure"));
+    const onCreateTask = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <CaptureDialog
+        open
+        onClose={() => {}}
+        principalId={PRINCIPAL_ID}
+        onCreateTask={onCreateTask}
+      />,
+    );
+
+    await user.click(await screen.findByTestId("capture-choice-create_task"));
+
+    expect(onCreateTask).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // Nothing was held, so nothing can be replayed as a note on reconnect.
+    const db = await openOfflineDatabase();
+    expect(await queueSnapshot(db)).toHaveLength(0);
+    expect(screen.queryByTestId("capture-queued")).toBeNull();
+    expect(screen.queryByTestId("capture-not-held")).toBeNull();
   });
 });

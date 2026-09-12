@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { StrictMode, useEffect, useState } from "react";
 import {
@@ -148,6 +148,162 @@ describe("TaskRuntimeProvider", () => {
     });
     expect(screen.getByTestId("runtime-session")).toHaveTextContent(`${PRINCIPAL_B}::epoch-2`);
     expect(disposed).toContain(`${PRINCIPAL_B}:epoch-1`);
+  });
+
+  it("notifies only currently registered active Task queries on a confirmed create", () => {
+    const captured: { runtime: ReturnType<typeof useTaskRuntime> | null } = { runtime: null };
+
+    function Capture() {
+      const runtime = useTaskRuntime();
+      useEffect(() => {
+        captured.runtime = runtime;
+      }, [runtime]);
+      return null;
+    }
+
+    render(
+      <TaskRuntimeProvider principalId={PRINCIPAL_A} sessionEpoch="epoch-1">
+        <Capture />
+      </TaskRuntimeProvider>,
+    );
+
+    const reconciliation = captured.runtime!.reconciliation;
+    const revalidate = vi.fn();
+
+    // Zero registered queries: a confirmed create must still be notifiable.
+    expect(() => reconciliation.notifyCreateConfirmed({ task_id: "tsk_aaaaaaaa11111111" })).not.toThrow();
+    expect(reconciliation.activeTaskQueryIds()).toEqual([]);
+
+    reconciliation.registerActiveTaskQuery("work:today", revalidate);
+    reconciliation.notifyCreateConfirmed({ task_id: "tsk_aaaaaaaa11111111" });
+    expect(revalidate).toHaveBeenCalledTimes(1);
+    // The confirmed Task is never handed to a list query — the server decides membership.
+    expect(revalidate).toHaveBeenCalledWith();
+
+    reconciliation.unregisterActiveTaskQuery("work:today");
+    reconciliation.notifyCreateConfirmed({ task_id: "tsk_bbbbbbbb22222222" });
+    expect(revalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let one failing query revalidation break a confirmed create", () => {
+    const captured: { runtime: ReturnType<typeof useTaskRuntime> | null } = { runtime: null };
+
+    function Capture() {
+      const runtime = useTaskRuntime();
+      useEffect(() => {
+        captured.runtime = runtime;
+      }, [runtime]);
+      return null;
+    }
+
+    render(
+      <TaskRuntimeProvider principalId={PRINCIPAL_A} sessionEpoch="epoch-1">
+        <Capture />
+      </TaskRuntimeProvider>,
+    );
+
+    const reconciliation = captured.runtime!.reconciliation;
+    const healthy = vi.fn();
+    reconciliation.registerActiveTaskQuery("throws", () => {
+      throw new Error("read exploded");
+    });
+    reconciliation.registerActiveTaskQuery("rejects", () => Promise.reject(new Error("read rejected")));
+    reconciliation.registerActiveTaskQuery("healthy", healthy);
+
+    expect(() => reconciliation.notifyCreateConfirmed()).not.toThrow();
+    expect(healthy).toHaveBeenCalledTimes(1);
+  });
+
+  it("double-submitted create dispatches once and reconciles once", async () => {
+    const captured: { runtime: ReturnType<typeof useTaskRuntime> | null } = { runtime: null };
+
+    function Capture() {
+      const runtime = useTaskRuntime();
+      useEffect(() => {
+        captured.runtime = runtime;
+      }, [runtime]);
+      return null;
+    }
+
+    render(
+      <TaskRuntimeProvider principalId={PRINCIPAL_A} sessionEpoch="epoch-1">
+        <Capture />
+      </TaskRuntimeProvider>,
+    );
+
+    const runtime = captured.runtime!;
+    const revalidate = vi.fn();
+    runtime.reconciliation.registerActiveTaskQuery("work:today", revalidate);
+
+    let release!: (value: { task_id: string }) => void;
+    const inFlight = new Promise<{ task_id: string }>((resolve) => {
+      release = resolve;
+    });
+    const dispatch = vi.fn(async () => inFlight);
+
+    const session = runtime.createIntents.openSession({ title: "Only once" });
+    const hooks = {
+      reconcile: (result: { task_id: string }) => runtime.reconciliation.notifyCreateConfirmed(result),
+    };
+
+    const first = session.submit(dispatch, hooks);
+    const second = session.submit(dispatch, hooks);
+
+    // The second activation never reaches the network.
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(await second).toEqual({ refused: true, reason: "create dispatch already in flight" });
+
+    await act(async () => {
+      release({ task_id: "tsk_aaaaaaaa11111111" });
+      await first;
+    });
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(revalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it("disposes active-query registrations when the Principal or epoch is replaced", () => {
+    const seen: ReturnType<typeof useTaskRuntime>["reconciliation"][] = [];
+
+    function Capture() {
+      const runtime = useTaskRuntime();
+      useEffect(() => {
+        seen.push(runtime.reconciliation);
+      }, [runtime]);
+      return <span data-testid="runtime-session">{runtime.sessionKey}</span>;
+    }
+
+    function Outer() {
+      const [principalId, setPrincipalId] = useState(PRINCIPAL_A);
+      return (
+        <TaskRuntimeProvider principalId={principalId} sessionEpoch="epoch-1">
+          <Capture />
+          <button type="button" onClick={() => setPrincipalId(PRINCIPAL_B)}>
+            Switch principal
+          </button>
+        </TaskRuntimeProvider>
+      );
+    }
+
+    render(<Outer />);
+    const first = seen[0]!;
+    const revalidate = vi.fn();
+    first.registerActiveTaskQuery("work:today", revalidate);
+    expect(first.activeTaskQueryIds()).toEqual(["work:today"]);
+
+    act(() => {
+      screen.getByRole("button", { name: "Switch principal" }).click();
+    });
+
+    expect(screen.getByTestId("runtime-session")).toHaveTextContent(`${PRINCIPAL_B}::epoch-1`);
+    const second = seen[seen.length - 1]!;
+    expect(second).not.toBe(first);
+    expect(first.isDisposed()).toBe(true);
+    expect(first.activeTaskQueryIds()).toEqual([]);
+    // A stale surface notifying the replaced session must reach nothing.
+    first.notifyCreateConfirmed({ task_id: "tsk_aaaaaaaa11111111" });
+    expect(revalidate).not.toHaveBeenCalled();
+    expect(second.activeTaskQueryIds()).toEqual([]);
   });
 
   it("keeps mutation feedback after a nested source unmounts", () => {

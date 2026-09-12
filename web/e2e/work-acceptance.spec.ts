@@ -35,9 +35,9 @@ test.describe("Work acceptance", () => {
   test("a synthetic Task preserves selection and restores focus after its detail drawer", async ({ page }) => {
     const title = `E2E synthetic Work task ${Date.now()}`;
     await page.getByRole("button", { name: "New task" }).click();
-    await page.getByLabel("Title").fill(title);
-    await page.getByRole("button", { name: "Create task" }).click();
-    await expect(page.getByRole("heading", { name: "Create task" })).toHaveCount(0);
+    await page.getByTestId("task-create-sheet").getByLabel("Title").fill(title);
+    await page.getByTestId("task-create-sheet").getByRole("button", { name: "Create", exact: true }).click();
+    await expect(page.getByTestId("task-create-sheet")).toHaveCount(0);
     // Creation sets no work date, so the canonical Today view must continue to
     // exclude this Task. Read it from the server-backed Unscheduled view instead.
     await page.getByRole("button", { name: "Work views" }).click();
@@ -145,9 +145,9 @@ test.describe("compact Task detail", () => {
     await page.goto("/work?view=unscheduled");
     await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
     await page.getByRole("button", { name: "New task" }).click();
-    await page.getByLabel("Title").fill(title);
-    await page.getByRole("button", { name: "Create task" }).click();
-    await expect(page.getByRole("heading", { name: "Create task" })).toHaveCount(0);
+    await page.getByTestId("task-create-sheet").getByLabel("Title").fill(title);
+    await page.getByTestId("task-create-sheet").getByRole("button", { name: "Create", exact: true }).click();
+    await expect(page.getByTestId("task-create-sheet")).toHaveCount(0);
     const trigger = page.getByRole("link", { name: new RegExp(title) });
     await expect(trigger).toBeVisible();
     await trigger.click();

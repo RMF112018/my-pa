@@ -283,6 +283,8 @@ describe("app shell", () => {
     render(<AppShell principal={PRINCIPAL}>content</AppShell>);
     await user.click(screen.getByTestId("capture-button-desktop"));
 
+    // Capture opens on the chooser; Quick note enters the unchanged note branch.
+    await user.click(await screen.findByTestId("capture-choice-quick_note"));
     const field = screen.getByTestId("capture-field");
     await waitFor(() => expect(field).toHaveFocus());
 

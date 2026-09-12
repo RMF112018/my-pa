@@ -45,6 +45,17 @@
  *   stays in the field and the reason is named, because the one thing this
  *   screen must never do is imply a hold it did not perform.
  *
+ * **The chooser in front of all of this is a router, not a capture.** Capture
+ * opens on three choices — Create Task, Quick note, Conversation log. The two
+ * note kinds enter the data-entry branch below with that kind already selected,
+ * and every downstream behavior — the single field, the attempt key, the six
+ * outcomes above, the offline hold — is exactly what it was before the chooser
+ * existed. Create Task is the one choice that is *not* a capture: it mints no
+ * attempt key, issues no `/api/capture` request and never touches the offline
+ * queue. It reports the choice to the shell through `onCreateTask`, and the
+ * shell closes this dialog before opening the canonical Task sheet, so a Task
+ * started from here can never be replayed as a note on reconnect.
+ *
  * **Enrichment state is not among them**, and its absence is deliberate. The save
  * is durable before any processing runs and no capability this tier can call
  * reports how that processing went, so this screen says the note is safe and that
@@ -65,6 +76,15 @@ const CAPTURE_KINDS = [
 ] as const;
 
 type CaptureKind = (typeof CAPTURE_KINDS)[number]["value"];
+
+/**
+ * Which half of the dialog is showing.
+ *
+ * `choose` is the router — no field, no attempt key, no request, nothing to
+ * queue. `entry` is the unchanged capture surface, reached only by picking one
+ * of the two note kinds.
+ */
+type Stage = "choose" | "entry";
 
 interface CaptureAck {
   /** `"backend"` (durable) or `"synthetic"` (acknowledged only). */
@@ -108,6 +128,7 @@ export function CaptureDialog({
   open,
   onClose,
   principalId,
+  onCreateTask,
 }: {
   open: boolean;
   onClose: () => void;
@@ -119,7 +140,16 @@ export function CaptureDialog({
    * server never authenticated.
    */
   principalId: string;
+  /**
+   * The person chose Create Task rather than a note.
+   *
+   * Nothing about a capture has happened when this fires — no attempt key, no
+   * request, no queue write — and this component opens nothing itself. The shell
+   * owns the handoff so that exactly one overlay is mounted at a time.
+   */
+  onCreateTask?: () => void;
 }) {
+  const [stage, setStage] = useState<Stage>("choose");
   const [text, setText] = useState("");
   const [kind, setKind] = useState<CaptureKind>("quick_note");
   const [outcome, setOutcome] = useState<Outcome>({ kind: "idle" });
@@ -128,16 +158,28 @@ export function CaptureDialog({
   // across retries of the same text, discarded when the text changes.
   const attemptKeyRef = useRef<string | null>(null);
 
+  // A newly opened dialog starts at the chooser, with no prior outcome showing.
   useEffect(() => {
-    if (open) {
-      const t = setTimeout(() => {
-        setOutcome({ kind: "idle" });
-        // Move focus into the single capture field once the dialog is open.
-        fieldRef.current?.focus();
-      }, 0);
-      return () => clearTimeout(t);
-    }
+    if (!open) return;
+    const t = setTimeout(() => {
+      setStage("choose");
+      setOutcome({ kind: "idle" });
+    }, 0);
+    return () => clearTimeout(t);
   }, [open]);
+
+  // Move focus into the single capture field once the entry branch is showing.
+  useEffect(() => {
+    if (!open || stage !== "entry") return;
+    const t = setTimeout(() => fieldRef.current?.focus(), 0);
+    return () => clearTimeout(t);
+  }, [open, stage]);
+
+  /** Enter the unchanged capture branch with the chosen kind already selected. */
+  function chooseKind(chosen: CaptureKind) {
+    setKind(chosen);
+    setStage("entry");
+  }
 
   async function save() {
     if (!text.trim()) return;
@@ -206,6 +248,38 @@ export function CaptureDialog({
         reason: error instanceof Error ? error.message : "this device could not hold the note",
       });
     }
+  }
+
+  // The chooser is its own render: the capture branch below is untouched.
+  if (stage === "choose") {
+    return (
+      <Dialog open={open} onClose={onClose} title="Capture">
+        <div
+          role="group"
+          aria-label="What are you capturing?"
+          data-testid="capture-chooser"
+          className="flex flex-col gap-2"
+        >
+          <Button
+            variant="ghost"
+            data-testid="capture-choice-create_task"
+            onClick={() => onCreateTask?.()}
+          >
+            Create Task
+          </Button>
+          {CAPTURE_KINDS.map((option) => (
+            <Button
+              key={option.value}
+              variant="ghost"
+              data-testid={`capture-choice-${option.value}`}
+              onClick={() => chooseKind(option.value)}
+            >
+              {option.label}
+            </Button>
+          ))}
+        </div>
+      </Dialog>
+    );
   }
 
   return (
@@ -284,6 +358,13 @@ export function CaptureDialog({
           </p>
         ) : null}
         <div className="flex justify-end gap-2">
+          <Button
+            variant="ghost"
+            data-testid="capture-entry-back"
+            onClick={() => setStage("choose")}
+          >
+            Back
+          </Button>
           <Button variant="ghost" onClick={onClose}>
             Close
           </Button>

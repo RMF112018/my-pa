@@ -449,6 +449,35 @@ describe("useTaskOperations", () => {
     expect(feedbackText()).toContain(`${TASK_V2.title} closed`);
   });
 
+  it("reports Close unconfirmed when neither the response nor the re-read carries a Task", async () => {
+    /*
+      Close requires a server Task before it may be called done — the write may
+      have landed or may not, and a 2xx with nothing in it says neither. Without
+      this the binder announces "«Task» closed" as a success and sends every
+      registered query off to re-read, for a write nobody confirmed, while the
+      surface still shows the Task as open and still offers to close it. That is
+      a closure announced on the strength of a status code.
+    */
+    const { calls } = stubFetch({ transition: () => ok({}), detail: () => ok({}) });
+    const { result, revalidate } = renderOperations({
+      taskId: TASK_ID,
+      task: TASK_V2,
+      authoritative: true,
+    });
+
+    await act(async () => {
+      await result.current.closeTask();
+    });
+
+    // The write was sent, so this is about the answer to it.
+    expect(posts(calls, "/transition")).toHaveLength(1);
+    // Nothing terminal is shown, nothing is claimed, nothing is reconciled.
+    expect(result.current.status.value).toBe("open");
+    expect(feedbackText()).toContain(TASK_OPERATION_AMBIGUOUS_MESSAGE);
+    expect(feedbackText()).not.toContain(`${TASK_V2.title} closed`);
+    expect(revalidate).not.toHaveBeenCalled();
+  });
+
   it("shows no terminal state for Cancel until the server Task confirms it", async () => {
     const cancelGate = gate();
     stubFetch({

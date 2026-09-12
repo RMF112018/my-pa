@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { TaskListRow, type TaskListRowProps } from "@/components/work/task-list-row";
 import { TaskRuntimeProvider } from "@/components/work/task-runtime-provider";
 import type { TaskDetail, TaskRow } from "@/contracts/work";
-import type { TaskCivilClock } from "@/lib/tasks/presentation";
+import { formatTaskPriority, type TaskCivilClock } from "@/lib/tasks/presentation";
 
 afterEach(() => {
   cleanup();
@@ -879,6 +879,7 @@ describe("TaskListRow", () => {
           task={{
             ...LIST_ROW,
             title: "Renamed somewhere else",
+            priority: "p3",
             lifecycle_state: "completed",
             version: 7,
             updated_at: "2026-09-12T12:00:00Z",
@@ -902,6 +903,8 @@ describe("TaskListRow", () => {
     expect(row().textContent).toContain("Renamed somewhere else");
     expect(row().textContent).not.toContain(TITLE);
     expect(screen.getByRole("link", { name: /Renamed somewhere else/ })).toBeTruthy();
+    // Priority comes from the same base, and froze in the same way.
+    expect(row().textContent).toContain(formatTaskPriority("p3"));
   });
 
   it("never shows a Task as closed on a response that carried no Task", async () => {

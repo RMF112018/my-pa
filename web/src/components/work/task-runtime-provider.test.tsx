@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
-import { useEffect, useState } from "react";
+import { StrictMode, useEffect, useState } from "react";
 import {
   MutationFeedbackEvent,
   useMutationFeedback,
@@ -10,6 +10,7 @@ import {
   useTaskRuntime,
   type TaskMutationCoordinatorHandle,
 } from "@/components/work/task-runtime-provider";
+import { buildTaskQueryKey } from "@/lib/task/query-key";
 
 afterEach(() => {
   cleanup();
@@ -54,6 +55,39 @@ describe("TaskRuntimeProvider", () => {
     expect(captured.runtime!.mutationCoordinator.coordinator).toBeTruthy();
     expect(captured.runtime!.feedback).toBeTruthy();
     expect(Object.prototype.hasOwnProperty.call(captured.runtime, "principal")).toBe(false);
+  });
+
+  it("remints a disposed read coordinator under Strict Mode remount", () => {
+    const key = buildTaskQueryKey({
+      mode: "list",
+      workView: "today",
+      workDate: "2026-09-11",
+      timezone: "UTC",
+      archiveMode: "exclude",
+      sessionEpoch: "epoch-1",
+    });
+    const captured: { runtime: ReturnType<typeof useTaskRuntime> | null } = { runtime: null };
+
+    function Capture() {
+      const runtime = useTaskRuntime();
+      useEffect(() => {
+        captured.runtime = runtime;
+      }, [runtime]);
+      return <RuntimeProbe />;
+    }
+
+    render(
+      <StrictMode>
+        <TaskRuntimeProvider principalId={PRINCIPAL_A} sessionEpoch="epoch-1">
+          <Capture />
+        </TaskRuntimeProvider>
+      </StrictMode>,
+    );
+
+    expect(captured.runtime).not.toBeNull();
+    expect(captured.runtime!.readCoordinator.isDisposed()).toBe(false);
+    expect(() => captured.runtime!.readCoordinator.retain(key)).not.toThrow();
+    captured.runtime!.readCoordinator.release(key);
   });
 
   it("clears shared Task state when Principal or session epoch changes", () => {

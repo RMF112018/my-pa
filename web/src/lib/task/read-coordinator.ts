@@ -264,6 +264,11 @@ export class TaskReadCoordinator<T = unknown> {
     this.entityBarriers.clear();
   }
 
+  /** True after {@link dispose}; used by providers to remint after Strict Mode cleanup. */
+  isDisposed(): boolean {
+    return this.disposed;
+  }
+
   private async execute(
     entry: Entry<T>,
     fetcher: TaskReadFetcher<T>,

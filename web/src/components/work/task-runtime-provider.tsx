@@ -150,42 +150,42 @@ export function TaskRuntimeProvider({
   /** Override factory for tests; production default uses Worker A's module. */
   readonly createMutationCoordinator?: CreateMutationCoordinatorFn;
 }) {
-  const createMutationRef = useRef(createMutationCoordinator);
+  const desiredKey = buildSessionKey(principalId, sessionEpoch);
   const [bundle, setBundle] = useState<TaskRuntimeBundle>(() =>
     createBundle(principalId, sessionEpoch, createMutationCoordinator),
   );
-  const bundleRef = useRef(bundle);
+  // Strict Mode runs effect cleanup+setup back-to-back; defer dispose so the
+  // remounting setup can cancel it and keep the live coordinator.
+  const pendingDisposeRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    createMutationRef.current = createMutationCoordinator;
-  }, [createMutationCoordinator]);
-
-  useEffect(() => {
-    bundleRef.current = bundle;
-  }, [bundle]);
-
-  // Principal / epoch replacement: dispose prior Task client state and mint fresh.
-  useEffect(() => {
-    const nextKey = buildSessionKey(principalId, sessionEpoch);
-    if (bundleRef.current.sessionKey === nextKey) {
-      return;
+  // Remint during render when the session key changes or a deferred dispose
+  // already ran (restored state still points at a disposed instance).
+  let activeBundle = bundle;
+  if (bundle.sessionKey !== desiredKey || bundle.readCoordinator.isDisposed()) {
+    if (bundle.sessionKey !== desiredKey && !bundle.readCoordinator.isDisposed()) {
+      disposeBundle(bundle);
     }
-    disposeBundle(bundleRef.current);
-    const next = createBundle(principalId, sessionEpoch, createMutationRef.current);
-    bundleRef.current = next;
-    setBundle(next);
-  }, [principalId, sessionEpoch]);
+    activeBundle = createBundle(principalId, sessionEpoch, createMutationCoordinator);
+    setBundle(activeBundle);
+  }
 
-  // Provider unmount: destroy the active bundle.
   useEffect(() => {
+    if (pendingDisposeRef.current != null) {
+      clearTimeout(pendingDisposeRef.current);
+      pendingDisposeRef.current = null;
+    }
+    const owned = activeBundle;
     return () => {
-      disposeBundle(bundleRef.current);
+      pendingDisposeRef.current = setTimeout(() => {
+        disposeBundle(owned);
+        pendingDisposeRef.current = null;
+      }, 0);
     };
-  }, []);
+  }, [activeBundle]);
 
   return (
-    <MutationFeedbackProvider key={bundle.sessionKey}>
-      <TaskRuntimeInner bundle={bundle}>{children}</TaskRuntimeInner>
+    <MutationFeedbackProvider key={activeBundle.sessionKey}>
+      <TaskRuntimeInner bundle={activeBundle}>{children}</TaskRuntimeInner>
     </MutationFeedbackProvider>
   );
 }

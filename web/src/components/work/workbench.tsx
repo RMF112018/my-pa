@@ -88,7 +88,9 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   const [partial, setPartial] = useState(false);
   const [creating, setCreating] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(initialState.archived === "only");
-  const lastTaskView = useRef<TaskView>(initialState.view === "commitments" ? "today" : initialState.view);
+  const [lastTaskView, setLastTaskView] = useState<TaskView>(
+    initialState.view === "commitments" ? "today" : (initialState.view as TaskView),
+  );
   const [selectedTaskIds, setSelectedTaskIds] = useState<readonly string[]>([]);
   const [detail, setDetail] = useState<{ type: "task" | "commitment"; id: string; title: string } | undefined>(
     initialState.task ? { type: "task", id: initialState.task, title: "Task detail" }
@@ -100,17 +102,11 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   const detailTrigger = useRef<HTMLElement | null>(null);
 
   const taskMode = view !== "commitments";
-  const taskViewForQuery: TaskView = taskMode ? view : lastTaskView.current;
+  const taskViewForQuery: TaskView = taskMode ? (view as TaskView) : lastTaskView;
   const needsClock = CLOCK_VIEWS.has(taskViewForQuery);
   const clock = needsClock ? browserWorkClock(new Date(), timezone || undefined) : null;
   const queryWorkDate = needsClock ? (clock?.workDate ?? null) : null;
-  const queryTimezone = needsClock ? (clock?.timezone ?? null) : null;
-
-  useEffect(() => {
-    if (!clock || timezone) return;
-    setTimezone(clock.timezone);
-    sync({ tz: clock.timezone });
-  }, [clock, timezone]);
+  const queryTimezone = needsClock ? (clock?.timezone ?? timezone ?? null) : null;
 
   const taskQueryKey = useMemo(
     () =>
@@ -155,7 +151,13 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
       if (committedQuery) parameters.set("q", committedQuery);
       if (cursor) parameters.set("after", cursor);
       if (queryWorkDate) parameters.set("workDate", queryWorkDate);
-      if (queryTimezone) parameters.set("timezone", queryTimezone);
+      if (queryTimezone) {
+        parameters.set("timezone", queryTimezone);
+        if (!timezone) {
+          setTimezone(queryTimezone);
+          sync({ tz: queryTimezone });
+        }
+      }
       const data = await workRequest<{ tasks: readonly TaskRow[]; disclosure?: DisclosureEnvelope }>(
         `/api/tasks?${parameters}`,
         { signal },
@@ -165,7 +167,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
         disclosure: data.disclosure,
       };
     },
-    [archiveMode, committedQuery, cursor, queryTimezone, queryWorkDate, taskViewForQuery],
+    [archiveMode, committedQuery, cursor, queryTimezone, queryWorkDate, taskViewForQuery, timezone],
   );
 
   const onTaskNotice = useCallback(
@@ -214,18 +216,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
     onNotice: onTaskNotice,
   });
 
-  useEffect(() => {
-    if (!taskMode) return;
-    setState("loading");
-    setReadError(undefined);
-    setRows([]);
-    setDisclosure(undefined);
-    setNextCursor("");
-    setPartial(false);
-    void revalidateTasks("manual");
-    // revalidateTasks is ref-backed; query identity drives the load.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional
-  }, [taskMode, taskQueryKeyId]);
+  // Freshness revalidates when `taskQueryKey` changes; filter/view handlers set loading.
 
   const loadCommitments = useCallback(async () => {
     activeCommitmentRead.current?.abort();
@@ -291,7 +282,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   }
 
   function select(next: WorkView) {
-    if (next !== "commitments") lastTaskView.current = next;
+    if (next !== "commitments") setLastTaskView(next as TaskView);
     setState("loading");
     setRows([]);
     setView(next);
@@ -307,7 +298,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
       if (view !== "commitments") select("commitments");
       return;
     }
-    if (view === "commitments") select(lastTaskView.current);
+    if (view === "commitments") select(lastTaskView);
   }
 
   function chooseCommitmentFilter(value: CommitmentFilter) {
@@ -789,16 +780,13 @@ function TaskCreate({
   onReconcile: () => void | Promise<unknown>;
 }) {
   const runtime = useTaskRuntime();
-  const [session, setSession] = useState<CreateIntentSession | null>(null);
+  const [session, setSession] = useState<CreateIntentSession>(
+    () => runtime.createIntents.getUnresolvedSession() ?? runtime.createIntents.openSession(),
+  );
   const [status, setStatus] = useState("");
   const [pending, setPending] = useState(false);
   const [commitments, setCommitments] = useState<readonly CommitmentRow[]>([]);
   const [optionsStatus, setOptionsStatus] = useState("Loading verified commitments…");
-
-  useEffect(() => {
-    const unresolved = runtime.createIntents.getUnresolvedSession();
-    setSession(unresolved ?? runtime.createIntents.openSession());
-  }, [runtime.createIntents]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -819,7 +807,7 @@ function TaskCreate({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!session || pending) return;
+    if (pending) return;
     const form = new FormData(event.currentTarget);
     const commitmentId = String(form.get("commitmentId") ?? "");
     if (commitmentId && !commitments.some((item) => item.commitment_id === commitmentId)) {

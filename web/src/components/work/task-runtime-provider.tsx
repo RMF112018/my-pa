@@ -151,13 +151,18 @@ export function TaskRuntimeProvider({
   readonly createMutationCoordinator?: CreateMutationCoordinatorFn;
 }) {
   const createMutationRef = useRef(createMutationCoordinator);
-  createMutationRef.current = createMutationCoordinator;
-
   const [bundle, setBundle] = useState<TaskRuntimeBundle>(() =>
     createBundle(principalId, sessionEpoch, createMutationCoordinator),
   );
   const bundleRef = useRef(bundle);
-  bundleRef.current = bundle;
+
+  useEffect(() => {
+    createMutationRef.current = createMutationCoordinator;
+  }, [createMutationCoordinator]);
+
+  useEffect(() => {
+    bundleRef.current = bundle;
+  }, [bundle]);
 
   // Principal / epoch replacement: dispose prior Task client state and mint fresh.
   useEffect(() => {

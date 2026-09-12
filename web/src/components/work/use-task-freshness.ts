@@ -118,7 +118,6 @@ export function useTaskFreshness<T>(options: UseTaskFreshnessOptions<T>): UseTas
   const [freshness, setFreshness] = useState<TaskFreshnessStatus>("idle");
   const [lastSuccessfulAt, setLastSuccessfulAt] = useState<number | null>(null);
   const [lastConfirmed, setLastConfirmed] = useState<T | undefined>(undefined);
-  const [suspended, setSuspended] = useState(false);
 
   const keyRef = useRef(queryKey);
   const fetcherRef = useRef(fetcher);
@@ -139,13 +138,18 @@ export function useTaskFreshness<T>(options: UseTaskFreshnessOptions<T>): UseTas
   );
   const notifyMutationRef = useRef<(data?: T) => Promise<TaskReadResult<T> | undefined>>(async () => undefined);
 
-  keyRef.current = queryKey;
-  fetcherRef.current = fetcher;
-  onResultRef.current = onResult;
-  onNoticeRef.current = onNotice;
-  enabledRef.current = enabled;
-
   const keyId = serializeTaskQueryKey(queryKey);
+  /** Suspended only while the same query identity remains active. */
+  const [suspendedKeyId, setSuspendedKeyId] = useState<string | null>(null);
+  const suspended = suspendedKeyId === keyId;
+
+  useEffect(() => {
+    keyRef.current = queryKey;
+    fetcherRef.current = fetcher;
+    onResultRef.current = onResult;
+    onNoticeRef.current = onNotice;
+    enabledRef.current = enabled;
+  }, [queryKey, fetcher, onResult, onNotice, enabled]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -171,7 +175,6 @@ export function useTaskFreshness<T>(options: UseTaskFreshnessOptions<T>): UseTas
     authNoticeSentRef.current = false;
     forbiddenNoticeSentRef.current = false;
     suspendedRef.current = false;
-    setSuspended(false);
   }, [keyId]);
 
   useEffect(() => {
@@ -244,14 +247,14 @@ export function useTaskFreshness<T>(options: UseTaskFreshnessOptions<T>): UseTas
           degradedNoticeSentRef.current = false;
           if (suspendedRef.current && result.outcome === "applied") {
             suspendedRef.current = false;
-            setSuspended(false);
+            setSuspendedKeyId(null);
             coordinator.markFresh(key);
           }
         } else if (result.outcome === "failed" && !result.silent) {
           const status = readHttpStatus(result.error);
           if (status === 401) {
             suspendedRef.current = true;
-            setSuspended(true);
+            setSuspendedKeyId(serializeTaskQueryKey(key));
             coordinator.markSuspended(key);
             clearTimer();
             if (!authNoticeSentRef.current) {
@@ -265,7 +268,7 @@ export function useTaskFreshness<T>(options: UseTaskFreshnessOptions<T>): UseTas
           }
           if (status === 403) {
             suspendedRef.current = true;
-            setSuspended(true);
+            setSuspendedKeyId(serializeTaskQueryKey(key));
             coordinator.markSuspended(key);
             clearTimer();
             if (!forbiddenNoticeSentRef.current) {
@@ -333,6 +336,7 @@ export function useTaskFreshness<T>(options: UseTaskFreshnessOptions<T>): UseTas
     };
 
     if (enabled && isDocumentVisible() && isNavigatorOnline() && !suspendedRef.current) {
+      void run("manual");
       schedule(intervalMs);
     }
 

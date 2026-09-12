@@ -26,6 +26,13 @@ const KEY = buildTaskQueryKey({
   sessionEpoch: "epoch-1",
 });
 
+async function flushMountRead() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
 describe("useTaskFreshness", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -46,7 +53,7 @@ describe("useTaskFreshness", () => {
     vi.restoreAllMocks();
   });
 
-  it("polls once every 5s while visible and online, without stacking ordinary reads", async () => {
+  it("loads immediately on mount, then polls every 5s without stacking ordinary reads", async () => {
     const coordinator = new TaskReadCoordinator<string>();
     const fetcher = vi.fn(async () => "rows");
     const { unmount } = renderHook(() =>
@@ -58,10 +65,7 @@ describe("useTaskFreshness", () => {
       }),
     );
 
-    expect(fetcher).toHaveBeenCalledTimes(0);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5_000);
-    });
+    await flushMountRead();
     expect(fetcher).toHaveBeenCalledTimes(1);
 
     await act(async () => {
@@ -92,7 +96,7 @@ describe("useTaskFreshness", () => {
   it("stops continuous polling while hidden and resumes immediately on visible", async () => {
     const coordinator = new TaskReadCoordinator<string>();
     const fetcher = vi.fn(async () => "rows");
-    let visibility: DocumentVisibilityState = "visible";
+    let visibility: DocumentVisibilityState = "hidden";
     Object.defineProperty(document, "visibilityState", {
       configurable: true,
       get: () => visibility,
@@ -107,9 +111,10 @@ describe("useTaskFreshness", () => {
       }),
     );
 
-    visibility = "hidden";
+    await flushMountRead();
+    expect(fetcher).toHaveBeenCalledTimes(0);
+
     await act(async () => {
-      document.dispatchEvent(new Event("visibilitychange"));
       await vi.advanceTimersByTimeAsync(20_000);
     });
     expect(fetcher).toHaveBeenCalledTimes(0);
@@ -135,18 +140,21 @@ describe("useTaskFreshness", () => {
       }),
     );
 
+    await flushMountRead();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+
     await act(async () => {
       window.dispatchEvent(new Event("focus"));
       await Promise.resolve();
     });
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledTimes(2);
     coordinator.dispose();
   });
 
   it("stops continuous polling while offline and resumes immediately on online", async () => {
     const coordinator = new TaskReadCoordinator<string>();
     const fetcher = vi.fn(async () => "rows");
-    let online = true;
+    let online = false;
     Object.defineProperty(navigator, "onLine", {
       configurable: true,
       get: () => online,
@@ -161,9 +169,10 @@ describe("useTaskFreshness", () => {
       }),
     );
 
-    online = false;
+    await flushMountRead();
+    expect(fetcher).toHaveBeenCalledTimes(0);
+
     await act(async () => {
-      window.dispatchEvent(new Event("offline"));
       await vi.advanceTimersByTimeAsync(20_000);
     });
     expect(fetcher).toHaveBeenCalledTimes(0);
@@ -196,7 +205,8 @@ describe("useTaskFreshness", () => {
       window.dispatchEvent(new Event("online"));
       await vi.advanceTimersByTimeAsync(20_000);
     });
-    expect(fetcher).toHaveBeenCalledTimes(0);
+    // Mount may have started a read before unmount; no further polls after cleanup.
+    expect(fetcher.mock.calls.length).toBeLessThanOrEqual(1);
     coordinator.dispose();
   });
 
@@ -216,9 +226,7 @@ describe("useTaskFreshness", () => {
       }),
     );
 
-    await act(async () => {
-      await result.current.revalidate("manual");
-    });
+    await flushMountRead();
     expect(result.current.suspended).toBe(true);
     expect(notices).toEqual(["auth"]);
 
@@ -249,9 +257,7 @@ describe("useTaskFreshness", () => {
       }),
     );
 
-    await act(async () => {
-      await result.current.revalidate("manual");
-    });
+    await flushMountRead();
     expect(result.current.suspended).toBe(true);
     expect(notices).toEqual(["forbidden"]);
     coordinator.dispose();
@@ -276,9 +282,7 @@ describe("useTaskFreshness", () => {
       }),
     );
 
-    await act(async () => {
-      await result.current.revalidate("manual");
-    });
+    await flushMountRead();
     expect(result.current.lastConfirmed).toBe("confirmed");
     expect(result.current.freshness).toBe("stale");
     expect(notices).toEqual(["degraded"]);
@@ -310,11 +314,14 @@ describe("useTaskFreshness", () => {
       }),
     );
 
+    await flushMountRead();
+    const mountCalls = fetcher.mock.calls.length;
+
     await act(async () => {
       await result.current.notifyMutationConfirmed("local-confirmed");
     });
     expect(coordinator.getSnapshot(KEY)?.lastConfirmed).toBe("after-mutation");
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher).toHaveBeenCalledTimes(mountCalls + 1);
     expect(coordinator.getSnapshot(KEY)?.mutationBarrier).toBeGreaterThan(0);
     coordinator.dispose();
   });

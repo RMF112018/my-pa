@@ -234,8 +234,12 @@ function TaskDetailViewInner({
   const transitionAttempt = useRef(createAttemptKey("task-transition"));
   const authoritativeRef = useRef<TaskDetail | undefined>(undefined);
   const draftRef = useRef<TaskDraft | undefined>(undefined);
-  authoritativeRef.current = authoritative;
-  draftRef.current = draft;
+  useEffect(() => {
+    authoritativeRef.current = authoritative;
+  }, [authoritative]);
+  useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
 
   const publishFeedback = useCallback(
     (kind: "success" | "error" | "conflict" | "info", message: string, eventId: string) => {

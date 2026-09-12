@@ -1,16 +1,54 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { RevealDialog } from "@/components/shell/reveal-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { LoadingStatus, SurfaceState } from "@/components/ui/surface-state";
+import type { MutationFeedbackValue } from "@/components/ui/mutation-feedback";
+import {
+  useTaskRuntime,
+  type TaskRuntimeValue,
+} from "@/components/work/task-runtime-provider";
 import { mapUserError, type UserErrorPresentation } from "@/lib/ui/user-error";
 import { Textarea } from "@/components/ui/textarea";
 import type { DisclosureEnvelope } from "@/contracts/envelope";
-import type { CommitmentDetail, CommitmentFollowUp, CommitmentRow, CounterpartyOption, TaskDetail, TaskLifecycle, WorkHistoryRow } from "@/contracts/work";
-import { captureEvidence, createAttemptKey, isDefinitiveAttemptFailure, requiredCollection, workRequest, type ApiFailure } from "@/lib/api/work-client";
+import type {
+  CommitmentDetail,
+  CommitmentFollowUp,
+  CommitmentRow,
+  CounterpartyOption,
+  TaskDetail,
+  TaskLifecycle,
+  WorkHistoryRow,
+} from "@/contracts/work";
+import {
+  captureEvidence,
+  createAttemptKey,
+  isDefinitiveAttemptFailure,
+  requiredCollection,
+  workRequest,
+  type ApiFailure,
+} from "@/lib/api/work-client";
+import {
+  createTaskMutationCoordinator,
+  type TaskMutationCoordinator,
+} from "@/lib/task/mutation-coordinator";
+import type { MutationKind, MutationPhase } from "@/lib/task/mutation-state";
+import { buildTaskQueryKey } from "@/lib/task/query-key";
+import {
+  createTaskReadCoordinator,
+  type TaskReadCoordinator,
+} from "@/lib/task/read-coordinator";
 
 function Labeled({ label, children }: { label: string; children: ReactNode }) { return <label className="grid gap-1 text-sm font-medium text-moss-slate"><span>{label}</span>{children}</label>; }
 function display(value: string | null | undefined) { return value ? value.replaceAll("_", " ") : "Not set"; }
@@ -18,65 +56,815 @@ function dateInput(value: string | null | undefined) { return value?.slice(0, 16
 function commitmentLabel(id: unknown, choices: readonly CommitmentRow[]) { if (!id) return "Not set"; return choices.find((choice) => choice.commitment_id === id)?.title ?? "Linked commitment unavailable"; }
 function counterpartyLabel(id: unknown, choices: readonly CounterpartyOption[]) { if (!id) return "Not set"; return choices.find((choice) => choice.person_id === id)?.display_name ?? "Counterparty not resolved"; }
 
+const TASK_CONFLICT_MESSAGE = "This task changed elsewhere. Review the latest version and try again.";
 
-interface TaskDraft { title: string; description: string; priority: string; dueAt: string; scheduledAt: string; deferredUntil: string; commitmentId: string; role: string; archived: boolean }
-function taskDraft(task: TaskDetail): TaskDraft { return { title: task.title, description: task.description ?? "", priority: task.priority ?? "", dueAt: dateInput(task.due_at), scheduledAt: dateInput(task.scheduled_at), deferredUntil: dateInput(task.deferred_until), commitmentId: task.commitment_id ?? "", role: task.role ?? "", archived: Boolean(task.archived_at) }; }
+interface TaskDraft {
+  title: string;
+  description: string;
+  priority: string;
+  dueAt: string;
+  scheduledAt: string;
+  deferredUntil: string;
+  commitmentId: string;
+  role: string;
+  archived: boolean;
+}
 
-export function TaskDetailView({ taskId, embedded = false }: { taskId: string; embedded?: boolean }) {
-  const [task, setTask] = useState<TaskDetail>(); const [draft, setDraft] = useState<TaskDraft>();
-  const [history, setHistory] = useState<readonly WorkHistoryRow[]>([]); const [historyDisclosure, setHistoryDisclosure] = useState<DisclosureEnvelope>();
-  const [status, setStatus] = useState("Loading task…"); const [failure, setFailure] = useState<UserErrorPresentation>();
-  const [conflict, setConflict] = useState(false); const [proposal, setProposal] = useState<Record<string, unknown>>();
+function taskDraft(task: TaskDetail): TaskDraft {
+  return {
+    title: task.title,
+    description: task.description ?? "",
+    priority: task.priority ?? "",
+    dueAt: dateInput(task.due_at),
+    scheduledAt: dateInput(task.scheduled_at),
+    deferredUntil: dateInput(task.deferred_until),
+    commitmentId: task.commitment_id ?? "",
+    role: task.role ?? "",
+    archived: Boolean(task.archived_at),
+  };
+}
+
+function draftsEqual(a: TaskDraft, b: TaskDraft): boolean {
+  return (
+    a.title === b.title &&
+    a.description === b.description &&
+    a.priority === b.priority &&
+    a.dueAt === b.dueAt &&
+    a.scheduledAt === b.scheduledAt &&
+    a.deferredUntil === b.deferredUntil &&
+    a.commitmentId === b.commitmentId &&
+    a.role === b.role &&
+    a.archived === b.archived
+  );
+}
+
+function isDraftDirty(draft: TaskDraft, authoritative: TaskDetail): boolean {
+  return !draftsEqual(draft, taskDraft(authoritative));
+}
+
+function isTaskDetail(value: unknown): value is TaskDetail {
+  if (!value || typeof value !== "object") return false;
+  const row = value as Partial<TaskDetail>;
+  return typeof row.task_id === "string" && typeof row.title === "string" && typeof row.version === "number";
+}
+
+function taskFromUnknown(value: unknown): TaskDetail | undefined {
+  if (isTaskDetail(value)) return value;
+  if (value && typeof value === "object" && "task" in value && isTaskDetail((value as { task: unknown }).task)) {
+    return (value as { task: TaskDetail }).task;
+  }
+  return undefined;
+}
+
+function transitionMutationKind(toState: string): MutationKind {
+  if (toState === "completed") return "close";
+  if (toState === "cancelled") return "cancel";
+  return "status";
+}
+
+interface TaskDetailSession {
+  readonly mutationCoordinator: TaskMutationCoordinator;
+  readonly readCoordinator: TaskReadCoordinator<TaskDetail>;
+  readonly sessionEpoch: string;
+  readonly feedback: MutationFeedbackValue | null;
+}
+
+function sessionFromRuntime(runtime: TaskRuntimeValue): TaskDetailSession {
+  return {
+    mutationCoordinator: runtime.mutationCoordinator.coordinator,
+    readCoordinator: runtime.readCoordinator as TaskReadCoordinator<TaskDetail>,
+    sessionEpoch: runtime.sessionEpoch,
+    feedback: runtime.feedback,
+  };
+}
+
+function useLocalTaskDetailSession(): TaskDetailSession {
+  const session = useMemo<TaskDetailSession>(() => {
+    const mutationCoordinator = createTaskMutationCoordinator();
+    const readCoordinator = createTaskReadCoordinator<TaskDetail>();
+    return {
+      mutationCoordinator,
+      readCoordinator,
+      sessionEpoch: "detail-local",
+      feedback: null,
+    };
+  }, []);
+  useEffect(() => {
+    return () => {
+      session.readCoordinator.dispose();
+      session.mutationCoordinator.clearSession();
+    };
+  }, [session]);
+  return session;
+}
+
+/** Prefer injected / provider runtime; fall back to local coordinators for tests and pre-AppShell mounts. */
+function useTaskDetailSession(runtime: TaskRuntimeValue | undefined): TaskDetailSession {
+  const local = useLocalTaskDetailSession();
+  return runtime ? sessionFromRuntime(runtime) : local;
+}
+
+/**
+ * Task detail with authoritative snapshot / dirty draft / conflict separation.
+ *
+ * Prefer shared runtime via `runtime` prop or by mounting under TaskRuntimeProvider
+ * (calls useTaskRuntime). Without a provider, uses local mutation/read coordinators
+ * from the same `@/lib/task/*` modules so tests and pre-AppShell mounts stay safe.
+ */
+export function TaskDetailView({
+  taskId,
+  embedded = false,
+  runtime,
+}: {
+  taskId: string;
+  embedded?: boolean;
+  /** Explicit runtime from a parent that already called useTaskRuntime. */
+  runtime?: TaskRuntimeValue;
+}) {
+  return <TaskDetailViewInner taskId={taskId} embedded={embedded} runtime={runtime} />;
+}
+
+/** Connected variant for mounts already inside TaskRuntimeProvider. */
+export function TaskDetailViewConnected({
+  taskId,
+  embedded = false,
+}: {
+  taskId: string;
+  embedded?: boolean;
+}) {
+  const runtime = useTaskRuntime();
+  return <TaskDetailViewInner taskId={taskId} embedded={embedded} runtime={runtime} />;
+}
+
+function TaskDetailViewInner({
+  taskId,
+  embedded = false,
+  runtime,
+}: {
+  taskId: string;
+  embedded?: boolean;
+  runtime?: TaskRuntimeValue;
+}) {
+  const session = useTaskDetailSession(runtime);
+  const { mutationCoordinator, readCoordinator, sessionEpoch, feedback } = session;
+
+  const detailKey = useMemo(
+    () => buildTaskQueryKey({ mode: "detail", taskId, sessionEpoch }),
+    [taskId, sessionEpoch],
+  );
+
+  /** Authoritative canonical Task snapshot (versioned). */
+  const [authoritative, setAuthoritative] = useState<TaskDetail>();
+  /** Editable draft; may diverge from authoritative when dirty. */
+  const [draft, setDraft] = useState<TaskDraft>();
+  /** True when a newer canonical arrived while the draft was dirty (or after 409). */
+  const [changedElsewhere, setChangedElsewhere] = useState(false);
+  const [history, setHistory] = useState<readonly WorkHistoryRow[]>([]);
+  const [historyDisclosure, setHistoryDisclosure] = useState<DisclosureEnvelope>();
+  const [status, setStatus] = useState("Loading task…");
+  const [failure, setFailure] = useState<UserErrorPresentation>();
+  const [conflict, setConflict] = useState(false);
+  const [proposal, setProposal] = useState<Record<string, unknown>>();
   const [transitionState, setTransitionState] = useState("open");
   const [commitments, setCommitments] = useState<readonly CommitmentRow[]>([]);
-  const updateAttempt = useRef(createAttemptKey("task-update")); const transitionAttempt = useRef(createAttemptKey("task-transition"));
-  const load = useCallback(async () => { try { const [detail, trail, choices] = await Promise.all([workRequest<{ task: TaskDetail }>(`/api/tasks/${encodeURIComponent(taskId)}`), workRequest<{ history: readonly WorkHistoryRow[]; disclosure?: DisclosureEnvelope }>(`/api/tasks/${encodeURIComponent(taskId)}/history?pageSize=50`), workRequest<{ commitments: readonly CommitmentRow[] }>("/api/commitments?pageSize=100")]); let available = requiredCollection(choices.commitments, "commitments"); if (detail.task.commitment_id && !available.some((item) => item.commitment_id === detail.task.commitment_id)) { const linked = await workRequest<{ commitment: CommitmentRow }>(`/api/commitments/${encodeURIComponent(detail.task.commitment_id)}`); available = [...available, linked.commitment]; } setCommitments(available); setTask(detail.task); setDraft(taskDraft(detail.task)); setTransitionState(detail.task.lifecycle_state); setHistory(requiredCollection(trail.history, "history")); setHistoryDisclosure(trail.disclosure); setStatus(""); setFailure(undefined); } catch (error) { setFailure(mapUserError(error)); } }, [taskId]);
-  useEffect(() => { void Promise.resolve().then(load); }, [load]);
-  async function loadMoreHistory() { const after = historyDisclosure?.nextCursor; if (!after) return; setStatus("Reading more Task history…"); try { const trail = await workRequest<{ history: readonly WorkHistoryRow[]; disclosure?: DisclosureEnvelope }>(`/api/tasks/${encodeURIComponent(taskId)}/history?pageSize=50&after=${encodeURIComponent(after)}`); setHistory((current) => [...current, ...requiredCollection(trail.history, "history").filter((row) => !current.some((existing) => existing.history_id === row.history_id))]); setHistoryDisclosure(trail.disclosure); setStatus(""); } catch (error) { setStatus(mapUserError(error).message); } }
-  async function applyProposal(values: Record<string, unknown>) { if (!task) return; const material = { ...values, expectedVersion: task.version }; setStatus("Saving one atomic patch…"); setConflict(false); try { await workRequest(`/api/tasks/${encodeURIComponent(taskId)}`, { method: "PATCH", body: JSON.stringify({ ...material, idempotencyKey: updateAttempt.current.forPayload(material) }) }); updateAttempt.current.succeeded(); setProposal(undefined); await load(); setStatus("Task update persisted."); } catch (error) { const problem = error as ApiFailure; const isConflict = problem.status === 409; setConflict(isConflict); setProposal(isConflict ? values : undefined); if (isConflict && problem.current) setTask(problem.current as TaskDetail); if (isDefinitiveAttemptFailure(error)) updateAttempt.current.succeeded(); setStatus(isConflict ? "The task changed on the server. Compare the canonical record with the controlled proposal, then reapply deliberately." : mapUserError(problem).message); } }
-  async function update(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!draft) return; await applyProposal({ title: draft.title, description: draft.description || undefined, priority: draft.priority || undefined, dueAt: draft.dueAt ? new Date(draft.dueAt).toISOString() : undefined, scheduledAt: draft.scheduledAt ? new Date(draft.scheduledAt).toISOString() : undefined, deferredUntil: draft.deferredUntil ? new Date(draft.deferredUntil).toISOString() : undefined, commitmentId: draft.commitmentId || undefined, role: draft.role || undefined, archived: draft.archived, clearFields: [!draft.description && "description", !draft.priority && "priority", !draft.dueAt && "due_at", !draft.scheduledAt && "scheduled_at", !draft.deferredUntil && "deferred_until", !draft.commitmentId && "commitment_id", !draft.role && "role"].filter(Boolean) }); }
-  async function transition(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!task) return;
-    setStatus("Preparing transition…");
-    try {
-      const material = { toState: transitionState, expectedVersion: task.version };
-      await workRequest(`/api/tasks/${encodeURIComponent(taskId)}/transition`, {
-        method: "POST",
-        body: JSON.stringify({ ...material, idempotencyKey: transitionAttempt.current.forPayload(material) }),
-      });
-      transitionAttempt.current.succeeded();
-      setStatus("Task transition persisted. A linked commitment was not changed.");
-      await load();
-    } catch (error) {
-      const problem = error as ApiFailure;
-      if (problem.status === 409 && problem.current) {
-        setTask(problem.current as TaskDetail);
-        setDraft(taskDraft(problem.current as TaskDetail));
+  const [mutationPending, setMutationPending] = useState(false);
+  const [readPending, setReadPending] = useState(false);
+
+  const updateAttempt = useRef(createAttemptKey("task-update"));
+  const transitionAttempt = useRef(createAttemptKey("task-transition"));
+  const authoritativeRef = useRef<TaskDetail | undefined>(undefined);
+  const draftRef = useRef<TaskDraft | undefined>(undefined);
+  authoritativeRef.current = authoritative;
+  draftRef.current = draft;
+
+  const publishFeedback = useCallback(
+    (kind: "success" | "error" | "conflict" | "info", message: string, eventId: string) => {
+      feedback?.publish({ eventId, kind, message });
+    },
+    [feedback],
+  );
+
+  /**
+   * Apply a newer canonical Task.
+   * Clean editor: advance authoritative + draft.
+   * Dirty editor: preserve draft exactly; store authoritative separately; flag external change.
+   */
+  const applyCanonical = useCallback((next: TaskDetail, options?: { forceDraft?: boolean }) => {
+    const currentDraft = draftRef.current;
+    const prior = authoritativeRef.current;
+    const dirty =
+      !options?.forceDraft &&
+      currentDraft !== undefined &&
+      prior !== undefined &&
+      isDraftDirty(currentDraft, prior);
+
+    setAuthoritative(next);
+    authoritativeRef.current = next;
+
+    if (!dirty || options?.forceDraft) {
+      const nextDraft = taskDraft(next);
+      setDraft(nextDraft);
+      draftRef.current = nextDraft;
+      setTransitionState(next.lifecycle_state);
+      setChangedElsewhere(false);
+      return;
+    }
+
+    // Preserve unsaved draft exactly — no silent overwrite, no auto-merge.
+    setChangedElsewhere(true);
+  }, []);
+
+  const loadTaskBundle = useCallback(
+    async (options?: { forceDraft?: boolean }) => {
+      setReadPending(true);
+      try {
+        const [detailResult, trail, choices] = await Promise.all([
+          readCoordinator.read(
+            detailKey,
+            async () => {
+              const detail = await workRequest<{ task: TaskDetail }>(
+                `/api/tasks/${encodeURIComponent(taskId)}`,
+              );
+              return detail.task;
+            },
+            { force: true },
+          ),
+          workRequest<{ history: readonly WorkHistoryRow[]; disclosure?: DisclosureEnvelope }>(
+            `/api/tasks/${encodeURIComponent(taskId)}/history?pageSize=50`,
+          ),
+          workRequest<{ commitments: readonly CommitmentRow[] }>("/api/commitments?pageSize=100"),
+        ]);
+
+        if (detailResult.silent && detailResult.outcome !== "applied" && detailResult.outcome !== "deduped") {
+          return;
+        }
+        if (detailResult.outcome === "failed" || !detailResult.data) {
+          throw detailResult.error ?? new Error("Task detail read failed");
+        }
+
+        let available = requiredCollection(choices.commitments, "commitments");
+        const task = detailResult.data;
+        if (task.commitment_id && !available.some((item) => item.commitment_id === task.commitment_id)) {
+          const linked = await workRequest<{ commitment: CommitmentRow }>(
+            `/api/commitments/${encodeURIComponent(task.commitment_id)}`,
+          );
+          available = [...available, linked.commitment];
+        }
+
+        setCommitments(available);
+        applyCanonical(task, { forceDraft: options?.forceDraft ?? authoritativeRef.current === undefined });
+        setHistory(requiredCollection(trail.history, "history"));
+        setHistoryDisclosure(trail.disclosure);
+        setStatus("");
+        setFailure(undefined);
+      } catch (error) {
+        setFailure(mapUserError(error));
+      } finally {
+        setReadPending(false);
       }
-      if (isDefinitiveAttemptFailure(error)) transitionAttempt.current.succeeded();
-      setStatus(mapUserError(problem).message);
+    },
+    [applyCanonical, detailKey, readCoordinator, taskId],
+  );
+
+  useEffect(() => {
+    readCoordinator.retain(detailKey);
+    void Promise.resolve().then(() => loadTaskBundle({ forceDraft: true }));
+    return () => {
+      readCoordinator.release(detailKey);
+    };
+  }, [detailKey, loadTaskBundle, readCoordinator]);
+
+  async function loadMoreHistory() {
+    const after = historyDisclosure?.nextCursor;
+    if (!after) return;
+    setStatus("Reading more Task history…");
+    try {
+      const trail = await workRequest<{ history: readonly WorkHistoryRow[]; disclosure?: DisclosureEnvelope }>(
+        `/api/tasks/${encodeURIComponent(taskId)}/history?pageSize=50&after=${encodeURIComponent(after)}`,
+      );
+      setHistory((current) => [
+        ...current,
+        ...requiredCollection(trail.history, "history").filter(
+          (row) => !current.some((existing) => existing.history_id === row.history_id),
+        ),
+      ]);
+      setHistoryDisclosure(trail.disclosure);
+      setStatus("");
+    } catch (error) {
+      setStatus(mapUserError(error).message);
     }
   }
-  if (failure) return <SurfaceState kind="unavailable" title={failure.title} detail={failure.message} diagnostic={failure.diagnostic}><Button className="mt-3" variant="secondary" onClick={() => void load()}>Retry Task read</Button></SurfaceState>;
-  if (!task || !draft) return <LoadingStatus label={status} />;
-  return <article className="mx-auto max-w-4xl">{embedded ? null : <Link href="/work?view=all-open" className="text-sm text-moss-green underline">← Work</Link>}<header className={embedded ? "" : "mt-4"}><h1 className="text-2xl font-semibold text-moss-slate">{task.title}</h1><p className="mt-1 text-sm text-muted">{display(task.lifecycle_state)} · version {task.version} · evidence {display(task.evidence_state)}</p></header>
-    {conflict && proposal ? <Conflict title="Canonical versus proposed"><p>Canonical version {task.version}. Every editable field is compared before reapply.</p><dl className="mt-2 grid gap-2"><dt>Title</dt><dd>Canonical: {task.title} · Proposed: {String(proposal.title ?? task.title)}</dd><dt>Description</dt><dd>Canonical: {task.description ?? "Not set"} · Proposed: {String(proposal.description ?? "Clear")}</dd><dt>Priority</dt><dd>Canonical: {task.priority ?? "Not set"} · Proposed: {String(proposal.priority ?? "Clear")}</dd><dt>Due</dt><dd>Canonical: {task.due_at ?? "Not set"} · Proposed: {String(proposal.dueAt ?? "Clear")}</dd><dt>Scheduled</dt><dd>Canonical: {task.scheduled_at ?? "Not set"} · Proposed: {String(proposal.scheduledAt ?? "Clear")}</dd><dt>Deferred until</dt><dd>Canonical: {task.deferred_until ?? "Not set"} · Proposed: {String(proposal.deferredUntil ?? "Clear")}</dd><dt>Archived</dt><dd>Canonical: {task.archived_at ? "Yes" : "No"} · Proposed: {proposal.archived ? "Yes" : "No"}</dd><dt>Commitment</dt><dd>Canonical: {commitmentLabel(task.commitment_id, commitments)} · Proposed: {commitmentLabel(proposal.commitmentId, commitments)}</dd><dt>Role</dt><dd>Canonical: {task.role ?? "Not set"} · Proposed: {String(proposal.role ?? "Clear")}</dd></dl><Button type="button" variant="secondary" onClick={() => void applyProposal(proposal)}>Reapply proposed patch to version {task.version}</Button></Conflict> : null}
-    <p role="status" className="mt-4 text-sm text-muted">{status}</p><div className="mt-6 grid gap-6 lg:grid-cols-2"><form onSubmit={update} className="grid gap-4 rounded-xl border border-moss-slate/15 bg-surface p-4"><h2 className="font-semibold">Edit task</h2><Labeled label="Title"><Input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} required /></Labeled><Labeled label="Description"><Textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></Labeled><Labeled label="Priority"><select value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: event.target.value })} className="h-10 rounded-md border bg-surface px-3"><option value="">Unset</option>{["p1","p2","p3","p4"].map((p)=><option key={p}>{p}</option>)}</select></Labeled><Labeled label="Due"><Input type="datetime-local" value={draft.dueAt} onChange={(event) => setDraft({ ...draft, dueAt: event.target.value })} /></Labeled><Labeled label="Scheduled"><Input type="datetime-local" value={draft.scheduledAt} onChange={(event) => setDraft({ ...draft, scheduledAt: event.target.value })} /></Labeled><Labeled label="Deferred until"><Input type="datetime-local" value={draft.deferredUntil} onChange={(event) => setDraft({ ...draft, deferredUntil: event.target.value })} /></Labeled><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.archived} onChange={(event) => setDraft({ ...draft, archived: event.target.checked })} /> Archived</label><Labeled label="Commitment"><select value={draft.commitmentId} onChange={(event) => setDraft({ ...draft, commitmentId: event.target.value })} className="h-10 rounded-md border bg-surface px-3"><option value="">None</option>{commitments.map((item) => <option key={item.commitment_id} value={item.commitment_id}>{item.title}</option>)}</select></Labeled><Labeled label="Role"><select value={draft.role} onChange={(event) => setDraft({ ...draft, role: event.target.value })} className="h-10 rounded-md border bg-surface px-3"><option value="">None</option><option value="follow_up">Follow up</option></select></Labeled><Button type="submit">Save atomic patch</Button></form>
-      <form onSubmit={transition} className="grid content-start gap-4 rounded-xl border border-moss-slate/15 bg-surface p-4"><h2 className="font-semibold">Lifecycle</h2><Labeled label="Move to"><select value={transitionState} onChange={(event) => setTransitionState(event.target.value)} className="h-10 rounded-md border bg-surface px-3">{["open","in_progress","waiting","blocked","completed","cancelled"].map((value)=><option key={value}>{value}</option>)}</select></Labeled><Button type="submit">Apply transition</Button><p className="text-xs text-muted">Completing this Task never closes its linked Commitment. Terminal transitions do not invent closure evidence.</p></form></div>
-    <TaskContext projectId={task.project_id} situationId={task.situation_id} />
-    <Evidence
-      subject="Task"
-      state={task.evidence_state}
-      originKind={task.origin_kind}
-      origin={task.origin_evidence_ref}
-      closure={task.closure_evidence_ref}
-      closedAt={task.closed_at}
-      acceptanceKind={task.acceptance_kind}
-      reviewDecisionId={task.accepted_by_review_decision_id}
-      closureHistoryId={task.closure_history_id}
-    /><History subject="Task" rows={history} closureHistoryId={task.closure_history_id} disclosure={historyDisclosure} onContinue={() => void loadMoreHistory()} />
-  </article>;
+
+  async function fetchCurrentTask(): Promise<TaskDetail | undefined> {
+    const result = await readCoordinator.read(
+      detailKey,
+      async () => {
+        const detail = await workRequest<{ task: TaskDetail }>(
+          `/api/tasks/${encodeURIComponent(taskId)}`,
+        );
+        return detail.task;
+      },
+      { force: true },
+    );
+    return result.data;
+  }
+
+  function handleConflict(current: unknown, values?: Record<string, unknown>) {
+    const resolved = taskFromUnknown(current);
+    if (resolved) {
+      // Store authoritative separately; never overwrite the unsaved draft/proposal.
+      setAuthoritative(resolved);
+      authoritativeRef.current = resolved;
+    }
+    setChangedElsewhere(true);
+    setConflict(true);
+    if (values) setProposal(values);
+    setStatus(TASK_CONFLICT_MESSAGE);
+    publishFeedback("conflict", TASK_CONFLICT_MESSAGE, `task-conflict:${taskId}:${resolved?.version ?? "unknown"}`);
+  }
+
+  async function applyProposal(values: Record<string, unknown>, options?: { deliberate?: boolean }) {
+    if (!authoritative || !draft) return;
+    if (changedElsewhere && !options?.deliberate && !conflict) {
+      setStatus(TASK_CONFLICT_MESSAGE);
+      return;
+    }
+
+    const expectedVersion = authoritative.version;
+    const material = { ...values, expectedVersion };
+    const idempotencyKey = updateAttempt.current.forPayload(material);
+    setStatus("Saving one atomic patch…");
+    setConflict(false);
+    setMutationPending(true);
+
+    const draftSnapshot = { ...draft };
+    const outcome = await mutationCoordinator.mutate({
+      kind: "update",
+      taskId,
+      expectedVersion,
+      idempotencyKey,
+      request: material,
+      draft: draftSnapshot,
+      hooks: {
+        fetchCurrent: async () => fetchCurrentTask(),
+        barriers: {
+          onMutationStart: () => {
+            readCoordinator.raiseMutationBarrier(detailKey, { entityId: taskId });
+          },
+        },
+        reconcile: async (result) => {
+          const confirmed = taskFromUnknown(result);
+          if (confirmed) {
+            readCoordinator.applyConfirmed(detailKey, confirmed, { entityId: taskId });
+            applyCanonical(confirmed, { forceDraft: true });
+          } else {
+            readCoordinator.raiseMutationBarrier(detailKey, { entityId: taskId });
+            await loadTaskBundle({ forceDraft: true });
+          }
+        },
+        feedback: async (_result, phase: MutationPhase) => {
+          if (phase === "confirmed") {
+            publishFeedback("success", "Task update persisted.", `task-update-ok:${idempotencyKey}`);
+          }
+        },
+      },
+      dispatch: async ({ request, idempotencyKey: key, expectedVersion: version }) =>
+        workRequest(`/api/tasks/${encodeURIComponent(taskId)}`, {
+          method: "PATCH",
+          body: JSON.stringify({ ...request, expectedVersion: version, idempotencyKey: key }),
+        }),
+    });
+
+    setMutationPending(false);
+
+    if (outcome.refused) {
+      setStatus(outcome.reason ?? "Mutation refused.");
+      return;
+    }
+
+    // Coordinator preserves draft on conflict/failure — reaffirm local draft identity.
+    if (outcome.draft && typeof outcome.draft === "object") {
+      setDraft(outcome.draft as TaskDraft);
+      draftRef.current = outcome.draft as TaskDraft;
+    }
+
+    if (outcome.state.phase === "conflict") {
+      // Conflict is definitive for the stale version; rotate attempt identity for the next deliberate try.
+      updateAttempt.current.succeeded();
+      handleConflict(outcome.state.conflictCurrent, values);
+      return;
+    }
+
+    if (outcome.state.phase === "confirmed") {
+      updateAttempt.current.succeeded();
+      setProposal(undefined);
+      setChangedElsewhere(false);
+      setConflict(false);
+      setStatus("Task update persisted.");
+      return;
+    }
+
+    if (outcome.state.phase === "ambiguous") {
+      setStatus("The update may have applied. Retry only if the Task still shows the prior version.");
+      publishFeedback("error", "Task update outcome is ambiguous.", `task-update-ambiguous:${idempotencyKey}`);
+      return;
+    }
+
+    updateAttempt.current.succeeded();
+    setStatus(outcome.state.error?.message ?? "Task update failed.");
+    publishFeedback("error", outcome.state.error?.message ?? "Task update failed.", `task-update-fail:${idempotencyKey}`);
+  }
+
+  async function update(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!draft) return;
+    await applyProposal({
+      title: draft.title,
+      description: draft.description || undefined,
+      priority: draft.priority || undefined,
+      dueAt: draft.dueAt ? new Date(draft.dueAt).toISOString() : undefined,
+      scheduledAt: draft.scheduledAt ? new Date(draft.scheduledAt).toISOString() : undefined,
+      deferredUntil: draft.deferredUntil ? new Date(draft.deferredUntil).toISOString() : undefined,
+      commitmentId: draft.commitmentId || undefined,
+      role: draft.role || undefined,
+      archived: draft.archived,
+      clearFields: [
+        !draft.description && "description",
+        !draft.priority && "priority",
+        !draft.dueAt && "due_at",
+        !draft.scheduledAt && "scheduled_at",
+        !draft.deferredUntil && "deferred_until",
+        !draft.commitmentId && "commitment_id",
+        !draft.role && "role",
+      ].filter(Boolean),
+    });
+  }
+
+  async function transition(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!authoritative) return;
+    if (changedElsewhere && !conflict) {
+      setStatus(TASK_CONFLICT_MESSAGE);
+      return;
+    }
+
+    const kind = transitionMutationKind(transitionState);
+    const material = { toState: transitionState, expectedVersion: authoritative.version };
+    const idempotencyKey = transitionAttempt.current.forPayload(material);
+    setStatus("Preparing transition…");
+    setMutationPending(true);
+
+    const draftSnapshot = draft ? { ...draft } : undefined;
+    const outcome = await mutationCoordinator.mutate({
+      kind,
+      taskId,
+      expectedVersion: authoritative.version,
+      idempotencyKey,
+      request: material,
+      draft: draftSnapshot,
+      hooks: {
+        fetchCurrent: async () => fetchCurrentTask(),
+        barriers: {
+          onMutationStart: () => {
+            readCoordinator.raiseMutationBarrier(detailKey, { entityId: taskId });
+          },
+        },
+        reconcile: async (result) => {
+          const confirmed = taskFromUnknown(result);
+          if (confirmed) {
+            readCoordinator.applyConfirmed(detailKey, confirmed, { entityId: taskId });
+            applyCanonical(confirmed, { forceDraft: !draftSnapshot || !isDraftDirty(draftSnapshot, authoritative) });
+          } else {
+            readCoordinator.raiseMutationBarrier(detailKey, { entityId: taskId });
+            await loadTaskBundle({ forceDraft: true });
+          }
+        },
+        feedback: async (_result, phase: MutationPhase) => {
+          if (phase === "confirmed") {
+            publishFeedback(
+              "success",
+              "Task transition persisted. A linked commitment was not changed.",
+              `task-transition-ok:${idempotencyKey}`,
+            );
+          }
+        },
+      },
+      dispatch: async ({ request, idempotencyKey: key, expectedVersion: version }) =>
+        workRequest(`/api/tasks/${encodeURIComponent(taskId)}/transition`, {
+          method: "POST",
+          body: JSON.stringify({ ...request, expectedVersion: version, idempotencyKey: key }),
+        }),
+    });
+
+    setMutationPending(false);
+
+    if (outcome.refused) {
+      setStatus(outcome.reason ?? "Transition refused.");
+      return;
+    }
+
+    if (outcome.draft && typeof outcome.draft === "object") {
+      setDraft(outcome.draft as TaskDraft);
+      draftRef.current = outcome.draft as TaskDraft;
+    }
+
+    if (outcome.state.phase === "conflict") {
+      transitionAttempt.current.succeeded();
+      handleConflict(outcome.state.conflictCurrent);
+      return;
+    }
+
+    if (outcome.state.phase === "confirmed") {
+      transitionAttempt.current.succeeded();
+      setChangedElsewhere(false);
+      setConflict(false);
+      setStatus("Task transition persisted. A linked commitment was not changed.");
+      return;
+    }
+
+    if (isDefinitiveAttemptFailure({ status: outcome.state.error?.status })) {
+      transitionAttempt.current.succeeded();
+    }
+    setStatus(outcome.state.error?.message ?? mapUserError(outcome.state.error ?? new Error("transition failed")).message);
+  }
+
+  function discardDraftForLatest() {
+    if (!authoritative) return;
+    applyCanonical(authoritative, { forceDraft: true });
+    setConflict(false);
+    setProposal(undefined);
+    setStatus("Loaded the latest canonical Task into the editor.");
+  }
+
+  // Blind saves/transitions stay locked while an unseen newer canonical or conflict is outstanding.
+  const controlsLocked = mutationPending || changedElsewhere;
+  const dirty = authoritative && draft ? isDraftDirty(draft, authoritative) : false;
+
+  if (failure) {
+    return (
+      <SurfaceState kind="unavailable" title={failure.title} detail={failure.message} diagnostic={failure.diagnostic}>
+        <Button className="mt-3" variant="secondary" pending={readPending} onClick={() => void loadTaskBundle({ forceDraft: true })}>
+          Retry Task read
+        </Button>
+      </SurfaceState>
+    );
+  }
+  if (!authoritative || !draft) return <LoadingStatus label={status} />;
+
+  return (
+    <article className="mx-auto max-w-4xl">
+      {embedded ? null : (
+        <Link href="/work?view=all-open" className="text-sm text-moss-green underline">
+          ← Work
+        </Link>
+      )}
+      <header className={embedded ? "" : "mt-4"}>
+        <h1 className="text-2xl font-semibold text-moss-slate">{authoritative.title}</h1>
+        <p className="mt-1 text-sm text-muted">
+          {display(authoritative.lifecycle_state)} · version {authoritative.version} · evidence{" "}
+          {display(authoritative.evidence_state)}
+          {dirty ? " · unsaved edits" : ""}
+        </p>
+      </header>
+
+      {changedElsewhere ? (
+        <section role="alert" data-testid="task-changed-elsewhere" className="mt-4 rounded-lg border border-moss-coral-strong p-3 text-sm">
+          <h2 className="font-semibold">Task changed elsewhere</h2>
+          <p className="mt-1">{TASK_CONFLICT_MESSAGE}</p>
+          <p className="mt-1 text-muted">Canonical version {authoritative.version} · title “{authoritative.title}”. Your draft was preserved.</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button type="button" variant="secondary" onClick={discardDraftForLatest}>
+              Discard edits and load latest
+            </Button>
+            {conflict && proposal ? (
+              <Button
+                type="button"
+                variant="secondary"
+                pending={mutationPending}
+                onClick={() => void applyProposal(proposal, { deliberate: true })}
+              >
+                Reapply proposed patch to version {authoritative.version}
+              </Button>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
+      {conflict && proposal && !changedElsewhere ? (
+        <Conflict title="Canonical versus proposed">
+          <p>Canonical version {authoritative.version}. Every editable field is compared before reapply.</p>
+          <dl className="mt-2 grid gap-2">
+            <dt>Title</dt>
+            <dd>
+              Canonical: {authoritative.title} · Proposed: {String(proposal.title ?? authoritative.title)}
+            </dd>
+            <dt>Description</dt>
+            <dd>
+              Canonical: {authoritative.description ?? "Not set"} · Proposed:{" "}
+              {String(proposal.description ?? "Clear")}
+            </dd>
+            <dt>Priority</dt>
+            <dd>
+              Canonical: {authoritative.priority ?? "Not set"} · Proposed: {String(proposal.priority ?? "Clear")}
+            </dd>
+            <dt>Due</dt>
+            <dd>
+              Canonical: {authoritative.due_at ?? "Not set"} · Proposed: {String(proposal.dueAt ?? "Clear")}
+            </dd>
+            <dt>Scheduled</dt>
+            <dd>
+              Canonical: {authoritative.scheduled_at ?? "Not set"} · Proposed:{" "}
+              {String(proposal.scheduledAt ?? "Clear")}
+            </dd>
+            <dt>Deferred until</dt>
+            <dd>
+              Canonical: {authoritative.deferred_until ?? "Not set"} · Proposed:{" "}
+              {String(proposal.deferredUntil ?? "Clear")}
+            </dd>
+            <dt>Archived</dt>
+            <dd>
+              Canonical: {authoritative.archived_at ? "Yes" : "No"} · Proposed: {proposal.archived ? "Yes" : "No"}
+            </dd>
+            <dt>Commitment</dt>
+            <dd>
+              Canonical: {commitmentLabel(authoritative.commitment_id, commitments)} · Proposed:{" "}
+              {commitmentLabel(proposal.commitmentId, commitments)}
+            </dd>
+            <dt>Role</dt>
+            <dd>
+              Canonical: {authoritative.role ?? "Not set"} · Proposed: {String(proposal.role ?? "Clear")}
+            </dd>
+          </dl>
+          <Button
+            type="button"
+            variant="secondary"
+            pending={mutationPending}
+            onClick={() => void applyProposal(proposal, { deliberate: true })}
+          >
+            Reapply proposed patch to version {authoritative.version}
+          </Button>
+        </Conflict>
+      ) : null}
+
+      <p role="status" className="mt-4 text-sm text-muted">
+        {status}
+      </p>
+      <div className="mt-2">
+        <Button
+          type="button"
+          variant="secondary"
+          pending={readPending}
+          onClick={() => void loadTaskBundle()}
+          data-testid="task-detail-refresh"
+        >
+          Refresh task
+        </Button>
+      </div>
+
+      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+        <form onSubmit={update} className="grid gap-4 rounded-xl border border-moss-slate/15 bg-surface p-4" aria-busy={mutationPending || undefined}>
+          <h2 className="font-semibold">Edit task</h2>
+          <Labeled label="Title">
+            <Input
+              value={draft.title}
+              onChange={(event) => setDraft({ ...draft, title: event.target.value })}
+              required
+              disabled={mutationPending}
+            />
+          </Labeled>
+          <Labeled label="Description">
+            <Textarea
+              value={draft.description}
+              onChange={(event) => setDraft({ ...draft, description: event.target.value })}
+              disabled={mutationPending}
+            />
+          </Labeled>
+          <Labeled label="Priority">
+            <select
+              value={draft.priority}
+              onChange={(event) => setDraft({ ...draft, priority: event.target.value })}
+              className="h-10 rounded-md border bg-surface px-3"
+              disabled={mutationPending}
+            >
+              <option value="">Unset</option>
+              {["p1", "p2", "p3", "p4"].map((p) => (
+                <option key={p}>{p}</option>
+              ))}
+            </select>
+          </Labeled>
+          <Labeled label="Due">
+            <Input
+              type="datetime-local"
+              value={draft.dueAt}
+              onChange={(event) => setDraft({ ...draft, dueAt: event.target.value })}
+              disabled={mutationPending}
+            />
+          </Labeled>
+          <Labeled label="Scheduled">
+            <Input
+              type="datetime-local"
+              value={draft.scheduledAt}
+              onChange={(event) => setDraft({ ...draft, scheduledAt: event.target.value })}
+              disabled={mutationPending}
+            />
+          </Labeled>
+          <Labeled label="Deferred until">
+            <Input
+              type="datetime-local"
+              value={draft.deferredUntil}
+              onChange={(event) => setDraft({ ...draft, deferredUntil: event.target.value })}
+              disabled={mutationPending}
+            />
+          </Labeled>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={draft.archived}
+              onChange={(event) => setDraft({ ...draft, archived: event.target.checked })}
+              disabled={mutationPending}
+            />{" "}
+            Archived
+          </label>
+          <Labeled label="Commitment">
+            <select
+              value={draft.commitmentId}
+              onChange={(event) => setDraft({ ...draft, commitmentId: event.target.value })}
+              className="h-10 rounded-md border bg-surface px-3"
+              disabled={mutationPending}
+            >
+              <option value="">None</option>
+              {commitments.map((item) => (
+                <option key={item.commitment_id} value={item.commitment_id}>
+                  {item.title}
+                </option>
+              ))}
+            </select>
+          </Labeled>
+          <Labeled label="Role">
+            <select
+              value={draft.role}
+              onChange={(event) => setDraft({ ...draft, role: event.target.value })}
+              className="h-10 rounded-md border bg-surface px-3"
+              disabled={mutationPending}
+            >
+              <option value="">None</option>
+              <option value="follow_up">Follow up</option>
+            </select>
+          </Labeled>
+          <Button type="submit" pending={mutationPending} disabled={controlsLocked && !mutationPending}>
+            Save atomic patch
+          </Button>
+        </form>
+
+        <form
+          onSubmit={transition}
+          className="grid content-start gap-4 rounded-xl border border-moss-slate/15 bg-surface p-4"
+          aria-busy={mutationPending || undefined}
+        >
+          <h2 className="font-semibold">Lifecycle</h2>
+          <Labeled label="Move to">
+            <select
+              value={transitionState}
+              onChange={(event) => setTransitionState(event.target.value)}
+              className="h-10 rounded-md border bg-surface px-3"
+              disabled={mutationPending}
+            >
+              {["open", "in_progress", "waiting", "blocked", "completed", "cancelled"].map((value) => (
+                <option key={value}>{value}</option>
+              ))}
+            </select>
+          </Labeled>
+          <Button type="submit" pending={mutationPending} disabled={controlsLocked && !mutationPending}>
+            Apply transition
+          </Button>
+          <p className="text-xs text-muted">
+            Completing this Task never closes its linked Commitment. Terminal transitions do not invent closure
+            evidence.
+          </p>
+        </form>
+      </div>
+
+      <TaskContext projectId={authoritative.project_id} situationId={authoritative.situation_id} />
+      <Evidence
+        subject="Task"
+        state={authoritative.evidence_state}
+        originKind={authoritative.origin_kind}
+        origin={authoritative.origin_evidence_ref}
+        closure={authoritative.closure_evidence_ref}
+        closedAt={authoritative.closed_at}
+        acceptanceKind={authoritative.acceptance_kind}
+        reviewDecisionId={authoritative.accepted_by_review_decision_id}
+        closureHistoryId={authoritative.closure_history_id}
+      />
+      <History
+        subject="Task"
+        rows={history}
+        closureHistoryId={authoritative.closure_history_id}
+        disclosure={historyDisclosure}
+        onContinue={() => void loadMoreHistory()}
+      />
+    </article>
+  );
 }
 
 interface CommitmentDraft { summary: string; counterparty: string; dueAt: string }

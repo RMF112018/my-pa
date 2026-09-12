@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   TaskDetailView,
@@ -218,7 +218,10 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     const save = await screen.findByRole("button", { name: /Save title/ });
     expect(save.getAttribute("aria-busy")).toBe("true");
     expect(save).toBeDisabled();
-    expect(screen.getByTestId("task-status-control").getAttribute("aria-busy")).toBe("true");
+    const statusControl = screen.getByTestId("task-status-control");
+    expect(statusControl.getAttribute("aria-busy")).toBe("true");
+    // The actionable element itself is locked, not merely its container.
+    expect(within(statusControl).getByRole("combobox")).toBeDisabled();
 
     release(json({ task: { ...TASK_V2, version: 3 } }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Save title" }).getAttribute("aria-busy")).toBeNull());

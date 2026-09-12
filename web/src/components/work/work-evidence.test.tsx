@@ -105,9 +105,18 @@ describe("Work evidence", () => {
     expect(await screen.findByText(new RegExp(closure))).toBeTruthy();
     expect(screen.getByText(new RegExp(origin))).toBeTruthy();
     expect(screen.getByText(/rdec_aaaaaaaa11111111/)).toBeTruthy();
-    // The closure history id appears both as provenance and on its history row.
-    expect((await screen.findAllByText(new RegExp(closureHistory))).length).toBeGreaterThan(0);
-    expect(screen.getByText("Closure receipt")).toBeTruthy();
+    // The closure history id is tied to its label as provenance, and separately
+    // marks its own history row as the receipt.
+    const provenance = screen.getByRole("region", { name: "Provenance" });
+    const receiptRow = within(provenance).getByText("Closure history id").parentElement;
+    expect(receiptRow?.textContent).toContain(closureHistory);
+    expect(within(screen.getByRole("region", { name: "History" })).getByText("Closure receipt")).toBeTruthy();
+
+    // Acceptance and evidence state relocated with the rest of provenance rather
+    // than being dropped when the primary Evidence panel was removed.
+    expect(within(provenance).getByText("Acceptance kind").parentElement?.textContent).toContain("review");
+    expect(within(provenance).getByText("Evidence state").parentElement?.textContent).toContain("accepted");
+    expect(within(provenance).getByText("Origin kind").parentElement?.textContent).toContain("evidence");
     await waitFor(() =>
       expect(fetcher.mock.calls.some(([path]) => String(path).includes("/history"))).toBe(true),
     );

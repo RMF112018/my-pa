@@ -125,6 +125,10 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "task_recurrences",
         "task_history",
         "task_bulk_operations",
+        # `c1a8e4d70b29` adds append-only capture labels above this revision
+        # (#234); name them so this equality keeps catching an unnamed
+        # leftover instead of failing on a table it simply never named.
+        "capture_labels",
         # WP-TUX-01. `de5ec1c65857` adds append-only comments above the
         # extraction plane; name them so a downgrade to EXTRACTION_REVISION
         # does not leave an unnamed table in the equality.

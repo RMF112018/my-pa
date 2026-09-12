@@ -869,13 +869,20 @@ describe("TaskListRow", () => {
     );
     await hydrated();
     expect(row().textContent).toContain("In progress");
+    expect(row().textContent).toContain(TITLE);
     expect(screen.getByTestId("task-close-trigger")).toBeTruthy();
 
     // The same Task, closed somewhere else, comes back on the next list read.
     view.rerender(
       <TaskRuntimeProvider principalId="prin_test" sessionEpoch="epoch-test">
         <TaskListRow
-          task={{ ...LIST_ROW, lifecycle_state: "completed", version: 7, updated_at: "2026-09-12T12:00:00Z" }}
+          task={{
+            ...LIST_ROW,
+            title: "Renamed somewhere else",
+            lifecycle_state: "completed",
+            version: 7,
+            updated_at: "2026-09-12T12:00:00Z",
+          }}
           selected={false}
           clock={CLOCK}
           onSelect={vi.fn()}
@@ -887,6 +894,14 @@ describe("TaskListRow", () => {
     // The row says what is true now, and no longer offers to close it again.
     await waitFor(() => expect(row().textContent).toContain("Closed"));
     expect(screen.queryByTestId("task-close-trigger")).toBeNull();
+    /*
+      Including its name — which is not decoration: it is the row's link text and
+      the accessible name of every control on it, so a stale one tells a screen
+      reader the wrong Task.
+    */
+    expect(row().textContent).toContain("Renamed somewhere else");
+    expect(row().textContent).not.toContain(TITLE);
+    expect(screen.getByRole("link", { name: /Renamed somewhere else/ })).toBeTruthy();
   });
 
   it("never shows a Task as closed on a response that carried no Task", async () => {
@@ -897,17 +912,25 @@ describe("TaskListRow", () => {
       the strength of a status code would be telling the user something nobody
       confirmed.
 
-      What this pins is the outcome, not one particular branch: a response with
-      no Task in it leaves the row exactly as it was and reports no confirmation.
-      The specific `else if (terminal)` arm in the binder is reached only when the
-      coordinator calls an empty response confirmed, which no path through this
-      surface produces — it is named as uncovered rather than pinned by a test
-      that would pass without it.
+      The Task has to hydrate first, or the write is never dispatched at all and
+      this proves nothing: an earlier version of this test starved the canonical
+      read outright, which failed before the transition and quietly duplicated
+      the hydration test next door. So the row hydrates, and only then is the
+      confirming re-read starved — a transient failure there is enough.
     */
+    let hydrations = 0;
+    let transitions = 0;
     stubFetch({
-      // Accepted, but with no Task in the body and none to be had on re-read.
-      transition: () => ok({}),
-      detail: () => ok({}),
+      // Accepted, with no Task in the body.
+      transition: () => {
+        transitions += 1;
+        return ok({});
+      },
+      // Hydrates once; the confirming re-read then comes back with nothing.
+      detail: () => {
+        hydrations += 1;
+        return hydrations === 1 ? ok({ task: CANONICAL }) : ok({});
+      },
     });
     const handles = renderRow();
     await hydrated();
@@ -915,6 +938,9 @@ describe("TaskListRow", () => {
     await userEvent.click(screen.getByTestId("task-close-trigger"));
     await userEvent.click(screen.getByTestId("task-close-confirm"));
     await waitFor(() => expect(row().getAttribute("aria-busy")).toBeNull());
+
+    // The write really was sent — otherwise this says nothing about its answer.
+    expect(transitions).toBe(1);
 
     // Not claimed as closed, and still offered — because nothing says it is.
     const status = within(row()).getByRole("combobox") as HTMLSelectElement;

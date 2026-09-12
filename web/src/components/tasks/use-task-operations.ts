@@ -115,6 +115,16 @@ export interface PendingTaskComment {
 export interface UseTaskOperationsResult {
   /** Authoritative Task snapshot once hydrated or returned by a confirmed write. */
   readonly task: TaskDetail | undefined;
+  /**
+   * What to show, which is not always what may be written.
+   *
+   * The held canonical snapshot while it is the newer of the two, otherwise the
+   * seed the surface was given — a list that has been re-read since is simply
+   * newer information about the same Task. Display only: `canMutate` and the
+   * version behind it come from the canonical read alone, so nothing here can
+   * authorise a write.
+   */
+  readonly display: TaskDetail | TaskRow | null;
   /** True only while a canonical numeric version is held. */
   readonly canMutate: boolean;
   readonly hydrated: boolean;
@@ -804,6 +814,7 @@ export function useTaskOperations(
 
   return {
     task: snapshot,
+    display: displayBase,
     canMutate: version !== null,
     hydrated: snapshot !== undefined,
     pending,

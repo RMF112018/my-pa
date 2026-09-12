@@ -239,8 +239,16 @@ export function TaskListRow({
     void cancelTask();
   }, [await_, cancelTask]);
 
-  const title = ops.task?.title ?? task.title;
-  const priority = ops.task?.priority ?? task.priority;
+  /*
+    Every word the row says about this Task comes from the display base, not from
+    the held snapshot. The snapshot is a reading of one moment and the row never
+    remounts while it stays listed, so reading names from it pinned the title to
+    whatever was true at mount: rename the Task from its own detail sheet and the
+    row went on showing the old name — in its link, in every control's accessible
+    name, and in the outcome spoken after a write.
+  */
+  const title = ops.display?.title ?? task.title;
+  const priority = ops.display?.priority ?? task.priority;
   /*
     Controls stay operable before hydration. The package requires the canonical
     read before the *mutation*, not before the affordance, and the binder does

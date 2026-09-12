@@ -329,6 +329,80 @@ describe("Work surface", () => {
     expect(document.activeElement).toBe(parked);
   });
 
+  it("does not move focus when the user pages away before a mutation settles", async () => {
+    /*
+      Independent review reproduced this. Paging changes the whole visible set,
+      so the Task a pending handoff is tracking is trivially absent from the new
+      page — and without a clear, that reads as "the mutation removed it" and
+      pulls focus onto whatever now sits at that index. The user is on page two
+      looking at different work entirely.
+
+      The clear is keyed on the query identity, which already covers the cursor,
+      rather than on a list of call sites. The first attempt enumerated call
+      sites by matching `setCursor("")` and missed pagination, which calls
+      `setCursor(nextCursor)`.
+    */
+    const rowOf = (id: string, title: string) => ({
+      task_id: id, title, lifecycle_state: "open", priority: null, due_at: null,
+      scheduled_at: null, deferred_until: null, archived_at: null,
+      created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z", version: 2,
+    });
+    const pageOne = rowOf("tsk_aaaaaaaa11111111", "Page one task");
+    const pageTwo = rowOf("tsk_bbbbbbbb22222222", "Page two task");
+    const body = (data: unknown) =>
+      new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
+    const withCursor = (tasks: unknown[]) =>
+      body({
+        tasks,
+        disclosure: {
+          scope: "tasks", coverage: "partial", freshnessAt: "2026-08-21T12:00:00Z",
+          authority: "accepted", limitations: ["bounded page"], truncated: true,
+          nextCursor: "cursor-page-two",
+        },
+      });
+
+    let releaseTransition: () => void = () => undefined;
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (path.includes("/transition") && method === "POST") {
+        // Still in flight while the user pages away.
+        await new Promise<void>((resolve) => {
+          releaseTransition = () => resolve();
+        });
+        return body({ task: { ...pageOne, version: 3, lifecycle_state: "waiting" } });
+      }
+      if (path === `/api/tasks/${pageOne.task_id}`) return body({ task: pageOne });
+      if (path === `/api/tasks/${pageTwo.task_id}`) return body({ task: pageTwo });
+      if (path.includes("/comments")) return body({ comments: [] });
+      return withCursor(path.includes("after=") ? [pageTwo] : [pageOne]);
+    }));
+
+    history.replaceState(null, "", "/work?view=all-open");
+    renderFromUrl();
+    await screen.findByText("Page one task");
+
+    const user = userEvent.setup();
+    // Dispatch a Status change, then page away before it settles.
+    void user.selectOptions(screen.getByRole("combobox", { name: /Status/i }), "waiting");
+    await screen.findByRole("button", { name: /Next page/i });
+    await user.click(screen.getByRole("button", { name: /Next page/i }));
+    await screen.findByText("Page two task");
+
+    const parked = screen.getByRole("heading", { name: "Work", level: 1 });
+    parked.focus();
+    releaseTransition();
+
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+
+    // Focus stayed where the user put it, on the page they navigated to.
+    expect(document.activeElement).toBe(parked);
+  });
+
   it("falls back to the Work heading when nothing is left to focus", async () => {
     const only = {
       task_id: "tsk_aaaaaaaa11111111", title: "The last one", lifecycle_state: "open",

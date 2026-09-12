@@ -111,6 +111,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
     rowsRef.current = rows;
   }, [rows]);
 
+
   /*
     Resolve focus once the reconciled list has painted.
 
@@ -184,6 +185,23 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
     ],
   );
   const taskQueryKeyId = serializeTaskQueryKey(taskQueryKey);
+
+  /*
+    A deliberate change of what the list is showing ends any pending handoff.
+
+    Keyed on the query identity rather than on a list of call sites: the key
+    already encodes view, search, archive mode and cursor, so paginating counts
+    without anyone having to remember that it does. An earlier version cleared at
+    named call sites and missed pagination, which then moved focus onto an
+    unrelated row on the next page.
+
+    A mutation's own reconciliation does not change the key, so a handoff still
+    survives to the rows update it was armed for.
+  */
+  useEffect(() => {
+    pendingMovement.current = null;
+  }, [taskQueryKeyId]);
+
 
   const applyTaskList = useCallback((payload: TaskListPayload) => {
     setRows(payload.tasks);
@@ -336,10 +354,6 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   }
 
   function select(next: WorkView) {
-    // Deliberate navigation ends any pending focus handoff: the user has chosen
-    // where to be, and a mutation dispatched in the view they just left must not
-    // reach forward and move focus in the one they arrived at.
-    pendingMovement.current = null;
     if (next !== "commitments") setLastTaskView(next as TaskView);
     setState("loading");
     setRows([]);
@@ -359,13 +373,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
     if (view === "commitments") select(lastTaskView);
   }
 
-  /** Any deliberate change of what the list is showing drops a pending handoff. */
-  function abandonPendingMovement() {
-    pendingMovement.current = null;
-  }
-
   function chooseCommitmentFilter(value: CommitmentFilter) {
-    abandonPendingMovement();
     sync({ commitment: value, cursor: undefined, q: value === "waiting-on" ? undefined : committedQuery || undefined });
     setCommitmentFilter(value);
     setCursor("");
@@ -376,7 +384,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   }
 
   function choosePerspective(next: string) {
-    abandonPendingMovement();
+    pendingMovement.current = null;
     if (!WORK_PERSPECTIVES.includes(next as WorkPerspective)) return;
     const perspectiveValue = next as WorkPerspective;
     setPerspective(perspectiveValue);
@@ -390,6 +398,9 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   }
 
   function openDetail(type: "task" | "commitment", id: string, title: string, trigger: HTMLElement) {
+    // The detail sheet overlays a still-mounted list. A handoff that fired while
+    // it was open would pull focus out from under the sheet.
+    pendingMovement.current = null;
     detailTrigger.current = trigger;
     setDetail({ type, id, title });
     sync({ task: type === "task" ? id : undefined, commitmentId: type === "commitment" ? id : undefined });
@@ -546,7 +557,6 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
           disabled={waitingOnSearch}
           onClick={() => {
             sync({ q: queryDraft || undefined, cursor: undefined });
-            abandonPendingMovement();
             setCursor("");
             setCommittedQuery(queryDraft);
           }}
@@ -565,7 +575,6 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
                     const value = event.target.value as typeof archiveMode;
                     sync({ archived: value, cursor: undefined });
                     setArchiveMode(value);
-                    abandonPendingMovement();
                     setCursor("");
                   }}
                 >

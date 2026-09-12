@@ -1,14 +1,37 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Workbench } from "@/components/work/workbench";
+import { TaskRuntimeProvider } from "@/components/work/task-runtime-provider";
 import { parseWorkUrlState } from "@/lib/api/work-url";
+import { TASK_FRESHNESS_INTERVAL_MS } from "@/components/work/use-task-freshness";
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); history.replaceState(null, "", "/"); });
-function renderFromUrl() { return render(<Workbench initialState={parseWorkUrlState(Object.fromEntries(new URLSearchParams(location.search)))} />); }
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+  history.replaceState(null, "", "/");
+});
+
+function renderFromUrl() {
+  return render(
+    <TaskRuntimeProvider principalId="00000000-0000-4000-8000-000000000001" sessionEpoch="test">
+      <Workbench initialState={parseWorkUrlState(Object.fromEntries(new URLSearchParams(location.search)))} />
+    </TaskRuntimeProvider>,
+  );
+}
+
 async function chooseWorkView(label: string) {
   await userEvent.click(screen.getByRole("button", { name: "Work views" }));
   await userEvent.click(await screen.findByRole("menuitem", { name: label }));
+}
+
+function listTaskGets(fetcher: ReturnType<typeof vi.fn<typeof fetch>>) {
+  return fetcher.mock.calls.filter(([path, init]) => {
+    const url = String(path);
+    const method = (init?.method ?? "GET").toUpperCase();
+    return method === "GET" && url.startsWith("/api/tasks?");
+  });
 }
 
 describe("Work surface", () => {
@@ -359,5 +382,137 @@ describe("Work surface", () => {
     expect(screen.getByTestId("surface-state-detail").textContent).toBe("This could not be read. Try again.");
     expect(screen.getByTestId("surface-state-diagnostic").textContent).toBe("gateway down");
     expect(screen.queryByText("No today tasks")).toBeNull();
+  });
+
+  it("double-submit create issues only one network POST", async () => {
+    let resolveCreate!: (response: Response) => void;
+    const createPromise = new Promise<Response>((resolve) => {
+      resolveCreate = resolve;
+    });
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      if (path === "/api/tasks" && init?.method === "POST") return createPromise;
+      if (path.startsWith("/api/commitments")) {
+        return new Response(JSON.stringify({ commitments: [] }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetcher);
+    history.replaceState(null, "", "/work?view=all-open");
+    renderFromUrl();
+    await screen.findByText("No all open tasks");
+    await userEvent.click(screen.getByRole("button", { name: "New task" }));
+    await userEvent.type(screen.getByLabelText("Title"), "Only once");
+    const form = screen.getByLabelText("Title").closest("form");
+    expect(form).toBeTruthy();
+    fireEvent.submit(form!);
+    fireEvent.submit(form!);
+    await waitFor(() => {
+      expect(fetcher.mock.calls.filter(([path, init]) => String(path) === "/api/tasks" && init?.method === "POST")).toHaveLength(1);
+    });
+    await act(async () => {
+      resolveCreate(
+        new Response(JSON.stringify({ task: { task_id: "tsk_aaaaaaaa11111111" }, history: {}, replayed: false }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    });
+    await waitFor(() => expect(screen.queryByText("Create task")).toBeNull());
+  });
+
+  it("retains confirmed rows when a background poll returns 503", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const task = {
+      task_id: "tsk_aaaaaaaa11111111",
+      title: "Keep me",
+      lifecycle_state: "open",
+      priority: null,
+      due_at: null,
+      archived_at: null,
+      created_at: "2026-08-21T12:00:00Z",
+      updated_at: "2026-08-21T12:00:00Z",
+    };
+    let listReads = 0;
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      const path = String(input);
+      if (path.startsWith("/api/tasks?")) {
+        listReads += 1;
+        if (listReads === 1) {
+          return new Response(JSON.stringify({ tasks: [task] }), { status: 200, headers: { "content-type": "application/json" } });
+        }
+        return new Response(JSON.stringify({ error: { code: "unavailable", message: "gateway down" } }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetcher);
+    history.replaceState(null, "", "/work?view=today");
+    renderFromUrl();
+    expect(await screen.findByText("Keep me")).toBeTruthy();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(TASK_FRESHNESS_INTERVAL_MS);
+    });
+    await waitFor(() => expect(listReads).toBeGreaterThanOrEqual(2));
+    expect(screen.getByText("Keep me")).toBeTruthy();
+    expect(screen.queryByText("No today tasks")).toBeNull();
+    expect(screen.queryByText("This could not be read")).toBeNull();
+    expect(await screen.findByTestId("mutation-feedback-region")).toBeTruthy();
+    expect(screen.getByRole("status")).toHaveTextContent(/temporarily unavailable/i);
+  });
+
+  it("does not multiply freshness polls when switching perspective", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    history.replaceState(null, "", "/work?view=today");
+    renderFromUrl();
+    await screen.findByText("No today tasks");
+    const beforePerspectives = listTaskGets(fetcher).length;
+    await userEvent.click(screen.getByRole("button", { name: "Board" }));
+    await userEvent.click(screen.getByRole("button", { name: "Calendar" }));
+    await userEvent.click(screen.getByRole("button", { name: "List" }));
+    expect(listTaskGets(fetcher).length).toBe(beforePerspectives);
+    fetcher.mockClear();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(TASK_FRESHNESS_INTERVAL_MS);
+    });
+    expect(listTaskGets(fetcher).length).toBe(1);
+    fetcher.mockClear();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(TASK_FRESHNESS_INTERVAL_MS);
+    });
+    expect(listTaskGets(fetcher).length).toBe(1);
+  });
+
+  it("publishes create success into the mutation feedback live region", async () => {
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      if (path === "/api/tasks" && init?.method === "POST") {
+        return new Response(JSON.stringify({ task: { task_id: "tsk_aaaaaaaa11111111" }, history: {}, replayed: false }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (path.startsWith("/api/commitments")) {
+        return new Response(JSON.stringify({ commitments: [] }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetcher);
+    history.replaceState(null, "", "/work?view=all-open");
+    renderFromUrl();
+    await screen.findByText("No all open tasks");
+    await userEvent.click(screen.getByRole("button", { name: "New task" }));
+    await userEvent.type(screen.getByLabelText("Title"), "Feedback task");
+    await userEvent.click(screen.getByRole("button", { name: "Create task" }));
+    expect(await screen.findByTestId("mutation-feedback-region")).toBeTruthy();
+    expect(screen.getByTestId(/^mutation-feedback-live-task:create:confirmed:/)).toHaveTextContent(
+      "Task created.",
+    );
   });
 });

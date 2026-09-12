@@ -421,54 +421,60 @@ export function TaskListRow({
           {COMMENT_ACTION_LABEL}
         </Button>
 
-        <div
-          role="group"
-          id={terminalRegionId}
-          aria-label={`Close ${title}`}
-          className="min-w-0"
-          onClick={stopPropagation}
-          onKeyDown={stopPropagation}
-        >
-          {terminal ? null : (
-            /*
-              A Task that has already been closed or cancelled cannot be closed
-              again, so the row withholds the action rather than offering to do it
-              once more. Task detail has always drawn this line; the row was
-              offering a live Close — and, under More, Cancel — on every row of
-              the Completed view, with a confirmation behind it that dispatched a
-              second transition against a Task that had already had one.
+        {/*
+          A Task that has already been closed or cancelled cannot be closed
+          again, so the row withholds the action rather than offering to do it
+          once more. Task detail has always drawn this line; the row was offering
+          a live Close — and, under More, Cancel — on every row of the Completed
+          view, with a confirmation behind it that dispatched a second transition
+          against a Task that had already had one.
 
-              The outcome itself is not restated here: the row's Status already
-              says Closed or Cancelled, in those words.
-            */
-            <TaskCloseControl
-              taskTitle={title}
-              disabled={locked}
-              pending={ops.pending === "close" || ops.pending === "cancel"}
-              // Cancel is deliberately not a peer of Close in the row: it is
-              // revealed only once More is activated.
-              showCancel={moreOpen}
-              onClose={handleClose}
-              onCancelTask={handleCancel}
-            />
-          )}
-        </div>
+          The whole affordance goes, not just its contents: More exists to reveal
+          Cancel, and an empty labelled group left behind a live disclosure that
+          announced itself as expanded with nothing inside it.
 
-        <Button
-          variant="ghost"
-          className="min-h-11 min-w-11"
-          data-testid="task-list-row-more"
-          data-prominence="tertiary"
-          aria-label={`More actions for ${title}`}
-          aria-expanded={moreOpen}
-          aria-controls={terminalRegionId}
-          onClick={(event) => {
-            event.stopPropagation();
-            setMoreOpen((open) => !open);
-          }}
-        >
-          {moreOpen ? MORE_CLOSE_LABEL : MORE_ACTION_LABEL}
-        </Button>
+          The outcome itself is not restated here: the row's Status already says
+          Closed or Cancelled, in those words.
+        */}
+        {terminal ? null : (
+          <>
+            <div
+              role="group"
+              id={terminalRegionId}
+              aria-label={`Close ${title}`}
+              className="min-w-0"
+              onClick={stopPropagation}
+              onKeyDown={stopPropagation}
+            >
+              <TaskCloseControl
+                taskTitle={title}
+                disabled={locked}
+                pending={ops.pending === "close" || ops.pending === "cancel"}
+                // Cancel is deliberately not a peer of Close in the row: it is
+                // revealed only once More is activated.
+                showCancel={moreOpen}
+                onClose={handleClose}
+                onCancelTask={handleCancel}
+              />
+            </div>
+
+            <Button
+              variant="ghost"
+              className="min-h-11 min-w-11"
+              data-testid="task-list-row-more"
+              data-prominence="tertiary"
+              aria-label={`More actions for ${title}`}
+              aria-expanded={moreOpen}
+              aria-controls={terminalRegionId}
+              onClick={(event) => {
+                event.stopPropagation();
+                setMoreOpen((open) => !open);
+              }}
+            >
+              {moreOpen ? MORE_CLOSE_LABEL : MORE_ACTION_LABEL}
+            </Button>
+          </>
+        )}
       </div>
 
       {/*

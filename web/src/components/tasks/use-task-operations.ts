@@ -776,9 +776,29 @@ export function useTaskOperations(
     intentRef.current = null;
   }, []);
 
-  // The canonical snapshot wins outright once held: a projection must never fill
-  // in a field the server has legitimately cleared.
-  const displayBase = snapshot ?? seedTask;
+  /*
+    The canonical snapshot wins while it is the newer of the two.
+
+    A projection must never fill in a field the server has legitimately cleared,
+    which is why the held snapshot is preferred at equal standing. But a held
+    snapshot is a reading of one moment, and the list around it keeps being
+    re-read: the Task can be changed from its own detail sheet, from a second
+    tab, or by anyone else, and the refreshed projection is then simply newer
+    information about the same Task. Preferring the snapshot outright froze the
+    row at whatever it first held — a row went on showing an open Task as open,
+    and offering to close it, long after it had been closed elsewhere.
+
+    Newer for display only. Write authority is untouched: `version` still comes
+    from the canonical read alone, so a projection cannot authorise a write no
+    matter how fresh it is.
+  */
+  const seedIsNewer =
+    snapshot !== undefined &&
+    seedTask !== null &&
+    (typeof seedTask.version === "number" && typeof snapshot.version === "number"
+      ? seedTask.version > snapshot.version
+      : seedTask.updated_at > snapshot.updated_at);
+  const displayBase = seedIsNewer ? seedTask : (snapshot ?? seedTask);
   const displayStatus = optimisticStatus ?? displayBase?.lifecycle_state ?? "open";
   const displayDue = optimisticDue ? optimisticDue.value : (displayBase?.due_at ?? null);
 

@@ -805,9 +805,13 @@ describe("TaskListRow", () => {
     expect(row().textContent).toContain("Closed");
     expect(screen.queryByTestId("task-close-trigger")).toBeNull();
 
-    // Nor is Cancel, which the row reveals under More.
-    await userEvent.click(screen.getByTestId("task-list-row-more"));
+    /*
+      Nor Cancel, nor the More that reveals it: leaving More behind meant a live
+      disclosure announcing itself as expanded over an empty labelled group.
+    */
+    expect(screen.queryByTestId("task-list-row-more")).toBeNull();
     expect(screen.queryByRole("button", { name: /cancel task/i })).toBeNull();
+    expect(screen.queryByRole("group", { name: `Close ${TITLE}` })).toBeNull();
   });
 
   it("gives focus back to the row when a confirmed Close empties the control", async () => {
@@ -843,6 +847,85 @@ describe("TaskListRow", () => {
     } finally {
       restore();
     }
+  });
+
+  it("follows the list it lives in when the Task changes elsewhere", async () => {
+    /*
+      A row is keyed by Task and never remounts while it stays listed, so a
+      refreshed projection arrives as a new prop on a mounted row. Preferring the
+      snapshot it first held froze it there: the Task could be closed from its own
+      detail sheet, from a second tab, or by anyone else, and the row went on
+      showing it as open — and, worse, went on offering to close it, because the
+      gate that withholds that action reads the same frozen value.
+
+      The projection drives what is shown. It still authorises nothing: the
+      canonical read remains the only source of write authority.
+    */
+    stubFetch();
+    const view = render(
+      <TaskRuntimeProvider principalId="prin_test" sessionEpoch="epoch-test">
+        <TaskListRow task={LIST_ROW} selected={false} clock={CLOCK} onSelect={vi.fn()} onOpen={vi.fn()} />
+      </TaskRuntimeProvider>,
+    );
+    await hydrated();
+    expect(row().textContent).toContain("In progress");
+    expect(screen.getByTestId("task-close-trigger")).toBeTruthy();
+
+    // The same Task, closed somewhere else, comes back on the next list read.
+    view.rerender(
+      <TaskRuntimeProvider principalId="prin_test" sessionEpoch="epoch-test">
+        <TaskListRow
+          task={{ ...LIST_ROW, lifecycle_state: "completed", version: 7, updated_at: "2026-09-12T12:00:00Z" }}
+          selected={false}
+          clock={CLOCK}
+          onSelect={vi.fn()}
+          onOpen={vi.fn()}
+        />
+      </TaskRuntimeProvider>,
+    );
+
+    // The row says what is true now, and no longer offers to close it again.
+    await waitFor(() => expect(row().textContent).toContain("Closed"));
+    expect(screen.queryByTestId("task-close-trigger")).toBeNull();
+  });
+
+  it("never shows a Task as closed on a response that carried no Task", async () => {
+    /*
+      Close and Cancel are pessimistic: the operation matrix requires a server
+      Task before either terminal state may be shown. A response carrying no Task
+      is not that — the write may have landed or may not, and saying "Closed" on
+      the strength of a status code would be telling the user something nobody
+      confirmed.
+
+      What this pins is the outcome, not one particular branch: a response with
+      no Task in it leaves the row exactly as it was and reports no confirmation.
+      The specific `else if (terminal)` arm in the binder is reached only when the
+      coordinator calls an empty response confirmed, which no path through this
+      surface produces — it is named as uncovered rather than pinned by a test
+      that would pass without it.
+    */
+    stubFetch({
+      // Accepted, but with no Task in the body and none to be had on re-read.
+      transition: () => ok({}),
+      detail: () => ok({}),
+    });
+    const handles = renderRow();
+    await hydrated();
+
+    await userEvent.click(screen.getByTestId("task-close-trigger"));
+    await userEvent.click(screen.getByTestId("task-close-confirm"));
+    await waitFor(() => expect(row().getAttribute("aria-busy")).toBeNull());
+
+    // Not claimed as closed, and still offered — because nothing says it is.
+    const status = within(row()).getByRole("combobox") as HTMLSelectElement;
+    expect(status.value).toBe("in_progress");
+    expect(screen.getByTestId("task-close-trigger")).toBeTruthy();
+    /*
+      And nothing downstream is told the Task moved. Reporting a confirmation
+      here would send Work off to re-read a filter on the strength of a status
+      code, and would speak success copy for a write nobody confirmed.
+    */
+    expect(handles.onMutationConfirmed).not.toHaveBeenCalled();
   });
 
   it("reports a confirmed mutation so Work can move the row", async () => {

@@ -471,6 +471,68 @@ describe("Work surface", () => {
     expect(document.activeElement).toBe(commitments);
   });
 
+  it("stands the focus handoff down when a mutation fails", async () => {
+    /*
+      A failed mutation moved nothing, so it is owed no focus placement. If its
+      handoff were left armed it would be spent on whatever changed the list
+      next — a poll, someone else's edit — and focus would jump for a reason the
+      user could not connect to anything they did.
+    */
+    const rowOf = (id: string, title: string) => ({
+      task_id: id, title, lifecycle_state: "open", priority: null, due_at: null,
+      scheduled_at: null, deferred_until: null, archived_at: null,
+      created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z", version: 2,
+    });
+    const task = rowOf("tsk_aaaaaaaa11111111", "Refuses to move");
+    const other = rowOf("tsk_bbbbbbbb22222222", "Someone else");
+    let listed = [task, other];
+    const body = (data: unknown, status = 200) =>
+      new Response(JSON.stringify(status >= 400 ? { error: { message: "nope", code: "invalid" } } : data), {
+        status, headers: { "content-type": "application/json" },
+      });
+
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      // The write is definitively refused.
+      if (path.includes("/transition") && method === "POST") return body(null, 400);
+      if (path === `/api/tasks/${task.task_id}`) return body({ task });
+      if (path === `/api/tasks/${other.task_id}`) return body({ task: other });
+      if (path.includes("/comments")) return body({ comments: [] });
+      return body({ tasks: listed });
+    }));
+
+    history.replaceState(null, "", "/work?view=all-open");
+    renderFromUrl();
+    await screen.findByText("Refuses to move");
+
+    const user = userEvent.setup();
+    const rows = screen.getAllByTestId("task-list-row");
+    await user.selectOptions(within(rows[0]).getByRole("combobox"), "waiting");
+    await waitFor(() =>
+      expect(screen.getByTestId("mutation-feedback-region").textContent).toMatch(/could not|not be saved/i),
+    );
+
+    const parked = screen.getByRole("heading", { name: "Work", level: 1 });
+    parked.focus();
+
+    // Later, the Task leaves the filter for reasons of its own.
+    listed = [other];
+    await act(async () => {
+      fireEvent(window, new Event("focus"));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.queryByText("Refuses to move")).toBeNull());
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+
+    // The failed attempt was owed nothing, so focus stayed put.
+    expect(document.activeElement).toBe(parked);
+  });
+
   it("falls back to the Work heading when nothing is left to focus", async () => {
     const only = {
       task_id: "tsk_aaaaaaaa11111111", title: "The last one", lifecycle_state: "open",
@@ -1076,3 +1138,63 @@ describe("Work surface", () => {
     );
   });
 });
+
+  it("REVIEW SCRATCH: does not strand focus when an unrelated poll interleaves before the mutation's own confirm", async () => {
+    const rowOf = (id: string, title: string) => ({
+      task_id: id, title, lifecycle_state: "open", priority: null, due_at: null,
+      scheduled_at: null, deferred_until: null, archived_at: null,
+      created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z", version: 2,
+    });
+    const first = rowOf("tsk_aaaaaaaa11111111", "Leaves the filter");
+    const second = rowOf("tsk_bbbbbbbb22222222", "Takes its place");
+    let closed = false;
+    let releaseClose: () => void = () => undefined;
+    const body = (data: unknown) =>
+      new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
+
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (path.includes("/transition") && method === "POST") {
+        await new Promise<void>((resolve) => { releaseClose = () => resolve(); });
+        closed = true;
+        return body({ task: { ...first, version: 3, lifecycle_state: "completed" } });
+      }
+      if (path === `/api/tasks/${first.task_id}`) return body({ task: first });
+      if (path === `/api/tasks/${second.task_id}`) return body({ task: second });
+      if (path.includes("/comments")) return body({ comments: [] });
+      return body({ tasks: closed ? [second] : [first, second] });
+    }));
+
+    history.replaceState(null, "", "/work?view=all-open");
+    renderFromUrl();
+    await screen.findByText("Leaves the filter");
+
+    const user = userEvent.setup();
+    const rows = screen.getAllByTestId("task-list-row");
+    await user.click(within(rows[0]).getByTestId("task-close-trigger"));
+    // Dispatch the close confirm; the POST stalls on releaseClose.
+    void user.click(within(rows[0]).getByTestId("task-close-confirm"));
+
+    // An unrelated background poll interleaves while the close is still in flight
+    // and resolves first, showing the pre-close list (the server hasn't processed
+    // the close yet).
+    await act(async () => {
+      fireEvent(window, new Event("focus"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Now let the close itself confirm.
+    releaseClose();
+    await waitFor(() => expect(screen.queryByText("Leaves the filter")).toBeNull());
+    await act(async () => {
+      await new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()); });
+      await new Promise<void>((resolve) => { requestAnimationFrame(() => resolve()); });
+    });
+
+    // eslint-disable-next-line no-console
+    console.log("REVIEW SCRATCH activeElement:", document.activeElement?.tagName, document.activeElement?.textContent, document.activeElement === document.body);
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement?.textContent).toContain("Takes its place");
+  });

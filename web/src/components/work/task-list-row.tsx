@@ -56,6 +56,15 @@ export interface TaskListRowProps {
   /** Fired once a mutation is confirmed by the server, for filter/focus handling. */
   onMutationConfirmed?(input: { taskId: string; kind: string }): void;
   /**
+   * Fired when a dispatched mutation settles without confirming — a definitive
+   * failure, a conflict, or an ambiguous result.
+   *
+   * Nothing moved, so any focus handoff armed for it must be stood down. Without
+   * this the handoff outlives the attempt and is spent on whatever changes the
+   * list next, for a reason that has nothing to do with it.
+   */
+  onMutationSettledUnconfirmed?(input: { taskId: string; kind: string }): void;
+  /**
    * Fired synchronously when a mutation is dispatched, before anything moves.
    *
    * Focus handling needs the list as the user last saw it: once the write
@@ -87,6 +96,7 @@ export function TaskListRow({
   onOpenActivity,
   onMutationConfirmed,
   onMutationDispatched,
+  onMutationSettledUnconfirmed,
   clock,
 }: TaskListRowProps): React.JSX.Element {
   const browserClock = useMemo<TaskCivilClock>(() => browserWorkClock(), []);
@@ -136,6 +146,23 @@ export function TaskListRow({
       onMutationConfirmed?.({ taskId: canonical.task_id, kind });
     }
   }, [canonical, onMutationConfirmed]);
+
+  /*
+    A dispatch that stopped being pending without satisfying its intent did not
+    happen: a definitive failure, a conflict awaiting the user, or an ambiguous
+    result. Stand the focus handoff down rather than leaving it to be spent on
+    whatever changes the list next.
+  */
+  const pendingKind = ops.pending;
+  useEffect(() => {
+    if (pendingKind !== null) return;
+    const outstanding = awaitingRef.current;
+    if (outstanding.length === 0) return;
+    awaitingRef.current = [];
+    for (const entry of outstanding) {
+      onMutationSettledUnconfirmed?.({ taskId: task.task_id, kind: entry.kind });
+    }
+  }, [pendingKind, onMutationSettledUnconfirmed, task.task_id]);
 
   const await_ = useCallback(
     (entry: AwaitedConfirmation) => {

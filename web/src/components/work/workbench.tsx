@@ -446,6 +446,16 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   }
 
   /**
+   * A dispatch settled without confirming. Nothing moved, so the handoff armed
+   * for it is stood down rather than left to be spent on the next list change.
+   */
+  function onTaskMutationSettledUnconfirmed(input: { taskId: string; kind: string }) {
+    if (pendingMovement.current?.taskId === input.taskId) {
+      pendingMovement.current = null;
+    }
+  }
+
+  /**
    * A Task mutation was confirmed by the server.
    *
    * Reconciliation is authoritative — the server decides whether the Task still
@@ -632,6 +642,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
             onOpenActivity={openActivity}
             onTaskMutationConfirmed={onTaskMutationConfirmed}
             onTaskMutationDispatched={onTaskMutationDispatched}
+            onTaskMutationSettledUnconfirmed={onTaskMutationSettledUnconfirmed}
           />
         ) : null}
       </div>

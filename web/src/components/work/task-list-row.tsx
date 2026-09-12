@@ -32,6 +32,7 @@ import type { TaskDetail, TaskRow } from "@/contracts/work";
 import { browserWorkClock } from "@/lib/api/work-client";
 import {
   formatTaskPriority,
+  isTerminalTaskStatus,
   type TaskActiveStatus,
   type TaskCivilClock,
 } from "@/lib/tasks/presentation";
@@ -247,6 +248,8 @@ export function TaskListRow({
     row forever or force an eager detail read per row to unlock it. A write is
     still blocked while one is in flight or an unresolved conflict is showing.
   */
+  /** A Task already closed or cancelled cannot be closed again. */
+  const terminal = isTerminalTaskStatus(ops.status.value);
   const locked = ops.pending !== null || ops.conflict !== null;
   const conflict = ops.conflict !== null;
   const busy = ops.pending !== null;
@@ -285,6 +288,14 @@ export function TaskListRow({
       document. So the nearest live thing stands in for it.
     */
     if (document.activeElement !== document.body) return;
+    /*
+      With writes in flight on two rows at once, the one that settles first takes
+      focus, which need not be the row the user touched last — "focus is on the
+      body" cannot tell a user who moved on from one whose second row disabled a
+      control under them too. Both are places the user just acted, and the
+      alternative is leaving them on the body, so this is an ordering to live
+      with rather than a wrong destination. Left deliberately.
+    */
     liveReturn(held)?.focus();
   }, [liveReturn, locked]);
 
@@ -418,16 +429,29 @@ export function TaskListRow({
           onClick={stopPropagation}
           onKeyDown={stopPropagation}
         >
-          <TaskCloseControl
-            taskTitle={title}
-            disabled={locked}
-            pending={ops.pending === "close" || ops.pending === "cancel"}
-            // Cancel is deliberately not a peer of Close in the row: it is
-            // revealed only once More is activated.
-            showCancel={moreOpen}
-            onClose={handleClose}
-            onCancelTask={handleCancel}
-          />
+          {terminal ? null : (
+            /*
+              A Task that has already been closed or cancelled cannot be closed
+              again, so the row withholds the action rather than offering to do it
+              once more. Task detail has always drawn this line; the row was
+              offering a live Close — and, under More, Cancel — on every row of
+              the Completed view, with a confirmation behind it that dispatched a
+              second transition against a Task that had already had one.
+
+              The outcome itself is not restated here: the row's Status already
+              says Closed or Cancelled, in those words.
+            */
+            <TaskCloseControl
+              taskTitle={title}
+              disabled={locked}
+              pending={ops.pending === "close" || ops.pending === "cancel"}
+              // Cancel is deliberately not a peer of Close in the row: it is
+              // revealed only once More is activated.
+              showCancel={moreOpen}
+              onClose={handleClose}
+              onCancelTask={handleCancel}
+            />
+          )}
         </div>
 
         <Button

@@ -789,6 +789,62 @@ describe("TaskListRow", () => {
     }
   });
 
+  it("offers no Close or Cancel on a Task that is already closed", async () => {
+    /*
+      A closed Task cannot be closed again. The row was offering a live Close —
+      and, under More, Cancel — on every row of the Completed view, with a
+      confirmation behind it that dispatched a second transition against a Task
+      that had already had one. Task detail has always drawn this line.
+    */
+    const closed = { ...LIST_ROW, lifecycle_state: "completed" as const };
+    stubFetch({ detail: () => ok({ task: { ...CANONICAL, lifecycle_state: "completed" } }) });
+    renderRow({ task: closed });
+
+    // The outcome is stated; the action is not offered.
+    expect(await screen.findByTestId("task-list-row")).toBeTruthy();
+    expect(row().textContent).toContain("Closed");
+    expect(screen.queryByTestId("task-close-trigger")).toBeNull();
+
+    // Nor is Cancel, which the row reveals under More.
+    await userEvent.click(screen.getByTestId("task-list-row-more"));
+    expect(screen.queryByRole("button", { name: /cancel task/i })).toBeNull();
+  });
+
+  it("gives focus back to the row when a confirmed Close empties the control", async () => {
+    /*
+      A Close that succeeds withdraws the very affordance it was made from: the
+      Task becomes terminal, so the row stops offering to close it. The button
+      the user confirmed with is gone, and so is everything else in that group —
+      in a view that still lists the Task, nothing moves and no other surface is
+      going to catch them. They are returned to the row itself.
+    */
+    const restore = emulateDisableBlur();
+    try {
+      stubFetch({
+        transition: (body) => ok({ task: { ...CANONICAL, version: 5, lifecycle_state: body.toState } }),
+        detail: () => ok({ task: CANONICAL }),
+      });
+      renderRow();
+      await hydrated();
+
+      const trigger = screen.getByTestId("task-close-trigger");
+      trigger.focus();
+      await userEvent.click(trigger);
+      const confirm = screen.getByTestId("task-close-confirm");
+      confirm.focus();
+      await userEvent.click(confirm);
+
+      // The Task is closed, so the row no longer offers to close it.
+      await waitFor(() => expect(screen.queryByTestId("task-close-trigger")).toBeNull());
+      await waitFor(() => expect(row().getAttribute("aria-busy")).toBeNull());
+
+      expect(document.activeElement).not.toBe(document.body);
+      expect(row().contains(document.activeElement)).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
   it("reports a confirmed mutation so Work can move the row", async () => {
     stubFetch();
     const handles = renderRow();

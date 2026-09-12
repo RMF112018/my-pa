@@ -516,7 +516,8 @@ export function useTaskOperations(
         if (mountedRef.current) setPending(intent.kind);
         const hold = await ensureCanonical();
         if (!hold) {
-          if (mountedRef.current) setPending(null);
+          // The lock is lowered in `finally`, which is the single unwind for
+          // every way out of here — including the ones nobody thought of.
           publish("error", TASK_OPERATION_FAILURE_MESSAGE, `task-${intent.kind}-unhydrated:${taskId}`);
           return;
         }
@@ -569,8 +570,6 @@ export function useTaskOperations(
                   body: JSON.stringify({ ...request, expectedVersion: expected, idempotencyKey: key }),
                 }),
         });
-
-        if (mountedRef.current) setPending(null);
 
         if (outcome.refused) {
           // A same-Task write is already in flight; the prior attempt still owns the outcome.
@@ -723,24 +722,29 @@ export function useTaskOperations(
     const ambiguousAttempt = ambiguousAttemptRef.current;
     const intent = intentRef.current;
     if (ambiguousAttempt && intent) {
-      if (mountedRef.current) setPending(intent.kind);
-      const outcome = await runtime.mutationCoordinator.coordinator.retry(ambiguousAttempt);
-      if (mountedRef.current) setPending(null);
-      const idempotencyKey = outcome.state.idempotencyKey ?? `retry:${ambiguousAttempt}`;
-      if (outcome.refused) return;
-      if (outcome.state.phase === "confirmed") {
-        await settleConfirmed(intent, outcome.attemptId, outcome.result, idempotencyKey);
-        return;
+      // Same single unwind as `execute`: a retry that throws must not leave the
+      // surface locked, which is the one failure the user cannot recover from.
+      try {
+        if (mountedRef.current) setPending(intent.kind);
+        const outcome = await runtime.mutationCoordinator.coordinator.retry(ambiguousAttempt);
+        const idempotencyKey = outcome.state.idempotencyKey ?? `retry:${ambiguousAttempt}`;
+        if (outcome.refused) return;
+        if (outcome.state.phase === "confirmed") {
+          await settleConfirmed(intent, outcome.attemptId, outcome.result, idempotencyKey);
+          return;
+        }
+        if (outcome.state.phase === "conflict") {
+          settleConflict(intent, outcome.state.conflictCurrent, idempotencyKey);
+          return;
+        }
+        if (outcome.state.phase === "ambiguous") {
+          await settleAmbiguous(intent, outcome.attemptId, idempotencyKey);
+          return;
+        }
+        settleFailed(intent, idempotencyKey);
+      } finally {
+        if (mountedRef.current) setPending(null);
       }
-      if (outcome.state.phase === "conflict") {
-        settleConflict(intent, outcome.state.conflictCurrent, idempotencyKey);
-        return;
-      }
-      if (outcome.state.phase === "ambiguous") {
-        await settleAmbiguous(intent, outcome.attemptId, idempotencyKey);
-        return;
-      }
-      settleFailed(intent, idempotencyKey);
       return;
     }
     if (!intent) return;

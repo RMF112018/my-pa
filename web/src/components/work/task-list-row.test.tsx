@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { TaskListRow, type TaskListRowProps } from "@/components/work/task-list-row";
@@ -414,6 +414,11 @@ describe("TaskListRow", () => {
 
     refusal.release();
     await waitFor(() => expect(row().getAttribute("aria-busy")).toBeNull());
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
 
     // The refusal left the Task where it was, and the user back in the row.
     expect(document.activeElement).not.toBe(document.body);
@@ -493,6 +498,88 @@ describe("TaskListRow", () => {
     // They are left where they chose to be.
     expect(document.activeElement).toBe(elsewhere);
     elsewhere.remove();
+  });
+
+  it("puts the user on the conflict question when a write is refused for version", async () => {
+    /*
+      A conflict is a question put to the user, and the write that raised it has
+      already cost them their place: disabling the control they operated drops
+      focus to the document body. The control stays disabled while the conflict
+      stands, so handing focus back to it would hand them nothing. Without this
+      they are left at the top of the document, tabbing down to a panel that
+      appeared without them.
+    */
+    stubFetch({
+      transition: () =>
+        new Response(
+          JSON.stringify({
+            error: { message: "version conflict", code: "conflict" },
+            current: { ...CANONICAL, version: 9, lifecycle_state: "blocked" },
+          }),
+          { status: 409, headers: { "content-type": "application/json" } },
+        ),
+    });
+    renderRow();
+    await hydrated();
+
+    /*
+      jsdom will not blur a disabled element, and the control is disabled from
+      the moment the write is dispatched — so the browser's own forced blur
+      cannot be simulated. Start from the state it produces: focus on the body,
+      and the change driven without moving it.
+    */
+    const status = within(row()).getByRole("combobox");
+    expect(document.activeElement).toBe(document.body);
+    fireEvent.change(status, { target: { value: "blocked" } });
+
+    await screen.findByTestId("task-list-row-conflict");
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(screen.getByTestId("task-list-row-conflict-reapply"));
+  });
+
+  it("reconciles the list when a conflict is recovered, not only when it is avoided", async () => {
+    /*
+      A conflict is not a settled attempt: the intent is still the user's, and
+      the reapply they are offered is that same attempt continued. If the awaited
+      intent is dropped when the conflict arrives, the retry confirms and nobody
+      is told — so Work never re-reads, and a Task the user has just moved out of
+      this filter sits there looking as though the change never happened.
+    */
+    let attempts = 0;
+    stubFetch({
+      transition: (body) => {
+        attempts += 1;
+        if (attempts === 1) {
+          return new Response(
+            JSON.stringify({
+              error: { message: "version conflict", code: "conflict" },
+              current: { ...CANONICAL, version: 9, lifecycle_state: "in_progress" },
+            }),
+            { status: 409, headers: { "content-type": "application/json" } },
+          );
+        }
+        return ok({ task: { ...CANONICAL, version: 10, lifecycle_state: body.toState } });
+      },
+    });
+    const handles = renderRow();
+    await hydrated();
+
+    await userEvent.selectOptions(within(row()).getByRole("combobox"), "blocked");
+    await screen.findByTestId("task-list-row-conflict");
+    expect(handles.onMutationConfirmed).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByTestId("task-list-row-conflict-reapply"));
+    await waitFor(() => expect(attempts).toBe(2));
+
+    // The recovered write is reported, so Work can re-read the filter.
+    await waitFor(() => expect(handles.onMutationConfirmed).toHaveBeenCalled());
+    expect(handles.onMutationConfirmed.mock.calls[0][0]).toMatchObject({ taskId: TASK_ID, kind: "status" });
   });
 
   it("reports a confirmed mutation so Work can move the row", async () => {

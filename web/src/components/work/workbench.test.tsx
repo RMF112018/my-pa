@@ -835,6 +835,143 @@ describe("Work surface", () => {
     expect(document.activeElement?.textContent).toContain("Dated and staying");
   });
 
+  it("keeps the record through a refresh that lands while a write is running", async () => {
+    /*
+      The mainline success path, interrupted. A row disables the control the user
+      operated while its write runs, and a browser answers that by dropping focus
+      to the document body. If an ordinary refresh lands in that window — the
+      freshness poll, another row's write, pagination — and is read as "the user
+      put focus down", the record is thrown away; then the write confirms, the
+      row leaves, and there is nothing left to catch focus.
+    */
+    const rowOf = (id: string, title: string) => ({
+      task_id: id, title, lifecycle_state: "open", priority: null, due_at: null,
+      scheduled_at: null, deferred_until: null, archived_at: null,
+      created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z", version: 2,
+    });
+    const working = rowOf("tsk_aaaaaaaa11111111", "Being worked on");
+    const neighbour = rowOf("tsk_bbbbbbbb22222222", "The neighbour");
+    let listed = [working, neighbour];
+    const body = (data: unknown) =>
+      new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
+
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      const path = String(input);
+      for (const row of [working, neighbour]) {
+        if (path === `/api/tasks/${row.task_id}`) return body({ task: row });
+      }
+      if (path.includes("/comments")) return body({ comments: [] });
+      return body({ tasks: listed });
+    }));
+
+    history.replaceState(null, "", "/work?view=all-open");
+    renderFromUrl();
+    await screen.findByText("Being worked on");
+
+    // The user is on a control in the first row; it is then disabled under them.
+    const rows = screen.getAllByTestId("task-list-row");
+    const control = within(rows[0]).getByRole("combobox") as HTMLSelectElement;
+    control.focus();
+    expect(document.activeElement).toBe(control);
+    // jsdom will not blur a disabled element, so produce the browser's end
+    // state directly: focus on the body, the control it let go of disabled.
+    control.blur();
+    control.disabled = true;
+    expect(document.activeElement).toBe(document.body);
+
+    // A refresh lands while the write is still running. Membership is unchanged.
+    await act(async () => {
+      fireEvent(window, new Event("focus"));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+
+    // The write now confirms and the Task leaves the filter.
+    listed = [neighbour];
+    await act(async () => {
+      fireEvent(window, new Event("focus"));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.queryByText("Being worked on")).toBeNull());
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+
+    // Focus was caught, not dropped by the refresh that came through first.
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement?.textContent).toContain("The neighbour");
+  });
+
+  it("records the Calendar marker the user is on, not the Task's first marker", async () => {
+    /*
+      One Task holds several places in the Calendar at once — a marker for its
+      deadline, one for planned work, one for when it becomes available — and all
+      of them carry the same Task identity. Looking the position up by identity
+      answers with the first, so a user standing at the foot of the calendar was
+      recorded as standing near the top, and sent there when their marker left.
+    */
+    const taskOf = (id: string, title: string, dates: Partial<Record<"due_at" | "scheduled_at" | "deferred_until", string>>) => ({
+      task_id: id, title, lifecycle_state: "open", priority: null,
+      due_at: null, scheduled_at: null, deferred_until: null, archived_at: null,
+      created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z", version: 2,
+      ...dates,
+    });
+    // The multi-dated Task brackets the others: earliest marker and latest marker.
+    const spread = taskOf("tsk_aaaaaaaa11111111", "Spread across the calendar", {
+      due_at: "2026-09-10T12:00:00Z",
+      scheduled_at: "2026-09-13T12:00:00Z",
+      deferred_until: "2026-09-15T12:00:00Z",
+    });
+    const early = taskOf("tsk_bbbbbbbb22222222", "Early neighbour", { due_at: "2026-09-11T12:00:00Z" });
+    const late = taskOf("tsk_cccccccc33333333", "Late neighbour", { due_at: "2026-09-16T12:00:00Z" });
+    let listed = [spread, early, late];
+    const body = (data: unknown) =>
+      new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
+
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      const path = String(input);
+      for (const row of [spread, early, late]) {
+        if (path === `/api/tasks/${row.task_id}`) return body({ task: row });
+      }
+      if (path.includes("/comments")) return body({ comments: [] });
+      return body({ tasks: listed });
+    }));
+
+    history.replaceState(null, "", "/work?view=all-open&perspective=calendar");
+    renderFromUrl();
+    await screen.findByText("Late neighbour");
+
+    // The user is on the Task's LAST marker, near the foot of the calendar.
+    const markers = screen.getAllByRole("link", { name: /Spread across the calendar/ });
+    expect(markers.length).toBeGreaterThan(1);
+    const standing = markers[markers.length - 1];
+    standing.focus();
+
+    // That Task leaves, taking every one of its markers with it.
+    listed = [early, late];
+    await act(async () => {
+      fireEvent(window, new Event("focus"));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.queryByText("Spread across the calendar")).toBeNull());
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+
+    // Focus lands where the user actually was, not at the Task's first marker.
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement?.textContent).toContain("Late neighbour");
+    expect(document.activeElement?.textContent).not.toContain("Early neighbour");
+  });
+
   it("does not move focus on a later refresh after a mutation that kept the Task", async () => {
     /*
       A Status change usually leaves the Task right where it was, so no focus

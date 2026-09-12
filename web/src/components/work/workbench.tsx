@@ -137,6 +137,11 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
     return container ? Array.from(container.querySelectorAll<HTMLElement>("[data-work-item]")) : [];
   }
 
+  /** Whether a control is disabled, which is why the browser let go of it. */
+  function isDisabled(element: HTMLElement): boolean {
+    return typeof element.matches === "function" && element.matches(":disabled");
+  }
+
   /** The title/details trigger of a row — the stable thing to hand focus to. */
   function rowTarget(row: HTMLElement | undefined): HTMLElement | null {
     return row?.querySelector<HTMLElement>("a[href]") ?? null;
@@ -151,10 +156,16 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   function rememberFocusedRow(event: React.FocusEvent<HTMLElement>) {
     const row = (event.target as HTMLElement).closest<HTMLElement>("[data-work-item]");
     const taskId = row?.getAttribute("data-work-item") ?? null;
-    if (!taskId) return;
-    const index = visibleRowElements().findIndex(
-      (candidate) => candidate.getAttribute("data-work-item") === taskId,
-    );
+    if (!row || !taskId) return;
+    /*
+      Position is taken from the element itself, never by looking its Task up
+      again. One Task can hold several places at once: Calendar gives it a marker
+      per date, all carrying the same identity, so a lookup by id answers with
+      the first of them — and a user standing on a Task's deferred-until marker
+      at the foot of the calendar was recorded as standing at its deadline near
+      the top, then sent there when their marker left.
+    */
+    const index = visibleRowElements().indexOf(row);
     focusedRow.current = { taskId, index: Math.max(0, index), element: event.target as HTMLElement };
   }
 
@@ -214,35 +225,49 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
             focusedRow.current = null;
             return;
           }
-          const moved = visibleRowElements().findIndex(
-            (candidate) => candidate.getAttribute("data-work-item") === lost.taskId,
-          );
+          const row = lost.element.closest<HTMLElement>("[data-work-item]");
+          const moved = row ? visibleRowElements().indexOf(row) : -1;
           focusedRow.current = moved < 0 ? lost : { ...lost, index: moved };
           return;
         }
 
         /*
           Focus is on the body and the control the user was in is still right
-          there — so they put it down themselves, by clicking the page
-          background or dismissing something. Nothing was taken from them and
-          nothing is owed. Without this a plain freshness poll would haul focus
-          back into the list against the user's own action, and do it again on
-          every poll after.
+          there. Either they put it down themselves — clicking the page
+          background, dismissing something — or the row disabled it under them
+          while a write runs, which a browser answers by dropping focus to the
+          body. The first is a choice and is owed nothing; the second is the
+          very loss this exists to repair.
+
+          A disabled control is the difference. Reading them as the same thing
+          meant any refresh landing mid-write — a freshness poll, another row's
+          write, pagination — threw the record away, and when the write then
+          confirmed and took the row, there was nothing left to catch focus.
         */
-        if (stillMounted) {
+        if (stillMounted && !isDisabled(lost.element)) {
           focusedRow.current = null;
           return;
         }
+        if (stillMounted) return;
 
         focusedRow.current = null;
         const after = visibleRowElements();
         const survivor = after.find(
           (candidate) => candidate.getAttribute("data-work-item") === lost.taskId,
         );
+        /*
+          The remembered position can sit past the end of the list: several rows
+          can leave in one update, and a Task in the Calendar leaves by as many
+          places as it held dates. Clamp to the last row still standing rather
+          than reading past it — landing on the nearest surviving neighbour is
+          the whole point, and giving up here sent the user to the heading with
+          perfectly good rows in front of them.
+        */
+        const clamped = Math.min(lost.index, after.length - 1);
         const target =
           rowTarget(survivor) ??
-          rowTarget(after[lost.index]) ??
-          (lost.index > 0 ? rowTarget(after[lost.index - 1]) : null);
+          rowTarget(after[clamped]) ??
+          (clamped > 0 ? rowTarget(after[clamped - 1]) : null);
         if (target) {
           target.focus();
           return;

@@ -137,10 +137,19 @@ export function TaskListRow({
   */
   const rowRef = useRef<HTMLDivElement | null>(null);
   const pendingKind = ops.pending;
+  const conflictOutstanding = ops.conflict !== null;
   useEffect(() => {
     if (pendingKind !== null) return;
+    /*
+      A conflict is not a settled attempt. The intent is still the user's, still
+      awaiting an answer, and the reapply they are being offered is the same
+      attempt continued — so it must still be recognised when it confirms.
+      Dropping it here meant a recovered conflict reconciled nothing, and the
+      Task the user had just moved stayed sitting in a filter it had left.
+    */
+    if (conflictOutstanding) return;
     awaitingRef.current = [];
-  }, [pendingKind]);
+  }, [pendingKind, conflictOutstanding]);
 
   const await_ = useCallback(
     (entry: AwaitedConfirmation) => {
@@ -198,6 +207,11 @@ export function TaskListRow({
     they are simply stranded. Hold the element while it is disabled and return
     focus to it on unlock, but only if focus is still lying on the body, so a
     user who moved on in the meantime is never pulled back.
+
+    The return waits a frame. Unlocking can unmount whatever currently holds
+    focus — the conflict panel's own buttons, when the user stands the conflict
+    down — and until that has happened focus still reads as theirs, so the check
+    would decline and then the element would vanish underneath it.
   */
   const lockedFocus = useRef<HTMLElement | null>(null);
   useEffect(() => {
@@ -210,10 +224,33 @@ export function TaskListRow({
     }
     const held = lockedFocus.current;
     lockedFocus.current = null;
-    if (!held || !held.isConnected) return;
-    if (document.activeElement !== document.body) return;
-    held.focus();
+    if (!held) return;
+    const frame = requestAnimationFrame(() => {
+      if (!held.isConnected) return;
+      if (document.activeElement !== document.body) return;
+      held.focus();
+    });
+    return () => cancelAnimationFrame(frame);
   }, [locked]);
+
+  /*
+    A conflict is a question put to the user, so put it where they can answer it.
+
+    The control they operated is disabled for as long as the conflict stands, so
+    handing focus back to it would hand them nothing. Meanwhile the write that
+    raised the conflict has already cost them their place: disabling that control
+    dropped focus to the document body. Without this they are left at the top of
+    the document, tabbing back down to a panel that appeared without them.
+  */
+  const conflictRecovery = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (!conflict) return;
+    const frame = requestAnimationFrame(() => {
+      if (document.activeElement !== document.body) return;
+      conflictRecovery.current?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [conflict]);
 
   return (
     <div
@@ -369,6 +406,7 @@ export function TaskListRow({
           <Button
             variant="secondary"
             className="min-h-11"
+            ref={conflictRecovery}
             data-testid="task-list-row-conflict-reapply"
             pending={busy}
             onClick={() => void ops.reapply()}

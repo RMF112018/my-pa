@@ -502,82 +502,96 @@ export function useTaskOperations(
         the coordinator refused it silently — the user pressed a control twice
         and was told nothing either time.
       */
-      if (mountedRef.current) setPending(intent.kind);
-      const hold = await ensureCanonical();
-      if (!hold) {
-        if (mountedRef.current) setPending(null);
-        publish("error", TASK_OPERATION_FAILURE_MESSAGE, `task-${intent.kind}-unhydrated:${taskId}`);
-        return;
-      }
+      /*
+        The lock is unwound in `finally`, not on the way out of each branch.
 
-      const material =
-        intent.kind === "due"
-          ? intent.dueAt === null
-            ? { clearFields: ["due_at"], expectedVersion: hold.version }
-            : { dueAt: intent.dueAt, expectedVersion: hold.version }
-          : { toState: intent.toState, expectedVersion: hold.version };
-      const idempotencyKey = attemptKeyFor(intent.kind).forPayload(material);
+        `setPending` is raised before the canonical read and is the only thing
+        disabling this row's controls; every path that leaves this function
+        without lowering it leaves the row unusable for the rest of the session,
+        because a row is keyed by Task and never remounts while it is listed. A
+        throw from the coordinator or from attempt-key derivation is exactly such
+        a path, and it is not one the row can recover from on its own.
+      */
+      try {
+        if (mountedRef.current) setPending(intent.kind);
+        const hold = await ensureCanonical();
+        if (!hold) {
+          if (mountedRef.current) setPending(null);
+          publish("error", TASK_OPERATION_FAILURE_MESSAGE, `task-${intent.kind}-unhydrated:${taskId}`);
+          return;
+        }
 
-      const outcome = await runtime.mutationCoordinator.coordinator.mutate({
-        kind: intent.kind,
-        taskId,
-        expectedVersion: hold.version,
-        idempotencyKey,
-        request: material,
-        // Close and Cancel are pessimistic: no terminal state before confirmation.
-        optimistic:
+        const material =
           intent.kind === "due"
-            ? { dueAt: intent.dueAt }
-            : intent.kind === "status"
-              ? { status: intent.toState }
-              : undefined,
-        hooks: {
-          fetchCurrent: async () => readCanonical(true),
-          barriers: {
-            onMutationStart: () => {
-              runtime.readCoordinator.raiseMutationBarrier(detailKey, { entityId: taskId });
+            ? intent.dueAt === null
+              ? { clearFields: ["due_at"], expectedVersion: hold.version }
+              : { dueAt: intent.dueAt, expectedVersion: hold.version }
+            : { toState: intent.toState, expectedVersion: hold.version };
+        const idempotencyKey = attemptKeyFor(intent.kind).forPayload(material);
+
+        const outcome = await runtime.mutationCoordinator.coordinator.mutate({
+          kind: intent.kind,
+          taskId,
+          expectedVersion: hold.version,
+          idempotencyKey,
+          request: material,
+          // Close and Cancel are pessimistic: no terminal state before confirmation.
+          optimistic:
+            intent.kind === "due"
+              ? { dueAt: intent.dueAt }
+              : intent.kind === "status"
+                ? { status: intent.toState }
+                : undefined,
+          hooks: {
+            fetchCurrent: async () => readCanonical(true),
+            barriers: {
+              onMutationStart: () => {
+                runtime.readCoordinator.raiseMutationBarrier(detailKey, { entityId: taskId });
+              },
+            },
+            onOptimistic: (projection) => {
+              if (!mountedRef.current) return;
+              if (intent.kind === "due") setOptimisticDue({ value: intent.dueAt });
+              else if (projection.status !== undefined) setOptimisticStatus(intent.toState);
+            },
+            onRollback: () => {
+              if (mountedRef.current) clearOptimistic();
             },
           },
-          onOptimistic: (projection) => {
-            if (!mountedRef.current) return;
-            if (intent.kind === "due") setOptimisticDue({ value: intent.dueAt });
-            else if (projection.status !== undefined) setOptimisticStatus(intent.toState);
-          },
-          onRollback: () => {
-            if (mountedRef.current) clearOptimistic();
-          },
-        },
-        dispatch: async ({ request, idempotencyKey: key, expectedVersion: expected }) =>
-          intent.kind === "due"
-            ? workRequest(`/api/tasks/${encodeURIComponent(taskId)}`, {
-                method: "PATCH",
-                body: JSON.stringify({ ...request, expectedVersion: expected, idempotencyKey: key }),
-              })
-            : workRequest(`/api/tasks/${encodeURIComponent(taskId)}/transition`, {
-                method: "POST",
-                body: JSON.stringify({ ...request, expectedVersion: expected, idempotencyKey: key }),
-              }),
-      });
+          dispatch: async ({ request, idempotencyKey: key, expectedVersion: expected }) =>
+            intent.kind === "due"
+              ? workRequest(`/api/tasks/${encodeURIComponent(taskId)}`, {
+                  method: "PATCH",
+                  body: JSON.stringify({ ...request, expectedVersion: expected, idempotencyKey: key }),
+                })
+              : workRequest(`/api/tasks/${encodeURIComponent(taskId)}/transition`, {
+                  method: "POST",
+                  body: JSON.stringify({ ...request, expectedVersion: expected, idempotencyKey: key }),
+                }),
+        });
 
-      if (mountedRef.current) setPending(null);
+        if (mountedRef.current) setPending(null);
 
-      if (outcome.refused) {
-        // A same-Task write is already in flight; the prior attempt still owns the outcome.
-        return;
+        if (outcome.refused) {
+          // A same-Task write is already in flight; the prior attempt still owns the outcome.
+          return;
+        }
+        if (outcome.state.phase === "confirmed") {
+          await settleConfirmed(intent, outcome.attemptId, outcome.result, idempotencyKey);
+          return;
+        }
+        if (outcome.state.phase === "conflict") {
+          settleConflict(intent, outcome.state.conflictCurrent, idempotencyKey);
+          return;
+        }
+        if (outcome.state.phase === "ambiguous") {
+          await settleAmbiguous(intent, outcome.attemptId, idempotencyKey);
+          return;
+        }
+        settleFailed(intent, idempotencyKey);
+      } finally {
+        if (mountedRef.current) setPending(null);
       }
-      if (outcome.state.phase === "confirmed") {
-        await settleConfirmed(intent, outcome.attemptId, outcome.result, idempotencyKey);
-        return;
-      }
-      if (outcome.state.phase === "conflict") {
-        settleConflict(intent, outcome.state.conflictCurrent, idempotencyKey);
-        return;
-      }
-      if (outcome.state.phase === "ambiguous") {
-        await settleAmbiguous(intent, outcome.attemptId, idempotencyKey);
-        return;
-      }
-      settleFailed(intent, idempotencyKey);
     },
     [
       attemptKeyFor,

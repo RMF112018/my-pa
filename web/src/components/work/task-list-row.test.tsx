@@ -420,6 +420,81 @@ describe("TaskListRow", () => {
     expect(row().contains(document.activeElement)).toBe(true);
   });
 
+  it("offers a way out of a conflict instead of locking the row for good", async () => {
+    /*
+      A conflict is the user's to resolve, and until it is resolved this row's
+      writes stay shut. With nothing offered to resolve it, the row simply
+      stopped working — every control disabled, no explanation, nothing to
+      press — and it stayed that way, because a row is keyed by Task and never
+      remounts while it is in the list.
+    */
+    stubFetch({
+      transition: () =>
+        new Response(
+          JSON.stringify({
+            error: { message: "version conflict", code: "conflict" },
+            current: { ...CANONICAL, version: 9, lifecycle_state: "blocked" },
+          }),
+          { status: 409, headers: { "content-type": "application/json" } },
+        ),
+    });
+    renderRow();
+    await hydrated();
+
+    await userEvent.selectOptions(within(row()).getByRole("combobox"), "blocked");
+
+    // The conflict is stated, and both ways out are offered.
+    const recovery = await screen.findByTestId("task-list-row-conflict");
+    expect(recovery.textContent).toContain("changed elsewhere");
+    expect(screen.getByTestId("task-list-row-conflict-reapply")).toBeTruthy();
+
+    // Standing down clears it, and the row is usable again.
+    await userEvent.click(screen.getByTestId("task-list-row-conflict-dismiss"));
+    await waitFor(() => expect(screen.queryByTestId("task-list-row-conflict")).toBeNull());
+    expect(screen.getByTestId("task-close-trigger")).not.toHaveProperty("disabled", true);
+  });
+
+  it("does not pull a user back into the row if they moved on while it ran", async () => {
+    /*
+      The row holds the element that had focus when it locked so it can give it
+      back. It must only do so if focus is still lying on the body: a user who
+      moved on to something else during the write chose where they are, and
+      yanking them back into a row they have finished with is worse than never
+      having held the element at all.
+    */
+    const refusal = gate();
+    stubFetch({
+      transition: async () => {
+        await refusal.wait;
+        return new Response(JSON.stringify({ error: { message: "nope", code: "invalid" } }), {
+          status: 400,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    renderRow();
+    await hydrated();
+
+    const anchorLink = within(row()).getByRole("link");
+    anchorLink.focus();
+    await userEvent.selectOptions(within(row()).getByRole("combobox"), "blocked");
+    await waitFor(() => expect(row().getAttribute("aria-busy")).toBe("true"));
+
+    // The user moves on somewhere else entirely while the write runs.
+    const elsewhere = document.createElement("button");
+    elsewhere.textContent = "Somewhere else";
+    document.body.append(elsewhere);
+    elsewhere.focus();
+    expect(document.activeElement).toBe(elsewhere);
+
+    refusal.release();
+    await waitFor(() => expect(row().getAttribute("aria-busy")).toBeNull());
+
+    // They are left where they chose to be.
+    expect(document.activeElement).toBe(elsewhere);
+    elsewhere.remove();
+  });
+
   it("reports a confirmed mutation so Work can move the row", async () => {
     stubFetch();
     const handles = renderRow();

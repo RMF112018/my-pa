@@ -26,7 +26,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { TaskCloseControl } from "@/components/tasks/task-close-control";
 import { TaskDueControl } from "@/components/tasks/task-due-control";
 import { TaskStatusControl } from "@/components/tasks/task-status-control";
-import { useTaskOperations } from "@/components/tasks/use-task-operations";
+import { TASK_OPERATION_CONFLICT_MESSAGE, useTaskOperations } from "@/components/tasks/use-task-operations";
 import { Button } from "@/components/ui/button";
 import type { TaskDetail, TaskRow } from "@/contracts/work";
 import { browserWorkClock } from "@/lib/api/work-client";
@@ -40,6 +40,8 @@ import {
 const COMMENT_ACTION_LABEL = "Comment";
 const MORE_ACTION_LABEL = "More";
 const MORE_CLOSE_LABEL = "Hide more actions";
+const CONFLICT_REAPPLY_LABEL = "Try again";
+const CONFLICT_DISMISS_LABEL = "Leave it";
 
 export interface TaskListRowProps {
   /** List projection. Seeds display only; it never authorizes a mutation. */
@@ -345,6 +347,44 @@ export function TaskListRow({
           {moreOpen ? MORE_CLOSE_LABEL : MORE_ACTION_LABEL}
         </Button>
       </div>
+
+      {/*
+        A conflict is the user's to resolve, and until they do this row's writes
+        stay shut. Without somewhere to resolve it the row simply stopped
+        working: every control disabled, no explanation, and nothing to press —
+        for the rest of the session, because the row never remounts. Task detail
+        has always offered exactly these two ways out; the row now offers them
+        too rather than locking on a state it gave no means to clear.
+      */}
+      {ops.conflict ? (
+        <div
+          role="group"
+          data-testid="task-list-row-conflict"
+          aria-label={`Resolve the conflict on ${title}`}
+          className="flex min-w-0 flex-wrap items-center gap-2 rounded-[var(--radius-sm)] border border-border-subtle bg-surface-sunken p-2"
+          onClick={stopPropagation}
+          onKeyDown={stopPropagation}
+        >
+          <p className="min-w-0 flex-1 text-sm text-muted">{TASK_OPERATION_CONFLICT_MESSAGE}</p>
+          <Button
+            variant="secondary"
+            className="min-h-11"
+            data-testid="task-list-row-conflict-reapply"
+            pending={busy}
+            onClick={() => void ops.reapply()}
+          >
+            {CONFLICT_REAPPLY_LABEL}
+          </Button>
+          <Button
+            variant="ghost"
+            className="min-h-11"
+            data-testid="task-list-row-conflict-dismiss"
+            onClick={ops.dismissConflict}
+          >
+            {CONFLICT_DISMISS_LABEL}
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }

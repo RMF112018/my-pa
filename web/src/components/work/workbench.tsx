@@ -124,10 +124,13 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   /**
    * The Task rows currently on screen, in the order the server returned them.
    *
-   * Scoped to the rendered perspective rather than to a document-wide lookup for
-   * one perspective's label: Board and Calendar lay their Tasks out differently
-   * and carry the same `data-work-item`, and a List-only query found none of
-   * them — so every restore in those two fell through to the heading.
+   * Scoped to the rendered perspective rather than to one perspective's own
+   * container label: List, Board and Calendar lay their Tasks out differently
+   * while carrying the same `data-work-item`, and a List-only query found none
+   * of the others — so every restore in Board and Calendar fell through to the
+   * heading. Every element carrying the attribute is inside this subtree today,
+   * so the scoping is a guard against that ceasing to be true, not a fix in its
+   * own right; the fix is that the query is no longer specific to List.
    */
   function visibleRowElements(): readonly HTMLElement[] {
     const container = perspectiveRegion.current;
@@ -179,38 +182,75 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
     only then the heading — never nothing.
   */
   useEffect(() => {
-    const lost = focusedRow.current;
-    if (!lost) return;
+    if (!focusedRow.current) return;
     const frame = requestAnimationFrame(() => {
+      const lost = focusedRow.current;
+      if (!lost) return;
       /*
-        Focus is still somewhere real: the row survived and kept it, or the
-        detail sheet, a dialog, or the user's own click took it deliberately.
-        Only focus that has fallen to nothing is ours to place.
+        A thrown error here is invisible — nothing awaits this callback — and it
+        would leave a stale record behind to mislead the next list change. Fail
+        by forgetting where focus was, which costs one restore rather than every
+        restore after it.
       */
-      const active = document.activeElement;
-      if (active && active !== document.body) return;
-      /*
-        Focus is on the body, but the control the user was in is still right
-        there — so they put it down themselves, by clicking the page background
-        or dismissing something. Nothing was taken from them and nothing is owed.
-        Without this a plain freshness poll would haul focus back into the list
-        against the user's own action, and do it again on every poll after.
-      */
-      if (lost.element.isConnected) return;
-      focusedRow.current = null;
-      const after = visibleRowElements();
-      const survivor = after.find(
-        (candidate) => candidate.getAttribute("data-work-item") === lost.taskId,
-      );
-      const target =
-        rowTarget(survivor) ??
-        rowTarget(after[lost.index]) ??
-        (lost.index > 0 ? rowTarget(after[lost.index - 1]) : null);
-      if (target) {
-        target.focus();
-        return;
+      try {
+        const active = document.activeElement;
+        const stillMounted = lost.element.isConnected;
+
+        /*
+          Focus is somewhere real: the row kept it, or the detail sheet, a
+          dialog, or the user's own click took it deliberately.
+
+          The record is maintained rather than merely consumed. If the row it
+          names has since left while the user was working elsewhere, it is
+          finished and must be dropped — kept, it would be read on some later
+          change as "focus was taken from this row" and haul the user out of
+          wherever they had got to. If the row is still here, its position is
+          refreshed: rows above it leave without the user touching anything, and
+          no new focus event fires to correct a remembered index that is by then
+          pointing at somebody else's row.
+        */
+        if (active && active !== document.body) {
+          if (!stillMounted) {
+            focusedRow.current = null;
+            return;
+          }
+          const moved = visibleRowElements().findIndex(
+            (candidate) => candidate.getAttribute("data-work-item") === lost.taskId,
+          );
+          focusedRow.current = moved < 0 ? lost : { ...lost, index: moved };
+          return;
+        }
+
+        /*
+          Focus is on the body and the control the user was in is still right
+          there — so they put it down themselves, by clicking the page
+          background or dismissing something. Nothing was taken from them and
+          nothing is owed. Without this a plain freshness poll would haul focus
+          back into the list against the user's own action, and do it again on
+          every poll after.
+        */
+        if (stillMounted) {
+          focusedRow.current = null;
+          return;
+        }
+
+        focusedRow.current = null;
+        const after = visibleRowElements();
+        const survivor = after.find(
+          (candidate) => candidate.getAttribute("data-work-item") === lost.taskId,
+        );
+        const target =
+          rowTarget(survivor) ??
+          rowTarget(after[lost.index]) ??
+          (lost.index > 0 ? rowTarget(after[lost.index - 1]) : null);
+        if (target) {
+          target.focus();
+          return;
+        }
+        workHeading.current?.focus();
+      } catch {
+        focusedRow.current = null;
       }
-      workHeading.current?.focus();
     });
     return () => cancelAnimationFrame(frame);
   }, [rows]);

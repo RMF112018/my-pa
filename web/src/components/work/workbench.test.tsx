@@ -638,6 +638,203 @@ describe("Work surface", () => {
     }
   });
 
+  it("forgets a row that left while the user was working elsewhere", async () => {
+    /*
+      The record of where focus was is maintained, not merely spent. A user who
+      leaves the list deliberately — into search, say — and whose old row then
+      leaves the filter is owed nothing: that row is finished. Kept, the record
+      would be read on some later change as "focus was taken from this row", and
+      a plain freshness poll would pull the user out of wherever they had got to
+      and back into the list.
+    */
+    const rowOf = (id: string, title: string) => ({
+      task_id: id, title, lifecycle_state: "open", priority: null, due_at: null,
+      scheduled_at: null, deferred_until: null, archived_at: null,
+      created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z", version: 2,
+    });
+    const visited = rowOf("tsk_aaaaaaaa11111111", "Row the user visited");
+    const stays = rowOf("tsk_bbbbbbbb22222222", "Row that stays");
+    let listed = [visited, stays];
+    const body = (data: unknown) =>
+      new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
+
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      const path = String(input);
+      for (const row of [visited, stays]) {
+        if (path === `/api/tasks/${row.task_id}`) return body({ task: row });
+      }
+      if (path.includes("/comments")) return body({ comments: [] });
+      return body({ tasks: listed });
+    }));
+
+    history.replaceState(null, "", "/work?view=all-open");
+    renderFromUrl();
+    await screen.findByText("Row the user visited");
+
+    // The user visits a row, then deliberately leaves the list for the search box.
+    const rows = screen.getAllByTestId("task-list-row");
+    within(rows[0]).getByRole("link").focus();
+    const search = screen.getByLabelText("Search tasks");
+    search.focus();
+    expect(document.activeElement).toBe(search);
+
+    // The row they had visited leaves the filter while they are typing.
+    listed = [stays];
+    await act(async () => {
+      fireEvent(window, new Event("focus"));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.queryByText("Row the user visited")).toBeNull());
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+    expect(document.activeElement).toBe(search);
+
+    // Later the user puts focus down, and an ordinary poll arrives.
+    search.blur();
+    expect(document.activeElement).toBe(document.body);
+    await act(async () => {
+      fireEvent(window, new Event("focus"));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+
+    // Nothing was owed, so nothing was taken.
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("follows the row as others leave from above it", async () => {
+    /*
+      Where a row sits is remembered when focus arrives, and rows above it leave
+      without the user touching anything — no focus event fires to correct it. By
+      the time the user's own row goes, a remembered position points at somebody
+      else's row, or past the end of a shortened list, and the user is dumped on
+      the heading with a perfectly good neighbour sitting right there.
+    */
+    const rowOf = (id: string, title: string) => ({
+      task_id: id, title, lifecycle_state: "open", priority: null, due_at: null,
+      scheduled_at: null, deferred_until: null, archived_at: null,
+      created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z", version: 2,
+    });
+    const all = [
+      rowOf("tsk_aaaaaaaa11111111", "Leaves one"),
+      rowOf("tsk_bbbbbbbb22222222", "Leaves two"),
+      rowOf("tsk_cccccccc33333333", "Leaves three"),
+      rowOf("tsk_dddddddd44444444", "The neighbour"),
+      rowOf("tsk_eeeeeeee55555555", "Where the user is"),
+    ];
+    let listed = all;
+    const body = (data: unknown) =>
+      new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
+
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      const path = String(input);
+      for (const row of all) {
+        if (path === `/api/tasks/${row.task_id}`) return body({ task: row });
+      }
+      if (path.includes("/comments")) return body({ comments: [] });
+      return body({ tasks: listed });
+    }));
+
+    history.replaceState(null, "", "/work?view=all-open");
+    renderFromUrl();
+    await screen.findByText("Where the user is");
+
+    // The user is in the last row, holding a control that survives re-render.
+    const rows = screen.getAllByTestId("task-list-row");
+    const held = within(rows[4]).getByRole("link");
+    held.focus();
+
+    // Three rows above leave. The user keeps focus and touches nothing.
+    listed = [all[3], all[4]];
+    await act(async () => {
+      fireEvent(window, new Event("focus"));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.queryByText("Leaves one")).toBeNull());
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+    expect(document.activeElement).toBe(held);
+
+    // Now their own row goes, and the neighbour is what is left.
+    listed = [all[3]];
+    await act(async () => {
+      fireEvent(window, new Event("focus"));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.queryByText("Where the user is")).toBeNull());
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+
+    expect(document.activeElement?.tagName).not.toBe("H1");
+    expect(document.activeElement?.textContent).toContain("The neighbour");
+  });
+
+  it("catches focus in the Calendar perspective too", async () => {
+    /*
+      Calendar lays its Tasks out as dated markers. They carried no row identity
+      at all, so focus was never recorded there: a keyboard user on a marker
+      whose Task left the filter was dropped on the document body with nothing to
+      catch them — and a record left over from the List survived the switch and
+      was spent on the first Calendar refresh.
+    */
+    const rowOf = (id: string, title: string, dueAt: string) => ({
+      task_id: id, title, lifecycle_state: "open", priority: null, due_at: dueAt,
+      scheduled_at: null, deferred_until: null, archived_at: null,
+      created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z", version: 2,
+    });
+    const leaving = rowOf("tsk_aaaaaaaa11111111", "Dated and leaving", "2026-09-13T12:00:00Z");
+    const staying = rowOf("tsk_bbbbbbbb22222222", "Dated and staying", "2026-09-14T12:00:00Z");
+    let listed = [leaving, staying];
+    const body = (data: unknown) =>
+      new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
+
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      const path = String(input);
+      for (const row of [leaving, staying]) {
+        if (path === `/api/tasks/${row.task_id}`) return body({ task: row });
+      }
+      if (path.includes("/comments")) return body({ comments: [] });
+      return body({ tasks: listed });
+    }));
+
+    history.replaceState(null, "", "/work?view=all-open&perspective=calendar");
+    renderFromUrl();
+    await screen.findByText("Dated and leaving");
+
+    const marker = screen.getByRole("link", { name: /Dated and leaving/ });
+    marker.focus();
+    expect(document.activeElement).toBe(marker);
+
+    listed = [staying];
+    await act(async () => {
+      fireEvent(window, new Event("focus"));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.queryByText("Dated and leaving")).toBeNull());
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement?.tagName).not.toBe("H1");
+    expect(document.activeElement?.textContent).toContain("Dated and staying");
+  });
+
   it("does not move focus on a later refresh after a mutation that kept the Task", async () => {
     /*
       A Status change usually leaves the Task right where it was, so no focus

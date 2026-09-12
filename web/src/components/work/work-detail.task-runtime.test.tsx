@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   TaskDetailView,
@@ -71,6 +71,7 @@ function stubDetailFetch(handlers: {
     const path = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
     if (path.includes("/history")) return json({ history: [] });
+    if (path.includes("/comments")) return json({ comments: [] });
     if (path === "/api/commitments?pageSize=100") return json({ commitments: [] });
     if (path === `/api/tasks/${TASK_V2.task_id}` && method === "GET") {
       return json(taskFactory());
@@ -106,7 +107,7 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     const title = await screen.findByDisplayValue("Coordinate review");
     await user.clear(title);
     await user.type(title, "My dirty title");
-    await user.click(screen.getByRole("button", { name: "Save atomic patch" }));
+    await user.click(screen.getByRole("button", { name: "Save title" }));
 
     expect(await screen.findByTestId("task-changed-elsewhere")).toBeTruthy();
     expect(screen.getAllByText(/This task changed elsewhere/).length).toBeGreaterThan(0);
@@ -116,7 +117,7 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     expect(patchCount).toBe(1);
 
     // Blind save stays locked — no second request without deliberate reapply.
-    expect(screen.getByRole("button", { name: "Save atomic patch" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save title" })).toBeDisabled();
     expect(patchCount).toBe(1);
   });
 
@@ -137,12 +138,12 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     const title = await screen.findByDisplayValue("Coordinate review");
     await user.clear(title);
     await user.type(title, "Kept draft title");
-    await user.click(screen.getByRole("button", { name: "Save atomic patch" }));
+    await user.click(screen.getByRole("button", { name: "Save title" }));
 
     expect(await screen.findByTestId("task-changed-elsewhere")).toBeTruthy();
     expect(screen.getByDisplayValue("Kept draft title")).toBeTruthy();
     expect(screen.getByText(/Canonical version 3/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Save atomic patch" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save title" })).toBeDisabled();
   });
 
   it("keeps a dirty title when a newer canonical arrives via refresh", async () => {
@@ -186,10 +187,10 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     const title = await screen.findByDisplayValue("Coordinate review");
     await user.clear(title);
     await user.type(title, "Proposed title");
-    await user.click(screen.getByRole("button", { name: "Save atomic patch" }));
+    await user.click(screen.getByRole("button", { name: "Save title" }));
 
     expect(await screen.findByDisplayValue("Proposed title")).toBeTruthy();
-    const reapply = await screen.findByRole("button", { name: /Reapply proposed patch to version 3/ });
+    const reapply = await screen.findByRole("button", { name: /Reapply my change to the latest version/ });
     await user.click(reapply);
 
     await waitFor(() => expect(patchCount).toBe(2));
@@ -210,16 +211,20 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     vi.stubGlobal("fetch", fetcher);
 
     render(<TaskDetailView taskId={TASK_V2.task_id} />);
-    await screen.findByDisplayValue("Coordinate review");
-    await user.click(screen.getByRole("button", { name: "Save atomic patch" }));
+    const pendingTitle = await screen.findByDisplayValue("Coordinate review");
+    await user.type(pendingTitle, " now");
+    await user.click(screen.getByRole("button", { name: "Save title" }));
 
-    const save = await screen.findByRole("button", { name: /Save atomic patch/ });
+    const save = await screen.findByRole("button", { name: /Save title/ });
     expect(save.getAttribute("aria-busy")).toBe("true");
     expect(save).toBeDisabled();
-    expect(screen.getByRole("button", { name: /Apply transition/ }).getAttribute("aria-busy")).toBe("true");
+    const statusControl = screen.getByTestId("task-status-control");
+    expect(statusControl.getAttribute("aria-busy")).toBe("true");
+    // The actionable element itself is locked, not merely its container.
+    expect(within(statusControl).getByRole("combobox")).toBeDisabled();
 
     release(json({ task: { ...TASK_V2, version: 3 } }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Save atomic patch" }).getAttribute("aria-busy")).toBeNull());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save title" }).getAttribute("aria-busy")).toBeNull());
   });
 
   it("routes mutations through the shared TaskRuntimeProvider coordinator when connected", async () => {
@@ -233,8 +238,9 @@ describe("TaskDetailView authoritative draft / conflict", () => {
       </TaskRuntimeProvider>,
     );
 
-    await screen.findByDisplayValue("Coordinate review");
-    await user.click(screen.getByRole("button", { name: "Save atomic patch" }));
+    const connectedTitle = await screen.findByDisplayValue("Coordinate review");
+    await user.type(connectedTitle, " again");
+    await user.click(screen.getByRole("button", { name: "Save title" }));
     await waitFor(() =>
       expect(
         fetcher.mock.calls.some(

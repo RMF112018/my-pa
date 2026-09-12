@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { CommitmentDetailView, TaskDetailView } from "@/components/work/work-detail";
 
 afterEach(() => {
@@ -34,18 +35,41 @@ describe("Work detail context", () => {
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
       const path = String(input);
       if (path.includes("/history")) return Response.json({ history: [] });
+      if (path.includes("/comments")) return Response.json({ comments: [] });
       if (path === "/api/commitments?pageSize=100") return Response.json({ commitments: [] });
       return Response.json({ task: TASK });
     }));
 
     render(<TaskDetailView taskId={TASK.task_id} />);
+    await screen.findByTestId("task-detail-sections");
 
-    expect(await screen.findByText("Unresolved Project context")).toBeTruthy();
-    expect(screen.getByText("Reference prj_aaaaaaaa11111111")).toBeTruthy();
-    expect(screen.getByText("Unresolved Situation context")).toBeTruthy();
-    expect(screen.getByText("Reference sit_aaaaaaaa11111111")).toBeTruthy();
-    expect(screen.getByText("review")).toBeTruthy();
-    expect(screen.getByText(/Review decision rdec_aaaaaaaa11111111/)).toBeTruthy();
+    // Primary Task UX states the absence rather than guessing a name — and never
+    // prints the raw reference. The raw id lives only in Technical details.
+    expect(screen.getByText("Project details unavailable")).toBeTruthy();
+    expect(screen.getByText("Situation details unavailable")).toBeTruthy();
+    expect(screen.queryByText(/prj_aaaaaaaa11111111/)).toBeNull();
+    expect(screen.queryByText(/sit_aaaaaaaa11111111/)).toBeNull();
+    expect(screen.queryByText(/rdec_aaaaaaaa11111111/)).toBeNull();
+  });
+
+  it("keeps raw context references and review metadata reachable under Technical details", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      const path = String(input);
+      if (path.includes("/history")) return Response.json({ history: [] });
+      if (path.includes("/comments")) return Response.json({ comments: [] });
+      if (path === "/api/commitments?pageSize=100") return Response.json({ commitments: [] });
+      return Response.json({ task: TASK });
+    }));
+
+    render(<TaskDetailView taskId={TASK.task_id} />);
+    await screen.findByTestId("task-technical-details");
+
+    await user.click(screen.getByText("Technical details"));
+
+    expect(await screen.findByText(/prj_aaaaaaaa11111111/)).toBeTruthy();
+    expect(screen.getByText(/sit_aaaaaaaa11111111/)).toBeTruthy();
+    expect(screen.getByText(/rdec_aaaaaaaa11111111/)).toBeTruthy();
   });
 
   it("renders a completed same-Principal follow-up Task returned with Commitment detail", async () => {
@@ -65,7 +89,10 @@ describe("Work detail context", () => {
 
     const link = await screen.findByRole("link", { name: "Ask Sam for the permit log" });
     expect(link.getAttribute("href")).toBe(`/work/tasks/${TASK.task_id}`);
-    expect(screen.getByText("Task state: completed")).toBeTruthy();
+    // A secondary Task reference uses product language, not the backend token.
+    expect(screen.getByText("Task state: Closed")).toBeTruthy();
+    expect(screen.queryByText(/Task state: completed/)).toBeNull();
+    expect(screen.queryByText(/Reference tsk_aaaaaaaa11111111/)).toBeNull();
     expect(fetcher.mock.calls.some(([input]) => String(input).includes("waiting-on"))).toBe(false);
   });
 

@@ -9,7 +9,8 @@ import { Select } from "@/components/ui/select";
 import { Sheet } from "@/components/ui/sheet";
 import { LoadingStatus, SurfaceState } from "@/components/ui/surface-state";
 import { Textarea } from "@/components/ui/textarea";
-import { CommitmentDetailView, TaskDetailViewConnected } from "@/components/work/work-detail";
+import { CommitmentDetailView } from "@/components/work/work-detail";
+import { TaskCompactSheet } from "@/components/tasks/task-compact-sheet";
 import { WorkPerspectives } from "@/components/work/work-perspectives";
 import { useTaskRuntime } from "@/components/work/task-runtime-provider";
 import { useTaskFreshness } from "@/components/work/use-task-freshness";
@@ -522,8 +523,18 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
           }}
         />
       ) : null}
+      {detail?.type === "task" ? (
+        <TaskCompactSheet
+          taskId={detail.id}
+          open
+          onOpenChange={(open) => {
+            if (!open) closeDetail();
+          }}
+          seed={taskSeed(rows, detail.id)}
+        />
+      ) : null}
       <Sheet
-        open={Boolean(detail)}
+        open={detail?.type === "commitment"}
         onOpenChange={(open) => {
           if (!open) closeDetail();
         }}
@@ -531,11 +542,23 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
         description="Closing restores your place in Work."
         placement="detail"
       >
-        {detail?.type === "task" ? <TaskDetailViewConnected taskId={detail.id} embedded /> : null}
         {detail?.type === "commitment" ? <CommitmentDetailView commitmentId={detail.id} embedded /> : null}
       </Sheet>
     </section>
   );
+}
+
+/**
+ * The already-loaded list row for an open Task, used only to paint the compact Sheet
+ * while the canonical Task hydrates. A row carries no guaranteed version, so it is a
+ * display seed and never a mutation authority.
+ */
+function taskSeed(
+  rows: readonly TaskRow[] | readonly CommitmentRow[] | readonly WaitingOnRow[],
+  taskId: string,
+): TaskRow | null {
+  const match = (rows as readonly { task_id?: string }[]).find((row) => row.task_id === taskId);
+  return match && "lifecycle_state" in match ? (match as TaskRow) : null;
 }
 
 function Disclosure({ details }: { details: DisclosureEnvelope }) {

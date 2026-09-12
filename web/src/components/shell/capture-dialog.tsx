@@ -154,6 +154,7 @@ export function CaptureDialog({
   const [kind, setKind] = useState<CaptureKind>("quick_note");
   const [outcome, setOutcome] = useState<Outcome>({ kind: "idle" });
   const fieldRef = useRef<HTMLTextAreaElement>(null);
+  const firstChoiceRef = useRef<HTMLButtonElement>(null);
   // One idempotency key per submission attempt: minted at first save, kept
   // across retries of the same text, discarded when the text changes.
   const attemptKeyRef = useRef<string | null>(null);
@@ -168,10 +169,21 @@ export function CaptureDialog({
     return () => clearTimeout(t);
   }, [open]);
 
-  // Move focus into the single capture field once the entry branch is showing.
+  /*
+    Move focus into the dialog on open, at whichever stage is showing.
+
+    The native `<dialog>` restores focus to the invoker on close by itself, so a
+    missing focus move here would not be visible in a close-and-restore test — it
+    would only be visible to someone actually using the keyboard, who would open
+    Capture and find focus still outside it. Both stages therefore take focus
+    explicitly: the chooser's first action, and the note field behind it.
+  */
   useEffect(() => {
-    if (!open || stage !== "entry") return;
-    const t = setTimeout(() => fieldRef.current?.focus(), 0);
+    if (!open) return;
+    const t = setTimeout(() => {
+      if (stage === "entry") fieldRef.current?.focus();
+      else firstChoiceRef.current?.focus();
+    }, 0);
     return () => clearTimeout(t);
   }, [open, stage]);
 
@@ -261,6 +273,7 @@ export function CaptureDialog({
           className="flex flex-col gap-2"
         >
           <Button
+            ref={firstChoiceRef}
             variant="ghost"
             data-testid="capture-choice-create_task"
             onClick={() => onCreateTask?.()}

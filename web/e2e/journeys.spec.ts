@@ -295,10 +295,12 @@ test.describe("the signed-in surfaces", () => {
   test("focus returns to the capture button when the dialog closes", async ({ page }) => {
     const opener = visibleCaptureButton(page);
     await opener.click();
-    // WP-TUX-04. Capture opens on its action chooser, so that is where focus
-    // lands; the guarantee this test exists for is unchanged — focus enters the
-    // dialog, Escape closes it, and the opener gets focus back.
-    await expect(page.getByTestId("capture-chooser")).toBeVisible();
+    // WP-TUX-04. Capture opens on its action chooser, so focus lands on the
+    // chooser's first action rather than the note field. Asserting focus — not
+    // mere visibility — is the point: a native <dialog> restores focus to its
+    // invoker on close by itself, so the closing assertion below would pass even
+    // if focus had never entered the dialog at all.
+    await expect(page.getByTestId("capture-choice-create_task")).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("capture-chooser")).toBeHidden();
     await expect(opener).toBeFocused();
@@ -429,12 +431,12 @@ test.describe("keyboard-only navigation", () => {
     await page.waitForURL("**/knowledge");
     await expect(page.getByRole("heading", { name: "Knowledge", level: 1 })).toBeVisible();
 
-    // And the capture dialog opens, takes focus, and closes on Escape.
+    // And the capture dialog opens, takes focus, and closes on Escape. The
+    // chooser is the dialog's first stop, so that is where focus must land for a
+    // keyboard-only user; reaching the note field is one choice further in.
     await visibleCaptureButton(page).focus();
     await page.keyboard.press("Enter");
-    // The chooser is the dialog's first stop; reaching the note field is one
-    // keyboard-operable choice further in.
-    await expect(page.getByTestId("capture-chooser")).toBeVisible();
+    await expect(page.getByTestId("capture-choice-create_task")).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("capture-chooser")).toBeHidden();
   });

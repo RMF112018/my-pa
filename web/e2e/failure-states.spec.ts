@@ -21,7 +21,7 @@
  */
 import { test, expect } from "@playwright/test";
 import { DEAD_GATEWAY_URL } from "../playwright.config";
-import { signIn, expectState, EMPTINESS_CLAIMS, visibleCaptureButton, openCaptureNote } from "./fixtures";
+import { signIn, expectState, EMPTINESS_CLAIMS, openCaptureNote } from "./fixtures";
 
 test.use({ baseURL: DEAD_GATEWAY_URL });
 

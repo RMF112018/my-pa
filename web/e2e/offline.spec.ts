@@ -41,7 +41,7 @@
  * person is looking at, is correct and is asserted below.
  */
 import { test, expect } from "@playwright/test";
-import { signIn, syntheticNote, visibleCaptureButton, openCaptureNote } from "./fixtures";
+import { signIn, syntheticNote, openCaptureNote } from "./fixtures";
 
 test.describe("offline capture and reconnect", () => {
   test("a note captured offline is held, then replayed, then durable", async ({

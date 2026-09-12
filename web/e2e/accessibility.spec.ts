@@ -125,7 +125,7 @@ test.describe("axe-core, in Chromium, against the rendered page", () => {
     await signIn(page);
     // Both stages are scanned: the WP-TUX-04 chooser and the note branch behind it.
     await visibleCaptureButton(page).click();
-    await expect(page.getByTestId("capture-chooser")).toBeVisible();
+    await expect(page.getByTestId("capture-choice-create_task")).toBeFocused();
     expect(await scan(page), "capture chooser accessibility violations").toEqual([]);
 
     await page.getByTestId("capture-chooser").getByRole("button", { name: "Quick note" }).click();

@@ -344,8 +344,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
     setState("loading");
     setRows([]);
     setView(next);
-    abandonPendingMovement();
-            setCursor("");
+    setCursor("");
     const url = new URL(window.location.href);
     url.searchParams.set("view", next);
     url.searchParams.delete("cursor");
@@ -369,8 +368,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
     abandonPendingMovement();
     sync({ commitment: value, cursor: undefined, q: value === "waiting-on" ? undefined : committedQuery || undefined });
     setCommitmentFilter(value);
-    abandonPendingMovement();
-            setCursor("");
+    setCursor("");
     if (value === "waiting-on") {
       setQueryDraft("");
       setCommittedQuery("");
@@ -568,7 +566,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
                     sync({ archived: value, cursor: undefined });
                     setArchiveMode(value);
                     abandonPendingMovement();
-            setCursor("");
+                    setCursor("");
                   }}
                 >
                   <option value="exclude">Active only</option>

@@ -42,6 +42,13 @@ export interface WaitingOnRow {
   follow_up_task_state: TaskLifecycle | null;
   counterparty: CounterpartyOption | null;
 }
+/** Append-only Task comment. Landed by WP-TUX-01; closed author set mirrors the domain model. */
+export type TaskCommentAuthorKind = "principal" | "assistant" | "system";
+export interface TaskComment {
+  comment_id: string; task_id: string; body: string;
+  author_kind: TaskCommentAuthorKind; author_id: string; created_at: string;
+}
+
 export interface WorkHistoryRow {
   history_id: string; action: string; actor: string; outcome: string; before_version: number;
   after_version: number; occurred_at: string; recorded_at: string;

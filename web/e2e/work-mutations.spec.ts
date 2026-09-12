@@ -74,18 +74,68 @@ test("real stack preserves deliberate Task and Commitment mutation semantics", a
   const taskId = taskSearch.body.tasks[0]?.task_id;
   expect(taskId).toBeTruthy();
 
-  await taskTrigger.click();
-  const taskDialog = page.getByRole("dialog");
-  await expect(taskDialog.getByRole("heading", { name: taskTitle })).toBeVisible();
+  // Commitment and Role are no longer editable from Task detail: the compact
+  // sheet states them as Context labels and owns no linkage form. The linkage
+  // semantics this spec has always guarded are therefore driven through the
+  // canonical endpoint, and the resulting *product language* is read back from
+  // the Context disclosure.
+  const linkedBefore = await api<{ task: { version: number; commitment_id: string | null } }>(
+    page,
+    `/api/tasks/${taskId}`,
+  );
+  expect(linkedBefore.body.task.commitment_id).toBe(commitment!.commitment_id);
+  const unlink = await api<Record<string, unknown>>(page, `/api/tasks/${taskId}`, {
+    method: "PATCH",
+    body: {
+      expectedVersion: linkedBefore.body.task.version,
+      clearFields: ["commitment_id", "role"],
+      idempotencyKey: key("e2e-unlink-task"),
+    },
+  });
+  expect(unlink.status).toBe(200);
+  const unlinked = await api<{ task: { commitment_id: string | null; version: number } }>(page, `/api/tasks/${taskId}`);
+  expect(unlinked.body.task.commitment_id).toBeNull();
 
-  await taskDialog.getByLabel("Description").fill("Safe atomic browser edit");
-  await taskDialog.getByLabel("Priority").selectOption("p2");
-  await taskDialog.getByRole("button", { name: "Save atomic patch" }).click();
-  await expect(taskDialog.getByText("Task update persisted.")).toBeVisible();
+  const relink = await api<Record<string, unknown>>(page, `/api/tasks/${taskId}`, {
+    method: "PATCH",
+    body: {
+      commitmentId: commitment!.commitment_id,
+      role: "follow_up",
+      expectedVersion: unlinked.body.task.version,
+      idempotencyKey: key("e2e-relink-task"),
+    },
+  });
+  expect(relink.status).toBe(200);
+  const relinked = await api<{ task: { commitment_id: string | null } }>(page, `/api/tasks/${taskId}`);
+  expect(relinked.body.task.commitment_id).toBe(commitment!.commitment_id);
+
+  await taskTrigger.click();
+  const taskSheet = page.getByTestId("task-compact-sheet");
+  await expect(taskSheet.getByRole("heading", { name: taskTitle })).toBeVisible();
+
+  // Context is a progressive disclosure: the linkage is stated in words there,
+  // never as a raw identifier in the primary surface.
+  const context = taskSheet.getByTestId("task-context-section");
+  await context.locator("summary").click();
+  await expect(context.getByText(commitmentTitle)).toBeVisible();
+  await expect(context.getByText("Follow up")).toBeVisible();
+
+  // Bounded field saves replace the whole-Task atomic patch form.
+  await taskSheet.getByRole("textbox", { name: "Description", exact: true }).fill("Safe atomic browser edit");
+  await taskSheet.getByRole("button", { name: "Save description" }).click();
+  await expect(taskSheet.getByText("Task saved.")).toBeVisible();
+  const described = await api<{ task: { description: string | null } }>(page, `/api/tasks/${taskId}`);
+  expect(described.body.task.description).toBe("Safe atomic browser edit");
+
+  await taskSheet.getByRole("combobox", { name: "Priority" }).selectOption({ label: "High" });
+  await expect(taskSheet.getByText("Task saved.")).toBeVisible();
+  await expect
+    .poll(async () => (await api<{ task: { priority: string | null } }>(page, `/api/tasks/${taskId}`)).body.task.priority)
+    .toBe("p2");
 
   const beforeConflict = await api<{ task: { version: number } }>(page, `/api/tasks/${taskId}`);
   expect(beforeConflict.status).toBe(200);
-  await taskDialog.getByLabel("Title").fill(reappliedTitle);
+  await taskSheet.getByRole("textbox", { name: "Title" }).fill(reappliedTitle);
   const concurrent = await api<Record<string, unknown>>(page, `/api/tasks/${taskId}`, {
     method: "PATCH",
     body: {
@@ -95,39 +145,51 @@ test("real stack preserves deliberate Task and Commitment mutation semantics", a
     },
   });
   expect(concurrent.status).toBe(200);
-  await taskDialog.getByRole("button", { name: "Save atomic patch" }).click();
-  await expect(taskDialog.getByTestId("task-changed-elsewhere")).toBeVisible();
-  await expect(taskDialog.getByRole("button", { name: /Reapply proposed patch to version/ })).toBeVisible();
-  await taskDialog.getByRole("button", { name: /Reapply proposed patch to version/ }).click();
-  await expect(taskDialog.getByRole("heading", { name: reappliedTitle })).toBeVisible();
+  await taskSheet.getByRole("button", { name: "Save title" }).click();
+  await expect(taskSheet.getByTestId("task-changed-elsewhere")).toBeVisible();
+  const reapply = taskSheet.getByRole("button", { name: "Reapply my change to the latest version" });
+  await expect(reapply).toBeVisible();
+  await reapply.click();
+  await expect(taskSheet.getByRole("heading", { name: reappliedTitle })).toBeVisible();
+  const reappliedRead = await api<{ task: { title: string; description: string | null } }>(page, `/api/tasks/${taskId}`);
+  expect(reappliedRead.body.task.title).toBe(reappliedTitle);
+  expect(reappliedRead.body.task.description).toBe("Concurrent canonical edit");
 
-  await taskDialog.getByLabel("Commitment").selectOption("");
-  await taskDialog.getByLabel("Role").selectOption("");
-  await taskDialog.getByRole("button", { name: "Save atomic patch" }).click();
-  await expect(taskDialog.getByText("Task update persisted.")).toBeVisible();
-  const unlinked = await api<{ task: { commitment_id: string | null } }>(page, `/api/tasks/${taskId}`);
-  expect(unlinked.body.task.commitment_id).toBeNull();
+  // The Status control issues the state change immediately: there is no
+  // separate apply step, and the human label is the only vocabulary offered.
+  const statusControl = taskSheet.getByTestId("task-status-control");
+  await expect(statusControl.getByRole("combobox")).toBeVisible();
+  await statusControl.getByRole("combobox").selectOption({ label: "In progress" });
+  await expect(taskSheet.getByText("Status updated.")).toBeVisible();
+  await expect(taskSheet.getByText(/^In progress · /)).toBeVisible();
+  const running = await api<{ task: { lifecycle_state: string } }>(page, `/api/tasks/${taskId}`);
+  expect(running.body.task.lifecycle_state).toBe("in_progress");
 
-  await taskDialog.getByLabel("Commitment").selectOption({ label: commitmentTitle });
-  await taskDialog.getByLabel("Role").selectOption("follow_up");
-  await taskDialog.getByRole("button", { name: "Save atomic patch" }).click();
-  await expect(taskDialog.getByText("Task update persisted.")).toBeVisible();
-  const relinked = await api<{ task: { commitment_id: string | null } }>(page, `/api/tasks/${taskId}`);
-  expect(relinked.body.task.commitment_id).toBe(commitment!.commitment_id);
+  // Closing costs exactly two activations and never asks for authored text.
+  await taskSheet.getByRole("button", { name: "Close Task", exact: true }).click();
+  const closeConfirmation = taskSheet.getByRole("alertdialog");
+  await expect(closeConfirmation).toBeVisible();
+  await expect(closeConfirmation.getByRole("button", { name: "Keep open" })).toBeVisible();
+  await closeConfirmation.getByRole("button", { name: "Confirm Closed" }).click();
+  await expect(taskSheet.getByText("Task closed.")).toBeVisible();
+  await expect(taskSheet.getByTestId("task-terminal-summary")).toHaveText("This task is closed.");
+  await expect(statusControl).toHaveAttribute("data-terminal", "true");
+  await expect(statusControl).toContainText("Closed");
+  await expect(taskSheet.getByRole("button", { name: "Close Task", exact: true })).toHaveCount(0);
 
-  await taskDialog.getByLabel("Move to").selectOption("in_progress");
-  await taskDialog.getByRole("button", { name: "Apply transition" }).click();
-  await expect(taskDialog.getByText(/in progress · version/)).toBeVisible();
-  await taskDialog.getByLabel("Move to").selectOption("completed");
-  await taskDialog.getByRole("button", { name: "Apply transition" }).click();
-  await expect(taskDialog.getByText(/completed · version/)).toBeVisible();
   const completed = await api<{ task: { lifecycle_state: string; closure_evidence_ref: string | null; origin_kind: string } }>(page, `/api/tasks/${taskId}`);
   expect(completed.body.task.lifecycle_state).toBe("completed");
   expect(completed.body.task.closure_evidence_ref).toBeNull();
   expect(completed.body.task.origin_kind).toBe("direct_principal");
-  await expect(taskDialog.getByText("Task is terminal, but closure evidence metadata was unavailable.")).toBeVisible();
-  await expect(taskDialog.getByRole("button", { name: "View closure evidence" })).toHaveCount(0);
-  await expect(taskDialog.getByText("Direct principal authoring")).toBeVisible();
+
+  // Provenance and closure-evidence metadata did not disappear: they moved
+  // behind the Technical details disclosure, which has to be expanded first.
+  const technical = taskSheet.getByTestId("task-technical-details");
+  await technical.getByText("Technical details").click();
+  const provenance = technical.getByRole("region", { name: "Provenance" });
+  await expect(provenance.getByText("direct_principal").first()).toBeVisible();
+  await expect(technical.getByRole("button", { name: "View closure evidence" })).toHaveCount(0);
+  await expect(technical.getByText(taskId!)).toBeVisible();
 
   const stillOpen = await api<{ commitment: { state: string } }>(
     page,
@@ -143,7 +205,9 @@ test("real stack preserves deliberate Task and Commitment mutation semantics", a
   const commitmentDialog = page.getByRole("dialog");
   await expect(commitmentDialog.getByText(/^E2E Synthetic Counterparty ·/)).toBeVisible();
   await expect(commitmentDialog.getByText(reappliedTitle)).toBeVisible();
-  await expect(commitmentDialog.getByText(/completed/i)).toBeVisible();
+  // The follow-up Task's terminal state, stated in product language. The
+  // previous wording (`completed`) was the backend token.
+  await expect(commitmentDialog.getByText("Task state: Closed")).toBeVisible();
   await commitmentDialog.getByLabel("Closure note").fill("Synthetic explicit Commitment closure evidence.");
   await commitmentDialog.getByRole("button", { name: "Close commitment" }).click();
   await expect(commitmentDialog.getByText("Commitment explicitly closed.")).toBeVisible();

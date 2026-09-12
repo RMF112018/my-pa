@@ -126,6 +126,39 @@ describe("Work surface", () => {
     expect(location.search).toContain("q=inspect");
   });
 
+  it("opens a Task through the compact Task Sheet, seeding from the list row without reading diagnostics", async () => {
+    const task = {
+      task_id: "tsk_bbbbbbbb22222222", title: "Seeded from the list", lifecycle_state: "in_progress",
+      priority: "p1", due_at: null, scheduled_at: null, deferred_until: null, archived_at: null,
+      created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-22T12:00:00Z", version: 2,
+    };
+    const detail = { ...task, description: null, evidence_state: "accepted", origin_kind: "direct_principal", origin_evidence_ref: null, closure_evidence_ref: null, accepted_by_review_decision_id: null, acceptance_kind: null, closure_history_id: null, commitment_id: null, role: null, project_id: null, situation_id: null, opened_at: task.created_at, closed_at: null };
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      const path = String(input);
+      const body = (data: unknown) => new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
+      if (path === `/api/tasks/${task.task_id}`) return body({ task: detail });
+      if (path.includes("/comments")) return body({ comments: [] });
+      if (path.includes("/history")) return body({ history: [] });
+      if (path.startsWith("/api/commitments")) return body({ commitments: [] });
+      return body({ tasks: [task] });
+    });
+    vi.stubGlobal("fetch", fetcher); history.replaceState(null, "", "/work?view=all-open"); renderFromUrl();
+
+    await userEvent.click(await screen.findByRole("link", { name: /Seeded from the list/ }));
+
+    const sheet = await screen.findByTestId("task-compact-sheet");
+    expect(location.search).toContain(`task=${task.task_id}`);
+
+    // Product language only, and no raw identifier or backend token in the compact view.
+    await waitFor(() => expect(sheet.textContent).toContain("In progress"));
+    expect(sheet.textContent).toContain("Critical");
+    expect(sheet.textContent).not.toMatch(/in_progress|\bp1\b/);
+    expect(sheet.textContent).not.toContain(task.task_id);
+
+    // Opening a Task does not eagerly read technical history.
+    expect(fetcher.mock.calls.some(([path]) => String(path).includes("/history"))).toBe(false);
+  });
+
   it("passes Commitment due focus and civil-date timezone to the server", async () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ commitments: [] }), { status: 200, headers: { "content-type": "application/json" } }));
     vi.stubGlobal("fetch", fetcher); history.replaceState(null, "", "/work?view=commitments&commitment=due&tz=America%2FNew_York"); renderFromUrl();

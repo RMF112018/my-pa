@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TaskDetailView } from "@/components/work/work-detail";
 
@@ -60,6 +60,7 @@ describe("Work evidence", () => {
           }],
         });
       }
+      if (path.includes("/comments")) return Response.json({ comments: [] });
       if (path === "/api/commitments?pageSize=100") return Response.json({ commitments: [] });
       if (path === "/api/reveal") {
         return Response.json({
@@ -91,12 +92,25 @@ describe("Work evidence", () => {
     vi.stubGlobal("fetch", fetcher);
 
     render(<TaskDetailView taskId="tsk_aaaaaaaa11111111" />);
+    await screen.findByTestId("task-technical-details");
 
-    expect(await screen.findByText("Recorded origin evidence")).toBeTruthy();
-    expect(screen.getByText("review")).toBeTruthy();
-    expect(screen.getByText(/Review decision rdec_aaaaaaaa11111111/)).toBeTruthy();
-    expect(screen.getByText(/History receipt tsh_closure001closure001/)).toBeTruthy();
+    // Diagnostics are collapsed by default and history is not read on open.
+    expect(screen.queryByText(new RegExp(closure))).toBeNull();
+    expect(screen.queryAllByText(new RegExp(closureHistory))).toHaveLength(0);
+    expect(fetcher.mock.calls.some(([path]) => String(path).includes("/history"))).toBe(false);
+
+    await userEvent.click(screen.getByText("Technical details"));
+
+    // Every diagnostic the previous primary-flow panel exposed is still reachable.
+    expect(await screen.findByText(new RegExp(closure))).toBeTruthy();
+    expect(screen.getByText(new RegExp(origin))).toBeTruthy();
+    expect(screen.getByText(/rdec_aaaaaaaa11111111/)).toBeTruthy();
+    // The closure history id appears both as provenance and on its history row.
+    expect((await screen.findAllByText(new RegExp(closureHistory))).length).toBeGreaterThan(0);
     expect(screen.getByText("Closure receipt")).toBeTruthy();
+    await waitFor(() =>
+      expect(fetcher.mock.calls.some(([path]) => String(path).includes("/history"))).toBe(true),
+    );
     expect(fetcher.mock.calls.some(([path]) => String(path) === "/api/reveal")).toBe(false);
 
     await userEvent.click(screen.getByRole("button", { name: "View closure evidence" }));
@@ -113,6 +127,7 @@ describe("Work evidence", () => {
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
       const path = String(input);
       if (path.includes("/history")) return Response.json({ history: [] });
+      if (path.includes("/comments")) return Response.json({ comments: [] });
       if (path === "/api/commitments?pageSize=100") return Response.json({ commitments: [] });
       return Response.json({ task: {
         task_id: "tsk_bbbbbbbb22222222", title: "Legacy terminal task", description: null,
@@ -128,8 +143,20 @@ describe("Work evidence", () => {
     }));
 
     render(<TaskDetailView taskId="tsk_bbbbbbbb22222222" />);
-    expect(await screen.findByText("Task is terminal, but closure evidence metadata was unavailable.")).toBeTruthy();
+    await screen.findByTestId("task-technical-details");
+
+    // Primary UX states the terminal outcome in product language.
+    expect(screen.getByText("This task is closed.")).toBeTruthy();
+
+    await userEvent.click(screen.getByText("Technical details"));
+
+    // The diagnostic states the absence rather than inventing a reference, and
+    // offers no reveal path for evidence that was never recorded.
+    const identity = await screen.findByRole("region", { name: "Provenance" });
+    const closureRow = within(identity).getByText("Closure evidence ref").parentElement;
+    expect(closureRow?.textContent).not.toMatch(/cap_/);
     expect(screen.queryByRole("button", { name: "View closure evidence" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy closure evidence reference" })).toBeNull();
   });
 
   it("applies a terminal Task transition without fabricating closure evidence", async () => {
@@ -156,15 +183,24 @@ describe("Work evidence", () => {
       }
       if (path === `/api/tasks/${task.task_id}`) return Response.json({ task: current });
       if (path.includes("/history")) return Response.json({ history: [] });
+      if (path.includes("/comments")) return Response.json({ comments: [] });
       if (path === "/api/commitments?pageSize=100") return Response.json({ commitments: [] });
       throw new Error(`unexpected request: ${path}`);
     });
     vi.stubGlobal("fetch", fetcher);
     render(<TaskDetailView taskId={task.task_id} />);
-    expect(await screen.findByText("Direct principal authoring")).toBeTruthy();
+    await screen.findByTestId("task-close-control");
+
+    // Direct-Principal closure asks for no authored note anywhere in the flow.
     expect(screen.queryByLabelText("Closure note")).toBeNull();
-    await userEvent.selectOptions(screen.getByLabelText("Move to"), "completed");
-    await userEvent.click(screen.getByRole("button", { name: "Apply transition" }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Close Task" }));
+    const confirmation = screen.getByRole("alertdialog");
+    expect(within(confirmation).queryByRole("textbox")).toBeNull();
+    expect(confirmation.querySelector("input, textarea")).toBeNull();
+    expect(fetcher.mock.calls.some(([path]) => String(path).includes("/transition"))).toBe(false);
+
+    await userEvent.click(screen.getByRole("button", { name: "Confirm Closed" }));
     await waitFor(() => {
       expect(fetcher.mock.calls.some(([path]) => String(path).includes("/transition"))).toBe(true);
     });

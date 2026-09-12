@@ -18,6 +18,27 @@ afterEach(() => {
 
 const PRINCIPAL_A = "aaaa0001-0000-0000-0000-000000000001";
 const PRINCIPAL_B = "bbbb0002-0000-0000-0000-000000000002";
+const TASK_ID = "tsk_aaaaaaaa11111111";
+
+/** Mount the runtime once and read the live value back for registry assertions. */
+function renderRuntime(): () => ReturnType<typeof useTaskRuntime> {
+  const captured: { runtime: ReturnType<typeof useTaskRuntime> | null } = { runtime: null };
+
+  function Capture() {
+    const runtime = useTaskRuntime();
+    useEffect(() => {
+      captured.runtime = runtime;
+    }, [runtime]);
+    return null;
+  }
+
+  render(
+    <TaskRuntimeProvider principalId={PRINCIPAL_A} sessionEpoch="epoch-1">
+      <Capture />
+    </TaskRuntimeProvider>,
+  );
+  return () => captured.runtime!;
+}
 
 function RuntimeProbe() {
   const runtime = useTaskRuntime();
@@ -417,5 +438,155 @@ describe("TaskRuntimeProvider", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent("The Task could not be updated.");
     expect(document.activeElement).toBe(button);
+  });
+  it("reconciles registered active Task queries for any confirmed Task mutation kind", () => {
+    const runtime = renderRuntime();
+    const revalidate = vi.fn();
+    runtime().reconciliation.registerActiveTaskQuery("work:today", revalidate);
+
+    for (const kind of ["status", "due", "close", "cancel", "commentCreate"] as const) {
+      runtime().reconciliation.notifyTaskMutationConfirmed({
+        kind,
+        task: { task_id: TASK_ID, version: 4 },
+        mutationId: `attempt-${kind}`,
+      });
+    }
+
+    expect(revalidate).toHaveBeenCalledTimes(5);
+    // The confirmed Task is never handed to a list query.
+    expect(revalidate).toHaveBeenCalledWith();
+  });
+
+  it("schedules one revalidation per logical mutation even when notified twice", () => {
+    const runtime = renderRuntime();
+    const revalidate = vi.fn();
+    runtime().reconciliation.registerActiveTaskQuery("work:today", revalidate);
+
+    const confirmation = {
+      kind: "status" as const,
+      task: { task_id: TASK_ID, version: 4 },
+      mutationId: "attempt-status-1",
+    };
+    runtime().reconciliation.notifyTaskMutationConfirmed(confirmation);
+    runtime().reconciliation.notifyTaskMutationConfirmed(confirmation);
+    expect(revalidate).toHaveBeenCalledTimes(1);
+
+    // A different logical mutation is a different reconciliation.
+    runtime().reconciliation.notifyTaskMutationConfirmed({
+      ...confirmation,
+      mutationId: "attempt-status-2",
+    });
+    expect(revalidate).toHaveBeenCalledTimes(2);
+  });
+
+  it("settles a generalized confirmed mutation with zero registered queries", () => {
+    const runtime = renderRuntime();
+    expect(runtime().reconciliation.activeTaskQueryIds()).toEqual([]);
+    expect(() =>
+      runtime().reconciliation.notifyTaskMutationConfirmed({
+        kind: "close",
+        task: { task_id: TASK_ID, version: 9 },
+        mutationId: "attempt-close-1",
+      }),
+    ).not.toThrow();
+  });
+
+  it("does not let a failing or hanging revalidation fail a confirmed Task mutation", () => {
+    const runtime = renderRuntime();
+    const healthy = vi.fn();
+    const reconciliation = runtime().reconciliation;
+    reconciliation.registerActiveTaskQuery("throws", () => {
+      throw new Error("read exploded");
+    });
+    reconciliation.registerActiveTaskQuery("rejects", () => Promise.reject(new Error("read rejected")));
+    reconciliation.registerActiveTaskQuery("hangs", () => new Promise<void>(() => undefined));
+    reconciliation.registerActiveTaskQuery("healthy", healthy);
+
+    expect(() =>
+      reconciliation.notifyTaskMutationConfirmed({ kind: "due", taskId: TASK_ID, mutationId: "a1" }),
+    ).not.toThrow();
+    expect(healthy).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps notifyCreateConfirmed working through the generalized notification", () => {
+    const runtime = renderRuntime();
+    const revalidate = vi.fn();
+    runtime().reconciliation.registerActiveTaskQuery("work:today", revalidate);
+    runtime().reconciliation.notifyCreateConfirmed({ task: { task_id: TASK_ID } }, "attempt-create-1");
+    runtime().reconciliation.notifyCreateConfirmed({ task: { task_id: TASK_ID } }, "attempt-create-1");
+    expect(revalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops generalized reconciliation registrations when the epoch is replaced", () => {
+    const seen: ReturnType<typeof useTaskRuntime>["reconciliation"][] = [];
+
+    function Capture() {
+      const runtime = useTaskRuntime();
+      useEffect(() => {
+        seen.push(runtime.reconciliation);
+      }, [runtime]);
+      return <span data-testid="runtime-session">{runtime.sessionKey}</span>;
+    }
+
+    function Outer() {
+      const [epoch, setEpoch] = useState("epoch-1");
+      return (
+        <TaskRuntimeProvider principalId={PRINCIPAL_A} sessionEpoch={epoch}>
+          <Capture />
+          <button type="button" onClick={() => setEpoch("epoch-2")}>
+            New epoch
+          </button>
+        </TaskRuntimeProvider>
+      );
+    }
+
+    render(<Outer />);
+    const first = seen[0]!;
+    const revalidate = vi.fn();
+    first.registerActiveTaskQuery("work:today", revalidate);
+
+    act(() => {
+      screen.getByRole("button", { name: "New epoch" }).click();
+    });
+
+    expect(first.isDisposed()).toBe(true);
+    first.notifyTaskMutationConfirmed({ kind: "status", taskId: TASK_ID, mutationId: "a1" });
+    expect(revalidate).not.toHaveBeenCalled();
+    expect(seen[seen.length - 1]!.activeTaskQueryIds()).toEqual([]);
+  });
+
+  it("bars an older in-flight read from overwriting a confirmed Task mutation", async () => {
+    const runtime = renderRuntime();
+    const detailKey = buildTaskQueryKey({
+      mode: "detail",
+      taskId: TASK_ID,
+      sessionEpoch: "epoch-1",
+    });
+    const readCoordinator = runtime().readCoordinator;
+
+    let releaseStaleRead!: (value: unknown) => void;
+    const staleRead = readCoordinator.read(detailKey, async () => {
+      return new Promise((resolve) => {
+        releaseStaleRead = resolve;
+      });
+    });
+
+    // The write confirms while the older read is still in flight.
+    const confirmed = { task_id: TASK_ID, version: 5, lifecycle_state: "waiting" };
+    runtime().reconciliation.notifyTaskMutationConfirmed({
+      kind: "status",
+      task: confirmed,
+      mutationId: "attempt-status-9",
+    });
+    readCoordinator.applyConfirmed(detailKey, confirmed, { entityId: TASK_ID });
+
+    const result = await act(async () => {
+      releaseStaleRead({ task_id: TASK_ID, version: 4, lifecycle_state: "open" });
+      return staleRead;
+    });
+
+    expect(result.outcome).toBe("barrier_blocked");
+    expect(result.silent).toBe(true);
+    expect(readCoordinator.getSnapshot(detailKey)?.lastConfirmed).toBe(confirmed);
   });
 });

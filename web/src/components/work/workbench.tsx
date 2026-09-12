@@ -102,6 +102,188 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   const commitmentGeneration = useRef(0);
   const activeCommitmentRead = useRef<AbortController | null>(null);
   const detailTrigger = useRef<HTMLElement | null>(null);
+  const workHeading = useRef<HTMLHeadingElement | null>(null);
+  /**
+   * The row that currently holds focus, and where it sits in the visible list.
+   *
+   * Focus restoration reacts to focus actually being lost rather than predicting
+   * which write will lose it. An earlier design armed a handoff when a mutation
+   * was dispatched and spent it on a later list change; because a list change
+   * carries no Task identity, an unrelated read — a freshness poll, or a second
+   * row's write confirming first — could spend the handoff armed for another
+   * row, and when that row really did go there was nothing left to catch focus.
+   * Recording where focus is cannot make that mistake: there is one entry, it is
+   * whichever row the user is actually in, and it is only acted on when that
+   * exact row leaves and focus has genuinely fallen to the document body.
+   */
+  const focusedRow = useRef<{ readonly taskId: string; readonly index: number; readonly element: HTMLElement } | null>(null);
+  /** The rendered perspective, whichever it is — the only place Task rows live. */
+  const perspectiveRegion = useRef<HTMLDivElement | null>(null);
+
+
+  /**
+   * The Task rows currently on screen, in the order the server returned them.
+   *
+   * Scoped to the rendered perspective rather than to one perspective's own
+   * container label: List, Board and Calendar lay their Tasks out differently
+   * while carrying the same `data-work-item`, and a List-only query found none
+   * of the others — so every restore in Board and Calendar fell through to the
+   * heading. Every element carrying the attribute is inside this subtree today,
+   * so the scoping is a guard against that ceasing to be true, not a fix in its
+   * own right; the fix is that the query is no longer specific to List.
+   */
+  function visibleRowElements(): readonly HTMLElement[] {
+    const container = perspectiveRegion.current;
+    return container ? Array.from(container.querySelectorAll<HTMLElement>("[data-work-item]")) : [];
+  }
+
+  /** Whether a control is disabled, which is why the browser let go of it. */
+  function isDisabled(element: HTMLElement): boolean {
+    return typeof element.matches === "function" && element.matches(":disabled");
+  }
+
+  /** The title/details trigger of a row — the stable thing to hand focus to. */
+  function rowTarget(row: HTMLElement | undefined): HTMLElement | null {
+    return row?.querySelector<HTMLElement>("a[href]") ?? null;
+  }
+
+  /**
+   * Remember which row focus is in, whenever it moves.
+   *
+   * `focusin` bubbles, so one handler on the list covers every row and every
+   * control inside one, including controls a row mounts after this renders.
+   */
+  function rememberFocusedRow(event: React.FocusEvent<HTMLElement>) {
+    const row = (event.target as HTMLElement).closest<HTMLElement>("[data-work-item]");
+    const taskId = row?.getAttribute("data-work-item") ?? null;
+    if (!row || !taskId) return;
+    /*
+      Position is taken from the element itself, never by looking its Task up
+      again. One Task can hold several places at once: Calendar gives it a marker
+      per date, all carrying the same identity, so a lookup by id answers with
+      the first of them — and a user standing on a Task's deferred-until marker
+      at the foot of the calendar was recorded as standing at its deadline near
+      the top, then sent there when their marker left.
+    */
+    /*
+      A focus event inside this subtree always lands in a row this subtree can
+      place: `closest` walked up from the event target, so the row it found is by
+      construction one of the elements this query returns.
+    */
+    focusedRow.current = {
+      taskId,
+      index: visibleRowElements().indexOf(row),
+      element: event.target as HTMLElement,
+    };
+  }
+
+  /*
+    Restore focus after a list change took it away.
+
+    Runs on the rows the server returned, not on a mutation callback: the row
+    that was mutated may already be unmounted by then, so nothing it fires can
+    be relied on.
+
+    Two conditions, and together they are the whole of the design: focus must
+    have fallen to the document body, and the element that was holding it must
+    have actually left the document. That is what makes this safe for any list
+    change whatever its cause — a write confirming, a freshness poll,
+    pagination, a change of view, a second row's write landing first. A change
+    that does not cost the user their focus is left alone, so nothing has to be
+    armed when a write is dispatched, stood down when it fails, or cleared on
+    navigation. An earlier design predicted which write would cost focus and
+    armed a handoff for it; because a list change carries no Task identity, an
+    unrelated read could spend the handoff armed for another row, and focus was
+    lost precisely when it mattered most.
+
+    Placement prefers the Task the user was actually in, if the list still has
+    it; otherwise whatever now occupies its place, then the row before it, and
+    only then the heading — never nothing.
+  */
+  useEffect(() => {
+    if (!focusedRow.current) return;
+    const frame = requestAnimationFrame(() => {
+      const lost = focusedRow.current;
+      if (!lost) return;
+      /*
+        A thrown error here is invisible — nothing awaits this callback — and it
+        would leave a stale record behind to mislead the next list change. Fail
+        by forgetting where focus was, which costs one restore rather than every
+        restore after it.
+      */
+      try {
+        const active = document.activeElement;
+        const stillMounted = lost.element.isConnected;
+
+        /*
+          Focus is somewhere real: the row kept it, or the detail sheet, a
+          dialog, or the user's own click took it deliberately.
+
+          The record is maintained rather than merely consumed. If the row it
+          names has since left while the user was working elsewhere, it is
+          finished and must be dropped — kept, it would be read on some later
+          change as "focus was taken from this row" and haul the user out of
+          wherever they had got to. If the row is still here, its position is
+          refreshed: rows above it leave without the user touching anything, and
+          no new focus event fires to correct a remembered index that is by then
+          pointing at somebody else's row.
+        */
+        if (active && active !== document.body) {
+          if (!stillMounted) {
+            focusedRow.current = null;
+            return;
+          }
+          const row = lost.element.closest<HTMLElement>("[data-work-item]");
+          const moved = row ? visibleRowElements().indexOf(row) : -1;
+          focusedRow.current = { ...lost, index: moved };
+          return;
+        }
+
+        /*
+          Focus is on the body and the control the user was in is still right
+          there. Either they put it down themselves — clicking the page
+          background, dismissing something — or the row disabled it under them
+          while a write runs, which a browser answers by dropping focus to the
+          body. The first is a choice and is owed nothing; the second is the
+          very loss this exists to repair.
+
+          A disabled control is the difference. Reading them as the same thing
+          meant any refresh landing mid-write — a freshness poll, another row's
+          write, pagination — threw the record away, and when the write then
+          confirmed and took the row, there was nothing left to catch focus.
+        */
+        if (stillMounted && !isDisabled(lost.element)) {
+          focusedRow.current = null;
+          return;
+        }
+        if (stillMounted) return;
+
+        focusedRow.current = null;
+        const after = visibleRowElements();
+        const survivor = after.find(
+          (candidate) => candidate.getAttribute("data-work-item") === lost.taskId,
+        );
+        /*
+          The remembered position can sit past the end of the list: several rows
+          can leave in one update, and a Task in the Calendar leaves by as many
+          places as it held dates. Clamp to the last row still standing rather
+          than reading past it — landing on the nearest surviving neighbour is
+          the whole point, and giving up here sent the user to the heading with
+          perfectly good rows in front of them.
+        */
+        const clamped = Math.min(lost.index, after.length - 1);
+        const target = rowTarget(survivor) ?? rowTarget(after[clamped]);
+        if (target) {
+          target.focus();
+          return;
+        }
+        workHeading.current?.focus();
+      } catch {
+        focusedRow.current = null;
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [rows]);
   const newTaskTrigger = useRef<HTMLButtonElement | null>(null);
 
   const taskMode = view !== "commitments";
@@ -134,6 +316,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
     ],
   );
   const taskQueryKeyId = serializeTaskQueryKey(taskQueryKey);
+
 
   const applyTaskList = useCallback((payload: TaskListPayload) => {
     setRows(payload.tasks);
@@ -286,6 +469,15 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   }
 
   function select(next: WorkView) {
+    /*
+      Cleared explicitly, not left to the query key.
+
+      Toggling between Tasks and Commitments empties the list, which re-runs
+      focus resolution against no rows. Nothing needs clearing here: the control
+      the user just pressed still holds focus, so the restore declines to move
+      it. The earlier design had to clear at each navigation site by hand and
+      missed pagination and this toggle in turn.
+    */
     if (next !== "commitments") setLastTaskView(next as TaskView);
     setState("loading");
     setRows([]);
@@ -334,6 +526,25 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
     sync({ task: type === "task" ? id : undefined, commitmentId: type === "commitment" ? id : undefined });
   }
 
+
+  /**
+   * A Task mutation was confirmed by the server.
+   *
+   * Reconciliation is authoritative — the server decides whether the Task still
+   * belongs in this filter, and nothing is inserted or removed locally.
+   */
+  function onTaskMutationConfirmed() {
+    void Promise.resolve(notifyMutationConfirmed()).catch(() => undefined);
+  }
+
+  /**
+   * The Comment affordance. Opens the Task's own Activity rather than giving the
+   * row a second comments implementation to keep in step with the first.
+   */
+  function openActivity(taskId: string, title: string, trigger: HTMLElement) {
+    openDetail("task", taskId, title, trigger);
+  }
+
   function closeDetail() {
     setDetail(undefined);
     sync({ task: undefined, commitmentId: undefined });
@@ -345,7 +556,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
     <section aria-labelledby="work-heading" className="mx-auto max-w-5xl pb-24">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 id="work-heading" className="text-2xl font-semibold text-text-primary">Work</h1>
+          <h1 id="work-heading" ref={workHeading} tabIndex={-1} className="text-2xl font-semibold text-text-primary">Work</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted">Tasks and commitments you are tracking.</p>
         </div>
         <Button
@@ -493,14 +704,23 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
           />
         ) : null}
         {state === "ready" ? (
-          <WorkPerspectives
-            perspective={perspective}
-            rows={rows}
-            commitments={view === "commitments"}
-            selectedTaskIds={selectedTaskIds}
-            onSelectTask={toggleTask}
-            onOpen={openDetail}
-          />
+          /*
+            React's `onFocus` is `focusin`, which bubbles — so this one handler
+            sees focus land anywhere in the list, including on controls a row
+            mounts later. It is a listener, not an interactive element.
+          */
+          <div ref={perspectiveRegion} onFocus={rememberFocusedRow}>
+            <WorkPerspectives
+              perspective={perspective}
+              rows={rows}
+              commitments={view === "commitments"}
+              selectedTaskIds={selectedTaskIds}
+              onSelectTask={toggleTask}
+              onOpen={openDetail}
+              onOpenActivity={openActivity}
+              onTaskMutationConfirmed={onTaskMutationConfirmed}
+            />
+          </div>
         ) : null}
       </div>
       {disclosure && state !== "failed" ? <Disclosure details={disclosure} /> : null}

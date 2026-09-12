@@ -46,6 +46,8 @@ import {
   createTaskMutationCoordinator,
   type TaskMutationCoordinator,
 } from "@/lib/task/mutation-coordinator";
+import type { MutationKind } from "@/lib/task/mutation-state";
+import { buildTaskQueryKey } from "@/lib/task/query-key";
 import {
   createTaskReadCoordinator,
   type TaskReadCoordinator,
@@ -81,30 +83,123 @@ function createDefaultMutationCoordinatorHandle(): TaskMutationCoordinatorHandle
 export type TaskQueryRevalidator = () => void | Promise<unknown>;
 
 /**
- * Session-scoped confirmed-create reconciliation seam.
+ * One confirmed Task mutation, described for reconciliation.
  *
- * Any surface that can confirm a Task create — Work's own sheet or a
- * shell-launched Capture create that Work does not own — calls
- * `notifyCreateConfirmed`. Every Task query that is mounted right now is asked
- * to revalidate against the server. This is not a cache: nothing is stored,
- * nothing is merged client-side, and no timer is owned. Registrations live only
- * as long as this session bundle and are dropped on principal/epoch replacement.
+ * `task` is the server's authoritative Task when the confirming response carried
+ * one; it is used only to raise the entity barrier, never merged into a list.
+ * `mutationId` is the logical attempt identity (the mutation coordinator's
+ * `attemptId`) and is the dedupe key: repeated notifications carrying the same
+ * `mutationId` schedule exactly one revalidation pass.
+ */
+export interface TaskMutationConfirmation {
+  readonly kind: MutationKind;
+  readonly task?: unknown;
+  readonly taskId?: string;
+  readonly mutationId?: string;
+}
+
+/**
+ * Session-scoped confirmed-mutation reconciliation seam.
+ *
+ * Any surface that can confirm a Task mutation — Work's create sheet, a
+ * shell-launched Capture create Work does not own, the Work list row controls,
+ * or Task detail — calls `notifyTaskMutationConfirmed`. Every Task query that is
+ * mounted right now is asked to revalidate against the server. This is not a
+ * cache: nothing is stored, nothing is merged client-side, and no timer is
+ * owned. Registrations live only as long as this session bundle and are dropped
+ * on principal/epoch replacement.
  */
 export interface TaskReconciliationRegistry {
   /** Register a mounted query's revalidation hook. Returns its unregister fn. */
   registerActiveTaskQuery: (queryId: string, revalidate: TaskQueryRevalidator) => () => void;
   unregisterActiveTaskQuery: (queryId: string) => void;
-  /** Fire-and-forget: a create must confirm even with zero active queries. */
-  notifyCreateConfirmed: (confirmedTask?: unknown) => void;
+  /**
+   * Fire-and-forget: a confirmed mutation must settle even with zero active
+   * queries, and a failing or hanging revalidation never propagates.
+   */
+  notifyTaskMutationConfirmed: (input: TaskMutationConfirmation) => void;
+  /** Create-shaped convenience over {@link notifyTaskMutationConfirmed}. */
+  notifyCreateConfirmed: (confirmedTask?: unknown, mutationId?: string) => void;
   /** Registration ids currently active — diagnostics and tests only. */
   activeTaskQueryIds: () => readonly string[];
   isDisposed: () => boolean;
   dispose: () => void;
 }
 
-function createTaskReconciliationRegistry(): TaskReconciliationRegistry {
+/** Bounded so one long session cannot grow the dedupe ledger without limit. */
+const RECONCILE_DEDUPE_LIMIT = 64;
+
+function readTaskId(task: unknown): string | undefined {
+  if (!task || typeof task !== "object") return undefined;
+  const candidate = task as { task_id?: unknown; task?: unknown };
+  if (typeof candidate.task_id === "string" && candidate.task_id) return candidate.task_id;
+  if (candidate.task !== undefined) return readTaskId(candidate.task);
+  return undefined;
+}
+
+function unwrapTask(task: unknown): unknown {
+  if (!task || typeof task !== "object") return task;
+  const candidate = task as { task_id?: unknown; task?: unknown };
+  if (typeof candidate.task_id === "string") return task;
+  if (candidate.task !== undefined) return unwrapTask(candidate.task);
+  return task;
+}
+
+function createTaskReconciliationRegistry(options: {
+  readonly readCoordinator: TaskReadCoordinator;
+  readonly sessionEpoch: string;
+}): TaskReconciliationRegistry {
   const queries = new Map<string, TaskQueryRevalidator>();
+  /** Logical mutation identities already reconciled in this session bundle. */
+  const settled = new Set<string>();
   let disposed = false;
+
+  function rememberMutation(mutationId: string): boolean {
+    if (settled.has(mutationId)) return false;
+    if (settled.size >= RECONCILE_DEDUPE_LIMIT) {
+      const oldest = settled.values().next().value;
+      if (oldest !== undefined) settled.delete(oldest);
+    }
+    settled.add(mutationId);
+    return true;
+  }
+
+  function raiseEntityBarrier(taskId: string): void {
+    try {
+      options.readCoordinator.raiseMutationBarrier(
+        buildTaskQueryKey({ mode: "detail", taskId, sessionEpoch: options.sessionEpoch }),
+        { entityId: taskId },
+      );
+    } catch {
+      // A disposed or unavailable read coordinator must never fail a confirmed
+      // mutation; the barrier is an ordering optimisation, not the write itself.
+    }
+  }
+
+  function notifyTaskMutationConfirmed(input: TaskMutationConfirmation): void {
+    if (disposed) return;
+    // One logical mutation schedules exactly one revalidation pass, however
+    // many surfaces report the same confirmation.
+    if (input.mutationId !== undefined && !rememberMutation(input.mutationId)) return;
+
+    const authoritative = unwrapTask(input.task);
+    const taskId = input.taskId ?? readTaskId(input.task);
+    // Authoritative Task in hand: an older in-flight read for this entity must
+    // not be allowed to overwrite the newer confirmed state.
+    if (authoritative !== undefined && authoritative !== null && taskId) {
+      raiseEntityBarrier(taskId);
+    }
+
+    // The confirmed Task is deliberately not applied to any list: Work bucket
+    // and filter membership is a server answer, never a client derivation.
+    for (const revalidate of Array.from(queries.values())) {
+      try {
+        void Promise.resolve(revalidate()).catch(() => undefined);
+      } catch {
+        // A failing query revalidation must never fail a confirmed mutation.
+      }
+    }
+  }
 
   return {
     registerActiveTaskQuery(queryId, revalidate) {
@@ -117,18 +212,9 @@ function createTaskReconciliationRegistry(): TaskReconciliationRegistry {
     unregisterActiveTaskQuery(queryId) {
       queries.delete(queryId);
     },
-    notifyCreateConfirmed(confirmedTask?: unknown) {
-      // The confirmed Task is deliberately not applied to any list: Work bucket
-      // and filter membership is a server answer, never a client derivation.
-      void confirmedTask;
-      if (disposed) return;
-      for (const revalidate of Array.from(queries.values())) {
-        try {
-          void Promise.resolve(revalidate()).catch(() => undefined);
-        } catch {
-          // A failing query revalidation must never fail a confirmed create.
-        }
-      }
+    notifyTaskMutationConfirmed,
+    notifyCreateConfirmed(confirmedTask?: unknown, mutationId?: string) {
+      notifyTaskMutationConfirmed({ kind: "create", task: confirmedTask, mutationId });
     },
     activeTaskQueryIds() {
       return Array.from(queries.keys());
@@ -139,6 +225,7 @@ function createTaskReconciliationRegistry(): TaskReconciliationRegistry {
     dispose() {
       disposed = true;
       queries.clear();
+      settled.clear();
     },
   };
 }
@@ -151,7 +238,7 @@ export interface TaskRuntimeValue {
   readonly createIntents: CreateIntentStore;
   readonly readCoordinator: TaskReadCoordinator;
   readonly mutationCoordinator: TaskMutationCoordinatorHandle;
-  /** Confirmed-create → active-Task-query reconciliation seam (session-scoped). */
+  /** Confirmed-mutation → active-Task-query reconciliation seam (session-scoped). */
   readonly reconciliation: TaskReconciliationRegistry;
   readonly feedback: MutationFeedbackValue;
 }
@@ -177,15 +264,16 @@ function createBundle(
   sessionEpoch: string,
   createMutationCoordinator: CreateMutationCoordinatorFn | undefined,
 ): TaskRuntimeBundle {
+  const readCoordinator = createTaskReadCoordinator();
   return {
     sessionKey: buildSessionKey(principalId, sessionEpoch),
     principalId,
     sessionEpoch,
     createIntents: createIntentStore(),
-    readCoordinator: createTaskReadCoordinator(),
+    readCoordinator,
     mutationCoordinator:
       createMutationCoordinator?.() ?? createDefaultMutationCoordinatorHandle(),
-    reconciliation: createTaskReconciliationRegistry(),
+    reconciliation: createTaskReconciliationRegistry({ readCoordinator, sessionEpoch }),
   };
 }
 

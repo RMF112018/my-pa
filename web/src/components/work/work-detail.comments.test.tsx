@@ -3,6 +3,10 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { TaskDetailView } from "@/components/work/work-detail";
+import {
+  TASK_COMMENT_ADDED_MESSAGE,
+  TASK_OPERATION_AMBIGUOUS_MESSAGE,
+} from "@/components/tasks/use-task-operations";
 import type { TaskDetail } from "@/contracts/work";
 
 afterEach(() => {
@@ -59,6 +63,7 @@ function commentStub(postOutcomes: readonly (number | "throw")[]) {
   const posted: { body: string; idempotencyKey: string }[] = [];
   let persisted: readonly (typeof COMMENT)[] = [];
   let post = 0;
+  let version = TASK.version;
   const fetcher = vi.fn<typeof fetch>(async (input, init) => {
     const path = String(input);
     const method = (init?.method ?? "GET").toUpperCase();
@@ -75,7 +80,11 @@ function commentStub(postOutcomes: readonly (number | "throw")[]) {
     if (path.includes("/comments")) return json({ comments: persisted });
     if (path.includes("/history")) return json({ history: [] });
     if (path === "/api/commitments?pageSize=100") return json({ commitments: [] });
-    if (path === `/api/tasks/${TASK_ID}`) return json({ task: TASK });
+    if (path === `/api/tasks/${TASK_ID}` && method === "PATCH") {
+      version += 1;
+      return json({ task: { ...TASK, version } });
+    }
+    if (path === `/api/tasks/${TASK_ID}`) return json({ task: { ...TASK, version } });
     throw new Error(`unexpected request: ${method} ${path}`);
   });
   return { fetcher, posted };
@@ -98,6 +107,8 @@ describe("Task comments through the shared mutation coordinator", () => {
     expect(await screen.findByText("Reviewer confirmed the revised scope.")).toBeTruthy();
     expect(posted).toHaveLength(1);
     expect(posted[0].idempotencyKey).toMatch(/^task-comment-/);
+    // The outcome speaks the shared binder's product copy, not local wording.
+    expect(await screen.findByText(TASK_COMMENT_ADDED_MESSAGE)).toBeTruthy();
   });
 
   it("reuses the same idempotency key when an ambiguous comment is retried", async () => {
@@ -110,6 +121,8 @@ describe("Task comments through the shared mutation coordinator", () => {
     await addComment(user, "Ambiguous comment");
 
     const retry = await screen.findByRole("button", { name: "Retry" });
+    // An unconfirmed attempt is reported as unconfirmed, never as persisted.
+    expect(screen.getAllByText(TASK_OPERATION_AMBIGUOUS_MESSAGE).length).toBeGreaterThan(0);
     await user.click(retry);
 
     await waitFor(() => expect(posted).toHaveLength(2));
@@ -132,6 +145,43 @@ describe("Task comments through the shared mutation coordinator", () => {
     expect(row.textContent).toContain("Never persisted");
     // The failed body is not presented as part of the persisted thread.
     expect(screen.queryByRole("listitem", { name: "Never persisted" })).toBeNull();
+  });
+
+  it("keeps an unsent comment when a bounded field save advances the Task", async () => {
+    /*
+      Task detail writes through two paths, and they must not collide. A comment
+      that failed is still the user's unsent words, held for retry. Saving a
+      title advances the canonical version — and if that rebuilt the operation
+      binder, the failed row would vanish with it and the words would be gone
+      without ever being sent or refused a second time.
+    */
+    const user = userEvent.setup();
+    const { fetcher } = commentStub([503]);
+    vi.stubGlobal("fetch", fetcher);
+
+    render(<TaskDetailView taskId={TASK_ID} />);
+    await addComment(user, "Words the user has not lost");
+    const failed = await screen.findByTestId(/task-comment-pending-/);
+    expect(failed.getAttribute("data-status")).toBe("failed");
+
+    // Save a bounded field, which advances the canonical version.
+    const title = await screen.findByDisplayValue(TASK.title);
+    await user.type(title, " revised");
+    await user.click(screen.getByRole("button", { name: "Save title" }));
+    await waitFor(() =>
+      expect(
+        fetcher.mock.calls.some(
+          ([input, init]) =>
+            String(input) === `/api/tasks/${TASK_ID}` &&
+            String(init?.method).toUpperCase() === "PATCH",
+        ),
+      ).toBe(true),
+    );
+
+    // The unsent comment is still there, still truthful, still retryable.
+    const survivor = screen.getByTestId(/task-comment-pending-/);
+    expect(survivor.getAttribute("data-status")).toBe("failed");
+    expect(survivor.textContent).toContain("Words the user has not lost");
   });
 
   it("does not offer a comment composer before the canonical Task hydrates", async () => {

@@ -228,6 +228,33 @@ describe("one field is the whole precondition", () => {
     expect(screen.queryByTestId("capture-refused")).toBeNull();
   });
 
+  it("returns focus to the chooser when reopened from the note branch", async () => {
+    /*
+      The stale-closure path. Reopening runs two effects on the same `open`
+      transition: one resets the stage to the chooser, one moves focus — and the
+      focus effect's first run still closes over the previous `stage`, which was
+      "entry". It is the effect cleanup cancelling that stale timeout that saves
+      this, which is subtle enough to break silently in a refactor. A native
+      <dialog> restores focus to its invoker on close by itself, so nothing
+      outside this assertion would notice.
+    */
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <CaptureDialog open onClose={() => {}} principalId={PRINCIPAL_ID} />,
+    );
+
+    await user.click(await screen.findByTestId("capture-choice-quick_note"));
+    await waitFor(() => expect(screen.getByTestId("capture-field")).toHaveFocus());
+
+    rerender(<CaptureDialog open={false} onClose={() => {}} principalId={PRINCIPAL_ID} />);
+    rerender(<CaptureDialog open onClose={() => {}} principalId={PRINCIPAL_ID} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("capture-choice-create_task")).toHaveFocus(),
+    );
+    expect(screen.queryByTestId("capture-field")).toBeNull();
+  });
+
   it("offers the kind as a default rather than a step, and sends the selected one", async () => {
     const spy = respond({
       shape: "backend",

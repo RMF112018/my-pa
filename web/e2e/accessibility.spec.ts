@@ -21,7 +21,7 @@
  */
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import { signIn, syntheticNote, visibleCaptureButton, openAccount, pinInspector } from "./fixtures";
+import { signIn, syntheticNote, visibleCaptureButton, openCaptureNote, openAccount, pinInspector } from "./fixtures";
 
 const WCAG = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 
@@ -123,7 +123,12 @@ test.describe("axe-core, in Chromium, against the rendered page", () => {
 
   test("the capture dialog, open, has no detectable violation", async ({ page }) => {
     await signIn(page);
+    // Both stages are scanned: the WP-TUX-04 chooser and the note branch behind it.
     await visibleCaptureButton(page).click();
+    await expect(page.getByTestId("capture-chooser")).toBeVisible();
+    expect(await scan(page), "capture chooser accessibility violations").toEqual([]);
+
+    await page.getByTestId("capture-chooser").getByRole("button", { name: "Quick note" }).click();
     await expect(page.getByTestId("capture-field")).toBeFocused();
     expect(await scan(page), "capture dialog accessibility violations").toEqual([]);
   });
@@ -155,7 +160,7 @@ test.describe("axe-core, in Chromium, against the rendered page", () => {
     await useDarkTheme(page);
     await context.setOffline(true);
 
-    await visibleCaptureButton(page).click();
+    await openCaptureNote(page);
     await page.getByTestId("capture-field").fill(syntheticNote("dark-accessibility"));
     await page.getByRole("button", { name: "Save" }).click();
     await expect(page.getByTestId("capture-queued")).toBeVisible({ timeout: 30_000 });
@@ -266,7 +271,7 @@ test.describe("what axe cannot decide", () => {
   });
 
   test("a state change is announced, not merely rendered", async ({ page }) => {
-    await visibleCaptureButton(page).click();
+    await openCaptureNote(page);
     await page.getByTestId("capture-field").fill("E2E synthetic note — announcement check.");
     await page.getByRole("button", { name: "Save" }).click();
     // Live-region role is what automation can see. That is not screen-reader

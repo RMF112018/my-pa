@@ -21,7 +21,7 @@
  */
 import { test, expect } from "@playwright/test";
 import { DEAD_GATEWAY_URL } from "../playwright.config";
-import { signIn, expectState, EMPTINESS_CLAIMS, visibleCaptureButton } from "./fixtures";
+import { signIn, expectState, EMPTINESS_CLAIMS, visibleCaptureButton, openCaptureNote } from "./fixtures";
 
 test.use({ baseURL: DEAD_GATEWAY_URL });
 
@@ -94,7 +94,7 @@ test("System says the build could not describe itself", async ({ page }) => {
 
 test("a capture against a dead gateway is never rendered as saved", async ({ page }) => {
   await page.goto("/today");
-  await visibleCaptureButton(page).click();
+  await openCaptureNote(page);
   await page.getByTestId("capture-field").fill("E2E synthetic note — dead gateway path.");
   await page.getByRole("button", { name: "Save" }).click();
 

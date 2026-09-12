@@ -30,10 +30,13 @@ function RuntimeProbe() {
 
 describe("TaskRuntimeProvider", () => {
   it("exposes session-scoped create-intent store and read coordinator", () => {
-    let runtime: ReturnType<typeof useTaskRuntime> | null = null;
+    const captured: { runtime: ReturnType<typeof useTaskRuntime> | null } = { runtime: null };
 
     function Capture() {
-      runtime = useTaskRuntime();
+      const runtime = useTaskRuntime();
+      useEffect(() => {
+        captured.runtime = runtime;
+      }, [runtime]);
       return <RuntimeProbe />;
     }
 
@@ -43,14 +46,14 @@ describe("TaskRuntimeProvider", () => {
       </TaskRuntimeProvider>,
     );
 
-    expect(runtime).not.toBeNull();
-    expect(runtime!.principalId).toBe(PRINCIPAL_A);
-    expect(runtime!.sessionKey).toBe(`${PRINCIPAL_A}::epoch-1`);
-    expect(runtime!.createIntents.openSession({ title: "One" }).intentId).toBeTruthy();
-    expect(runtime!.readCoordinator).toBeTruthy();
-    expect(runtime!.mutationCoordinator.coordinator).toBeTruthy();
-    expect(runtime!.feedback).toBeTruthy();
-    expect(Object.prototype.hasOwnProperty.call(runtime, "principal")).toBe(false);
+    expect(captured.runtime).not.toBeNull();
+    expect(captured.runtime!.principalId).toBe(PRINCIPAL_A);
+    expect(captured.runtime!.sessionKey).toBe(`${PRINCIPAL_A}::epoch-1`);
+    expect(captured.runtime!.createIntents.openSession({ title: "One" }).intentId).toBeTruthy();
+    expect(captured.runtime!.readCoordinator).toBeTruthy();
+    expect(captured.runtime!.mutationCoordinator.coordinator).toBeTruthy();
+    expect(captured.runtime!.feedback).toBeTruthy();
+    expect(Object.prototype.hasOwnProperty.call(captured.runtime, "principal")).toBe(false);
   });
 
   it("clears shared Task state when Principal or session epoch changes", () => {

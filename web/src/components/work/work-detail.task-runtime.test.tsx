@@ -6,6 +6,11 @@ import {
   TaskDetailViewConnected,
 } from "@/components/work/work-detail";
 import { TaskRuntimeProvider } from "@/components/work/task-runtime-provider";
+import {
+  TASK_OPERATION_CONFLICT_MESSAGE,
+  taskClosedMessage,
+} from "@/components/tasks/use-task-operations";
+import TaskPage from "@/app/(app)/work/tasks/[taskId]/page";
 
 afterEach(() => {
   cleanup();
@@ -90,6 +95,31 @@ function stubDetailFetch(handlers: {
   });
 }
 
+/**
+ * Raw version/identity diagnostics belong behind Technical details and nowhere
+ * else, so the canonical version is proven there rather than in primary copy.
+ */
+async function expectCanonicalVersionBehindTechnicalDetails(
+  user: ReturnType<typeof userEvent.setup>,
+  version: string,
+) {
+  await user.click(screen.getByText("Technical details"));
+  const identity = await screen.findByRole("region", { name: "Identity" });
+  expect(within(identity).getByText(version)).toBeTruthy();
+}
+
+/**
+ * Primary conflict UX states what happened in product language. It never
+ * renders a raw version number or any other identity diagnostic: those belong
+ * behind Technical details. ("the latest version" as ordinary English is fine;
+ * a digit anywhere in this region is not.)
+ */
+function expectNoVersionNumber(element: HTMLElement) {
+  const text = element.textContent ?? "";
+  expect(text).not.toMatch(/version\s*\d/i);
+  expect(text).not.toMatch(/\d/);
+}
+
 describe("TaskDetailView authoritative draft / conflict", () => {
   it("preserves draft on 409 with current and does not auto-resubmit", async () => {
     const user = userEvent.setup();
@@ -112,9 +142,11 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     expect(await screen.findByTestId("task-changed-elsewhere")).toBeTruthy();
     expect(screen.getAllByText(/This task changed elsewhere/).length).toBeGreaterThan(0);
     expect(screen.getByDisplayValue("My dirty title")).toBeTruthy();
-    expect(screen.getByText(/Canonical version 3/)).toBeTruthy();
+    // The newer canonical is exposed by identity, not by version jargon.
     expect(screen.getByText(/title “Coordinate review \(server\)”/)).toBeTruthy();
+    expectNoVersionNumber(screen.getByTestId("task-changed-elsewhere"));
     expect(patchCount).toBe(1);
+    await expectCanonicalVersionBehindTechnicalDetails(user, "3");
 
     // Blind save stays locked — no second request without deliberate reapply.
     expect(screen.getByRole("button", { name: "Save title" })).toBeDisabled();
@@ -142,8 +174,8 @@ describe("TaskDetailView authoritative draft / conflict", () => {
 
     expect(await screen.findByTestId("task-changed-elsewhere")).toBeTruthy();
     expect(screen.getByDisplayValue("Kept draft title")).toBeTruthy();
-    expect(screen.getByText(/Canonical version 3/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Save title" })).toBeDisabled();
+    await expectCanonicalVersionBehindTechnicalDetails(user, "3");
   });
 
   it("keeps a dirty title when a newer canonical arrives via refresh", async () => {
@@ -164,8 +196,8 @@ describe("TaskDetailView authoritative draft / conflict", () => {
 
     expect(await screen.findByTestId("task-changed-elsewhere")).toBeTruthy();
     expect(screen.getByDisplayValue("Local unsaved title")).toBeTruthy();
-    expect(screen.getByText(/Canonical version 3/)).toBeTruthy();
     expect(screen.queryByDisplayValue("Coordinate review (server)")).toBeNull();
+    await expectCanonicalVersionBehindTechnicalDetails(user, "3");
   });
 
   it("does not silently reset the draft and requires deliberate reapply after conflict", async () => {
@@ -250,4 +282,143 @@ describe("TaskDetailView authoritative draft / conflict", () => {
       ).toBe(true),
     );
   });
+
+  it("shows a Status change optimistically before the server confirms it", async () => {
+    const user = userEvent.setup();
+    let release!: (value: Response) => void;
+    const gate = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    let transitions = 0;
+    const fetcher = stubDetailFetch({
+      transition: (body) => {
+        transitions += 1;
+        expect((body as { expectedVersion: number }).expectedVersion).toBe(2);
+        return gate;
+      },
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    render(<TaskDetailView taskId={TASK_V2.task_id} />);
+    await screen.findByDisplayValue("Coordinate review");
+    const statusSelect = within(screen.getByTestId("task-status-control")).getByRole("combobox");
+    await user.selectOptions(statusSelect, "in_progress");
+
+    // Still in flight: the new Status is already shown, on the user's authority.
+    expect(transitions).toBe(1);
+    expect((statusSelect as HTMLSelectElement).value).toBe("in_progress");
+    expect(screen.getByTestId("task-status-control").getAttribute("aria-busy")).toBe("true");
+
+    release(json({ task: { ...TASK_V2, lifecycle_state: "in_progress", version: 3 } }));
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId("task-status-control"))
+          .getByRole("combobox")
+          .getAttribute("disabled"),
+      ).toBeNull(),
+    );
+    expect(
+      (within(screen.getByTestId("task-status-control")).getByRole("combobox") as HTMLSelectElement)
+        .value,
+    ).toBe("in_progress");
+  });
+
+  it("keeps Close pessimistic: no terminal state until the server confirms", async () => {
+    const user = userEvent.setup();
+    let release!: (value: Response) => void;
+    const gate = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    const fetcher = stubDetailFetch({
+      transition: (body) => {
+        expect((body as { toState: string }).toState).toBe("completed");
+        return gate;
+      },
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    render(<TaskDetailView taskId={TASK_V2.task_id} />);
+    await screen.findByDisplayValue("Coordinate review");
+    await user.click(screen.getByTestId("task-close-trigger"));
+    await user.click(screen.getByTestId("task-close-confirm"));
+
+    // Unconfirmed: the Task is not shown as closed, and Status is not terminal.
+    expect(screen.queryByTestId("task-terminal-summary")).toBeNull();
+    expect(screen.getByTestId("task-status-control").getAttribute("data-terminal")).toBeNull();
+    expect(screen.queryByText("This task is closed.")).toBeNull();
+
+    release(json({ task: { ...TASK_V2, lifecycle_state: "completed", closed_at: "2026-08-24T12:00:00Z", version: 3 } }));
+    expect(await screen.findByTestId("task-terminal-summary")).toBeTruthy();
+    // Product copy for the confirmed closure comes from the shared binder.
+    expect(await screen.findByText(taskClosedMessage(TASK_V2.title))).toBeTruthy();
+  });
+
+  it("states an operation conflict in product language with no version number", async () => {
+    const user = userEvent.setup();
+    const fetcher = stubDetailFetch({
+      transition: () => json(null, 409, { current: TASK_V3 }),
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    render(<TaskDetailView taskId={TASK_V2.task_id} />);
+    await screen.findByDisplayValue("Coordinate review");
+    const statusSelect = within(screen.getByTestId("task-status-control")).getByRole("combobox");
+    await user.selectOptions(statusSelect, "waiting");
+
+    const alert = await screen.findByTestId("task-operation-conflict");
+    expect(alert.textContent).toContain(TASK_OPERATION_CONFLICT_MESSAGE);
+    expectNoVersionNumber(alert);
+    // The optimistic Status was rolled back rather than left asserted.
+    expect(
+      (within(screen.getByTestId("task-status-control")).getByRole("combobox") as HTMLSelectElement)
+        .value,
+    ).toBe("open");
+    // The raw version the server exposed stays a diagnostic.
+    await expectCanonicalVersionBehindTechnicalDetails(user, "3");
+  });
+
+  it("binds comments through the shared binder in Activity", async () => {
+    const fetcher = stubDetailFetch({});
+    vi.stubGlobal("fetch", fetcher);
+
+    render(<TaskDetailView taskId={TASK_V2.task_id} />);
+    await screen.findByDisplayValue("Coordinate review");
+    // Comments live in Description & Activity, never as a lifecycle form.
+    const activity = screen.getByTestId("task-comments");
+    expect(within(activity).getByLabelText("Add comment")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Apply transition/i })).toBeNull();
+    expect(screen.queryByLabelText(/closure note/i)).toBeNull();
+  });
 });
+
+describe("standalone Task route", () => {
+  it("consumes the AppShell Task runtime rather than a route-local coordinator", async () => {
+    const user = userEvent.setup();
+    const fetcher = stubDetailFetch({});
+    vi.stubGlobal("fetch", fetcher);
+
+    const page = await TaskPage({ params: Promise.resolve({ taskId: TASK_V2.task_id }) });
+
+    // Outside the shell runtime the route cannot mount at all: it owns no
+    // coordinator of its own.
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    expect(() => render(page)).toThrow(/TaskRuntimeProvider/);
+    consoleError.mockRestore();
+    cleanup();
+
+    render(
+      <TaskRuntimeProvider principalId="prin_test" sessionEpoch="epoch-test">
+        {page}
+      </TaskRuntimeProvider>,
+    );
+    await screen.findByDisplayValue("Coordinate review");
+
+    // Shell-persistent feedback survives on this route: the binder's own copy
+    // is published into the shell feedback region.
+    const statusSelect = within(screen.getByTestId("task-status-control")).getByRole("combobox");
+    await user.selectOptions(statusSelect, "in_progress");
+    await waitFor(() => expect(screen.getByTestId("mutation-feedback-region")).toBeTruthy());
+    expect(screen.getByText("Status changed to In progress")).toBeTruthy();
+  });
+});
+

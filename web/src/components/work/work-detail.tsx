@@ -14,10 +14,9 @@ import { RevealDialog } from "@/components/shell/reveal-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { LoadingStatus, SurfaceState } from "@/components/ui/surface-state";
-import type { MutationFeedbackValue } from "@/components/ui/mutation-feedback";
 import {
+  TaskRuntimeProvider,
   useTaskRuntime,
-  type TaskRuntimeValue,
 } from "@/components/work/task-runtime-provider";
 import { mapUserError, type UserErrorPresentation } from "@/lib/ui/user-error";
 import { Textarea } from "@/components/ui/textarea";
@@ -40,6 +39,12 @@ import { TaskDetailSections } from "@/components/tasks/task-detail-sections";
 import { TaskDueControl } from "@/components/tasks/task-due-control";
 import { TaskStatusControl } from "@/components/tasks/task-status-control";
 import { TaskTechnicalDetails } from "@/components/tasks/task-technical-details";
+import {
+  TASK_OPERATION_AMBIGUOUS_MESSAGE,
+  TASK_OPERATION_CONFLICT_MESSAGE,
+  TASK_OPERATION_FAILURE_MESSAGE,
+  useTaskOperations,
+} from "@/components/tasks/use-task-operations";
 import { formatTaskStatus, toTaskPresentationModel, type TaskCivilClock } from "@/lib/tasks/presentation";
 import {
   browserWorkClock,
@@ -50,23 +55,17 @@ import {
   workRequest,
   type ApiFailure,
 } from "@/lib/api/work-client";
-import {
-  createTaskMutationCoordinator,
-  type TaskMutationCoordinator,
-} from "@/lib/task/mutation-coordinator";
-import type { MutationKind, MutationPhase } from "@/lib/task/mutation-state";
+import type { MutationPhase } from "@/lib/task/mutation-state";
 import { buildTaskQueryKey } from "@/lib/task/query-key";
-import {
-  createTaskReadCoordinator,
-  type TaskReadCoordinator,
-} from "@/lib/task/read-coordinator";
+import type { TaskReadCoordinator } from "@/lib/task/read-coordinator";
 
 function Labeled({ label, children }: { label: string; children: ReactNode }) { return <label className="grid gap-1 text-sm font-medium text-moss-slate"><span>{label}</span>{children}</label>; }
 function display(value: string | null | undefined) { return value ? value.replaceAll("_", " ") : "Not set"; }
 function dateInput(value: string | null | undefined) { return value?.slice(0, 16) ?? ""; }
 function counterpartyLabel(id: unknown, choices: readonly CounterpartyOption[]) { if (!id) return "Not set"; return choices.find((choice) => choice.person_id === id)?.display_name ?? "Counterparty not resolved"; }
 
-const TASK_CONFLICT_MESSAGE = "This task changed elsewhere. Review the latest version and try again.";
+/** Bounded field save outcome copy. Operation copy comes from the shared binder. */
+const TASK_SAVED_MESSAGE = "Task saved.";
 
 interface TaskDraft {
   title: string;
@@ -126,106 +125,33 @@ function taskFromUnknown(value: unknown): TaskDetail | undefined {
   return undefined;
 }
 
-function transitionMutationKind(toState: string): MutationKind {
-  if (toState === "completed") return "close";
-  if (toState === "cancelled") return "cancel";
-  return "status";
-}
-
-/** Product-language result copy for one Task state change. */
-function terminalFeedbackMessage(toState: TaskLifecycle): string {
-  if (toState === "completed") return "Task closed.";
-  if (toState === "cancelled") return "Task cancelled.";
-  return "Status updated.";
-}
-
-/**
- * One outbound comment attempt.
- *
- * `idempotencyKey` is minted once and reused verbatim on every retry, so a retried
- * comment can never be persisted twice.
- */
-interface OutboundComment {
-  readonly localId: string;
-  readonly body: string;
-  readonly idempotencyKey: string;
-  readonly status: "pending" | "failed";
-  readonly message?: string;
-  readonly attemptId?: string;
-  /** Set when the failure was ambiguous, so retry reuses the coordinator attempt. */
-  readonly ambiguous?: boolean;
-}
-
-function mintCommentKey(): string {
-  return `task-comment-${crypto.randomUUID()}`;
-}
-
-interface TaskDetailSession {
-  readonly mutationCoordinator: TaskMutationCoordinator;
-  readonly readCoordinator: TaskReadCoordinator<TaskDetail>;
-  readonly sessionEpoch: string;
-  readonly feedback: MutationFeedbackValue | null;
-}
-
-function sessionFromRuntime(runtime: TaskRuntimeValue): TaskDetailSession {
-  return {
-    mutationCoordinator: runtime.mutationCoordinator.coordinator,
-    readCoordinator: runtime.readCoordinator as TaskReadCoordinator<TaskDetail>,
-    sessionEpoch: runtime.sessionEpoch,
-    feedback: runtime.feedback,
-  };
-}
-
-function useLocalTaskDetailSession(): TaskDetailSession {
-  const session = useMemo<TaskDetailSession>(() => {
-    const mutationCoordinator = createTaskMutationCoordinator();
-    const readCoordinator = createTaskReadCoordinator<TaskDetail>();
-    return {
-      mutationCoordinator,
-      readCoordinator,
-      sessionEpoch: "detail-local",
-      feedback: null,
-    };
-  }, []);
-  useEffect(() => {
-    return () => {
-      session.readCoordinator.dispose();
-      session.mutationCoordinator.clearSession();
-    };
-  }, [session]);
-  return session;
-}
-
-/** Prefer injected / provider runtime; fall back to local coordinators for tests and pre-AppShell mounts. */
-function useTaskDetailSession(runtime: TaskRuntimeValue | undefined): TaskDetailSession {
-  const local = useLocalTaskDetailSession();
-  return runtime ? sessionFromRuntime(runtime) : local;
-}
-
 /**
  * Task detail with authoritative snapshot / dirty draft / conflict separation.
  *
- * Prefer shared runtime via `runtime` prop or by mounting under TaskRuntimeProvider
- * (calls useTaskRuntime). Without a provider, uses local mutation/read coordinators
- * from the same `@/lib/task/*` modules so tests and pre-AppShell mounts stay safe.
+ * Isolated variant: mounts its own Task runtime so tests, stories and any mount
+ * that is deliberately outside AppShell still get real coordinators. Ordinary
+ * signed-in surfaces — the Work-hosted sheet and the standalone
+ * `/work/tasks/[taskId]` route — use {@link TaskDetailViewConnected}, which
+ * consumes the shell-persistent runtime instead.
  */
 export function TaskDetailView({
   taskId,
   embedded = false,
-  runtime,
   seed,
 }: {
   taskId: string;
   embedded?: boolean;
-  /** Explicit runtime from a parent that already called useTaskRuntime. */
-  runtime?: TaskRuntimeValue;
   /** Projection that seeds fast paint only. It never authorizes a mutation. */
   seed?: TaskRow | null;
 }) {
-  return <TaskDetailViewInner taskId={taskId} embedded={embedded} runtime={runtime} seed={seed} />;
+  return (
+    <TaskRuntimeProvider principalId="isolated-task-detail" sessionEpoch="isolated-task-detail">
+      <TaskDetailViewInner taskId={taskId} embedded={embedded} seed={seed} />
+    </TaskRuntimeProvider>
+  );
 }
 
-/** Connected variant for mounts already inside TaskRuntimeProvider. */
+/** Connected variant for mounts already inside TaskRuntimeProvider (AppShell). */
 export function TaskDetailViewConnected({
   taskId,
   embedded = false,
@@ -235,23 +161,23 @@ export function TaskDetailViewConnected({
   embedded?: boolean;
   seed?: TaskRow | null;
 }) {
-  const runtime = useTaskRuntime();
-  return <TaskDetailViewInner taskId={taskId} embedded={embedded} runtime={runtime} seed={seed} />;
+  return <TaskDetailViewInner taskId={taskId} embedded={embedded} seed={seed} />;
 }
 
 function TaskDetailViewInner({
   taskId,
   embedded = false,
-  runtime,
   seed,
 }: {
   taskId: string;
   embedded?: boolean;
-  runtime?: TaskRuntimeValue;
   seed?: TaskRow | null;
 }) {
-  const session = useTaskDetailSession(runtime);
-  const { mutationCoordinator, readCoordinator, sessionEpoch, feedback } = session;
+  const runtime = useTaskRuntime();
+  const mutationCoordinator = runtime.mutationCoordinator.coordinator;
+  const readCoordinator = runtime.readCoordinator as TaskReadCoordinator<TaskDetail>;
+  const sessionEpoch = runtime.sessionEpoch;
+  const feedback = runtime.feedback;
 
   const detailKey = useMemo(
     () => buildTaskQueryKey({ mode: "detail", taskId, sessionEpoch }),
@@ -275,8 +201,6 @@ function TaskDetailViewInner({
   const [commentsLoading, setCommentsLoading] = useState(true);
   const [commentsUnavailable, setCommentsUnavailable] = useState(false);
   const [commentsLoadingMore, setCommentsLoadingMore] = useState(false);
-  const [outboundComments, setOutboundComments] = useState<readonly OutboundComment[]>([]);
-  const [commentSubmitting, setCommentSubmitting] = useState(false);
   const [status, setStatus] = useState("Loading task…");
   const [failure, setFailure] = useState<UserErrorPresentation>();
   const [conflict, setConflict] = useState(false);
@@ -288,7 +212,6 @@ function TaskDetailViewInner({
   const [revealSubject, setRevealSubject] = useState<string | null>(null);
 
   const updateAttempt = useRef(createAttemptKey("task-update"));
-  const transitionAttempt = useRef(createAttemptKey("task-transition"));
   const authoritativeRef = useRef<TaskDetail | undefined>(undefined);
   const draftRef = useRef<TaskDraft | undefined>(undefined);
   useEffect(() => {
@@ -300,7 +223,7 @@ function TaskDetailViewInner({
 
   const publishFeedback = useCallback(
     (kind: "success" | "error" | "conflict" | "info", message: string, eventId: string) => {
-      feedback?.publish({ eventId, kind, message });
+      feedback.publish({ eventId, kind, message });
     },
     [feedback],
   );
@@ -495,18 +418,31 @@ function TaskDetailViewInner({
     setChangedElsewhere(true);
     setConflict(true);
     if (values) setProposal(values);
-    setStatus(TASK_CONFLICT_MESSAGE);
-    publishFeedback("conflict", TASK_CONFLICT_MESSAGE, `task-conflict:${taskId}:${resolved?.version ?? "unknown"}`);
+    setStatus(TASK_OPERATION_CONFLICT_MESSAGE);
+    // Identity/version diagnostics stay behind Technical details; the event id is not user copy.
+    publishFeedback(
+      "conflict",
+      TASK_OPERATION_CONFLICT_MESSAGE,
+      `task-conflict:${taskId}:${resolved?.version ?? "unknown"}`,
+    );
   }
 
-  async function applyProposal(values: Record<string, unknown>, options?: { deliberate?: boolean }) {
+  /**
+   * One bounded field- or section-level save intent — never a whole-Task atomic
+   * patch, and never a lifecycle transition. Status, Due, Close, Cancel and
+   * comments all belong to the shared operation binder.
+   */
+  async function applyProposal(
+    values: Record<string, unknown>,
+    options?: { deliberate?: boolean; expectedVersion?: number },
+  ) {
     if (!authoritative || !draft) return;
     if (changedElsewhere && !options?.deliberate && !conflict) {
-      setStatus(TASK_CONFLICT_MESSAGE);
+      setStatus(TASK_OPERATION_CONFLICT_MESSAGE);
       return;
     }
 
-    const expectedVersion = authoritative.version;
+    const expectedVersion = options?.expectedVersion ?? authoritative.version;
     const material = { ...values, expectedVersion };
     const idempotencyKey = updateAttempt.current.forPayload(material);
     setStatus("Saving…");
@@ -542,7 +478,7 @@ function TaskDetailViewInner({
             },
             feedback: async (_result, phase: MutationPhase) => {
               if (phase === "confirmed") {
-                publishFeedback("success", "Task saved.", `task-update-ok:${idempotencyKey}`);
+                publishFeedback("success", TASK_SAVED_MESSAGE, `task-update-ok:${idempotencyKey}`);
               }
             },
           },
@@ -580,205 +516,21 @@ function TaskDetailViewInner({
       setProposal(undefined);
       setChangedElsewhere(false);
       setConflict(false);
-      setStatus("Task saved.");
+      setStatus(TASK_SAVED_MESSAGE);
       return;
     }
 
     if (outcome.state.phase === "ambiguous") {
       setAmbiguousAttemptId(outcome.attemptId);
-      setStatus("The update may have applied. Retry only if the Task still shows the prior version.");
-      publishFeedback("error", "Task update outcome is ambiguous.", `task-update-ambiguous:${idempotencyKey}`);
+      setStatus(TASK_OPERATION_AMBIGUOUS_MESSAGE);
+      publishFeedback("info", TASK_OPERATION_AMBIGUOUS_MESSAGE, `task-update-ambiguous:${idempotencyKey}`);
       return;
     }
 
     updateAttempt.current.succeeded();
     setAmbiguousAttemptId(null);
-    setStatus(outcome.state.error?.message ?? "Task update failed.");
-    publishFeedback("error", outcome.state.error?.message ?? "Task update failed.", `task-update-fail:${idempotencyKey}`);
-  }
-
-  /** One bounded field- or section-level save intent. Never a whole-Task atomic patch. */
-  async function saveFields(values: Record<string, unknown>, clearFields: readonly string[] = []) {
-    await applyProposal(clearFields.length ? { ...values, clearFields } : values);
-  }
-
-  /**
-   * One terminal or non-terminal Task state intent.
-   * Close and Cancel are distinct product actions that both land here.
-   */
-  async function runTransition(toState: TaskLifecycle) {
-    if (!authoritative) return;
-    if (changedElsewhere && !conflict) {
-      setStatus(TASK_CONFLICT_MESSAGE);
-      return;
-    }
-
-    const kind = transitionMutationKind(toState);
-    const material = { toState, expectedVersion: authoritative.version };
-    const idempotencyKey = transitionAttempt.current.forPayload(material);
-    setStatus(toState === "completed" ? "Closing task…" : toState === "cancelled" ? "Cancelling task…" : "Updating status…");
-    setMutationPending(true);
-
-    const draftSnapshot = draft ? { ...draft } : undefined;
-    const outcome = await mutationCoordinator.mutate({
-      kind,
-      taskId,
-      expectedVersion: authoritative.version,
-      idempotencyKey,
-      request: material,
-      draft: draftSnapshot,
-      hooks: {
-        fetchCurrent: async () => fetchCurrentTask(),
-        barriers: {
-          onMutationStart: () => {
-            readCoordinator.raiseMutationBarrier(detailKey, { entityId: taskId });
-          },
-        },
-        reconcile: async (result) => {
-          const confirmed = taskFromUnknown(result);
-          if (confirmed) {
-            readCoordinator.applyConfirmed(detailKey, confirmed, { entityId: taskId });
-            applyCanonical(confirmed, { forceDraft: !draftSnapshot || !isDraftDirty(draftSnapshot, authoritative) });
-          } else {
-            readCoordinator.raiseMutationBarrier(detailKey, { entityId: taskId });
-            await loadTaskBundle({ forceDraft: true });
-          }
-        },
-        feedback: async (_result, phase: MutationPhase) => {
-          if (phase === "confirmed") {
-            // Published through the shared live region so it survives this row leaving the filter.
-            publishFeedback("success", terminalFeedbackMessage(toState), `task-transition-ok:${idempotencyKey}`);
-          }
-        },
-      },
-      dispatch: async ({ request, idempotencyKey: key, expectedVersion: version }) =>
-        workRequest(`/api/tasks/${encodeURIComponent(taskId)}/transition`, {
-          method: "POST",
-          body: JSON.stringify({ ...request, expectedVersion: version, idempotencyKey: key }),
-        }),
-    });
-
-    setMutationPending(false);
-
-    if (outcome.refused) {
-      setStatus(outcome.reason ?? "Transition refused.");
-      return;
-    }
-
-    if (outcome.draft && typeof outcome.draft === "object") {
-      setDraft(outcome.draft as TaskDraft);
-      draftRef.current = outcome.draft as TaskDraft;
-    }
-
-    if (outcome.state.phase === "conflict") {
-      transitionAttempt.current.succeeded();
-      handleConflict(outcome.state.conflictCurrent);
-      return;
-    }
-
-    if (outcome.state.phase === "confirmed") {
-      transitionAttempt.current.succeeded();
-      setChangedElsewhere(false);
-      setConflict(false);
-      setStatus(terminalFeedbackMessage(toState));
-      return;
-    }
-
-    if (outcome.state.phase === "ambiguous") {
-      setStatus("The change may have applied. Retry only if the Task still shows the prior state.");
-      publishFeedback(
-        "error",
-        "Task state change outcome is ambiguous.",
-        `task-transition-ambiguous:${idempotencyKey}`,
-      );
-      return;
-    }
-
-    if (isDefinitiveAttemptFailure({ status: outcome.state.error?.status })) {
-      transitionAttempt.current.succeeded();
-    }
-    setStatus(outcome.state.error?.message ?? mapUserError(outcome.state.error ?? new Error("transition failed")).message);
-  }
-
-  /**
-   * Submit one append-only comment.
-   *
-   * The attempt identity is minted once per outbound comment and reused verbatim on
-   * retry, so a retried comment can never be persisted twice.
-   */
-  async function submitComment(body: string, existing?: OutboundComment) {
-    const outbound: OutboundComment =
-      existing ?? {
-        localId: `outbound-${crypto.randomUUID()}`,
-        body,
-        idempotencyKey: mintCommentKey(),
-        status: "pending",
-      };
-
-    setOutboundComments((current) =>
-      existing
-        ? current.map((row) => (row.localId === outbound.localId ? { ...row, status: "pending", message: undefined } : row))
-        : [...current, outbound],
-    );
-    setCommentSubmitting(true);
-
-    const material = { body: outbound.body };
-    const outcome =
-      existing?.attemptId && existing.ambiguous
-        ? await mutationCoordinator.retry(existing.attemptId)
-        : await mutationCoordinator.mutate({
-            kind: "commentCreate",
-            taskId,
-            idempotencyKey: outbound.idempotencyKey,
-            request: material,
-            dispatch: async ({ request, idempotencyKey: key }) =>
-              workRequest(`/api/tasks/${encodeURIComponent(taskId)}/comments`, {
-                method: "POST",
-                body: JSON.stringify({ ...request, idempotencyKey: key }),
-              }),
-          });
-
-    setCommentSubmitting(false);
-
-    if (outcome.refused) {
-      markCommentFailed(outbound.localId, outcome.reason ?? "Comment not sent.", outcome.attemptId, false);
-      return;
-    }
-    if (outcome.state.phase === "confirmed") {
-      setOutboundComments((current) => current.filter((row) => row.localId !== outbound.localId));
-      publishFeedback("success", "Comment added.", `task-comment-ok:${outbound.idempotencyKey}`);
-      await loadComments();
-      return;
-    }
-    if (outcome.state.phase === "ambiguous") {
-      markCommentFailed(
-        outbound.localId,
-        "The comment may have been added. Retry only if it is still missing.",
-        outcome.attemptId,
-        true,
-      );
-      return;
-    }
-    markCommentFailed(
-      outbound.localId,
-      outcome.state.error?.message ?? "Comment not sent.",
-      outcome.attemptId,
-      false,
-    );
-  }
-
-  function markCommentFailed(localId: string, message: string, attemptId: string, ambiguous: boolean) {
-    setOutboundComments((current) =>
-      current.map((row) =>
-        row.localId === localId ? { ...row, status: "failed", message, attemptId, ambiguous } : row,
-      ),
-    );
-  }
-
-  function retryComment(localId: string) {
-    const target = outboundComments.find((row) => row.localId === localId);
-    if (!target) return;
-    void submitComment(target.body, target);
+    setStatus(TASK_OPERATION_FAILURE_MESSAGE);
+    publishFeedback("error", TASK_OPERATION_FAILURE_MESSAGE, `task-update-fail:${idempotencyKey}`);
   }
 
   function discardDraftForLatest() {
@@ -789,7 +541,7 @@ function TaskDetailViewInner({
     setStatus("Loaded the latest version.");
   }
 
-  // Blind saves/transitions stay locked while an unseen newer canonical or conflict is outstanding.
+  // Blind saves stay locked while an unseen newer canonical or conflict is outstanding.
   const controlsLocked = mutationPending || changedElsewhere;
 
   if (failure) {
@@ -813,13 +565,6 @@ function TaskDetailViewInner({
     );
   }
 
-  /**
-   * Mutation authority comes only from a canonical snapshot carrying a trustworthy
-   * version. A projection may seed the view; it never unlocks a write.
-   */
-  const canMutate = typeof authoritative.version === "number" && !changedElsewhere;
-  const model = toTaskPresentationModel(authoritative, { clock, canMutate });
-
   return (
     <article className="mx-auto max-w-4xl pb-[env(safe-area-inset-bottom)]">
       {embedded ? null : (
@@ -827,16 +572,12 @@ function TaskDetailViewInner({
           ← Work
         </Link>
       )}
-      <header className={embedded ? "" : "mt-4"}>
-        <h1 className="text-2xl font-semibold text-moss-slate">{authoritative.title}</h1>
-        <p className="mt-1 text-sm text-muted">{model.statusLabel} · {model.due.phrase}</p>
-      </header>
 
       {changedElsewhere ? (
         <section role="alert" data-testid="task-changed-elsewhere" className="mt-4 rounded-lg border border-moss-coral-strong p-3 text-sm">
           <h2 className="font-semibold">Task changed elsewhere</h2>
-          <p className="mt-1">{TASK_CONFLICT_MESSAGE}</p>
-          <p className="mt-1 text-muted">Canonical version {authoritative.version} · title “{authoritative.title}”. Your draft was preserved.</p>
+          <p className="mt-1">{TASK_OPERATION_CONFLICT_MESSAGE}</p>
+          <p className="mt-1 text-muted">Latest saved title “{authoritative.title}”. Your draft was preserved.</p>
           <div className="mt-3 flex flex-wrap gap-2">
             <Button type="button" variant="secondary" onClick={discardDraftForLatest}>
               Discard edits and load latest
@@ -870,79 +611,41 @@ function TaskDetailViewInner({
         </Button>
       </div>
 
-      <TaskDetailSections
-        model={model}
+      {/*
+        Keyed on the Task, not its version. The binder adopts a newer
+        authoritative seed in place, so a bounded field save advances its write
+        authority without remounting it — remounting would also discard an
+        unsent comment left awaiting retry.
+      */}
+      <TaskOperationSurface
+        key={`task-operations:${taskId}`}
+        taskId={taskId}
         task={authoritative}
+        draft={draft}
         clock={clock}
-        title={draft.title}
-        titleDirty={draft.title !== authoritative.title}
-        priority={authoritative.priority}
-        description={draft.description}
-        descriptionDirty={draft.description !== (authoritative.description ?? "")}
-        disabled={!canMutate || controlsLocked}
-        pending={mutationPending}
-        projectLabel={null}
-        situationLabel={null}
+        embedded={embedded}
+        locked={controlsLocked}
+        updatePending={mutationPending}
         commitmentLabel={
           authoritative.commitment_id
             ? commitments.find((item) => item.commitment_id === authoritative.commitment_id)?.title ?? null
             : "No commitment linked"
         }
-        roleLabel={authoritative.role === "follow_up" ? "Follow up" : "No role set"}
-        statusControl={
-          <TaskStatusControl
-            value={authoritative.lifecycle_state}
-            disabled={!canMutate || controlsLocked}
-            pending={mutationPending}
-            conflict={changedElsewhere}
-            onChange={(next) => void runTransition(next)}
-          />
+        comments={comments}
+        commentsLoading={commentsLoading}
+        commentsUnavailable={commentsUnavailable}
+        commentsHasMore={Boolean(commentsDisclosure?.nextCursor)}
+        commentsLoadingMore={commentsLoadingMore}
+        onDraftChange={setDraft}
+        onSaveFields={(values, clearFields, expectedVersion) =>
+          void applyProposal(clearFields.length ? { ...values, clearFields } : values, { expectedVersion })
         }
-        dueControl={
-          <TaskDueControl
-            value={authoritative.due_at}
-            clock={clock}
-            disabled={!canMutate || controlsLocked}
-            pending={mutationPending}
-            conflict={changedElsewhere}
-            onChange={(nextIso) =>
-              void saveFields(nextIso ? { dueAt: nextIso } : {}, nextIso ? [] : ["due_at"])
-            }
-          />
-        }
-        closeControl={
-          <TaskCloseControl
-            taskTitle={authoritative.title}
-            disabled={!canMutate || controlsLocked}
-            pending={mutationPending}
-            onClose={() => void runTransition("completed")}
-            onCancelTask={() => void runTransition("cancelled")}
-          />
-        }
-        comments={
-          <TaskComments
-            comments={comments}
-            pending={outboundComments.map((row) => ({
-              localId: row.localId,
-              body: row.body,
-              status: row.status,
-              message: row.message,
-            }))}
-            loading={commentsLoading}
-            unavailable={commentsUnavailable}
-            hasMore={Boolean(commentsDisclosure?.nextCursor)}
-            loadingMore={commentsLoadingMore}
-            disabled={!canMutate}
-            submitting={commentSubmitting}
-            onSubmit={(body) => void submitComment(body)}
-            onRetry={retryComment}
-            onLoadMore={() => void loadMoreComments()}
-            onRetryLoad={() => void loadComments()}
-          />
-        }
-        technicalDetails={
+        onCommentsSettled={() => void loadComments()}
+        onLoadMoreComments={() => void loadMoreComments()}
+        onRetryLoadComments={() => void loadComments()}
+        renderTechnicalDetails={(current) => (
           <TaskTechnicalDetails
-            task={authoritative}
+            task={current}
             clock={clock}
             history={history}
             historyDisclosure={historyDisclosure}
@@ -952,25 +655,216 @@ function TaskDetailViewInner({
             onContinueHistory={() => void loadMoreHistory()}
             onRevealEvidence={(ref) => setRevealSubject(ref)}
           />
-        }
-        onTitleChange={(next) => setDraft({ ...draft, title: next })}
-        onTitleSave={() => void saveFields({ title: draft.title.trim() })}
-        onPriorityChange={(next) => void saveFields(next ? { priority: next } : {}, next ? [] : ["priority"])}
-        onDescriptionChange={(next) => setDraft({ ...draft, description: next })}
-        onDescriptionSave={() =>
-          void saveFields(draft.description ? { description: draft.description } : {}, draft.description ? [] : ["description"])
-        }
-        onPlannedForChange={(next) =>
-          void saveFields(next ? { scheduledAt: next } : {}, next ? [] : ["scheduled_at"])
-        }
-        onSnoozedUntilChange={(next) =>
-          void saveFields(next ? { deferredUntil: next } : {}, next ? [] : ["deferred_until"])
-        }
-        onArchivedChange={(next) => void saveFields({ archived: next })}
+        )}
       />
 
       {revealSubject ? <RevealDialog open onClose={() => setRevealSubject(null)} subjectId={revealSubject} /> : null}
     </article>
+  );
+}
+
+interface TaskOperationSurfaceProps {
+  readonly taskId: string;
+  /** Canonical, versioned Task snapshot from this surface's own detail read. */
+  readonly task: TaskDetail;
+  readonly draft: TaskDraft;
+  readonly clock: TaskCivilClock;
+  readonly embedded: boolean;
+  /** A newer unseen canonical or an in-flight bounded save locks blind writes. */
+  readonly locked: boolean;
+  readonly updatePending: boolean;
+  readonly commitmentLabel: string | null;
+  readonly comments: readonly TaskComment[];
+  readonly commentsLoading: boolean;
+  readonly commentsUnavailable: boolean;
+  readonly commentsHasMore: boolean;
+  readonly commentsLoadingMore: boolean;
+  onDraftChange(next: TaskDraft): void;
+  onSaveFields(
+    values: Record<string, unknown>,
+    clearFields: readonly string[],
+    expectedVersion: number,
+  ): void;
+  onCommentsSettled(): void;
+  onLoadMoreComments(): void;
+  onRetryLoadComments(): void;
+  renderTechnicalDetails(current: TaskDetail): ReactNode;
+}
+
+/**
+ * Task detail operations, bound once through the shared binder.
+ *
+ * Status and Due are optimistic, Close and Cancel are pessimistic, comments are
+ * append-only pending rows — all of that is the binder's, not this surface's.
+ * Bounded title / description / priority / planning saves stay with the owning
+ * detail view, which is the only holder of the dirty draft.
+ */
+function TaskOperationSurface({
+  taskId,
+  task,
+  draft,
+  clock,
+  embedded,
+  locked,
+  updatePending,
+  commitmentLabel,
+  comments,
+  commentsLoading,
+  commentsUnavailable,
+  commentsHasMore,
+  commentsLoadingMore,
+  onDraftChange,
+  onSaveFields,
+  onCommentsSettled,
+  onLoadMoreComments,
+  onRetryLoadComments,
+  renderTechnicalDetails,
+}: TaskOperationSurfaceProps) {
+  // The seed is canonical: it is this surface's own `/api/tasks/{id}` read, never
+  // a list or search projection, so it may authorize a versioned write directly.
+  const ops = useTaskOperations({ taskId, task, authoritative: true }, { clock });
+
+  const current = ops.task ?? task;
+  const canMutate = ops.canMutate && !locked;
+  const busy = updatePending || ops.pending !== null;
+
+  /** Status and Due render their optimistic value; every other field is canonical. */
+  const displayed = useMemo<TaskDetail>(
+    () => ({ ...current, lifecycle_state: ops.status.value, due_at: ops.due.value }),
+    [current, ops.status.value, ops.due.value],
+  );
+  const model = toTaskPresentationModel(displayed, { clock, canMutate });
+
+  const writeVersion = typeof current.version === "number" ? current.version : task.version;
+
+  async function addComment(body: string) {
+    await ops.addComment(body);
+    onCommentsSettled();
+  }
+
+  async function retryComment(localId: string) {
+    await ops.retryComment(localId);
+    onCommentsSettled();
+  }
+
+  return (
+    <>
+      <header className={embedded ? "" : "mt-4"}>
+        <h1 className="text-2xl font-semibold text-moss-slate">{current.title}</h1>
+        <p className="mt-1 text-sm text-muted">{model.statusLabel} · {model.due.phrase}</p>
+      </header>
+
+      {ops.conflict ? (
+        <section
+          role="alert"
+          data-testid="task-operation-conflict"
+          className="mt-4 rounded-lg border border-moss-coral-strong p-3 text-sm"
+        >
+          <p>{TASK_OPERATION_CONFLICT_MESSAGE}</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button type="button" variant="secondary" pending={busy} onClick={() => void ops.reapply()}>
+              Try my change again
+            </Button>
+            <Button type="button" variant="secondary" onClick={ops.dismissConflict}>
+              Keep the latest details
+            </Button>
+          </div>
+        </section>
+      ) : null}
+
+      <TaskDetailSections
+        model={model}
+        task={current}
+        clock={clock}
+        title={draft.title}
+        titleDirty={draft.title !== task.title}
+        priority={current.priority}
+        description={draft.description}
+        descriptionDirty={draft.description !== (task.description ?? "")}
+        disabled={!canMutate || busy}
+        pending={busy}
+        projectLabel={null}
+        situationLabel={null}
+        commitmentLabel={commitmentLabel}
+        roleLabel={current.role === "follow_up" ? "Follow up" : "No role set"}
+        statusControl={
+          <TaskStatusControl
+            value={ops.status.value}
+            disabled={!canMutate}
+            pending={busy}
+            conflict={locked || ops.conflict !== null}
+            onChange={(next) => void ops.changeStatus(next)}
+          />
+        }
+        dueControl={
+          <TaskDueControl
+            value={ops.due.value}
+            clock={clock}
+            disabled={!canMutate}
+            pending={busy}
+            conflict={locked || ops.conflict !== null}
+            onChange={(nextIso) => void ops.changeDue(nextIso)}
+          />
+        }
+        closeControl={
+          <TaskCloseControl
+            taskTitle={current.title}
+            disabled={!canMutate}
+            pending={busy}
+            onClose={() => void ops.closeTask()}
+            onCancelTask={() => void ops.cancelTask()}
+          />
+        }
+        comments={
+          <TaskComments
+            comments={comments}
+            pending={ops.pendingComments.map((row) => ({
+              localId: row.localId,
+              body: row.body,
+              // The thread has two truthful states; an unconfirmed attempt is not persisted.
+              status: row.state === "pending" ? ("pending" as const) : ("failed" as const),
+              message:
+                row.state === "ambiguous"
+                  ? TASK_OPERATION_AMBIGUOUS_MESSAGE
+                  : row.state === "failed"
+                    ? TASK_OPERATION_FAILURE_MESSAGE
+                    : undefined,
+            }))}
+            loading={commentsLoading}
+            unavailable={commentsUnavailable}
+            hasMore={commentsHasMore}
+            loadingMore={commentsLoadingMore}
+            disabled={!canMutate}
+            submitting={ops.pending === "commentCreate"}
+            onSubmit={(body) => void addComment(body)}
+            onRetry={(localId) => void retryComment(localId)}
+            onLoadMore={onLoadMoreComments}
+            onRetryLoad={onRetryLoadComments}
+          />
+        }
+        technicalDetails={renderTechnicalDetails(current)}
+        onTitleChange={(next) => onDraftChange({ ...draft, title: next })}
+        onTitleSave={() => onSaveFields({ title: draft.title.trim() }, [], writeVersion)}
+        onPriorityChange={(next) =>
+          onSaveFields(next ? { priority: next } : {}, next ? [] : ["priority"], writeVersion)
+        }
+        onDescriptionChange={(next) => onDraftChange({ ...draft, description: next })}
+        onDescriptionSave={() =>
+          onSaveFields(
+            draft.description ? { description: draft.description } : {},
+            draft.description ? [] : ["description"],
+            writeVersion,
+          )
+        }
+        onPlannedForChange={(next) =>
+          onSaveFields(next ? { scheduledAt: next } : {}, next ? [] : ["scheduled_at"], writeVersion)
+        }
+        onSnoozedUntilChange={(next) =>
+          onSaveFields(next ? { deferredUntil: next } : {}, next ? [] : ["deferred_until"], writeVersion)
+        }
+        onArchivedChange={(next) => onSaveFields({ archived: next }, [], writeVersion)}
+      />
+    </>
   );
 }
 

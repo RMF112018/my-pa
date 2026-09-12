@@ -338,6 +338,10 @@ STACKED_ABOVE: Final[frozenset[str]] = frozenset(
         "constraint_sync_run_items",
         "constraint_sync_resolution_history",
         "constraint_sync_legacy_unbound_conflicts",
+        # `c1a8e4d70b29` adds append-only capture labels above this revision
+        # (#234); name them so this equality keeps catching an unnamed
+        # leftover instead of failing on a table it simply never named.
+        "capture_labels",
         # WP-TUX-01. Head stacks `task_comments` above the entity plane.
         "task_comments",
     }

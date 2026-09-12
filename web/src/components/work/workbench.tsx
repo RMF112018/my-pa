@@ -105,6 +105,16 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   const workHeading = useRef<HTMLHeadingElement | null>(null);
   /** The Task a dispatched mutation may move, and where it sat when it was dispatched. */
   const pendingMovement = useRef<{ readonly taskId: string; readonly index: number } | null>(null);
+  /**
+   * Whether a Task mutation has actually been confirmed since the handoff armed.
+   *
+   * Without this the handoff is spent on whichever list read lands first. An
+   * ordinary background poll can beat the write it knows nothing about, and it
+   * arrives while the Task is still there — so the handoff is consumed, and when
+   * the write does confirm and the row really does go, there is nothing left to
+   * catch focus and it falls to the document body.
+   */
+  const confirmedSinceArm = useRef(false);
   /** Live rows, so focus resolution after reconciliation never reads a stale closure. */
   const rowsRef = useRef<readonly unknown[]>([]);
   useEffect(() => {
@@ -134,7 +144,15 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
       entry would later be read as "this mutation removed the Task" and pull
       focus somewhere the user was not working.
     */
+    /*
+      An unrelated read — the freshness poll, another Task's mutation — must not
+      spend this handoff. It is only in play once a Task mutation has actually
+      been confirmed since it armed; until then this list update belongs to
+      something else and the handoff waits.
+    */
+    if (!confirmedSinceArm.current) return;
     pendingMovement.current = null;
+    confirmedSinceArm.current = false;
     const present = rows.some((row) => taskIdOf(row) === moved.taskId);
     if (present) return;
     const frame = requestAnimationFrame(() => {
@@ -200,7 +218,21 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   */
   useEffect(() => {
     pendingMovement.current = null;
+    confirmedSinceArm.current = false;
   }, [taskQueryKeyId]);
+
+  /*
+    A confirmed Task mutation, observed through the runtime's own reconciliation
+    registry rather than through the row. The row cannot be relied on here: its
+    own confirmation unmounts it, so a callback from it never arrives.
+  */
+  useEffect(
+    () =>
+      runtime.reconciliation.registerActiveTaskQuery("work:focus-handoff", () => {
+        confirmedSinceArm.current = true;
+      }),
+    [runtime.reconciliation],
+  );
 
 
   const applyTaskList = useCallback((payload: TaskListPayload) => {
@@ -440,6 +472,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
    * row away — and with it whichever control had focus.
    */
   function onTaskMutationDispatched(input: { taskId: string; kind: string }) {
+    confirmedSinceArm.current = false;
     const rows = visibleRowElements();
     const index = rows.findIndex((row) => row.getAttribute("data-work-item") === input.taskId);
     pendingMovement.current = { taskId: input.taskId, index: Math.max(0, index) };
@@ -452,6 +485,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   function onTaskMutationSettledUnconfirmed(input: { taskId: string; kind: string }) {
     if (pendingMovement.current?.taskId === input.taskId) {
       pendingMovement.current = null;
+      confirmedSinceArm.current = false;
     }
   }
 

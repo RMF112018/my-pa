@@ -213,3 +213,86 @@ test.describe("compact Task detail", () => {
     await expect(sheet.getByTestId("task-status-control")).toHaveAttribute("data-terminal", "true");
   });
 });
+
+/**
+ * WP-TUX-05. Ordinary Task management happens in the list.
+ *
+ * The point of this package is that routine work costs no navigation: Status,
+ * Due, Comment and Close are reachable on the row itself. These run against the
+ * real stack, because the guarantees that matter here — the server deciding
+ * membership, the result surviving the row that issued it — only exist end to
+ * end.
+ */
+test.describe("operational Work List", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await signIn(page);
+  });
+
+  /** Creates one synthetic Task and returns its list row. */
+  async function seedRow(page: Page, view = "unscheduled") {
+    const title = `E2E list op task ${Date.now()}`;
+    await page.goto(`/work?view=${view}`);
+    await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
+    await page.getByRole("button", { name: "New task" }).click();
+    await page.getByTestId("task-create-sheet").getByLabel("Title").fill(title);
+    await page.getByTestId("task-create-sheet").getByRole("button", { name: "Create", exact: true }).click();
+    await expect(page.getByTestId("task-create-sheet")).toHaveCount(0);
+    const row = page.locator('[data-testid="task-list-row"]').filter({ hasText: title });
+    await expect(row).toBeVisible();
+    return { row, title };
+  }
+
+  const feedback = (page: Page) => page.getByTestId("mutation-feedback-region");
+
+  test("changes Status from the row without opening Task detail", async ({ page }) => {
+    const { row } = await seedRow(page);
+
+    await row.getByRole("combobox").selectOption({ label: "In progress" });
+
+    await expect(feedback(page).getByText("Status changed to In progress")).toBeVisible();
+    // Detail was never opened: this is the whole point of the package.
+    await expect(page.getByTestId("task-compact-sheet")).toHaveCount(0);
+  });
+
+  test("changes Due from the row without opening Task detail", async ({ page }) => {
+    const { row } = await seedRow(page);
+
+    await row.getByRole("button", { name: /^Due, / }).click();
+    await page.getByRole("button", { name: "Today", exact: true }).click();
+
+    await expect(feedback(page).getByText(/^Due date moved to /)).toBeVisible();
+    await expect(page.getByTestId("task-compact-sheet")).toHaveCount(0);
+  });
+
+  test("closes from the row in two activations, asking for no authored text", async ({ page }) => {
+    const { row, title } = await seedRow(page);
+
+    await row.getByRole("button", { name: /^Close /, exact: false }).click();
+    const confirmation = page.getByRole("alertdialog");
+    await expect(confirmation).toBeVisible();
+    // No note, no keyboard: closing is a decision, not an essay.
+    await expect(confirmation.getByRole("textbox")).toHaveCount(0);
+    await confirmation.getByRole("button", { name: "Confirm Closed" }).click();
+
+    // The result outlives the row that issued it.
+    await expect(feedback(page).getByText(new RegExp(`${title}.*closed`))).toBeVisible();
+  });
+
+  test("keeps the list read-only on Board, which a later package owns", async ({ page }) => {
+    await seedRow(page);
+    await page.goto("/work?view=unscheduled&perspective=board");
+    await expect(page.getByRole("region", { name: "Task lifecycle board" })).toBeVisible();
+    // The operational row is a List surface; Board keeps the shared card.
+    await expect(page.locator('[data-testid="task-list-row"]')).toHaveCount(0);
+  });
+
+  test("states no backend vocabulary on the row", async ({ page }) => {
+    const { row } = await seedRow(page);
+    const text = await row.innerText();
+    expect(text).toContain("Status");
+    for (const token of ["in_progress", "lifecycle", "p1", "p2", "p3", "p4", "tsk_"]) {
+      expect(text, `row states "${token}"`).not.toContain(token);
+    }
+  });
+});

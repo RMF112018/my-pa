@@ -31,6 +31,11 @@ test.beforeEach(async ({ page }) => {
   await signIn(page);
 });
 
+/** The shell-persistent feedback region, which outlives any row or sheet. */
+function feedback(page: Page) {
+  return page.getByTestId("mutation-feedback-region");
+}
+
 test("real stack preserves deliberate Task and Commitment mutation semantics", async ({ page }) => {
   test.setTimeout(180_000);
   const marker = `${test.info().project.name}-${Date.now()}`;
@@ -178,7 +183,14 @@ test("real stack preserves deliberate Task and Commitment mutation semantics", a
   const statusControl = taskSheet.getByTestId("task-status-control");
   await expect(statusControl.getByRole("combobox")).toBeVisible();
   await statusControl.getByRole("combobox").selectOption({ label: "In progress" });
-  await expect(taskSheet.getByText("Status updated.")).toBeVisible();
+  /*
+    WP-TUX-05. Operation results are published to the shell-persistent feedback
+    region, not inside the sheet: the Task can leave the current filter and the
+    sheet can unmount, and a result the user never sees is indistinguishable
+    from one that never happened. The copy is product language too — the Status
+    it changed to, not a generic acknowledgement.
+  */
+  await expect(feedback(page).getByText("Status changed to In progress")).toBeVisible();
   await expect(taskSheet.getByText(/^In progress · /)).toBeVisible();
   const running = await api<{ task: { lifecycle_state: string } }>(page, `/api/tasks/${taskId}`);
   expect(running.body.task.lifecycle_state).toBe("in_progress");
@@ -189,7 +201,7 @@ test("real stack preserves deliberate Task and Commitment mutation semantics", a
   await expect(closeConfirmation).toBeVisible();
   await expect(closeConfirmation.getByRole("button", { name: "Keep open" })).toBeVisible();
   await closeConfirmation.getByRole("button", { name: "Confirm Closed" }).click();
-  await expect(taskSheet.getByText("Task closed.")).toBeVisible();
+  await expect(feedback(page).getByText(/closed$/)).toBeVisible();
   await expect(taskSheet.getByTestId("task-terminal-summary")).toHaveText("This task is closed.");
   await expect(statusControl).toHaveAttribute("data-terminal", "true");
   await expect(statusControl).toContainText("Closed");

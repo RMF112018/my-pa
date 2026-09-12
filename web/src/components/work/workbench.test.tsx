@@ -403,6 +403,74 @@ describe("Work surface", () => {
     expect(document.activeElement).toBe(parked);
   });
 
+  it("does not move focus when the user switches to Commitments mid-mutation", async () => {
+    /*
+      Found by review, and a regression I introduced: switching between Tasks and
+      Commitments pins the task view through `lastTaskView`, so the query
+      identity can be byte-identical either side of the toggle — while the switch
+      still empties the rows. A handoff left armed reads that empty list as "the
+      Task is gone" and pulls focus to the heading, away from the Commitments
+      control the user just pressed.
+
+      The list load is resolved a frame late here on purpose. Resolving it in the
+      same microtask hides the theft behind a lucky cancelAnimationFrame; any
+      real round trip does not.
+    */
+    const task = {
+      task_id: "tsk_aaaaaaaa11111111", title: "Mid-flight task", lifecycle_state: "open",
+      priority: null, due_at: null, scheduled_at: null, deferred_until: null, archived_at: null,
+      created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z", version: 2,
+    };
+    const body = (data: unknown) =>
+      new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
+
+    let releaseTransition: () => void = () => undefined;
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (path.includes("/transition") && method === "POST") {
+        await new Promise<void>((resolve) => {
+          releaseTransition = () => resolve();
+        });
+        return body({ task: { ...task, version: 3, lifecycle_state: "waiting" } });
+      }
+      if (path === `/api/tasks/${task.task_id}`) return body({ task });
+      if (path.includes("/comments")) return body({ comments: [] });
+      if (path.startsWith("/api/commitments")) {
+        // Arrives a frame later, as a real round trip would.
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+        return body({ commitments: [] });
+      }
+      return body({ tasks: [task] });
+    }));
+
+    history.replaceState(null, "", "/work?view=all-open");
+    renderFromUrl();
+    await screen.findByText("Mid-flight task");
+
+    const user = userEvent.setup();
+    void user.selectOptions(screen.getByRole("combobox", { name: /Status/i }), "waiting");
+
+    const commitments = await screen.findByRole("button", { name: "Commitments" });
+    await user.click(commitments);
+    commitments.focus();
+
+    releaseTransition();
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+
+    // Focus stayed on the control the user pressed.
+    expect(document.activeElement).toBe(commitments);
+  });
+
   it("falls back to the Work heading when nothing is left to focus", async () => {
     const only = {
       task_id: "tsk_aaaaaaaa11111111", title: "The last one", lifecycle_state: "open",

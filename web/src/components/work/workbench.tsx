@@ -354,6 +354,21 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   }
 
   function select(next: WorkView) {
+    /*
+      Cleared explicitly, not left to the query key.
+
+      Toggling between Tasks and Commitments pins the task view through
+      `lastTaskView`, so the query identity can come out byte-identical either
+      side of the switch — while `setRows([])` below still re-runs focus
+      resolution against an empty list. A handoff left armed would then read
+      "the Task is gone" and pull focus to the heading, away from the control
+      the user just pressed.
+
+      The query key covers pagination, search, archive mode and view; this
+      covers the navigations it cannot see. Both, deliberately: relying on the
+      key alone has already missed a case twice.
+    */
+    pendingMovement.current = null;
     if (next !== "commitments") setLastTaskView(next as TaskView);
     setState("loading");
     setRows([]);

@@ -96,7 +96,7 @@ test("real stack preserves deliberate Task and Commitment mutation semantics", a
   });
   expect(concurrent.status).toBe(200);
   await taskDialog.getByRole("button", { name: "Save atomic patch" }).click();
-  await expect(taskDialog.getByText(/changed on the server/i)).toBeVisible();
+  await expect(taskDialog.getByText(/changed elsewhere/i)).toBeVisible();
   await expect(taskDialog.getByRole("button", { name: /Reapply proposed patch to version/ })).toBeVisible();
   await taskDialog.getByRole("button", { name: /Reapply proposed patch to version/ }).click();
   await expect(taskDialog.getByRole("heading", { name: reappliedTitle })).toBeVisible();

@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/nextjs-vite";
 import { CommitmentDetailView, TaskDetailView } from "@/components/work/work-detail";
-import { WorkPerspectives } from "@/components/work/work-perspectives";
+import { WorkPerspectives, type WorkPerspectivesProps } from "@/components/work/work-perspectives";
+import { TaskRuntimeProvider } from "@/components/work/task-runtime-provider";
 import type {
   CommitmentDetail as CommitmentDetailContract,
   CommitmentRow,
@@ -44,6 +45,21 @@ const commitments: readonly CommitmentRow[] = [
 const noOp = () => undefined;
 const common = { selectedTaskIds: [] as readonly string[], onSelectTask: noOp, onOpen: noOp };
 
+/*
+  Board and Calendar now drive the shared Task-operation binder, which is only
+  valid inside the session-scoped Task runtime. Without it every perspective
+  story throws on render — which the List story already did, silently, because
+  Storybook is not built in CI. The runtime is the signed-in shell's in
+  production; here it is a synthetic session, which is all a story needs.
+*/
+function Perspectives(props: WorkPerspectivesProps) {
+  return (
+    <TaskRuntimeProvider principalId="prin_storybook" sessionEpoch="storybook">
+      <WorkPerspectives {...props} />
+    </TaskRuntimeProvider>
+  );
+}
+
 const meta = {
   title: "Work/Canonical states",
   parameters: { layout: "padded" },
@@ -52,11 +68,11 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-export const TaskList: Story = { render: () => <WorkPerspectives {...common} perspective="list" rows={tasks} commitments={false} /> };
-export const TaskBoard: Story = { render: () => <WorkPerspectives {...common} perspective="board" rows={tasks} commitments={false} /> };
-export const TaskCalendar: Story = { render: () => <WorkPerspectives {...common} perspective="calendar" rows={tasks} commitments={false} /> };
-export const CommitmentList: Story = { render: () => <WorkPerspectives {...common} perspective="list" rows={commitments} commitments /> };
-export const CommitmentBoardDarkCompact: Story = { globals: { theme: "dark", density: "compact" }, render: () => <WorkPerspectives {...common} perspective="board" rows={commitments} commitments /> };
+export const TaskList: Story = { render: () => <Perspectives {...common} perspective="list" rows={tasks} commitments={false} /> };
+export const TaskBoard: Story = { render: () => <Perspectives {...common} perspective="board" rows={tasks} commitments={false} /> };
+export const TaskCalendar: Story = { render: () => <Perspectives {...common} perspective="calendar" rows={tasks} commitments={false} /> };
+export const CommitmentList: Story = { render: () => <Perspectives {...common} perspective="list" rows={commitments} commitments /> };
+export const CommitmentBoardDarkCompact: Story = { globals: { theme: "dark", density: "compact" }, render: () => <Perspectives {...common} perspective="board" rows={commitments} commitments /> };
 
 function mockDetailFetch() {
   const original = globalThis.fetch;
@@ -76,4 +92,4 @@ function mockDetailFetch() {
 
 export const TaskDetail: Story = { beforeEach: mockDetailFetch, render: () => <TaskDetailView taskId={task.task_id} /> };
 export const CommitmentDetail: Story = { beforeEach: mockDetailFetch, render: () => <CommitmentDetailView commitmentId={commitment.commitment_id} /> };
-export const MobileCalendar: Story = { parameters: { viewport: { defaultViewport: "mobile" } }, render: () => <WorkPerspectives {...common} perspective="calendar" rows={tasks} commitments={false} /> };
+export const MobileCalendar: Story = { parameters: { viewport: { defaultViewport: "mobile" } }, render: () => <Perspectives {...common} perspective="calendar" rows={tasks} commitments={false} /> };

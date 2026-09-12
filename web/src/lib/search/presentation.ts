@@ -14,6 +14,8 @@ import type {
 } from "@/lib/api/decode/capabilities/knowledge.search";
 import type { ReportSearchMatch } from "@/lib/api/decode/capabilities/reports.search";
 import type { TaskListEntry } from "@/lib/api/decode/capabilities/tasks.search";
+import type { TaskRow } from "@/contracts/work";
+import { formatTaskStatus } from "@/lib/tasks/presentation";
 
 export const SEARCH_DOMAIN_ORDER = [
   "tasks",
@@ -43,6 +45,29 @@ export type SearchCoverage = {
   readonly reason?: string;
 };
 
+/**
+ * A Search projection of a Task, shaped so the compact Task sheet can paint a
+ * header immediately instead of opening on a blank panel.
+ *
+ * `version` is deliberately absent. A Search hit decodes with a numeric version,
+ * but that number never reaches the UI layer: the compact sheet performs its own
+ * canonical read and stays read-only until that read returns. Dropping the field
+ * here makes "a Search projection is never write authority" structural rather
+ * than merely intended — a caller cannot mutate from a Search row by mistake,
+ * because the value a mutation would need does not exist on this type.
+ */
+export type PresentedTaskSeed = Omit<TaskRow, "version">;
+
+/**
+ * Activation metadata for a Task hit. Present only on `domain: "tasks"` rows and
+ * carrying display fields only, so the UI can open the canonical Task sheet in
+ * place rather than navigating away from the result list.
+ */
+export type PresentedTaskActivation = {
+  readonly taskId: string;
+  readonly seed: PresentedTaskSeed;
+};
+
 export type PresentedHit = {
   readonly domain: SearchDomain;
   readonly key: string;
@@ -50,6 +75,8 @@ export type PresentedHit = {
   readonly detail: string | null;
   readonly href: string | null;
   readonly rank?: KnowledgeRank;
+  /** Task hits only. See {@link PresentedTaskActivation}. */
+  readonly task?: PresentedTaskActivation;
 };
 
 export type PresentedGroup = {
@@ -126,8 +153,26 @@ function presentHit(hit: FederatedHit, enrollmentId: string | undefined): Presen
         domain: "tasks",
         key: hit.item.task_id,
         label: hit.item.title,
-        detail: hit.item.lifecycle_state,
+        // Product language, not the raw lifecycle enum token the BFF speaks.
+        detail: formatTaskStatus(hit.item.lifecycle_state),
         href: identityHref("/work/tasks", hit.item.task_id),
+        task: {
+          taskId: hit.item.task_id,
+          // Field-by-field, not a spread: the copy is the enumeration of what a
+          // projection may carry, and `version` is not on it.
+          seed: {
+            task_id: hit.item.task_id,
+            title: hit.item.title,
+            lifecycle_state: hit.item.lifecycle_state,
+            priority: hit.item.priority,
+            due_at: hit.item.due_at,
+            scheduled_at: hit.item.scheduled_at,
+            deferred_until: hit.item.deferred_until,
+            archived_at: hit.item.archived_at,
+            created_at: hit.item.created_at,
+            updated_at: hit.item.updated_at,
+          },
+        },
       };
     case "commitments":
       return {

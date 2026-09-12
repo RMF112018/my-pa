@@ -282,3 +282,116 @@ test("unsupported Waiting On search is explicit and unavailable Work is not empt
   await expect(page.getByLabel("Search commitments")).toBeDisabled();
   await expect(page.getByText(/Search is unavailable for the dedicated Waiting On view/)).toBeVisible();
 });
+
+/**
+ * TASK-AC-018. Moving a deadline from the Calendar moves the deadline, and
+ * nothing else.
+ *
+ * The Calendar states three different dated facts about a Task in three
+ * different phrases — `Due`, `Planned for`, `Snoozed until` — and only the first
+ * is the Principal's own deadline. The risk this test exists to close is that a
+ * surface which lets you drag or edit "the date" quietly rewrites whichever one
+ * it happened to be showing. Two things are asserted, because either alone would
+ * be weak: the request the browser actually sent carries due fields only, and
+ * the canonical Task read back afterwards still holds the *same* planned and
+ * snoozed instants it held before.
+ */
+test("TASK-AC-018 a Calendar Due change never mutates planned or snoozed dates", async ({ page }) => {
+  test.setTimeout(180_000);
+  const marker = `cal-${test.info().project.name}-${Date.now()}`;
+  const title = `E2E calendar dates ${marker}`;
+
+  await page.goto(`/work?view=all-open&q=${encodeURIComponent(marker)}`);
+  await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
+  await page.getByRole("button", { name: "New task" }).click();
+  const create = page.getByTestId("task-create-sheet");
+  await create.getByLabel("Title").fill(title);
+  await create.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(create).toHaveCount(0);
+
+  const listed = await api<{ tasks: { task_id: string }[] }>(
+    page,
+    `/api/tasks?q=${encodeURIComponent(marker)}&pageSize=50&workView=all-open&archived=exclude`,
+  );
+  expect(listed.status).toBe(200);
+  const taskId = listed.body.tasks[0]?.task_id;
+  expect(taskId).toBeTruthy();
+
+  // The three dated fields, given three distinct instants through the canonical
+  // endpoint — the only way to set planned and snoozed, which the product
+  // deliberately does not expose as Calendar edits.
+  const seeded = await api<{ task: { version: number } }>(page, `/api/tasks/${taskId}`);
+  const seeding = await api<Record<string, unknown>>(page, `/api/tasks/${taskId}`, {
+    method: "PATCH",
+    body: {
+      dueAt: "2026-11-10T17:00:00Z",
+      scheduledAt: "2026-11-11T15:00:00Z",
+      deferredUntil: "2026-11-12T13:00:00Z",
+      expectedVersion: seeded.body.task.version,
+      idempotencyKey: key("e2e-calendar-dates"),
+    },
+  });
+  expect(seeding.status).toBe(200);
+
+  type DatedTask = {
+    task: {
+      due_at: string | null;
+      scheduled_at: string | null;
+      deferred_until: string | null;
+    };
+  };
+  const before = await api<DatedTask>(page, `/api/tasks/${taskId}`);
+  expect(before.body.task.due_at).not.toBeNull();
+  expect(before.body.task.scheduled_at).not.toBeNull();
+  expect(before.body.task.deferred_until).not.toBeNull();
+
+  // Every Task PATCH this page issues from here on, recorded as it is sent.
+  const patches: Record<string, unknown>[] = [];
+  page.on("request", (request) => {
+    if (request.method() !== "PATCH") return;
+    if (!request.url().includes(`/api/tasks/${taskId}`)) return;
+    try {
+      patches.push(JSON.parse(request.postData() ?? "{}") as Record<string, unknown>);
+    } catch {
+      patches.push({ unparsed: request.postData() });
+    }
+  });
+
+  await page.goto(`/work?view=all-open&q=${encodeURIComponent(marker)}&perspective=calendar`);
+  await expect(page.getByRole("heading", { name: "Work calendar", level: 2 })).toBeVisible();
+
+  // Three markers, each saying which date it is in the Task's own words.
+  const items = page.locator("li").filter({ hasText: title });
+  await expect(items).toHaveCount(3);
+  await expect(items.filter({ hasText: "Planned for" })).toHaveCount(1);
+  await expect(items.filter({ hasText: "Snoozed until" })).toHaveCount(1);
+
+  // Exactly one of the three is editable, and it is the Due one.
+  const editable = page.locator('[data-testid="task-calendar-marker"]').filter({ hasText: title });
+  await expect(editable).toHaveCount(1);
+  await expect(page.getByTestId("task-due-control")).toHaveCount(1);
+  await expect(editable.getByTestId("task-due-control")).toHaveCount(1);
+  // And the editable one is the Due marker, named as such on its own link.
+  await expect(editable.locator("a").getByText("Due", { exact: true })).toHaveCount(1);
+
+  await editable.getByRole("button", { name: /^Due, / }).click();
+  await editable.getByRole("button", { name: "Tomorrow", exact: true }).click();
+  await expect(feedback(page).getByText(/^Due date moved to /)).toBeVisible();
+
+  // What was sent: a due field, a version and an idempotency key. Nothing that
+  // could reschedule planned work or re-arm a snooze.
+  expect(patches.length, "the Calendar Due change issued no Task PATCH").toBeGreaterThanOrEqual(1);
+  for (const patch of patches) {
+    expect(Object.keys(patch).sort()).toEqual(["dueAt", "expectedVersion", "idempotencyKey"]);
+    expect(patch).not.toHaveProperty("scheduledAt");
+    expect(patch).not.toHaveProperty("deferredUntil");
+    expect(patch).not.toHaveProperty("clearFields");
+  }
+
+  // What the server holds: a different deadline, and the same other two
+  // instants, byte for byte.
+  const after = await api<DatedTask>(page, `/api/tasks/${taskId}`);
+  expect(after.body.task.due_at).not.toBe(before.body.task.due_at);
+  expect(after.body.task.scheduled_at).toBe(before.body.task.scheduled_at);
+  expect(after.body.task.deferred_until).toBe(before.body.task.deferred_until);
+});

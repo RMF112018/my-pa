@@ -95,9 +95,22 @@ describe("Work surface", () => {
     expect(screen.getByRole("checkbox", { name: "Select Prepare permit set" })).toBeChecked();
     expect(location.search).toContain("q=permit"); expect(location.search).toContain("perspective=board");
     await userEvent.click(screen.getByRole("button", { name: "Calendar" }));
-    expect(await screen.findByText("Deadline")).toBeTruthy();
-    expect(screen.getByText("Planned work")).toBeTruthy();
-    expect(screen.getByText("Available after")).toBeTruthy();
+    /*
+      The Calendar says what each date means in the Task's own words. The three
+      markers are distinct and coexist for one Task: a deadline, a plan to work
+      on it, and a date it becomes relevant again are three different promises,
+      and only the first is a Due date the user may edit here.
+
+      "Due" appears more than once on its marker — the label and the control
+      that edits it — so it is counted rather than fetched singularly.
+    */
+    expect((await screen.findAllByText("Due")).length).toBeGreaterThan(0);
+    expect(screen.getByText("Planned for")).toBeTruthy();
+    expect(screen.getByText("Snoozed until")).toBeTruthy();
+    // The superseded vocabulary is gone, not merely supplemented.
+    expect(screen.queryByText("Deadline")).toBeNull();
+    expect(screen.queryByText("Planned work")).toBeNull();
+    expect(screen.queryByText("Available after")).toBeNull();
     expect(location.search).toContain("perspective=calendar");
   });
 

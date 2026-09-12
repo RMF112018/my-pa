@@ -296,3 +296,350 @@ test.describe("operational Work List", () => {
     }
   });
 });
+
+/**
+ * WP-TUX-06. Board and Calendar are operational surfaces, and neither asks for a
+ * mouse drag.
+ *
+ * Everything below drives the shipped controls in a real browser against the
+ * real stack. The fixtures are synthetic Tasks created through the product's own
+ * create sheet and addressed by a `Date.now()` marker, so no assertion here can
+ * be satisfied by data this suite did not make.
+ *
+ * What these tests do **not** claim: they are not a screen-reader proof, not a
+ * 200%/400% zoom proof and not a WCAG 2.2 AA claim. WP30 owns those.
+ */
+test.describe("operational Board and Calendar", () => {
+  // A touch-capable context on every project, so the tap path is a real
+  // `touchstart`/`touchend` rather than a synthetic mouse click. The viewport is
+  // left to the project, which is what makes the same file meaningful on
+  // desktop, tablet and mobile.
+  test.use({ hasTouch: true });
+
+  /** The shell-persistent feedback region, which outlives any card. */
+  const feedback = (page: Page) => page.getByTestId("mutation-feedback-region");
+
+  /** The four narrow widths this work package pins for TASK-AC-045. */
+  const NARROW_WIDTHS = [320, 375, 390, 430] as const;
+
+  /**
+   * Chromium drives a closed `<select>` from the keyboard alone: ArrowDown moves
+   * the selection and fires `change`. Firefox and WebKit open a native popup
+   * window that Playwright cannot address, so on those engines the *selection*
+   * is made with `selectOption` — the same event sequence the platform picker
+   * produces — while the keyboard *reachability* of the control is asserted on
+   * every engine by Tab-focus. Stated rather than hidden: this is a limit of the
+   * driver, not a second code path in the product.
+   */
+  function keyboardSelectIsDrivable(): boolean {
+    return ["desktop", "tablet", "mobile"].includes(test.info().project.name);
+  }
+
+  /**
+   * Move focus to the next control, with the keyboard, on whichever engine is
+   * running.
+   *
+   * macOS Tab traverses text fields and lists only unless Full Keyboard Access
+   * is switched on; Option+Tab is the chord that reaches every control, and
+   * Playwright WebKit reproduces that operating-system default faithfully. This
+   * is a platform convention, not a product behaviour, so the *chord* differs by
+   * engine while the path being proved — keyboard, no pointer — does not.
+   */
+  async function pressNextControl(page: Page): Promise<void> {
+    await page.keyboard.press(test.info().project.name === "webkit" ? "Alt+Tab" : "Tab");
+  }
+
+  test.beforeEach(async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await signIn(page);
+  });
+
+  /**
+   * Creates one synthetic Task through the product's create sheet and returns
+   * its title. `due` is a civil date (`YYYY-MM-DD`) typed into the sheet's own
+   * Due field, so a Calendar marker exists without any back-channel write.
+   */
+  async function seedTask(page: Page, options: { due?: string } = {}): Promise<string> {
+    const title = `E2E surface task ${test.info().project.name} ${Date.now()}`;
+    await page.goto("/work?view=all-open");
+    await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
+    await page.getByRole("button", { name: "New task" }).click();
+    const sheet = page.getByTestId("task-create-sheet");
+    await sheet.getByLabel("Title").fill(title);
+    if (options.due) await sheet.getByLabel("Due", { exact: true }).fill(options.due);
+    await sheet.getByRole("button", { name: "Create", exact: true }).click();
+    await expect(sheet).toHaveCount(0);
+    return title;
+  }
+
+  /** A civil date a few days out, so the Due marker is neither today nor overdue. */
+  function civilDateAhead(days: number): string {
+    const date = new Date(Date.now() + days * 86_400_000);
+    return date.toISOString().slice(0, 10);
+  }
+
+  function boardCard(page: Page, title: string) {
+    return page.locator('[data-testid="task-board-card"]').filter({ hasText: title });
+  }
+
+  function calendarMarker(page: Page, title: string) {
+    return page.locator('[data-testid="task-calendar-marker"]').filter({ hasText: title });
+  }
+
+  /**
+   * TASK-AC-017. Status changes from the Board card itself — by keyboard, and by
+   * tap — and Task detail is never opened to do it.
+   */
+  test("TASK-AC-017 Board changes Status by keyboard and by tap without opening Task detail", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const title = await seedTask(page);
+    await page.getByRole("button", { name: "Board" }).click();
+    await expect(page).toHaveURL(/perspective=board/);
+    await expect(page.getByRole("region", { name: "Task lifecycle board" })).toBeVisible();
+
+    const card = boardCard(page, title);
+    await expect(card).toHaveCount(1);
+
+    // Keyboard reachability, asserted on every engine: the card's own title is
+    // focusable and Tab from it lands on the Status control. Nothing here hovers
+    // and nothing here drags.
+    await card.getByTestId("task-board-card-title").focus();
+    await page.keyboard.press("Tab");
+    const status = card.getByTestId("task-status-control").getByRole("combobox");
+    await expect(status).toBeFocused();
+
+    if (keyboardSelectIsDrivable()) {
+      // Open -> Waiting, from the keyboard alone: type-ahead on the focused
+      // control, which is how a keyboard user changes a closed select.
+      await page.keyboard.press("w");
+    } else {
+      await status.selectOption({ label: "Waiting" });
+    }
+    await expect(feedback(page).getByText("Status changed to Waiting")).toBeVisible();
+    // The whole point of the criterion: no full detail was opened to do it.
+    await expect(page.getByTestId("task-compact-sheet")).toHaveCount(0);
+    await expect(page).toHaveURL(/perspective=board/);
+
+    // The tap path. The control is a real touch target first, and the touch
+    // lands on it.
+    const moved = boardCard(page, title).getByTestId("task-status-control").getByRole("combobox");
+    await expect(moved).toBeVisible();
+    await moved.tap();
+    // Playwright cannot drive a native option list, on any engine. The selection
+    // itself is therefore made with `selectOption`, which is the event sequence
+    // the platform picker produces once the tap has opened it.
+    await moved.selectOption({ label: "In progress" });
+    await expect(feedback(page).getByText("Status changed to In progress")).toBeVisible();
+    await expect(page.getByTestId("task-compact-sheet")).toHaveCount(0);
+  });
+
+  /**
+   * The tap path is only a path if the target can be hit.
+   *
+   * WCAG 2.5.8 (AA) sets the minimum target at 24x24 CSS px; this shell builds
+   * its controls to a 44px row height, which is the floor asserted here.
+   *
+   * **A defect is recorded here rather than asserted away.** On WebKit the
+   * native `<select>` that carries Status renders 22 CSS px tall on the Board
+   * card — below the shell's own 44px floor *and* below WCAG 2.5.8's 24px
+   * minimum — because the element's `min-height` does not take effect on a
+   * default-appearance select in that engine. This test is therefore expected to
+   * fail on WebKit and expected to pass everywhere else: it holds the real
+   * number, it goes red on Chromium the moment that regresses, and it goes red
+   * on WebKit the day the product fixes it. `src/` belongs to another worker in
+   * this package; this is the report, not the fix.
+   */
+  test("TASK-AC-017 the Board Status and Due controls are real touch targets", async ({ page }) => {
+    test.fail(
+      test.info().project.name === "webkit",
+      "Reported, not fixed: WebKit renders the Status select 22px tall, below WCAG 2.5.8's 24px and this shell's 44px.",
+    );
+    test.setTimeout(180_000);
+    const title = await seedTask(page);
+    await page.goto("/work?view=all-open&perspective=board");
+    const card = boardCard(page, title);
+    await expect(card).toHaveCount(1);
+
+    const undersized: string[] = [];
+    for (const [name, control] of [
+      ["Status", card.getByTestId("task-status-control").getByRole("combobox")],
+      ["Due", card.getByRole("button", { name: /^Due, / })],
+      ["Comment", card.getByTestId("task-board-card-comment")],
+      ["Close Task", card.getByRole("button", { name: "Close Task", exact: true })],
+      ["More", card.getByTestId("task-board-card-more")],
+    ] as const) {
+      const box = await control.boundingBox();
+      expect(box, `${name} has no box on the Board card`).not.toBeNull();
+      if (box!.height < 44 || box!.width < 24) {
+        undersized.push(`${name} ${box!.width}x${box!.height}`);
+      }
+    }
+    expect(undersized, "Board controls below 44px tall or WCAG 2.5.8's 24px wide").toEqual([]);
+  });
+
+  /**
+   * TASK-AC-047. No Board operation depends on a drag: Due, More, Comment and
+   * Close are each driven here by the keyboard or by a tap, and the surface
+   * carries no drag affordance for any of them.
+   */
+  test("TASK-AC-047 every Board operation has a keyboard or tap path and nothing is drag-only", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const title = await seedTask(page);
+    await page.goto("/work?view=all-open&perspective=board");
+    const board = page.getByRole("region", { name: "Task lifecycle board" });
+    await expect(board).toBeVisible();
+    const card = boardCard(page, title);
+    await expect(card).toHaveCount(1);
+
+    // Nothing on this surface is draggable, and nothing announces itself as
+    // draggable: a drag-only path cannot exist where there is no drag.
+    await expect(board.locator('[draggable="true"]')).toHaveCount(0);
+    await expect(board.locator("[aria-grabbed]")).toHaveCount(0);
+    await expect(board.locator('[aria-roledescription*="drag" i]')).toHaveCount(0);
+    await expect(board.getByText(/drag/i)).toHaveCount(0);
+
+    // Due, from the keyboard alone. Opening the control focuses its first
+    // choice, so Enter twice is the whole interaction.
+    const due = card.getByRole("button", { name: /^Due, / });
+    await due.focus();
+    await expect(due).toBeFocused();
+    await page.keyboard.press("Enter");
+    const today = card.getByRole("button", { name: "Today", exact: true });
+    await expect(today).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(feedback(page).getByText(/^Due date moved to /)).toBeVisible();
+    await expect(page.getByTestId("task-compact-sheet")).toHaveCount(0);
+
+    // More, from the keyboard alone. It exists to reveal Cancel, and it does.
+    const more = boardCard(page, title).getByTestId("task-board-card-more");
+    await more.focus();
+    await page.keyboard.press("Enter");
+    await expect(more).toHaveAttribute("aria-expanded", "true");
+    await expect(boardCard(page, title).getByRole("button", { name: "Cancel Task", exact: true })).toBeVisible();
+    await page.keyboard.press("Enter");
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+
+    // Comment, by tap. It opens the Task's own Activity rather than a second
+    // comment implementation, and closing returns focus to the control tapped.
+    const comment = boardCard(page, title).getByTestId("task-board-card-comment");
+    await comment.tap();
+    await expect(page.getByTestId("task-compact-sheet")).toBeVisible();
+    await page.getByRole("button", { name: "Close panel" }).click();
+    await expect(page.getByTestId("task-compact-sheet")).toHaveCount(0);
+    await expect(boardCard(page, title).getByTestId("task-board-card-comment")).toBeFocused();
+
+    // Close, from the keyboard alone, in exactly two activations. The
+    // confirmation opens on the non-destructive choice, so Confirm is one Tab
+    // away and is never the thing Enter lands on by accident.
+    const close = boardCard(page, title).getByRole("button", { name: "Close Task", exact: true });
+    await close.focus();
+    await page.keyboard.press("Enter");
+    const confirmation = boardCard(page, title).getByRole("alertdialog");
+    await expect(confirmation).toBeVisible();
+    await expect(confirmation.getByRole("button", { name: "Keep open" })).toBeFocused();
+    await expect(confirmation.getByRole("textbox")).toHaveCount(0);
+    await pressNextControl(page);
+    await expect(confirmation.getByRole("button", { name: "Confirm Closed" })).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(feedback(page).getByText(new RegExp(`${title}.*closed`))).toBeVisible();
+  });
+
+  /**
+   * TASK-AC-047, on the Calendar. The one editable marker is operable from the
+   * keyboard, and the surface offers no drag for it either.
+   */
+  test("TASK-AC-047 the Calendar Due marker is operable from the keyboard and offers no drag", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const title = await seedTask(page, { due: civilDateAhead(4) });
+    await page.goto("/work?view=all-open&perspective=calendar");
+    const calendar = page.getByRole("heading", { name: "Work calendar", level: 2 }).locator("..");
+    await expect(calendar).toBeVisible();
+
+    const marker = calendarMarker(page, title);
+    await expect(marker).toHaveCount(1);
+    await expect(calendar.locator('[draggable="true"]')).toHaveCount(0);
+    await expect(calendar.locator("[aria-grabbed]")).toHaveCount(0);
+    await expect(calendar.locator('[aria-roledescription*="drag" i]')).toHaveCount(0);
+
+    const due = marker.getByRole("button", { name: /^Due, / });
+    await due.focus();
+    await expect(due).toBeFocused();
+    await page.keyboard.press("Enter");
+    // Opening lands on the first choice; Tab reaches the next one. No pointer.
+    await expect(marker.getByRole("button", { name: "Today", exact: true })).toBeFocused();
+    await pressNextControl(page);
+    await expect(marker.getByRole("button", { name: "Tomorrow", exact: true })).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(feedback(page).getByText(/^Due date moved to /)).toBeVisible();
+  });
+
+  /**
+   * TASK-AC-045. Board and Calendar at 320, 375, 390 and 430 CSS px: no
+   * horizontal scroll anywhere, and the operations still there to be operated.
+   * This is a narrow-viewport reflow measurement, not browser zoom.
+   */
+  for (const width of NARROW_WIDTHS) {
+    test(`TASK-AC-045 Board and Calendar are operable at ${width}px with no horizontal scroll`, async ({
+      page,
+    }) => {
+      test.setTimeout(180_000);
+      const title = await seedTask(page, { due: civilDateAhead(4) });
+
+      await page.setViewportSize({ width, height: 844 });
+
+      await page.goto("/work?view=all-open&perspective=board");
+      await expect(page.getByRole("region", { name: "Task lifecycle board" })).toBeVisible();
+      const card = boardCard(page, title);
+      await expect(card).toHaveCount(1);
+      // Every operation is present and enabled, not merely rendered somewhere
+      // off to the side.
+      const status = card.getByTestId("task-status-control").getByRole("combobox");
+      await expect(status).toBeVisible();
+      await expect(status).toBeEnabled();
+      await expect(card.getByRole("button", { name: /^Due, / })).toBeVisible();
+      await expect(card.getByTestId("task-board-card-comment")).toBeVisible();
+      await expect(card.getByRole("button", { name: "Close Task", exact: true })).toBeVisible();
+      await expect(card.getByTestId("task-board-card-more")).toBeVisible();
+      expect(
+        await horizontalOverflow(page),
+        `Board overflows horizontally at ${width}`,
+      ).toBeLessThanOrEqual(1);
+      // The card itself fits, so the absence of document overflow is not a
+      // clipped card sitting outside it.
+      const cardBox = await card.boundingBox();
+      expect(cardBox, "Board card has no box").not.toBeNull();
+      expect(cardBox!.x + cardBox!.width, `Board card exceeds ${width}`).toBeLessThanOrEqual(width + 1);
+
+      await page.goto("/work?view=all-open&perspective=calendar");
+      await expect(page.getByRole("heading", { name: "Work calendar", level: 2 })).toBeVisible();
+      const marker = calendarMarker(page, title);
+      await expect(marker).toHaveCount(1);
+      await expect(marker.getByRole("button", { name: /^Due, / })).toBeVisible();
+      await expect(marker.getByRole("button", { name: /^Due, / })).toBeEnabled();
+      expect(
+        await horizontalOverflow(page),
+        `Calendar overflows horizontally at ${width}`,
+      ).toBeLessThanOrEqual(1);
+      const markerBox = await marker.boundingBox();
+      expect(markerBox, "Calendar marker has no box").not.toBeNull();
+      expect(markerBox!.x + markerBox!.width, `Calendar marker exceeds ${width}`).toBeLessThanOrEqual(
+        width + 1,
+      );
+
+      // Opening the Due choices must not push the page sideways either: a
+      // popover is where a narrow layout usually breaks.
+      await marker.getByRole("button", { name: /^Due, / }).click();
+      await expect(marker.getByRole("button", { name: "Today", exact: true })).toBeVisible();
+      expect(
+        await horizontalOverflow(page),
+        `Calendar Due choices overflow horizontally at ${width}`,
+      ).toBeLessThanOrEqual(1);
+    });
+  }
+});

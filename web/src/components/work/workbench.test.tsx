@@ -890,6 +890,11 @@ describe("Work surface", () => {
       });
     });
 
+    // Nothing has been placed yet: the write is still running and the user has
+    // not lost their row, so moving them now would be moving them somewhere they
+    // did not ask to be. The record is kept; it is not spent.
+    expect(document.activeElement).toBe(document.body);
+
     // The write now confirms and the Task leaves the filter.
     listed = [neighbour];
     await act(async () => {

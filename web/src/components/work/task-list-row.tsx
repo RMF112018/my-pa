@@ -138,6 +138,8 @@ export function TaskListRow({
   const rowRef = useRef<HTMLDivElement | null>(null);
   /** The control the user operated, held while the row's write disables it. */
   const lockedFocus = useRef<HTMLElement | null>(null);
+  /** Its control group, for when the control itself answers by closing. */
+  const lockedGroup = useRef<HTMLElement | null>(null);
   const pendingKind = ops.pending;
   const conflictOutstanding = ops.conflict !== null;
   useEffect(() => {
@@ -152,6 +154,23 @@ export function TaskListRow({
     if (conflictOutstanding) return;
     awaitingRef.current = [];
   }, [pendingKind, conflictOutstanding]);
+
+  /**
+   * The row-level control group an element sits in.
+   *
+   * Not the nearest one: Due's choices are their own group inside the group for
+   * Due itself, and the inner one goes when the popover closes. The outer group
+   * is the part of the row that stays — for Due, the trigger the popover hangs
+   * off — so that is what a return has to aim at.
+   */
+  const outermostGroup = useCallback((element: HTMLElement): HTMLElement | null => {
+    let group = element.closest<HTMLElement>('[role="group"]');
+    for (;;) {
+      const parent = group?.parentElement?.closest<HTMLElement>('[role="group"]');
+      if (!parent || !rowRef.current?.contains(parent)) return group;
+      group = parent;
+    }
+  }, []);
 
   const await_ = useCallback(
     (entry: AwaitedConfirmation) => {
@@ -170,10 +189,28 @@ export function TaskListRow({
       const active = document.activeElement;
       if (active instanceof HTMLElement && rowRef.current?.contains(active)) {
         lockedFocus.current = active;
+        /*
+          The control group as well as the control. Some of these affordances
+          answer by closing: Due is chosen from a popover, and choosing dismisses
+          it, so the button the user pressed is gone before the write even
+          settles. Returning focus to it then returns them nothing at all.
+        */
+        lockedGroup.current = outermostGroup(active);
       }
     },
-    [],
+    [outermostGroup],
   );
+
+  /** The nearest live thing to the control the user operated. */
+  const liveReturn = useCallback((held: HTMLElement): HTMLElement | null => {
+    if (held.isConnected) return held;
+    const group = lockedGroup.current;
+    const withinGroup = group?.isConnected
+      ? group.querySelector<HTMLElement>("button:not([disabled]), select:not([disabled]), a[href], input:not([disabled])")
+      : null;
+    // Failing that, the row's own title — still this Task, still where they were.
+    return withinGroup ?? rowRef.current?.querySelector<HTMLElement>("a[href]") ?? null;
+  }, []);
 
   const handleStatus = useCallback(
     (next: TaskActiveStatus) => {
@@ -238,14 +275,18 @@ export function TaskListRow({
     /*
       Only focus that is lying on the body is ours to place: a user who moved on
       during the write chose where they are. Whatever unlocking unmounted — the
-      conflict panel's own buttons, when the user answers it — is already gone by
-      the time this runs, so the answer here is the settled one. Focusing a node
-      that has since been replaced is a silent no-op, which is the same outcome
-      as declining, so nothing is gained by checking for it.
+      conflict panel's buttons when the user answers it, the Due popover the
+      moment they choose from it — is already gone by the time this runs, so the
+      answer here is the settled one.
+
+      What is placed has to be something still on the page. Calling focus on a
+      node that has left the document does nothing, silently, and leaves the user
+      exactly where the failure left them: on the body, at the top of the
+      document. So the nearest live thing stands in for it.
     */
     if (document.activeElement !== document.body) return;
-    held.focus();
-  }, [locked]);
+    liveReturn(held)?.focus();
+  }, [liveReturn, locked]);
 
   /*
     A conflict is a question put to the user, so put it where they can answer it.

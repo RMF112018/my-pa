@@ -165,11 +165,16 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
       at the foot of the calendar was recorded as standing at its deadline near
       the top, then sent there when their marker left.
     */
-    const index = visibleRowElements().indexOf(row);
-    // A row this surface cannot place is a row it cannot restore. Record nothing
-    // rather than a position that means nothing.
-    if (index < 0) return;
-    focusedRow.current = { taskId, index, element: event.target as HTMLElement };
+    /*
+      A focus event inside this subtree always lands in a row this subtree can
+      place: `closest` walked up from the event target, so the row it found is by
+      construction one of the elements this query returns.
+    */
+    focusedRow.current = {
+      taskId,
+      index: visibleRowElements().indexOf(row),
+      element: event.target as HTMLElement,
+    };
   }
 
   /*
@@ -230,7 +235,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
           }
           const row = lost.element.closest<HTMLElement>("[data-work-item]");
           const moved = row ? visibleRowElements().indexOf(row) : -1;
-          focusedRow.current = moved < 0 ? lost : { ...lost, index: moved };
+          focusedRow.current = { ...lost, index: moved };
           return;
         }
 

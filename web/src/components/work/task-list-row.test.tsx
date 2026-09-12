@@ -535,6 +535,75 @@ describe("TaskListRow", () => {
     }
   });
 
+  it("gives focus back after a Due change, whose own control closes under the user", async () => {
+    /*
+      Due is chosen from a popover, and choosing dismisses it — so the button the
+      user pressed is gone before the write has even settled. Returning focus to
+      it returns them nothing: `focus()` on a node that has left the document
+      does nothing at all, silently, and leaves them on the body at the top of
+      the page. This is the common case, not an edge: it happens on the success
+      path, every time Due is changed from the list.
+    */
+    const restore = emulateDisableBlur();
+    try {
+      stubFetch();
+      renderRow();
+      await hydrated();
+
+      const trigger = screen.getByRole("button", { name: "Due, Tomorrow" });
+      trigger.focus();
+      await userEvent.click(trigger);
+      const choice = await screen.findByRole("button", { name: "Today" });
+      choice.focus();
+      await userEvent.click(choice);
+
+      // The chosen button is gone with its popover, and the write has settled.
+      expect(choice.isConnected).toBe(false);
+      await waitFor(() => expect(row().getAttribute("aria-busy")).toBeNull());
+
+      // The user is back on the Due affordance itself, not stranded.
+      expect(document.activeElement).not.toBe(document.body);
+      expect(row().contains(document.activeElement)).toBe(true);
+      expect(document.activeElement?.getAttribute("aria-label")).toContain("Due");
+    } finally {
+      restore();
+    }
+  });
+
+  it("gives focus back after a Due change that is refused", async () => {
+    /*
+      The same, with nothing to reconcile afterwards: a refused Due write moves
+      no Task and changes no list, so if the return does not place focus, nothing
+      else will.
+    */
+    const restore = emulateDisableBlur();
+    try {
+      stubFetch({
+        patch: () =>
+          new Response(JSON.stringify({ error: { message: "nope", code: "invalid" } }), {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          }),
+      });
+      renderRow();
+      await hydrated();
+
+      const trigger = screen.getByRole("button", { name: "Due, Tomorrow" });
+      trigger.focus();
+      await userEvent.click(trigger);
+      const choice = await screen.findByRole("button", { name: "Today" });
+      choice.focus();
+      await userEvent.click(choice);
+
+      await waitFor(() => expect(row().getAttribute("aria-busy")).toBeNull());
+
+      expect(document.activeElement).not.toBe(document.body);
+      expect(row().contains(document.activeElement)).toBe(true);
+    } finally {
+      restore();
+    }
+  });
+
   it("does not pull a user back into the row if they moved on while it ran", async () => {
     /*
       The row holds the control the user operated so it can give it back. It
@@ -667,6 +736,57 @@ describe("TaskListRow", () => {
     // The recovered write is reported, so Work can re-read the filter.
     await waitFor(() => expect(handles.onMutationConfirmed).toHaveBeenCalled());
     expect(handles.onMutationConfirmed.mock.calls[0][0]).toMatchObject({ taskId: TASK_ID, kind: "status" });
+  });
+
+  it("does not take a user to the conflict question if they moved on", async () => {
+    /*
+      The conflict is worth answering, but not worth interrupting for. A user who
+      moved on to something else while the write ran chose where they are, and
+      the panel waits in the row for them rather than pulling them to it.
+    */
+    const restore = emulateDisableBlur();
+    try {
+      const refusal = gate();
+      stubFetch({
+        transition: async () => {
+          await refusal.wait;
+          return new Response(
+            JSON.stringify({
+              error: { message: "version conflict", code: "conflict" },
+              current: { ...CANONICAL, version: 9, lifecycle_state: "blocked" },
+            }),
+            { status: 409, headers: { "content-type": "application/json" } },
+          );
+        },
+      });
+      renderRow();
+      await hydrated();
+
+      const status = within(row()).getByRole("combobox");
+      status.focus();
+      await userEvent.selectOptions(status, "blocked");
+      await waitFor(() => expect(row().getAttribute("aria-busy")).toBe("true"));
+
+      // The user goes elsewhere while the write is still running.
+      const elsewhere = document.createElement("button");
+      elsewhere.textContent = "Somewhere else";
+      document.body.append(elsewhere);
+      elsewhere.focus();
+
+      refusal.release();
+      await screen.findByTestId("task-list-row-conflict");
+      await act(async () => {
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+      });
+
+      // The question is there to answer; they were not dragged to it.
+      expect(document.activeElement).toBe(elsewhere);
+      elsewhere.remove();
+    } finally {
+      restore();
+    }
   });
 
   it("reports a confirmed mutation so Work can move the row", async () => {

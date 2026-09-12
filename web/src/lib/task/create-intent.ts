@@ -290,13 +290,24 @@ export class CreateIntentSession {
     }
   }
 
-  /** Success order: confirm → reconcile → feedback → retire. */
+  /**
+   * Success order: mark confirmed → reconcile → feedback → retire.
+   * Hook failures must not roll a confirmed create back into ambiguous/failed.
+   */
   private async confirm<TResult>(result: TResult, hooks: CreateIntentHooks<TResult>): Promise<void> {
     this.phase = "confirmed";
     this.result = result;
     this.error = undefined;
-    await hooks.reconcile?.(result);
-    await hooks.feedback?.(result);
+    try {
+      await hooks.reconcile?.(result);
+    } catch {
+      // List refresh / barrier work is best-effort after the server accepted create.
+    }
+    try {
+      await hooks.feedback?.(result);
+    } catch {
+      // Feedback is best-effort; the create itself already confirmed.
+    }
     this.retired = true;
   }
 

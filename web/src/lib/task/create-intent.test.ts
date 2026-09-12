@@ -172,6 +172,24 @@ describe("CreateIntentStore", () => {
     expect(store.getUnresolvedSession()?.idempotencyKey).toBe(session.idempotencyKey);
   });
 
+  it("keeps confirmed phase when reconcile throws after a successful dispatch", async () => {
+    const store = createIntentStore();
+    const session = store.openSession({ title: "Hook fail" });
+
+    const outcome = await session.submit(
+      async () => ({ task_id: "tsk_dddddddd44444444" }),
+      {
+        reconcile: async () => {
+          throw new Error("TaskReadCoordinator has been disposed");
+        },
+      },
+    );
+
+    expect(outcome).toEqual({ refused: false, result: { task_id: "tsk_dddddddd44444444" } });
+    expect(session.getPhase()).toBe("confirmed");
+    expect(session.isRetired()).toBe(true);
+  });
+
   it("runs confirm then reconcile then feedback before retiring", async () => {
     const store = createIntentStore();
     const session = store.openSession({ title: "Ordered" });

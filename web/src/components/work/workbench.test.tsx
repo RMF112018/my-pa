@@ -534,6 +534,59 @@ describe("Work surface", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: "Retry same create" })).toBeNull());
   });
 
+  it("closes create form even when list reconcile never resolves", async () => {
+    let resolveList!: (response: Response) => void;
+    const listPromise = new Promise<Response>((resolve) => {
+      resolveList = resolve;
+    });
+    let createPosts = 0;
+    const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      if (path === "/api/tasks" && init?.method === "POST") {
+        createPosts += 1;
+        return new Response(
+          JSON.stringify({ task: { task_id: "tsk_aaaaaaaa11111111" }, history: {}, replayed: false }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (path.startsWith("/api/tasks?")) return listPromise;
+      if (path.startsWith("/api/commitments")) {
+        return new Response(JSON.stringify({ commitments: [] }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetcher);
+    history.replaceState(null, "", "/work?view=all-open");
+    renderFromUrl();
+    // First paint waits on the hung list promise — resolve the initial mount read only.
+    await act(async () => {
+      resolveList(new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } }));
+    });
+    await screen.findByText("No all open tasks");
+    // Subsequent list reads hang again.
+    const listPromise2 = new Promise<Response>(() => undefined);
+    fetcher.mockImplementation(async (input, init) => {
+      const path = String(input);
+      if (path === "/api/tasks" && init?.method === "POST") {
+        createPosts += 1;
+        return new Response(
+          JSON.stringify({ task: { task_id: "tsk_aaaaaaaa11111111" }, history: {}, replayed: false }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (path.startsWith("/api/tasks?")) return listPromise2;
+      if (path.startsWith("/api/commitments")) {
+        return new Response(JSON.stringify({ commitments: [] }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    await userEvent.click(screen.getByRole("button", { name: "New task" }));
+    await userEvent.type(screen.getByLabelText("Title"), "Must close");
+    await userEvent.click(screen.getByRole("button", { name: "Create task" }));
+    await waitFor(() => expect(createPosts).toBe(1));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Create task" })).toBeNull());
+  });
+
   it("publishes create success into the mutation feedback live region", async () => {
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       const path = String(input);

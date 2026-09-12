@@ -413,7 +413,10 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
         ) : (
           <TaskCreate
             onReconcile={() => notifyMutationConfirmed()}
-            onDone={() => setCreating(false)}
+            onDone={() => {
+              setCreating(false);
+              void notifyMutationConfirmed();
+            }}
           />
         )
       ) : null}
@@ -849,7 +852,9 @@ function TaskCreate({
           }),
         {
           reconcile: async () => {
-            await onReconcile();
+            // Do not await list revalidation here — a hung/disposed freshness
+            // read must not keep the create form open after POST succeeded.
+            void Promise.resolve(onReconcile()).catch(() => undefined);
           },
           feedback: async () => {
             runtime.feedback.publish({

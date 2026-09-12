@@ -322,6 +322,33 @@ describe("TaskListRow", () => {
     await waitFor(() => expect(row().getAttribute("aria-busy")).toBeNull());
   });
 
+  it("locks the row from the activation, not from the write", async () => {
+    /*
+      A list row reaches the canonical Task on demand, so an activation can spend
+      a real round trip before anything is sent. While that read was in flight the
+      controls stayed live, so a second activation got through — and the
+      coordinator refused it without a word, leaving the user pressing a control
+      twice and told nothing either time.
+    */
+    const detail = gate();
+    stubFetch({
+      detail: async () => {
+        await detail.wait;
+        return ok({ task: CANONICAL });
+      },
+    });
+    renderRow();
+    // Close is offered immediately; hydration happens at the first write.
+    await userEvent.click(await screen.findByTestId("task-close-trigger"));
+    await userEvent.click(await screen.findByTestId("task-close-confirm"));
+
+    // The canonical read has not answered yet, and the row is already busy.
+    await waitFor(() => expect(row().getAttribute("aria-busy")).toBe("true"));
+
+    detail.release();
+    await waitFor(() => expect(row().getAttribute("aria-busy")).toBeNull());
+  });
+
   it("reports a confirmed mutation so Work can move the row", async () => {
     stubFetch();
     const handles = renderRow();

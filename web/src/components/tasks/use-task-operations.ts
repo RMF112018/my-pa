@@ -493,8 +493,19 @@ export function useTaskOperations(
 
   const execute = useCallback(
     async (intent: OperationIntent): Promise<void> => {
+      /*
+        Pending from the first moment, not from the write.
+
+        A list row reaches the canonical Task on demand, so an activation can
+        spend a real round trip here before anything is sent. Leaving the
+        controls unlocked for that window let a second activation through, and
+        the coordinator refused it silently — the user pressed a control twice
+        and was told nothing either time.
+      */
+      if (mountedRef.current) setPending(intent.kind);
       const hold = await ensureCanonical();
       if (!hold) {
+        if (mountedRef.current) setPending(null);
         publish("error", TASK_OPERATION_FAILURE_MESSAGE, `task-${intent.kind}-unhydrated:${taskId}`);
         return;
       }
@@ -507,7 +518,6 @@ export function useTaskOperations(
           : { toState: intent.toState, expectedVersion: hold.version };
       const idempotencyKey = attemptKeyFor(intent.kind).forPayload(material);
 
-      if (mountedRef.current) setPending(intent.kind);
       const outcome = await runtime.mutationCoordinator.coordinator.mutate({
         kind: intent.kind,
         taskId,

@@ -248,14 +248,160 @@ describe("Work surface", () => {
     });
   });
 
+  it("catches focus when a second row's write confirms after the first", async () => {
+    /*
+      Two rows triaged in quick succession, both writes in flight at once.
+
+      An earlier design armed a single focus handoff when a write was dispatched
+      and opened it on the next confirmed mutation in the session. Neither signal
+      carried a Task identity — a list change cannot — so the first row's
+      confirmation opened the gate for the handoff belonging to the second, and
+      the list update that removed the first row spent it while the second row
+      was still there. When the second row really did go, nothing was left to
+      catch focus and it fell to `document.body`: the keyboard user is dropped at
+      the top of the document with no sign their action succeeded.
+
+      Restoring on focus actually being lost cannot make that mistake. There is
+      nothing to arm and nothing to spend early — the first row leaving costs the
+      user no focus, and the second row leaving is caught because it does.
+    */
+    const rowOf = (id: string, title: string) => ({
+      task_id: id, title, lifecycle_state: "open", priority: null, due_at: null,
+      scheduled_at: null, deferred_until: null, archived_at: null,
+      created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z", version: 2,
+    });
+    const alpha = rowOf("tsk_aaaaaaaa11111111", "Confirms first");
+    const bravo = rowOf("tsk_bbbbbbbb22222222", "Confirms second");
+    const charlie = rowOf("tsk_cccccccc33333333", "Takes the place");
+    let listed = [alpha, bravo, charlie];
+    const body = (data: unknown) =>
+      new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
+
+    // Each close is held open so both are in flight together, and released in order.
+    const release: Record<string, () => void> = {};
+    const inFlight = (taskId: string) =>
+      new Promise<void>((resolve) => {
+        release[taskId] = resolve;
+      });
+
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      const method = (init?.method ?? "GET").toUpperCase();
+      if (path.includes("/transition") && method === "POST") {
+        const subject = [alpha, bravo, charlie].find((row) => path.includes(row.task_id))!;
+        await inFlight(subject.task_id);
+        // The server decides membership: a closed Task is gone from an open view.
+        listed = listed.filter((row) => row.task_id !== subject.task_id);
+        return body({ task: { ...subject, version: 3, lifecycle_state: "completed" } });
+      }
+      for (const row of [alpha, bravo, charlie]) {
+        if (path === `/api/tasks/${row.task_id}`) return body({ task: row });
+      }
+      if (path.includes("/comments")) return body({ comments: [] });
+      return body({ tasks: listed });
+    }));
+
+    history.replaceState(null, "", "/work?view=all-open");
+    renderFromUrl();
+    await screen.findByText("Confirms first");
+
+    const user = userEvent.setup();
+    const rows = screen.getAllByTestId("task-list-row");
+
+    // Close the first row; its write is held open.
+    await user.click(within(rows[0]).getByTestId("task-close-trigger"));
+    await user.click(within(rows[0]).getByTestId("task-close-confirm"));
+    await waitFor(() => expect(release[alpha.task_id]).toEqual(expect.any(Function)));
+
+    // Move to the second row and close it too, while the first is still in flight.
+    await user.click(within(rows[1]).getByTestId("task-close-trigger"));
+    await user.click(within(rows[1]).getByTestId("task-close-confirm"));
+    await waitFor(() => expect(release[bravo.task_id]).toEqual(expect.any(Function)));
+
+    // The first write lands and its row leaves, while the user's row is still here.
+    await act(async () => {
+      release[alpha.task_id]();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.queryByText("Confirms first")).toBeNull());
+
+    // Now the row the user was actually in goes.
+    await act(async () => {
+      release[bravo.task_id]();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.queryByText("Confirms second")).toBeNull());
+
+    await waitFor(() => {
+      expect(document.activeElement).not.toBe(document.body);
+      expect(document.activeElement?.textContent).toContain("Takes the place");
+    });
+  });
+
+  it("returns focus to the Task the user was in, not to whatever holds its old place", async () => {
+    /*
+      The remembered position is where the row sat when focus arrived, and rows
+      above it can leave in the meantime. If restoration went by position alone
+      it would hand focus to a different Task than the one the user was reading,
+      which is worse than the body: it looks deliberate and it is wrong.
+    */
+    const rowOf = (id: string, title: string) => ({
+      task_id: id, title, lifecycle_state: "open", priority: null, due_at: null,
+      scheduled_at: null, deferred_until: null, archived_at: null,
+      created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z", version: 2,
+    });
+    const above = rowOf("tsk_aaaaaaaa11111111", "Leaves from above");
+    const reading = rowOf("tsk_bbbbbbbb22222222", "Where the user was");
+    const below = rowOf("tsk_cccccccc33333333", "Not where the user was");
+    let listed = [above, reading, below];
+    const body = (data: unknown) =>
+      new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
+
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      const path = String(input);
+      for (const row of [above, reading, below]) {
+        if (path === `/api/tasks/${row.task_id}`) return body({ task: row });
+      }
+      if (path.includes("/comments")) return body({ comments: [] });
+      return body({ tasks: listed });
+    }));
+
+    history.replaceState(null, "", "/work?view=all-open");
+    renderFromUrl();
+    await screen.findByText("Where the user was");
+
+    // Focus the middle row, then lose it the way an unmounting control does.
+    const rows = screen.getAllByTestId("task-list-row");
+    const link = within(rows[1]).getByRole("link");
+    link.focus();
+    expect(document.activeElement).toBe(link);
+    (document.activeElement as HTMLElement).blur();
+    expect(document.activeElement).toBe(document.body);
+
+    // The row above leaves, so the user's row is no longer at the remembered index.
+    listed = [reading, below];
+    await act(async () => {
+      fireEvent(window, new Event("focus"));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.queryByText("Leaves from above")).toBeNull());
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement?.textContent).toContain("Where the user was");
+  });
+
   it("does not move focus on a later refresh after a mutation that kept the Task", async () => {
     /*
-      The dangling-handoff case. A Status change usually leaves the Task right
-      where it was, so no focus move is owed. But `rows` keeps changing for
-      reasons of its own — the freshness poll, another Task's mutation — and if
-      the handoff armed at dispatch were still sitting there, one of those later
-      refreshes would be read as "this mutation removed the Task" and pull focus
-      somewhere the user was not working.
+      A Status change usually leaves the Task right where it was, so no focus
+      move is owed. `rows` then keeps changing for reasons of its own — the
+      freshness poll, another Task's mutation — and none of those changes cost
+      the user the focus they are holding. Focus is only placed when it has
+      actually fallen to nothing, so the user keeps working where they are.
     */
     const rowOf = (id: string, title: string) => ({
       task_id: id, title, lifecycle_state: "open", priority: null, due_at: null,
@@ -325,14 +471,14 @@ describe("Work surface", () => {
       });
     });
 
-    // Focus was not stolen by a handoff that no longer had anything to do.
+    // Focus was not stolen by a list change that had nothing to do with it.
     expect(document.activeElement).toBe(parked);
   });
 
   it("does not move focus when the user pages away before a mutation settles", async () => {
     /*
       Independent review reproduced this. Paging changes the whole visible set,
-      so the Task a pending handoff is tracking is trivially absent from the new
+      so the Task the user was in is trivially absent from the new
       page — and without a clear, that reads as "the mutation removed it" and
       pulls focus onto whatever now sits at that index. The user is on page two
       looking at different work entirely.
@@ -408,8 +554,8 @@ describe("Work surface", () => {
       Found by review, and a regression I introduced: switching between Tasks and
       Commitments pins the task view through `lastTaskView`, so the query
       identity can be byte-identical either side of the toggle — while the switch
-      still empties the rows. A handoff left armed reads that empty list as "the
-      Task is gone" and pulls focus to the heading, away from the Commitments
+      still empties the rows. Reading that empty list as "the Task is gone"
+      would pull focus to the heading, away from the Commitments
       control the user just pressed.
 
       The list load is resolved a frame late here on purpose. Resolving it in the
@@ -471,12 +617,12 @@ describe("Work surface", () => {
     expect(document.activeElement).toBe(commitments);
   });
 
-  it("stands the focus handoff down when a mutation fails", async () => {
+  it("leaves focus alone when a mutation fails and the Task later leaves anyway", async () => {
     /*
-      A failed mutation moved nothing, so it is owed no focus placement. If its
-      handoff were left armed it would be spent on whatever changed the list
-      next — a poll, someone else's edit — and focus would jump for a reason the
-      user could not connect to anything they did.
+      A failed mutation moved nothing and cost the user no focus, so it is owed
+      no focus placement — not then, and not when the Task later leaves the
+      filter for reasons of its own. Focus that is somewhere real is never taken
+      from the user to be placed somewhere they did not ask to be.
     */
     const rowOf = (id: string, title: string) => ({
       task_id: id, title, lifecycle_state: "open", priority: null, due_at: null,

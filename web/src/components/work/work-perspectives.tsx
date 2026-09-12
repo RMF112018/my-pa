@@ -108,8 +108,6 @@ function ListPerspective(props: WorkPerspectivesProps) {
                 onOpen={props.onOpen}
                 onOpenActivity={props.onOpenActivity}
                 onMutationConfirmed={props.onTaskMutationConfirmed}
-                onMutationDispatched={props.onTaskMutationDispatched}
-                onMutationSettledUnconfirmed={props.onTaskMutationSettledUnconfirmed}
               />
             </li>
           ))}
@@ -156,10 +154,6 @@ export interface WorkPerspectivesProps {
   onOpenActivity?: (taskId: string, title: string, trigger: HTMLElement) => void;
   /** A confirmed Task mutation, so Work can reconcile the query. List only. */
   onTaskMutationConfirmed?: () => void;
-  /** A dispatched Task mutation, so Work can capture ordering before anything moves. List only. */
-  onTaskMutationDispatched?: (input: { taskId: string; kind: string }) => void;
-  /** A dispatch that settled without confirming, so Work can stand the handoff down. List only. */
-  onTaskMutationSettledUnconfirmed?: (input: { taskId: string; kind: string }) => void;
 }
 
 export function WorkPerspectives(props: WorkPerspectivesProps) {

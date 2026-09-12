@@ -103,68 +103,93 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   const activeCommitmentRead = useRef<AbortController | null>(null);
   const detailTrigger = useRef<HTMLElement | null>(null);
   const workHeading = useRef<HTMLHeadingElement | null>(null);
-  /** The Task a dispatched mutation may move, and where it sat when it was dispatched. */
-  const pendingMovement = useRef<{ readonly taskId: string; readonly index: number } | null>(null);
   /**
-   * Whether a Task mutation has actually been confirmed since the handoff armed.
+   * The row that currently holds focus, and where it sits in the visible list.
    *
-   * Without this the handoff is spent on whichever list read lands first. An
-   * ordinary background poll can beat the write it knows nothing about, and it
-   * arrives while the Task is still there — so the handoff is consumed, and when
-   * the write does confirm and the row really does go, there is nothing left to
-   * catch focus and it falls to the document body.
+   * Focus restoration reacts to focus actually being lost rather than predicting
+   * which write will lose it. An earlier design armed a handoff when a mutation
+   * was dispatched and spent it on a later list change; because a list change
+   * carries no Task identity, an unrelated read — a freshness poll, or a second
+   * row's write confirming first — could spend the handoff armed for another
+   * row, and when that row really did go there was nothing left to catch focus.
+   * Recording where focus is cannot make that mistake: there is one entry, it is
+   * whichever row the user is actually in, and it is only acted on when that
+   * exact row leaves and focus has genuinely fallen to the document body.
    */
-  const confirmedSinceArm = useRef(false);
-  /** Live rows, so focus resolution after reconciliation never reads a stale closure. */
-  const rowsRef = useRef<readonly unknown[]>([]);
-  useEffect(() => {
-    rowsRef.current = rows;
-  }, [rows]);
+  const focusedRow = useRef<{ readonly taskId: string; readonly index: number } | null>(null);
 
+
+  /** The Task rows currently on screen, in the order the server returned them. */
+  function visibleRowElements(): readonly HTMLElement[] {
+    const list = document.querySelector('[aria-label="Work list"]');
+    return list ? Array.from(list.querySelectorAll<HTMLElement>("[data-work-item]")) : [];
+  }
+
+  /** The title/details trigger of a row — the stable thing to hand focus to. */
+  function rowTarget(row: HTMLElement | undefined): HTMLElement | null {
+    return row?.querySelector<HTMLElement>("a[href]") ?? null;
+  }
+
+  /**
+   * Remember which row focus is in, whenever it moves.
+   *
+   * `focusin` bubbles, so one handler on the list covers every row and every
+   * control inside one, including controls a row mounts after this renders.
+   */
+  function rememberFocusedRow(event: React.FocusEvent<HTMLElement>) {
+    const row = (event.target as HTMLElement).closest<HTMLElement>("[data-work-item]");
+    const taskId = row?.getAttribute("data-work-item") ?? null;
+    if (!taskId) return;
+    const index = visibleRowElements().findIndex(
+      (candidate) => candidate.getAttribute("data-work-item") === taskId,
+    );
+    focusedRow.current = { taskId, index: Math.max(0, index) };
+  }
 
   /*
-    Resolve focus once the reconciled list has painted.
+    Restore focus after a list change took it away.
 
     Runs on the rows the server returned, not on a mutation callback: the row
     that was mutated may already be unmounted by then, so nothing it fires can
-    be relied on. Focus lands on whatever now occupies its place, then the row
-    before it, and only then the heading — never on nothing.
+    be relied on.
+
+    There is exactly one condition, and it is the whole of the design: focus
+    must have actually fallen to the document body. That is what makes this
+    safe for any list change whatever its cause — a write confirming, a
+    freshness poll, pagination, a change of view, a second row's write landing
+    first. A change that does not cost the user their focus is left alone, so
+    nothing has to be armed when a write is dispatched, stood down when it
+    fails, or cleared on navigation. An earlier design predicted which write
+    would cost focus and armed a handoff for it; because a list change carries
+    no Task identity, an unrelated read could spend the handoff armed for
+    another row, and focus was lost precisely when it mattered most.
+
+    Placement prefers the Task the user was actually in, if the list still has
+    it; otherwise whatever now occupies its place, then the row before it, and
+    only then the heading — never nothing.
   */
   useEffect(() => {
-    const moved = pendingMovement.current;
-    if (!moved) return;
-    /*
-      Single-shot. This rows update is the dispatched mutation's only chance to
-      move focus, and the entry is dropped either way — including when the Task
-      is still here, which is the ordinary outcome of a Status or Due edit that
-      does not change membership.
-
-      Leaving it armed was a real bug: `rows` also changes on the five-second
-      freshness poll and on any other Task mutation in the session, so a stale
-      entry would later be read as "this mutation removed the Task" and pull
-      focus somewhere the user was not working.
-    */
-    /*
-      An unrelated read — the freshness poll, another Task's mutation — must not
-      spend this handoff. It is only in play once a Task mutation has actually
-      been confirmed since it armed; until then this list update belongs to
-      something else and the handoff waits.
-    */
-    if (!confirmedSinceArm.current) return;
-    pendingMovement.current = null;
-    confirmedSinceArm.current = false;
-    const present = rows.some((row) => taskIdOf(row) === moved.taskId);
-    if (present) return;
+    const lost = focusedRow.current;
+    if (!lost) return;
     const frame = requestAnimationFrame(() => {
+      /*
+        Focus is still somewhere real: the row survived and kept it, or the
+        detail sheet, a dialog, or the user's own click took it deliberately.
+        Only focus that has fallen to nothing is ours to place.
+      */
+      const active = document.activeElement;
+      if (active && active !== document.body) return;
+      focusedRow.current = null;
       const after = visibleRowElements();
-      const sameIndex = rowTarget(after[moved.index]);
-      if (sameIndex) {
-        sameIndex.focus();
-        return;
-      }
-      const previous = moved.index > 0 ? rowTarget(after[moved.index - 1]) : null;
-      if (previous) {
-        previous.focus();
+      const survivor = after.find(
+        (candidate) => candidate.getAttribute("data-work-item") === lost.taskId,
+      );
+      const target =
+        rowTarget(survivor) ??
+        rowTarget(after[lost.index]) ??
+        (lost.index > 0 ? rowTarget(after[lost.index - 1]) : null);
+      if (target) {
+        target.focus();
         return;
       }
       workHeading.current?.focus();
@@ -203,36 +228,6 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
     ],
   );
   const taskQueryKeyId = serializeTaskQueryKey(taskQueryKey);
-
-  /*
-    A deliberate change of what the list is showing ends any pending handoff.
-
-    Keyed on the query identity rather than on a list of call sites: the key
-    already encodes view, search, archive mode and cursor, so paginating counts
-    without anyone having to remember that it does. An earlier version cleared at
-    named call sites and missed pagination, which then moved focus onto an
-    unrelated row on the next page.
-
-    A mutation's own reconciliation does not change the key, so a handoff still
-    survives to the rows update it was armed for.
-  */
-  useEffect(() => {
-    pendingMovement.current = null;
-    confirmedSinceArm.current = false;
-  }, [taskQueryKeyId]);
-
-  /*
-    A confirmed Task mutation, observed through the runtime's own reconciliation
-    registry rather than through the row. The row cannot be relied on here: its
-    own confirmation unmounts it, so a callback from it never arrives.
-  */
-  useEffect(
-    () =>
-      runtime.reconciliation.registerActiveTaskQuery("work:focus-handoff", () => {
-        confirmedSinceArm.current = true;
-      }),
-    [runtime.reconciliation],
-  );
 
 
   const applyTaskList = useCallback((payload: TaskListPayload) => {
@@ -389,18 +384,12 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
     /*
       Cleared explicitly, not left to the query key.
 
-      Toggling between Tasks and Commitments pins the task view through
-      `lastTaskView`, so the query identity can come out byte-identical either
-      side of the switch — while `setRows([])` below still re-runs focus
-      resolution against an empty list. A handoff left armed would then read
-      "the Task is gone" and pull focus to the heading, away from the control
-      the user just pressed.
-
-      The query key covers pagination, search, archive mode and view; this
-      covers the navigations it cannot see. Both, deliberately: relying on the
-      key alone has already missed a case twice.
+      Toggling between Tasks and Commitments empties the list, which re-runs
+      focus resolution against no rows. Nothing needs clearing here: the control
+      the user just pressed still holds focus, so the restore declines to move
+      it. The earlier design had to clear at each navigation site by hand and
+      missed pagination and this toggle in turn.
     */
-    pendingMovement.current = null;
     if (next !== "commitments") setLastTaskView(next as TaskView);
     setState("loading");
     setRows([]);
@@ -431,7 +420,6 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   }
 
   function choosePerspective(next: string) {
-    pendingMovement.current = null;
     if (!WORK_PERSPECTIVES.includes(next as WorkPerspective)) return;
     const perspectiveValue = next as WorkPerspective;
     setPerspective(perspectiveValue);
@@ -445,49 +433,11 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   }
 
   function openDetail(type: "task" | "commitment", id: string, title: string, trigger: HTMLElement) {
-    // The detail sheet overlays a still-mounted list. A handoff that fired while
-    // it was open would pull focus out from under the sheet.
-    pendingMovement.current = null;
     detailTrigger.current = trigger;
     setDetail({ type, id, title });
     sync({ task: type === "task" ? id : undefined, commitmentId: type === "commitment" ? id : undefined });
   }
 
-  /** The Task rows currently on screen, in the order the server returned them. */
-  function visibleRowElements(): readonly HTMLElement[] {
-    const list = document.querySelector('[aria-label="Work list"]');
-    return list ? Array.from(list.querySelectorAll<HTMLElement>("[data-work-item]")) : [];
-  }
-
-  /** The title/details trigger of a row — the stable thing to hand focus to. */
-  function rowTarget(row: HTMLElement | undefined): HTMLElement | null {
-    return row?.querySelector<HTMLElement>("a[href]") ?? null;
-  }
-
-  /**
-   * A Task mutation is on its way.
-   *
-   * The ordering is captured now, while it is still what the user is looking at.
-   * By the time the write confirms, reconciliation may already have taken this
-   * row away — and with it whichever control had focus.
-   */
-  function onTaskMutationDispatched(input: { taskId: string; kind: string }) {
-    confirmedSinceArm.current = false;
-    const rows = visibleRowElements();
-    const index = rows.findIndex((row) => row.getAttribute("data-work-item") === input.taskId);
-    pendingMovement.current = { taskId: input.taskId, index: Math.max(0, index) };
-  }
-
-  /**
-   * A dispatch settled without confirming. Nothing moved, so the handoff armed
-   * for it is stood down rather than left to be spent on the next list change.
-   */
-  function onTaskMutationSettledUnconfirmed(input: { taskId: string; kind: string }) {
-    if (pendingMovement.current?.taskId === input.taskId) {
-      pendingMovement.current = null;
-      confirmedSinceArm.current = false;
-    }
-  }
 
   /**
    * A Task mutation was confirmed by the server.
@@ -666,18 +616,23 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
           />
         ) : null}
         {state === "ready" ? (
-          <WorkPerspectives
-            perspective={perspective}
-            rows={rows}
-            commitments={view === "commitments"}
-            selectedTaskIds={selectedTaskIds}
-            onSelectTask={toggleTask}
-            onOpen={openDetail}
-            onOpenActivity={openActivity}
-            onTaskMutationConfirmed={onTaskMutationConfirmed}
-            onTaskMutationDispatched={onTaskMutationDispatched}
-            onTaskMutationSettledUnconfirmed={onTaskMutationSettledUnconfirmed}
-          />
+          /*
+            React's `onFocus` is `focusin`, which bubbles — so this one handler
+            sees focus land anywhere in the list, including on controls a row
+            mounts later. It is a listener, not an interactive element.
+          */
+          <div onFocus={rememberFocusedRow}>
+            <WorkPerspectives
+              perspective={perspective}
+              rows={rows}
+              commitments={view === "commitments"}
+              selectedTaskIds={selectedTaskIds}
+              onSelectTask={toggleTask}
+              onOpen={openDetail}
+              onOpenActivity={openActivity}
+              onTaskMutationConfirmed={onTaskMutationConfirmed}
+            />
+          </div>
         ) : null}
       </div>
       {disclosure && state !== "failed" ? <Disclosure details={disclosure} /> : null}
@@ -756,11 +711,6 @@ function taskSeed(
 ): TaskRow | null {
   const match = (rows as readonly { task_id?: string }[]).find((row) => row.task_id === taskId);
   return match && "lifecycle_state" in match ? (match as TaskRow) : null;
-}
-
-function taskIdOf(row: unknown): string | undefined {
-  const id = (row as { task_id?: unknown } | null)?.task_id;
-  return typeof id === "string" ? id : undefined;
 }
 
 function Disclosure({ details }: { details: DisclosureEnvelope }) {

@@ -57,22 +57,6 @@ export interface TaskListRowProps {
   onMutationConfirmed?(input: { taskId: string; kind: string }): void;
   /**
    * Fired when a dispatched mutation settles without confirming — a definitive
-   * failure, a conflict, or an ambiguous result.
-   *
-   * Nothing moved, so any focus handoff armed for it must be stood down. Without
-   * this the handoff outlives the attempt and is spent on whatever changes the
-   * list next, for a reason that has nothing to do with it.
-   */
-  onMutationSettledUnconfirmed?(input: { taskId: string; kind: string }): void;
-  /**
-   * Fired synchronously when a mutation is dispatched, before anything moves.
-   *
-   * Focus handling needs the list as the user last saw it: once the write
-   * confirms, reconciliation may already have removed this row, taking the
-   * control that had focus with it. The ordering has to be captured while it is
-   * still true.
-   */
-  onMutationDispatched?(input: { taskId: string; kind: string }): void;
   /** Civil-day context. Defaults to the browser clock. */
   clock?: TaskCivilClock;
 }
@@ -95,8 +79,6 @@ export function TaskListRow({
   onOpen,
   onOpenActivity,
   onMutationConfirmed,
-  onMutationDispatched,
-  onMutationSettledUnconfirmed,
   clock,
 }: TaskListRowProps): React.JSX.Element {
   const browserClock = useMemo<TaskCivilClock>(() => browserWorkClock(), []);
@@ -150,26 +132,20 @@ export function TaskListRow({
   /*
     A dispatch that stopped being pending without satisfying its intent did not
     happen: a definitive failure, a conflict awaiting the user, or an ambiguous
-    result. Stand the focus handoff down rather than leaving it to be spent on
-    whatever changes the list next.
+    result. Drop it, so a later canonical read for an unrelated reason cannot
+    satisfy an intent that never took effect and report it as confirmed.
   */
   const pendingKind = ops.pending;
   useEffect(() => {
     if (pendingKind !== null) return;
-    const outstanding = awaitingRef.current;
-    if (outstanding.length === 0) return;
     awaitingRef.current = [];
-    for (const entry of outstanding) {
-      onMutationSettledUnconfirmed?.({ taskId: task.task_id, kind: entry.kind });
-    }
-  }, [pendingKind, onMutationSettledUnconfirmed, task.task_id]);
+  }, [pendingKind]);
 
   const await_ = useCallback(
     (entry: AwaitedConfirmation) => {
       awaitingRef.current = [...awaitingRef.current, entry];
-      onMutationDispatched?.({ taskId: task.task_id, kind: entry.kind });
     },
-    [onMutationDispatched, task.task_id],
+    [],
   );
 
   const handleStatus = useCallback(

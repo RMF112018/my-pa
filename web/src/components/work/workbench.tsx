@@ -1,17 +1,23 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { MutationFeedbackEvent } from "@/components/ui/mutation-feedback";
 import { Select } from "@/components/ui/select";
 import { Sheet } from "@/components/ui/sheet";
 import { LoadingStatus, SurfaceState } from "@/components/ui/surface-state";
 import { Textarea } from "@/components/ui/textarea";
-import { CommitmentDetailView, TaskDetailView } from "@/components/work/work-detail";
+import { CommitmentDetailView, TaskDetailViewConnected } from "@/components/work/work-detail";
 import { WorkPerspectives } from "@/components/work/work-perspectives";
+import { useTaskRuntime } from "@/components/work/task-runtime-provider";
+import { useTaskFreshness } from "@/components/work/use-task-freshness";
 import { browserWorkClock, captureEvidence, createAttemptKey, isDefinitiveAttemptFailure, requiredCollection, workRequest } from "@/lib/api/work-client";
 import { COMMITMENT_FILTERS, parseWorkUrlState, TASK_VIEWS, WORK_PERSPECTIVES, type CommitmentFilter, type TaskView, type WorkPerspective, type WorkUrlState, type WorkView } from "@/lib/api/work-url";
+import type { CreateIntentSession, TaskCreateRequest } from "@/lib/task/create-intent";
+import { buildTaskQueryKey, serializeTaskQueryKey } from "@/lib/task/query-key";
+import type { TaskReadCoordinator } from "@/lib/task/read-coordinator";
 import { mapUserError } from "@/lib/ui/user-error";
 import type { DisclosureEnvelope } from "@/contracts/envelope";
 import type {
@@ -49,8 +55,23 @@ const LABEL: Record<WorkView, string> = { overdue: "Overdue", today: "Today", up
 const PERSPECTIVE_LABEL: Record<WorkPerspective, string> = { list: "List", board: "Board", calendar: "Calendar" };
 const COMMITMENT_LABEL: Record<CommitmentFilter, string> = { "all-open": "Open", due: "Commitments due", "recently-updated": "Recently updated", "waiting-on": "Waiting on", closed: "Closed", all: "All" };
 const DEFAULT_STATE = parseWorkUrlState({});
+const CLOCK_VIEWS = new Set<string>(["overdue", "today", "upcoming", "recently-updated"]);
+
+interface TaskListPayload {
+  readonly tasks: readonly TaskRow[];
+  readonly disclosure?: DisclosureEnvelope;
+}
+
+function sync(parameters: Record<string, string | undefined>) {
+  const url = new URL(window.location.href);
+  for (const [key, value] of Object.entries(parameters)) {
+    if (value) url.searchParams.set(key, value); else url.searchParams.delete(key);
+  }
+  history.replaceState(null, "", url);
+}
 
 export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: WorkUrlState }) {
+  const runtime = useTaskRuntime();
   const [view, setView] = useState<WorkView>(initialState.view);
   const [perspective, setPerspective] = useState<WorkPerspective>(initialState.perspective);
   const [rows, setRows] = useState<readonly TaskRow[] | readonly CommitmentRow[] | readonly WaitingOnRow[]>([]);
@@ -67,74 +88,209 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   const [partial, setPartial] = useState(false);
   const [creating, setCreating] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(initialState.archived === "only");
-  const lastTaskView = useRef<TaskView>(initialState.view === "commitments" ? "today" : initialState.view);
+  const [lastTaskView, setLastTaskView] = useState<TaskView>(
+    initialState.view === "commitments" ? "today" : (initialState.view as TaskView),
+  );
   const [selectedTaskIds, setSelectedTaskIds] = useState<readonly string[]>([]);
   const [detail, setDetail] = useState<{ type: "task" | "commitment"; id: string; title: string } | undefined>(
     initialState.task ? { type: "task", id: initialState.task, title: "Task detail" }
       : initialState.commitmentId ? { type: "commitment", id: initialState.commitmentId, title: "Commitment detail" }
       : undefined,
   );
-  const readGeneration = useRef(0);
-  const activeRead = useRef<AbortController | null>(null);
+  const commitmentGeneration = useRef(0);
+  const activeCommitmentRead = useRef<AbortController | null>(null);
   const detailTrigger = useRef<HTMLElement | null>(null);
 
-  const load = useCallback(async () => {
-    activeRead.current?.abort();
-    const controller = new AbortController();
-    activeRead.current = controller;
-    const generation = ++readGeneration.current;
-    setState("loading"); setReadError(undefined);
-    try {
-      if (view === "commitments") {
-        const parameters = new URLSearchParams({ pageSize: "50" });
-        if (cursor) parameters.set("after", cursor);
-        const waitingOn = commitmentFilter === "waiting-on";
-        const path = waitingOn ? "/api/commitments/waiting-on" : "/api/commitments";
-        if (!waitingOn && committedQuery) parameters.set("q", committedQuery);
-        if (commitmentFilter === "all-open") parameters.set("state", "open");
-        if (commitmentFilter === "closed") parameters.set("state", "closed");
-        if (commitmentFilter === "due" || commitmentFilter === "recently-updated") {
-          const clock = browserWorkClock(new Date(), timezone || undefined);
-          parameters.set("workView", commitmentFilter === "due" ? "due" : "recently-updated");
-          parameters.set("workDate", clock.workDate);
-          parameters.set("timezone", clock.timezone);
-          if (!timezone) { setTimezone(clock.timezone); sync({ tz: clock.timezone }); }
+  const taskMode = view !== "commitments";
+  const taskViewForQuery: TaskView = taskMode ? (view as TaskView) : lastTaskView;
+  const needsClock = CLOCK_VIEWS.has(taskViewForQuery);
+  const clock = needsClock ? browserWorkClock(new Date(), timezone || undefined) : null;
+  const queryWorkDate = needsClock ? (clock?.workDate ?? null) : null;
+  const queryTimezone = needsClock ? (clock?.timezone ?? timezone ?? null) : null;
+
+  const taskQueryKey = useMemo(
+    () =>
+      buildTaskQueryKey({
+        mode: committedQuery ? "search" : "list",
+        workView: taskViewForQuery,
+        workDate: queryWorkDate,
+        timezone: queryTimezone,
+        q: committedQuery || null,
+        archiveMode,
+        cursor: cursor || null,
+        sessionEpoch: runtime.sessionEpoch,
+      }),
+    [
+      archiveMode,
+      committedQuery,
+      cursor,
+      queryTimezone,
+      queryWorkDate,
+      runtime.sessionEpoch,
+      taskViewForQuery,
+    ],
+  );
+  const taskQueryKeyId = serializeTaskQueryKey(taskQueryKey);
+
+  const applyTaskList = useCallback((payload: TaskListPayload) => {
+    setRows(payload.tasks);
+    setDisclosure(payload.disclosure);
+    setNextCursor(payload.disclosure?.nextCursor ?? "");
+    setPartial(payload.disclosure?.coverage === "partial" || payload.disclosure?.truncated === true);
+    setReadError(undefined);
+    setState(payload.tasks.length ? "ready" : "empty");
+  }, []);
+
+  const taskListFetcher = useCallback(
+    async ({ signal }: { signal: AbortSignal }): Promise<TaskListPayload> => {
+      const parameters = new URLSearchParams({
+        pageSize: "50",
+        workView: taskViewForQuery,
+        archived: archiveMode,
+      });
+      if (committedQuery) parameters.set("q", committedQuery);
+      if (cursor) parameters.set("after", cursor);
+      if (queryWorkDate) parameters.set("workDate", queryWorkDate);
+      if (queryTimezone) {
+        parameters.set("timezone", queryTimezone);
+        if (!timezone) {
+          setTimezone(queryTimezone);
+          sync({ tz: queryTimezone });
         }
-        const data = await workRequest<{ commitments?: readonly CommitmentRow[]; waiting_on?: readonly WaitingOnRow[]; disclosure?: DisclosureEnvelope }>(`${path}?${parameters}`, { signal: controller.signal });
-        if (generation !== readGeneration.current) return;
-        const found = waitingOn
-          ? requiredCollection(data.waiting_on, "waiting_on")
-          : requiredCollection(data.commitments, "commitments");
-        setRows(found); setDisclosure(data.disclosure); setNextCursor(data.disclosure?.nextCursor ?? ""); setPartial(data.disclosure?.coverage === "partial" || data.disclosure?.truncated === true); setState(found.length ? "ready" : "empty");
-      } else {
-        const parameters = new URLSearchParams({ pageSize: "50", workView: view, archived: archiveMode });
-        if (committedQuery) parameters.set("q", committedQuery);
-        if (cursor) parameters.set("after", cursor);
-        if (["overdue", "today", "upcoming", "recently-updated"].includes(view)) {
-          const clock = browserWorkClock(new Date(), timezone || undefined);
-          parameters.set("workDate", clock.workDate);
-          parameters.set("timezone", clock.timezone);
-          if (!timezone) { setTimezone(clock.timezone); sync({ tz: clock.timezone }); }
-        }
-        const data = await workRequest<{ tasks: readonly TaskRow[]; disclosure?: DisclosureEnvelope }>(`/api/tasks?${parameters}`, { signal: controller.signal });
-        if (generation !== readGeneration.current) return;
-        const tasks = requiredCollection(data.tasks, "tasks");
-        setRows(tasks); setDisclosure(data.disclosure); setNextCursor(data.disclosure?.nextCursor ?? ""); setPartial(data.disclosure?.coverage === "partial" || data.disclosure?.truncated === true); setState(tasks.length ? "ready" : "empty");
       }
+      const data = await workRequest<{ tasks: readonly TaskRow[]; disclosure?: DisclosureEnvelope }>(
+        `/api/tasks?${parameters}`,
+        { signal },
+      );
+      return {
+        tasks: requiredCollection(data.tasks, "tasks"),
+        disclosure: data.disclosure,
+      };
+    },
+    [archiveMode, committedQuery, cursor, queryTimezone, queryWorkDate, taskViewForQuery, timezone],
+  );
+
+  const onTaskNotice = useCallback(
+    (notice: { kind: string; message: string }) => {
+      if (notice.kind !== "degraded") return;
+      runtime.feedback.publishPollNotice({
+        eventId: MutationFeedbackEvent.pollDegraded(taskQueryKeyId),
+        kind: "info",
+        message: notice.message,
+      });
+    },
+    [runtime.feedback, taskQueryKeyId],
+  );
+
+  const onTaskResult = useCallback(
+    (
+      result: { outcome: string; data?: TaskListPayload; error?: unknown; silent: boolean },
+      snapshot: { lastConfirmed: TaskListPayload | undefined },
+    ) => {
+      if (result.outcome === "applied" || result.outcome === "deduped") {
+        const payload = result.data ?? snapshot.lastConfirmed;
+        if (payload) applyTaskList(payload);
+        return;
+      }
+      if (result.outcome === "failed" && !result.silent) {
+        if (snapshot.lastConfirmed !== undefined) {
+          applyTaskList(snapshot.lastConfirmed);
+          return;
+        }
+        setReadError(result.error);
+        setState("failed");
+      }
+    },
+    [applyTaskList],
+  );
+
+  const {
+    revalidate: revalidateTasks,
+    notifyMutationConfirmed,
+  } = useTaskFreshness<TaskListPayload>({
+    queryKey: taskQueryKey,
+    enabled: taskMode,
+    coordinator: runtime.readCoordinator as TaskReadCoordinator<TaskListPayload>,
+    fetcher: taskListFetcher,
+    onResult: onTaskResult,
+    onNotice: onTaskNotice,
+  });
+
+  // Freshness revalidates when `taskQueryKey` changes; filter/view handlers set loading.
+
+  const loadCommitments = useCallback(async () => {
+    activeCommitmentRead.current?.abort();
+    const controller = new AbortController();
+    activeCommitmentRead.current = controller;
+    const generation = ++commitmentGeneration.current;
+    setState("loading");
+    setReadError(undefined);
+    try {
+      const parameters = new URLSearchParams({ pageSize: "50" });
+      if (cursor) parameters.set("after", cursor);
+      const waitingOn = commitmentFilter === "waiting-on";
+      const path = waitingOn ? "/api/commitments/waiting-on" : "/api/commitments";
+      if (!waitingOn && committedQuery) parameters.set("q", committedQuery);
+      if (commitmentFilter === "all-open") parameters.set("state", "open");
+      if (commitmentFilter === "closed") parameters.set("state", "closed");
+      if (commitmentFilter === "due" || commitmentFilter === "recently-updated") {
+        const commitmentClock = browserWorkClock(new Date(), timezone || undefined);
+        parameters.set("workView", commitmentFilter === "due" ? "due" : "recently-updated");
+        parameters.set("workDate", commitmentClock.workDate);
+        parameters.set("timezone", commitmentClock.timezone);
+        if (!timezone) {
+          setTimezone(commitmentClock.timezone);
+          sync({ tz: commitmentClock.timezone });
+        }
+      }
+      const data = await workRequest<{
+        commitments?: readonly CommitmentRow[];
+        waiting_on?: readonly WaitingOnRow[];
+        disclosure?: DisclosureEnvelope;
+      }>(`${path}?${parameters}`, { signal: controller.signal });
+      if (generation !== commitmentGeneration.current) return;
+      const found = waitingOn
+        ? requiredCollection(data.waiting_on, "waiting_on")
+        : requiredCollection(data.commitments, "commitments");
+      setRows(found);
+      setDisclosure(data.disclosure);
+      setNextCursor(data.disclosure?.nextCursor ?? "");
+      setPartial(data.disclosure?.coverage === "partial" || data.disclosure?.truncated === true);
+      setState(found.length ? "ready" : "empty");
     } catch (error) {
-      if (generation !== readGeneration.current || controller.signal.aborted) return;
-      setReadError(error); setState("failed");
+      if (generation !== commitmentGeneration.current || controller.signal.aborted) return;
+      setReadError(error);
+      setState("failed");
     }
-  }, [archiveMode, commitmentFilter, committedQuery, cursor, timezone, view]);
+  }, [commitmentFilter, committedQuery, cursor, timezone]);
+
   useEffect(() => {
-    void Promise.resolve().then(load);
-    return () => activeRead.current?.abort();
-  }, [load]);
+    if (view !== "commitments") {
+      activeCommitmentRead.current?.abort();
+      return;
+    }
+    void Promise.resolve().then(loadCommitments);
+    return () => activeCommitmentRead.current?.abort();
+  }, [loadCommitments, view]);
+
+  function reloadActiveSurface() {
+    if (view === "commitments") {
+      void loadCommitments();
+      return;
+    }
+    void revalidateTasks("manual");
+  }
 
   function select(next: WorkView) {
-    if (next !== "commitments") lastTaskView.current = next;
-    setState("loading"); setRows([]); setView(next); setCursor("");
-    const url = new URL(window.location.href); url.searchParams.set("view", next); url.searchParams.delete("cursor"); history.replaceState(null, "", url);
+    if (next !== "commitments") setLastTaskView(next as TaskView);
+    setState("loading");
+    setRows([]);
+    setView(next);
+    setCursor("");
+    const url = new URL(window.location.href);
+    url.searchParams.set("view", next);
+    url.searchParams.delete("cursor");
+    history.replaceState(null, "", url);
   }
 
   function chooseMode(mode: "tasks" | "commitments") {
@@ -142,22 +298,17 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
       if (view !== "commitments") select("commitments");
       return;
     }
-    if (view === "commitments") select(lastTaskView.current);
+    if (view === "commitments") select(lastTaskView);
   }
 
   function chooseCommitmentFilter(value: CommitmentFilter) {
     sync({ commitment: value, cursor: undefined, q: value === "waiting-on" ? undefined : committedQuery || undefined });
     setCommitmentFilter(value);
     setCursor("");
-    if (value === "waiting-on") { setQueryDraft(""); setCommittedQuery(""); }
-  }
-
-  function sync(parameters: Record<string, string | undefined>) {
-    const url = new URL(window.location.href);
-    for (const [key, value] of Object.entries(parameters)) {
-      if (value) url.searchParams.set(key, value); else url.searchParams.delete(key);
+    if (value === "waiting-on") {
+      setQueryDraft("");
+      setCommittedQuery("");
     }
-    history.replaceState(null, "", url);
   }
 
   function choosePerspective(next: string) {
@@ -168,9 +319,9 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   }
 
   function toggleTask(taskId: string) {
-    setSelectedTaskIds((current) => current.includes(taskId)
-      ? current.filter((id) => id !== taskId)
-      : [...current, taskId].slice(0, 100));
+    setSelectedTaskIds((current) =>
+      current.includes(taskId) ? current.filter((id) => id !== taskId) : [...current, taskId].slice(0, 100),
+    );
   }
 
   function openDetail(type: "task" | "commitment", id: string, title: string, trigger: HTMLElement) {
@@ -186,128 +337,238 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   }
 
   const waitingOnSearch = view === "commitments" && commitmentFilter === "waiting-on";
-  const taskMode = view !== "commitments";
-  return <section aria-labelledby="work-heading" className="mx-auto max-w-5xl pb-24">
-    <div className="flex flex-wrap items-start justify-between gap-4">
-      <div>
-        <h1 id="work-heading" className="text-2xl font-semibold text-text-primary">Work</h1>
-        <p className="mt-1 max-w-2xl text-sm text-muted">Tasks and commitments you are tracking.</p>
-      </div>
-      <Button onClick={() => setCreating((open) => !open)}>{creating ? "Cancel" : view === "commitments" ? "New commitment" : "New task"}</Button>
-    </div>
-    <div className="mt-6 flex flex-wrap items-center gap-2">
-      <div
-        role="group"
-        aria-label="Work mode"
-        className="inline-flex gap-1 rounded-[var(--radius-md)] bg-surface-subtle p-1"
-      >
-        <Button
-          variant={taskMode ? "secondary" : "ghost"}
-          size="sm"
-          aria-pressed={taskMode}
-          onClick={() => chooseMode("tasks")}
-        >
-          Tasks
-        </Button>
-        <Button
-          variant={taskMode ? "ghost" : "secondary"}
-          size="sm"
-          aria-pressed={!taskMode}
-          onClick={() => chooseMode("commitments")}
-        >
-          Commitments
+  return (
+    <section aria-labelledby="work-heading" className="mx-auto max-w-5xl pb-24">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 id="work-heading" className="text-2xl font-semibold text-text-primary">Work</h1>
+          <p className="mt-1 max-w-2xl text-sm text-muted">Tasks and commitments you are tracking.</p>
+        </div>
+        <Button onClick={() => setCreating((open) => !open)}>
+          {creating ? "Cancel" : view === "commitments" ? "New commitment" : "New task"}
         </Button>
       </div>
-      {taskMode ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="secondary" size="sm" aria-label="Work views">{LABEL[view]}</Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent aria-label="Work views">
-            {TASK_VIEWS.map((item) => (
-              <DropdownMenuItem key={item} onSelect={() => select(item)} aria-current={view === item ? "true" : undefined}>{LABEL[item]}</DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      ) : (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="secondary" size="sm" aria-label="Commitment filter">{COMMITMENT_LABEL[commitmentFilter]}</Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent aria-label="Commitment filter">
-            {COMMITMENT_FILTERS.map((item) => (
-              <DropdownMenuItem key={item} onSelect={() => chooseCommitmentFilter(item)} aria-current={commitmentFilter === item ? "true" : undefined}>{COMMITMENT_LABEL[item]}</DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )}
-      <div
-        role="group"
-        aria-label="Work perspective"
-        className="inline-flex gap-1 rounded-[var(--radius-md)] bg-surface-subtle p-1"
-      >
-        {WORK_PERSPECTIVES.map((item) => (
-          <Button
-            key={item}
-            variant={perspective === item ? "secondary" : "ghost"}
-            size="sm"
-            aria-pressed={perspective === item}
-            onClick={() => choosePerspective(item)}
-          >
-            {PERSPECTIVE_LABEL[item]}
+      <div className="mt-6 flex flex-wrap items-center gap-2">
+        <div role="group" aria-label="Work mode" className="inline-flex gap-1 rounded-[var(--radius-md)] bg-surface-subtle p-1">
+          <Button variant={taskMode ? "secondary" : "ghost"} size="sm" aria-pressed={taskMode} onClick={() => chooseMode("tasks")}>
+            Tasks
           </Button>
-        ))}
+          <Button variant={taskMode ? "ghost" : "secondary"} size="sm" aria-pressed={!taskMode} onClick={() => chooseMode("commitments")}>
+            Commitments
+          </Button>
+        </div>
+        {taskMode ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="secondary" size="sm" aria-label="Work views">{LABEL[view]}</Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent aria-label="Work views">
+              {TASK_VIEWS.map((item) => (
+                <DropdownMenuItem key={item} onSelect={() => select(item)} aria-current={view === item ? "true" : undefined}>
+                  {LABEL[item]}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="secondary" size="sm" aria-label="Commitment filter">{COMMITMENT_LABEL[commitmentFilter]}</Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent aria-label="Commitment filter">
+              {COMMITMENT_FILTERS.map((item) => (
+                <DropdownMenuItem
+                  key={item}
+                  onSelect={() => chooseCommitmentFilter(item)}
+                  aria-current={commitmentFilter === item ? "true" : undefined}
+                >
+                  {COMMITMENT_LABEL[item]}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+        <div role="group" aria-label="Work perspective" className="inline-flex gap-1 rounded-[var(--radius-md)] bg-surface-subtle p-1">
+          {WORK_PERSPECTIVES.map((item) => (
+            <Button
+              key={item}
+              variant={perspective === item ? "secondary" : "ghost"}
+              size="sm"
+              aria-pressed={perspective === item}
+              onClick={() => choosePerspective(item)}
+            >
+              {PERSPECTIVE_LABEL[item]}
+            </Button>
+          ))}
+        </div>
+        {selectedTaskIds.length > 0 ? (
+          <p className="text-xs text-muted">
+            {selectedTaskIds.length} task{selectedTaskIds.length === 1 ? "" : "s"} selected
+          </p>
+        ) : null}
       </div>
-      {selectedTaskIds.length > 0 ? <p className="text-xs text-muted">{selectedTaskIds.length} task{selectedTaskIds.length === 1 ? "" : "s"} selected</p> : null}
-    </div>
-    {creating ? (view === "commitments" ? <CommitmentCreate onDone={() => { setCreating(false); void load(); }} /> : <TaskCreate onDone={() => { setCreating(false); void load(); }} />) : null}
-    <div className="mt-5 flex flex-wrap items-end gap-3">
-      <div className="min-w-0 max-w-sm flex-1">
-        <Labeled label={view === "commitments" ? "Search commitments" : "Search tasks"} hint={waitingOnSearch ? "Search is unavailable for the dedicated Waiting On view." : undefined}>
-          <Input aria-label={view === "commitments" ? "Search commitments" : "Search tasks"} value={queryDraft} disabled={waitingOnSearch} onChange={(event) => setQueryDraft(event.target.value)} placeholder={view === "commitments" ? "Search commitments" : "Search tasks"} />
-        </Labeled>
-      </div>
-      <Button variant="secondary" disabled={waitingOnSearch} onClick={() => { sync({ q: queryDraft || undefined, cursor: undefined }); setCursor(""); setCommittedQuery(queryDraft); }}>Search</Button>
-      {taskMode ? (
-        <details className="min-w-[12rem]" open={filtersOpen} onToggle={(event) => setFiltersOpen(event.currentTarget.open)}>
-          <summary className="cursor-pointer text-sm font-medium text-text-primary">Filters</summary>
-          <div className="mt-2">
-            <Labeled label="Archive">
-              <Select aria-label="Archive" value={archiveMode} onChange={(event) => { const value = event.target.value as typeof archiveMode; sync({ archived: value, cursor: undefined }); setArchiveMode(value); setCursor(""); }}>
-                <option value="exclude">Active only</option>
-                <option value="only">Archived only</option>
-              </Select>
-            </Labeled>
-          </div>
-        </details>
+      {creating ? (
+        view === "commitments" ? (
+          <CommitmentCreate onDone={() => { setCreating(false); void loadCommitments(); }} />
+        ) : (
+          <TaskCreate
+            onReconcile={() => notifyMutationConfirmed()}
+            onDone={() => {
+              setCreating(false);
+              void notifyMutationConfirmed();
+            }}
+          />
+        )
       ) : null}
-    </div>
-    <div className="mt-5" aria-live="polite">
-      {state === "loading" ? <LoadingStatus label="Loading work…" testId="work-loading" /> : null}
-      {state === "failed" ? <SurfaceState kind="unavailable" title={mapUserError(readError).title} error={readError}><Button className="mt-3" variant="secondary" onClick={() => void load()}>Try again</Button></SurfaceState> : null}
-      {state === "empty" ? <SurfaceState kind="empty" title={`${committedQuery || archiveMode === "only" || (view === "commitments" && commitmentFilter !== "all-open") ? "No matching" : "No"} ${view === "commitments" ? "commitments" : LABEL[view].toLowerCase() + " tasks"}`} detail={committedQuery || archiveMode === "only" || (view === "commitments" && commitmentFilter !== "all-open") ? "Nothing matched these filters." : "Nothing is in this view yet."} /> : null}
-      {state === "ready" ? <WorkPerspectives perspective={perspective} rows={rows} commitments={view === "commitments"} selectedTaskIds={selectedTaskIds} onSelectTask={toggleTask} onOpen={openDetail} /> : null}
-    </div>
-    {disclosure && state !== "failed" ? <Disclosure details={disclosure} /> : null}
-    {partial ? <SurfaceState kind="degraded" title="More Work is available" detail="There are more results. Continue to the next page." /> : null}
-    {nextCursor ? <Button variant="secondary" onClick={() => { sync({ cursor: nextCursor }); setCursor(nextCursor); }}>Next page</Button> : null}
-    {view !== "commitments" && selectedTaskIds.length > 0 ? <BulkTaskEditor key={selectedTaskIds.join("|")} taskIds={selectedTaskIds} onConfirmed={() => { void load(); }} /> : null}
-    <Sheet open={Boolean(detail)} onOpenChange={(open) => { if (!open) closeDetail(); }} title={detail?.title ?? "Work detail"} description="Closing restores your place in Work." placement="detail">
-      {detail?.type === "task" ? <TaskDetailView taskId={detail.id} embedded /> : null}
-      {detail?.type === "commitment" ? <CommitmentDetailView commitmentId={detail.id} embedded /> : null}
-    </Sheet>
-  </section>;
+      <div className="mt-5 flex flex-wrap items-end gap-3">
+        <div className="min-w-0 max-w-sm flex-1">
+          <Labeled
+            label={view === "commitments" ? "Search commitments" : "Search tasks"}
+            hint={waitingOnSearch ? "Search is unavailable for the dedicated Waiting On view." : undefined}
+          >
+            <Input
+              aria-label={view === "commitments" ? "Search commitments" : "Search tasks"}
+              value={queryDraft}
+              disabled={waitingOnSearch}
+              onChange={(event) => setQueryDraft(event.target.value)}
+              placeholder={view === "commitments" ? "Search commitments" : "Search tasks"}
+            />
+          </Labeled>
+        </div>
+        <Button
+          variant="secondary"
+          disabled={waitingOnSearch}
+          onClick={() => {
+            sync({ q: queryDraft || undefined, cursor: undefined });
+            setCursor("");
+            setCommittedQuery(queryDraft);
+          }}
+        >
+          Search
+        </Button>
+        {taskMode ? (
+          <details className="min-w-[12rem]" open={filtersOpen} onToggle={(event) => setFiltersOpen(event.currentTarget.open)}>
+            <summary className="cursor-pointer text-sm font-medium text-text-primary">Filters</summary>
+            <div className="mt-2">
+              <Labeled label="Archive">
+                <Select
+                  aria-label="Archive"
+                  value={archiveMode}
+                  onChange={(event) => {
+                    const value = event.target.value as typeof archiveMode;
+                    sync({ archived: value, cursor: undefined });
+                    setArchiveMode(value);
+                    setCursor("");
+                  }}
+                >
+                  <option value="exclude">Active only</option>
+                  <option value="only">Archived only</option>
+                </Select>
+              </Labeled>
+            </div>
+          </details>
+        ) : null}
+      </div>
+      <div className="mt-5" aria-live="polite">
+        {state === "loading" ? <LoadingStatus label="Loading work…" testId="work-loading" /> : null}
+        {state === "failed" ? (
+          <SurfaceState kind="unavailable" title={mapUserError(readError).title} error={readError}>
+            <Button className="mt-3" variant="secondary" onClick={() => reloadActiveSurface()}>
+              Try again
+            </Button>
+          </SurfaceState>
+        ) : null}
+        {state === "empty" ? (
+          <SurfaceState
+            kind="empty"
+            title={`${committedQuery || archiveMode === "only" || (view === "commitments" && commitmentFilter !== "all-open") ? "No matching" : "No"} ${view === "commitments" ? "commitments" : LABEL[view].toLowerCase() + " tasks"}`}
+            detail={
+              committedQuery || archiveMode === "only" || (view === "commitments" && commitmentFilter !== "all-open")
+                ? "Nothing matched these filters."
+                : "Nothing is in this view yet."
+            }
+          />
+        ) : null}
+        {state === "ready" ? (
+          <WorkPerspectives
+            perspective={perspective}
+            rows={rows}
+            commitments={view === "commitments"}
+            selectedTaskIds={selectedTaskIds}
+            onSelectTask={toggleTask}
+            onOpen={openDetail}
+          />
+        ) : null}
+      </div>
+      {disclosure && state !== "failed" ? <Disclosure details={disclosure} /> : null}
+      {partial ? <SurfaceState kind="degraded" title="More Work is available" detail="There are more results. Continue to the next page." /> : null}
+      {nextCursor ? (
+        <Button
+          variant="secondary"
+          onClick={() => {
+            sync({ cursor: nextCursor });
+            setCursor(nextCursor);
+          }}
+        >
+          Next page
+        </Button>
+      ) : null}
+      {view !== "commitments" && selectedTaskIds.length > 0 ? (
+        <BulkTaskEditor
+          key={selectedTaskIds.join("|")}
+          taskIds={selectedTaskIds}
+          onConfirmed={() => {
+            void notifyMutationConfirmed();
+          }}
+        />
+      ) : null}
+      <Sheet
+        open={Boolean(detail)}
+        onOpenChange={(open) => {
+          if (!open) closeDetail();
+        }}
+        title={detail?.title ?? "Work detail"}
+        description="Closing restores your place in Work."
+        placement="detail"
+      >
+        {detail?.type === "task" ? <TaskDetailViewConnected taskId={detail.id} embedded /> : null}
+        {detail?.type === "commitment" ? <CommitmentDetailView commitmentId={detail.id} embedded /> : null}
+      </Sheet>
+    </section>
+  );
 }
 
 function Disclosure({ details }: { details: DisclosureEnvelope }) {
-  return <aside aria-label="Work answer disclosure" className="mt-4 rounded-lg border border-border bg-surface p-3 text-xs text-muted">
-    <p><span className="font-medium text-text-primary">Updated:</span> {details.freshnessAt ? <time className="tabular-nums" data-visual-dynamic="freshness" dateTime={details.freshnessAt}>{new Date(details.freshnessAt).toLocaleString()}</time> : "not disclosed"}</p>
-    <details className="mt-2">
-      <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
-      <p className="mt-1">Authority: {details.authority.replaceAll("_", " ")} · Coverage: {details.coverage} · Truncation: {details.truncated ? "yes" : "no"}</p>
-      {details.limitations.length ? <ul className="mt-1 list-inside list-disc">{details.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul> : <p className="mt-1">No additional limitations were disclosed.</p>}
-    </details>
-  </aside>;
+  return (
+    <aside aria-label="Work answer disclosure" className="mt-4 rounded-lg border border-border bg-surface p-3 text-xs text-muted">
+      <p>
+        <span className="font-medium text-text-primary">Updated:</span>{" "}
+        {details.freshnessAt ? (
+          <time className="tabular-nums" data-visual-dynamic="freshness" dateTime={details.freshnessAt}>
+            {new Date(details.freshnessAt).toLocaleString()}
+          </time>
+        ) : (
+          "not disclosed"
+        )}
+      </p>
+      <details className="mt-2">
+        <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
+        <p className="mt-1">
+          Authority: {details.authority.replaceAll("_", " ")} · Coverage: {details.coverage} · Truncation:{" "}
+          {details.truncated ? "yes" : "no"}
+        </p>
+        {details.limitations.length ? (
+          <ul className="mt-1 list-inside list-disc">
+            {details.limitations.map((limitation) => (
+              <li key={limitation}>{limitation}</li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-1">No additional limitations were disclosed.</p>
+        )}
+      </details>
+    </aside>
+  );
 }
 
 function bulkCounts(receipt: { affected: number; no_op: number; rejected: number }) {
@@ -345,12 +606,17 @@ function BulkTaskEditor({ taskIds, onConfirmed }: { taskIds: readonly string[]; 
   }
 
   async function previewChanges() {
-    setBusy(true); setPreview(undefined); setMutations(undefined); note("Preparing preview…");
+    setBusy(true);
+    setPreview(undefined);
+    setMutations(undefined);
+    note("Preparing preview…");
     try {
-      const details = await Promise.all(taskIds.map(async (taskId) => {
-        const answer = await workRequest<{ task: TaskDetail }>(`/api/tasks/${encodeURIComponent(taskId)}`);
-        return answer.task;
-      }));
+      const details = await Promise.all(
+        taskIds.map(async (taskId) => {
+          const answer = await workRequest<{ task: TaskDetail }>(`/api/tasks/${encodeURIComponent(taskId)}`);
+          return answer.task;
+        }),
+      );
       const normalized: readonly TaskBulkMutation[] = details.map((task): TaskBulkMutation => {
         if (kind === "priority") {
           const values: Readonly<Record<string, string | boolean>> =
@@ -364,21 +630,30 @@ function BulkTaskEditor({ taskIds, onConfirmed }: { taskIds: readonly string[]; 
           };
         }
         return {
-            kind: "transition" as const,
-            task_id: task.task_id,
-            expected_version: task.version,
-            to_state: value as "open" | "in_progress" | "waiting" | "blocked",
-          };
+          kind: "transition" as const,
+          task_id: task.task_id,
+          expected_version: task.version,
+          to_state: value as "open" | "in_progress" | "waiting" | "blocked",
+        };
       });
       note("Preparing preview…");
       const receipt = await workRequest<TaskBulkPreviewReceipt>("/api/tasks/bulk/preview", {
         method: "POST",
         body: JSON.stringify({ mutations: normalized, idempotencyKey: previewAttempt.current.forPayload(normalized) }),
       });
-      previewAttempt.current.succeeded(); setMutations(normalized); setPreview(receipt);
-      note("Preview ready", `${receipt.replayed ? "Replayed" : "Applied"} preview: ${bulkCounts(receipt)}. No task has changed. Preview ${receipt.bulk_operation_id} expires ${receipt.expires_at}.`);
-    } catch (error) { if (isDefinitiveAttemptFailure(error)) previewAttempt.current.succeeded(); failureNote(error, "preview"); }
-    finally { setBusy(false); }
+      previewAttempt.current.succeeded();
+      setMutations(normalized);
+      setPreview(receipt);
+      note(
+        "Preview ready",
+        `${receipt.replayed ? "Replayed" : "Applied"} preview: ${bulkCounts(receipt)}. No task has changed. Preview ${receipt.bulk_operation_id} expires ${receipt.expires_at}.`,
+      );
+    } catch (error) {
+      if (isDefinitiveAttemptFailure(error)) previewAttempt.current.succeeded();
+      failureNote(error, "preview");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function confirmChanges() {
@@ -387,77 +662,289 @@ function BulkTaskEditor({ taskIds, onConfirmed }: { taskIds: readonly string[]; 
       setPreview(undefined);
       setMutations(undefined);
       confirmAttempt.current.succeeded();
-      note("The preview expired before confirmation. Nothing was applied; preview again.", `Preview ${preview.bulk_operation_id} expired at ${preview.expires_at}.`);
+      note(
+        "The preview expired before confirmation. Nothing was applied; preview again.",
+        `Preview ${preview.bulk_operation_id} expired at ${preview.expires_at}.`,
+      );
       return;
     }
-    setBusy(true); note("Applying the previewed changes…");
+    setBusy(true);
+    note("Applying the previewed changes…");
     try {
       const receipt = await workRequest<TaskBulkConfirmReceipt>("/api/tasks/bulk/confirm", {
         method: "POST",
-        body: JSON.stringify({ bulkOperationId: preview.bulk_operation_id, idempotencyKey: confirmAttempt.current.forPayload({ bulkOperationId: preview.bulk_operation_id, mutations }), mutations }),
+        body: JSON.stringify({
+          bulkOperationId: preview.bulk_operation_id,
+          idempotencyKey: confirmAttempt.current.forPayload({ bulkOperationId: preview.bulk_operation_id, mutations }),
+          mutations,
+        }),
       });
-      confirmAttempt.current.succeeded(); setPreview(undefined); setMutations(undefined);
-      note("Changes applied", `${receipt.replayed ? "Replayed" : "Applied"} confirmation: ${bulkCounts(receipt)}; history_ids: ${receipt.history_ids.join(", ") || "none"}.`);
+      confirmAttempt.current.succeeded();
+      setPreview(undefined);
+      setMutations(undefined);
+      note(
+        "Changes applied",
+        `${receipt.replayed ? "Replayed" : "Applied"} confirmation: ${bulkCounts(receipt)}; history_ids: ${receipt.history_ids.join(", ") || "none"}.`,
+      );
       onConfirmed();
     } catch (error) {
       const responseStatus = (error as { status?: number }).status;
       const definitive = responseStatus !== undefined && [400, 401, 403, 404, 409, 410, 422].includes(responseStatus);
-      if (definitive) { confirmAttempt.current.succeeded(); setPreview(undefined); setMutations(undefined); failureNote(error, "confirm"); }
-      else { failureNote(error, "confirm", preview); }
-    } finally { setBusy(false); }
+      if (definitive) {
+        confirmAttempt.current.succeeded();
+        setPreview(undefined);
+        setMutations(undefined);
+        failureNote(error, "confirm");
+      } else {
+        failureNote(error, "confirm", preview);
+      }
+    } finally {
+      setBusy(false);
+    }
   }
 
   function changeKind(next: "priority" | "transition") {
-    setKind(next); setValue(next === "priority" ? "p1" : "open"); setPreview(undefined); setMutations(undefined);
+    setKind(next);
+    setValue(next === "priority" ? "p1" : "open");
+    setPreview(undefined);
+    setMutations(undefined);
     note("Action changed. Preview the retained selection before confirmation.");
   }
 
-  return <section aria-labelledby="bulk-heading" className="mt-6 rounded-xl border border-border bg-surface p-4">
-    <div className="flex flex-wrap items-center justify-between gap-2"><h2 id="bulk-heading" className="font-semibold text-text-primary">Bulk change</h2><span className="text-sm text-muted">{taskIds.length} selected · maximum 100</span></div>
-    <div className="mt-4 grid gap-4 sm:grid-cols-2">
-      <Labeled label="Action"><select aria-label="Bulk action" value={kind} disabled={busy} onChange={(event) => changeKind(event.target.value as "priority" | "transition")} className="h-10 rounded-md border bg-surface px-3"><option value="priority">Set priority</option><option value="transition">Move lifecycle</option></select></Labeled>
-      <Labeled label={kind === "priority" ? "Priority" : "Lifecycle state"}><select aria-label="Bulk value" value={value} disabled={busy} onChange={(event) => { setValue(event.target.value); setPreview(undefined); setMutations(undefined); note("Action changed. Preview the retained selection before confirmation."); }} className="h-10 rounded-md border bg-surface px-3">{kind === "priority" ? <><option value="p1">P1</option><option value="p2">P2</option><option value="p3">P3</option><option value="p4">P4</option><option value="clear">Clear priority</option></> : <><option value="open">Open</option><option value="in_progress">In progress</option><option value="waiting">Waiting</option><option value="blocked">Blocked</option></>}</select></Labeled>
-    </div>
-    <div className="mt-4 flex flex-wrap gap-2"><Button type="button" variant="secondary" disabled={busy} onClick={() => void previewChanges()}>{busy && !preview ? "Previewing…" : preview ? "Refresh preview" : "Preview change"}</Button><Button type="button" disabled={busy || !preview} onClick={() => void confirmChanges()}>{busy && preview ? "Confirming…" : "Confirm exact preview"}</Button></div>
-    <StatusNote message={status} details={statusDetails} className="mt-3" />
-  </section>;
+  return (
+    <section aria-labelledby="bulk-heading" className="mt-6 rounded-xl border border-border bg-surface p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 id="bulk-heading" className="font-semibold text-text-primary">Bulk change</h2>
+        <span className="text-sm text-muted">{taskIds.length} selected · maximum 100</span>
+      </div>
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <Labeled label="Action">
+          <select
+            aria-label="Bulk action"
+            value={kind}
+            disabled={busy}
+            onChange={(event) => changeKind(event.target.value as "priority" | "transition")}
+            className="h-10 rounded-md border bg-surface px-3"
+          >
+            <option value="priority">Set priority</option>
+            <option value="transition">Move lifecycle</option>
+          </select>
+        </Labeled>
+        <Labeled label={kind === "priority" ? "Priority" : "Lifecycle state"}>
+          <select
+            aria-label="Bulk value"
+            value={value}
+            disabled={busy}
+            onChange={(event) => {
+              setValue(event.target.value);
+              setPreview(undefined);
+              setMutations(undefined);
+              note("Action changed. Preview the retained selection before confirmation.");
+            }}
+            className="h-10 rounded-md border bg-surface px-3"
+          >
+            {kind === "priority" ? (
+              <>
+                <option value="p1">P1</option>
+                <option value="p2">P2</option>
+                <option value="p3">P3</option>
+                <option value="p4">P4</option>
+                <option value="clear">Clear priority</option>
+              </>
+            ) : (
+              <>
+                <option value="open">Open</option>
+                <option value="in_progress">In progress</option>
+                <option value="waiting">Waiting</option>
+                <option value="blocked">Blocked</option>
+              </>
+            )}
+          </select>
+        </Labeled>
+      </div>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button type="button" variant="secondary" disabled={busy} onClick={() => void previewChanges()}>
+          {busy && !preview ? "Previewing…" : preview ? "Refresh preview" : "Preview change"}
+        </Button>
+        <Button type="button" disabled={busy || !preview} onClick={() => void confirmChanges()}>
+          {busy && preview ? "Confirming…" : "Confirm exact preview"}
+        </Button>
+      </div>
+      <StatusNote message={status} details={statusDetails} className="mt-3" />
+    </section>
+  );
 }
 
-function TaskCreate({ onDone }: { onDone: () => void }) {
+function TaskCreate({
+  onDone,
+  onReconcile,
+}: {
+  onDone: () => void;
+  onReconcile: () => void | Promise<unknown>;
+}) {
+  const runtime = useTaskRuntime();
+  const [session, setSession] = useState<CreateIntentSession>(
+    () => runtime.createIntents.getUnresolvedSession() ?? runtime.createIntents.openSession(),
+  );
   const [status, setStatus] = useState("");
+  const [pending, setPending] = useState(false);
   const [commitments, setCommitments] = useState<readonly CommitmentRow[]>([]);
   const [optionsStatus, setOptionsStatus] = useState("Loading verified commitments…");
-  const createAttempt = useRef(createAttemptKey("task-create"));
+
   useEffect(() => {
     const controller = new AbortController();
-    void workRequest<{ commitments: readonly CommitmentRow[] }>("/api/commitments?pageSize=100", { signal: controller.signal })
-      .then((answer) => { setCommitments(requiredCollection(answer.commitments, "commitments")); setOptionsStatus(""); })
-      .catch((error) => { if (!controller.signal.aborted) setOptionsStatus(error instanceof Error ? error.message : "Verified commitments are unavailable"); });
+    void workRequest<{ commitments: readonly CommitmentRow[] }>("/api/commitments?pageSize=100", {
+      signal: controller.signal,
+    })
+      .then((answer) => {
+        setCommitments(requiredCollection(answer.commitments, "commitments"));
+        setOptionsStatus("");
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          setOptionsStatus(error instanceof Error ? error.message : "Verified commitments are unavailable");
+        }
+      });
     return () => controller.abort();
   }, []);
+
   async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setStatus("Creating task…"); const form = new FormData(event.currentTarget);
+    event.preventDefault();
+    if (pending) return;
+    const form = new FormData(event.currentTarget);
     const commitmentId = String(form.get("commitmentId") ?? "");
-    if (commitmentId && !commitments.some((item) => item.commitment_id === commitmentId)) { setStatus("Choose a verified commitment from the list."); return; }
+    if (commitmentId && !commitments.some((item) => item.commitment_id === commitmentId)) {
+      setStatus("Choose a verified commitment from the list.");
+      return;
+    }
+    const request: TaskCreateRequest = {
+      title: String(form.get("title") ?? ""),
+      description: String(form.get("description") || "") || undefined,
+      priority: String(form.get("priority") || "") || undefined,
+      dueAt: form.get("dueAt") ? new Date(String(form.get("dueAt"))).toISOString() : undefined,
+      commitmentId: commitmentId || undefined,
+      role: String(form.get("role") || "") || undefined,
+    };
+
+    let active = session;
+    const phase = active.getPhase();
+    // Ambiguous / pending: never mutate the draft — submit() retries the frozen request/key.
+    if (phase === "failed") {
+      active = runtime.createIntents.replaceAfterMaterialEdit(active, request);
+      setSession(active);
+    } else if (phase !== "ambiguous" && phase !== "pending") {
+      try {
+        active.updateDraft(request);
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : "Draft could not be updated");
+        return;
+      }
+    }
+
+    setPending(true);
+    setStatus(phase === "ambiguous" ? "Retrying the same create…" : "Creating task…");
     try {
-      const payload = {
-        title: form.get("title"),
-        description: form.get("description") || undefined,
-        priority: form.get("priority") || undefined,
-        dueAt: form.get("dueAt") ? new Date(String(form.get("dueAt"))).toISOString() : undefined,
-        commitmentId: commitmentId || undefined,
-        role: form.get("role") || undefined,
-      };
-      await workRequest("/api/tasks", { method: "POST", body: JSON.stringify({ ...payload, idempotencyKey: createAttempt.current.forPayload(payload) }) });
-      createAttempt.current.succeeded();
+      const outcome = await active.submit(
+        async ({ request: frozen, idempotencyKey }) =>
+          workRequest("/api/tasks", {
+            method: "POST",
+            body: JSON.stringify({ ...frozen, idempotencyKey }),
+          }),
+        {
+          reconcile: async () => {
+            // Do not await list revalidation here — a hung/disposed freshness
+            // read must not keep the create form open after POST succeeded.
+            void Promise.resolve(onReconcile()).catch(() => undefined);
+          },
+          feedback: async () => {
+            runtime.feedback.publish({
+              eventId: MutationFeedbackEvent.createConfirmed(active.intentId),
+              kind: "success",
+              message: "Task created.",
+            });
+          },
+        },
+      );
+      if (outcome.refused) {
+        if (outcome.reason === "create dispatch already in flight") return;
+        setStatus(outcome.reason);
+        return;
+      }
       setStatus("Task created.");
+      runtime.createIntents.pruneTerminal();
       onDone();
     } catch (error) {
-      if (isDefinitiveAttemptFailure(error)) createAttempt.current.succeeded();
-      setStatus(error instanceof Error ? error.message : "Task was not created");
+      if (active.getPhase() === "ambiguous") {
+        setStatus(
+          "Create may still have succeeded. Retry with the same intent — do not edit the frozen request until this resolves.",
+        );
+      } else {
+        setStatus(error instanceof Error ? error.message : "Task was not created");
+      }
+    } finally {
+      setPending(false);
     }
   }
-  return <form onSubmit={submit} className="mt-5 grid gap-4 rounded-xl border border-border bg-surface p-4"><h2 className="font-semibold">Create task</h2><Labeled label="Title"><Input name="title" required /></Labeled><Labeled label="Description"><Textarea name="description" /></Labeled><div className="grid gap-4 sm:grid-cols-2"><Labeled label="Priority"><select name="priority" className="h-10 rounded-md border bg-surface px-3"><option value="">Unset</option>{["p1","p2","p3","p4"].map((p)=><option key={p}>{p}</option>)}</select></Labeled><Labeled label="Due"><Input name="dueAt" type="datetime-local" /></Labeled><Labeled label="Commitment"><select name="commitmentId" disabled={Boolean(optionsStatus)} className="h-10 rounded-md border bg-surface px-3"><option value="">None</option>{commitments.map((item) => <option key={item.commitment_id} value={item.commitment_id}>{item.title}</option>)}</select></Labeled><Labeled label="Role"><select name="role" className="h-10 rounded-md border bg-surface px-3"><option value="">None</option><option value="follow_up">Follow up</option></select></Labeled></div>{optionsStatus ? <p role="status" className="text-sm text-muted">{optionsStatus}</p> : null}<Button type="submit">Create task</Button><p role="status" className="text-sm text-muted">{status}</p></form>;
+
+  const draft = session.getDraft();
+  const phase = session.getPhase();
+  const frozen = phase === "ambiguous" || phase === "pending";
+  return (
+    <form
+      onSubmit={(event) => void submit(event)}
+      aria-busy={pending || undefined}
+      className="mt-5 grid gap-4 rounded-xl border border-border bg-surface p-4"
+    >
+      <h2 className="font-semibold">Create task</h2>
+      <Labeled label="Title">
+        <Input name="title" required disabled={pending || frozen} defaultValue={draft?.title ?? ""} readOnly={frozen} />
+      </Labeled>
+      <Labeled label="Description">
+        <Textarea name="description" disabled={pending || frozen} defaultValue={draft?.description ?? ""} readOnly={frozen} />
+      </Labeled>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Labeled label="Priority">
+          <select name="priority" disabled={pending || frozen} defaultValue={draft?.priority ?? ""} className="h-10 rounded-md border bg-surface px-3">
+            <option value="">Unset</option>
+            {["p1", "p2", "p3", "p4"].map((p) => (
+              <option key={p}>{p}</option>
+            ))}
+          </select>
+        </Labeled>
+        <Labeled label="Due">
+          <Input name="dueAt" type="datetime-local" disabled={pending || frozen} readOnly={frozen} />
+        </Labeled>
+        <Labeled label="Commitment">
+          <select
+            name="commitmentId"
+            disabled={pending || frozen || Boolean(optionsStatus)}
+            defaultValue={draft?.commitmentId ?? ""}
+            className="h-10 rounded-md border bg-surface px-3"
+          >
+            <option value="">None</option>
+            {commitments.map((item) => (
+              <option key={item.commitment_id} value={item.commitment_id}>
+                {item.title}
+              </option>
+            ))}
+          </select>
+        </Labeled>
+        <Labeled label="Role">
+          <select name="role" disabled={pending || frozen} defaultValue={draft?.role ?? ""} className="h-10 rounded-md border bg-surface px-3">
+            <option value="">None</option>
+            <option value="follow_up">Follow up</option>
+          </select>
+        </Labeled>
+      </div>
+      {optionsStatus ? <p role="status" className="text-sm text-muted">{optionsStatus}</p> : null}
+      <Button type="submit" disabled={pending} aria-busy={pending || undefined}>
+        {pending ? "Creating…" : phase === "ambiguous" ? "Retry same create" : "Create task"}
+      </Button>
+      <p role="status" className="text-sm text-muted">
+        {status}
+      </p>
+    </form>
+  );
 }
 
 function CommitmentCreate({ onDone }: { onDone: () => void }) {
@@ -465,14 +952,116 @@ function CommitmentCreate({ onDone }: { onDone: () => void }) {
   const [counterparties, setCounterparties] = useState<readonly CounterpartyOption[]>([]);
   const [optionsStatus, setOptionsStatus] = useState("Loading verified counterparties…");
   const [optionsTruncated, setOptionsTruncated] = useState(false);
-  const captureAttempt = useRef(createAttemptKey("commitment-origin")); const createAttempt = useRef(createAttemptKey("commitment-create"));
+  const captureAttempt = useRef(createAttemptKey("commitment-origin"));
+  const createAttempt = useRef(createAttemptKey("commitment-create"));
   useEffect(() => {
     const controller = new AbortController();
-    void workRequest<{ counterparty_options: readonly CounterpartyOption[]; counterparty_options_truncated?: boolean }>("/api/commitments?pageSize=1", { signal: controller.signal })
-      .then((answer) => { setCounterparties(requiredCollection(answer.counterparty_options, "counterparty_options")); setOptionsTruncated(Boolean(answer.counterparty_options_truncated)); setOptionsStatus(""); })
-      .catch((error) => { if (!controller.signal.aborted) setOptionsStatus(error instanceof Error ? error.message : "Verified counterparties are unavailable"); });
+    void workRequest<{ counterparty_options: readonly CounterpartyOption[]; counterparty_options_truncated?: boolean }>(
+      "/api/commitments?pageSize=1",
+      { signal: controller.signal },
+    )
+      .then((answer) => {
+        setCounterparties(requiredCollection(answer.counterparty_options, "counterparty_options"));
+        setOptionsTruncated(Boolean(answer.counterparty_options_truncated));
+        setOptionsStatus("");
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          setOptionsStatus(error instanceof Error ? error.message : "Verified counterparties are unavailable");
+        }
+      });
     return () => controller.abort();
   }, []);
-  async function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); const form = new FormData(event.currentTarget); const note = String(form.get("origin")); const counterpartyPersonId = String(form.get("counterparty") ?? ""); if (!counterparties.some((item) => item.person_id === counterpartyPersonId)) { setStatus("Choose a verified counterparty from the list."); return; } setStatus("Saving evidence…"); try { const origin = await captureEvidence(note, "commitment-origin", captureAttempt.current.forPayload({ note })); setStatus("Creating commitment…"); const payload = { summary: form.get("summary"), counterpartyPersonId, direction: form.get("direction"), dueAt: form.get("dueAt") ? new Date(String(form.get("dueAt"))).toISOString() : undefined, originEvidenceRef: origin }; await workRequest("/api/commitments", { method: "POST", body: JSON.stringify({ ...payload, idempotencyKey: createAttempt.current.forPayload(payload) }) }); captureAttempt.current.succeeded(); createAttempt.current.succeeded(); setStatus("Commitment created."); onDone(); } catch (error) { if (isDefinitiveAttemptFailure(error)) { captureAttempt.current.succeeded(); createAttempt.current.succeeded(); } setStatus(error instanceof Error ? error.message : "Commitment was not created"); } }
-  return <form onSubmit={submit} className="mt-5 grid gap-4 rounded-xl border border-border bg-surface p-4"><h2 className="font-semibold">Create commitment</h2><Labeled label="Summary"><Input name="summary" required /></Labeled><div className="grid gap-4 sm:grid-cols-2"><Labeled label="Counterparty"><select name="counterparty" required disabled={Boolean(optionsStatus) || counterparties.length === 0} className="h-10 rounded-md border bg-surface px-3"><option value="">Choose a person</option>{counterparties.map((item) => <option key={item.person_id} value={item.person_id}>{item.display_name}</option>)}</select></Labeled><Labeled label="Direction"><select name="direction" className="h-10 rounded-md border bg-surface px-3"><option value="owed_to_principal">Owed to me</option><option value="owed_by_principal">Owed by me</option></select></Labeled><Labeled label="Due"><Input name="dueAt" type="datetime-local" /></Labeled></div>{optionsStatus ? <p role="status" className="text-sm text-muted">{optionsStatus}</p> : counterparties.length === 0 ? <p role="status" className="text-sm text-muted">No verified relationship people are available for selection.</p> : optionsTruncated ? <p role="status" className="text-sm text-muted">Showing the first 100 verified people.</p> : null}<Labeled label="Origin note" hint="Saved through Quick Capture before the commitment is attempted."><Textarea name="origin" required /></Labeled><Button type="submit" disabled={counterparties.length === 0}>Create commitment</Button><p role="status" className="text-sm text-muted">{status}</p></form>;
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const note = String(form.get("origin"));
+    const counterpartyPersonId = String(form.get("counterparty") ?? "");
+    if (!counterparties.some((item) => item.person_id === counterpartyPersonId)) {
+      setStatus("Choose a verified counterparty from the list.");
+      return;
+    }
+    setStatus("Saving evidence…");
+    try {
+      const origin = await captureEvidence(note, "commitment-origin", captureAttempt.current.forPayload({ note }));
+      setStatus("Creating commitment…");
+      const payload = {
+        summary: form.get("summary"),
+        counterpartyPersonId,
+        direction: form.get("direction"),
+        dueAt: form.get("dueAt") ? new Date(String(form.get("dueAt"))).toISOString() : undefined,
+        originEvidenceRef: origin,
+      };
+      await workRequest("/api/commitments", {
+        method: "POST",
+        body: JSON.stringify({ ...payload, idempotencyKey: createAttempt.current.forPayload(payload) }),
+      });
+      captureAttempt.current.succeeded();
+      createAttempt.current.succeeded();
+      setStatus("Commitment created.");
+      onDone();
+    } catch (error) {
+      if (isDefinitiveAttemptFailure(error)) {
+        captureAttempt.current.succeeded();
+        createAttempt.current.succeeded();
+      }
+      setStatus(error instanceof Error ? error.message : "Commitment was not created");
+    }
+  }
+  return (
+    <form onSubmit={submit} className="mt-5 grid gap-4 rounded-xl border border-border bg-surface p-4">
+      <h2 className="font-semibold">Create commitment</h2>
+      <Labeled label="Summary">
+        <Input name="summary" required />
+      </Labeled>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Labeled label="Counterparty">
+          <select
+            name="counterparty"
+            required
+            disabled={Boolean(optionsStatus) || counterparties.length === 0}
+            className="h-10 rounded-md border bg-surface px-3"
+          >
+            <option value="">Choose a person</option>
+            {counterparties.map((item) => (
+              <option key={item.person_id} value={item.person_id}>
+                {item.display_name}
+              </option>
+            ))}
+          </select>
+        </Labeled>
+        <Labeled label="Direction">
+          <select name="direction" className="h-10 rounded-md border bg-surface px-3">
+            <option value="owed_to_principal">Owed to me</option>
+            <option value="owed_by_principal">Owed by me</option>
+          </select>
+        </Labeled>
+        <Labeled label="Due">
+          <Input name="dueAt" type="datetime-local" />
+        </Labeled>
+      </div>
+      {optionsStatus ? (
+        <p role="status" className="text-sm text-muted">
+          {optionsStatus}
+        </p>
+      ) : counterparties.length === 0 ? (
+        <p role="status" className="text-sm text-muted">
+          No verified relationship people are available for selection.
+        </p>
+      ) : optionsTruncated ? (
+        <p role="status" className="text-sm text-muted">
+          Showing the first 100 verified people.
+        </p>
+      ) : null}
+      <Labeled label="Origin note" hint="Saved through Quick Capture before the commitment is attempted.">
+        <Textarea name="origin" required />
+      </Labeled>
+      <Button type="submit" disabled={counterparties.length === 0}>
+        Create commitment
+      </Button>
+      <p role="status" className="text-sm text-muted">
+        {status}
+      </p>
+    </form>
+  );
 }

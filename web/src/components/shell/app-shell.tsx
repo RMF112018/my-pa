@@ -14,6 +14,7 @@ import { CommandPalette } from "@/components/shell/command-palette";
 import { UtilityRegion } from "@/components/shell/utility-region";
 import { InspectorSelectionProvider } from "@/components/shell/inspector-selection";
 import { useShellPreferences } from "@/components/shell/shell-preferences";
+import { TaskRuntimeProvider } from "@/components/work/task-runtime-provider";
 
 const OpenCaptureContext = createContext<() => void>(() => {
   throw new Error("useOpenCapture is only valid inside AppShell");
@@ -45,53 +46,59 @@ export function AppShell({
       update({ density: preferences.density === "comfortable" ? "compact" : "comfortable" }),
   };
 
+  // Session epoch keys Task client state; Principal replacement remounts/resets it.
+  // identitySubject is the durable auth subject for this shell session — never an API param.
+  const sessionEpoch = `${principal.identityProvider}:${principal.identitySubject}`;
+
   return (
-    <OpenCaptureContext.Provider value={openCapture}>
-      <InspectorSelectionProvider onSelectionPublished={() => setUtilityOpen(true)}>
-        <div className="flex min-h-screen flex-col">
-          <ContextHeader
-            principal={account.principal}
-            theme={account.theme}
-            density={account.density}
-            onToggleTheme={account.onToggleTheme}
-            onToggleDensity={account.onToggleDensity}
-          />
-          <div className="flex flex-1">
-            <NavRail
-              collapsed={preferences.navCollapsed}
-              onCollapsedChange={(navCollapsed) => update({ navCollapsed })}
-              onCapture={openCapture}
-              account={account}
+    <TaskRuntimeProvider principalId={principal.principalId} sessionEpoch={sessionEpoch}>
+      <OpenCaptureContext.Provider value={openCapture}>
+        <InspectorSelectionProvider onSelectionPublished={() => setUtilityOpen(true)}>
+          <div className="flex min-h-screen flex-col">
+            <ContextHeader
+              principal={account.principal}
+              theme={account.theme}
+              density={account.density}
+              onToggleTheme={account.onToggleTheme}
+              onToggleDensity={account.onToggleDensity}
             />
-            <div className="min-w-0 flex-1">
-              <main
-                id="main"
-                className="min-w-0 p-4 pb-[calc(var(--nav-height)+env(safe-area-inset-bottom))] lg:p-6 lg:pb-6"
-              >
-                {children}
-              </main>
-            </div>
-            {utilityOpen || preferences.utilityPinned ? (
-              <UtilityRegion
-                open={utilityOpen || preferences.utilityPinned}
-                onOpenChange={setUtilityOpen}
-                pinned={preferences.utilityPinned}
-                onPinnedChange={(utilityPinned) => update({ utilityPinned })}
-                width={preferences.utilityWidth}
-                onWidthChange={(utilityWidth) => update({ utilityWidth })}
+            <div className="flex flex-1">
+              <NavRail
+                collapsed={preferences.navCollapsed}
+                onCollapsedChange={(navCollapsed) => update({ navCollapsed })}
+                onCapture={openCapture}
+                account={account}
               />
-            ) : null}
+              <div className="min-w-0 flex-1">
+                <main
+                  id="main"
+                  className="min-w-0 p-4 pb-[calc(var(--nav-height)+env(safe-area-inset-bottom))] lg:p-6 lg:pb-6"
+                >
+                  {children}
+                </main>
+              </div>
+              {utilityOpen || preferences.utilityPinned ? (
+                <UtilityRegion
+                  open={utilityOpen || preferences.utilityPinned}
+                  onOpenChange={setUtilityOpen}
+                  pinned={preferences.utilityPinned}
+                  onPinnedChange={(utilityPinned) => update({ utilityPinned })}
+                  width={preferences.utilityWidth}
+                  onWidthChange={(utilityWidth) => update({ utilityWidth })}
+                />
+              ) : null}
+            </div>
+            <MobileNav onCapture={openCapture} />
+            <CaptureDialog
+              open={captureOpen}
+              onClose={() => setCaptureOpen(false)}
+              principalId={principal.principalId}
+            />
+            <CommandPalette open={searchOpen} onOpenChange={setSearchOpen} onCapture={openCapture} />
+            <OfflineQueueStatus principalId={principal.principalId} />
           </div>
-          <MobileNav onCapture={openCapture} />
-          <CaptureDialog
-            open={captureOpen}
-            onClose={() => setCaptureOpen(false)}
-            principalId={principal.principalId}
-          />
-          <CommandPalette open={searchOpen} onOpenChange={setSearchOpen} onCapture={openCapture} />
-          <OfflineQueueStatus principalId={principal.principalId} />
-        </div>
-      </InspectorSelectionProvider>
-    </OpenCaptureContext.Provider>
+        </InspectorSelectionProvider>
+      </OpenCaptureContext.Provider>
+    </TaskRuntimeProvider>
   );
 }

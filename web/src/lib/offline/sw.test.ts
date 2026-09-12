@@ -127,6 +127,8 @@ describe("no /api response is ever cached, stored, or served from a cache", () =
     "/api/capture",
     "/api/library",
     "/api/session",
+    "/api/tasks",
+    "/api/tasks?pageSize=50&workView=today&archived=exclude",
     "/api/webauthn/auth-state",
     "/api/webauthn/bootstrap/registration/options",
     "/api/webauthn/operator-recovery/registration/complete",

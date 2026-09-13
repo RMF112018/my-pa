@@ -120,6 +120,13 @@ function expectNoVersionNumber(element: HTMLElement) {
   expect(text).not.toMatch(/\d/);
 }
 
+/**
+ * Acceptance traceability: TASK-AC-033, TASK-AC-040.
+ *
+ * A 409 preserves the draft and never auto-resubmits, and the conflict is stated in product
+ * language with no version number (033); a newer canonical arriving by background refresh
+ * does not overwrite a dirty editor (040).
+ */
 describe("TaskDetailView authoritative draft / conflict", () => {
   it("preserves draft on 409 with current and does not auto-resubmit", async () => {
     const user = userEvent.setup();

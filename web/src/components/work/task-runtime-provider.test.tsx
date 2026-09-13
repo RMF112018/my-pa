@@ -50,6 +50,13 @@ function RuntimeProbe() {
   );
 }
 
+/**
+ * Acceptance traceability: TASK-AC-006, TASK-AC-030, TASK-AC-038.
+ *
+ * A double-submitted create dispatches once and reconciles once (006), confirmed feedback
+ * survives the source unmounting (030), and a confirmed mutation reconciles the registered
+ * active reads exactly once while barring an older in-flight read (038).
+ */
 describe("TaskRuntimeProvider", () => {
   it("exposes session-scoped create-intent store and read coordinator", () => {
     const captured: { runtime: ReturnType<typeof useTaskRuntime> | null } = { runtime: null };

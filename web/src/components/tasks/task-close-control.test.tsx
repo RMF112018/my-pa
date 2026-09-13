@@ -25,6 +25,13 @@ function renderControl(overrides: Partial<Parameters<typeof TaskCloseControl>[0]
 const closeTrigger = () => screen.getByRole("button", { name: "Close Task" });
 const cancelTrigger = () => screen.getByRole("button", { name: "Cancel Task" });
 
+/**
+ * Acceptance traceability: TASK-AC-024, TASK-AC-025, TASK-AC-026.
+ *
+ * Closing costs exactly two activations and no third interaction (024), the confirmation
+ * contains no text entry so it summons no keyboard (025), and Close and Cancel Task carry
+ * their own distinct terminal copy (026).
+ */
 describe("TaskCloseControl", () => {
   it("does not close on the first activation: it only opens a confirmation", async () => {
     const user = userEvent.setup();

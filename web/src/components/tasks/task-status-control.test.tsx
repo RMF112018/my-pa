@@ -10,6 +10,14 @@ afterEach(() => {
 
 const CONFLICT_COPY = "This task changed elsewhere. Review the latest version before saving.";
 
+/**
+ * Acceptance traceability: TASK-AC-002, TASK-AC-015, TASK-AC-017, TASK-AC-043.
+ *
+ * Exactly the four active statuses, named in human language, with the raw token emitted only
+ * to the wire (002, 043); the control is the inline Status affordance the list, detail and
+ * Board rows all mount (015), it is reachable and operable by keyboard, and it pins the
+ * definite 44px sizing contract the Board acceptance run measures (017).
+ */
 describe("TaskStatusControl", () => {
   it("offers exactly the four active statuses in human language", () => {
     render(<TaskStatusControl value="open" onChange={() => {}} />);

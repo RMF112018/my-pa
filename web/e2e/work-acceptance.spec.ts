@@ -198,6 +198,8 @@ test.describe("compact Task detail", () => {
     expect(await technical.innerText()).toMatch(/tsk_[a-z0-9]+/i);
   });
 
+  /** TASK-AC-024, TASK-AC-025: Close is exactly two activations, with no third interaction
+   * and no text entry anywhere in the confirmation. */
   test("closing a Task costs two activations and never asks for authored text", async ({ page }) => {
     const sheet = await openTask(page);
     await sheet.getByTestId("task-close-control").getByRole("button", { name: "Close Task", exact: true }).click();
@@ -245,6 +247,7 @@ test.describe("operational Work List", () => {
 
   const feedback = (page: Page) => page.getByTestId("mutation-feedback-region");
 
+  /** TASK-AC-015: Status is changed inline from the list row, without opening Task detail. */
   test("changes Status from the row without opening Task detail", async ({ page }) => {
     const { row } = await seedRow(page);
 
@@ -255,6 +258,7 @@ test.describe("operational Work List", () => {
     await expect(page.getByTestId("task-compact-sheet")).toHaveCount(0);
   });
 
+  /** TASK-AC-016: Due is changed inline from the list row, without opening Task detail. */
   test("changes Due from the row without opening Task detail", async ({ page }) => {
     const { row } = await seedRow(page);
 
@@ -287,6 +291,8 @@ test.describe("operational Work List", () => {
     await expect(page.locator('[data-testid="task-list-row"]')).toHaveCount(0);
   });
 
+  /** TASK-AC-042, TASK-AC-043: the row carries no opaque identifier and no raw lifecycle or
+   * priority token. */
   test("states no backend vocabulary on the row", async ({ page }) => {
     const { row } = await seedRow(page);
     const text = await row.innerText();

@@ -524,6 +524,12 @@ test.describe("what axe cannot decide", () => {
     await expect(rail.getByRole("link", { name: "Map" })).toBeVisible();
   });
 
+  /**
+   * TASK-AC-035. A mutation outcome is perceptible to a screen reader, not merely painted.
+   *
+   * This is the automated half. The VoiceOver leg of TASK-AC-046 is operator-gated on a real
+   * device and is not claimed by this run.
+   */
   test("a state change is announced, not merely rendered", async ({ page }) => {
     await openCaptureNote(page);
     await page.getByTestId("capture-field").fill("E2E synthetic note — announcement check.");

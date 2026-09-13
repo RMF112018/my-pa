@@ -78,6 +78,8 @@ describe("task status language", () => {
   });
 });
 
+/** Acceptance traceability: TASK-AC-002 — p1..p4 are named Critical/High/Medium/Low and an
+ * absent priority is never silently rendered as Low. */
 describe("task priority language", () => {
   it("maps p1..p4 to Critical/High/Medium/Low", () => {
     const cases: ReadonlyArray<readonly [TaskPriority, string]> = [
@@ -141,6 +143,13 @@ describe("civil-day arithmetic", () => {
   });
 });
 
+/**
+ * Acceptance traceability: TASK-AC-013, TASK-AC-014.
+ *
+ * A Due moment earlier in the caller's own civil day still reads Today (013), and a Due
+ * moment on a prior civil day reads as overdue by whole civil days (014). Both are decided
+ * in the caller's zone, never by truncating UTC.
+ */
 describe("due presentation", () => {
   it("states an absent due date", () => {
     const due = formatTaskDue(null, CLOCK);
@@ -289,6 +298,14 @@ describe("presentation module boundaries", () => {
   });
 });
 
+/**
+ * Acceptance traceability: TASK-AC-010, TASK-AC-012.
+ *
+ * A date-only Due becomes 23:59:59 on the local wall clock of the caller's IANA zone (010),
+ * and it holds across both DST transitions, UTC-positive and UTC-negative offsets, a leap
+ * day and a year boundary (012). This is the whole of the TASK-AC-012 boundary matrix — do
+ * not duplicate it elsewhere.
+ */
 describe("civil day end (WP-TUX-04)", () => {
   const NY = "America/New_York";
 

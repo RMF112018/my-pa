@@ -185,6 +185,16 @@ async function flush(): Promise<void> {
   });
 }
 
+/**
+ * Acceptance traceability: TASK-AC-009, TASK-AC-026, TASK-AC-028, TASK-AC-032,
+ * TASK-AC-033, TASK-AC-042.
+ *
+ * A civil date is serialized to that civil day's end (009); Close and Cancel each stay
+ * pessimistic until the server Task confirms the terminal state, so no closure is ever shown
+ * on a response that carried no Task (026, 028); an ambiguous retry reuses the idempotency
+ * key (032); a conflict surfaces with no blind retry (033); and feedback copy exposes no
+ * transport detail, version or evidence (042).
+ */
 describe("useTaskOperations", () => {
   it("refuses to let a Work list projection authorize a versioned mutation until hydrated", async () => {
     const detailGate = gate();

@@ -168,6 +168,14 @@ async function reschedule(): Promise<void> {
   await userEvent.click(await screen.findByRole("button", { name: "Tomorrow" }));
 }
 
+/**
+ * Acceptance traceability: TASK-AC-024, TASK-AC-034, TASK-AC-042, TASK-AC-044.
+ *
+ * The card states what the Task is, why it is on Today, and the two actions, in that reading
+ * order (044); Close costs exactly two activations and asks for no text (024); focus returns
+ * to the card when Close removes the control the user was on (034); and no raw identifier is
+ * rendered (042).
+ */
 describe("TodayTaskCard", () => {
   it("renders title, reason and the two actions, in that reading order", async () => {
     stubFetch();

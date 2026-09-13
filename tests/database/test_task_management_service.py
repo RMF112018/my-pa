@@ -152,6 +152,8 @@ def _bulk_operation(*, key: str, now: datetime) -> TaskBulkOperation:
 # --- idempotency: exactly one row survives a retry --------------------------
 
 
+# Acceptance traceability: TASK-AC-006 — one create intent yields exactly one Task row and
+# one history row, proven at the database rather than at the client.
 def test_a_replayed_create_writes_exactly_one_task_and_one_history_row(
     migrated_engine: Engine,
 ) -> None:
@@ -710,6 +712,8 @@ def test_list_and_get_hydrate_a_direct_principal_accepted_task(migrated_engine: 
     assert read.title == "Verify ChatLLM write behavior on pulse"
 
 
+# Acceptance traceability: TASK-AC-022 — comment idempotency under a real concurrent insert
+# race: same digest replays the winner, a different digest conflicts rather than duplicating.
 def test_concurrent_comment_same_digest_race_replays_the_winner(
     migrated_engine: Engine,
 ) -> None:
@@ -929,3 +933,50 @@ def test_concurrent_comment_different_digest_repo_returns_winner(
     assert {comment.comment_id for comment in results} == {first.comment_id}
     assert {comment.request_digest for comment in results} == {"c" * 64}
     assert _row_count(migrated_engine, "task_comments") == 1
+
+
+# --- TASK-AC-011: an authored due time survives the transaction boundary ----
+
+
+def test_an_explicit_due_time_is_preserved_exactly(migrated_engine: Engine) -> None:
+    """TASK-AC-011. An explicit due time is stored to the second, not rounded.
+
+    `due_at` is `DateTime(timezone=True)` in the schema and `UtcDatetime` in the
+    v1 contract, so a due instant carrying a meaningful time-of-day is
+    structurally representable. Nothing proved it actually survives the write.
+
+    This matters specifically because no Task UX authors one: the Due control is
+    `type="date"` and `formatTaskDue` keeps `withExplicitTime` off by default,
+    documenting that callers opt in "only once that semantic exists upstream".
+    An explicit time therefore reaches a Task only from a non-UI origin -- an
+    MCP or API write -- which is exactly the path with no browser test standing
+    over it. Preservation has to be proved at the layer that stores it.
+
+    The instant is deliberately not midnight and not 23:59:59, so a silent
+    truncation to a civil-day boundary -- the one plausible corruption, given
+    the date-only UI path -- fails this test rather than passing it.
+    """
+    service = _service(migrated_engine)
+    authored = datetime(2026, 9, 15, 14, 37, 42, tzinfo=UTC)
+
+    created = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Call the surveyor back",
+        origin_kind=TaskOriginKind.EVIDENCE,
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+        due_at=authored,
+        idempotency_key=_idempotency_key("explicit-due-time"),
+    )
+
+    stored = _task_row(migrated_engine, created.task.task_id)
+    read_back = stored["due_at"]
+    assert isinstance(read_back, datetime)
+
+    # Compared as an instant: the column is timezone-aware, so a server that
+    # returned the same moment in another offset is still correct.
+    assert read_back == authored, "the stored due instant is not the authored one"
+
+    # Named separately so a truncation to a civil-day boundary reports as the
+    # loss of the time-of-day rather than as an opaque instant mismatch.
+    assert (read_back.hour, read_back.minute, read_back.second) == (14, 37, 42)

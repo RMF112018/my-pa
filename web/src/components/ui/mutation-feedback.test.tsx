@@ -42,6 +42,14 @@ function renderFeedback(ui?: ReactNode) {
   return { ...view, api: apiRef.current };
 }
 
+/**
+ * Acceptance traceability: TASK-AC-030, TASK-AC-035.
+ *
+ * Create success outlives the form that published it (030), and mutation outcomes are made
+ * perceptible to a screen reader — alert semantics for conflicts, a live region that is not
+ * spammed by background poll notices, and no focus steal (035). The VoiceOver leg of
+ * TASK-AC-046 is operator-gated and is not claimed here.
+ */
 describe("MutationFeedbackProvider", () => {
   it("keeps create success feedback after the source form unmounts", () => {
     function SourceForm({ open }: { readonly open: boolean }) {

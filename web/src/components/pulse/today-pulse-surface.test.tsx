@@ -291,6 +291,11 @@ describe("classification reads coverage before it counts rows", () => {
  * depends on that behaviour emulates it — a test that passed only because jsdom
  * differs from a browser would be worse than no test here.
  */
+/**
+ * Acceptance traceability: TASK-AC-034 — a Task that disappears from Today lands focus
+ * somewhere deliberate rather than on the body, and never yanks a user back from where they
+ * deliberately went.
+ */
 describe("focus survives the card leaving Today", () => {
   function Probe({ onRuntime }: { onRuntime: (runtime: ReturnType<typeof useTaskRuntime>) => void }) {
     onRuntime(useTaskRuntime());

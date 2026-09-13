@@ -33,6 +33,11 @@ async function flushMountRead() {
   });
 }
 
+/**
+ * Acceptance traceability: TASK-AC-037, TASK-AC-039 — the Work-surface binding of the
+ * foreground revalidation contract: focus, hidden-to-visible and online each revalidate
+ * immediately (037), and polling stops while hidden or offline (039).
+ */
 describe("useTaskFreshness", () => {
   beforeEach(() => {
     vi.useFakeTimers();

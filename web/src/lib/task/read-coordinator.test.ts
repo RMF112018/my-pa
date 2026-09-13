@@ -81,6 +81,12 @@ describe("TaskReadCoordinator supersede", () => {
   });
 });
 
+/**
+ * Acceptance traceability: TASK-AC-038, TASK-AC-040.
+ *
+ * A confirmed local mutation is never overwritten by a read that started before it (038),
+ * which is the same barrier that keeps a background refresh off a dirty editor (040).
+ */
 describe("TaskReadCoordinator mutation barrier", () => {
   it("does not let a pre-mutation poll overwrite confirmed mutation data", async () => {
     const coordinator = new TaskReadCoordinator<{ version: number; title: string }>();

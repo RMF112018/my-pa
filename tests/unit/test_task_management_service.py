@@ -608,6 +608,9 @@ def test_a_terminal_task_cannot_be_transitioned_further() -> None:
         )
 
 
+# Acceptance traceability: TASK-AC-026, TASK-AC-028 — a terminal transition records the
+# closure it actually had. Absent evidence is allowed; blank evidence is refused rather
+# than fabricated; supplied evidence is recorded as given.
 def test_entering_a_terminal_state_without_closure_evidence_is_allowed() -> None:
     world = _World()
     service = _service(world)
@@ -896,6 +899,8 @@ def test_a_task_belonging_to_another_principal_is_not_found_either() -> None:
         )
 
 
+# Acceptance traceability: TASK-AC-003 — an ordinary direct-principal create carries no
+# origin evidence note, and is accepted without one.
 def test_create_task_direct_principal_is_accepted_without_evidence() -> None:
     world = _World()
     receipt = _service(world).create_task(
@@ -911,6 +916,8 @@ def test_create_task_direct_principal_is_accepted_without_evidence() -> None:
     assert receipt.task.accepted_by_review_decision_id is None
 
 
+# Acceptance traceability: TASK-AC-020, TASK-AC-022 — comments are append-only alongside
+# the Task, and a replayed comment key is idempotent rather than a second comment.
 def test_create_task_comment_does_not_bump_task_version_or_history() -> None:
     world = _World()
     service = _service(world)

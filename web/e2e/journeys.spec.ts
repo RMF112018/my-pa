@@ -7,12 +7,39 @@
  * typed into the browser comes back as a row in the Library listing, and the
  * only way that can happen is if it was committed.
  */
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { signIn, syntheticNote, expectState, visibleCaptureButton, openCaptureNote, pinInspector } from "./fixtures";
 
 /** Chrome below the `lg` (1024) split: rail hidden, Knowledge lives in More. */
 function belowLgChrome(projectName: string): boolean {
   return projectName === "mobile" || projectName === "tablet";
+}
+
+/**
+ * The **shell's** navigation overflow, and nothing else that says "More".
+ *
+ * `getByRole(role, { name })` matches the accessible name as a
+ * case-insensitive *substring*, so a bare `{ name: "More" }` was never a
+ * locator for one button — it was a locator for every control whose name
+ * contains that word. It resolved to one element only because nothing else on
+ * screen had ever been named that way.
+ *
+ * Since WP-TUX-07 something is: a Today Task card carries a disclosure named
+ * `More actions for <task title>` (`task-operation-controls.tsx`), so a
+ * populated Today puts one of those on the page per card and the bare locator
+ * resolves to a dozen or more. Below `lg` the shell's own overflow joins them,
+ * which is why this only ever bit tablet and mobile.
+ *
+ * Both halves of the fix state the intent rather than narrow the result: the
+ * Primary landmark, because this is the *shell's* navigation and no Task card
+ * lives inside it (the same scoping the Inspector test already used), and
+ * `exact`, because the button's accessible name is precisely `More`
+ * (`nav.tsx`) while a card's never is. Nothing is asserted less than before.
+ */
+function navMoreButton(page: Page) {
+  return page
+    .getByRole("navigation", { name: "Primary" })
+    .getByRole("button", { name: "More", exact: true });
 }
 
 test.describe("an unauthenticated visitor reaches no destination", () => {
@@ -147,7 +174,7 @@ test.describe("the signed-in surfaces", () => {
       "synthetic",
     );
     if (belowLgChrome(testInfo.project.name)) {
-      await page.getByRole("button", { name: "More" }).click();
+      await navMoreButton(page).click();
     }
     await expect(page.getByRole("link", { name: "Knowledge" }).first()).toHaveAttribute(
       "aria-current",
@@ -163,10 +190,10 @@ test.describe("the signed-in surfaces", () => {
       await expect(nav.getByRole("link", { name: "Today" })).toBeVisible();
       await expect(nav.getByRole("link", { name: "Work" })).toBeVisible();
       await expect(nav.getByRole("link", { name: "People" })).toBeVisible();
-      await expect(nav.getByRole("button", { name: "More" })).toBeVisible();
+      await expect(navMoreButton(page)).toBeVisible();
       await expect(nav.getByRole("link", { name: "Review" })).toHaveCount(0);
       await expect(nav.getByRole("link", { name: "Search" })).toHaveCount(0);
-      await nav.getByRole("button", { name: "More" }).click();
+      await navMoreButton(page).click();
       const more = page.getByRole("dialog", { name: "More" });
       await expect(more).toBeVisible();
       await expect(more.getByRole("link", { name: "Review", exact: true })).toBeVisible();
@@ -195,7 +222,7 @@ test.describe("the signed-in surfaces", () => {
     await page.keyboard.press("Escape");
     await expect(search).toHaveCount(0);
     if (belowLgChrome(testInfo.project.name)) {
-      await page.getByRole("button", { name: "More" }).click();
+      await navMoreButton(page).click();
       await page.getByRole("dialog", { name: "More" }).getByRole("link", { name: "Knowledge" }).click();
     } else {
       await page.getByRole("link", { name: "Knowledge" }).first().click();
@@ -435,7 +462,7 @@ test.describe("keyboard-only navigation", () => {
 
     // Every destination in the rail is reachable and activatable by keyboard.
     if (belowLgChrome(testInfo.project.name)) {
-      await page.getByRole("button", { name: "More" }).focus();
+      await navMoreButton(page).focus();
       await page.keyboard.press("Enter");
     }
     await page.getByRole("link", { name: "Knowledge" }).first().focus();
@@ -464,8 +491,32 @@ test.describe("keyboard-only navigation", () => {
     const button = visibleCaptureButton(page);
     await button.evaluate((element) => (element as HTMLElement).blur());
     await page.keyboard.press("Tab");
+    /*
+      The walk is bounded by the page's own focusable count, not by a constant.
+
+      Below `lg` the Capture button lives in `MobileNav`, which `app-shell.tsx`
+      renders *after* `<main>` — so a keyboard reaches it only by traversing
+      everything the page is currently showing. A fixed budget of 25 stops
+      therefore never asserted "reachable by keyboard": it asserted "within the
+      first 25 stops", which is a different and weaker claim that a busy page
+      can fail while the product is perfectly correct. Since WP-TUX-07 Today
+      renders a Task card per Pulse item, each with its own controls, so that is
+      exactly what began to happen — on tablet and mobile only, because the
+      desktop rail precedes `<main>`.
+
+      One pass over every focusable element in the document is the honest bound
+      for the claim being made, and it is strictly more generous than the
+      constant it replaces: if the button is anywhere in the tab order, this
+      finds it, and if it is genuinely unreachable this still terminates.
+    */
+    const budget = await page.evaluate(
+      () =>
+        document.querySelectorAll(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ).length + 10,
+    );
     let focused = false;
-    for (let stop = 0; stop < 25 && !focused; stop += 1) {
+    for (let stop = 0; stop < budget && !focused; stop += 1) {
       focused = await button.evaluate((element) => element === document.activeElement);
       if (!focused) await page.keyboard.press("Tab");
     }

@@ -1487,11 +1487,104 @@ class ListSituations:
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
 
 
+#: Shared Continuity Project field documentation for the generated MCP schema.
+#: Overlay only; it invents no fields. System-owned columns (`principal_id`,
+#: `version`, `opened_at`, `closed_at`, `created_at`, `updated_at`,
+#: `participants`) are absent so `additionalProperties: false` refuses them.
+_PROJECT_FIELD_DOCS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+    {
+        "page_size": {
+            "description": (
+                "Optional page bound. Omit for the server default. A non-positive "
+                "value is invalid_request."
+            )
+        },
+        "after": {
+            "description": (
+                "Keyset cursor: the project_id of the last row on the previous "
+                "page. A malformed cursor is invalid_request."
+            )
+        },
+        "state": {
+            "description": (
+                "Optional lifecycle filter: active, on_hold, or closed. Omit for "
+                "every state. query and exact_name are mutually exclusive."
+            )
+        },
+        "query": {
+            "description": (
+                "Optional substring match on name. Mutually exclusive with "
+                "exact_name; sending both is invalid_request."
+            )
+        },
+        "exact_name": {"description": "Optional exact name match. Mutually exclusive with query."},
+        "project_id": {
+            "description": (
+                "Opaque Continuity Project identifier. Nested under payload, never "
+                "at the envelope top level. Missing and foreign ids are the same "
+                "not_found."
+            )
+        },
+        "name": {
+            "description": (
+                "The project title the user chose. Required on create; optional on "
+                "update. Blank is invalid_request."
+            )
+        },
+        "description": {
+            "description": "Optional free-text description. A non-string is invalid_request."
+        },
+        "idempotency_key": {
+            "description": (
+                "Caller-chosen replay key on the canonical contract. The same key "
+                "with the same payload returns the original result; the same key "
+                "with a different payload is conflict. Remote MCP stamps this "
+                "field so a model does not invent one."
+            )
+        },
+        "expected_version": {
+            "description": (
+                "The integer version you last read. Required on update and close, "
+                "with no default. A stale value is conflict and writes nothing. "
+                "Do not send version, opened_at, closed_at, created_at, "
+                "updated_at, principal_id, or participants — those are "
+                "system-owned and refused as invalid_request."
+            )
+        },
+        "nonterminal_state": {
+            "type": "string",
+            "enum": ["active", "on_hold"],
+            "description": (
+                "Optional nonterminal lifecycle: active or on_hold only. Closing "
+                "is continuity.projects.close. Sending closed is invalid_request. "
+                "A closed Project cannot be reopened. There is no delete."
+            ),
+        },
+    }
+)
+
+
+def _project_docs(*names: str) -> Mapping[str, Mapping[str, object]]:
+    """The subset of `_PROJECT_FIELD_DOCS` one Continuity Project command publishes."""
+    return MappingProxyType({name: _PROJECT_FIELD_DOCS[name] for name in names})
+
+
 @dataclass(frozen=True, slots=True)
 class ListProjects:
-    """`continuity.projects`: one bounded page of the Principal's Projects."""
+    """`continuity.projects`: nested payload page of this Principal's Projects; no delete.
+
+    Command fields live under nested `payload`. Envelope metadata (`request_id`,
+    `purpose`, `principal_id`, `requested_at`, `contract_version`, `scope`) stays
+    at the top level; putting `page_size`, `after`, `state`, `query`, or
+    `exact_name` there is invalid_request. `query` and `exact_name` are XOR.
+    `state` is the closed enum active|on_hold|closed. There is no delete tool.
+    """
 
     capability: ClassVar[Capability] = Capability.CONTINUITY_PROJECTS
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = _project_docs(
+        "page_size", "after", "state", "query", "exact_name"
+    )
 
     page_size: int | None = None
     after: str | None = None
@@ -1517,14 +1610,20 @@ class ListProjects:
 
 @dataclass(frozen=True, slots=True)
 class ReadProject:
-    """Return one Project via payload wrapper; project_id required; foreign ids undisclosed.
+    """`continuity.projects.read`: nested payload.project_id; missing/foreign are not_found.
 
-    `continuity.projects.read` answers the acting Principal's own Project and
-    collapses absence with a foreign partition so neither case discloses the
-    other Principal's row.
+    Command fields live under nested `payload`. Envelope metadata stays at the
+    top level; a top-level `project_id` is invalid_request. Absence and a
+    foreign partition are the same not_found. System-owned fields (`version`,
+    `opened_at`, `closed_at`, `created_at`, `updated_at`, `principal_id`,
+    `participants`) are in the answer, not the request. There is no delete.
     """
 
     capability: ClassVar[Capability] = Capability.CONTINUITY_PROJECTS_READ
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = _project_docs(
+        "project_id"
+    )
 
     project_id: str
 
@@ -1534,15 +1633,22 @@ class ReadProject:
 
 @dataclass(frozen=True, slots=True)
 class CreateProject:
-    """Create a project the user explicitly asked to create. Requires name.
+    """`continuity.projects.create`: nested payload requires name; replay by key; no delete.
 
-    An explicit user instruction. The authenticated Principal is the owner; this
-    command does not carry a Principal field. `name` is the project title the
-    user chose. `idempotency_key` is required on the canonical contract; the
-    remote MCP adapter stamps it so a model does not invent one.
+    Command fields live under nested `payload`. The authenticated Principal is
+    the owner; this command does not carry a Principal field. `name` is
+    required. `idempotency_key` is required on the canonical contract; remote
+    MCP stamps it so a model does not invent one. Same key and same payload
+    replay the original result; same key and a different payload is conflict.
+    Forward create mints a bound Project↔Entity link in the same transaction.
+    System-owned fields are absent and refused. There is no reopen or delete.
     """
 
     capability: ClassVar[Capability] = Capability.CONTINUITY_PROJECTS_CREATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = _project_docs(
+        "name", "idempotency_key", "description"
+    )
 
     name: str
     idempotency_key: str
@@ -1559,16 +1665,35 @@ class CreateProject:
 
 @dataclass(frozen=True, slots=True)
 class UpdateProject:
-    """`continuity.projects.update`: change name, description, and/or nonterminal state.
+    """`continuity.projects.update`: nested payload needs expected_version; no reopen/delete.
 
-    `expected_version` and `idempotency_key` are required and have no default.
-    At least one of `name`, `description`, or `state` must be supplied. `state`,
-    when present, is `active` or `on_hold` only — closing is
-    `continuity.projects.close`. System-owned fields are absent from this
-    command so the generated schema refuses them (`additionalProperties: false`).
+    Command fields live under nested `payload`. Envelope metadata stays at the
+    top level. `expected_version` and `idempotency_key` are required and have no
+    default. At least one of `name`, `description`, or `state` must be
+    supplied. `state`, when present, is active or on_hold only — closing is
+    `continuity.projects.close`. A closed Project cannot be reopened. Same key
+    and same payload replay; same key and a different payload is conflict. A
+    stale `expected_version` is conflict and writes nothing. System-owned
+    fields are absent from this command so the generated schema refuses them
+    (`additionalProperties: false`). There is no delete.
     """
 
     capability: ClassVar[Capability] = Capability.CONTINUITY_PROJECTS_UPDATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+        {
+            **dict(
+                _project_docs(
+                    "project_id",
+                    "expected_version",
+                    "idempotency_key",
+                    "name",
+                    "description",
+                )
+            ),
+            "state": _PROJECT_FIELD_DOCS["nonterminal_state"],
+        }
+    )
 
     project_id: str
     expected_version: int
@@ -1601,13 +1726,21 @@ class UpdateProject:
 
 @dataclass(frozen=True, slots=True)
 class CloseProject:
-    """`continuity.projects.close`: close a project. Always an explicit, separate call.
+    """`continuity.projects.close`: nested payload needs expected_version; no reopen/delete.
 
+    Always this explicit, separate call — never `continuity.projects.update`
+    with state=closed. Command fields live under nested `payload`.
     `expected_version` and `idempotency_key` are required and have no default.
-    Already-closed is a conflict, not a silent no-op.
+    Already-closed is conflict, not a silent no-op. A closed Project cannot be
+    reopened. There is no delete. Same key and same payload replay; a stale
+    `expected_version` is conflict. System-owned fields are refused.
     """
 
     capability: ClassVar[Capability] = Capability.CONTINUITY_PROJECTS_CLOSE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = _project_docs(
+        "project_id", "expected_version", "idempotency_key"
+    )
 
     project_id: str
     expected_version: int
@@ -1923,7 +2056,7 @@ class ReadTask:
 
 @dataclass(frozen=True, slots=True)
 class ListTasks:
-    """`tasks.list`: one bounded page of this Principal's own tasks, newest first.
+    """`tasks.list`: one bounded page of this Principal's tasks; optional payload.project_id.
 
     The structured filters are not a free-text query, which is the line this
     command keeps against `SearchTasks`: a lifecycle state, a priority, or a
@@ -1932,10 +2065,10 @@ class ListTasks:
     lexically. Mixing search text into this command would make "no filter
     supplied" ambiguous between "list everything" and "search for nothing".
 
-    `project_id`, when omitted, does not narrow the page: an unscoped list is
-    still this Principal's tasks. When set, it is an exact match inside that
-    same partition, not a second lookup that could distinguish a missing
-    Project from a foreign one.
+    `project_id` lives under nested `payload`. When omitted, the page is still
+    this Principal's tasks. When set, it is an exact match inside that same
+    partition, not a second lookup that could distinguish a missing Project
+    from a foreign one.
 
     Archived tasks are excluded by default for the reason `ListManagedDocuments`
     excludes archived documents: an archived task withdrew itself from the
@@ -1944,6 +2077,19 @@ class ListTasks:
     """
 
     capability: ClassVar[Capability] = Capability.TASKS_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = MappingProxyType(
+        {
+            "project_id": {
+                "description": (
+                    "Optional Continuity Project identifier nested under payload. "
+                    "When omitted, the page is this Principal's tasks unscoped. "
+                    "When set, exact match in the same partition; missing and "
+                    "foreign Projects are indistinguishable."
+                )
+            }
+        }
+    )
 
     lifecycle_state: TaskLifecycleState | None = None
     priority: TaskPriority | None = None
@@ -2169,7 +2315,7 @@ class CreateTask:
 
 @dataclass(frozen=True, slots=True)
 class UpdateTask:
-    """`tasks.update`: modify one task's mutable fields.
+    """`tasks.update`: mutate fields; payload.project_id assigns, clear_project detaches.
 
     `expected_version` is required and has no default. An update that did not
     state what it was updating would be a blind write, and the whole of
@@ -2180,6 +2326,11 @@ class UpdateTask:
     `CreateTask` requires it: a write that did not state its own idempotency
     key would be a blind write.
 
+    `project_id` and `clear_project` live under nested `payload` and are
+    mutually exclusive: assign an owned Continuity Project, or detach, not
+    both. Sending both is invalid_request. A missing or foreign `project_id`
+    is not_found.
+
     At least one of the mutable fields must be supplied and different from the
     current value, or the update is a no-op. The service records no-ops as
     `NO_OP` outcomes, not `APPLIED`, so a caller can tell a replay from a first
@@ -2187,6 +2338,24 @@ class UpdateTask:
     """
 
     capability: ClassVar[Capability] = Capability.TASKS_UPDATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = MappingProxyType(
+        {
+            "project_id": {
+                "description": (
+                    "Assign this Task to an owned Continuity Project. Nested under "
+                    "payload. Mutually exclusive with clear_project. A missing or "
+                    "foreign project_id is not_found."
+                )
+            },
+            "clear_project": {
+                "description": (
+                    "When true, detach the Task from any Project. Cannot be "
+                    "combined with project_id; sending both is invalid_request."
+                )
+            },
+        }
+    )
 
     task_id: str
     expected_version: int
@@ -6052,10 +6221,11 @@ class ListEntityCommunicationMethods:
 
 @dataclass(frozen=True, slots=True)
 class ListEntityParticipations:
-    """List one entity's project participations from one end, oldest first.
+    """`entities.participations.list`: payload entity_id XOR project_id; oldest first.
 
-    Exactly one of `entity_id` or `project_id`. With `entity_id`, `perspective`
-    says which end and has no default: `project` lists who takes part in this
+    Exactly one of `entity_id` or `project_id` under nested `payload`. Sending
+    both or neither is invalid_request. With `entity_id`, `perspective` says
+    which end and has no default: `project` lists who takes part in this
     project, `participant` lists the projects this entity takes part in. A
     caller silently handed the other end would read one entity's answer as
     another's, which is why an unrecognised value is refused rather than
@@ -6064,6 +6234,7 @@ class ListEntityParticipations:
 
     With `project_id`, the server resolves the bound project entity and lists
     from the project end. `perspective` may be omitted or must be `project`.
+    Unresolved linkage is conflict naming `project_id`; nothing matches on name.
     """
 
     capability: ClassVar[Capability] = Capability.ENTITIES_PARTICIPATIONS_LIST
@@ -6637,11 +6808,12 @@ class RetireEntityCommunicationMethod:
 
 @dataclass(frozen=True, slots=True)
 class CreateEntityParticipation:
-    """`entities.participations.create`: record one participation on one project.
+    """`entities.participations.create`: payload project_id XOR project_entity_id.
 
-    Exactly one of `project_id` or `project_entity_id` names the project.
-    `project_id` is a Continuity Project resolved through the Project↔Entity
-    bridge; unresolved linkage is refused rather than minting an entity.
+    Exactly one of `project_id` or `project_entity_id` under nested `payload`
+    names the project. Sending both or neither is invalid_request. `project_id`
+    is a Continuity Project resolved through the Project↔Entity bridge;
+    unresolved linkage is refused rather than minting an entity.
     `project_entity_id` is a project-type entity you have already resolved.
     `participant_entity_id` is who or what participates. The two entities must
     differ: a project cannot meaningfully participate in itself.

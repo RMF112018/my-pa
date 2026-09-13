@@ -558,5 +558,9 @@ grants, activation, and rollback are
 [`managed-knowledge-context.md`](managed-knowledge-context.md). Production is
 not activated. Live Abacus OAuth remains operator-gated.
 
+`continuity.projects` / `.read` / `.create` / `.update` / `.close` nested
+payload, versioning, lifecycle, Task association, and error vocabulary are
+[`mcp-project-management.md`](mcp-project-management.md).
+
 New implementation must use the neutral `my_pa` / `MY_PA_` namespace. Legacy
 identities may appear only in explicit compatibility or evidence records.

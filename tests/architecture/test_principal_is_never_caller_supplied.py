@@ -550,7 +550,17 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # the request rather than the authorization a second time is what keeps the
     # routing and semantic proposal reads and the decision that follows them
     # provably the same Principal.
-    "application/service.py": (("request", "principal_id"),) * 3,
+    #
+    # `_continuity_project_payload` reads `project.principal_id` off a Continuity
+    # Project already loaded under the authorized partition, then looks up the
+    # bound-entity participation projection. The value is the stored row's
+    # owner, not a request-body field.
+    "application/service.py": (
+        ("project", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+    ),
     # `WP-RI-B-05`'s Review SQL for the entity plane. Neither read is a caller's
     # statement: `decision.principal_id` is checked *against* the acting
     # Principal and the write is refused on a mismatch -- the same shape

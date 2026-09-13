@@ -310,6 +310,68 @@ describe("TodayTaskCard", () => {
     expect(rescheduleTrigger().getAttribute("aria-label")).toBe(`Reschedule ${TITLE}`);
   });
 
+  /*
+    TUX07-AC-018. Confirming Close makes the Task terminal, and this card's
+    terminal affordance then withholds itself — so the control the user was
+    holding and its `role="group"` both leave. The card is not a link and has no
+    anchor for the shared engine's chain to land on, so before this the user was
+    dropped on `document.body`, at the top of the document. The card declares its
+    root focusable by script and the engine places them there.
+  */
+  it("returns focus to the card itself when Close removes the control the user was on", async () => {
+    const restore = emulateDisableBlur();
+    try {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      stubFetch({
+        transition: async (body) => {
+          await held;
+          return ok({ task: { ...CANONICAL, version: 8, lifecycle_state: body.toState } });
+        },
+      });
+      renderCard();
+
+      const trigger = screen.getByTestId("task-close-trigger");
+      trigger.focus();
+      await userEvent.click(trigger);
+      const confirm = screen.getByTestId("task-close-confirm");
+      confirm.focus();
+      expect(document.activeElement).toBe(confirm);
+      await userEvent.click(confirm);
+
+      // The browser lets go of the control the moment the write disables it.
+      await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(true));
+      expect(document.activeElement).toBe(document.body);
+      release();
+
+      // The Task is terminal: the whole Close affordance has withdrawn.
+      await waitFor(() => expect(screen.queryByTestId("task-close-trigger")).toBeNull());
+      await waitFor(() => expect(document.activeElement).toBe(card()));
+      expect(document.activeElement).not.toBe(document.body);
+    } finally {
+      restore();
+    }
+  });
+
+  /*
+    Focusable by script, and nothing more. A `0` here would put every Pulse card
+    in the tab order ahead of its own controls, making the list longer to walk
+    for every keyboard user in order to serve one moment after a write.
+  */
+  it("keeps the focusable card root out of the tab order, and names it", async () => {
+    stubFetch();
+    renderCard();
+
+    expect(card().getAttribute("tabindex")).toBe("-1");
+    const labelledBy = card().getAttribute("aria-labelledby");
+    expect(labelledBy).toBeTruthy();
+    expect(document.getElementById(String(labelledBy))).toBe(
+      screen.getByTestId("today-task-card-title"),
+    );
+  });
+
   it("offers a way out of a version conflict rather than locking forever", async () => {
     const restore = emulateDisableBlur();
     try {

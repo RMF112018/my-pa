@@ -39,6 +39,8 @@
  * publishes nothing of its own.
  */
 
+import { useId } from "react";
+
 import {
   stopPropagation,
   TaskConflictPanel,
@@ -91,6 +93,8 @@ export function TodayTaskCard({
     onMutationConfirmed,
   });
   const { ops, rowRef, busy } = operations;
+  /** Names the card for a screen reader when focus lands on the root. */
+  const titleId = useId();
 
   /*
     Once a write has confirmed, the canonical Task is held and its title is the
@@ -105,10 +109,27 @@ export function TodayTaskCard({
       ref={rowRef}
       data-testid="today-task-card"
       aria-busy={busy || undefined}
+      aria-labelledby={titleId}
+      /*
+        Focusable by script, never a tab stop.
+
+        This card's own affordances withdraw when the Task becomes terminal:
+        confirm Close and both the control the user is holding and its
+        `role="group"` unmount together. The shared focus engine then walks its
+        fallback chain, and a card that is not a link has no anchor for the chain
+        to land on — so without this the keyboard user who just closed a Task is
+        dropped on `document.body`. `-1` lets the engine place them on the card
+        they acted on (announced as the Task, via `aria-labelledby`) with the
+        card's surviving controls ahead of them, while adding nothing to the tab
+        order for everyone else. There is no second focus path here: the engine
+        in `useTaskRowOperations` is the only one, and this is the target it was
+        missing.
+      */
+      tabIndex={-1}
       className="flex min-w-0 flex-col gap-2 rounded-[var(--radius-md)] border border-border-subtle bg-surface p-3"
     >
       {/* Reading order: what it is, why now, what to do, and only then why it matters. */}
-      <h3 data-testid="today-task-card-title" className="min-w-0 break-words font-medium text-text-primary">
+      <h3 id={titleId} data-testid="today-task-card-title" className="min-w-0 break-words font-medium text-text-primary">
         {displayTitle}
       </h3>
 

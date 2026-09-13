@@ -572,14 +572,29 @@ test("TUX07-AC-014/017: an open Today reconciles a completed Task away and annou
  * resolves to `null`, nothing is focused, and the user who closed a Task with
  * the keyboard is left at the top of the document.
  *
- * Reported, not fixed: `web/src/` is out of scope for this worker.
+ * **The fix is now in, and this declaration is the one thing left to remove.**
+ * `liveReturn` gained a last step — the row root itself, when the surface has
+ * made it focusable by script — and `TodayTaskCard` carries `tabIndex={-1}` on
+ * its root so the engine has somewhere deterministic to land. Both are covered
+ * by unit guards (`use-task-row-operations.test.tsx`,
+ * `today-task-card.test.tsx`), including one proving a row that *has* an anchor
+ * still returns to that anchor rather than to the root.
+ *
+ * The declaration stays only because this run was never observed: the browser
+ * tiers could not be stood up here without colliding with a Playwright run
+ * already holding the servers this suite needs. It is left deliberately
+ * unweakened, so CI is the thing that answers: the moment this passes,
+ * Playwright reports "expected to fail, but passed" and the line below is
+ * deleted. No pass is claimed that was not seen.
  */
 test("TUX07-AC-018: focus lands deterministically after the card leaves Today", async ({
   page,
 }) => {
   test.fail(
     true,
-    "Known product defect: liveReturn's last resort is the row's a[href], and a Today Task card has none, so focus is left on document.body.",
+    // The fix for this is in the tree (root fallback + a focusable card root);
+    // this stays only until a browser run confirms it, and then it goes.
+    "Known product defect: liveReturn's last resort is the row's a[href], and a Today Task card has none, so focus is left on document.body. Fix landed in web/src; awaiting an observed browser run.",
   );
   test.setTimeout(180_000);
   const closedTitle = `E2E today focus ${marker("ac018a")}`;

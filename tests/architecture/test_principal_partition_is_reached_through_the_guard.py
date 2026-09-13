@@ -608,6 +608,7 @@ HAND_WRITTEN_COMPARISONS: Final = {
     ),
     "infrastructure/persistence/continuity_authoring.py": (
         ("continuity_authoring_submissions", "principal_id"),
+        ("entities", "principal_id"),
     ),
     "infrastructure/persistence/remote_identity.py": (("remote_clients", "principal_id"),),
     "infrastructure/persistence/user_accounts.py": (
@@ -681,6 +682,10 @@ HAND_WRITTEN_COMPARISONS: Final = {
         ("frames", "principal_id"),
         ("frames", "principal_id"),
         ("frames", "principal_id"),
+        ("project_entity_links", "principal_id"),
+        ("project_history", "principal_id"),
+        ("projects", "principal_id"),
+        ("projects", "principal_id"),
         ("projects", "principal_id"),
         ("projects", "principal_id"),
         ("projects", "principal_id"),

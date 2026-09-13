@@ -18,7 +18,14 @@ import pytest
 from alembic.config import Config
 from sqlalchemy import Engine, text
 
-from my_pa.application.commands import Command, CreateProject, GetPulse, ListProjects, RecordTask
+from my_pa.application.commands import (
+    Command,
+    CreateProject,
+    GetPulse,
+    ListProjects,
+    ReadProject,
+    RecordTask,
+)
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.ports import AuthoringConflictError, UnitOfWork
 from my_pa.contracts.v1.capabilities import EffectiveLimits
@@ -31,6 +38,8 @@ from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.continuity_authoring import SqlContinuityAuthoringRepository
+from my_pa.infrastructure.persistence.situation_repository import SqlProjectRepository
+from my_pa.infrastructure.persistence.tables import projects
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
 pytestmark = pytest.mark.database
@@ -148,7 +157,40 @@ def test_a_replayed_key_does_not_insert_a_second_project(
         count = connection.execute(
             text(f"SELECT count(*) FROM {SCHEMA}.projects")  # noqa: S608
         ).scalar_one()
+        entities = connection.execute(
+            text(
+                f"SELECT count(*) FROM {SCHEMA}.entities "  # noqa: S608
+                "WHERE entity_type = 'project'"
+            )
+        ).scalar_one()
+        links = connection.execute(
+            text(f"SELECT count(*) FROM {SCHEMA}.project_entity_links")  # noqa: S608
+        ).scalar_one()
+        version = connection.execute(
+            text(
+                f"SELECT version FROM {SCHEMA}.projects "  # noqa: S608
+                "WHERE project_id = :project_id"
+            ),
+            {"project_id": first.result["project_id"]},
+        ).scalar_one()
+        link = (
+            connection.execute(
+                text(
+                    f"SELECT linkage_state, project_entity_id "  # noqa: S608
+                    f"FROM {SCHEMA}.project_entity_links "
+                    "WHERE project_id = :project_id"
+                ),
+                {"project_id": first.result["project_id"]},
+            )
+            .mappings()
+            .one()
+        )
     assert int(count) == 1
+    assert int(entities) == 1
+    assert int(links) == 1
+    assert int(version) == 1
+    assert link["linkage_state"] == "bound"
+    assert link["project_entity_id"] is not None
 
 
 def test_concurrent_same_key_creates_one_project(migrated_engine: Engine) -> None:
@@ -239,3 +281,113 @@ def test_a_reused_key_with_different_content_is_a_conflict_and_inserts_nothing(
             )
             == 1
         )
+
+
+def test_principal_b_cannot_see_principal_a_bridge(migrated_engine: Engine) -> None:
+    principal_b = "prn_bbbb0002bbbb0002bbbb0002"
+    object_id = issue_identifier(IdKind.PROJECT)
+    with migrated_engine.connect() as connection, connection.begin():
+        repository = SqlContinuityAuthoringRepository(connection)
+        assert repository.reserve(
+            principal_id=PRINCIPAL_A,
+            idempotency_key="author-db-bridge-0001",
+            capability=Capability.CONTINUITY_PROJECTS_CREATE.value,
+            payload_digest="bridge-digest",
+            object_id=object_id,
+        )
+        repository.author_project(
+            principal_id=PRINCIPAL_A,
+            project_id=object_id,
+            name="Owner bridge",
+            description=None,
+        )
+        projects = SqlProjectRepository(connection)
+        assert projects.get_project_entity_link(PRINCIPAL_A, object_id) is not None
+        assert projects.get_project_entity_link(principal_b, object_id) is None
+
+
+def test_duplicate_active_project_canonical_name_fails_create(migrated_engine: Engine) -> None:
+    first_id = issue_identifier(IdKind.PROJECT)
+    second_id = issue_identifier(IdKind.PROJECT)
+    with migrated_engine.connect() as connection, connection.begin():
+        repository = SqlContinuityAuthoringRepository(connection)
+        assert repository.reserve(
+            principal_id=PRINCIPAL_A,
+            idempotency_key="author-db-dup-0001",
+            capability=Capability.CONTINUITY_PROJECTS_CREATE.value,
+            payload_digest="dup-digest-1",
+            object_id=first_id,
+        )
+        repository.author_project(
+            principal_id=PRINCIPAL_A,
+            project_id=first_id,
+            name="Duplicate Name",
+            description=None,
+        )
+        assert repository.reserve(
+            principal_id=PRINCIPAL_A,
+            idempotency_key="author-db-dup-0002",
+            capability=Capability.CONTINUITY_PROJECTS_CREATE.value,
+            payload_digest="dup-digest-2",
+            object_id=second_id,
+        )
+        with pytest.raises(ValueError, match="canonical name is already held"):
+            repository.author_project(
+                principal_id=PRINCIPAL_A,
+                project_id=second_id,
+                name="Duplicate Name",
+                description=None,
+            )
+
+
+def test_sql_read_collapses_missing_and_cross_principal(runtime: _Runtime) -> None:
+    created = runtime.invoke(
+        CreateProject(name="Owner visible", idempotency_key="author-db-read-0001")
+    )
+    assert created.error is None and created.result is not None
+    owned = runtime.invoke(ReadProject(project_id=created.result["project_id"]))
+    assert owned.error is None and owned.result is not None
+    assert owned.result["project_id"] == created.result["project_id"]
+    assert owned.result["version"] == 1
+    assert "project_entity_id" not in owned.result
+    missing = runtime.invoke(ReadProject(project_id=issue_identifier(IdKind.PROJECT)))
+    foreign = runtime.invoke(
+        ReadProject(project_id=created.result["project_id"]),
+        principal_id="prn_bbbb0002bbbb0002bbbb0002",
+    )
+    assert missing.error is not None and foreign.error is not None
+    assert missing.error.code == foreign.error.code
+    assert missing.error.code.value == "not_found"
+
+
+def test_sql_list_keyset_does_not_skip_or_duplicate_on_tied_created_at(
+    migrated_engine: Engine,
+) -> None:
+    when = datetime(2026, 9, 13, 12, tzinfo=UTC)
+    ids = sorted(issue_identifier(IdKind.PROJECT) for _ in range(3))
+    with migrated_engine.connect() as connection, connection.begin():
+        for index, project_id in enumerate(ids):
+            connection.execute(
+                projects.insert().values(
+                    project_id=project_id,
+                    principal_id=PRINCIPAL_A,
+                    name=f"Keyset {index}",
+                    description=None,
+                    state="active",
+                    participants=[],
+                    opened_at=when,
+                    closed_at=None,
+                    created_at=when,
+                    updated_at=when,
+                    version=1,
+                )
+            )
+        repository = SqlProjectRepository(connection)
+        first = repository.list_projects(PRINCIPAL_A, limit=2)
+        assert [row.project_id for row in first] == [ids[2], ids[1]]
+        rest = repository.list_projects(PRINCIPAL_A, after=ids[1], limit=2)
+        assert [row.project_id for row in rest] == [ids[0]]
+        escaped = repository.list_projects(PRINCIPAL_A, query="Keyset %", limit=10)
+        assert escaped == ()
+        named = repository.list_projects(PRINCIPAL_A, exact_name="Keyset 1", limit=10)
+        assert [row.project_id for row in named] == [ids[1]]

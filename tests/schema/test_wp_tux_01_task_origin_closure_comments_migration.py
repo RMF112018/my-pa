@@ -124,7 +124,6 @@ def _seed_legacy_task(connection: Connection, *, task_id: str, closed: bool = Fa
 def test_the_revision_is_in_the_chain() -> None:
     script = ScriptDirectory.from_config(_config())
     assert len(list(script.get_heads())) == 1
-    assert script.get_heads() == [REVISION]
     assert script.get_revision(REVISION).down_revision == PREVIOUS_REVISION
     assert FUNCTION  # rename must touch this module
 

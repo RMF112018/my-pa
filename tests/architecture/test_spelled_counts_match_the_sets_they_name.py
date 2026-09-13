@@ -457,12 +457,15 @@ _ORDINAL_UNITS = (
     "hundred-sixtieth",
     "hundred-sixty-first",
     "hundred-sixty-second",
-    # The one-sixties continue: WP-TUX-01's two comment capabilities took the
-    # public set to one hundred and sixty-three, so `a hundred-sixty-fourth
+    # The one-sixties continue: WP-MCP-PROJ-02's Project read took the
+    # public set to one hundred and sixty-six, so `a hundred-sixty-seventh
     # capability` became the ordinal a correct claim would use. Same density
     # rule as every earlier decade boundary.
     "hundred-sixty-third",
     "hundred-sixty-fourth",
+    "hundred-sixty-fifth",
+    "hundred-sixty-sixth",
+    "hundred-sixty-seventh",
 )
 
 

@@ -1696,7 +1696,8 @@ class SqlEntityRepository(EntitiesRepository):
         source wrote is not a taxonomy code, and inventing one here would put
         a structured claim into the record that nobody made.
         """
-        self._insert_project_participation(principal_id, participation)
+        with _duplicate_translated(_PARTICIPATION_UNIQUE):
+            self._insert_project_participation(principal_id, participation)
 
     def _insert_project_participation(
         self, principal_id: str, participation: EntityProjectParticipation
@@ -5838,15 +5839,16 @@ _DIRECTIONS: dict[str, Any] = {
 }
 
 
-#: The three unique constraints the directed write path may collide with, and
-#: what each collision *means*. Named rather than matched loosely, because
-#: `IntegrityError` is one exception class over every constraint on the table:
-#: catching it without reading `constraint_name` would report a duplicate
-#: assignment for a violated foreign key, which is a wrong answer rather than a
-#: missing one.
+#: The unique constraints the directed write path and the participation create
+#: path may collide with, and what each collision *means*. Named rather than
+#: matched loosely, because `IntegrityError` is one exception class over every
+#: constraint on the table: catching it without reading `constraint_name` would
+#: report a duplicate assignment for a violated foreign key, which is a wrong
+#: answer rather than a missing one.
 _ASSIGNMENT_UNIQUE: Final = "an_active_assignment_is_recorded_once"
 _RELATIONSHIP_UNIQUE: Final = "an_active_entity_relationship_is_recorded_once"
 _MUTATION_KEY_UNIQUE: Final = "one_entity_mutation_per_key_and_capability"
+_PARTICIPATION_UNIQUE: Final = "an_active_project_participation_is_unique_per_project_and_role"
 
 #: Which capability name one ledger row records, by the operation that wrote it.
 #: The ledger's `capability` column is what the idempotency unique is keyed on

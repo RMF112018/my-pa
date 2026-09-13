@@ -284,8 +284,10 @@ from my_pa.domain.situation.continuity import (
     LifecycleTransition,
     TaskState,
 )
+from my_pa.domain.situation.project_history import ProjectMutationAction
 from my_pa.domain.situation.situation import (
     FrameState,
+    ProjectEntityLinkageState,
     ProjectState,
     PulseItemType,
     PulseReasonCode,
@@ -2809,6 +2811,7 @@ projects = Table(
     Column("closed_at", DateTime(timezone=True)),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("version", Integer, nullable=False, server_default=text("1")),
     _is_identifier("project_id", IdKind.PROJECT),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     CheckConstraint("length(trim(name)) > 0", name="a_project_name_is_not_blank"),
@@ -2817,8 +2820,78 @@ projects = Table(
         "(state = 'closed') = (closed_at IS NOT NULL)",
         name="a_closed_project_records_when_it_closed",
     ),
+    CheckConstraint("version >= 1", name="a_project_version_is_positive"),
+    UniqueConstraint(
+        "project_id",
+        "principal_id",
+        name="a_project_is_identified_within_its_principal",
+    ),
     Index("projects_by_principal", "principal_id"),
     Index("projects_by_principal_state", "principal_id", "state"),
+    Index(
+        "projects_by_principal_created_at_id_desc",
+        "principal_id",
+        text("created_at DESC"),
+        text("project_id DESC"),
+    ),
+)
+
+#: `project_history`: one append-only mutation receipt per Continuity Project
+#: write (WP-MCP-PROJ-03), the identical shape `commitment_history` establishes
+#: for the Commitment plane. See `domain.situation.project_history` for the
+#: field-by-field rationale.
+project_history = Table(
+    "project_history",
+    METADATA,
+    Column("history_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("action", Text, nullable=False),
+    Column("actor", Text, nullable=False),
+    Column("outcome", Text, nullable=False),
+    Column("before_version", Integer, nullable=False),
+    Column("after_version", Integer, nullable=False),
+    Column("idempotency_key", Text),
+    Column("request_digest", Text),
+    Column("occurred_at", DateTime(timezone=True), nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("history_id", IdKind.PROJECT_HISTORY),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _one_of("action", ProjectMutationAction, name="a_project_history_action_is_known"),
+    _one_of("actor", TaskMutationActor, name="a_project_history_actor_is_known"),
+    _one_of("outcome", TaskMutationOutcome, name="a_project_history_outcome_is_known"),
+    CheckConstraint("before_version >= 0", name="a_project_history_before_version_is_non_negative"),
+    CheckConstraint(
+        "(outcome = 'applied') = (after_version > before_version)",
+        name="an_applied_project_mutation_advances_its_version",
+    ),
+    CheckConstraint(
+        "outcome = 'applied' OR after_version = before_version",
+        name="an_unapplied_project_mutation_records_no_version_change",
+    ),
+    CheckConstraint(
+        "idempotency_key IS NULL OR idempotency_key ~ '^[A-Za-z0-9_-]{8,128}$'",
+        name="a_project_history_idempotency_key_is_bounded",
+    ),
+    CheckConstraint(
+        "request_digest IS NULL OR request_digest ~ '^[0-9a-f]{64}$'",
+        name="a_project_history_request_digest_is_sha256",
+    ),
+    ForeignKeyConstraint(
+        ["project_id", "principal_id"],
+        [f"{SCHEMA}.projects.project_id", f"{SCHEMA}.projects.principal_id"],
+        name="a_project_history_names_a_project_in_its_principal",
+    ),
+    Index("project_history_by_principal", "principal_id"),
+    Index("project_history_by_principal_project", "principal_id", "project_id"),
+    Index(
+        "project_history_idempotency_key_is_unique_per_principal",
+        "principal_id",
+        "idempotency_key",
+        unique=True,
+        postgresql_where=text("idempotency_key IS NOT NULL"),
+    ),
 )
 
 #: `project_situations`: the link table binding a Project to the Situations it
@@ -2966,6 +3039,58 @@ entities = Table(
     Index("entities_by_principal", "principal_id"),
     Index("entities_by_entity_type", "entity_type"),
     Index("entities_by_status", "status"),
+)
+
+#: Continuity Project ↔ project-type Entity bridge. Primary key is the
+#: Continuity Project itself; there is no new identifier kind. A bound row
+#: names exactly one Entity in the same Principal; an unresolved backfill row
+#: names none. Forward create mints a bound Entity in the same transaction as
+#: `author_project`. Existing Projects receive `unresolved_missing` rows with
+#: no name matching.
+project_entity_links = Table(
+    "project_entity_links",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("project_entity_id", Text),
+    Column("linkage_state", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("principal_id", "project_id"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    CheckConstraint(
+        "project_entity_id IS NULL OR project_entity_id ~ "
+        f"'^{IdKind.ENTITY.value}_{_IDENTIFIER_SUFFIX}$'",
+        name="a_project_entity_id_is_an_entity_identifier_when_present",
+    ),
+    _one_of(
+        "linkage_state",
+        ProjectEntityLinkageState,
+        name="a_project_entity_link_state_is_known",
+    ),
+    CheckConstraint(
+        "(linkage_state = 'bound') = (project_entity_id IS NOT NULL)",
+        name="a_bound_project_entity_link_names_its_entity",
+    ),
+    ForeignKeyConstraint(
+        ["project_id", "principal_id"],
+        [f"{SCHEMA}.projects.project_id", f"{SCHEMA}.projects.principal_id"],
+        name="a_project_entity_link_names_a_project_in_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["project_entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        name="a_project_entity_link_names_an_entity_in_its_principal",
+    ),
+    Index("project_entity_links_by_principal", "principal_id"),
+    Index(
+        "a_project_entity_is_linked_once_per_principal",
+        "principal_id",
+        "project_entity_id",
+        unique=True,
+        postgresql_where=text("project_entity_id IS NOT NULL"),
+    ),
 )
 
 #: WP-RI-01: an entity's identity in an external namespace.  Uniqueness is

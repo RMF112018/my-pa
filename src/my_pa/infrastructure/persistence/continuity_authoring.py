@@ -19,7 +19,10 @@ from my_pa.contracts.ports import (
     AuthoringReceipt,
     ContinuityAuthoringRepository,
 )
+from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import utc_now
+from my_pa.domain.relationship.entity import EntityStatus, EntityType
+from my_pa.domain.relationship.normalization import normalize_name
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
     ContinuityAcceptanceKind,
@@ -29,11 +32,20 @@ from my_pa.domain.situation.continuity import (
     Task,
     TaskState,
 )
-from my_pa.domain.situation.situation import Project, ProjectState, Situation, SituationState
+from my_pa.domain.situation.situation import (
+    Project,
+    ProjectEntityLinkageState,
+    ProjectState,
+    Situation,
+    SituationState,
+)
+from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.lifecycle import TaskOriginKind
 from my_pa.infrastructure.persistence.situation_repository import _append_lifecycle_event
 from my_pa.infrastructure.persistence.tables import (
     continuity_authoring_submissions,
+    entities,
+    project_entity_links,
     projects,
     situations,
     tasks,
@@ -113,7 +125,14 @@ class SqlContinuityAuthoringRepository(ContinuityAuthoringRepository):
                 closed_at=None,
                 created_at=now,
                 updated_at=now,
+                version=1,
             )
+        )
+        self._mint_bound_project_entity(
+            principal_id=principal_id,
+            project_id=project_id,
+            name=name,
+            now=now,
         )
         return Project(
             project_id=project_id,
@@ -124,6 +143,58 @@ class SqlContinuityAuthoringRepository(ContinuityAuthoringRepository):
             created_at=now,
             updated_at=now,
             description=description,
+            version=1,
+        )
+
+    def _mint_bound_project_entity(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        name: str,
+        now: datetime,
+    ) -> None:
+        """Mint a new project-type Entity and bind it. Never match by name."""
+        canonical_name = normalize_name(name)
+        claimed = self._connection.execute(
+            select(entities.c.entity_id).where(
+                entities.c.principal_id == principal_id,
+                entities.c.entity_type == EntityType.PROJECT.value,
+                entities.c.canonical_name == canonical_name,
+                entities.c.status.in_(
+                    (
+                        EntityStatus.ACTIVE.value,
+                        EntityStatus.INACTIVE.value,
+                        EntityStatus.HISTORICAL.value,
+                    )
+                ),
+            )
+        ).first()
+        if claimed is not None:
+            raise ValueError("an active project-type canonical name is already held")
+        entity_id = issue_identifier(IdKind.ENTITY)
+        self._connection.execute(
+            entities.insert().values(
+                entity_id=entity_id,
+                principal_id=principal_id,
+                entity_type=EntityType.PROJECT.value,
+                canonical_name=canonical_name,
+                display_name=name,
+                status=EntityStatus.ACTIVE.value,
+                version=1,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        self._connection.execute(
+            project_entity_links.insert().values(
+                principal_id=principal_id,
+                project_id=project_id,
+                project_entity_id=entity_id,
+                linkage_state=ProjectEntityLinkageState.BOUND.value,
+                created_at=now,
+                updated_at=now,
+            )
         )
 
     def author_situation(

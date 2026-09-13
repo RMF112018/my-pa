@@ -11,7 +11,7 @@ The five, over both:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — proved from both ends: the tool list and the option
-  surface route one hundred and sixty-three capability names and none of them mutates a
+  surface route one hundred and sixty-six capability names and none of them mutates a
   source, and every capability driven over both transports is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -311,7 +311,10 @@ SCOPED_CAPABILITIES = [
         Capability.CONTINUITY_PULSE,
         Capability.CONTINUITY_SITUATIONS,
         Capability.CONTINUITY_PROJECTS,
+        Capability.CONTINUITY_PROJECTS_READ,
         Capability.CONTINUITY_PROJECTS_CREATE,
+        Capability.CONTINUITY_PROJECTS_UPDATE,
+        Capability.CONTINUITY_PROJECTS_CLOSE,
         Capability.CONTINUITY_SITUATIONS_CREATE,
         Capability.CONTINUITY_TASKS_CREATE,
         Capability.KNOWLEDGE_COVERAGE,
@@ -699,6 +702,7 @@ MANAGED_DOCUMENT_EXEMPTION = frozenset({Capability.DOCUMENTS_CREATE})
 CONTINUITY_AUTHORING_EXEMPTION = frozenset(
     {
         Capability.CONTINUITY_PROJECTS_CREATE,
+        Capability.CONTINUITY_PROJECTS_UPDATE,
         Capability.CONTINUITY_SITUATIONS_CREATE,
         Capability.CONTINUITY_TASKS_CREATE,
     }

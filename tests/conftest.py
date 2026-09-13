@@ -333,6 +333,7 @@ from my_pa.domain.relationship.memory import (
 from my_pa.domain.relationship.normalization import (
     is_normalized_identifier,
     is_normalized_name,
+    normalize_name,
 )
 from my_pa.domain.search.query import RankCategory, SearchMatch, SearchRequest
 from my_pa.domain.situation.continuity import (
@@ -347,9 +348,17 @@ from my_pa.domain.situation.continuity import (
 )
 from my_pa.domain.situation.continuity import Decision as ContinuityDecision
 from my_pa.domain.situation.continuity import Task as ContinuityTask
+from my_pa.domain.situation.project_history import (
+    ProjectHistoryEntry,
+    ProjectMutationReceipt,
+    execute_close_project,
+    execute_update_project,
+)
 from my_pa.domain.situation.pulse_derivation import FramedObligation, derive_pulse
 from my_pa.domain.situation.situation import (
     Project,
+    ProjectEntityLink,
+    ProjectEntityLinkageState,
     ProjectState,
     PulseItem,
     Situation,
@@ -584,7 +593,9 @@ class World:
     #: pass here against a derivation the store would not reproduce.
     situations: list[Situation] = field(default_factory=list)
     projects: list[Project] = field(default_factory=list)
+    project_history: list[ProjectHistoryEntry] = field(default_factory=list)
     project_situations: list[tuple[str, str, str, str]] = field(default_factory=list)
+    project_entity_links: list[ProjectEntityLink] = field(default_factory=list)
     commitments: list[Commitment] = field(default_factory=list)
     continuity_tasks: list[ContinuityTask] = field(default_factory=list)
     continuity_decisions: list[ContinuityDecision] = field(default_factory=list)
@@ -2309,6 +2320,7 @@ class _TasksRead(TaskManagementRepository):
         work_start: datetime | None = None,
         work_end: datetime | None = None,
         work_now: datetime | None = None,
+        project_id: str | None = None,
         limit: int,
     ) -> tuple[TaskV2, ...]:
         owned = [task for task in self._world.tasks_v2 if task.principal_id == principal_id]
@@ -2316,6 +2328,8 @@ class _TasksRead(TaskManagementRepository):
             owned = [task for task in owned if task.lifecycle_state is lifecycle_state]
         if priority is not None:
             owned = [task for task in owned if task.priority is priority]
+        if project_id is not None:
+            owned = [task for task in owned if task.project_id == project_id]
         if archive_mode is TaskArchiveMode.EXCLUDE:
             owned = [task for task in owned if task.archived_at is None]
         else:
@@ -2863,6 +2877,7 @@ class _TasksWrite(TaskManagementRepository):
         work_start: datetime | None = None,
         work_end: datetime | None = None,
         work_now: datetime | None = None,
+        project_id: str | None = None,
         limit: int,
     ) -> tuple[TaskV2, ...]:
         raise NotImplementedError("the write plane's fake does not serve list reads")
@@ -3652,6 +3667,7 @@ class _Projects(ProjectRepository):
             updated_at=now,
             description=description,
             participants=tuple(participants),
+            version=1,
         )
         self._world.projects.append(project)
         return project
@@ -3666,13 +3682,49 @@ class _Projects(ProjectRepository):
             None,
         )
 
+    def get_project_entity_link(
+        self, principal_id: str, project_id: str
+    ) -> ProjectEntityLink | None:
+        return next(
+            (
+                row
+                for row in self._world.project_entity_links
+                if row.project_id == project_id and row.principal_id == principal_id
+            ),
+            None,
+        )
+
     def list_projects(
-        self, principal_id: str, state_filter: ProjectState | None = None
+        self,
+        principal_id: str,
+        *,
+        after: str | None = None,
+        state: ProjectState | None = None,
+        query: str | None = None,
+        exact_name: str | None = None,
+        limit: int | None = None,
     ) -> tuple[Project, ...]:
         rows = [row for row in self._world.projects if row.principal_id == principal_id]
-        if state_filter is not None:
-            rows = [row for row in rows if row.state is state_filter]
-        rows.sort(key=lambda row: row.created_at, reverse=True)
+        if state is not None:
+            rows = [row for row in rows if row.state is state]
+        if query is not None:
+            needle = query.casefold()
+            rows = [row for row in rows if needle in row.name.casefold()]
+        if exact_name is not None:
+            target = exact_name.strip()
+            rows = [row for row in rows if row.name.strip() == target]
+        rows.sort(key=lambda row: (row.created_at, row.project_id), reverse=True)
+        if after is not None:
+            if not any(row.project_id == after for row in rows):
+                raise WorkCursorError
+            rows = rows[
+                next(
+                    (index + 1 for index, row in enumerate(rows) if row.project_id == after),
+                    len(rows),
+                ) :
+            ]
+        if limit is not None:
+            rows = rows[:limit]
         return tuple(rows)
 
     def link_situation(
@@ -3693,6 +3745,75 @@ class _Projects(ProjectRepository):
         link = (principal_id, project_id, situation_id, evidence_ref)
         if link not in self._world.project_situations:
             self._world.project_situations.append(link)
+
+    def lock_project(self, principal_id: str, project_id: str) -> Project | None:
+        return self.get_project(principal_id, project_id)
+
+    def persist_project(self, project: Project) -> None:
+        self._world.projects = [
+            project if row.project_id == project.project_id else row for row in self._world.projects
+        ]
+
+    def persist_history(self, entry: ProjectHistoryEntry) -> None:
+        self._world.project_history.append(entry)
+
+    def history_for_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> ProjectHistoryEntry | None:
+        return next(
+            (
+                entry
+                for entry in self._world.project_history
+                if entry.principal_id == principal_id and entry.idempotency_key == idempotency_key
+            ),
+            None,
+        )
+
+    def update_project(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        expected_version: int,
+        idempotency_key: str,
+        request_digest: str,
+        name: str | None,
+        description: str | None,
+        state: ProjectState | None,
+        now: datetime,
+    ) -> ProjectMutationReceipt | None:
+        return execute_update_project(
+            self,
+            principal_id=principal_id,
+            project_id=project_id,
+            expected_version=expected_version,
+            idempotency_key=idempotency_key,
+            request_digest=request_digest,
+            name=name,
+            description=description,
+            state=state,
+            now=now,
+        )
+
+    def close_project(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        expected_version: int,
+        idempotency_key: str,
+        request_digest: str,
+        now: datetime,
+    ) -> ProjectMutationReceipt | None:
+        return execute_close_project(
+            self,
+            principal_id=principal_id,
+            project_id=project_id,
+            expected_version=expected_version,
+            idempotency_key=idempotency_key,
+            request_digest=request_digest,
+            now=now,
+        )
 
 
 class _ContinuityAuthoring(ContinuityAuthoringRepository):
@@ -3743,9 +3864,63 @@ class _ContinuityAuthoring(ContinuityAuthoringRepository):
             created_at=now,
             updated_at=now,
             description=description,
+            version=1,
         )
         self._world.projects.append(project)
+        try:
+            self._mint_bound_project_entity(
+                principal_id=principal_id,
+                project_id=project_id,
+                name=name,
+                now=now,
+            )
+        except ValueError:
+            self._world.projects.remove(project)
+            raise
         return project
+
+    def _mint_bound_project_entity(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        name: str,
+        now: datetime,
+    ) -> None:
+        canonical_name = normalize_name(name)
+        claimed = [
+            entity
+            for entity in self._world.entities
+            if entity.principal_id == principal_id
+            and entity.entity_type is EntityType.PROJECT
+            and entity.canonical_name == canonical_name
+            and entity.status
+            in (EntityStatus.ACTIVE, EntityStatus.INACTIVE, EntityStatus.HISTORICAL)
+        ]
+        if claimed:
+            raise ValueError("an active project-type canonical name is already held")
+        entity = Entity(
+            entity_id=issue_identifier(IdKind.ENTITY),
+            principal_id=principal_id,
+            entity_type=EntityType.PROJECT,
+            canonical_name=canonical_name,
+            display_name=name,
+            status=EntityStatus.ACTIVE,
+            created_at=now,
+            updated_at=now,
+            version=1,
+        )
+        self._world.entities.append(entity)
+        self._world.project_entity_links.append(
+            ProjectEntityLink(
+                principal_id=principal_id,
+                project_id=project_id,
+                linkage_state=ProjectEntityLinkageState.BOUND,
+                created_at=now,
+                updated_at=now,
+                project_entity_id=entity.entity_id,
+            )
+        )
 
     def author_situation(
         self,
@@ -4519,6 +4694,20 @@ class _Entities(EntitiesRepository):
     def record_project_participation(
         self, principal_id: str, participation: EntityProjectParticipation
     ) -> None:
+        # Mirror `an_active_project_participation_is_unique_per_project_and_role`
+        # on create only. PostgreSQL treats NULL `role_code` as distinct, so a
+        # missing code never collides; this double keeps that hole rather than
+        # inventing a uniqueness the index does not have.
+        if participation.role_code is not None:
+            for held in self._world.entity_project_participations:
+                if (
+                    held.principal_id == principal_id
+                    and held.state is EntityProjectParticipationState.ACTIVE
+                    and held.project_entity_id == participation.project_entity_id
+                    and held.participant_entity_id == participation.participant_entity_id
+                    and held.role_code == participation.role_code
+                ):
+                    raise DuplicateDirectedFactError("an identical active record is recorded")
         self._insert_project_participation(principal_id, participation)
 
     def supersede_project_participation(
@@ -8873,6 +9062,38 @@ def staged_review_case(scene: Scene, capture: CaptureVersion | None = None) -> R
     )
     scene.world.review_cases.append(case)
     return case
+
+
+def staged_continuity_project(scene: Scene, *, name: str = "a synthetic project") -> Project:
+    """One stored Continuity Project so `continuity.projects.read` can answer.
+
+    Reused by `(principal_id, name)`, not by Principal alone: an HTTP/MCP
+    negative sweep drives update and close in one pass over one scene, and a
+    second call that returned the read's row would close a Project whose
+    version the update had already moved.
+    """
+    existing = next(
+        (
+            row
+            for row in scene.world.projects
+            if row.principal_id == scene.principal.principal_id and row.name == name
+        ),
+        None,
+    )
+    if existing is not None:
+        return existing
+    project = Project(
+        project_id=issue_identifier(IdKind.PROJECT),
+        principal_id=scene.principal.principal_id,
+        name=name,
+        state=ProjectState.ACTIVE,
+        opened_at=WHEN,
+        created_at=WHEN,
+        updated_at=WHEN,
+        version=1,
+    )
+    scene.world.projects.append(project)
+    return project
 
 
 def staged_task(scene: Scene, *, title: str = "a synthetic task") -> TaskV2:

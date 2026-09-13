@@ -105,7 +105,7 @@
     },
     "continuity.projects": {
       "purpose": "capture_review",
-      "payloadFields": ["page_size"],
+      "payloadFields": ["page_size", "after", "state", "query", "exact_name"],
       "probe": {}
     },
     "tasks.read": {
@@ -115,7 +115,7 @@
     },
     "tasks.list": {
       "purpose": "task_read",
-      "payloadFields": ["lifecycle_state", "priority", "archive_mode", "page_size", "after", "work_view", "work_date", "timezone"],
+      "payloadFields": ["lifecycle_state", "priority", "archive_mode", "page_size", "after", "work_view", "work_date", "timezone", "project_id"],
       "probe": { "page_size": 25 }
     },
     "tasks.search": {
@@ -145,7 +145,7 @@
     },
     "tasks.update": {
       "purpose": "task_authoring",
-      "payloadFields": ["task_id", "expected_version", "idempotency_key", "title", "description", "priority", "due_at", "scheduled_at", "deferred_until", "commitment_id", "role", "clear_fields", "archived", "client_context"],
+      "payloadFields": ["task_id", "expected_version", "idempotency_key", "title", "description", "priority", "due_at", "scheduled_at", "deferred_until", "commitment_id", "role", "clear_fields", "archived", "project_id", "clear_project", "client_context"],
       "probe": { "task_id": "tsk_aaaaaaaa11111111", "expected_version": 1, "idempotency_key": "idem-task-update-0001", "title": "Updated synthetic task" }
     },
     "tasks.transition": {
@@ -377,7 +377,7 @@
     },
     "entities.participations.list": {
       "purpose": "entity_read",
-      "payloadFields": ["entity_id", "perspective", "page_size", "after"],
+      "payloadFields": ["entity_id", "perspective", "project_id", "page_size", "after"],
       "probe": { "entity_id": "ent_aaaaaaaa11111111", "perspective": "participant" }
     },
     "canvas.workspace.get": {

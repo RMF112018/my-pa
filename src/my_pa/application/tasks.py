@@ -293,8 +293,9 @@ class TaskManagementService:
             "commitment_id",
             "role",
             "archived_at",
+            "project_id",
         }
-        clearable = mutable - {"title"}
+        clearable = mutable - {"title", "project_id"}
         if unknown := (set(values) | set(clear_fields)) - mutable:
             raise ValueError(f"unknown task patch fields: {sorted(unknown)!r}")
         if not set(clear_fields) <= clearable:

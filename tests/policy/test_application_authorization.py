@@ -68,6 +68,7 @@ from my_pa.application.commands import (
     CloseCommitment,
     CloseConstraint,
     CloseConstraintWithFollowUp,
+    CloseProject,
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
@@ -164,6 +165,7 @@ from my_pa.application.commands import (
     ReadIntelligenceArtifact,
     ReadKnowledge,
     ReadManagedDocument,
+    ReadProject,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -213,6 +215,7 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateProject,
     UpdateTask,
     VoidConstraint,
     WaitingOn,
@@ -333,8 +336,22 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.CONTINUITY_PULSE: GetPulse(),
         Capability.CONTINUITY_SITUATIONS: ListSituations(),
         Capability.CONTINUITY_PROJECTS: ListProjects(),
+        Capability.CONTINUITY_PROJECTS_READ: ReadProject(
+            project_id=issue_identifier(IdKind.PROJECT)
+        ),
         Capability.CONTINUITY_PROJECTS_CREATE: CreateProject(
             name="Denial-path project", idempotency_key="denial-project-0001"
+        ),
+        Capability.CONTINUITY_PROJECTS_UPDATE: UpdateProject(
+            project_id=issue_identifier(IdKind.PROJECT),
+            expected_version=1,
+            idempotency_key="denial-project-update-0001",
+            name="Denial-path project update",
+        ),
+        Capability.CONTINUITY_PROJECTS_CLOSE: CloseProject(
+            project_id=issue_identifier(IdKind.PROJECT),
+            expected_version=1,
+            idempotency_key="denial-project-close-0001",
         ),
         Capability.CONTINUITY_SITUATIONS_CREATE: CreateSituation(
             title="Denial-path situation", idempotency_key="denial-situation-0001"
@@ -1256,7 +1273,10 @@ SCOPED_CAPABILITIES = [
         Capability.CONTINUITY_PULSE,
         Capability.CONTINUITY_SITUATIONS,
         Capability.CONTINUITY_PROJECTS,
+        Capability.CONTINUITY_PROJECTS_READ,
         Capability.CONTINUITY_PROJECTS_CREATE,
+        Capability.CONTINUITY_PROJECTS_UPDATE,
+        Capability.CONTINUITY_PROJECTS_CLOSE,
         Capability.CONTINUITY_SITUATIONS_CREATE,
         Capability.CONTINUITY_TASKS_CREATE,
         # The corpus coverage read names a Principal, not a source. The scope it
@@ -1527,7 +1547,10 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.CONTINUITY_PULSE,
         Capability.CONTINUITY_SITUATIONS,
         Capability.CONTINUITY_PROJECTS,
+        Capability.CONTINUITY_PROJECTS_READ,
         Capability.CONTINUITY_PROJECTS_CREATE,
+        Capability.CONTINUITY_PROJECTS_UPDATE,
+        Capability.CONTINUITY_PROJECTS_CLOSE,
         Capability.CONTINUITY_SITUATIONS_CREATE,
         Capability.CONTINUITY_TASKS_CREATE,
         Capability.KNOWLEDGE_COVERAGE,

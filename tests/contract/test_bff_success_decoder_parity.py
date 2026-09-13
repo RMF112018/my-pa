@@ -210,6 +210,7 @@ def _task_list_entry() -> dict[str, Any]:
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         updated_at=datetime(2026, 1, 1, tzinfo=UTC),
         version=1,
+        project_id=None,
     ).model_dump(mode="json")
 
 
@@ -564,8 +565,12 @@ def _continuity_projects() -> dict[str, Any]:
                 "state": "active",
                 "description": None,
                 "participants": ["per_aaaa0001aaaa0001aaaa0001"],
+                "canonical_participations": [],
                 "opened_at": format_rfc3339(datetime(2026, 1, 1, tzinfo=UTC)),
                 "closed_at": None,
+                "created_at": format_rfc3339(datetime(2026, 1, 1, tzinfo=UTC)),
+                "updated_at": format_rfc3339(datetime(2026, 1, 1, tzinfo=UTC)),
+                "version": 1,
             }
         ]
     }

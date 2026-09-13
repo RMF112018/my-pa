@@ -47,7 +47,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Column, Table, and_, func, insert, select, update
+from sqlalchemy import Column, Table, and_, desc, func, insert, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Row
 
@@ -60,6 +60,7 @@ from my_pa.contracts.ports import (
     SituationRepository,
     TraceRepository,
     UnknownScopeError,
+    WorkCursorError,
 )
 from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind
@@ -80,11 +81,20 @@ from my_pa.domain.situation.continuity import (
     Task,
     TaskState,
 )
+from my_pa.domain.situation.project_history import (
+    ProjectHistoryEntry,
+    ProjectMutationAction,
+    ProjectMutationReceipt,
+    execute_close_project,
+    execute_update_project,
+)
 from my_pa.domain.situation.pulse_derivation import FramedObligation, derive_pulse
 from my_pa.domain.situation.situation import (
     Frame,
     FrameState,
     Project,
+    ProjectEntityLink,
+    ProjectEntityLinkageState,
     ProjectState,
     PulseItem,
     PulseItemType,
@@ -94,6 +104,7 @@ from my_pa.domain.situation.situation import (
     Trace,
 )
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.domain.task.history import TaskMutationActor, TaskMutationOutcome
 from my_pa.domain.task.lifecycle import TaskOriginKind
 from my_pa.infrastructure.persistence.tables import (
     capture_review_decisions,
@@ -101,6 +112,8 @@ from my_pa.infrastructure.persistence.tables import (
     continuity_lifecycle_events,
     decisions,
     frames,
+    project_entity_links,
+    project_history,
     project_situations,
     projects,
     pulse_items,
@@ -535,6 +548,7 @@ class SqlProjectRepository(ProjectRepository):
                 closed_at=None,
                 created_at=now,
                 updated_at=now,
+                version=1,
             )
         )
         return Project(
@@ -547,6 +561,7 @@ class SqlProjectRepository(ProjectRepository):
             updated_at=now,
             description=description,
             participants=tuple(participants),
+            version=1,
         )
 
     def get_project(self, principal_id: str, project_id: str) -> Project | None:
@@ -560,15 +575,60 @@ class SqlProjectRepository(ProjectRepository):
         ).one_or_none()
         return None if row is None else self._to_project(row)
 
+    def get_project_entity_link(
+        self, principal_id: str, project_id: str
+    ) -> ProjectEntityLink | None:
+        row = self._connection.execute(
+            select(*project_entity_links.c).where(
+                and_(
+                    project_entity_links.c.project_id == project_id,
+                    project_entity_links.c.principal_id == principal_id,
+                )
+            )
+        ).one_or_none()
+        return None if row is None else self._to_project_entity_link(row)
+
     def list_projects(
-        self, principal_id: str, state_filter: ProjectState | None = None
+        self,
+        principal_id: str,
+        *,
+        after: str | None = None,
+        state: ProjectState | None = None,
+        query: str | None = None,
+        exact_name: str | None = None,
+        limit: int | None = None,
     ) -> tuple[Project, ...]:
-        criteria = [projects.c.principal_id == principal_id]
-        if state_filter is not None:
-            criteria.append(projects.c.state == state_filter.value)
-        rows = self._connection.execute(
-            select(*projects.c).where(and_(*criteria)).order_by(projects.c.created_at.desc())
-        ).all()
+        conditions = [projects.c.principal_id == principal_id]
+        if state is not None:
+            conditions.append(projects.c.state == state.value)
+        if query is not None:
+            escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            conditions.append(projects.c.name.ilike(f"%{escaped}%", escape="\\"))
+        if exact_name is not None:
+            conditions.append(func.trim(projects.c.name) == exact_name.strip())
+        if after is not None:
+            anchor = self._connection.execute(
+                select(*projects.c).where(and_(*conditions, projects.c.project_id == after))
+            ).one_or_none()
+            if anchor is None:
+                raise WorkCursorError
+            conditions.append(
+                or_(
+                    projects.c.created_at < anchor.created_at,
+                    and_(
+                        projects.c.created_at == anchor.created_at,
+                        projects.c.project_id < anchor.project_id,
+                    ),
+                )
+            )
+        statement = (
+            select(*projects.c)
+            .where(and_(*conditions))
+            .order_by(desc(projects.c.created_at), desc(projects.c.project_id))
+        )
+        if limit is not None:
+            statement = statement.limit(limit)
+        rows = self._connection.execute(statement).all()
         return tuple(self._to_project(row) for row in rows)
 
     def link_situation(
@@ -644,6 +704,133 @@ class SqlProjectRepository(ProjectRepository):
             recorded_at=now,
         )
 
+    def lock_project(self, principal_id: str, project_id: str) -> Project | None:
+        row = self._connection.execute(
+            select(*projects.c)
+            .where(
+                and_(
+                    projects.c.project_id == project_id,
+                    projects.c.principal_id == principal_id,
+                )
+            )
+            .with_for_update()
+        ).one_or_none()
+        return None if row is None else self._to_project(row)
+
+    def persist_project(self, project: Project) -> None:
+        self._connection.execute(
+            update(projects)
+            .where(
+                and_(
+                    projects.c.project_id == project.project_id,
+                    projects.c.principal_id == project.principal_id,
+                )
+            )
+            .values(
+                name=project.name,
+                description=project.description,
+                state=project.state.value,
+                closed_at=project.closed_at,
+                updated_at=project.updated_at,
+                version=project.version,
+            )
+        )
+
+    def persist_history(self, entry: ProjectHistoryEntry) -> None:
+        self._connection.execute(
+            insert(project_history).values(
+                history_id=entry.history_id,
+                principal_id=entry.principal_id,
+                project_id=entry.project_id,
+                action=entry.action.value,
+                actor=entry.actor.value,
+                outcome=entry.outcome.value,
+                before_version=entry.before_version,
+                after_version=entry.after_version,
+                idempotency_key=entry.idempotency_key,
+                request_digest=entry.request_digest,
+                occurred_at=entry.occurred_at,
+                recorded_at=entry.recorded_at,
+            )
+        )
+
+    def history_for_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> ProjectHistoryEntry | None:
+        row = self._connection.execute(
+            select(*project_history.c).where(
+                and_(
+                    project_history.c.principal_id == principal_id,
+                    project_history.c.idempotency_key == idempotency_key,
+                )
+            )
+        ).one_or_none()
+        return None if row is None else self._to_project_history(row)
+
+    def update_project(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        expected_version: int,
+        idempotency_key: str,
+        request_digest: str,
+        name: str | None,
+        description: str | None,
+        state: ProjectState | None,
+        now: datetime,
+    ) -> ProjectMutationReceipt | None:
+        return execute_update_project(
+            self,
+            principal_id=principal_id,
+            project_id=project_id,
+            expected_version=expected_version,
+            idempotency_key=idempotency_key,
+            request_digest=request_digest,
+            name=name,
+            description=description,
+            state=state,
+            now=now,
+        )
+
+    def close_project(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        expected_version: int,
+        idempotency_key: str,
+        request_digest: str,
+        now: datetime,
+    ) -> ProjectMutationReceipt | None:
+        return execute_close_project(
+            self,
+            principal_id=principal_id,
+            project_id=project_id,
+            expected_version=expected_version,
+            idempotency_key=idempotency_key,
+            request_digest=request_digest,
+            now=now,
+        )
+
+    @staticmethod
+    def _to_project_history(row: Row[Any]) -> ProjectHistoryEntry:
+        mapping = row._mapping
+        return ProjectHistoryEntry(
+            history_id=mapping["history_id"],
+            principal_id=mapping["principal_id"],
+            project_id=mapping["project_id"],
+            action=ProjectMutationAction(mapping["action"]),
+            actor=TaskMutationActor(mapping["actor"]),
+            outcome=TaskMutationOutcome(mapping["outcome"]),
+            before_version=int(mapping["before_version"]),
+            after_version=int(mapping["after_version"]),
+            occurred_at=mapping["occurred_at"],
+            recorded_at=mapping["recorded_at"],
+            idempotency_key=mapping["idempotency_key"],
+            request_digest=mapping["request_digest"],
+        )
+
     @staticmethod
     def _to_project(row: Row[Any]) -> Project:
         mapping = row._mapping
@@ -658,6 +845,19 @@ class SqlProjectRepository(ProjectRepository):
             description=mapping["description"],
             participants=_as_tuple(mapping["participants"]),
             closed_at=mapping["closed_at"],
+            version=int(mapping["version"]),
+        )
+
+    @staticmethod
+    def _to_project_entity_link(row: Row[Any]) -> ProjectEntityLink:
+        mapping = row._mapping
+        return ProjectEntityLink(
+            principal_id=mapping["principal_id"],
+            project_id=mapping["project_id"],
+            linkage_state=ProjectEntityLinkageState(mapping["linkage_state"]),
+            created_at=mapping["created_at"],
+            updated_at=mapping["updated_at"],
+            project_entity_id=mapping["project_entity_id"],
         )
 
 

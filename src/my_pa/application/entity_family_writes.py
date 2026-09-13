@@ -97,6 +97,7 @@ from my_pa.application.commands import (
     ReviseEntityParticipation,
     SupersedeEntityName,
 )
+from my_pa.application.errors import InvalidRequestError, SafeDetail
 
 # `_directed_digest` rather than a second canonicalisation, on the argument that
 # function's own docstring makes: what makes a replay decidable is that the same
@@ -770,6 +771,8 @@ class EntityFamilyWriteService:
         actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
     ) -> DirectedReceipt:
         """Record one project participation, or return the receipt this key already has."""
+        if command.project_entity_id is None:
+            raise InvalidRequestError(SafeDetail.PROJECT_ENTITY_ID)
         payload = _participation_payload(command)
         digest = _directed_digest(payload)
         replayed = repository.directed_replay(

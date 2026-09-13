@@ -216,9 +216,11 @@ from my_pa.domain.situation.continuity import (
     Decision,
     Task,
 )
+from my_pa.domain.situation.project_history import ProjectMutationReceipt
 from my_pa.domain.situation.situation import (
     Frame,
     Project,
+    ProjectEntityLink,
     ProjectState,
     PulseItem,
     Situation,
@@ -5195,10 +5197,28 @@ class ProjectRepository(ABC):
         """Return the Project the Principal owns, or `None`."""
 
     @abstractmethod
+    def get_project_entity_link(
+        self, principal_id: str, project_id: str
+    ) -> ProjectEntityLink | None:
+        """Return this Principal's Project↔Entity bridge row, or `None`."""
+
+    @abstractmethod
     def list_projects(
-        self, principal_id: str, state_filter: ProjectState | None = None
+        self,
+        principal_id: str,
+        *,
+        after: str | None = None,
+        state: ProjectState | None = None,
+        query: str | None = None,
+        exact_name: str | None = None,
+        limit: int | None = None,
     ) -> tuple[Project, ...]:
-        """One page of this Principal's Projects, newest first."""
+        """One page of this Principal's Projects, newest first.
+
+        Keyset pagination uses `(created_at DESC, project_id DESC)`. `after` is
+        the last `project_id` from the previous page and is resolved in-partition
+        against the same filters. `query` and `exact_name` are mutually exclusive.
+        """
 
     @abstractmethod
     def link_situation(
@@ -5214,6 +5234,44 @@ class ProjectRepository(ABC):
 
         Refuses when either the Project or the Situation is not in this
         Principal's partition. Idempotent per (project, situation).
+        """
+
+    @abstractmethod
+    def update_project(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        expected_version: int,
+        idempotency_key: str,
+        request_digest: str,
+        name: str | None,
+        description: str | None,
+        state: ProjectState | None,
+        now: datetime,
+    ) -> ProjectMutationReceipt | None:
+        """Versioned update of name, description, and/or nonterminal state.
+
+        `SELECT … FOR UPDATE`. Missing row is `None`. Stale `expected_version`
+        writes a rejected history receipt and raises `ProjectVersionConflictError`.
+        Illegal lifecycle transitions raise `ProjectIllegalTransitionError` before
+        any write. `now` is the server clock the application already resolved.
+        """
+
+    @abstractmethod
+    def close_project(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        expected_version: int,
+        idempotency_key: str,
+        request_digest: str,
+        now: datetime,
+    ) -> ProjectMutationReceipt | None:
+        """Versioned close. Missing row is `None`. Already-closed is illegal.
+
+        `now` is the server clock the application already resolved.
         """
 
 
@@ -6284,15 +6342,18 @@ class TaskManagementRepository(ABC):
         work_start: datetime | None = None,
         work_end: datetime | None = None,
         work_now: datetime | None = None,
+        project_id: str | None = None,
         limit: int,
     ) -> tuple[TaskAggregate, ...]:
         """One bounded page of this Principal's own tasks, newest created first.
 
-        `lifecycle_state` and `priority`, when given, are exact matches — a
-        structured filter, not the lexical one `search` performs. Archived
-        tasks are excluded unless `archive_mode` is `only`, for the
-        same reason `ListManagedDocuments` excludes archived documents: a
-        caller who wants a withdrawn task back has to ask for it by name.
+        `lifecycle_state`, `priority`, and `project_id`, when given, are exact
+        matches — a structured filter, not the lexical one `search` performs.
+        `project_id` is applied inside the Principal predicate; omitting it
+        leaves the page unscoped by Project. Archived tasks are excluded
+        unless `archive_mode` is `only`, for the same reason
+        `ListManagedDocuments` excludes archived documents: a caller who wants
+        a withdrawn task back has to ask for it by name.
         """
 
     @abstractmethod

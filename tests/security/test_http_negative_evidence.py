@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes one hundred and sixty-three capability names and none of them
+  ends: the transport routes one hundred and sixty-six capability names and none of them
   mutates a source, and every capability driven over the wire is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -58,6 +58,7 @@ from tests.conftest import (
     seed_gsqs_b0_workflow,
     staged_capture,
     staged_commitment,
+    staged_continuity_project,
     staged_goodnotes_raster,
     staged_goodnotes_work,
     staged_managed_document,
@@ -72,6 +73,7 @@ from tests.contract.test_transport_parity import (
     staged_entities,
     staged_memory,
     staged_mention,
+    staged_project_entity,
 )
 from tests.wire import Reply, Wire, serve
 
@@ -303,6 +305,13 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
     review_case = staged_review_case(marked, capture)
     document = staged_managed_document(marked, body=MARKER_CONTENT.encode())
     task = staged_task(marked)
+    project = staged_continuity_project(marked)
+    # Two mutation subjects rather than one, on the same argument the four
+    # memories rest on: an update takes the Project to version two, so an
+    # update and a close naming one row would leave close meeting a stale
+    # expectation.
+    update_project = staged_continuity_project(marked, name="a synthetic update project")
+    close_project = staged_continuity_project(marked, name="a synthetic close project")
     commitment = staged_commitment(marked)
     gsqs_run_id = str(seed_gsqs_b0_workflow(idempotency_key="wire-gsqs-start-0001")["run_id"])
     bulk_mutations = [
@@ -372,6 +381,7 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
     assert collector_admission.artifact is not None
     report_id = collector_admission.artifact.artifact_id
     person, organization = staged_entities(marked)
+    project_entity = staged_project_entity(marked)
     subjects = staged_write_subjects(marked)
     families = staged_record_family_rows(marked, person, organization)
     # Four memories rather than one, because the sweeps below drive this whole
@@ -432,9 +442,21 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         Capability.CONTINUITY_PULSE: {},
         Capability.CONTINUITY_SITUATIONS: {},
         Capability.CONTINUITY_PROJECTS: {},
+        Capability.CONTINUITY_PROJECTS_READ: {"project_id": project.project_id},
         Capability.CONTINUITY_PROJECTS_CREATE: {
             "name": "Marked authoring project",
             "idempotency_key": "wire-project-0001",
+        },
+        Capability.CONTINUITY_PROJECTS_UPDATE: {
+            "project_id": update_project.project_id,
+            "expected_version": update_project.version,
+            "idempotency_key": "wire-project-update-0001",
+            "name": "Marked updated project",
+        },
+        Capability.CONTINUITY_PROJECTS_CLOSE: {
+            "project_id": close_project.project_id,
+            "expected_version": close_project.version,
+            "idempotency_key": "wire-project-close-0001",
         },
         Capability.CONTINUITY_SITUATIONS_CREATE: {
             "title": "Marked authoring situation",
@@ -916,7 +938,7 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "idempotency_key": "wire-entity-communication-retire-0001",
         },
         Capability.ENTITIES_PARTICIPATIONS_CREATE: {
-            "project_entity_id": organization.entity_id,
+            "project_entity_id": project_entity.entity_id,
             "participant_entity_id": person.entity_id,
             "project_display_name": "Wire Person on Wire Works",
             "role_basis_code": "source_verified",
@@ -1639,7 +1661,10 @@ SCOPED_CAPABILITIES = [
         Capability.CONTINUITY_PULSE,
         Capability.CONTINUITY_SITUATIONS,
         Capability.CONTINUITY_PROJECTS,
+        Capability.CONTINUITY_PROJECTS_READ,
         Capability.CONTINUITY_PROJECTS_CREATE,
+        Capability.CONTINUITY_PROJECTS_UPDATE,
+        Capability.CONTINUITY_PROJECTS_CLOSE,
         Capability.CONTINUITY_SITUATIONS_CREATE,
         Capability.CONTINUITY_TASKS_CREATE,
         Capability.KNOWLEDGE_COVERAGE,
@@ -1954,6 +1979,7 @@ MANAGED_DOCUMENT_EXEMPTION = frozenset({Capability.DOCUMENTS_CREATE})
 CONTINUITY_AUTHORING_EXEMPTION = frozenset(
     {
         Capability.CONTINUITY_PROJECTS_CREATE,
+        Capability.CONTINUITY_PROJECTS_UPDATE,
         Capability.CONTINUITY_SITUATIONS_CREATE,
         Capability.CONTINUITY_TASKS_CREATE,
     }

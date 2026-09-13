@@ -37,16 +37,24 @@ from my_pa.contracts.ports import (
     SituationRepository,
     TraceRepository,
     UnknownScopeError,
+    WorkCursorError,
 )
 from my_pa.domain.common.identifiers import IdKind, make_identifier
 from my_pa.domain.common.time import utc_now
 from my_pa.domain.relationship.event import RelationshipEvent, RelationshipEventType
 from my_pa.domain.situation.continuity import ClosureEvidenceKind
+from my_pa.domain.situation.project_history import (
+    ProjectHistoryEntry,
+    ProjectMutationReceipt,
+    execute_close_project,
+    execute_update_project,
+)
 from my_pa.domain.situation.pulse_derivation import derive_pulse
 from my_pa.domain.situation.situation import (
     Frame,
     FrameState,
     Project,
+    ProjectEntityLink,
     ProjectState,
     PulseItem,
     PulseItemType,
@@ -251,6 +259,8 @@ class InMemoryProjectRepository(ProjectRepository):
         self._situations = situations
         self._rows: dict[str, Project] = {}
         self._links: set[tuple[str, str, str]] = set()
+        self._entity_links: dict[tuple[str, str], ProjectEntityLink] = {}
+        self._history: list[ProjectHistoryEntry] = []
         self.association_evidence: dict[tuple[str, str, str], tuple[ClosureEvidenceKind, str]] = {}
 
     def add_project(
@@ -272,6 +282,7 @@ class InMemoryProjectRepository(ProjectRepository):
             updated_at=now,
             description=description,
             participants=tuple(participants),
+            version=1,
         )
         self._rows[project.project_id] = project
         return project
@@ -282,13 +293,42 @@ class InMemoryProjectRepository(ProjectRepository):
             return None
         return current
 
+    def get_project_entity_link(
+        self, principal_id: str, project_id: str
+    ) -> ProjectEntityLink | None:
+        return self._entity_links.get((principal_id, project_id))
+
     def list_projects(
-        self, principal_id: str, state_filter: ProjectState | None = None
+        self,
+        principal_id: str,
+        *,
+        after: str | None = None,
+        state: ProjectState | None = None,
+        query: str | None = None,
+        exact_name: str | None = None,
+        limit: int | None = None,
     ) -> tuple[Project, ...]:
         rows = [row for row in self._rows.values() if row.principal_id == principal_id]
-        if state_filter is not None:
-            rows = [row for row in rows if row.state is state_filter]
-        rows.sort(key=lambda row: row.created_at, reverse=True)
+        if state is not None:
+            rows = [row for row in rows if row.state is state]
+        if query is not None:
+            needle = query.casefold()
+            rows = [row for row in rows if needle in row.name.casefold()]
+        if exact_name is not None:
+            target = exact_name.strip()
+            rows = [row for row in rows if row.name.strip() == target]
+        rows.sort(key=lambda row: (row.created_at, row.project_id), reverse=True)
+        if after is not None:
+            if not any(row.project_id == after for row in rows):
+                raise WorkCursorError
+            rows = rows[
+                next(
+                    (index + 1 for index, row in enumerate(rows) if row.project_id == after),
+                    len(rows),
+                ) :
+            ]
+        if limit is not None:
+            rows = rows[:limit]
         return tuple(rows)
 
     def link_situation(
@@ -312,6 +352,73 @@ class InMemoryProjectRepository(ProjectRepository):
         self.association_evidence[(principal_id, project_id, situation_id)] = (
             evidence_kind,
             evidence_ref,
+        )
+
+    def lock_project(self, principal_id: str, project_id: str) -> Project | None:
+        return self.get_project(principal_id, project_id)
+
+    def persist_project(self, project: Project) -> None:
+        self._rows[project.project_id] = project
+
+    def persist_history(self, entry: ProjectHistoryEntry) -> None:
+        self._history.append(entry)
+
+    def history_for_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> ProjectHistoryEntry | None:
+        return next(
+            (
+                entry
+                for entry in self._history
+                if entry.principal_id == principal_id and entry.idempotency_key == idempotency_key
+            ),
+            None,
+        )
+
+    def update_project(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        expected_version: int,
+        idempotency_key: str,
+        request_digest: str,
+        name: str | None,
+        description: str | None,
+        state: ProjectState | None,
+        now: datetime,
+    ) -> ProjectMutationReceipt | None:
+        return execute_update_project(
+            self,
+            principal_id=principal_id,
+            project_id=project_id,
+            expected_version=expected_version,
+            idempotency_key=idempotency_key,
+            request_digest=request_digest,
+            name=name,
+            description=description,
+            state=state,
+            now=now,
+        )
+
+    def close_project(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        expected_version: int,
+        idempotency_key: str,
+        request_digest: str,
+        now: datetime,
+    ) -> ProjectMutationReceipt | None:
+        return execute_close_project(
+            self,
+            principal_id=principal_id,
+            project_id=project_id,
+            expected_version=expected_version,
+            idempotency_key=idempotency_key,
+            request_digest=request_digest,
+            now=now,
         )
 
 

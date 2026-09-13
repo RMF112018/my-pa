@@ -258,6 +258,7 @@ class _TaskRepo(TaskManagementRepository):
         work_start: datetime | None = None,
         work_end: datetime | None = None,
         work_now: datetime | None = None,
+        project_id: str | None = None,
         limit: int,
     ) -> tuple[Task, ...]:
         raise NotImplementedError("write-plane fake does not serve list reads")

@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-one hundred and sixty-three capabilities. There are two ways to prove that and only one stays
+one hundred and sixty-six capabilities. There are two ways to prove that and only one stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -71,6 +71,7 @@ from tests.conftest import (
     seed_gsqs_b0_workflow,
     staged_capture,
     staged_commitment,
+    staged_continuity_project,
     staged_goodnotes_raster,
     staged_goodnotes_work,
     staged_managed_document,
@@ -354,6 +355,31 @@ def staged_entities(scene: Scene) -> tuple[Entity, Entity]:
         ),
     )
     return person, organization
+
+
+def staged_project_entity(scene: Scene) -> Entity:
+    """One project-type entity so `entities.participations.create` has a legal project end.
+
+    The MCP create path refuses a non-project `project_entity_id`. Revise and
+    end still restage through `staged_participation`, which keeps the
+    organization-as-project rows the existing transport tables already hold.
+    """
+    principal_id = scene.principal.principal_id
+    held = next(
+        (
+            entity
+            for entity in scene.world.entities
+            if entity.principal_id == principal_id
+            and entity.entity_type is EntityType.PROJECT
+            and entity.display_name == "Parity Tower"
+        ),
+        None,
+    )
+    if held is not None:
+        return held
+    return FakeUnitOfWork(scene.world).entities.create(
+        principal_id, _entity(principal_id, EntityType.PROJECT, "Parity Tower")
+    )
 
 
 def staged_assignment(scene: Scene, role: str) -> str:
@@ -788,6 +814,9 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     review_case = staged_review_case(scene, capture)
     managed_document = staged_managed_document(scene)
     task = staged_task(scene)
+    project = staged_continuity_project(scene)
+    update_project = staged_continuity_project(scene, name="a synthetic update project")
+    close_project = staged_continuity_project(scene, name="a synthetic close project")
     commitment = staged_commitment(scene)
     bulk_mutations = [
         {
@@ -856,6 +885,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     assert collector_admission.artifact is not None
     report_id = collector_admission.artifact.artifact_id
     person, organization = staged_entities(scene)
+    project_entity = staged_project_entity(scene)
     identifier_id, alias_id = staged_child_records(scene)
     archived = staged_archived_entity(scene)
     memory_id = staged_memory(scene)
@@ -944,9 +974,21 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.CONTINUITY_PULSE: {},
         Capability.CONTINUITY_SITUATIONS: {"page_size": 10},
         Capability.CONTINUITY_PROJECTS: {"page_size": 10},
+        Capability.CONTINUITY_PROJECTS_READ: {"project_id": project.project_id},
         Capability.CONTINUITY_PROJECTS_CREATE: {
             "name": "Parity authoring project",
             "idempotency_key": "parity-project-0001",
+        },
+        Capability.CONTINUITY_PROJECTS_UPDATE: {
+            "project_id": update_project.project_id,
+            "expected_version": update_project.version,
+            "idempotency_key": "parity-project-update-0001",
+            "name": "Parity updated project",
+        },
+        Capability.CONTINUITY_PROJECTS_CLOSE: {
+            "project_id": close_project.project_id,
+            "expected_version": close_project.version,
+            "idempotency_key": "parity-project-close-0001",
         },
         Capability.CONTINUITY_SITUATIONS_CREATE: {
             "title": "Parity authoring situation",
@@ -1457,7 +1499,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "idempotency_key": "parity-entity-communication-retire-0001",
         },
         Capability.ENTITIES_PARTICIPATIONS_CREATE: {
-            "project_entity_id": organization.entity_id,
+            "project_entity_id": project_entity.entity_id,
             "participant_entity_id": person.entity_id,
             "project_display_name": "Parity Person on Parity Works",
             "role_basis_code": "source_verified",
@@ -1925,7 +1967,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 164, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 167, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))

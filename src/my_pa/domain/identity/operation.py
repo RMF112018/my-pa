@@ -116,6 +116,7 @@ class Capability(StrEnum):
     CONTINUITY_PULSE = "continuity.pulse"
     CONTINUITY_SITUATIONS = "continuity.situations"
     CONTINUITY_PROJECTS = "continuity.projects"
+    CONTINUITY_PROJECTS_READ = "continuity.projects.read"
     # User-directed continuity writes. Three rather than one, by `D-91`:
     # `projects.create` writes a Project row, `situations.create` writes a
     # Situation row, and `tasks.create` writes a Task row. One grant covering
@@ -126,6 +127,14 @@ class Capability(StrEnum):
     # `7c2e9b4a1d80` carries the forward `ALTER` that admits these three writes
     # and `continuity_authoring`.
     CONTINUITY_PROJECTS_CREATE = "continuity.projects.create"
+    #: Versioned mutations of an existing Continuity Project. Two rather than
+    #: one, by `D-91`: `projects.update` changes name, description, and/or
+    #: nonterminal state, and `projects.close` is the only path that records
+    #: `closed_at`. One grant covering both would let a request permitted to
+    #: rename a project also close it. Neither is additive: each replaces state
+    #: on an existing row. `c4f1a8e52d90` admits both names.
+    CONTINUITY_PROJECTS_UPDATE = "continuity.projects.update"
+    CONTINUITY_PROJECTS_CLOSE = "continuity.projects.close"
     CONTINUITY_SITUATIONS_CREATE = "continuity.situations.create"
     CONTINUITY_TASKS_CREATE = "continuity.tasks.create"
     # The twentieth, and `2d9f4a7c1e58` carries the forward `ALTER` that admits
@@ -1017,7 +1026,10 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.CONTINUITY_PULSE: frozenset({Purpose.CAPTURE_REVIEW}),
         Capability.CONTINUITY_SITUATIONS: frozenset({Purpose.CAPTURE_REVIEW}),
         Capability.CONTINUITY_PROJECTS: frozenset({Purpose.CAPTURE_REVIEW}),
+        Capability.CONTINUITY_PROJECTS_READ: frozenset({Purpose.CAPTURE_REVIEW}),
         Capability.CONTINUITY_PROJECTS_CREATE: frozenset({Purpose.CONTINUITY_AUTHORING}),
+        Capability.CONTINUITY_PROJECTS_UPDATE: frozenset({Purpose.CONTINUITY_AUTHORING}),
+        Capability.CONTINUITY_PROJECTS_CLOSE: frozenset({Purpose.CONTINUITY_AUTHORING}),
         Capability.CONTINUITY_SITUATIONS_CREATE: frozenset({Purpose.CONTINUITY_AUTHORING}),
         Capability.CONTINUITY_TASKS_CREATE: frozenset({Purpose.CONTINUITY_AUTHORING}),
         # `STATUS_OBSERVATION`, reused, and the residual is stated rather than
@@ -1376,6 +1388,8 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.CAPTURE_REVISE,
         Capability.REVIEW_DECIDE,
         Capability.CONTINUITY_PROJECTS_CREATE,
+        Capability.CONTINUITY_PROJECTS_UPDATE,
+        Capability.CONTINUITY_PROJECTS_CLOSE,
         Capability.CONTINUITY_SITUATIONS_CREATE,
         Capability.CONTINUITY_TASKS_CREATE,
         Capability.DOCUMENTS_CREATE,

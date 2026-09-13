@@ -71,6 +71,21 @@ export interface TaskRowOperations<E extends HTMLElement = HTMLElement> {
   handleCancel(): void;
 }
 
+/**
+ * Whether `element` can be handed focus by script.
+ *
+ * Deliberately narrow: an explicit `tabindex` (of any value — `-1` is the
+ * script-only opt-in a row root should use, so it never becomes a tab stop), or
+ * an element that is focusable by its own nature. Anything else silently
+ * swallows `focus()`, and a return that silently does nothing is the defect this
+ * is here to avoid, not a fallback.
+ */
+function canTakeScriptFocus(element: HTMLElement): boolean {
+  return element.matches(
+    '[tabindex], button:not([disabled]), select:not([disabled]), textarea:not([disabled]), input:not([disabled]), a[href], [contenteditable="true"]',
+  );
+}
+
 export function useTaskRowOperations<E extends HTMLElement = HTMLElement>({
   taskId,
   task,
@@ -201,8 +216,39 @@ export function useTaskRowOperations<E extends HTMLElement = HTMLElement>({
     const withinGroup = group?.isConnected
       ? group.querySelector<HTMLElement>("button:not([disabled]), select:not([disabled]), a[href], input:not([disabled])")
       : null;
+    if (withinGroup) return withinGroup;
     // Failing that, the card's own title — still this Task, still where they were.
-    return withinGroup ?? rowRef.current?.querySelector<HTMLElement>("a[href]") ?? null;
+    const anchor = rowRef.current?.querySelector<HTMLElement>("a[href]") ?? null;
+    if (anchor) return anchor;
+    /*
+      And failing *that*, the row root itself — but only when the surface has
+      made it focusable by script.
+
+      Every step above assumes something inside the row survives the write. On a
+      surface whose affordances withdraw themselves that is not guaranteed:
+      confirming Close on a Today card makes the Task terminal, so
+      `TaskTerminalActions` withholds itself and the held control and its
+      `role="group"` both unmount together. The anchor step was written against
+      the Work list row and the Board card, which carry a title link; a card that
+      is not a link has no anchor at all, so the chain resolved to `null` and a
+      keyboard user who just closed a Task was left on `document.body`, at the
+      top of the document.
+
+      The root, not the heading. A heading would have to be given a tabindex too
+      — the same opt-in — and it names the Task without containing anything: from
+      it the user's next Tab still walks the rest of the card. The root *is* the
+      Task as a whole, it is the element this engine already holds, and landing
+      on it puts the user at the top of the card they just acted on with every
+      surviving control of that card still ahead of them. So the surface opts in
+      once, on the element the engine already knows about.
+
+      The opt-in is required, not inferred. A root that cannot take focus would
+      swallow `focus()` silently and leave the user on the body while looking
+      like a successful return, so a surface that has not declared itself
+      focusable is not handed focus at all.
+    */
+    const root = rowRef.current;
+    return root && canTakeScriptFocus(root) ? root : null;
   }, []);
 
   const handleStatus = useCallback(

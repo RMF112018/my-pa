@@ -303,7 +303,7 @@ jobs:
           set -euo pipefail
           python_bin="$(command -v python)"
           test -x "${python_bin}"
-          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/work-acceptance.spec.ts e2e/journeys.spec.ts e2e/intelligence-journey.spec.ts e2e/constraints-read-plane.spec.ts --project=desktop --project=tablet --project=mobile
+          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/work-acceptance.spec.ts e2e/today-tasks.spec.ts e2e/journeys.spec.ts e2e/intelligence-journey.spec.ts e2e/constraints-read-plane.spec.ts --project=desktop --project=tablet --project=mobile
 
   pwa-offline:
     name: frontend / pwa-offline

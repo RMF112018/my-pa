@@ -85,6 +85,117 @@ async function useDarkTheme(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Close panel" }).click();
 }
 
+/* ------------------------------------------------------------------ *
+ * Seeding, and putting back what it takes out
+ * ------------------------------------------------------------------ */
+
+/**
+ * Two scans here need a *populated* surface, so two of them create a Task.
+ *
+ * That is not inert in a suite whose tiers are shared. `e2e/stack.sh` creates
+ * one disposable database for the whole run, and an open Task sits in
+ * `work_view=unscheduled` — which `task_management.py` orders
+ * `asc(due_at).nullslast()` — and, when its due moment has passed, on Today's
+ * derived Pulse as well. Left behind, one Task per scanning test per project
+ * accumulates and changes what every later spec sees. `today-tasks.spec.ts`
+ * leaked the same way at larger scale and put three latent defects in
+ * `journeys.spec.ts` and one in `work-acceptance.spec.ts` on screen as a red
+ * job; this file is the smaller instance of it, drained the same way.
+ *
+ * The cleanup cannot hollow out what is being scanned: every seed is created,
+ * asserted on screen, and scanned *inside* its test, and disposal happens in
+ * `afterEach` — after the last assertion of that test and before the next one.
+ * No scan ever runs against a surface this teardown has touched.
+ */
+const seededTaskIds: string[] = [];
+
+/** See `today-tasks.spec.ts`: scaffolding was never done, so it is not "Closed". */
+const TEARDOWN_STATE = "cancelled";
+
+type ApiAnswer<T> = { status: number; body: T };
+
+async function api<T>(
+  page: Page,
+  path: string,
+  options: { method?: string; body?: Record<string, unknown> } = {},
+): Promise<ApiAnswer<T>> {
+  return page.evaluate(
+    async ({ target, method, payload }) => {
+      const response = await fetch(target, {
+        method: method ?? "GET",
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: payload ? { "content-type": "application/json" } : undefined,
+        body: payload ? JSON.stringify(payload) : undefined,
+      });
+      return { status: response.status, body: (await response.json()) as T };
+    },
+    { target: path, method: options.method, payload: options.body },
+  );
+}
+
+/** Create one synthetic Task through the canonical BFF and remember it. */
+async function seedTask(
+  page: Page,
+  input: { readonly title: string; readonly dueAt: string; readonly idempotencyKey: string },
+): Promise<{ readonly status: number; readonly taskId: string }> {
+  const created = await api<{ task?: { task_id: string } }>(page, "/api/tasks", {
+    method: "POST",
+    body: { title: input.title, dueAt: input.dueAt, idempotencyKey: input.idempotencyKey },
+  });
+  const taskId = created.body.task?.task_id;
+  if (taskId) seededTaskIds.push(taskId);
+  return { status: created.status, taskId: taskId ?? "" };
+}
+
+/**
+ * Dispose of every Task a test seeded, and fail loudly if disposal fails.
+ *
+ * Deterministic rather than best-effort — a silent `catch` would let the leak
+ * back the moment the endpoint changed shape. Each row is read, one already
+ * terminal is left alone, and the rest are transitioned with the version that
+ * read returned. Confirmed by its own response, so no wait is introduced.
+ */
+async function disposeSeededTasks(page: Page): Promise<void> {
+  const ids = [...seededTaskIds];
+  seededTaskIds.length = 0;
+  for (const taskId of ids) {
+    const read = await api<{ task?: { version: number; lifecycle_state: string } }>(
+      page,
+      `/api/tasks/${taskId}`,
+    );
+    if (read.status !== 200 || !read.body.task) continue;
+    const task = read.body.task;
+    if (task.lifecycle_state === "completed" || task.lifecycle_state === "cancelled") continue;
+    const disposed = await api<unknown>(page, `/api/tasks/${taskId}/transition`, {
+      method: "POST",
+      body: {
+        toState: TEARDOWN_STATE,
+        expectedVersion: task.version,
+        idempotencyKey: `a11y-teardown-${taskId}-${Date.now()}`,
+      },
+    });
+    expect(
+      disposed.status,
+      `teardown must dispose of seeded Task ${taskId}: ${JSON.stringify(disposed.body)}`,
+    ).toBeLessThan(300);
+  }
+}
+
+test.beforeEach(() => {
+  seededTaskIds.length = 0;
+});
+
+/*
+  Runs after a failed test as well as a passing one: a test that fails after
+  seeding has still seeded, and those are the runs that leave the most behind.
+  Tests that seed nothing drain an empty list and touch the network not at all,
+  which matters for the offline held-note scan.
+*/
+test.afterEach(async ({ page }) => {
+  await disposeSeededTasks(page);
+});
+
 test.describe("axe-core, in Chromium, against the rendered page", () => {
   test("the sign-in screen has no detectable violation", async ({ page }) => {
     await page.goto("/sign-in");
@@ -144,23 +255,12 @@ test.describe("axe-core, in Chromium, against the rendered page", () => {
     const title = `E2E perspective task ${marker}`;
     await page.goto("/work?view=all-open");
     await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
-    const created = await page.evaluate(
-      async ({ taskTitle, key }) => {
-        const response = await fetch("/api/tasks", {
-          method: "POST",
-          cache: "no-store",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            title: taskTitle,
-            dueAt: "2026-11-18T17:00:00Z",
-            idempotencyKey: key,
-          }),
-        });
-        return response.status;
-      },
-      { taskTitle: title, key: `e2e-${marker}` },
-    );
-    expect(created).toBe(200);
+    const created = await seedTask(page, {
+      title,
+      dueAt: "2026-11-18T17:00:00Z",
+      idempotencyKey: `e2e-${marker}`,
+    });
+    expect(created.status).toBe(200);
 
     const board = `/work?view=all-open&q=${encodeURIComponent(marker)}&perspective=board`;
     const calendar = `/work?view=all-open&q=${encodeURIComponent(marker)}&perspective=calendar`;
@@ -193,6 +293,86 @@ test.describe("axe-core, in Chromium, against the rendered page", () => {
       await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
       expect(await scan(page), `${label} dark-theme accessibility violations`).toEqual([]);
     }
+  });
+
+  /**
+   * A **populated** Today, and the two states its Task card can be put into
+   * (WP-TUX-07).
+   *
+   * The `/today` entry in `PAGES` scans whatever Today happens to hold, and on
+   * a quiet database that is the Empty card — a scan that passes without ever
+   * seeing a Task card, a Due chooser or a terminal confirmation. So this test
+   * puts a Task on the Pulse first and asserts the card is on screen before
+   * scanning, exactly as the Board/Calendar test does, so a pass cannot be
+   * vacuous.
+   *
+   * A Task reaches Today by being open with a due moment already past: the
+   * derivation (`domain/situation/pulse_derivation.py`) surfaces it as
+   * `task_overdue`, and it derives at read time, so nothing needs seeding into
+   * a pulse table. The Task is synthetic and lives in the disposable database.
+   *
+   * The Due chooser and the Close confirmation are scanned separately, and for
+   * the same reason the Board test gives: a control that exists only once it is
+   * opened is never reached by a pass over the closed state — and the Close
+   * confirmation is a `role="alertdialog"` that takes focus, which is precisely
+   * the sort of tree an automated pass is good at.
+   *
+   * Still an automated subset: not screen-reader proof, not a WCAG 2.2 AA claim.
+   */
+  test("a populated Today, its Due chooser and its Close confirmation have no detectable violation", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    await signIn(page);
+    const marker = `a11y-today-${test.info().project.name}-${Date.now()}`;
+    const title = `E2E today a11y task ${marker}`;
+    const created = await seedTask(page, {
+      title,
+      // Past-due, so `pulse_derivation` surfaces it as `task_overdue` and Today
+      // is genuinely populated before anything here is scanned.
+      dueAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+      idempotencyKey: `e2e-${marker}`,
+    });
+    expect(created.status).toBe(200);
+
+    const card = () => page.getByTestId("today-task-card").filter({ hasText: title });
+
+    /** Populate, prove it is populated, then scan the three states. */
+    async function scanTodayStates(label: string): Promise<void> {
+      await page.goto("/today");
+      await expect(page.getByRole("heading", { name: "Today", level: 1 })).toBeVisible();
+      // Load-bearing: without this the scan below could pass on an Empty card.
+      await expect(card(), `${label}: Today must be populated before it is scanned`).toBeVisible({
+        timeout: 30_000,
+      });
+      expect(await scan(page), `${label} populated Today accessibility violations`).toEqual([]);
+
+      await card().getByRole("button", { name: `Reschedule ${title}` }).click();
+      await expect(page.getByRole("group", { name: "Due choices" })).toBeVisible();
+      expect(await scan(page), `${label} Today Reschedule chooser accessibility violations`).toEqual(
+        [],
+      );
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("group", { name: "Due choices" })).toHaveCount(0);
+
+      await card().getByTestId("task-close-trigger").click();
+      await expect(card().getByTestId("task-close-confirmation")).toBeVisible();
+      expect(
+        await scan(page),
+        `${label} Today Close confirmation accessibility violations`,
+      ).toEqual([]);
+      // Stand the confirmation down: the Task must survive into the dark pass.
+      await card().getByTestId("task-close-keep-open").click();
+      await expect(card().getByTestId("task-close-confirmation")).toHaveCount(0);
+    }
+
+    await scanTodayStates("light");
+
+    // The same three states in the dark theme, where contrast rules are decided
+    // against a different set of computed colours.
+    await useDarkTheme(page);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await scanTodayStates("dark");
   });
 
   test("the capture dialog, open, has no detectable violation", async ({ page }) => {

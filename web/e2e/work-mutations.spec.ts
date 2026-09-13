@@ -395,3 +395,307 @@ test("TASK-AC-018 a Calendar Due change never mutates planned or snoozed dates",
   expect(after.body.task.scheduled_at).toBe(before.body.task.scheduled_at);
   expect(after.body.task.deferred_until).toBe(before.body.task.deferred_until);
 });
+
+/**
+ * Browser-level Task idempotency: the three layers below this comment.
+ *
+ * The claim "one human intent is one Task" is enforced in three different
+ * places, and each place can be wrong on its own. The component race is proven
+ * in `task-runtime-provider.test.tsx`, and the backend same-key single row in
+ * `tests/database/test_task_management_service.py`. Neither of those runs a
+ * browser: neither can tell you that a *real* repeated activation on a real
+ * page, over a real network, against the real Work plane, produces one Task.
+ * That is what the three tests below are for, and the only browser idempotency
+ * replay proof the suite previously held was on the Capture plane
+ * (`journeys.spec.ts`), not on Task.
+ *
+ * All three are marker-scoped. `e2e/stack.sh` creates ONE disposable database
+ * per `npm run e2e` invocation, shared by every project and spec in the run, so
+ * a global row count would be polluted by whatever else the run created. Every
+ * canonical assertion below is therefore a query on this test's own marker.
+ */
+
+/** One browser attempt at the canonical Task create route, as it was sent. */
+interface CreateAttempt {
+  /** The key the client chose for this attempt. */
+  readonly idempotencyKey: string;
+  /** Everything else in the request body — the material request, frozen or not. */
+  readonly payload: Record<string, unknown>;
+}
+
+function createAttempt(postData: string | null): CreateAttempt {
+  const body = JSON.parse(postData ?? "{}") as Record<string, unknown>;
+  const { idempotencyKey, ...payload } = body;
+  return {
+    idempotencyKey: typeof idempotencyKey === "string" ? idempotencyKey : "",
+    payload,
+  };
+}
+
+/** What the Work plane answered a create with. */
+interface CreateOutcome {
+  readonly taskId: string;
+  readonly replayed: boolean;
+}
+
+function createOutcome(body: unknown): CreateOutcome {
+  const envelope = (body ?? {}) as { task?: { task_id?: unknown }; replayed?: unknown };
+  return {
+    taskId: typeof envelope.task?.task_id === "string" ? envelope.task.task_id : "",
+    replayed: envelope.replayed === true,
+  };
+}
+
+/** The canonical Task create endpoint, matched on path so list GETs are not glob-missed. */
+function isTaskCollection(url: URL): boolean {
+  return url.pathname === "/api/tasks";
+}
+
+/** The marker-scoped canonical listing. Never a global count — see the note above. */
+async function tasksForMarker(page: Page, marker: string) {
+  const listed = await api<{ tasks: { task_id: string; title: string }[] }>(
+    page,
+    `/api/tasks?q=${encodeURIComponent(marker)}&pageSize=50&workView=unscheduled&archived=exclude`,
+  );
+  expect(listed.status).toBe(200);
+  return listed.body.tasks;
+}
+
+/**
+ * TASK-AC-006. A repeated create activation dispatches once and leaves one Task.
+ *
+ * The create response is held open by a `page.route` barrier — no sleep, no
+ * timing guess — and a second submission is raised while the first is still in
+ * flight. The second submission is issued as a `requestSubmit()` on the same
+ * form rather than as a second key press or click, and that is deliberate: the
+ * pending render disables both the Title field and the Create button, so a
+ * second *gesture* would be swallowed by the DOM before the create mutex ever
+ * saw it, and a refusal that is never reached is not a refusal. `requestSubmit()`
+ * raises exactly the submit event an Enter key raises, so the guard under test
+ * is the component's, not the browser's disabled-control behaviour.
+ *
+ * Two facts are asserted because either alone is weak: exactly one POST left the
+ * browser, and exactly one Task exists canonically under this test's marker.
+ */
+test("TASK-AC-006 a repeated create activation reaches the Work plane exactly once", async ({ page }) => {
+  test.setTimeout(180_000);
+  const marker = `idem-once-${test.info().project.name}-${Date.now()}`;
+  const title = `E2E repeated create ${marker}`;
+
+  const attempts: CreateAttempt[] = [];
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  await page.route(isTaskCollection, async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.fallback();
+      return;
+    }
+    attempts.push(createAttempt(route.request().postData()));
+    await held;
+    await route.continue();
+  });
+
+  await page.goto(`/work?view=unscheduled&q=${encodeURIComponent(marker)}`);
+  await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
+  await page.getByRole("button", { name: "New task" }).click();
+  const create = page.getByTestId("task-create-sheet");
+  await create.getByLabel("Title").fill(title);
+
+  // Activation one: implicit form submission from the Title field, by keyboard.
+  await create.getByLabel("Title").press("Enter");
+
+  // The barrier has the first dispatch and is holding it. Bounded poll, not a sleep.
+  await expect.poll(() => attempts.length, { timeout: 30_000 }).toBe(1);
+  await expect(create.getByRole("status")).toHaveText("Creating task…");
+  // The surface is inert while unresolved: the draft cannot move under the dispatch.
+  await expect(create.getByLabel("Title")).toBeDisabled();
+  await expect(create.getByRole("button", { name: "Creating…" })).toBeDisabled();
+
+  // Activation two, overlapping the first, and a third for good measure.
+  await create.evaluate((form) => {
+    (form as HTMLFormElement).requestSubmit();
+    (form as HTMLFormElement).requestSubmit();
+  });
+
+  // Release, and let the single dispatch resolve. Any escaped dispatch was
+  // recorded at interception — before this line — so the count below is settled.
+  release();
+  await expect(create).toHaveCount(0);
+  await expect(feedback(page).getByText(`Task created: ${title}`)).toBeVisible();
+
+  // The canonical claim is asserted first, deliberately. The two claims fail
+  // under different faults — a lost mutex dispatches twice on one frozen key and
+  // still leaves one Task, while a mutex lost *and* a key reminted per dispatch
+  // leaves two — and ordering them this way keeps each one independently
+  // reachable rather than shadowed by the other.
+  const tasks = await tasksForMarker(page, marker);
+  expect(
+    tasks.map((task) => task.task_id),
+    "a repeated activation left more than one Task under this marker",
+  ).toHaveLength(1);
+  expect(tasks[0]!.title).toBe(title);
+
+  expect(
+    attempts.map((attempt) => attempt.idempotencyKey),
+    "a repeated activation escaped the create mutex and reached the Work plane twice",
+  ).toHaveLength(1);
+  expect(attempts[0]!.idempotencyKey).toMatch(/^task-create-/);
+  expect(attempts[0]!.payload.title).toBe(title);
+});
+
+/**
+ * TASK-AC-007 and TASK-AC-032. An ambiguous attempt is retried with the same
+ * key, resolves to the original Task, and creates nothing.
+ *
+ * The first attempt is made *genuinely* ambiguous rather than merely failed: the
+ * barrier forwards it to the real Work plane, which really applies it, reads the
+ * answer, and then aborts the browser's request. The client is left in the one
+ * state that matters — the request was sent, and the outcome is unknowable from
+ * here. A retry that minted a fresh key in that state would create a second Task
+ * for one human intent, which is the whole failure this closes.
+ *
+ * TASK-AC-032 is the frozen-request half: the draft must not be editable while
+ * the attempt is unresolved, and the retry must carry the same material request,
+ * not a re-read of whatever the form holds now.
+ */
+test("TASK-AC-007 TASK-AC-032 an ambiguous create retries on the same key and resolves to the same Task", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  const marker = `idem-retry-${test.info().project.name}-${Date.now()}`;
+  const title = `E2E ambiguous create ${marker}`;
+
+  const attempts: CreateAttempt[] = [];
+  const outcomes: CreateOutcome[] = [];
+
+  await page.route(isTaskCollection, async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.fallback();
+      return;
+    }
+    attempts.push(createAttempt(route.request().postData()));
+    // The real route, really invoked: the Work plane applies attempt one.
+    const response = await route.fetch();
+    outcomes.push(createOutcome(await response.json()));
+    if (attempts.length === 1) {
+      // …and the browser is denied the answer it already earned.
+      await route.abort("failed");
+      return;
+    }
+    await route.fulfill({ response });
+  });
+
+  await page.goto(`/work?view=unscheduled&q=${encodeURIComponent(marker)}`);
+  await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
+  await page.getByRole("button", { name: "New task" }).click();
+  const create = page.getByTestId("task-create-sheet");
+  await create.getByLabel("Title").fill(title);
+  await create.getByLabel("Description").fill("Synthetic ambiguous create evidence.");
+  await create.getByRole("button", { name: "Create", exact: true }).click();
+
+  // Unresolved, and said so in the Principal's words — not "failed", which would
+  // invite a fresh intent and a second Task.
+  await expect(create.getByRole("status")).toHaveText(/^Create may still have succeeded\./);
+  // TASK-AC-032: the frozen request cannot be edited out from under the retry.
+  await expect(create.getByLabel("Title")).toBeDisabled();
+  await expect(create.getByLabel("Description")).toBeDisabled();
+  const retry = create.getByRole("button", { name: "Retry same create" });
+  await expect(retry).toBeVisible();
+  expect(attempts).toHaveLength(1);
+  expect(outcomes[0]!.replayed, "attempt one must be the create, not a replay").toBe(false);
+  expect(outcomes[0]!.taskId).toMatch(/^tsk_/);
+
+  await retry.click();
+  await expect(create).toHaveCount(0);
+  await expect(feedback(page).getByText(`Task created: ${title}`)).toBeVisible();
+
+  expect(attempts).toHaveLength(2);
+  expect(
+    attempts[1]!.idempotencyKey,
+    "the retry of an ambiguous create minted a new key instead of reusing the original",
+  ).toBe(attempts[0]!.idempotencyKey);
+  expect(
+    attempts[1]!.payload,
+    "the retry sent a different material request than the one that was frozen",
+  ).toEqual(attempts[0]!.payload);
+
+  // What the Work plane did with it: nothing. Same Task, and it said so.
+  expect(
+    outcomes[1]!.replayed,
+    "the retry was treated as a new create rather than a replay of the original",
+  ).toBe(true);
+  expect(outcomes[1]!.taskId).toBe(outcomes[0]!.taskId);
+
+  const tasks = await tasksForMarker(page, marker);
+  expect(
+    tasks.map((task) => task.task_id),
+    "an ambiguous create plus its retry left more than one Task",
+  ).toEqual([outcomes[0]!.taskId]);
+});
+
+/**
+ * TASK-AC-008. A deliberate second create session is a second Task.
+ *
+ * The mirror image of the two above, and the reason they cannot be satisfied by
+ * content deduplication: a Principal who opens create again and types the same
+ * thing again means it. The payload here is byte-identical — same title, same
+ * description, same priority — and the only thing that may differ is the key,
+ * which must be freshly minted because the intent is fresh.
+ *
+ * Asserted on this test's marker, never on a global row count: the run's
+ * database is shared with every other spec in the same invocation.
+ */
+test("TASK-AC-008 a deliberate second create session mints a new key and a second Task", async ({ page }) => {
+  test.setTimeout(180_000);
+  const marker = `idem-fresh-${test.info().project.name}-${Date.now()}`;
+  const title = `E2E deliberate repeat ${marker}`;
+  const description = "Synthetic deliberate repeat evidence.";
+
+  const attempts: CreateAttempt[] = [];
+  page.on("request", (request) => {
+    if (request.method() !== "POST") return;
+    if (new URL(request.url()).pathname !== "/api/tasks") return;
+    attempts.push(createAttempt(request.postData()));
+  });
+
+  await page.goto(`/work?view=unscheduled&q=${encodeURIComponent(marker)}`);
+  await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
+
+  for (const attempt of ["first", "second"]) {
+    await page.getByRole("button", { name: "New task" }).click();
+    const create = page.getByTestId("task-create-sheet");
+    await create.getByLabel("Title").fill(title);
+    await create.getByLabel("Description").fill(description);
+    await create.getByLabel("Priority").selectOption("p2");
+    await create.getByRole("button", { name: "Create", exact: true }).click();
+    // The sheet closes only on a confirmed create, so this is the confirmation.
+    await expect(create, `the ${attempt} deliberate create was not confirmed`).toHaveCount(0);
+  }
+  // The feedback text is identical for both, so it is matched permissively here;
+  // the exact-count claims below are the canonical ones.
+  await expect(feedback(page).getByText(`Task created: ${title}`).first()).toBeVisible();
+
+  expect(attempts).toHaveLength(2);
+  expect(
+    attempts[1]!.payload,
+    "the two deliberate creates were not byte-identical, so a differing key proves nothing",
+  ).toEqual(attempts[0]!.payload);
+  expect(attempts[0]!.idempotencyKey).toMatch(/^task-create-/);
+  expect(attempts[1]!.idempotencyKey).toMatch(/^task-create-/);
+  expect(
+    attempts[1]!.idempotencyKey,
+    "a deliberate second create session reused the first session's key",
+  ).not.toBe(attempts[0]!.idempotencyKey);
+
+  const tasks = await tasksForMarker(page, marker);
+  const identifiers = tasks.map((task) => task.task_id);
+  expect(
+    identifiers,
+    "two deliberate create sessions did not leave two Tasks under this marker",
+  ).toHaveLength(2);
+  expect(new Set(identifiers).size, "the two deliberate creates resolved to one Task").toBe(2);
+  for (const task of tasks) expect(task.title).toBe(title);
+});

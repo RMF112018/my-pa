@@ -11,7 +11,6 @@ const PROJECT_ID = /^prj_[A-Za-z0-9]{8,64}$/;
 export function isProjectId(value: unknown): value is string {
   return typeof value === "string" && PROJECT_ID.test(value);
 }
-
 export function projectScope(projectId: string): ProjectScope {
   if (!isProjectId(projectId)) throw new Error("invalid Project identifier");
   return Object.freeze({ kind: "PROJECT", projectId });
@@ -24,4 +23,3 @@ export function sameProjectScope(left: ProjectScope, right: ProjectScope): boole
       (right.kind === "PROJECT" && left.projectId === right.projectId))
   );
 }
-

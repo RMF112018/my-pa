@@ -41,7 +41,6 @@ describe("Project Scope preference", () => {
     );
   });
 });
-
 describe("Project deep links", () => {
   it("extracts only the canonical Project route segment", () => {
     expect(projectFromDeepLink(`/work/projects/${PROJECT}/constraints`)).toEqual({
@@ -62,4 +61,3 @@ describe("Project deep links", () => {
     });
   });
 });
-

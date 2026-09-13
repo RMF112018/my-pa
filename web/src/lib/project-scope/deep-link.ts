@@ -21,4 +21,3 @@ export function projectFromDeepLink(pathname: string): DeepLinkProject {
   }
   return { kind: "present", projectId: isProjectId(decoded) ? decoded : null };
 }
-

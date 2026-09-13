@@ -74,12 +74,23 @@ export function TaskStatusOperationControl({
   );
 }
 
+interface TaskDueOperationControlProps extends TaskOperationPieceProps {
+  /**
+   * Presents the trigger as an action instead of the current Due value
+   * (WP-TUX-07). A surface that holds no Task read — Today's Pulse card binds a
+   * Task id alone — must not announce a Due phrase it has not read. Omit it and
+   * the control behaves exactly as it always has.
+   */
+  readonly triggerLabel?: string;
+}
+
 /** Due date, wrapped in the labelled group that contains its events. */
 export function TaskDueOperationControl({
   taskTitle,
   operations,
   className = "min-w-0",
-}: TaskOperationPieceProps): React.JSX.Element {
+  triggerLabel,
+}: TaskDueOperationControlProps): React.JSX.Element {
   const { ops, civilClock, locked, conflict, handleDue } = operations;
   return (
     <div
@@ -96,6 +107,7 @@ export function TaskDueOperationControl({
         disabled={locked}
         pending={ops.pending === "due"}
         conflict={conflict}
+        triggerLabel={triggerLabel}
         onChange={handleDue}
       />
     </div>

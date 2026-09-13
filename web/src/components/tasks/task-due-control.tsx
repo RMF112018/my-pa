@@ -34,6 +34,20 @@ export interface TaskDueControlProps {
   readonly pending?: boolean;
   readonly conflict?: boolean;
   readonly compact?: boolean;
+  /**
+   * Presents the trigger as an *action* rather than an assertion about the
+   * current value (WP-TUX-07).
+   *
+   * When given, it replaces both the trigger's accessible name and its visible
+   * label, and the current due phrase is not rendered at all. A surface that
+   * has not read the Task's Due — Today's Pulse card binds a Task id and no
+   * TaskRow — must not announce "Due, No due date" for a Task that surfaced
+   * precisely because it is overdue. Such a surface says "Reschedule <title>"
+   * and asserts nothing.
+   *
+   * When absent, behaviour is exactly as before: `Due, <phrase>`.
+   */
+  readonly triggerLabel?: string;
   /** `null` is an explicit clear intent, never an empty string. */
   onChange(nextIso: string | null): void;
 }
@@ -45,6 +59,7 @@ export function TaskDueControl({
   pending = false,
   conflict = false,
   compact = false,
+  triggerLabel,
   onChange,
 }: TaskDueControlProps): React.JSX.Element {
   const baseId = useId();
@@ -94,7 +109,7 @@ export function TaskDueControl({
         pending={pending}
         aria-haspopup="true"
         aria-expanded={open}
-        aria-label={`${TASK_DUE_FIELD_LABEL}, ${due.phrase}`}
+        aria-label={triggerLabel ?? `${TASK_DUE_FIELD_LABEL}, ${due.phrase}`}
         aria-describedby={conflict ? conflictId : undefined}
         onClick={() => {
           if (inert) return;
@@ -104,10 +119,16 @@ export function TaskDueControl({
           });
         }}
       >
-        <span aria-hidden="true" className="text-text-muted">
-          {TASK_DUE_FIELD_LABEL}
-        </span>
-        <span>{due.phrase}</span>
+        {triggerLabel === undefined ? (
+          <>
+            <span aria-hidden="true" className="text-text-muted">
+              {TASK_DUE_FIELD_LABEL}
+            </span>
+            <span>{due.phrase}</span>
+          </>
+        ) : (
+          <span>{triggerLabel}</span>
+        )}
       </Button>
 
       {open ? (

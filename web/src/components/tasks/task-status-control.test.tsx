@@ -93,8 +93,12 @@ describe("TaskStatusControl", () => {
    * the definite block height the fix introduced. The geometry itself — that the
    * rendered box really is at least 44 CSS px tall — is proved in Playwright by
    * `e2e/work-acceptance.spec.ts`, "TASK-AC-017 the Board Status and Due
-   * controls are real touch targets", measured on **macOS** WebKit (106x22
-   * before the fix, 106x44 after) and on Chromium.
+   * controls are real touch targets", measured on **macOS** WebKit: 106x22
+   * before the fix, 106x44 after. That is the only measurement that is evidence
+   * *for this fix*, because macOS WebKit is the only engine where the defect
+   * reproduces. Chromium reports 119x44 — but it reports 119x44 with the fix
+   * removed too, so it is blind to this defect by construction, as are the
+   * Linux CI builds of every engine.
    *
    * Be careful which browser evidence you credit. The Linux Playwright builds
    * used in CI render this control 44px tall *with or without* the fix, because

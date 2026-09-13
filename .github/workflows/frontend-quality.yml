@@ -441,12 +441,15 @@ jobs:
           # the absence of overflow, clipping and layout regressions at the
           # measured widths -- which is why it is kept.
           #
-          # The regression guard for the fix itself is the class contract in
-          # task-status-control.test.tsx, which runs in the blocking
-          # "frontend / unit" job. Chromium geometry is gated by the blocking
-          # "frontend / responsive" job, which runs work-acceptance.spec.ts on
-          # the Chromium desktop/tablet/mobile projects and feeds the required
-          # gate; the "frontend / e2e-critical" job does not run that spec.
+          # The ONLY blocking regression guard for the fix itself is the class
+          # contract in task-status-control.test.tsx, running in "frontend /
+          # unit". Do not read "frontend / responsive" as a second one: it runs
+          # work-acceptance.spec.ts on the Chromium desktop/tablet/mobile
+          # projects and does feed the required gate, but Chromium reports 44px
+          # with the fix removed too, so it is blind to this defect exactly as
+          # the lanes here are. What it gates is Chromium layout and behaviour,
+          # not this control's height. ("frontend / e2e-critical" does not run
+          # that spec at all.)
           # This step is ADVISORY because this whole job is continue-on-error.
           # Playwright WebKit is not Safari.
           MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/work-acceptance.spec.ts --project=firefox --project=webkit --grep "real touch targets|holds 44px across the width matrix"

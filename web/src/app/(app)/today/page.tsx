@@ -8,6 +8,12 @@
  * `lib/fixtures/gate.ts` records — a server component that called its own API
  * route would be a second copy of the same decision.
  *
+ * Since WP-TUX-07 this page classifies once and hands that answer to
+ * `TodayPulseSurface`, which owns every read after it through `/api/pulse`. The
+ * classification, the authentication and the synthetic short-circuit all stay
+ * here, on the server, for the reason above: this page still does not call its
+ * own API route.
+ *
  * The three serving states stay separate and none of them is a fallback:
  * `synthetic` requires `MYPA_DATA_PROVIDER=synthetic` and renders the fixture
  * list; `backend` renders the derivation; a refused or unreachable gateway
@@ -23,12 +29,15 @@ import { invokeGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { PulseList } from "@/components/pulse/pulse-list";
-import { BackendPulseList } from "@/components/pulse/backend-pulse-list";
+import { TodayPulseSurface } from "@/components/pulse/today-pulse-surface";
 import { PageHeader } from "@/components/shell/page-header";
-import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
 import { IntelligencePulse } from "./intelligence-pulse";
-import type { PulseItem } from "@/lib/api/decode/capabilities/continuity.pulse";
-import type { BackendPulseItem } from "@/contracts/views";
+import type {
+  ContinuityPulseResult,
+  PulseItem,
+} from "@/lib/api/decode/capabilities/continuity.pulse";
+import type { BackendPulseItem, TodayPulseAnswer } from "@/contracts/views";
+import type { SurfaceAnswer } from "@/lib/api/surface-answer";
 
 export const metadata = { title: "Today — my-pa" };
 
@@ -45,10 +54,41 @@ function toItem(row: PulseItem): BackendPulseItem {
     basisRefs: row.basis_refs,
     consequence: row.consequence,
     nextStep: row.next_step,
-    priority: row.attention_rank,
+    // The derivation's ordering rank. Never Task priority — see `views.ts`.
+    attentionRank: row.attention_rank,
     generatedAt: row.generated_at,
     ...(row.subject_title !== undefined ? { subjectTitle: row.subject_title } : {}),
   };
+}
+
+/**
+ * Carry the server's one classification across the client boundary without
+ * re-deciding it.
+ *
+ * Only what the surface renders crosses: the rows, the disclosed limitations,
+ * and the failure. The `GatewayOutcome` itself does not — it carries transport
+ * detail a browser has no use for and no business holding.
+ */
+function toClientAnswer(answer: SurfaceAnswer<ContinuityPulseResult>): TodayPulseAnswer {
+  switch (answer.kind) {
+    case "unavailable":
+      return {
+        kind: "unavailable",
+        error: answer.error,
+        limitations: answer.disclosure.limitations,
+      };
+    case "empty":
+      return { kind: "empty" };
+    case "degraded":
+      return {
+        kind: "degraded",
+        items: answer.result.pulse_items.map(toItem),
+        limitations: answer.disclosure.limitations,
+        truncated: answer.disclosure.truncated,
+      };
+    default:
+      return { kind: "records", items: answer.result.pulse_items.map(toItem) };
+  }
 }
 
 export default async function TodayPage() {
@@ -79,51 +119,7 @@ export default async function TodayPage() {
   return (
     <section aria-labelledby="today-heading" className="mx-auto max-w-2xl">
       {heading}
-      {answer.kind === "unavailable" ? (
-        <SurfaceState
-          kind="unavailable"
-          title="Today could not be derived"
-          error={answer.error}
-          limitations={answer.disclosure.limitations}
-          testId="today-unavailable"
-        />
-      ) : answer.kind === "empty" ? (
-        <SurfaceState
-          kind="empty"
-          title="Nothing needs attention right now"
-          detail="This is about today, not everything you hold."
-          diagnostic={
-            "The derivation ran and found no accepted commitment, decision, task or situation that " +
-            "a named condition holds about right now."
-          }
-          testId="today-empty"
-        />
-      ) : answer.kind === "degraded" ? (
-        <>
-          <DegradedBanner
-            scope="today's derivation"
-            limitations={answer.disclosure.limitations}
-            truncated={answer.disclosure.truncated}
-          />
-          {answer.rowCount === 0 ? (
-            <SurfaceState
-              kind="degraded"
-              title="Today is incomplete"
-              detail="A quiet day is not established. Something may still need you."
-              diagnostic={
-                "The derivation was incomplete and surfaced nothing. A partial read does not " +
-                "establish that nothing needs attention."
-              }
-              testId="today-degraded-empty"
-            />
-          ) : (
-            // The gateway's order, untouched. See `BackendPulseList`.
-            <BackendPulseList items={answer.result.pulse_items.map(toItem)} />
-          )}
-        </>
-      ) : (
-        <BackendPulseList items={answer.result.pulse_items.map(toItem)} />
-      )}
+      <TodayPulseSurface initialAnswer={toClientAnswer(answer)} />
       {intelligencePulse}
     </section>
   );

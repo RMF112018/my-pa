@@ -45,7 +45,7 @@ function toBackendItem(row: PulseItem): BackendPulseItem {
     basisRefs: row.basis_refs,
     consequence: row.consequence,
     nextStep: row.next_step,
-    priority: row.attention_rank,
+    attentionRank: row.attention_rank,
     generatedAt: row.generated_at,
     ...(row.subject_title !== undefined ? { subjectTitle: row.subject_title } : {}),
   };

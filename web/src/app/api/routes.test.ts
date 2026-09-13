@@ -46,6 +46,7 @@ import { resetSessionRegistry } from "@/lib/auth/session-registry";
 import { withSessionServiceFetch } from "@/lib/auth/session-service-fetch-stub";
 import { SyntheticProviderDisabledError } from "@/lib/fixtures/gate";
 import { syntheticPulse, syntheticDisclosure } from "@/lib/fixtures/pulse";
+import { decodeContinuityPulse } from "@/lib/api/decode/capabilities/continuity.pulse";
 import { syntheticReviewCases } from "@/lib/fixtures/review";
 import { syntheticSituations } from "@/lib/fixtures/situation";
 
@@ -964,8 +965,65 @@ describe("Today is a derivation, not a feed", () => {
       expect(item.reasonCode).toMatch(/^[a-z_]+$/);
       expect(item.basisRefs.length).toBeGreaterThan(0);
       expect(item.nextStep).toBeTruthy();
-      expect(item.priority).toBeGreaterThan(0);
+      // Replaces an assertion on `item.priority`, which pinned a field name that
+      // said Task priority and meant the derivation's own ordering rank. The
+      // rank is still asserted; the misleading name is asserted absent, so a
+      // renderer cannot read one as the other.
+      expect(item.attentionRank).toBeGreaterThan(0);
+      expect(item).not.toHaveProperty("priority");
     }
+  });
+
+  it("still decodes the subject fields the backend may attach to an item", async () => {
+    /*
+      The wire names never changed when the projection renamed `priority` to
+      `attentionRank`: the decoder still reads `attention_rank`, and still keeps
+      the optional `subject_*` fields.
+
+      The decoder is asserted directly as well as through the route, and that is
+      deliberate. `pick` *ignores* unknown keys rather than rejecting them, so a
+      decoder that had quietly stopped admitting `subject_version` would still
+      answer 200 here and drop the field on the floor. Only reading the decoded
+      value proves it survived.
+    */
+    const decoded = decodeContinuityPulse({
+      pulse_items: [
+        {
+          ...DERIVED[0],
+          subject_title: "Return the signed lease",
+          subject_state: "in_progress",
+          subject_version: 7,
+          subject_priority: "p1",
+        },
+      ],
+    });
+    expect(decoded.ok).toBe(true);
+    if (decoded.ok) {
+      const item = decoded.value.pulse_items[0]!;
+      expect(item.subject_version).toBe(7);
+      expect(item.subject_state).toBe("in_progress");
+      expect(item.subject_priority).toBe("p1");
+      expect(item.attention_rank).toBe(DERIVED[0].attention_rank);
+    }
+
+    const cookie = await signIn();
+    stubGateway({
+      pulse_items: [
+        {
+          ...DERIVED[0],
+          subject_title: "Return the signed lease",
+          subject_state: "in_progress",
+          subject_version: 7,
+          subject_priority: "p1",
+        },
+      ],
+    });
+    const response = await pulse(get(cookie, "/api/pulse"));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.items).toHaveLength(1);
+    expect(body.items[0].subjectTitle).toBe("Return the signed lease");
+    expect(body.items[0].attentionRank).toBe(DERIVED[0].attention_rank);
   });
 
   it("preserves the gateway's ranked order and never re-sorts by time", async () => {

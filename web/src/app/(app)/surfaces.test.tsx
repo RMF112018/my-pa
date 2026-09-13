@@ -78,6 +78,8 @@ import PeopleEntityPage from "@/app/(app)/people/[entityId]/page";
 import ReviewPage from "@/app/(app)/review/page";
 import TodayPage from "@/app/(app)/today/page";
 import SituationsPage from "@/app/(app)/situations/page";
+import { TaskRuntimeProvider } from "@/components/work/task-runtime-provider";
+import { TODAY_EMPTY_COPY } from "@/components/pulse/today-pulse-surface";
 import SystemPage from "@/app/(app)/system/page";
 import RelationshipPage from "@/app/(app)/relationships/[personId]/page";
 
@@ -148,15 +150,38 @@ function answerByCapability(map: Record<string, unknown>, disclosure: unknown = 
  * and the tree it returned is rendered under the condition React needs.
  */
 async function renderServerPage(page: () => Promise<React.ReactNode>) {
+  const tree = await serverTreeOf(page);
+  return render(tree);
+}
+
+async function serverTreeOf(page: () => Promise<React.ReactNode>) {
   const saved = Object.getOwnPropertyDescriptor(globalThis, "window");
   Reflect.deleteProperty(globalThis, "window");
-  let tree: React.ReactNode;
   try {
-    tree = await page();
+    return await page();
   } finally {
     if (saved) Object.defineProperty(globalThis, "window", saved);
   }
-  return render(tree);
+}
+
+/**
+ * Today's server half hands its one classified answer to a client surface, and
+ * that surface binds the session-scoped Task runtime the shell provides. The
+ * provider is harness, not subject: nothing below asserts anything about it, and
+ * the page still runs under exactly the server conditions above.
+ *
+ * The surface revalidates through `/api/pulse` once it mounts. Under this file's
+ * stub that read cannot succeed — the socket answers with a gateway envelope,
+ * not a route answer — and the assertions below are precisely that a refresh
+ * which does not succeed changes none of the four answers the server reached.
+ */
+async function renderTodayPage() {
+  const tree = await serverTreeOf(() => TodayPage());
+  return render(
+    <TaskRuntimeProvider principalId={PRINCIPAL.principalId} sessionEpoch="surfaces-test">
+      {tree}
+    </TaskRuntimeProvider>,
+  );
 }
 
 function socketFails() {
@@ -536,26 +561,46 @@ describe("Review distinguishes an empty queue from an unread one", () => {
 describe("Today distinguishes a quiet day from a failed derivation", () => {
   it("renders derived items when the derivation returned some", async () => {
     answerWith({ pulse_items: [PULSE_ITEM] }, whole());
-    await renderServerPage(() => TodayPage());
+    await renderTodayPage();
     expect(screen.getByTestId("pulse-reason").textContent).toContain("two days past");
   });
 
   it("says nothing meets a condition only when the derivation ran", async () => {
     answerWith({ pulse_items: [] }, whole());
-    const { unmount } = await renderServerPage(() => TodayPage());
+    const { unmount } = await renderTodayPage();
     expect(screen.getByTestId("today-empty")).toHaveAttribute("data-state", "empty");
     unmount();
 
     answerWith({ pulse_items: [] }, notSearched());
-    await renderServerPage(() => TodayPage());
+    await renderTodayPage();
     expect(screen.getByTestId("today-unavailable")).toHaveAttribute("data-state", "unavailable");
     expect(screen.queryByTestId("today-empty")).toBeNull();
   });
 
   it("does NOT treat omitted pulse_items as a quiet day", async () => {
     answerWith({}, whole());
-    await renderServerPage(() => TodayPage());
+    await renderTodayPage();
     expect(screen.getByTestId("today-unavailable")).toHaveAttribute("data-state", "unavailable");
+    expect(screen.queryByTestId("today-empty")).toBeNull();
+  });
+
+  it("says the quiet-day sentence in exactly those words, and only then", async () => {
+    answerWith({ pulse_items: [] }, whole());
+    const { unmount } = await renderTodayPage();
+    expect(screen.getByTestId("today-empty").textContent).toContain(TODAY_EMPTY_COPY);
+    unmount();
+
+    // The same zero rows, from a read the backend said it did not perform.
+    answerWith({ pulse_items: [] }, notSearched());
+    const failed = await renderTodayPage();
+    expect(screen.queryByText(TODAY_EMPTY_COPY)).toBeNull();
+    failed.unmount();
+
+    // And the same zero rows, from an answer the backend called partial.
+    answerWith({ pulse_items: [] }, partial());
+    await renderTodayPage();
+    expect(screen.getByTestId("today-degraded-empty")).toHaveAttribute("data-state", "degraded");
+    expect(screen.queryByText(TODAY_EMPTY_COPY)).toBeNull();
     expect(screen.queryByTestId("today-empty")).toBeNull();
   });
 });

@@ -5,7 +5,13 @@
  * These are derived, principal-scoped projections. A Trace is not source
  * evidence; a PulseItem is a recommendation with a reason, never a bare alert.
  */
-import type { DisclosureEnvelope, IsoTimestamp, OpaqueId, SourceSpan } from "./envelope";
+import type {
+  DisclosureEnvelope,
+  ErrorEnvelope,
+  IsoTimestamp,
+  OpaqueId,
+  SourceSpan,
+} from "./envelope";
 import type { ProposalState } from "./states";
 
 /** Purposeful operational context referencing objects it does not own. */
@@ -199,8 +205,17 @@ export interface PulseItem {
  * named the subject, and it must not be invented from identifiers. It also
  * carries three things the fixture shape has no field for and which are the
  * whole point of the derivation: a closed `reasonCode` naming *why now*, the
- * `basisRefs` a reader can open to check that reason, and a bounded `priority`
- * that is an evidentiary urgency rank rather than a position in a stream.
+ * `basisRefs` a reader can open to check that reason, and a bounded
+ * `attentionRank` that is an evidentiary urgency rank rather than a position in
+ * a stream.
+ *
+ * **`attentionRank` is not Task priority.** It was called `priority` until
+ * WP-TUX-07, which is the name the Task vocabulary already uses for a
+ * user-chosen `p1|p2|p3`. The two are unrelated: this is the derivation's own
+ * ordering rank over items of six different types, most of which have no
+ * priority at all, and it is renamed here so no renderer can mistake one for the
+ * other. The decoder still reads the backend's `attention_rank` — the wire name
+ * never changed.
  * Merging the two would mean inventing a title and dropping the basis, which is
  * exactly the flattening that turns a Pulse back into a feed.
  *
@@ -217,11 +232,41 @@ export interface BackendPulseItem {
   readonly basisRefs: readonly OpaqueId[];
   readonly consequence: string | null;
   readonly nextStep: string | null;
-  readonly priority: number;
+  readonly attentionRank: number;
   readonly generatedAt: IsoTimestamp;
   /** Backend-supplied subject name. Absent or empty means the renderer must not invent one. */
   readonly subjectTitle?: string;
 }
+
+/**
+ * One classified Today answer, in the exact five-way shape Today's client
+ * surface must keep apart (WP-TUX-07).
+ *
+ * The server classifies the first read with `surfaceAnswer` and hands the result
+ * across the client boundary as one of these; every later client read is
+ * classified into the same shape, so the two paths cannot drift into two
+ * different ideas of what "nothing needs you" means.
+ *
+ * The distinction that matters is between `empty` and everything else: `empty`
+ * is the only member that asserts something about the Principal's record, and
+ * it is reachable only from a whole, successful answer that carried no rows. A
+ * refresh that failed, or that came back partial, can never produce it — see
+ * `today-pulse-surface.tsx`, which retains the last confirmed answer instead.
+ */
+export type TodayPulseAnswer =
+  | { readonly kind: "records"; readonly items: readonly BackendPulseItem[] }
+  | { readonly kind: "empty" }
+  | {
+      readonly kind: "degraded";
+      readonly items: readonly BackendPulseItem[];
+      readonly limitations: readonly string[];
+      readonly truncated: boolean;
+    }
+  | {
+      readonly kind: "unavailable";
+      readonly error: ErrorEnvelope;
+      readonly limitations: readonly string[];
+    };
 
 /**
  * A Situation as `continuity.situations` returns it.

@@ -195,6 +195,95 @@ test.describe("axe-core, in Chromium, against the rendered page", () => {
     }
   });
 
+  /**
+   * A **populated** Today, and the two states its Task card can be put into
+   * (WP-TUX-07).
+   *
+   * The `/today` entry in `PAGES` scans whatever Today happens to hold, and on
+   * a quiet database that is the Empty card — a scan that passes without ever
+   * seeing a Task card, a Due chooser or a terminal confirmation. So this test
+   * puts a Task on the Pulse first and asserts the card is on screen before
+   * scanning, exactly as the Board/Calendar test does, so a pass cannot be
+   * vacuous.
+   *
+   * A Task reaches Today by being open with a due moment already past: the
+   * derivation (`domain/situation/pulse_derivation.py`) surfaces it as
+   * `task_overdue`, and it derives at read time, so nothing needs seeding into
+   * a pulse table. The Task is synthetic and lives in the disposable database.
+   *
+   * The Due chooser and the Close confirmation are scanned separately, and for
+   * the same reason the Board test gives: a control that exists only once it is
+   * opened is never reached by a pass over the closed state — and the Close
+   * confirmation is a `role="alertdialog"` that takes focus, which is precisely
+   * the sort of tree an automated pass is good at.
+   *
+   * Still an automated subset: not screen-reader proof, not a WCAG 2.2 AA claim.
+   */
+  test("a populated Today, its Due chooser and its Close confirmation have no detectable violation", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    await signIn(page);
+    const marker = `a11y-today-${test.info().project.name}-${Date.now()}`;
+    const title = `E2E today a11y task ${marker}`;
+    const created = await page.evaluate(
+      async ({ taskTitle, key, dueAt }) => {
+        const response = await fetch("/api/tasks", {
+          method: "POST",
+          cache: "no-store",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title: taskTitle, dueAt, idempotencyKey: key }),
+        });
+        return response.status;
+      },
+      {
+        taskTitle: title,
+        key: `e2e-${marker}`,
+        dueAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+    );
+    expect(created).toBe(200);
+
+    const card = () => page.getByTestId("today-task-card").filter({ hasText: title });
+
+    /** Populate, prove it is populated, then scan the three states. */
+    async function scanTodayStates(label: string): Promise<void> {
+      await page.goto("/today");
+      await expect(page.getByRole("heading", { name: "Today", level: 1 })).toBeVisible();
+      // Load-bearing: without this the scan below could pass on an Empty card.
+      await expect(card(), `${label}: Today must be populated before it is scanned`).toBeVisible({
+        timeout: 30_000,
+      });
+      expect(await scan(page), `${label} populated Today accessibility violations`).toEqual([]);
+
+      await card().getByRole("button", { name: `Reschedule ${title}` }).click();
+      await expect(page.getByRole("group", { name: "Due choices" })).toBeVisible();
+      expect(await scan(page), `${label} Today Reschedule chooser accessibility violations`).toEqual(
+        [],
+      );
+      await page.keyboard.press("Escape");
+      await expect(page.getByRole("group", { name: "Due choices" })).toHaveCount(0);
+
+      await card().getByTestId("task-close-trigger").click();
+      await expect(card().getByTestId("task-close-confirmation")).toBeVisible();
+      expect(
+        await scan(page),
+        `${label} Today Close confirmation accessibility violations`,
+      ).toEqual([]);
+      // Stand the confirmation down: the Task must survive into the dark pass.
+      await card().getByTestId("task-close-keep-open").click();
+      await expect(card().getByTestId("task-close-confirmation")).toHaveCount(0);
+    }
+
+    await scanTodayStates("light");
+
+    // The same three states in the dark theme, where contrast rules are decided
+    // against a different set of computed colours.
+    await useDarkTheme(page);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await scanTodayStates("dark");
+  });
+
   test("the capture dialog, open, has no detectable violation", async ({ page }) => {
     await signIn(page);
     // Both stages are scanned: the WP-TUX-04 chooser and the note branch behind it.

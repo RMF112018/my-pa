@@ -70,17 +70,29 @@ test.describe("the signed-in surfaces", () => {
       }
       await page.reload();
     }
-    // Settle on any explicit Today outcome: populated Pulse, quiet-day empty,
-    // degraded-empty, or backend list empty.
+    // Settle on any explicit Today outcome: a Today Task card, a non-Task Pulse
+    // item, quiet-day empty, degraded-empty, or backend list empty.
+    //
+    // `today-task-card` joined this set in WP-TUX-07: a Task surfaced by the
+    // Pulse is no longer rendered as a `pulse-item` but as the card that can
+    // answer it, so a Today populated *only* by Tasks settles on nothing in the
+    // original list. The rest of the set is unchanged.
     const settled = page
       .getByTestId("pulse-item")
+      .or(page.getByTestId("today-task-card"))
       .or(page.getByTestId("today-empty"))
       .or(page.getByTestId("today-degraded-empty"))
       .or(page.getByTestId("pulse-empty"));
     await expect(settled.first()).toBeVisible();
     if ((await page.getByTestId("today-empty").count()) > 0) {
       await expectState(page, "today-empty", "empty");
-      await expect(page.getByTestId("today-empty")).toContainText(/derivation ran/i);
+      // WP-TUX-07 (TUX07-AC-012). The diagnostic prose this asserted — "the
+      // derivation ran and found no ..." — is still there, behind Details, but
+      // it is no longer what Empty *says*. The heading is the claim now, and it
+      // is exact product copy (`TODAY_EMPTY_COPY`), so it is asserted exactly.
+      await expect(
+        page.getByTestId("today-empty").getByRole("heading"),
+      ).toHaveText("Nothing needs your attention right now.");
     }
   });
 

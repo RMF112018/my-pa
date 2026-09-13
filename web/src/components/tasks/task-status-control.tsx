@@ -92,7 +92,7 @@ export function TaskStatusControl({
       </label>
       <Select
         id={controlId}
-        className="h-11 min-h-11 min-w-11"
+        className="min-h-11 min-w-11"
         value={value}
         disabled={disabled || pending}
         aria-describedby={conflict ? conflictId : undefined}

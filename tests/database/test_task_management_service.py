@@ -152,6 +152,8 @@ def _bulk_operation(*, key: str, now: datetime) -> TaskBulkOperation:
 # --- idempotency: exactly one row survives a retry --------------------------
 
 
+# Acceptance traceability: TASK-AC-006 — one create intent yields exactly one Task row and
+# one history row, proven at the database rather than at the client.
 def test_a_replayed_create_writes_exactly_one_task_and_one_history_row(
     migrated_engine: Engine,
 ) -> None:
@@ -710,6 +712,8 @@ def test_list_and_get_hydrate_a_direct_principal_accepted_task(migrated_engine: 
     assert read.title == "Verify ChatLLM write behavior on pulse"
 
 
+# Acceptance traceability: TASK-AC-022 — comment idempotency under a real concurrent insert
+# race: same digest replays the winner, a different digest conflicts rather than duplicating.
 def test_concurrent_comment_same_digest_race_replays_the_winner(
     migrated_engine: Engine,
 ) -> None:

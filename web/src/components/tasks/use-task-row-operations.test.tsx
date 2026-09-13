@@ -282,6 +282,10 @@ async function closeFromKeyboard(props: Omit<CardProbeProps, "task">): Promise<C
   return { card, rootFocus };
 }
 
+/**
+ * Acceptance traceability: TASK-AC-034 — where focus lands when the control a user held is
+ * removed by the write they just made.
+ */
 describe("useTaskRowOperations focus return", () => {
   /*
     The defect this closes. A card that is not a link has no `a[href]` for the

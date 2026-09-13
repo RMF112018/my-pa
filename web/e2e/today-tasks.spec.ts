@@ -294,6 +294,11 @@ test.afterEach(async ({ page }) => {
  * TUX07-AC-002 / AC-003 — the two operations, reachable and cheap
  * ------------------------------------------------------------------ */
 
+/**
+ * Also TASK-AC-024, TASK-AC-025 and TASK-AC-044: the Today card states what the Task is and
+ * why it is here, offers exactly the two actions, and Close costs two activations and asks
+ * for no authored text.
+ */
 test("TUX07-AC-002/003: Reschedule and Close are on the card, and Close costs two activations with no note", async ({
   page,
 }) => {
@@ -598,6 +603,10 @@ async function closeCardAndReconcile(page: Page, title: string): Promise<void> {
   await expect(cardFor(page, title)).toHaveCount(0, { timeout: 60_000 });
 }
 
+/**
+ * Also TASK-AC-034: a Task that disappears from an open surface is announced rather than
+ * silently removed.
+ */
 test("TUX07-AC-014/017: an open Today reconciles a completed Task away and announces it", async ({
   page,
 }) => {
@@ -665,6 +674,8 @@ test("TUX07-AC-014/017: an open Today reconciles a completed Task away and annou
  * genuinely fallen to the body and the recorded element has actually left the
  * document. Component guards live in `today-pulse-surface.test.tsx`.
  */
+/** Also TASK-AC-034: the focus half of the same criterion — where focus lands once the card
+ * the user was operating has left the surface. */
 test("TUX07-AC-018: focus lands deterministically after the card leaves Today", async ({
   page,
 }) => {
@@ -700,6 +711,8 @@ test("TUX07-AC-018: focus lands deterministically after the card leaves Today", 
 
 const NARROW_WIDTHS = [320, 360, 375, 390, 430] as const;
 
+/** Also TASK-AC-045: 320-430 CSS px with no horizontal scroll and both operations still
+ * operable, measured here on Today. */
 test("TUX07-AC-019: the Today Task card reflows at 320-430 with both operations reachable", async ({
   page,
 }) => {

@@ -75,6 +75,16 @@ function sheet() {
   return screen.getByTestId("task-create-sheet");
 }
 
+/**
+ * Acceptance traceability: TASK-AC-001, TASK-AC-002, TASK-AC-003, TASK-AC-004,
+ * TASK-AC-005, TASK-AC-006, TASK-AC-010.
+ *
+ * The canonical create form offers exactly Title, Description, Priority and Due (001, 004),
+ * names priorities in product language (002), sends no origin, commitment or role (003),
+ * creates through /api/tasks whether entered from Work or from Capture (005), issues exactly
+ * one POST when Create is double-activated (006), and serializes a chosen Due as the end of
+ * that civil day (010).
+ */
 describe("TaskCreateSheet", () => {
   it("offers exactly Title, Description, Priority and Due — no Origin, Commitment or Role", () => {
     vi.stubGlobal("fetch", immediateFetch());

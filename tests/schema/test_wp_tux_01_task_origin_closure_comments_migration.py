@@ -203,6 +203,8 @@ def test_backfill_preserves_evidence_refs_from_prior_head(disposable_database: s
 
 
 @pytest.mark.database
+# Acceptance traceability: TASK-AC-027 — closed_at is required by the schema for a terminal
+# state and refused for a non-terminal one.
 def test_provenance_and_closure_checks(disposable_database: str) -> None:
     engine = create_database_engine(disposable_database)
     try:
@@ -281,6 +283,8 @@ def test_provenance_and_closure_checks(disposable_database: str) -> None:
 
 
 @pytest.mark.database
+# Acceptance traceability: TASK-AC-020, TASK-AC-023, TASK-AC-027 — comment history is
+# append-only in the schema itself, not merely in the UI.
 def test_comment_fk_partition_idempotency_and_append_only(
     disposable_database: str,
 ) -> None:

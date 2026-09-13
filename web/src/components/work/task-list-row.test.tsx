@@ -167,6 +167,15 @@ async function hydrated(): Promise<HTMLElement> {
   return row();
 }
 
+/**
+ * Acceptance traceability: TASK-AC-015, TASK-AC-016, TASK-AC-033, TASK-AC-034,
+ * TASK-AC-042, TASK-AC-043.
+ *
+ * Status and Due are operated inline from the row without opening detail (015, 016), a
+ * version conflict is stood down or recovered with focus returned and no blind retry (033),
+ * a row that leaves under the user hands focus somewhere deliberate (034), and the row
+ * renders no Task ID and no lifecycle or priority token (042, 043).
+ */
 describe("TaskListRow", () => {
   it("speaks human Status only — no lifecycle tokens, no raw priority enums", async () => {
     stubFetch();

@@ -8,6 +8,8 @@ import {
   type MutationPhase,
 } from "@/lib/task/mutation-state";
 
+/** Acceptance traceability: TASK-AC-029 — the declared mutation state machine and its
+ * failure taxonomy (ambiguous vs definitive), which TASK-AC-031 and TASK-AC-032 rest on. */
 describe("mutation state machine", () => {
   it.each([
     ["idle", "pending", true],

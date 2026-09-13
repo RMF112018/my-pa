@@ -16,6 +16,14 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+/**
+ * Acceptance traceability: TASK-AC-006, TASK-AC-007, TASK-AC-008, TASK-AC-030,
+ * TASK-AC-031, TASK-AC-032.
+ *
+ * One intent mints one key (006, 008), an ambiguous or retryable transport failure
+ * reuses that key rather than minting a second Task (007, 032), the store outlives the
+ * form that opened it (030), and a definitive failure preserves the draft (031).
+ */
 describe("CreateIntentStore", () => {
   it("mints one stable intent and key when a create session opens", () => {
     vi.stubGlobal("crypto", {

@@ -90,6 +90,14 @@ test("the service worker registers, activates, and controls the page", async ({ 
   expect(state.controlled || controlled).toBe(true);
 });
 
+/**
+ * TASK-AC-041. No Principal-bound API response is ever served from the service worker.
+ *
+ * This spec runs in the `pwa-offline` CI lane, which is `continue-on-error: true`. An
+ * advisory green is not acceptance: TASK-AC-041 stays PENDING in
+ * `docs/acceptance/task-ux-ac-ledger.md` until a specialized run of this lane is executed
+ * and recorded by run ID against the head being accepted.
+ */
 test("the worker never caches a principal-bound response", async ({ page }) => {
   await signIn(page);
   await page.waitForFunction(async () => (await navigator.serviceWorker.ready) !== undefined);

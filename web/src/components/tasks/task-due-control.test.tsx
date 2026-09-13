@@ -30,6 +30,12 @@ function trigger(): HTMLElement {
   return screen.getByRole("button", { name: /^Due, / });
 }
 
+/**
+ * Acceptance traceability: TASK-AC-009, TASK-AC-016.
+ *
+ * Due is chosen and stated as a civil day, never as a raw timestamp (009), and the control
+ * is the inline Due affordance the list and detail surfaces both mount (016).
+ */
 describe("TaskDueControl", () => {
   it("renders the human due phrase for each display state", () => {
     const cases: ReadonlyArray<readonly [string | null, string]> = [

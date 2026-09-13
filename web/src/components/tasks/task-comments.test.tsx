@@ -62,6 +62,12 @@ describe("TaskCommentCount", () => {
   });
 });
 
+/**
+ * Acceptance traceability: TASK-AC-020, TASK-AC-021, TASK-AC-023.
+ *
+ * Comments are append-only (020), each row states a human author and an ISO timestamp and
+ * leaks no identifier (021), and no edit, delete or remove affordance exists (023).
+ */
 describe("TaskComments", () => {
   it("renders the empty state with the composer", () => {
     renderComments();

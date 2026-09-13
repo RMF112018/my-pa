@@ -11,6 +11,13 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+/**
+ * Acceptance traceability: TASK-AC-029, TASK-AC-032, TASK-AC-033.
+ *
+ * The coordinator is the mutation state machine in practice (029): ambiguous attempts
+ * retry under the same idempotency key (032), and a 409 enters conflict with the draft
+ * intact and no blind resubmission (033).
+ */
 describe("TaskMutationCoordinator", () => {
   it("includes expectedVersion and stable key on versioned mutations", async () => {
     const coordinator = createTaskMutationCoordinator();

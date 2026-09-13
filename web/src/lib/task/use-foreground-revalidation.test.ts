@@ -190,6 +190,14 @@ function render(props: HookProps) {
 let visibility: DocumentVisibilityState = "visible";
 let online = true;
 
+/**
+ * Acceptance traceability: TASK-AC-036, TASK-AC-037, TASK-AC-039.
+ *
+ * The 5s foreground cadence is the mechanism behind the external-write freshness window
+ * (036 — synthetic here; the criterion itself is operator-gated against a real external MCP
+ * write). Focus, visibility and online each revalidate immediately (037), and a hidden or
+ * offline surface arms no poll at all (039).
+ */
 describe("useForegroundRevalidation", () => {
   beforeEach(() => {
     vi.useFakeTimers();

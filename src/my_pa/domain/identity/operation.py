@@ -116,6 +116,7 @@ class Capability(StrEnum):
     CONTINUITY_PULSE = "continuity.pulse"
     CONTINUITY_SITUATIONS = "continuity.situations"
     CONTINUITY_PROJECTS = "continuity.projects"
+    CONTINUITY_PROJECTS_READ = "continuity.projects.read"
     # User-directed continuity writes. Three rather than one, by `D-91`:
     # `projects.create` writes a Project row, `situations.create` writes a
     # Situation row, and `tasks.create` writes a Task row. One grant covering
@@ -1017,6 +1018,7 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.CONTINUITY_PULSE: frozenset({Purpose.CAPTURE_REVIEW}),
         Capability.CONTINUITY_SITUATIONS: frozenset({Purpose.CAPTURE_REVIEW}),
         Capability.CONTINUITY_PROJECTS: frozenset({Purpose.CAPTURE_REVIEW}),
+        Capability.CONTINUITY_PROJECTS_READ: frozenset({Purpose.CAPTURE_REVIEW}),
         Capability.CONTINUITY_PROJECTS_CREATE: frozenset({Purpose.CONTINUITY_AUTHORING}),
         Capability.CONTINUITY_SITUATIONS_CREATE: frozenset({Purpose.CONTINUITY_AUTHORING}),
         Capability.CONTINUITY_TASKS_CREATE: frozenset({Purpose.CONTINUITY_AUTHORING}),

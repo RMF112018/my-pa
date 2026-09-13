@@ -239,6 +239,7 @@ from my_pa.application.commands import (
     ReadKnowledge,
     ReadManagedDocument,
     ReadManagedDocumentCommand,
+    ReadProject,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -5153,35 +5154,43 @@ class ApplicationService:
     ) -> _Result:
         """One bounded page of this Principal's Projects, newest first."""
         page_size = self._page_size(command.page_size)
-        with _translated():
-            found = unit_of_work.projects.list_projects(authorization.principal.principal_id)
+        with _work_cursor_translated(), _translated():
+            found = unit_of_work.projects.list_projects(
+                authorization.principal.principal_id,
+                after=command.after,
+                state=command.state,
+                query=command.query,
+                exact_name=command.exact_name,
+                limit=page_size + 1,
+            )
         truncated = len(found) > page_size
+        page = found[:page_size]
         return _Result(
-            payload={
-                "projects": [
-                    {
-                        "project_id": project.project_id,
-                        "name": project.name,
-                        "state": project.state.value,
-                        "description": project.description,
-                        "participants": list(project.participants),
-                        "opened_at": format_rfc3339(project.opened_at),
-                        "closed_at": (
-                            None if project.closed_at is None else format_rfc3339(project.closed_at)
-                        ),
-                    }
-                    for project in found[:page_size]
-                ]
-            },
+            payload={"projects": [self._continuity_project_payload(project) for project in page]},
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=_CONTINUITY_TRUST_BASIS,
                 truncation=Truncation(
                     is_truncated=truncated,
                     reason="page_size_reached" if truncated else None,
+                    next_cursor=page[-1].project_id if truncated and page else None,
                 ),
-                extra_limitations=((Limitation.LISTING_HAS_NO_CONTINUATION,) if truncated else ()),
             ),
+        )
+
+    def _continuity_projects_read(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadProject
+    ) -> _Result:
+        """One Project owned by this Principal, or the same not_found as absence."""
+        with _translated():
+            project = unit_of_work.projects.get_project(
+                authorization.principal.principal_id, command.project_id
+            )
+        if project is None:
+            raise NotFoundError(SafeDetail.PROJECT_ID)
+        return _Result(
+            payload=self._continuity_project_payload(project),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CONTINUITY_TRUST_BASIS),
         )
 
     def _continuity_projects_create(
@@ -5353,9 +5362,24 @@ class ApplicationService:
                 "state": project.state.value,
                 "description": project.description,
                 "replayed": replayed,
+                "version": project.version,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CONTINUITY_TRUST_BASIS),
         )
+
+    def _continuity_project_payload(self, project: Project) -> dict[str, object]:
+        return {
+            "project_id": project.project_id,
+            "name": project.name,
+            "state": project.state.value,
+            "description": project.description,
+            "participants": list(project.participants),
+            "opened_at": format_rfc3339(project.opened_at),
+            "closed_at": None if project.closed_at is None else format_rfc3339(project.closed_at),
+            "created_at": format_rfc3339(project.created_at),
+            "updated_at": format_rfc3339(project.updated_at),
+            "version": project.version,
+        }
 
     def _situation_authoring_result(
         self, authorization: Authorization, situation: Situation, *, replayed: bool
@@ -11939,6 +11963,7 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.CONTINUITY_PULSE: ApplicationService._continuity_pulse,
         Capability.CONTINUITY_SITUATIONS: ApplicationService._continuity_situations,
         Capability.CONTINUITY_PROJECTS: ApplicationService._continuity_projects,
+        Capability.CONTINUITY_PROJECTS_READ: ApplicationService._continuity_projects_read,
         Capability.CONTINUITY_PROJECTS_CREATE: ApplicationService._continuity_projects_create,
         Capability.CONTINUITY_SITUATIONS_CREATE: ApplicationService._continuity_situations_create,
         Capability.CONTINUITY_TASKS_CREATE: ApplicationService._continuity_tasks_create,

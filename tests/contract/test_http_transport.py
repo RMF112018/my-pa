@@ -2,7 +2,7 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the one hundred and sixty-three capabilities is addressable
+**Reachability.** Every one of the one hundred and sixty-four capabilities is addressable
 over HTTP and answers. Parametrised over `Capability` rather than over a list
 written here, so the next capability added to the domain arrives as
 a failing row instead of as an untested one. Fourteen of the one hundred and forty-two answer a
@@ -59,6 +59,7 @@ from tests.conftest import (
     seed_gsqs_b0_workflow,
     staged_capture,
     staged_commitment,
+    staged_continuity_project,
     staged_goodnotes_raster,
     staged_goodnotes_work,
     staged_managed_document,
@@ -198,6 +199,7 @@ from my_pa.application.commands import (
     ReadIntelligenceArtifact,
     ReadKnowledge,
     ReadManagedDocument,
+    ReadProject,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -440,6 +442,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     review_case = staged_review_case(scene, capture)
     document = staged_managed_document(scene)
     task = staged_task(scene)
+    project = staged_continuity_project(scene)
     commitment = staged_commitment(scene)
     work = staged_goodnotes_work(scene)
     raster = staged_goodnotes_raster(scene)
@@ -547,6 +550,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.CONTINUITY_PULSE: {},
         Capability.CONTINUITY_SITUATIONS: {},
         Capability.CONTINUITY_PROJECTS: {},
+        Capability.CONTINUITY_PROJECTS_READ: {"project_id": project.project_id},
         Capability.CONTINUITY_PROJECTS_CREATE: {
             "name": "HTTP authoring project",
             "idempotency_key": "http-project-0001",
@@ -1392,6 +1396,7 @@ def commands_for(
     """
     document = staged_managed_document(scene)
     task = staged_task(scene)
+    project = staged_continuity_project(scene)
     commitment = staged_commitment(scene)
     work = staged_goodnotes_work(scene)
     raster = staged_goodnotes_raster(scene)
@@ -1498,6 +1503,7 @@ def commands_for(
         Capability.CONTINUITY_PULSE: GetPulse(),
         Capability.CONTINUITY_SITUATIONS: ListSituations(),
         Capability.CONTINUITY_PROJECTS: ListProjects(),
+        Capability.CONTINUITY_PROJECTS_READ: ReadProject(project_id=project.project_id),
         Capability.CONTINUITY_PROJECTS_CREATE: CreateProject(
             name="HTTP authoring project", idempotency_key="http-project-0001"
         ),

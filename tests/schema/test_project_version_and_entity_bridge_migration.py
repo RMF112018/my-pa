@@ -26,6 +26,7 @@ from my_pa.infrastructure.persistence.tables import project_entity_links, projec
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "9f2c8a1d4e70"
+CURRENT_HEAD: Final = "b3e9d7a41c25"
 PREVIOUS_REVISION: Final = "de5ec1c65857"
 MIGRATION: Final = (
     ROOT / "migrations" / "versions" / "20260913_9f2c8a1d4e70_project_version_and_entity_bridge.py"
@@ -140,7 +141,7 @@ def _seed_legacy_project(
 def test_the_revision_is_in_the_chain() -> None:
     script = ScriptDirectory.from_config(_config())
     assert len(list(script.get_heads())) == 1
-    assert script.get_heads() == [REVISION]
+    assert script.get_heads() == [CURRENT_HEAD]
     assert script.get_revision(REVISION).down_revision == PREVIOUS_REVISION
 
 

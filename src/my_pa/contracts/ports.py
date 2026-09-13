@@ -5203,9 +5203,21 @@ class ProjectRepository(ABC):
 
     @abstractmethod
     def list_projects(
-        self, principal_id: str, state_filter: ProjectState | None = None
+        self,
+        principal_id: str,
+        *,
+        after: str | None = None,
+        state: ProjectState | None = None,
+        query: str | None = None,
+        exact_name: str | None = None,
+        limit: int | None = None,
     ) -> tuple[Project, ...]:
-        """One page of this Principal's Projects, newest first."""
+        """One page of this Principal's Projects, newest first.
+
+        Keyset pagination uses `(created_at DESC, project_id DESC)`. `after` is
+        the last `project_id` from the previous page and is resolved in-partition
+        against the same filters. `query` and `exact_name` are mutually exclusive.
+        """
 
     @abstractmethod
     def link_situation(

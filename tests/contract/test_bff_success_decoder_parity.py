@@ -566,6 +566,9 @@ def _continuity_projects() -> dict[str, Any]:
                 "participants": ["per_aaaa0001aaaa0001aaaa0001"],
                 "opened_at": format_rfc3339(datetime(2026, 1, 1, tzinfo=UTC)),
                 "closed_at": None,
+                "created_at": format_rfc3339(datetime(2026, 1, 1, tzinfo=UTC)),
+                "updated_at": format_rfc3339(datetime(2026, 1, 1, tzinfo=UTC)),
+                "version": 1,
             }
         ]
     }

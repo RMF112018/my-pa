@@ -164,6 +164,7 @@ from my_pa.application.commands import (
     ReadIntelligenceArtifact,
     ReadKnowledge,
     ReadManagedDocument,
+    ReadProject,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -333,6 +334,9 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.CONTINUITY_PULSE: GetPulse(),
         Capability.CONTINUITY_SITUATIONS: ListSituations(),
         Capability.CONTINUITY_PROJECTS: ListProjects(),
+        Capability.CONTINUITY_PROJECTS_READ: ReadProject(
+            project_id=issue_identifier(IdKind.PROJECT)
+        ),
         Capability.CONTINUITY_PROJECTS_CREATE: CreateProject(
             name="Denial-path project", idempotency_key="denial-project-0001"
         ),
@@ -1256,6 +1260,7 @@ SCOPED_CAPABILITIES = [
         Capability.CONTINUITY_PULSE,
         Capability.CONTINUITY_SITUATIONS,
         Capability.CONTINUITY_PROJECTS,
+        Capability.CONTINUITY_PROJECTS_READ,
         Capability.CONTINUITY_PROJECTS_CREATE,
         Capability.CONTINUITY_SITUATIONS_CREATE,
         Capability.CONTINUITY_TASKS_CREATE,
@@ -1527,6 +1532,7 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.CONTINUITY_PULSE,
         Capability.CONTINUITY_SITUATIONS,
         Capability.CONTINUITY_PROJECTS,
+        Capability.CONTINUITY_PROJECTS_READ,
         Capability.CONTINUITY_PROJECTS_CREATE,
         Capability.CONTINUITY_SITUATIONS_CREATE,
         Capability.CONTINUITY_TASKS_CREATE,

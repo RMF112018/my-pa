@@ -59,6 +59,7 @@ def test_remote_profile_is_deterministic_read_only(scene: Scene) -> None:
     assert Capability.GSQS_START.value in first
     assert Capability.GSQS_STATUS.value in first
     assert Capability.CONTINUITY_PROJECTS_CREATE.value not in first
+    assert Capability.CONTINUITY_PROJECTS_READ.value in first
     assert Capability.SOURCES_ENROLL.value not in first
     assert Capability.DOCUMENTS_CREATE.value not in first
     assert Capability.TASKS_READ.value in first
@@ -1105,6 +1106,7 @@ async def test_remote_read_only_reference_client_matrix(scene: Scene) -> None:
         Capability.CONTINUITY_PULSE,
         Capability.CONTINUITY_SITUATIONS,
         Capability.CONTINUITY_PROJECTS,
+        Capability.CONTINUITY_PROJECTS_READ,
         Capability.DOCUMENTS_READ,
         Capability.DOCUMENTS_LIST,
         Capability.TASKS_READ,
@@ -1147,6 +1149,7 @@ def _continuity_app(scene: Scene) -> object:
         Capability.CONTINUITY_PULSE,
         Capability.CONTINUITY_SITUATIONS,
         Capability.CONTINUITY_PROJECTS,
+        Capability.CONTINUITY_PROJECTS_READ,
     )
     return create_remote_mcp_app(
         build_service(scene.world, scene.providers),
@@ -1159,6 +1162,7 @@ def _continuity_app(scene: Scene) -> object:
                     (Capability.CONTINUITY_PULSE, Purpose.CAPTURE_REVIEW),
                     (Capability.CONTINUITY_SITUATIONS, Purpose.CAPTURE_REVIEW),
                     (Capability.CONTINUITY_PROJECTS, Purpose.CAPTURE_REVIEW),
+                    (Capability.CONTINUITY_PROJECTS_READ, Purpose.CAPTURE_REVIEW),
                 }
             ),
         ),
@@ -1230,6 +1234,7 @@ async def test_chatllm_domain_only_continuity_calls_succeed(scene: Scene) -> Non
     assert initialized.server_info.name == "my-pa"
     for name in (
         "continuity.projects",
+        "continuity.projects.read",
         "continuity.situations",
         "continuity.pulse",
         "capabilities.get",

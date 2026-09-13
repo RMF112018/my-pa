@@ -2827,6 +2827,12 @@ projects = Table(
     ),
     Index("projects_by_principal", "principal_id"),
     Index("projects_by_principal_state", "principal_id", "state"),
+    Index(
+        "projects_by_principal_created_at_id_desc",
+        "principal_id",
+        text("created_at DESC"),
+        text("project_id DESC"),
+    ),
 )
 
 #: `project_situations`: the link table binding a Project to the Situations it

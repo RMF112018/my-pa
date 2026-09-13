@@ -166,6 +166,7 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.CONTINUITY_PULSE,
         Capability.CONTINUITY_SITUATIONS,
         Capability.CONTINUITY_PROJECTS,
+        Capability.CONTINUITY_PROJECTS_READ,
         Capability.CONTINUITY_PROJECTS_CREATE,
         Capability.CONTINUITY_SITUATIONS_CREATE,
         Capability.CONTINUITY_TASKS_CREATE,

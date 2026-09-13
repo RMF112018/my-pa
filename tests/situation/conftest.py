@@ -37,6 +37,7 @@ from my_pa.contracts.ports import (
     SituationRepository,
     TraceRepository,
     UnknownScopeError,
+    WorkCursorError,
 )
 from my_pa.domain.common.identifiers import IdKind, make_identifier
 from my_pa.domain.common.time import utc_now
@@ -291,12 +292,36 @@ class InMemoryProjectRepository(ProjectRepository):
         return self._entity_links.get((principal_id, project_id))
 
     def list_projects(
-        self, principal_id: str, state_filter: ProjectState | None = None
+        self,
+        principal_id: str,
+        *,
+        after: str | None = None,
+        state: ProjectState | None = None,
+        query: str | None = None,
+        exact_name: str | None = None,
+        limit: int | None = None,
     ) -> tuple[Project, ...]:
         rows = [row for row in self._rows.values() if row.principal_id == principal_id]
-        if state_filter is not None:
-            rows = [row for row in rows if row.state is state_filter]
-        rows.sort(key=lambda row: row.created_at, reverse=True)
+        if state is not None:
+            rows = [row for row in rows if row.state is state]
+        if query is not None:
+            needle = query.casefold()
+            rows = [row for row in rows if needle in row.name.casefold()]
+        if exact_name is not None:
+            target = exact_name.strip()
+            rows = [row for row in rows if row.name.strip() == target]
+        rows.sort(key=lambda row: (row.created_at, row.project_id), reverse=True)
+        if after is not None:
+            if not any(row.project_id == after for row in rows):
+                raise WorkCursorError
+            rows = rows[
+                next(
+                    (index + 1 for index, row in enumerate(rows) if row.project_id == after),
+                    len(rows),
+                ) :
+            ]
+        if limit is not None:
+            rows = rows[:limit]
         return tuple(rows)
 
     def link_situation(

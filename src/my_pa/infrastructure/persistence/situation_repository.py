@@ -47,7 +47,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Column, Table, and_, func, insert, select, update
+from sqlalchemy import Column, Table, and_, desc, func, insert, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection, Row
 
@@ -60,6 +60,7 @@ from my_pa.contracts.ports import (
     SituationRepository,
     TraceRepository,
     UnknownScopeError,
+    WorkCursorError,
 )
 from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind
@@ -579,14 +580,46 @@ class SqlProjectRepository(ProjectRepository):
         return None if row is None else self._to_project_entity_link(row)
 
     def list_projects(
-        self, principal_id: str, state_filter: ProjectState | None = None
+        self,
+        principal_id: str,
+        *,
+        after: str | None = None,
+        state: ProjectState | None = None,
+        query: str | None = None,
+        exact_name: str | None = None,
+        limit: int | None = None,
     ) -> tuple[Project, ...]:
-        criteria = [projects.c.principal_id == principal_id]
-        if state_filter is not None:
-            criteria.append(projects.c.state == state_filter.value)
-        rows = self._connection.execute(
-            select(*projects.c).where(and_(*criteria)).order_by(projects.c.created_at.desc())
-        ).all()
+        conditions = [projects.c.principal_id == principal_id]
+        if state is not None:
+            conditions.append(projects.c.state == state.value)
+        if query is not None:
+            escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            conditions.append(projects.c.name.ilike(f"%{escaped}%", escape="\\"))
+        if exact_name is not None:
+            conditions.append(func.trim(projects.c.name) == exact_name.strip())
+        if after is not None:
+            anchor = self._connection.execute(
+                select(*projects.c).where(and_(*conditions, projects.c.project_id == after))
+            ).one_or_none()
+            if anchor is None:
+                raise WorkCursorError
+            conditions.append(
+                or_(
+                    projects.c.created_at < anchor.created_at,
+                    and_(
+                        projects.c.created_at == anchor.created_at,
+                        projects.c.project_id < anchor.project_id,
+                    ),
+                )
+            )
+        statement = (
+            select(*projects.c)
+            .where(and_(*conditions))
+            .order_by(desc(projects.c.created_at), desc(projects.c.project_id))
+        )
+        if limit is not None:
+            statement = statement.limit(limit)
+        rows = self._connection.execute(statement).all()
         return tuple(self._to_project(row) for row in rows)
 
     def link_situation(

@@ -200,6 +200,7 @@ from my_pa.domain.situation.continuity import (
     CommitmentState,
     CommitmentWorkView,
 )
+from my_pa.domain.situation.situation import ProjectState
 from my_pa.domain.task.comment import (
     MAX_TASK_COMMENT_BODY_CHARACTERS,
     validate_task_comment_body,
@@ -287,6 +288,7 @@ __all__ = [
     "ReadKnowledge",
     "ReadManagedDocument",
     "ReadManagedDocumentCommand",
+    "ReadProject",
     "ReadTask",
     "RecordContextFeedback",
     "RecordIntelligenceRunState",
@@ -1490,9 +1492,42 @@ class ListProjects:
     capability: ClassVar[Capability] = Capability.CONTINUITY_PROJECTS
 
     page_size: int | None = None
+    after: str | None = None
+    state: ProjectState | None = None
+    query: str | None = None
+    exact_name: str | None = None
 
     def __post_init__(self) -> None:
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.PROJECT, SafeDetail.CURSOR)
+        if self.state is not None and not isinstance(self.state, ProjectState):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        if self.query is not None and (not isinstance(self.query, str) or not self.query.strip()):
+            raise InvalidRequestError(SafeDetail.QUERY)
+        if self.exact_name is not None and (
+            not isinstance(self.exact_name, str) or not self.exact_name.strip()
+        ):
+            raise InvalidRequestError(SafeDetail.NAME)
+        if self.query is not None and self.exact_name is not None:
+            raise InvalidRequestError(SafeDetail.QUERY)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadProject:
+    """Return one Project via payload wrapper; project_id required; foreign ids undisclosed.
+
+    `continuity.projects.read` answers the acting Principal's own Project and
+    collapses absence with a foreign partition so neither case discloses the
+    other Principal's row.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONTINUITY_PROJECTS_READ
+
+    project_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
 
 
 @dataclass(frozen=True, slots=True)
@@ -9202,6 +9237,7 @@ type Command = (
     | GetPulse
     | ListSituations
     | ListProjects
+    | ReadProject
     | CreateProject
     | CreateSituation
     | RecordTask

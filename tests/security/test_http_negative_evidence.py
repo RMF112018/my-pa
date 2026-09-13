@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes one hundred and sixty-three capability names and none of them
+  ends: the transport routes one hundred and sixty-four capability names and none of them
   mutates a source, and every capability driven over the wire is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -58,6 +58,7 @@ from tests.conftest import (
     seed_gsqs_b0_workflow,
     staged_capture,
     staged_commitment,
+    staged_continuity_project,
     staged_goodnotes_raster,
     staged_goodnotes_work,
     staged_managed_document,
@@ -303,6 +304,7 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
     review_case = staged_review_case(marked, capture)
     document = staged_managed_document(marked, body=MARKER_CONTENT.encode())
     task = staged_task(marked)
+    project = staged_continuity_project(marked)
     commitment = staged_commitment(marked)
     gsqs_run_id = str(seed_gsqs_b0_workflow(idempotency_key="wire-gsqs-start-0001")["run_id"])
     bulk_mutations = [
@@ -432,6 +434,7 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         Capability.CONTINUITY_PULSE: {},
         Capability.CONTINUITY_SITUATIONS: {},
         Capability.CONTINUITY_PROJECTS: {},
+        Capability.CONTINUITY_PROJECTS_READ: {"project_id": project.project_id},
         Capability.CONTINUITY_PROJECTS_CREATE: {
             "name": "Marked authoring project",
             "idempotency_key": "wire-project-0001",
@@ -1639,6 +1642,7 @@ SCOPED_CAPABILITIES = [
         Capability.CONTINUITY_PULSE,
         Capability.CONTINUITY_SITUATIONS,
         Capability.CONTINUITY_PROJECTS,
+        Capability.CONTINUITY_PROJECTS_READ,
         Capability.CONTINUITY_PROJECTS_CREATE,
         Capability.CONTINUITY_SITUATIONS_CREATE,
         Capability.CONTINUITY_TASKS_CREATE,

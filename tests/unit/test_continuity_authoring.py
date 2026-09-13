@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -14,8 +15,11 @@ from my_pa.application.commands import (
     GetPulse,
     ListProjects,
     ListSituations,
+    ReadProject,
     RecordTask,
 )
+from my_pa.application.disclosure import Limitation
+from my_pa.application.errors import InvalidRequestError
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.v1.envelope import ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
@@ -62,6 +66,7 @@ def test_explicit_project_create_is_visible_on_continuity_projects(scene: Scene)
     assert created.result is not None
     assert created.result["name"] == "MCP Write Acceptance Test"
     assert created.result["replayed"] is False
+    assert created.result["version"] == 1
     project = scene.world.projects[0]
     assert project.version == 1
     assert len(scene.world.project_entity_links) == 1
@@ -86,6 +91,14 @@ def test_explicit_project_create_is_visible_on_continuity_projects(scene: Scene)
     assert listed.result is not None
     names = [row["name"] for row in listed.result["projects"]]
     assert "MCP Write Acceptance Test" in names
+    row = next(
+        item for item in listed.result["projects"] if item["name"] == "MCP Write Acceptance Test"
+    )
+    assert row["version"] == 1
+    assert row["created_at"]
+    assert row["updated_at"]
+    assert "project_entity_id" not in row
+    assert "ent_" not in str(row)
 
 
 def test_explicit_situation_create_is_visible_on_continuity_situations(scene: Scene) -> None:
@@ -333,3 +346,167 @@ def test_a_bound_link_requires_an_entity_and_an_unresolved_link_forbids_one() ->
             created_at=when,
             updated_at=when,
         )
+
+
+def _seed_project(
+    scene: Scene,
+    *,
+    name: str,
+    project_id: str | None = None,
+    created_at: datetime = WHEN,
+    state: ProjectState = ProjectState.ACTIVE,
+    closed_at: datetime | None = None,
+) -> Project:
+    project = Project(
+        project_id=project_id or issue_identifier(IdKind.PROJECT),
+        principal_id=scene.principal.principal_id,
+        name=name,
+        state=state,
+        opened_at=created_at,
+        created_at=created_at,
+        updated_at=created_at,
+        closed_at=closed_at,
+        version=1,
+    )
+    scene.world.projects.append(project)
+    return project
+
+
+def test_read_returns_the_owned_project_and_hides_internal_ids(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    created = _invoke(
+        service,
+        scene.principal,
+        Capability.CONTINUITY_PROJECTS_CREATE,
+        Purpose.CONTINUITY_AUTHORING,
+        CreateProject(name="Readable project", idempotency_key="author-read-0001"),
+    )
+    assert created.error is None and created.result is not None
+    project_id = created.result["project_id"]
+    read = _invoke(
+        service,
+        scene.principal,
+        Capability.CONTINUITY_PROJECTS_READ,
+        Purpose.CAPTURE_REVIEW,
+        ReadProject(project_id=project_id),
+    )
+    assert read.error is None and read.result is not None
+    assert read.result["project_id"] == project_id
+    assert read.result["name"] == "Readable project"
+    assert read.result["state"] == ProjectState.ACTIVE.value
+    assert read.result["version"] == 1
+    assert read.result["created_at"]
+    assert read.result["updated_at"]
+    assert "project_entity_id" not in read.result
+    assert not any(str(value).startswith("ent_") for value in read.result.values())
+
+
+def test_missing_and_cross_principal_reads_are_the_same_not_found(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    created = _invoke(
+        service,
+        scene.principal,
+        Capability.CONTINUITY_PROJECTS_CREATE,
+        Purpose.CONTINUITY_AUTHORING,
+        CreateProject(name="Owner project", idempotency_key="author-read-isolation-0001"),
+    )
+    assert created.error is None and created.result is not None
+    missing = _invoke(
+        service,
+        scene.principal,
+        Capability.CONTINUITY_PROJECTS_READ,
+        Purpose.CAPTURE_REVIEW,
+        ReadProject(project_id=issue_identifier(IdKind.PROJECT)),
+    )
+    stranger = operator()
+    foreign = _invoke(
+        service,
+        stranger,
+        Capability.CONTINUITY_PROJECTS_READ,
+        Purpose.CAPTURE_REVIEW,
+        ReadProject(project_id=created.result["project_id"]),
+    )
+    assert missing.error is not None and foreign.error is not None
+    assert missing.error.code is ErrorCode.NOT_FOUND
+    assert foreign.error.code is ErrorCode.NOT_FOUND
+    assert missing.error.safe_details == foreign.error.safe_details
+
+
+def test_list_filters_state_query_and_exact_name(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    alpha = _seed_project(scene, name="Alpha Site")
+    _seed_project(scene, name="Beta Site")
+    closed = _seed_project(scene, name="Closed Alpha")
+    scene.world.projects[-1] = replace(closed, state=ProjectState.CLOSED, closed_at=WHEN)
+
+    def listed(**fields: object) -> list[str]:
+        envelope = _invoke(
+            service,
+            scene.principal,
+            Capability.CONTINUITY_PROJECTS,
+            Purpose.CAPTURE_REVIEW,
+            ListProjects(**fields),  # type: ignore[arg-type]
+        )
+        assert envelope.error is None and envelope.result is not None
+        return [row["name"] for row in envelope.result["projects"]]
+
+    assert listed(state=ProjectState.CLOSED) == ["Closed Alpha"]
+    assert set(listed(query="Alpha")) == {"Closed Alpha", "Alpha Site"}
+    assert listed(exact_name="Alpha Site") == [alpha.name]
+
+
+def test_query_and_exact_name_together_are_invalid() -> None:
+    with pytest.raises(InvalidRequestError):
+        ListProjects(query="Alpha", exact_name="Alpha Site")
+
+
+def test_malformed_after_cursor_is_invalid_request() -> None:
+    with pytest.raises(InvalidRequestError):
+        ListProjects(after="not-a-project-id")
+
+
+def test_list_keyset_cursor_does_not_skip_or_duplicate(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    ids = sorted(issue_identifier(IdKind.PROJECT) for _ in range(3))
+    for index, project_id in enumerate(ids):
+        _seed_project(scene, name=f"Keyset {index}", project_id=project_id, created_at=WHEN)
+    expected = list(reversed(ids))
+
+    def page(*, page_size: int, after: str | None = None) -> tuple[list[str], str | None, bool]:
+        envelope = _invoke(
+            service,
+            scene.principal,
+            Capability.CONTINUITY_PROJECTS,
+            Purpose.CAPTURE_REVIEW,
+            ListProjects(page_size=page_size, after=after),
+        )
+        assert envelope.error is None and envelope.result is not None
+        truncation = envelope.disclosure.truncation
+        names = [row["project_id"] for row in envelope.result["projects"]]
+        assert Limitation.LISTING_HAS_NO_CONTINUATION.value not in envelope.disclosure.limitations
+        return names, truncation.next_cursor, truncation.is_truncated
+
+    first, cursor, truncated = page(page_size=1)
+    assert truncated is True
+    assert first == [expected[0]]
+    assert cursor == expected[0]
+    second, cursor, truncated = page(page_size=1, after=cursor)
+    assert truncated is True
+    assert second == [expected[1]]
+    assert cursor == expected[1]
+    third, cursor, truncated = page(page_size=1, after=cursor)
+    assert truncated is False
+    assert third == [expected[2]]
+    assert cursor is None
+    assert first + second + third == expected
+
+    wider, cursor, truncated = page(page_size=2)
+    assert truncated is True
+    assert wider == expected[:2]
+    assert cursor == expected[1]
+    rest, cursor, truncated = page(page_size=2, after=cursor)
+    assert truncated is False
+    assert rest == expected[2:]
+    assert cursor is None
+    assert wider + rest == expected
+    assert set(wider) & set(rest) == set()

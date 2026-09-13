@@ -3684,12 +3684,36 @@ class _Projects(ProjectRepository):
         )
 
     def list_projects(
-        self, principal_id: str, state_filter: ProjectState | None = None
+        self,
+        principal_id: str,
+        *,
+        after: str | None = None,
+        state: ProjectState | None = None,
+        query: str | None = None,
+        exact_name: str | None = None,
+        limit: int | None = None,
     ) -> tuple[Project, ...]:
         rows = [row for row in self._world.projects if row.principal_id == principal_id]
-        if state_filter is not None:
-            rows = [row for row in rows if row.state is state_filter]
-        rows.sort(key=lambda row: row.created_at, reverse=True)
+        if state is not None:
+            rows = [row for row in rows if row.state is state]
+        if query is not None:
+            needle = query.casefold()
+            rows = [row for row in rows if needle in row.name.casefold()]
+        if exact_name is not None:
+            target = exact_name.strip()
+            rows = [row for row in rows if row.name.strip() == target]
+        rows.sort(key=lambda row: (row.created_at, row.project_id), reverse=True)
+        if after is not None:
+            if not any(row.project_id == after for row in rows):
+                raise WorkCursorError
+            rows = rows[
+                next(
+                    (index + 1 for index, row in enumerate(rows) if row.project_id == after),
+                    len(rows),
+                ) :
+            ]
+        if limit is not None:
+            rows = rows[:limit]
         return tuple(rows)
 
     def link_situation(
@@ -8940,6 +8964,28 @@ def staged_review_case(scene: Scene, capture: CaptureVersion | None = None) -> R
     )
     scene.world.review_cases.append(case)
     return case
+
+
+def staged_continuity_project(scene: Scene, *, name: str = "a synthetic project") -> Project:
+    """One stored Continuity Project so `continuity.projects.read` can answer."""
+    existing = next(
+        (row for row in scene.world.projects if row.principal_id == scene.principal.principal_id),
+        None,
+    )
+    if existing is not None:
+        return existing
+    project = Project(
+        project_id=issue_identifier(IdKind.PROJECT),
+        principal_id=scene.principal.principal_id,
+        name=name,
+        state=ProjectState.ACTIVE,
+        opened_at=WHEN,
+        created_at=WHEN,
+        updated_at=WHEN,
+        version=1,
+    )
+    scene.world.projects.append(project)
+    return project
 
 
 def staged_task(scene: Scene, *, title: str = "a synthetic task") -> TaskV2:

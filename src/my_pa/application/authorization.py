@@ -161,6 +161,7 @@ from my_pa.application.commands import (
     ReadIntelligenceArtifact,
     ReadKnowledge,
     ReadManagedDocument,
+    ReadProject,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -342,6 +343,7 @@ def _requested_scope(
             | GetPulse()
             | ListSituations()
             | ListProjects()
+            | ReadProject()
             | CreateProject()
             | CreateSituation()
             | RecordTask()

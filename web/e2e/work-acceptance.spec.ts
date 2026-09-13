@@ -319,8 +319,31 @@ test.describe("operational Board and Calendar", () => {
   /** The shell-persistent feedback region, which outlives any card. */
   const feedback = (page: Page) => page.getByTestId("mutation-feedback-region");
 
-  /** The four narrow widths this work package pins for TASK-AC-045. */
-  const NARROW_WIDTHS = [320, 375, 390, 430] as const;
+  /**
+   * The narrow widths this work package pins for TASK-AC-045.
+   *
+   * 393 is WP-TUX-06's addition: the repaired Status control is now a definite
+   * 44 CSS px tall, and a definite height is exactly the kind of change that
+   * shows up as card-density or wrapping pressure at one specific width. 393 is
+   * the modern default-phone width that sits between the two the suite already
+   * pinned, so the matrix has no gap where the pressure could hide.
+   */
+  const NARROW_WIDTHS = [320, 375, 390, 393, 430] as const;
+
+  /**
+   * The full width matrix the geometry of the Status control is asserted over:
+   * every narrow width above at the suite's mobile height, plus tablet and
+   * desktop. Heights follow the convention already in this file — 844 for the
+   * narrow widths, and the `tablet`/`desktop` project viewports for the rest.
+   */
+  const STATUS_GEOMETRY_MATRIX = [
+    ...NARROW_WIDTHS.map((width) => ({ width, height: 844 })),
+    { width: 768, height: 1024 },
+    { width: 1280, height: 800 },
+  ] as const;
+
+  /** This shell's row height, and the floor every touch target is held to. */
+  const ROW_HEIGHT = 44;
 
   /**
    * Chromium drives a closed `<select>` from the keyboard alone: ArrowDown moves
@@ -441,28 +464,48 @@ test.describe("operational Board and Calendar", () => {
    * WCAG 2.5.8 (AA) sets the minimum target at 24x24 CSS px; this shell builds
    * its controls to a 44px row height, which is the floor asserted here.
    *
-   * **A defect is recorded here rather than asserted away.** On WebKit the
-   * native `<select>` that carries Status renders 22 CSS px tall on the Board
-   * card — below the shell's own 44px floor *and* below WCAG 2.5.8's 24px
-   * minimum — because the element's `min-height` does not take effect on a
-   * default-appearance select in that engine. This test is therefore expected to
-   * fail on WebKit and expected to pass everywhere else: it holds the real
-   * number, it goes red on Chromium the moment that regresses, and it goes red
-   * on WebKit the day the product fixes it. `src/` belongs to another worker in
-   * this package; this is the report, not the fix.
+   * **Every control is proved on its own, and nothing here is expected to
+   * fail.** WebKit once rendered the Status `<select>` 22 CSS px tall, because a
+   * default-appearance select in that engine does not honour `min-height`;
+   * `task-status-control.tsx` now gives it a definite `h-11`, and the WebKit
+   * expected-failure this test used to carry is gone.
+   *
+   * **Exactly what is proved, and where the claim stops.** The floor is
+   * *measured* on Chromium (the `desktop`, `tablet` and `mobile` projects) at
+   * 119x44, and on **macOS** WebKit at 106x44 — the engine and machine where
+   * the 22px defect actually reproduces, which is what makes that measurement
+   * evidence for the fix.
+   *
+   * It does not hold on "every engine", and a green run here on a CI runner is
+   * weaker than it looks: the Linux Playwright builds render this control 44px
+   * whether or not the fix is present, so neither their WebKit nor their
+   * Firefox result can detect this defect. That was established by running a
+   * branch with the fix removed. The full explanation, and the pointer to the
+   * guard that does fail, lives on the sizing-contract test in
+   * `src/components/tasks/task-status-control.test.tsx` — deliberately in one
+   * place rather than restated here.
+   *
+   * The assertions below are unconditional on whatever engine runs them, which
+   * is what keeps this test useful across all of them: it still proves the
+   * absence of overflow, clipping and layout regression everywhere it runs.
+   *
+   * Each control is still reported by name. The five checks are `expect.soft`,
+   * which records a failure and keeps going instead of aborting at the first
+   * one, so a single run enumerates *every* undersized control rather than only
+   * the first; the test still fails, and no floor is lowered to buy that. The
+   * only conditional below is the `continue` after a missing box, which guards
+   * a TypeError on a measurement that has already been recorded as failed.
    */
   test("TASK-AC-017 the Board Status and Due controls are real touch targets", async ({ page }) => {
-    test.fail(
-      test.info().project.name === "webkit",
-      "Reported, not fixed: WebKit renders the Status select 22px tall, below WCAG 2.5.8's 24px and this shell's 44px.",
-    );
     test.setTimeout(180_000);
     const title = await seedTask(page);
     await page.goto("/work?view=all-open&perspective=board");
     const card = boardCard(page, title);
     await expect(card).toHaveCount(1);
 
-    const undersized: string[] = [];
+    // Status is measured first and named first: this is the control the WebKit
+    // defect was in, and it is never again allowed to fail silently behind an
+    // aggregate or an expected failure.
     for (const [name, control] of [
       ["Status", card.getByTestId("task-status-control").getByRole("combobox")],
       ["Due", card.getByRole("button", { name: /^Due, / })],
@@ -471,12 +514,12 @@ test.describe("operational Board and Calendar", () => {
       ["More", card.getByTestId("task-board-card-more")],
     ] as const) {
       const box = await control.boundingBox();
-      expect(box, `${name} has no box on the Board card`).not.toBeNull();
-      if (box!.height < 44 || box!.width < 24) {
-        undersized.push(`${name} ${box!.width}x${box!.height}`);
-      }
+      expect.soft(box, `${name} has no box on the Board card`).not.toBeNull();
+      // Recorded above; this only avoids dereferencing null for the next two.
+      if (box === null) continue;
+      expect.soft(box.height, `${name} is below this shell's 44px row height`).toBeGreaterThanOrEqual(44);
+      expect.soft(box.width, `${name} is below WCAG 2.5.8's 24px minimum width`).toBeGreaterThanOrEqual(24);
     }
-    expect(undersized, "Board controls below 44px tall or WCAG 2.5.8's 24px wide").toEqual([]);
   });
 
   /**
@@ -602,10 +645,15 @@ test.describe("operational Board and Calendar", () => {
       const status = card.getByTestId("task-status-control").getByRole("combobox");
       await expect(status).toBeVisible();
       await expect(status).toBeEnabled();
-      await expect(card.getByRole("button", { name: /^Due, / })).toBeVisible();
-      await expect(card.getByTestId("task-board-card-comment")).toBeVisible();
-      await expect(card.getByRole("button", { name: "Close Task", exact: true })).toBeVisible();
-      await expect(card.getByTestId("task-board-card-more")).toBeVisible();
+      for (const [name, control] of [
+        ["Due", card.getByRole("button", { name: /^Due, / })],
+        ["Comment", card.getByTestId("task-board-card-comment")],
+        ["Close Task", card.getByRole("button", { name: "Close Task", exact: true })],
+        ["More", card.getByTestId("task-board-card-more")],
+      ] as const) {
+        await expect(control, `${name} is not visible at ${width}`).toBeVisible();
+        await expect(control, `${name} is not enabled at ${width}`).toBeEnabled();
+      }
       expect(
         await horizontalOverflow(page),
         `Board overflows horizontally at ${width}`,
@@ -615,6 +663,26 @@ test.describe("operational Board and Calendar", () => {
       const cardBox = await card.boundingBox();
       expect(cardBox, "Board card has no box").not.toBeNull();
       expect(cardBox!.x + cardBox!.width, `Board card exceeds ${width}`).toBeLessThanOrEqual(width + 1);
+
+      // WP-TUX-06. The Status control is measured at every pinned width, not
+      // merely found: a definite 44px height is what the WebKit repair added,
+      // and a narrow card is where a definite height would push something out.
+      const statusBox = await status.boundingBox();
+      expect(statusBox, `Status has no box at ${width}`).not.toBeNull();
+      expect(
+        statusBox!.height,
+        `Status is below this shell's ${ROW_HEIGHT}px row height at ${width}`,
+      ).toBeGreaterThanOrEqual(ROW_HEIGHT);
+      expect(
+        statusBox!.x + statusBox!.width,
+        `Status escapes its card at ${width}`,
+      ).toBeLessThanOrEqual(cardBox!.x + cardBox!.width + 1);
+      // Nothing is clipped away inside the card either: a card whose own
+      // content is wider than its box is hiding an operation, not fitting.
+      expect(
+        await card.evaluate((el) => el.scrollWidth - el.clientWidth),
+        `Board card clips its own content at ${width}`,
+      ).toBeLessThanOrEqual(1);
 
       await page.goto("/work?view=all-open&perspective=calendar");
       await expect(page.getByRole("heading", { name: "Work calendar", level: 2 })).toBeVisible();
@@ -642,4 +710,133 @@ test.describe("operational Board and Calendar", () => {
       ).toBeLessThanOrEqual(1);
     });
   }
+
+  /**
+   * WP-TUX-06. The repaired Status control, measured across the whole width
+   * matrix, on a populated Board.
+   *
+   * **Why this test exists.** `task-status-control.tsx` now sets a *definite*
+   * height (`h-11`) on the Task Status `<select>`, because WebKit resolves a
+   * bare `min-height` down to the intrinsic 18px and rendered the control 22 CSS
+   * px tall against this shell's 44px target. A definite height is the correct
+   * repair, and it is also the kind of change that buys its target back out of
+   * some other budget: card density, wrapping, clipping, horizontal overflow —
+   * most plausibly at 320px, the narrowest width this product claims. Nothing
+   * proved it did not. This does.
+   *
+   * One test rather than one per size, deliberately: a single seeded Task is
+   * carried across every viewport, so the same card is measured throughout and
+   * the matrix costs one seed instead of seven. The assertions are `expect.soft`
+   * so that one run reports *every* width that fails rather than stopping at the
+   * first; nothing is lowered to achieve that, and the test still fails.
+   *
+   * The measured height at each size is printed, so the record carries numbers
+   * rather than the word "passed".
+   *
+   * Not claimed: this is a viewport measurement, not browser zoom, not a
+   * screen-reader proof, and not a WCAG 2.2 AA claim. WP30 owns those.
+   */
+  test("WP-TUX-06 the Board Status control holds 44px across the width matrix without layout pressure", async ({
+    page,
+  }) => {
+    test.setTimeout(300_000);
+    const title = await seedTask(page, { due: civilDateAhead(4) });
+    const measured: string[] = [];
+
+    for (const { width, height } of STATUS_GEOMETRY_MATRIX) {
+      await page.setViewportSize({ width, height });
+      await page.goto("/work?view=all-open&perspective=board");
+      await expect(page.getByRole("region", { name: "Task lifecycle board" })).toBeVisible();
+      const card = boardCard(page, title);
+      await expect(card).toHaveCount(1);
+      const status = card.getByTestId("task-status-control").getByRole("combobox");
+      await expect(status).toBeVisible();
+
+      const statusBox = await status.boundingBox();
+      const cardBox = await card.boundingBox();
+      expect.soft(statusBox, `Status has no box at ${width}x${height}`).not.toBeNull();
+      expect.soft(cardBox, `Board card has no box at ${width}x${height}`).not.toBeNull();
+      if (statusBox === null || cardBox === null) continue;
+
+      measured.push(
+        `${width}x${height}: Status ${Math.round(statusBox.width)}x${Math.round(statusBox.height)}, ` +
+          `card ${Math.round(cardBox.width)}x${Math.round(cardBox.height)}`,
+      );
+
+      // The floor the repair exists to hold.
+      expect
+        .soft(
+          statusBox.height,
+          `Status is below this shell's ${ROW_HEIGHT}px row height at ${width}x${height}`,
+        )
+        .toBeGreaterThanOrEqual(ROW_HEIGHT);
+      // The taller control stays inside the card that owns it, and the card
+      // stays inside the viewport. Same tolerance the narrow-width test uses.
+      expect
+        .soft(statusBox.x + statusBox.width, `Status escapes its card at ${width}x${height}`)
+        .toBeLessThanOrEqual(cardBox.x + cardBox.width + 1);
+      expect
+        .soft(cardBox.x + cardBox.width, `Board card exceeds ${width} at ${width}x${height}`)
+        .toBeLessThanOrEqual(width + 1);
+      // No clipping: a card whose own content is wider than its box has hidden
+      // an operation rather than fitted it.
+      expect
+        .soft(
+          await card.evaluate((el) => el.scrollWidth - el.clientWidth),
+          `Board card clips its own content at ${width}x${height}`,
+        )
+        .toBeLessThanOrEqual(1);
+      // The document does not move sideways. The existing tolerance, unchanged.
+      expect
+        .soft(
+          await horizontalOverflow(page),
+          `Board overflows horizontally at ${width}x${height}`,
+        )
+        .toBeLessThanOrEqual(1);
+
+      // Every operation is still there and still operable — the taller Status
+      // must not have pushed a neighbour off the card or under another.
+      for (const [name, control] of [
+        ["Due", card.getByRole("button", { name: /^Due, / })],
+        ["Comment", card.getByTestId("task-board-card-comment")],
+        ["Close Task", card.getByRole("button", { name: "Close Task", exact: true })],
+        ["More", card.getByTestId("task-board-card-more")],
+      ] as const) {
+        await expect.soft(control, `${name} is not visible at ${width}x${height}`).toBeVisible();
+        await expect.soft(control, `${name} is not enabled at ${width}x${height}`).toBeEnabled();
+      }
+    }
+
+    console.log(`WP-TUX-06 Status geometry matrix:\n  ${measured.join("\n  ")}`);
+    expect(measured, "no viewport in the matrix was measured").toHaveLength(
+      STATUS_GEOMETRY_MATRIX.length,
+    );
+
+    // Present is not operable. The narrowest viewport in the matrix changes
+    // Status for real and the change survives a reload from the server, so the
+    // taller control is proved to work rather than merely to fit.
+    await page.setViewportSize({ width: 320, height: 844 });
+    await page.goto("/work?view=all-open&perspective=board");
+    const narrowCard = boardCard(page, title);
+    await expect(narrowCard).toHaveCount(1);
+    const narrowStatus = narrowCard.getByTestId("task-status-control").getByRole("combobox");
+    await narrowStatus.selectOption({ label: "In progress" });
+    await expect(feedback(page).getByText("Status changed to In progress")).toBeVisible();
+    await expect(page.getByTestId("task-compact-sheet")).toHaveCount(0);
+    expect(await horizontalOverflow(page), "Board overflows after a Status change at 320").toBeLessThanOrEqual(1);
+
+    await page.goto("/work?view=all-open&perspective=board");
+    const reloaded = boardCard(page, title).getByTestId("task-status-control").getByRole("combobox");
+    await expect(reloaded).toBeVisible();
+    expect(
+      await reloaded.evaluate((el) => (el as HTMLSelectElement).selectedOptions[0]?.textContent ?? ""),
+      "the Status change did not round-trip at 320",
+    ).toBe("In progress");
+    const reloadedBox = await reloaded.boundingBox();
+    expect(reloadedBox, "Status has no box after the round-trip at 320").not.toBeNull();
+    expect(
+      reloadedBox!.height,
+      `Status is below this shell's ${ROW_HEIGHT}px row height after the round-trip at 320`,
+    ).toBeGreaterThanOrEqual(ROW_HEIGHT);
+  });
 });

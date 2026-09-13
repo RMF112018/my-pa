@@ -90,9 +90,19 @@ export function TaskStatusControl({
       <label htmlFor={controlId} className="text-sm text-text-muted">
         {TASK_STATUS_FIELD_LABEL}
       </label>
+      {/*
+        `h-11` is not redundant beside `min-h-11`, and removing it reintroduces a
+        real defect. macOS WebKit does not honour `min-height` on a
+        default-appearance `<select>` — it resolves it down to the intrinsic
+        ~18px — so this control rendered 22 CSS px there against the shell's 44px
+        target. A definite height is what fixes it. Linux CI renders 44px either
+        way, so no browser lane will catch the removal; the guard that does is
+        the sizing-contract test in `task-status-control.test.tsx`, which runs in
+        the blocking `frontend / unit` job. Full story there.
+      */}
       <Select
         id={controlId}
-        className="min-h-11 min-w-11"
+        className="h-11 min-h-11 min-w-11"
         value={value}
         disabled={disabled || pending}
         aria-describedby={conflict ? conflictId : undefined}

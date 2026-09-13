@@ -408,6 +408,51 @@ jobs:
           # Origin/CSRF plus Search BFF smoke. WebAuthn virtual authenticator is
           # Chromium CDP only (HARVEST_CANNOT_PROVE). Playwright WebKit is not Safari.
           MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/browser-security.spec.ts e2e/search-contract.spec.ts --project=firefox --project=webkit
+      - name: Run Work control geometry under Firefox/WebKit (INTRODUCED / ADVISORY)
+        # Runs even when the step above fails. That step exercises unrelated
+        # origin/CSRF and Search specs and has a known Firefox failure in
+        # hideNextjsDevOverlay (page.addStyleTag blocked by CSP), which would
+        # otherwise abort the job before this measurement ever executes -- as it
+        # did on the first run of this lane. The geometry evidence must not be
+        # contingent on an unrelated spec passing.
+        if: always()
+        env:
+          MYPA_E2E_PYTHON: python
+          MYPA_E2E_ADMIN_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/postgres
+          MYPA_E2E_DATABASE_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/my_pa_wp13_e2e
+        run: |
+          set -euo pipefail
+          python_bin="$(command -v python)"
+          test -x "${python_bin}"
+          # WP-TUX-06 WebKit remediation. The shared Task Status <select> rendered
+          # 22px tall in macOS WebKit because a default-appearance select resolves
+          # the author min-height to its intrinsic height; it now carries a
+          # definite height.
+          #
+          # READ THIS BEFORE TRUSTING A GREEN HERE. A pass in this step is NOT
+          # evidence that the 22px defect is fixed. On a branch with the fix
+          # removed, this lane measured Status at 130x44 (WebKit) and 122x44
+          # (Firefox) and passed. The Linux builds of both engines used here
+          # honour min-height on a native select -- macOS WebKit does NOT, which
+          # is the whole reason the definite height exists -- and ui/select.tsx
+          # already sets min-h-[var(--control-height)], 44px at default density,
+          # so these runners render 44px either way. The 22px collapse did not
+          # reproduce on any Linux runner. What this step does prove is
+          # the absence of overflow, clipping and layout regressions at the
+          # measured widths -- which is why it is kept.
+          #
+          # The ONLY blocking regression guard for the fix itself is the class
+          # contract in task-status-control.test.tsx, running in "frontend /
+          # unit". Do not read "frontend / responsive" as a second one: it runs
+          # work-acceptance.spec.ts on the Chromium desktop/tablet/mobile
+          # projects and does feed the required gate, but Chromium reports 44px
+          # with the fix removed too, so it is blind to this defect exactly as
+          # the lanes here are. What it gates is Chromium layout and behaviour,
+          # not this control's height. ("frontend / e2e-critical" does not run
+          # that spec at all.)
+          # This step is ADVISORY because this whole job is continue-on-error.
+          # Playwright WebKit is not Safari.
+          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/work-acceptance.spec.ts --project=firefox --project=webkit --grep "real touch targets|holds 44px across the width matrix"
 
   visual:
     name: frontend / visual

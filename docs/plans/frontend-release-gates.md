@@ -23,7 +23,7 @@ Advisory jobs stay advisory. WP29 does not promote them into `frontend / require
 | Job | Why advisory | Promotion condition |
 |---|---|---|
 | `frontend / pwa-offline` | WP26 introduction; Chromium only; not real-device PWA | Green required-PR streak and no flake. Still not Safari/iOS/Android. |
-| `frontend / browsers` | Firefox/WebKit critical subset; WebAuthn stays Chromium-CDP; Playwright WebKit is not Safari | Partial promotion possible after flake evidence. Never treat WebKit as Safari. |
+| `frontend / browsers` | Firefox/WebKit critical subset, plus the WP-TUX-06 Work control geometry; WebAuthn stays Chromium-CDP; Playwright WebKit is not Safari | Partial promotion possible after flake evidence. Never treat WebKit as Safari. **A green here does not prove the WP-TUX-06 Task Status 44px fix**: the Linux builds render that control 44px with or without it (measured on a fix-removed branch), so promoting this lane must not be read as gating that defect. Its blocking guard is the class contract in `frontend / unit`. |
 | `frontend / visual` | Darwin PNG baselines only; Linux CI will mismatch until linux snapshots are committed. No auto-update. | Commit linux desktop baselines; freeze auto-approval policy. |
 | `frontend / performance` | Observational `.next/static` JS census. **No accepted numeric budget.** | Accept a budget from measured evidence; do not invent one here. |
 | `frontend / degraded-gateway` | Dead-gateway `failure-states.spec.ts` after `MYPA_SESSION_SERVICE_URL` split **and** e2e stack origin allowlist including `http://localhost:3101`. Sign-in topology newly enabled. | Promote into `e2e-critical` only after a green advisory streak. |
@@ -35,8 +35,8 @@ Advisory jobs stay advisory. WP29 does not promote them into `frontend / require
 | Engine | CI now | Claim |
 |---|---|---|
 | Chromium (Playwright) | Required via `e2e-critical`, a11y, responsive | CI_PARTIAL for Chromium desktop |
-| Firefox (Playwright) | Advisory `frontend / browsers` | Origin/CSRF + Search subset |
-| WebKit (Playwright) | Advisory `frontend / browsers` | Same subset. **Not Safari.** |
+| Firefox (Playwright) | Advisory `frontend / browsers` | Origin/CSRF + Search subset, plus WP-TUX-06 Work control geometry (non-discriminating for the 44px defect — see note above) |
+| WebKit (Playwright) | Advisory `frontend / browsers` | Same subset and geometry. Linux WebKit, which does **not** reproduce the macOS 22px `<select>` collapse. **Not Safari.** |
 | Real Safari / iOS / Android | None | WP30 |
 
 ## Visual policy

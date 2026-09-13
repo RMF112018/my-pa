@@ -420,10 +420,13 @@ jobs:
           # WP-TUX-06 WebKit remediation. The shared Task Status <select> rendered
           # 22px tall in WebKit because a default-appearance select resolves the
           # author min-height to its intrinsic height; it now carries a definite
-          # height. Chromium geometry is already gated by the blocking e2e job;
+          # height. Chromium geometry is already gated by the blocking
+          # "frontend / responsive" job, which runs work-acceptance.spec.ts on
+          # the Chromium desktop/tablet/mobile projects and feeds the required
+          # gate; the "frontend / e2e-critical" job does not run that spec;
           # this step is the Firefox/WebKit measurement and is ADVISORY because
           # this whole job is continue-on-error. Playwright WebKit is not Safari.
-          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/work-acceptance.spec.ts --project=firefox --project=webkit --grep "real touch targets"
+          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/work-acceptance.spec.ts --project=firefox --project=webkit --grep "real touch targets|holds 44px across the width matrix"
 
   visual:
     name: frontend / visual

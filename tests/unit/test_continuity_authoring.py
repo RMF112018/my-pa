@@ -203,6 +203,29 @@ def test_reused_key_with_different_content_conflicts(scene: Scene) -> None:
     assert list(refused.error.safe_details) == ["idempotency_key"]
 
 
+def test_duplicate_project_canonical_name_conflicts_on_name(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    first = _invoke(
+        service,
+        scene.principal,
+        Capability.CONTINUITY_PROJECTS_CREATE,
+        Purpose.CONTINUITY_AUTHORING,
+        CreateProject(name="Shared Name", idempotency_key="author-name-0001"),
+    )
+    assert first.error is None
+    refused = _invoke(
+        service,
+        scene.principal,
+        Capability.CONTINUITY_PROJECTS_CREATE,
+        Purpose.CONTINUITY_AUTHORING,
+        CreateProject(name="shared name", idempotency_key="author-name-0002"),
+    )
+    assert refused.error is not None
+    assert refused.error.code is ErrorCode.CONFLICT
+    assert list(refused.error.safe_details) == ["name"]
+    assert len(scene.world.projects) == 1
+
+
 def test_a_foreign_project_id_cannot_attach_a_task(scene: Scene) -> None:
     service = build_service(scene.world, scene.providers)
     stranger = operator()

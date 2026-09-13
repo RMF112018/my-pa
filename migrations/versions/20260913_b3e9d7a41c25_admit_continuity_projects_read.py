@@ -175,7 +175,7 @@ def _restate_audit(capability: str, purpose: str) -> None:
 def upgrade() -> None:
     _restate_audit(_CAPABILITIES_AT_THIS_REVISION, _PURPOSES_AT_THIS_REVISION)
     op.execute(
-        f"CREATE INDEX {INDEX} ON {SCHEMA}.projects "  # noqa: S608
+        f"CREATE INDEX {INDEX} ON {SCHEMA}.projects "
         "(principal_id, created_at DESC, project_id DESC)"
     )
 

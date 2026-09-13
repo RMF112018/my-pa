@@ -5236,12 +5236,17 @@ class ApplicationService:
                 if project is None:
                     raise InternalError()
                 return self._project_authoring_result(authorization, project, replayed=True)
-            project = authoring.author_project(
-                principal_id=authorization.principal.principal_id,
-                project_id=object_id,
-                name=command.name,
-                description=command.description,
-            )
+            try:
+                project = authoring.author_project(
+                    principal_id=authorization.principal.principal_id,
+                    project_id=object_id,
+                    name=command.name,
+                    description=command.description,
+                )
+            except ValueError as error:
+                if str(error) != "an active project-type canonical name is already held":
+                    raise
+                raise ConflictError(SafeDetail.NAME) from None
         return self._project_authoring_result(authorization, project, replayed=False)
 
     def _continuity_projects_update(

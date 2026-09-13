@@ -121,6 +121,9 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         # WP-MCP-PROJ-01. `9f2c8a1d4e70` adds the Continuity Project↔Entity
         # bridge above this revision.
         "project_entity_links",
+        # WP-MCP-PROJ-03. `c4f1a8e52d90` adds append-only Project history
+        # above this revision.
+        "project_history",
         "commitment_history",
         "situations",
         "frames",

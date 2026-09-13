@@ -346,6 +346,8 @@ STACKED_ABOVE: Final[frozenset[str]] = frozenset(
         "task_comments",
         # WP-MCP-PROJ-01. `9f2c8a1d4e70` stacks `project_entity_links`.
         "project_entity_links",
+        # WP-MCP-PROJ-03. `c4f1a8e52d90` stacks `project_history`.
+        "project_history",
     }
 )
 

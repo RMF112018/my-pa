@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resolveSessionPrincipal } from "@/lib/auth/principal";
 import { AppShell } from "@/components/shell/app-shell";
+import { DEFAULT_PROJECT_SCOPE_RESOLUTION } from "@/lib/project-scope/resolver";
 
 /**
  * Signed-in layout. Middleware already guards these routes; this layout
@@ -15,5 +16,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   if (!principal) {
     redirect("/sign-in");
   }
-  return <AppShell principal={principal}>{children}</AppShell>;
+  // Fail closed until the canonical `continuity.projects.read` decoder and
+  // exact-read BFF adapter are integrated. A Project preference must never be
+  // trusted merely because the browser supplied a well-shaped cookie.
+  return (
+    <AppShell principal={principal} initialProjectScope={DEFAULT_PROJECT_SCOPE_RESOLUTION}>
+      {children}
+    </AppShell>
+  );
 }

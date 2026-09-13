@@ -93,12 +93,23 @@ describe("TaskStatusControl", () => {
    * the definite block height the fix introduced. The geometry itself — that the
    * rendered box really is at least 44 CSS px tall — is proved in Playwright by
    * `e2e/work-acceptance.spec.ts`, "TASK-AC-017 the Board Status and Due
-   * controls are real touch targets", on Chromium and WebKit.
+   * controls are real touch targets", measured on **macOS** WebKit (106x22
+   * before the fix, 106x44 after) and on Chromium.
    *
-   * Why a definite `h-11` rather than `min-h-11` alone: WebKit does not honour
-   * `min-height` on a default-appearance `<select>`, and the control rendered 22
-   * CSS px there. The native select is deliberately kept — no `appearance-none`,
-   * no custom combobox — so the height has to be stated outright.
+   * Be careful which browser evidence you credit. The Linux Playwright builds
+   * used in CI render this control 44px tall *with or without* the fix, because
+   * they honour `min-height` on a native select and `ui/select.tsx` already
+   * carries `min-h-[var(--control-height)]`. A green WebKit or Firefox run in
+   * the advisory `frontend / browsers` lane therefore says nothing about this
+   * defect — it was measured passing on a branch with the fix removed. This
+   * assertion, in the blocking `frontend / unit` job, is what actually fails
+   * when the definite height is dropped.
+   *
+   * Why a definite `h-11` rather than `min-h-11` alone: macOS WebKit does not
+   * honour `min-height` on a default-appearance `<select>` — it resolves it
+   * down to the intrinsic ~18px — and the control rendered 22 CSS px there. The
+   * native select is deliberately kept — no `appearance-none`, no custom
+   * combobox — so the height has to be stated outright.
    */
   it("keeps a native select and pins the definite 44px sizing contract", () => {
     render(<TaskStatusControl value="open" onChange={() => {}} />);

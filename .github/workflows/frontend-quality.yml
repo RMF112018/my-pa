@@ -432,10 +432,12 @@ jobs:
           # READ THIS BEFORE TRUSTING A GREEN HERE. A pass in this step is NOT
           # evidence that the 22px defect is fixed. On a branch with the fix
           # removed, this lane measured Status at 130x44 (WebKit) and 122x44
-          # (Firefox) and passed. Both engines honour min-height on a native
-          # select, and ui/select.tsx already sets min-h-[var(--control-height)]
-          # = 44px, so they render 44px either way. The 22px collapse is macOS
-          # WebKit; no Linux runner reproduces it. What this step does prove is
+          # (Firefox) and passed. The Linux builds of both engines used here
+          # honour min-height on a native select -- macOS WebKit does NOT, which
+          # is the whole reason the definite height exists -- and ui/select.tsx
+          # already sets min-h-[var(--control-height)], 44px at default density,
+          # so these runners render 44px either way. The 22px collapse did not
+          # reproduce on any Linux runner. What this step does prove is
           # the absence of overflow, clipping and layout regressions at the
           # measured widths -- which is why it is kept.
           #

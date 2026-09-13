@@ -101,7 +101,79 @@ async function seedOverdueTask(page: Page, title: string): Promise<string> {
   expect(created.status, `seeding "${title}" must be accepted`).toBeLessThan(300);
   const taskId = created.body.task?.task_id;
   expect(taskId, "the create answer must carry the canonical Task id").toBeTruthy();
+  seededTaskIds.push(taskId as string);
   return taskId as string;
+}
+
+/* ------------------------------------------------------------------ *
+ * Teardown — leave the shared database as this file found it
+ * ------------------------------------------------------------------ */
+
+/**
+ * Every Task the current test has created. Reset per test, drained after it.
+ *
+ * **Why this file has to clean up after itself.** `e2e/stack.sh` creates one
+ * disposable database for the whole run and every spec in the job shares it,
+ * and what this file seeds is not inert: an *open, past-due* Task is precisely
+ * what `pulse_derivation` puts on Today, and what `work_view=unscheduled`
+ * sorts to the front (`asc(due_at).nullslast()` — a Task with no due moment
+ * sorts last). Left behind, these rows accumulate across projects and change
+ * what every later spec sees: Today grows a card per leftover, and the
+ * Unscheduled list fills with past-due rows ahead of whatever the next spec
+ * just created. That is not a hypothetical — it is what put three latent
+ * defects in `journeys.spec.ts` and one in `work-acceptance.spec.ts` on screen
+ * as a red `responsive` job.
+ *
+ * Specs stay independent of each other regardless: every test here seeds its
+ * own marker-named Tasks and locates cards by that marker, so none of them
+ * depends on another's teardown having run. This keeps the *neighbours* clean,
+ * not this file's own tests.
+ */
+const seededTaskIds: string[] = [];
+
+/**
+ * Cancelled, not closed, and the distinction is not cosmetic.
+ *
+ * These Tasks were scaffolding; none of them was ever *done*. `cancelled` says
+ * that, and it keeps the teardown's rows out of any Closed/Completed listing a
+ * neighbouring spec might read or count. Both states are terminal, so either
+ * would take the row off Today and out of Unscheduled — the choice is about
+ * what the record then claims happened.
+ */
+const TEARDOWN_STATE = "cancelled";
+
+/**
+ * Dispose of every Task the test seeded, and fail loudly if disposal fails.
+ *
+ * Deterministic rather than best-effort: each row is read, and one that is not
+ * already terminal is transitioned with the version that read returned. A
+ * silent `catch` here would let the leak back in the moment the endpoint
+ * changed shape, which is exactly the failure this teardown exists to prevent.
+ * There is no polling and no wait: the transition is confirmed by its own
+ * response, so this adds no timing dependence to the suite.
+ */
+async function disposeSeededTasks(page: Page): Promise<void> {
+  const ids = [...seededTaskIds];
+  seededTaskIds.length = 0;
+  for (const taskId of ids) {
+    const read = await api<{ task?: TaskRow }>(page, `/api/tasks/${taskId}`);
+    // A Task the test itself disposed of through the product is already done.
+    if (read.status !== 200 || !read.body.task) continue;
+    const task = read.body.task;
+    if (task.lifecycle_state === "completed" || task.lifecycle_state === "cancelled") continue;
+    const disposed = await api<unknown>(page, `/api/tasks/${taskId}/transition`, {
+      method: "POST",
+      body: {
+        toState: TEARDOWN_STATE,
+        expectedVersion: task.version,
+        idempotencyKey: key("e2e-today-teardown"),
+      },
+    });
+    expect(
+      disposed.status,
+      `teardown must dispose of seeded Task ${taskId}: ${JSON.stringify(disposed.body)}`,
+    ).toBeLessThan(300);
+  }
 }
 
 async function readTask(page: Page, taskId: string): Promise<TaskRow> {
@@ -204,8 +276,18 @@ async function announcements(page: Page): Promise<string[]> {
 }
 
 test.beforeEach(async ({ page }) => {
+  seededTaskIds.length = 0;
   await page.emulateMedia({ reducedMotion: "reduce" });
   await signIn(page);
+});
+
+/*
+  Runs after a failed test as well as a passing one, which is the point: a test
+  that fails half way through has still seeded rows, and those are exactly the
+  runs that used to leave the most behind.
+*/
+test.afterEach(async ({ page }) => {
+  await disposeSeededTasks(page);
 });
 
 /* ------------------------------------------------------------------ *

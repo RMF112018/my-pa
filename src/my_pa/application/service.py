@@ -592,6 +592,7 @@ from my_pa.domain.relationship.entity import (
     EntityOrganizationProfile,
     EntityProfileLimitation,
     EntityProjectParticipation,
+    EntityProjectParticipationState,
     EntityRelationship,
     EntityType,
     ExternalIdentifier,
@@ -651,7 +652,7 @@ from my_pa.domain.search.query import (
     label_for_media_type,
 )
 from my_pa.domain.situation.continuity import CommitmentWorkView
-from my_pa.domain.situation.situation import Project, Situation
+from my_pa.domain.situation.situation import Project, ProjectEntityLinkageState, Situation
 from my_pa.domain.source.enrollment import (
     MAX_ENROLLMENT_BYTES,
     MAX_ENROLLMENT_DEPTH,
@@ -1870,8 +1871,7 @@ def _directed_translated() -> Iterator[None]:
 def _record_family_translated() -> Iterator[None]:
     """The one refusal `RI-ENT-WP-11`'s writes add to the directed vocabulary.
 
-    Stacked *inside* `_directed_translated`, and it carries exactly one clause
-    because the rest of what these writes refuse is already that one's. The five
+    Stacked *inside* `_directed_translated`. The five
     record families raise `UnknownScopeError` for a row outside this partition
     and `StaleDirectedVersionError` for a version that moved, from the same
     `_refuse_stale_or_absent` the directed writes reach -- so absent-or-foreign
@@ -1894,20 +1894,24 @@ def _record_family_translated() -> Iterator[None]:
     raise, and stacking it here would put this plane behind a translator whose
     next clause is about a plane it does not touch.
 
-    **What this deliberately does not catch: the driver's own `IntegrityError`
-    from a family's active partial unique.** A correction whose successor
-    collides with a third active row of the same type and normalized value
-    surfaces that today, untranslated, exactly as `EntityRecordFamilyService`'s
-    own docstrings say it does out of `record_name`. It is not caught here
+    **What this deliberately does not catch for the first three families: the
+    driver's own `IntegrityError` from a family's active partial unique.** A
+    name, address or communication-method correction whose successor collides
+    with a third active row of the same type and normalized value surfaces that
+    today, untranslated, exactly as `EntityRecordFamilyService`'s own
+    docstrings say it does out of `record_name`. It is not caught here
     because it cannot be: the application layer holds no `sqlalchemy`, so the
     only place to classify a constraint violation is the persistence adapter --
-    the five families' inserts are `RI-ENT-WP-08`'s and are under review, and
-    reclassifying their refusals is that package's change to make, not this
-    one's. The consequence is stated rather than hidden: such a collision reaches
-    `invoke`'s terminal catch and answers `internal_error`, which is the wrong
-    class for a conflict a caller could act on, and is recorded as a limitation.
-    The one violation `RI-ENT-WP-11` itself introduces -- two writers racing for
-    one idempotency key -- *is* classified, by
+    those three families' inserts are `RI-ENT-WP-08`'s and remain under that
+    package's disclosed limitation.
+
+    **Participation uniqueness is the exception this package classifies.** The
+    adapter translates a violation of
+    `an_active_project_participation_is_unique_per_project_and_role` into
+    `DuplicateDirectedFactError`, and this translator answers `conflict`
+    naming `subject`. The NULL `role_code` hole in that index is pre-existing
+    and is not closed here. The one violation `RI-ENT-WP-11` itself introduces
+    -- two writers racing for one idempotency key -- *is* classified, by
     `SqlEntityRepository.record_mutation_event`'s
     `_duplicate_translated(_MUTATION_KEY_UNIQUE)`, and arrives here as the
     `DirectedWriteError` the clause above already answers.
@@ -1917,6 +1921,8 @@ def _record_family_translated() -> Iterator[None]:
         yield
     except EntityMutationConflictError:
         failure = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+    except DuplicateDirectedFactError:
+        failure = ConflictError(SafeDetail.SUBJECT)
     if failure is not None:
         raise failure
 
@@ -5168,7 +5174,11 @@ class ApplicationService:
         truncated = len(found) > page_size
         page = found[:page_size]
         return _Result(
-            payload={"projects": [self._continuity_project_payload(project) for project in page]},
+            payload={
+                "projects": [
+                    self._continuity_project_payload(unit_of_work, project) for project in page
+                ]
+            },
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=_CONTINUITY_TRUST_BASIS,
@@ -5191,7 +5201,7 @@ class ApplicationService:
         if project is None:
             raise NotFoundError(SafeDetail.PROJECT_ID)
         return _Result(
-            payload=self._continuity_project_payload(project),
+            payload=self._continuity_project_payload(unit_of_work, project),
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CONTINUITY_TRUST_BASIS),
         )
 
@@ -5327,7 +5337,7 @@ class ApplicationService:
             raise _CommitRejectedConflictError(ConflictError(SafeDetail.PROJECT_ID)) from None
         if receipt is None:
             raise NotFoundError(SafeDetail.PROJECT_ID)
-        payload = self._continuity_project_payload(receipt.project)
+        payload = self._continuity_project_payload(unit_of_work, receipt.project)
         payload["replayed"] = receipt.replayed
         return _Result(
             payload=payload,
@@ -5470,19 +5480,96 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CONTINUITY_TRUST_BASIS),
         )
 
-    def _continuity_project_payload(self, project: Project) -> dict[str, object]:
+    def _continuity_project_payload(
+        self, unit_of_work: UnitOfWork, project: Project
+    ) -> dict[str, object]:
         return {
             "project_id": project.project_id,
             "name": project.name,
             "state": project.state.value,
             "description": project.description,
             "participants": list(project.participants),
+            "canonical_participations": self._canonical_participations(
+                unit_of_work, project.principal_id, project.project_id
+            ),
             "opened_at": format_rfc3339(project.opened_at),
             "closed_at": None if project.closed_at is None else format_rfc3339(project.closed_at),
             "created_at": format_rfc3339(project.created_at),
             "updated_at": format_rfc3339(project.updated_at),
             "version": project.version,
         }
+
+    def _canonical_participations(
+        self, unit_of_work: UnitOfWork, principal_id: str, project_id: str
+    ) -> list[dict[str, object]]:
+        """Active RI participations for a bound Continuity Project, or empty.
+
+        Unresolved linkage is an empty list rather than a refusal: a Project
+        read still answers, and the JSON `participants` echo remains the
+        non-authoritative field it was. The bound entity id is not published.
+        """
+        link = unit_of_work.projects.get_project_entity_link(principal_id, project_id)
+        if (
+            link is None
+            or link.linkage_state is not ProjectEntityLinkageState.BOUND
+            or link.project_entity_id is None
+        ):
+            return []
+        entity = unit_of_work.entities.get(principal_id, link.project_entity_id)
+        if entity is None or entity.entity_type is not EntityType.PROJECT:
+            return []
+        rows = unit_of_work.entities.project_participations_as_project(
+            principal_id, link.project_entity_id
+        )
+        summaries = [
+            {
+                "participant_entity_id": row.participant_entity_id,
+                "role_code": row.role_code,
+                "relationship_status_code": row.relationship_status_code.value,
+                "participation_id": row.participation_id,
+                "state": row.state.value,
+            }
+            for row in rows
+            if row.state is EntityProjectParticipationState.ACTIVE
+        ]
+        summaries.sort(key=lambda item: str(item["participation_id"]))
+        return summaries
+
+    def _bound_project_entity_id(
+        self, unit_of_work: UnitOfWork, principal_id: str, project_id: str
+    ) -> str:
+        """Resolve a Continuity Project to its bound project-type Entity.
+
+        A missing or foreign `project_id` is the same `not_found` as
+        `continuity.projects.read`. Unresolved linkage is `conflict` naming
+        `project_id` and does not mint an Entity. A bound row whose entity is
+        missing or not a project is also `conflict`; nothing here guesses.
+        """
+        if unit_of_work.projects.get_project(principal_id, project_id) is None:
+            raise NotFoundError(SafeDetail.PROJECT_ID)
+        link = unit_of_work.projects.get_project_entity_link(principal_id, project_id)
+        if (
+            link is None
+            or link.linkage_state is not ProjectEntityLinkageState.BOUND
+            or link.project_entity_id is None
+        ):
+            raise ConflictError(SafeDetail.PROJECT_ID)
+        entity = unit_of_work.entities.get(principal_id, link.project_entity_id)
+        if entity is None or entity.entity_type is not EntityType.PROJECT:
+            raise ConflictError(SafeDetail.PROJECT_ID)
+        return link.project_entity_id
+
+    def _require_project_typed_entity(
+        self, unit_of_work: UnitOfWork, principal_id: str, project_entity_id: str
+    ) -> None:
+        """Refuse a direct project-end that is not a project in this partition.
+
+        Absence and a non-project type are the same `not_found`, so this cannot
+        be used as a type oracle.
+        """
+        entity = unit_of_work.entities.get(principal_id, project_entity_id)
+        if entity is None or entity.entity_type is not EntityType.PROJECT:
+            raise NotFoundError(SafeDetail.PROJECT_ENTITY_ID)
 
     def _situation_authoring_result(
         self, authorization: Authorization, situation: Situation, *, replayed: bool
@@ -7032,21 +7119,32 @@ class ApplicationService:
         self._entity_plane()
         page_size = self._page_size(command.page_size)
         principal_id = authorization.principal.principal_id
-        with _translated():
-            if unit_of_work.entities.get(principal_id, command.entity_id) is None:
-                raise NotFoundError(SafeDetail.TARGET_ID)
+        if command.project_id is not None:
+            with _translated():
+                entity_id = self._bound_project_entity_id(
+                    unit_of_work, principal_id, command.project_id
+                )
+            perspective = "project"
+        else:
+            entity_id = command.entity_id
+            perspective = command.perspective
+            if entity_id is None or perspective is None:
+                raise InvalidRequestError(SafeDetail.SELECTOR)
+            with _translated():
+                if unit_of_work.entities.get(principal_id, entity_id) is None:
+                    raise NotFoundError(SafeDetail.TARGET_ID)
         with _translated(), _entity_translated():
             page = unit_of_work.entities.participation_page(
-                command.entity_id,
+                entity_id,
                 principal_id=principal_id,
-                perspective=command.perspective,
+                perspective=perspective,
                 limit=page_size,
                 after_participation_id=command.after,
             )
         return _Result(
             payload={
-                "entity_id": command.entity_id,
-                "perspective": command.perspective,
+                "entity_id": entity_id,
+                "perspective": perspective,
                 "participations": [_participation_view(record) for record in page.records],
             },
             disclosure=unenrolled_disclosure(
@@ -7256,11 +7354,23 @@ class ApplicationService:
     ) -> _Result:
         """`entities.participations.create`: record one participation on one project."""
         repository = self._entity_repository(unit_of_work)
+        principal_id = authorization.principal.principal_id
+        if command.project_id is not None:
+            with _translated():
+                resolved = self._bound_project_entity_id(
+                    unit_of_work, principal_id, command.project_id
+                )
+            command = replace(command, project_id=None, project_entity_id=resolved)
+        elif command.project_entity_id is not None:
+            with _translated():
+                self._require_project_typed_entity(
+                    unit_of_work, principal_id, command.project_entity_id
+                )
         with _translated(), _directed_translated(), _record_family_translated():
             receipt = self._family_writes.create_participation(
                 repository,
                 command,
-                principal_id=authorization.principal.principal_id,
+                principal_id=principal_id,
                 audit_id=authorization.audit_id,
                 at=authorization.at,
             )

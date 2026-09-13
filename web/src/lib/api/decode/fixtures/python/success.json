@@ -390,6 +390,7 @@
         "participants": [
           "per_aaaa0001aaaa0001aaaa0001"
         ],
+        "canonical_participations": [],
         "opened_at": "2026-01-01T00:00:00.000Z",
         "closed_at": null,
         "created_at": "2026-01-01T00:00:00.000Z",

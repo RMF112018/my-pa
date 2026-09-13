@@ -73,6 +73,7 @@ from tests.contract.test_transport_parity import (
     staged_entities,
     staged_memory,
     staged_mention,
+    staged_project_entity,
 )
 from tests.wire import Reply, Wire, serve
 
@@ -380,6 +381,7 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
     assert collector_admission.artifact is not None
     report_id = collector_admission.artifact.artifact_id
     person, organization = staged_entities(marked)
+    project_entity = staged_project_entity(marked)
     subjects = staged_write_subjects(marked)
     families = staged_record_family_rows(marked, person, organization)
     # Four memories rather than one, because the sweeps below drive this whole
@@ -936,7 +938,7 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "idempotency_key": "wire-entity-communication-retire-0001",
         },
         Capability.ENTITIES_PARTICIPATIONS_CREATE: {
-            "project_entity_id": organization.entity_id,
+            "project_entity_id": project_entity.entity_id,
             "participant_entity_id": person.entity_id,
             "project_display_name": "Wire Person on Wire Works",
             "role_basis_code": "source_verified",

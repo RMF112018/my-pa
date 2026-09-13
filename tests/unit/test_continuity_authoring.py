@@ -398,6 +398,8 @@ def test_read_returns_the_owned_project_and_hides_internal_ids(scene: Scene) -> 
     assert read.result["created_at"]
     assert read.result["updated_at"]
     assert "project_entity_id" not in read.result
+    assert read.result["participants"] == []
+    assert read.result["canonical_participations"] == []
     assert not any(str(value).startswith("ent_") for value in read.result.values())
 
 

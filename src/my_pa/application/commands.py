@@ -5420,8 +5420,19 @@ _ENTITY_FIELD_DOCS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
             "description": (
                 "Which end of the participation to list from: project, for the "
                 "participants of this project, or participant, for the projects "
-                "this entity takes part in. Required; there is no default, because "
-                "the two answer different questions."
+                "this entity takes part in. Required with entity_id, because the "
+                "two answer different questions. With project_id it may be omitted "
+                "and is then project."
+            )
+        },
+        "project_id": {
+            "description": (
+                "Opaque Continuity Project identifier, as returned by "
+                "continuity.projects.create or continuity.projects.read. Exactly "
+                "one of project_id or project_entity_id on create, and exactly one "
+                "of project_id or entity_id on list. The server resolves it through "
+                "the Project↔Entity bridge; unresolved linkage is refused rather "
+                "than minting an entity, and nothing here matches on name."
             )
         },
         # `RI-ENT-WP-11`'s record-family write fields.
@@ -5533,7 +5544,8 @@ _ENTITY_FIELD_DOCS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
             "description": (
                 "The project entity this participation is on. A project cannot "
                 "participate in itself, so it must differ from "
-                "participant_entity_id."
+                "participant_entity_id. On create, exactly one of project_id or "
+                "project_entity_id."
             )
         },
         "participant_entity_id": {
@@ -6026,29 +6038,43 @@ class ListEntityCommunicationMethods:
 class ListEntityParticipations:
     """List one entity's project participations from one end, oldest first.
 
-    `perspective` says which end and has no default: `project` lists who takes
-    part in this project, `participant` lists the projects this entity takes
-    part in. A caller silently handed the other end would read one entity's
-    answer as another's, which is why an unrecognised value is refused rather
-    than corrected — the same reason `entities.relationships` refuses a
-    `direction` it does not know.
+    Exactly one of `entity_id` or `project_id`. With `entity_id`, `perspective`
+    says which end and has no default: `project` lists who takes part in this
+    project, `participant` lists the projects this entity takes part in. A
+    caller silently handed the other end would read one entity's answer as
+    another's, which is why an unrecognised value is refused rather than
+    corrected — the same reason `entities.relationships` refuses a `direction`
+    it does not know.
+
+    With `project_id`, the server resolves the bound project entity and lists
+    from the project end. `perspective` may be omitted or must be `project`.
     """
 
     capability: ClassVar[Capability] = Capability.ENTITIES_PARTICIPATIONS_LIST
 
     mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
-        "entity_id", "perspective", "page_size", "after"
+        "entity_id", "perspective", "project_id", "page_size", "after"
     )
 
-    entity_id: str
-    perspective: str
+    entity_id: str | None = None
+    perspective: str | None = None
+    project_id: str | None = None
     page_size: int | None = None
     after: str | None = None
 
     def __post_init__(self) -> None:
-        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
-        if self.perspective not in ("project", "participant"):
+        has_entity = self.entity_id is not None
+        has_project = self.project_id is not None
+        if has_entity == has_project:
             raise InvalidRequestError(SafeDetail.SELECTOR)
+        if self.entity_id is not None:
+            _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+            if self.perspective not in ("project", "participant"):
+                raise InvalidRequestError(SafeDetail.SELECTOR)
+        if self.project_id is not None:
+            _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+            if self.perspective is not None and self.perspective != "project":
+                raise InvalidRequestError(SafeDetail.SELECTOR)
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
         if self.after is not None:
             _identifier(self.after, IdKind.ENTITY_PROJECT_PARTICIPATION, SafeDetail.CURSOR)
@@ -6597,9 +6623,12 @@ class RetireEntityCommunicationMethod:
 class CreateEntityParticipation:
     """`entities.participations.create`: record one participation on one project.
 
-    `project_entity_id` is the project and `participant_entity_id` is who or
-    what participates in it. Both are entities you have already resolved, and
-    they must differ: a project cannot meaningfully participate in itself.
+    Exactly one of `project_id` or `project_entity_id` names the project.
+    `project_id` is a Continuity Project resolved through the Project↔Entity
+    bridge; unresolved linkage is refused rather than minting an entity.
+    `project_entity_id` is a project-type entity you have already resolved.
+    `participant_entity_id` is who or what participates. The two entities must
+    differ: a project cannot meaningfully participate in itself.
 
     **`project_display_name` is project-scoped fact and never global identity.**
     It is what this participant is called on *this* project, which may differ
@@ -6619,6 +6648,7 @@ class CreateEntityParticipation:
 
     mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
         "project_entity_id",
+        "project_id",
         "participant_entity_id",
         "project_display_name",
         "role_basis_code",
@@ -6635,7 +6665,6 @@ class CreateEntityParticipation:
         "effective_to",
     )
 
-    project_entity_id: str
     participant_entity_id: str
     project_display_name: str = field(repr=False)
     role_basis_code: RoleBasisCode
@@ -6643,6 +6672,8 @@ class CreateEntityParticipation:
     stakeholder_class_code: StakeholderClassCode
     relationship_status_code: ParticipationStatusCode
     idempotency_key: str
+    project_entity_id: str | None = None
+    project_id: str | None = None
     role_code: str | None = None
     role_text: str | None = field(default=None, repr=False)
     discipline_code: str | None = None
@@ -6652,7 +6683,14 @@ class CreateEntityParticipation:
     effective_to: datetime | None = None
 
     def __post_init__(self) -> None:
-        _identifier(self.project_entity_id, IdKind.ENTITY, SafeDetail.PROJECT_ENTITY_ID)
+        has_project = self.project_id is not None
+        has_entity = self.project_entity_id is not None
+        if has_project == has_entity:
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        if self.project_id is not None:
+            _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        if self.project_entity_id is not None:
+            _identifier(self.project_entity_id, IdKind.ENTITY, SafeDetail.PROJECT_ENTITY_ID)
         _identifier(self.participant_entity_id, IdKind.ENTITY, SafeDetail.PARTICIPANT_ENTITY_ID)
         _record_text(self.project_display_name, SafeDetail.PROJECT_DISPLAY_NAME)
         _entity_vocabulary(self.role_basis_code, RoleBasisCode, SafeDetail.ROLE_BASIS_CODE)

@@ -80,6 +80,7 @@ from tests.contract.test_transport_parity import (
     staged_entity_name,
     staged_mention,
     staged_participation,
+    staged_project_entity,
 )
 from tests.wire import Wire, serve
 
@@ -487,6 +488,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     assert collector_admission.artifact is not None
     report_id = collector_admission.artifact.artifact_id
     person, organization = staged_entities(scene)
+    project_entity = staged_project_entity(scene)
     identifier_id, alias_id = staged_child_records(scene)
     archived = staged_archived_entity(scene)
     # One staged record per directed write: this table is driven in one pass
@@ -1068,7 +1070,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "idempotency_key": "http-entity-communication-retire-0001",
         },
         Capability.ENTITIES_PARTICIPATIONS_CREATE: {
-            "project_entity_id": organization.entity_id,
+            "project_entity_id": project_entity.entity_id,
             "participant_entity_id": person.entity_id,
             "project_display_name": "HTTP Person on HTTP Works",
             "role_basis_code": "source_verified",
@@ -1454,6 +1456,7 @@ def commands_for(
     assert collector_admission.artifact is not None
     report_id = collector_admission.artifact.artifact_id
     person, organization = staged_entities(scene)
+    project_entity = staged_project_entity(scene)
     identifier_id, alias_id = staged_child_records(scene)
     archived = staged_archived_entity(scene)
     # The same staged rows the payload table names, for the reason `person` is
@@ -2006,7 +2009,7 @@ def commands_for(
             idempotency_key="http-entity-communication-retire-0001",
         ),
         Capability.ENTITIES_PARTICIPATIONS_CREATE: CreateEntityParticipation(
-            project_entity_id=organization.entity_id,
+            project_entity_id=project_entity.entity_id,
             participant_entity_id=person.entity_id,
             project_display_name="HTTP Person on HTTP Works",
             role_basis_code=RoleBasisCode.SOURCE_VERIFIED,

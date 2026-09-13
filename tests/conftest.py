@@ -4686,6 +4686,20 @@ class _Entities(EntitiesRepository):
     def record_project_participation(
         self, principal_id: str, participation: EntityProjectParticipation
     ) -> None:
+        # Mirror `an_active_project_participation_is_unique_per_project_and_role`
+        # on create only. PostgreSQL treats NULL `role_code` as distinct, so a
+        # missing code never collides; this double keeps that hole rather than
+        # inventing a uniqueness the index does not have.
+        if participation.role_code is not None:
+            for held in self._world.entity_project_participations:
+                if (
+                    held.principal_id == principal_id
+                    and held.state is EntityProjectParticipationState.ACTIVE
+                    and held.project_entity_id == participation.project_entity_id
+                    and held.participant_entity_id == participation.participant_entity_id
+                    and held.role_code == participation.role_code
+                ):
+                    raise DuplicateDirectedFactError("an identical active record is recorded")
         self._insert_project_participation(principal_id, participation)
 
     def supersede_project_participation(

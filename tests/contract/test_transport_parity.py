@@ -357,6 +357,31 @@ def staged_entities(scene: Scene) -> tuple[Entity, Entity]:
     return person, organization
 
 
+def staged_project_entity(scene: Scene) -> Entity:
+    """One project-type entity so `entities.participations.create` has a legal project end.
+
+    The MCP create path refuses a non-project `project_entity_id`. Revise and
+    end still restage through `staged_participation`, which keeps the
+    organization-as-project rows the existing transport tables already hold.
+    """
+    principal_id = scene.principal.principal_id
+    held = next(
+        (
+            entity
+            for entity in scene.world.entities
+            if entity.principal_id == principal_id
+            and entity.entity_type is EntityType.PROJECT
+            and entity.display_name == "Parity Tower"
+        ),
+        None,
+    )
+    if held is not None:
+        return held
+    return FakeUnitOfWork(scene.world).entities.create(
+        principal_id, _entity(principal_id, EntityType.PROJECT, "Parity Tower")
+    )
+
+
 def staged_assignment(scene: Scene, role: str) -> str:
     """One assignment the staged person holds on the staged organization.
 
@@ -860,6 +885,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     assert collector_admission.artifact is not None
     report_id = collector_admission.artifact.artifact_id
     person, organization = staged_entities(scene)
+    project_entity = staged_project_entity(scene)
     identifier_id, alias_id = staged_child_records(scene)
     archived = staged_archived_entity(scene)
     memory_id = staged_memory(scene)
@@ -1473,7 +1499,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "idempotency_key": "parity-entity-communication-retire-0001",
         },
         Capability.ENTITIES_PARTICIPATIONS_CREATE: {
-            "project_entity_id": organization.entity_id,
+            "project_entity_id": project_entity.entity_id,
             "participant_entity_id": person.entity_id,
             "project_display_name": "Parity Person on Parity Works",
             "role_basis_code": "source_verified",

@@ -2861,9 +2861,7 @@ project_history = Table(
     _one_of("action", ProjectMutationAction, name="a_project_history_action_is_known"),
     _one_of("actor", TaskMutationActor, name="a_project_history_actor_is_known"),
     _one_of("outcome", TaskMutationOutcome, name="a_project_history_outcome_is_known"),
-    CheckConstraint(
-        "before_version >= 0", name="a_project_history_before_version_is_non_negative"
-    ),
+    CheckConstraint("before_version >= 0", name="a_project_history_before_version_is_non_negative"),
     CheckConstraint(
         "(outcome = 'applied') = (after_version > before_version)",
         name="an_applied_project_mutation_advances_its_version",

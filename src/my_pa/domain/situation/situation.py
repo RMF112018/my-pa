@@ -287,7 +287,7 @@ class Project:
             raise ValueError("a project carries a non-blank name")
         if not isinstance(self.state, ProjectState):
             raise ValueError("a project names one lifecycle state")
-        if isinstance(self.version, bool) or not isinstance(self.version, int) or self.version < 1:
+        if type(self.version) is not int or self.version < 1:
             raise ValueError("a project version is an integer of at least one")
         ensure_utc(self.opened_at)
         ensure_utc(self.created_at)

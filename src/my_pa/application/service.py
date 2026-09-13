@@ -5316,7 +5316,6 @@ class ApplicationService:
         from my_pa.domain.situation.project_history import (
             ProjectIdempotencyConflictError,
             ProjectIllegalTransitionError,
-            ProjectMutationReceipt,
             ProjectVersionConflictError,
         )
 
@@ -5332,11 +5331,10 @@ class ApplicationService:
             current = unit_of_work.projects.get_project(principal_id, project_id)
             receipt = conflict.receipt
             if (
-                not isinstance(receipt, ProjectMutationReceipt)
-                or receipt.history.outcome.value != "rejected"
+                receipt.history.outcome.value != "rejected"
                 or receipt.history.before_version != receipt.history.after_version
-                or current != receipt.project
                 or current is None
+                or current != receipt.project
                 or current.version != receipt.history.before_version
             ):
                 raise InternalError() from None
@@ -5527,7 +5525,7 @@ class ApplicationService:
         rows = unit_of_work.entities.project_participations_as_project(
             principal_id, link.project_entity_id
         )
-        summaries = [
+        summaries: list[dict[str, object]] = [
             {
                 "participant_entity_id": row.participant_entity_id,
                 "role_code": row.role_code,
@@ -7131,11 +7129,11 @@ class ApplicationService:
                     unit_of_work, principal_id, command.project_id
                 )
             perspective = "project"
+        elif command.entity_id is None or command.perspective is None:
+            raise InvalidRequestError(SafeDetail.SELECTOR)
         else:
             entity_id = command.entity_id
             perspective = command.perspective
-            if entity_id is None or perspective is None:
-                raise InvalidRequestError(SafeDetail.SELECTOR)
             with _translated():
                 if unit_of_work.entities.get(principal_id, entity_id) is None:
                     raise NotFoundError(SafeDetail.TARGET_ID)

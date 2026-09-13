@@ -1598,11 +1598,11 @@ class ListProjects:
             _identifier(self.after, IdKind.PROJECT, SafeDetail.CURSOR)
         if self.state is not None and not isinstance(self.state, ProjectState):
             raise InvalidRequestError(SafeDetail.SELECTOR)
-        if self.query is not None and (not isinstance(self.query, str) or not self.query.strip()):
+        query: object = self.query
+        if query is not None and (not isinstance(query, str) or not query.strip()):
             raise InvalidRequestError(SafeDetail.QUERY)
-        if self.exact_name is not None and (
-            not isinstance(self.exact_name, str) or not self.exact_name.strip()
-        ):
+        exact_name: object = self.exact_name
+        if exact_name is not None and (not isinstance(exact_name, str) or not exact_name.strip()):
             raise InvalidRequestError(SafeDetail.NAME)
         if self.query is not None and self.exact_name is not None:
             raise InvalidRequestError(SafeDetail.QUERY)

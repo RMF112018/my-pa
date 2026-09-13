@@ -217,8 +217,7 @@ def _create_project_history() -> None:
         """
     )
     op.execute(
-        f"CREATE INDEX project_history_by_principal "
-        f"ON {SCHEMA}.project_history (principal_id)"
+        f"CREATE INDEX project_history_by_principal ON {SCHEMA}.project_history (principal_id)"
     )
     op.execute(
         f"CREATE INDEX project_history_by_principal_project "

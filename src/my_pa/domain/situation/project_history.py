@@ -24,7 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Protocol
 
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
@@ -169,7 +169,7 @@ def execute_update_project(
             raise ProjectIllegalTransitionError(
                 "a project update may only move between active and on_hold"
             )
-        replacements: dict[str, object] = {}
+        replacements: dict[str, Any] = {}
         if name is not None:
             replacements["name"] = name
         if description is not None:

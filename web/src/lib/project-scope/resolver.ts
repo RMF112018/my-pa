@@ -16,6 +16,11 @@ export type CanonicalProjectRead =
   | { readonly kind: "not_found" }
   | { readonly kind: "unavailable" };
 
+export interface CanonicalProjectListPage {
+  readonly projects: readonly CanonicalProjectScopeRecord[];
+  readonly nextCursor: string | null;
+}
+
 /**
  * Adapter boundary for authenticated canonical capabilities. Implementations
  * must use `continuity.projects.read` for exact resolution and
@@ -29,7 +34,7 @@ export interface CanonicalProjectScopeReader {
     readonly state?: CanonicalProjectState;
     readonly query?: string;
     readonly pageSize: number;
-  }): Promise<readonly CanonicalProjectScopeRecord[]>;
+  }): Promise<CanonicalProjectListPage>;
 }
 
 export type ScopeResolutionSource = "deep_link" | "preference" | "default";
@@ -70,7 +75,7 @@ export async function discoverProjectScopes(
     readonly query?: string;
     readonly pageSize?: number;
   } = {},
-): Promise<readonly CanonicalProjectScopeRecord[]> {
+): Promise<CanonicalProjectListPage> {
   const requested = input.pageSize ?? 25;
   const pageSize = Number.isSafeInteger(requested) ? Math.min(100, Math.max(1, requested)) : 25;
   const found = await projects.listProjects({
@@ -79,13 +84,16 @@ export async function discoverProjectScopes(
     ...(input.query === undefined ? {} : { query: input.query }),
     pageSize,
   });
-  return found.filter(
-    (project) =>
-      isProjectId(project.project_id) &&
-      project.state !== "closed" &&
-      Number.isSafeInteger(project.version) &&
-      project.version >= 1,
-  );
+  return {
+    projects: found.projects.filter(
+      (project) =>
+        isProjectId(project.project_id) &&
+        project.state !== "closed" &&
+        Number.isSafeInteger(project.version) &&
+        project.version >= 1,
+    ),
+    nextCursor: found.nextCursor,
+  };
 }
 
 /**

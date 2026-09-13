@@ -28,6 +28,7 @@ import type { CommitmentsSearchResult } from "./capabilities/commitments.search"
 import type { CommitmentsUpdateResult } from "./capabilities/commitments.update";
 import type { CommitmentsWaitingOnResult } from "./capabilities/commitments.waiting_on";
 import type { ContinuityProjectsResult } from "./capabilities/continuity.projects";
+import type { ContinuityProjectsReadResult } from "./capabilities/continuity.projects.read";
 import type { ContinuityPulseResult } from "./capabilities/continuity.pulse";
 import type { ContinuitySituationsResult } from "./capabilities/continuity.situations";
 import type { EntitiesAddressesListResult } from "./capabilities/entities.addresses.list";
@@ -111,6 +112,7 @@ export type CapabilityResults = {
   readonly "constraints.read": ConstraintsReadResult;
   readonly "constraints.search": ConstraintsSearchResult;
   readonly "continuity.projects": ContinuityProjectsResult;
+  readonly "continuity.projects.read": ContinuityProjectsReadResult;
   readonly "continuity.pulse": ContinuityPulseResult;
   readonly "continuity.situations": ContinuitySituationsResult;
   readonly "entities.addresses.list": EntitiesAddressesListResult;

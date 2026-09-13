@@ -401,6 +401,21 @@
       }
     ]
   },
+  "continuity.projects.read": {
+    "project_id": "prj_aaaa0001aaaa0001aaaa0001",
+    "name": "North pour",
+    "state": "active",
+    "description": null,
+    "participants": [
+      "per_aaaa0001aaaa0001aaaa0001"
+    ],
+    "canonical_participations": [],
+    "opened_at": "2026-01-01T00:00:00.000Z",
+    "closed_at": null,
+    "created_at": "2026-01-01T00:00:00.000Z",
+    "updated_at": "2026-01-01T00:00:00.000Z",
+    "version": 1
+  },
   "review.list": {
     "review_cases": [
       {

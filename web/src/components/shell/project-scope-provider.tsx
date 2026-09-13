@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  Fragment,
   createContext,
   useCallback,
   useContext,
@@ -57,8 +56,7 @@ export function ProjectScopeProvider({
 
   return (
     <ProjectScopeContext.Provider value={value}>
-      {/* Scope/version transitions remount descendants so local state cannot cross the epoch. */}
-      <Fragment key={state.epoch}>{children}</Fragment>
+      {children}
     </ProjectScopeContext.Provider>
   );
 }

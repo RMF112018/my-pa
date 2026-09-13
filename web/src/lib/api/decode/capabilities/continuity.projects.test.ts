@@ -8,21 +8,36 @@ const PROJECT = {
   state: "active",
   description: null,
   participants: ["per_aaaa0001aaaa0001aaaa0001"],
+  canonical_participations: [
+    {
+      participant_entity_id: "ent_bbbb0001bbbb0001bbbb0001",
+      role_code: "superintendent",
+      relationship_status_code: "active",
+      participation_id: "epp_bbbb0001bbbb0001bbbb0001",
+      state: "active",
+    },
+  ],
   opened_at: "2026-01-01T00:00:00Z",
   closed_at: null,
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-02T00:00:00Z",
+  version: 4,
 };
 
 describe("decodeContinuityProjects", () => {
   it("accepts a Python-derived success payload", () => {
     const decoded = decodeContinuityProjects({ projects: [PROJECT] });
     expect(decoded.ok).toBe(true);
-    if (decoded.ok) expect(decoded.value.projects).toHaveLength(1);
+    if (decoded.ok) {
+      expect(decoded.value.projects).toHaveLength(1);
+      expect(decoded.value.projects[0]).toMatchObject({ state: "active", version: 4 });
+    }
   });
 
   it("ignores unknown extra fields", () => {
     expect(
       decodeContinuityProjects({
-        projects: [{ ...PROJECT, extra: 1, version: 1, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" }],
+        projects: [{ ...PROJECT, extra: 1 }],
         noise: true,
       }).ok,
     ).toBe(true);
@@ -55,5 +70,27 @@ describe("decodeContinuityProjects", () => {
     expect(decodeContinuityProjects({ projects: [{ ...PROJECT, state: "paused" }] }).ok).toBe(
       false,
     );
+  });
+
+  it.each([
+    ["version", { version: 0 }],
+    [
+      "canonical participation state",
+      {
+        canonical_participations: [
+          { ...PROJECT.canonical_participations[0], state: "retired" },
+        ],
+      },
+    ],
+    [
+      "canonical relationship status",
+      {
+        canonical_participations: [
+          { ...PROJECT.canonical_participations[0], relationship_status_code: "paused" },
+        ],
+      },
+    ],
+  ])("fails closed on invalid canonical %s", (_label, change) => {
+    expect(decodeContinuityProjects({ projects: [{ ...PROJECT, ...change }] }).ok).toBe(false);
   });
 });

@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   ProjectScopeProvider,
   useProjectScope,
@@ -20,12 +20,14 @@ const PROJECT_V1: ResolvedProjectScope = {
 function Harness() {
   const { resolution, epoch, applyResolution, isCurrentEpoch } = useProjectScope();
   const [local, setLocal] = useState(0);
+  const initialEpoch = useRef(epoch);
   return (
     <div>
       <output data-testid="scope">{resolution.scope.kind}</output>
       <output data-testid="epoch">{epoch}</output>
       <output data-testid="local">{local}</output>
       <output data-testid="current">{String(isCurrentEpoch(epoch))}</output>
+      <output data-testid="initial-current">{String(isCurrentEpoch(initialEpoch.current))}</output>
       <button type="button" onClick={() => setLocal((value) => value + 1)}>
         Local
       </button>
@@ -61,7 +63,7 @@ function Harness() {
 afterEach(cleanup);
 
 describe("Project Scope provider", () => {
-  it("increments a monotonic epoch and remounts descendant state on scope transitions", async () => {
+  it("increments a monotonic epoch without broadly remounting authenticated shell state", async () => {
     const user = userEvent.setup();
     render(
       <ProjectScopeProvider>
@@ -75,8 +77,9 @@ describe("Project Scope provider", () => {
     await user.click(screen.getByRole("button", { name: "Project v1" }));
     expect(screen.getByTestId("scope")).toHaveTextContent("PROJECT");
     expect(screen.getByTestId("epoch")).toHaveTextContent("1");
-    expect(screen.getByTestId("local")).toHaveTextContent("0");
+    expect(screen.getByTestId("local")).toHaveTextContent("1");
     expect(screen.getByTestId("current")).toHaveTextContent("true");
+    expect(screen.getByTestId("initial-current")).toHaveTextContent("false");
   });
 
   it("does not advance for the same scope/version but does for a new canonical version", async () => {

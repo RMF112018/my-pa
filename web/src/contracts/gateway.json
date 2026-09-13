@@ -108,6 +108,11 @@
       "payloadFields": ["page_size", "after", "state", "query", "exact_name"],
       "probe": {}
     },
+    "continuity.projects.read": {
+      "purpose": "capture_review",
+      "payloadFields": ["project_id"],
+      "probe": { "project_id": "prj_aaaaaaaa11111111" }
+    },
     "tasks.read": {
       "purpose": "task_read",
       "payloadFields": ["task_id"],

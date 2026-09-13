@@ -22,7 +22,7 @@ function reader(
           }
         : { kind: "not_found" as const };
     }),
-    listProjects: vi.fn(async () => []),
+    listProjects: vi.fn(async () => ({ projects: [], nextCursor: null })),
   };
 }
 
@@ -94,7 +94,7 @@ describe("authenticated Project Scope resolution", () => {
         kind: "found",
         project: { project_id: SAVED, state: "active", version: 1 },
       }),
-      listProjects: async () => [],
+      listProjects: async () => ({ projects: [], nextCursor: null }),
     };
     const result = await resolveAuthenticatedProjectScope({
       deepLinkProjectId: LINKED,
@@ -115,18 +115,24 @@ describe("authenticated Project Scope resolution", () => {
   });
 
   it("composes bounded discovery from the canonical Project list response", async () => {
-    const listProjects = vi.fn(async () => [
-      { project_id: LINKED, state: "active" as const, version: 4 },
-      { project_id: SAVED, state: "closed" as const, version: 7 },
-      { project_id: "prj_short", state: "active" as const, version: 1 },
-    ]);
+    const listProjects = vi.fn(async () => ({
+      projects: [
+        { project_id: LINKED, state: "active" as const, version: 4 },
+        { project_id: SAVED, state: "closed" as const, version: 7 },
+        { project_id: "prj_short", state: "active" as const, version: 1 },
+      ],
+      nextCursor: "prj_cursor00000001",
+    }));
     const projects: CanonicalProjectScopeReader = {
       readProject: async () => ({ kind: "not_found" }),
       listProjects,
     };
     await expect(
       discoverProjectScopes(projects, { state: "active", query: "steel", pageSize: 500 }),
-    ).resolves.toEqual([{ project_id: LINKED, state: "active", version: 4 }]);
+    ).resolves.toEqual({
+      projects: [{ project_id: LINKED, state: "active", version: 4 }],
+      nextCursor: "prj_cursor00000001",
+    });
     expect(listProjects).toHaveBeenCalledWith({
       state: "active",
       query: "steel",

@@ -1346,6 +1346,7 @@ def python_success_payloads() -> dict[str, dict[str, Any]]:
         "continuity.pulse": _continuity_pulse(),
         "continuity.situations": _continuity_situations(),
         "continuity.projects": _continuity_projects(),
+        "continuity.projects.read": _continuity_projects()["projects"][0],
         "review.list": _review_list(),
         "review.decide": _review_decide(),
         "capabilities.get": _capabilities_get(),

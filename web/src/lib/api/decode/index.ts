@@ -17,6 +17,7 @@ import { decodeReviewDecide } from "./capabilities/review.decide";
 import { decodeContinuityPulse } from "./capabilities/continuity.pulse";
 import { decodeContinuitySituations } from "./capabilities/continuity.situations";
 import { decodeContinuityProjects } from "./capabilities/continuity.projects";
+import { decodeContinuityProjectsRead } from "./capabilities/continuity.projects.read";
 import { decodeTasksRead } from "./capabilities/tasks.read";
 import { decodeTasksList } from "./capabilities/tasks.list";
 import { decodeTasksSearch } from "./capabilities/tasks.search";
@@ -99,6 +100,7 @@ export const DECODERS = {
   "continuity.pulse": decodeContinuityPulse,
   "continuity.situations": decodeContinuitySituations,
   "continuity.projects": decodeContinuityProjects,
+  "continuity.projects.read": decodeContinuityProjectsRead,
   "tasks.read": decodeTasksRead,
   "tasks.list": decodeTasksList,
   "tasks.search": decodeTasksSearch,

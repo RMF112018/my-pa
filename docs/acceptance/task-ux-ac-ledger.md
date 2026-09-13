@@ -9,10 +9,16 @@ commit that introduced this file. Every `file:line` below was read back at that 
 
 Before WP-TUX-08 the string `TASK-AC-0NN` appeared **18 times in 4 files** across the whole
 repository, and only 7 of the 50 criteria (017, 018, 019, 042, 043, 045, 047) appeared anywhere at
-all. The coverage overwhelmingly existed; it was simply not attributable. WP-TUX-08 did not author
-new behavioural tests. It attached criterion identifiers to the tests that already prove the
-behaviour, and it wrote this ledger so that each criterion resolves to an exact, greppable
-`file:line`.
+all. The coverage overwhelmingly existed; it was simply not attributable. WP-TUX-08 is therefore
+mostly attribution: it attached criterion identifiers to the tests that already prove the behaviour,
+and wrote this ledger so each criterion resolves to an exact, greppable `file:line`.
+
+It authored new behavioural tests in exactly two places, both where execution proved a real gap
+rather than a missing label: the three browser-layer idempotency tests in
+`web/e2e/work-mutations.spec.ts` (no browser-level Task replay proof existed anywhere — the only
+such proof was on the Capture plane), and the explicit-due-time preservation test in
+`tests/database/test_task_management_service.py`. Layers already proven — the component pre-await
+race and the database same-key one-record claim — were deliberately **not** re-authored.
 
 ## Binding rule
 
@@ -27,6 +33,7 @@ executed on this head. No inference, no "it must be covered somewhere". Anything
 | `PASS` | Exact evidence exists at this head and runs in a **blocking** CI lane (see *CI lane authority*). |
 | `PENDING-RUN` | Exact evidence exists at this head, but it does not execute in a blocking lane, or it is not yet proven executed on this head by run ID. |
 | `PENDING-RUNTIME` | Operator-gated. Requires a physical device, a deployed identity, or an authenticated external service. Cannot close in an agent session. |
+| `PARTIAL` | The criterion decomposes and only some parts are proven. The row must name which half is proven and which is not — never rounded up to PASS. |
 | `GAP` | No evidence located at this head. Stated plainly rather than filled with a plausible citation. |
 
 ## CI lane authority
@@ -59,12 +66,12 @@ not acceptance (package finding TUX08-F007).
 | 003 | No Origin note on an ordinary create | WP-TUX-02 | unit + source | `web/src/components/tasks/task-create-sheet.test.tsx:352`; `tests/unit/test_task_management_service.py:904` | PASS | Client sends none; service accepts a direct-principal create without evidence. |
 | 004 | No Commitment/Role in the default create | WP-TUX-02 | unit | `web/src/components/tasks/task-create-sheet.test.tsx:89`, `:352` | PASS | |
 | 005 | Work and Capture share one canonical create form | WP-TUX-02 | unit | `web/src/components/tasks/task-create-sheet.test.tsx:264`, `:338` | PASS | Both entries post `/api/tasks`, never `/api/capture`. |
-| 006 | One intent yields exactly one Task | WP-TUX-03 | unit + DB | `web/src/lib/task/create-intent.test.ts:41`; `web/src/components/tasks/task-create-sheet.test.tsx:222`; `web/src/components/work/task-runtime-provider.test.tsx:245`; `tests/database/test_task_management_service.py:157` | PASS | Proven at intent, form, provider and database. Browser-layer proof is landing separately in `web/e2e/work-mutations.spec.ts` under a sibling WP-TUX-08 worker; it is **not** claimed by this row at this head. |
-| 007 | An ambiguous retry reuses the idempotency key | WP-TUX-03 | unit | `web/src/lib/task/create-intent.test.ts:59`, `:80`; `web/src/lib/task/mutation-coordinator.test.ts:278` | PASS | Same caveat as 006 on the browser layer. |
-| 008 | Two deliberate sessions yield two Tasks | WP-TUX-03 | unit | `web/src/lib/task/create-intent.test.ts:160` | PASS | Same caveat as 006 on the browser layer. |
+| 006 | One intent yields exactly one Task | WP-TUX-03 | unit + DB | `web/src/lib/task/create-intent.test.ts:41`; `web/src/components/tasks/task-create-sheet.test.tsx:222`; `web/src/components/work/task-runtime-provider.test.tsx:245`; `tests/database/test_task_management_service.py:157` | PASS | Proven at intent, form, provider and database. Browser layer now closed: `web/e2e/work-mutations.spec.ts:480` holds the create response on a route barrier, raises further submissions, and asserts exactly one dispatch and exactly one marker-scoped Task. Blocking lane `e2e-critical`. |
+| 007 | An ambiguous retry reuses the idempotency key | WP-TUX-03 | unit | `web/src/lib/task/create-intent.test.ts:59`, `:80`; `web/src/lib/task/mutation-coordinator.test.ts:278` | PASS | Browser layer now closed: `web/e2e/work-mutations.spec.ts:564` makes attempt one genuinely ambiguous (forwarded and applied, then denied to the browser), and asserts the retry carries the identical key, `replayed` is true, and it resolves to the original `task_id`. Also proves TASK-AC-032 (draft frozen). Blocking lane `e2e-critical`. |
+| 008 | Two deliberate sessions yield two Tasks | WP-TUX-03 | unit | `web/src/lib/task/create-intent.test.ts:160` | PASS | Browser layer now closed: `web/e2e/work-mutations.spec.ts:651` runs two sessions with a byte-identical payload and asserts the keys differ and exactly two distinct Tasks exist under the marker. Blocking lane `e2e-critical`. |
 | 009 | Due is date-only by default | WP-TUX-04 | unit | `web/src/components/tasks/task-due-control.test.tsx:40`, `:69`, `:98`; `web/src/components/tasks/use-task-operations.test.tsx:385` | PASS | The control offers civil days; the hook serializes a civil date. |
 | 010 | A date-only Due becomes local `23:59:59` | WP-TUX-04 | unit | `web/src/lib/tasks/presentation.test.ts:336`, `:426`; `web/src/components/tasks/task-create-sheet.test.tsx:237` | PASS | `:426` reads the wall clock back independently of the helper under test. |
-| 011 | An explicitly authored time is preserved | WP-TUX-04 | — | none | **GAP** | No evidence at this head, and none expected: `web/src/lib/tasks/presentation.ts:194` states the caller opts into an explicit time "only once that semantic exists upstream", and no surface authors one. `presentation.test.ts:197` proves only that display *omits* a time unless asked. See *Findings*, TUX08-L011. |
+| 011 | An explicitly authored time is preserved | WP-TUX-04 | DB | `tests/database/test_task_management_service.py:941` | **PARTIAL** | **Preservation is proven; authoring is not offered.** An explicit due instant (14:37:42Z, deliberately neither midnight nor 23:59:59) survives the write to the second — proven red by truncating it to a civil-day boundary. But no Task UX authors one: the Due control is `type="date"` (`task-due-control.tsx:179`) and `presentation.ts:194` keeps `withExplicitTime` off "only once that semantic exists upstream". The criterion is therefore met on the non-UI write path (MCP/API) and vacuous on the UI path. See *Findings*, TUX08-L011. |
 | 012 | DST and IANA zone boundaries hold | WP-TUX-04 | unit | `web/src/lib/tasks/presentation.test.ts:342` (spring forward), `:349` (fall back), `:356` (UTC-positive, incl. Sydney winter/summer), `:374` (UTC-negative), `:381` (leap day), `:388` (year boundary), `:426` (wall clock in every zone) | PASS | This is the entire TASK-AC-012 boundary matrix. Do not duplicate it elsewhere. |
 | 013 | A Due earlier today still reads Today | WP-TUX-04 | unit | `web/src/lib/tasks/presentation.test.ts:161`, `:189` | PASS | `:189` pins the late-evening UTC case to the caller's civil day. |
 | 014 | A Due on a prior day reads Overdue | WP-TUX-04 | unit | `web/src/lib/tasks/presentation.test.ts:173` | PASS | Whole civil days, singular and plural. |
@@ -110,20 +117,30 @@ not acceptance (package finding TUX08-F007).
 | Status | Count | Criteria |
 |---|---|---|
 | `PASS` | 45 | all except those listed below |
+| `PARTIAL` | 1 | 011 |
 | `PENDING-RUN` | 1 | 041 |
 | `PENDING-RUNTIME` | 3 | 036, 046, 050 |
-| `GAP` | 1 | 011 |
+| `GAP` | 0 | — |
 
-**Reachable in this session: 45 of 50.** AC-036, AC-046 and AC-050 cannot close without an
-authenticated external MCP client, a human on VoiceOver, and physical hardware respectively.
-AC-041 closes on a recorded specialized run. AC-011 needs a product decision before it needs a test.
-That arithmetic is the whole justification for
-`TASK_UX_REMEDIATION_IMPLEMENTATION_COMPLETE_RUNTIME_ACCEPTANCE_PENDING`.
+**Reachable in this session: 45 full PASS, plus AC-011 on its provable half.** AC-036, AC-046 and
+AC-050 cannot close without an authenticated external MCP client, a human on VoiceOver, and physical
+hardware respectively. AC-041 closes on a recorded specialized run. AC-011's storage half is proven;
+its authoring half needs a product decision, not a test. That arithmetic is the whole justification
+for `TASK_UX_REMEDIATION_IMPLEMENTATION_COMPLETE_RUNTIME_ACCEPTANCE_PENDING`.
 
 ## Execution record
 
-WP-TUX-08 added no test and changed no assertion, so the suites below are recorded as *unchanged*
-baselines held across the traceability commit, not as new acceptance evidence.
+**Amended.** This section originally read "WP-TUX-08 added no test and changed no assertion", which
+was true of the traceability commit alone. Two later commits on this branch did add tests, and the
+claim is corrected rather than left standing:
+
+* `web/e2e/work-mutations.spec.ts` gained the three browser-layer idempotency tests (L3/L4/L5) that
+  close the one real coverage gap this package found — 4 tests → 7.
+* `tests/database/test_task_management_service.py` gained the AC-011 explicit-due-time preservation
+  test — 11 tests → 12.
+
+Both were proven red under compiling mutations. The frontend baselines below are still recorded as
+*unchanged*, which remains correct: neither new test is a vitest test.
 
 | Suite | Command | Result |
 |---|---|---|
@@ -147,10 +164,25 @@ sheet serializes a chosen Due to civil day end
 takes a civil date and does the same (`web/src/components/tasks/use-task-operations.test.tsx:385`).
 `presentation.test.ts:197` proves only the display rule — a time is *omitted* unless the caller asks.
 
-So TASK-AC-011 is not a missing test, it is a criterion whose precondition does not exist at this
-head. It is recorded as **GAP**, not quietly attached to the civil-day-end tests, which prove the
-opposite behaviour. Routed to the owning product/backend WP for a decision: either the explicit-time
-semantic lands upstream and the criterion becomes testable, or the criterion is retired.
+So TASK-AC-011 was never a missing test *on the UI path* — it is a criterion whose UI precondition
+does not exist at this head. It is not quietly attached to the civil-day-end tests, which prove the
+opposite behaviour.
+
+**Amended after the initial GAP finding.** The criterion splits, and only one half is vacuous. A
+Task can receive an explicit due time from a non-UI origin — an MCP or API write — because `due_at`
+is `DateTime(timezone=True)` in the schema (`tables.py:6760`) and `UtcDatetime` in the v1 contract
+(`contracts/v1/tasks.py:74`). That path had no test standing over it. It now does:
+`tests/database/test_task_management_service.py:941` asserts an authored 14:37:42Z instant survives
+the write to the second, and was proven red by a compiling mutation that truncated it to a
+civil-day boundary. So:
+
+* **Preservation: PROVEN** at the layer that stores it.
+* **Authoring: NOT OFFERED** in any Task UX, deliberately and documented in source.
+
+The remaining open question is a product decision, not a coverage gap: either an explicit-time
+authoring affordance lands upstream and the UI half becomes testable, or the criterion is
+formally scoped to non-UI origins. Routed to the owning product/backend WP. **No one should read
+the row as fully PASS while the authoring half is undecided.**
 
 The draft ledger cited `use-task-operations.test.tsx:377` for this row. That line sits inside the
 test at `:385` (post-annotation numbering), which asserts civil-day-end serialization — the opposite

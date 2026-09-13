@@ -553,49 +553,39 @@ test("TUX07-AC-014/017: an open Today reconciles a completed Task away and annou
 });
 
 /**
- * TUX07-AC-018, and a product defect this package did not close.
+ * TUX07-AC-018 — an ordinary test, and what it took to make it one.
  *
- * **`test.fail()` is a statement, not a suppression.** This assertion is the
- * criterion as written and it is not weakened: Playwright runs the test, and
- * the run is red the moment it *starts passing*, which is exactly what closing
- * the defect would do. Nothing about AC-018 is claimed as met.
+ * The assertion is unchanged from when it carried a `test.fail()` declaration.
+ * That declaration is gone because this run was observed: Playwright reported
+ * "Expected to fail, but passed" against the fix, and then passed outright
+ * against the same assertion with the declaration removed.
  *
- * **What was observed.** Confirming Close disables the control the user is on,
- * so the browser drops focus to `document.body`. `use-task-row-operations.ts`
- * returns it on unlock through `liveReturn(held)`, which tries, in order: the
- * held control (gone — the Task became terminal and `TaskTerminalActions`
- * withheld itself), the first live control in the held `role="group"` (gone
- * with it), and finally `rowRef.current?.querySelector('a[href]')`. A Work-list
- * row has such an anchor — its own title link — and that is the fallback this
- * engine was written against. `TodayTaskCard` has no anchor at all: its title
- * is an `<h3>` and the card does not route anywhere. So the last resort
- * resolves to `null`, nothing is focused, and the user who closed a Task with
- * the keyboard is left at the top of the document.
+ * **What was wrong, in two parts.** Confirming Close disables the control the
+ * user is on, so the browser drops focus to `document.body`.
+ * `use-task-row-operations.ts` returns it on unlock through `liveReturn(held)`,
+ * which tries the held control (gone — the Task became terminal and
+ * `TaskTerminalActions` withheld itself), then the first live control in the
+ * held `role="group"` (gone with it), then the row's own `a[href]`. A Work-list
+ * row has such an anchor; `TodayTaskCard` has none, so the chain resolved to
+ * `null` and the user was left at the top of the document. `liveReturn` gained
+ * a last step — the row root itself, when the surface has made it focusable by
+ * script — and `TodayTaskCard` carries `tabIndex={-1}` for it to land on.
  *
- * **The fix is now in, and this declaration is the one thing left to remove.**
- * `liveReturn` gained a last step — the row root itself, when the surface has
- * made it focusable by script — and `TodayTaskCard` carries `tabIndex={-1}` on
- * its root so the engine has somewhere deterministic to land. Both are covered
- * by unit guards (`use-task-row-operations.test.tsx`,
- * `today-task-card.test.tsx`), including one proving a row that *has* an anchor
- * still returns to that anchor rather than to the root.
- *
- * The declaration stays only because this run was never observed: the browser
- * tiers could not be stood up here without colliding with a Playwright run
- * already holding the servers this suite needs. It is left deliberately
- * unweakened, so CI is the thing that answers: the moment this passes,
- * Playwright reports "expected to fail, but passed" and the line below is
- * deleted. No pass is claimed that was not seen.
+ * That was necessary and not sufficient, and a measured focus timeline said so:
+ * the root fallback fired correctly, and about a frame later Today's
+ * authoritative Pulse re-read removed that very card, so focus landed and
+ * evaporated back to the body. `useTaskRowOperations` cannot repair that — by
+ * the time reconciliation unmounts the row its own `rowRef` is detached. So
+ * `TodayPulseSurface` now owns the second half, the way `workbench.tsx` has
+ * owned it for the Work list since WP-TUX-05: a bubbling `focusin` listener
+ * records which card holds focus, and an effect keyed on the answer places focus
+ * on the surviving neighbour — or a stable heading — but only when focus has
+ * genuinely fallen to the body and the recorded element has actually left the
+ * document. Component guards live in `today-pulse-surface.test.tsx`.
  */
 test("TUX07-AC-018: focus lands deterministically after the card leaves Today", async ({
   page,
 }) => {
-  test.fail(
-    true,
-    // The fix for this is in the tree (root fallback + a focusable card root);
-    // this stays only until a browser run confirms it, and then it goes.
-    "Known product defect: liveReturn's last resort is the row's a[href], and a Today Task card has none, so focus is left on document.body. Fix landed in web/src; awaiting an observed browser run.",
-  );
   test.setTimeout(180_000);
   const closedTitle = `E2E today focus ${marker("ac018a")}`;
   const keptTitle = `E2E today focus kept ${marker("ac018b")}`;

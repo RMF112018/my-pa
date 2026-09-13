@@ -108,6 +108,16 @@ export function TodayTaskCard({
     <article
       ref={rowRef}
       data-testid="today-task-card"
+      /*
+        Which Task this card is about, on the element that is the card.
+
+        The surface that owns the list restores focus when its authoritative
+        re-read removes a card the user was standing in, and to do that it has to
+        be able to say *which* card left and which one now stands in its place.
+        The test id names the kind of thing; this names the thing itself. It is
+        read, never written, by that surface.
+      */
+      data-today-task={taskId}
       aria-busy={busy || undefined}
       aria-labelledby={titleId}
       /*

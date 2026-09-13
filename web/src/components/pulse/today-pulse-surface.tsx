@@ -78,6 +78,39 @@ export const TODAY_EMPTY_COPY = "Nothing needs your attention right now.";
 /** Registration id in the session reconciliation registry. A plain string. */
 export const TODAY_PULSE_QUERY_ID = "today:pulse";
 
+/**
+ * The Task cards currently on screen, in the order the Pulse returned them.
+ *
+ * Scoped to the region this surface renders rather than to the document, so a
+ * card belonging to some other list — the Intelligence Pulse below Today, a
+ * future second list — can never be counted as one of these, and an index
+ * remembered here always means a place in this list.
+ */
+function cardsIn(container: HTMLElement | null): readonly HTMLElement[] {
+  return container ? Array.from(container.querySelectorAll<HTMLElement>("[data-today-task]")) : [];
+}
+
+/** Whether a control is disabled, which is why the browser let go of it. */
+function isDisabled(element: HTMLElement): boolean {
+  return typeof element.matches === "function" && element.matches(":disabled");
+}
+
+/**
+ * Where focus goes when it is placed on a card.
+ *
+ * A Today card is not a link and carries no anchor, so the stable thing to hand
+ * focus to is the card root itself — it names the Task through
+ * `aria-labelledby` and leaves every surviving control of that card ahead of
+ * the user. The root has to have opted into script focus: an element with no
+ * `tabindex` swallows `focus()` silently, which would look like a successful
+ * return while leaving the user on the body, so an un-opted root is declined
+ * here and the heading catches them instead.
+ */
+function cardTarget(card: HTMLElement | undefined): HTMLElement | null {
+  if (!card) return null;
+  return card.hasAttribute("tabindex") ? card : null;
+}
+
 /** Notice copy for this surface. Recoverable, and never "your tasks are gone". */
 const TODAY_MESSAGES = {
   auth: "Session expired. Sign in again to refresh Today.",
@@ -388,6 +421,32 @@ export function TodayPulseSurface({ initialAnswer }: TodayPulseSurfaceProps): Re
   const [stale, setStale] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
+  /**
+   * The card that currently holds focus, and where it sits in the visible list.
+   *
+   * This mirrors the Work surface's restoration (`workbench.tsx`), for the same
+   * reason and with the same shape. `useTaskRowOperations` already returns focus
+   * to the control the user operated, or — since a Today card's own affordances
+   * withdraw when the Task becomes terminal — to the card root. That return is
+   * correct and it is not enough here: Today's authoritative re-read then
+   * removes the very card it just landed on, and by the time reconciliation
+   * unmounts that row the hook's own `rowRef` is detached. Only the component
+   * that owns the list can see that a focused card has left it.
+   *
+   * So focus is recorded where it actually is rather than predicted from a
+   * write, and it is acted on only when that exact card leaves and focus has
+   * genuinely fallen to the document body. There is one entry, it names whichever
+   * card the user is really in, and no unrelated read — a cadence refresh, a
+   * second card's write confirming first — can spend it on somebody else.
+   */
+  const focusedCard = useRef<{ readonly taskId: string; readonly index: number; readonly element: HTMLElement } | null>(
+    null,
+  );
+  /** The rendered Pulse — the only place Today's Task cards live. */
+  const pulseRegion = useRef<HTMLDivElement | null>(null);
+  /** The last resort, and never `document.body`. */
+  const pulseHeading = useRef<HTMLHeadingElement | null>(null);
+
   /*
     One coordinator per session bundle: a replaced principal must not inherit the
     previous one's confirmed answer. Reminted during render when the session key
@@ -465,8 +524,145 @@ export function TodayPulseSurface({ initialAnswer }: TodayPulseSurfaceProps): Re
     [reconciliation],
   );
 
+  /**
+   * Remember which card focus is in, whenever it moves.
+   *
+   * `focusin` bubbles — React's `onFocus` is `focusin` — so one handler on the
+   * region covers every card and every control inside one, including the
+   * controls a card mounts after this renders and the card root itself when the
+   * shared engine places focus there.
+   */
+  function rememberFocusedCard(event: React.FocusEvent<HTMLElement>) {
+    const card = (event.target as HTMLElement).closest<HTMLElement>("[data-today-task]");
+    const taskId = card?.getAttribute("data-today-task") ?? null;
+    if (!card || !taskId) return;
+    /*
+      Position is taken from the element itself and never by looking the Task up
+      again: the Pulse may surface one Task under more than one item, and a
+      lookup by id would answer with the first of them and send the user to a
+      card they were not standing in.
+    */
+    focusedCard.current = {
+      taskId,
+      index: cardsIn(pulseRegion.current).indexOf(card),
+      element: event.target as HTMLElement,
+    };
+  }
+
+  /*
+    Restore focus after the authoritative re-read took it away.
+
+    Keyed on the answer the server returned, not on a mutation callback: the card
+    that was operated may already be unmounted by then, so nothing it fires can
+    be relied on, and Today's membership is the Pulse's decision rather than
+    anything this surface may infer locally.
+
+    Two conditions, and together they are the whole design: focus must have
+    fallen to the document body, and the element that was holding it must have
+    actually left the document. That pair is what separates a real loss from a
+    user who deliberately clicked away and from a control that merely
+    re-rendered, and it makes this safe for any list change whatever its cause —
+    a write confirming, a cadence refresh, a degraded answer replacing a whole
+    one. A change that costs the user nothing is left alone.
+  */
+  useEffect(() => {
+    if (!focusedCard.current) return;
+    const frame = requestAnimationFrame(() => {
+      const lost = focusedCard.current;
+      if (!lost) return;
+      /*
+        A thrown error here is invisible — nothing awaits this callback — and it
+        would leave a stale record behind to mislead the next re-read. Fail by
+        forgetting where focus was, which costs one restore rather than every
+        restore after it.
+      */
+      try {
+        const active = document.activeElement;
+        const stillMounted = lost.element.isConnected;
+
+        /*
+          Focus is somewhere real: the card kept it, or a popover, a dialog or
+          the user's own click took it deliberately.
+
+          The record is maintained rather than merely consumed. If the card it
+          names has since gone while the user was working elsewhere it is
+          finished and must be dropped — kept, it would be read on some later
+          re-read as "focus was taken from this card" and haul the user back out
+          of wherever they had got to. If the card is still here its position is
+          refreshed: cards above it can leave without the user touching anything,
+          and no new focus event fires to correct a remembered index that is by
+          then pointing at somebody else's card.
+        */
+        if (active && active !== document.body) {
+          if (!stillMounted) {
+            focusedCard.current = null;
+            return;
+          }
+          const card = lost.element.closest<HTMLElement>("[data-today-task]");
+          const moved = card ? cardsIn(pulseRegion.current).indexOf(card) : -1;
+          focusedCard.current = { ...lost, index: moved };
+          return;
+        }
+
+        /*
+          Focus is on the body and the control the user was in is still right
+          there. Either they put it down themselves — clicking the page
+          background, dismissing something — or the card disabled it under them
+          while a write runs, which a browser answers by dropping focus to the
+          body. The first is a choice and is owed nothing; the second is the very
+          loss this exists to repair, and reading them as the same thing would
+          throw the record away on any refresh landing mid-write, leaving nothing
+          to catch focus when the write then confirmed and took the card.
+        */
+        if (stillMounted && !isDisabled(lost.element)) {
+          focusedCard.current = null;
+          return;
+        }
+        if (stillMounted) return;
+
+        focusedCard.current = null;
+        const after = cardsIn(pulseRegion.current);
+        const survivor = after.find(
+          (candidate) => candidate.getAttribute("data-today-task") === lost.taskId,
+        );
+        /*
+          The remembered position can sit past the end of the list — more than
+          one card can leave in a single answer — so clamp to the last card still
+          standing rather than reading past it. Landing on the nearest surviving
+          neighbour is the whole point; giving up here would send the user to the
+          heading with perfectly good cards in front of them.
+        */
+        const clamped = Math.min(lost.index, after.length - 1);
+        const target = cardTarget(survivor) ?? cardTarget(after[clamped]);
+        if (target) {
+          target.focus();
+          return;
+        }
+        pulseHeading.current?.focus();
+      } catch {
+        focusedCard.current = null;
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [answer]);
+
   return (
-    <>
+    /*
+      A listener, not an interactive element: `onFocus` is `focusin` and bubbles,
+      so this one handler sees focus land anywhere in the Pulse, including on
+      controls a card mounts later.
+    */
+    <div ref={pulseRegion} onFocus={rememberFocusedCard}>
+      {/*
+        The stable last resort. The page's own `<h1>` is rendered by a server
+        component that has not opted into script focus, so focusing it would do
+        nothing silently; this heading is owned by the surface that needs it, is
+        always mounted whatever the answer, and names the region for a screen
+        reader when focus arrives on it.
+      */}
+      <h2 ref={pulseHeading} tabIndex={-1} className="sr-only" data-testid="today-pulse-heading">
+        Today
+      </h2>
       {notice ? (
         <p role="status" data-testid="today-refresh-notice" className="mb-2 text-sm text-muted">
           {notice}
@@ -521,6 +717,6 @@ export function TodayPulseSurface({ initialAnswer }: TodayPulseSurfaceProps): Re
       ) : (
         <BackendPulseList items={answer.items} />
       )}
-    </>
+    </div>
   );
 }

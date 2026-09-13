@@ -372,6 +372,19 @@ describe("TodayTaskCard", () => {
     );
   });
 
+  it("names the Task it is about on its root, so the list can tell its cards apart", async () => {
+    stubFetch();
+    renderCard();
+
+    /*
+      The surface that owns Today's list restores focus when its authoritative
+      re-read removes a card the user was standing in, and to do that it has to
+      know which card left and which one now stands in its place. The test id
+      names the kind of thing; this names the thing itself.
+    */
+    expect(card().getAttribute("data-today-task")).toBe(TASK_ID);
+  });
+
   it("offers a way out of a version conflict rather than locking forever", async () => {
     const restore = emulateDisableBlur();
     try {

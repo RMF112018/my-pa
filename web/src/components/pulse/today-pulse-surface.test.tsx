@@ -11,7 +11,7 @@
  * real `/api/pulse` path; what is stubbed is one HTTP response.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 
 import {
   TODAY_EMPTY_COPY,
@@ -273,5 +273,197 @@ describe("classification reads coverage before it counts rows", () => {
   it("calls a zero-row whole answer empty, and a populated one records", () => {
     expect(classifyPulsePayload({ items: [], disclosure: disclosure() }).kind).toBe("empty");
     expect(classifyPulsePayload({ items: TWO_ROWS, disclosure: disclosure() }).kind).toBe("records");
+  });
+});
+
+/**
+ * Focus after Today's authoritative re-read has removed the card the user was
+ * standing in.
+ *
+ * The shared row engine returns focus to the control the user operated, or — a
+ * Today card's affordances withdraw when the Task becomes terminal — to the card
+ * root. That return is correct and it is not the whole story: the Pulse re-read
+ * then removes that very card, so focus lands and evaporates, and a keyboard
+ * user who closed a Task is left on `document.body` at the top of the document.
+ * Only this surface owns the list, so only this surface can see it happen.
+ *
+ * jsdom does not blur a focused element when it is disabled, so the test that
+ * depends on that behaviour emulates it — a test that passed only because jsdom
+ * differs from a browser would be worse than no test here.
+ */
+describe("focus survives the card leaving Today", () => {
+  function Probe({ onRuntime }: { onRuntime: (runtime: ReturnType<typeof useTaskRuntime>) => void }) {
+    onRuntime(useTaskRuntime());
+    return null;
+  }
+
+  function taskItem(taskId: string, title: string): BackendPulseItem {
+    return item({
+      pulseId: `puls_${taskId}`,
+      itemType: "task",
+      itemRef: taskId,
+      reasonCode: "task_overdue",
+      subjectTitle: title,
+      nextStep: undefined,
+    });
+  }
+
+  const ONE = taskItem("tsk_one", "First task");
+  const TWO = taskItem("tsk_two", "Second task");
+
+  /** Emulate the browser dropping focus when the focused control is disabled. */
+  function emulateDisableBlur(): () => void {
+    const original = Element.prototype.setAttribute;
+    Element.prototype.setAttribute = function patched(name: string, value: string) {
+      if (name === "disabled" && document.activeElement === this) {
+        (this as HTMLElement).blur();
+      }
+      return original.call(this, name, value);
+    };
+    return () => {
+      Element.prototype.setAttribute = original;
+    };
+  }
+
+  function card(taskId: string): HTMLElement {
+    const found = document.querySelector<HTMLElement>(`[data-today-task="${taskId}"]`);
+    if (!found) throw new Error(`no Today card for ${taskId}`);
+    return found;
+  }
+
+  function cardCount(): number {
+    return document.querySelectorAll("[data-today-task]").length;
+  }
+
+  function renderToday(items: readonly BackendPulseItem[]) {
+    let runtime: ReturnType<typeof useTaskRuntime> | undefined;
+    fetchSpy.mockImplementation(async () => pulseResponse(items));
+    render(
+      <TaskRuntimeProvider principalId="prin_test" sessionEpoch="epoch-test">
+        <Probe onRuntime={(value) => (runtime = value)} />
+        <button type="button" data-testid="elsewhere">
+          Somewhere else entirely
+        </button>
+        <TodayPulseSurface initialAnswer={{ kind: "records", items }} />
+      </TaskRuntimeProvider>,
+    );
+    return {
+      /**
+       * Answer the next re-read with exactly these items, ask for one, and do
+       * not return until it has been applied and the restoration frame it
+       * scheduled has had its turn.
+       *
+       * Waiting on the request alone is not enough, and neither is waiting on a
+       * card count that the new answer happens to share with the old one: the
+       * restoration runs in `requestAnimationFrame`, and a later answer cancels
+       * a frame that has not fired. A test that did not wait for the frame would
+       * report a guard as unreached rather than as wrong.
+       */
+      async reread(next: readonly BackendPulseItem[], settled: () => void) {
+        const before = fetchSpy.mock.calls.length;
+        fetchSpy.mockImplementation(async () => pulseResponse(next));
+        runtime?.reconciliation.notifyTaskMutationConfirmed({ kind: "close", taskId: "tsk_one" });
+        await waitFor(() => expect(fetchSpy.mock.calls.length).toBeGreaterThan(before));
+        await waitFor(settled);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      },
+    };
+  }
+
+  it("places focus on the card that now stands where the closed one was", async () => {
+    const today = renderToday([ONE, TWO]);
+    await waitFor(() => expect(cardCount()).toBe(2));
+
+    card("tsk_one").focus();
+    expect(document.activeElement).toBe(card("tsk_one"));
+
+    await today.reread([TWO], () => expect(cardCount()).toBe(1));
+
+    await waitFor(() => expect(document.activeElement).toBe(card("tsk_two")));
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("keeps the record while the control is merely disabled, and spends it when the card goes", async () => {
+    const restore = emulateDisableBlur();
+    try {
+      const today = renderToday([ONE, TWO]);
+      await waitFor(() => expect(cardCount()).toBe(2));
+
+      /*
+        The hand is on a control of the first card, and the write disables it —
+        which is exactly how a browser drops focus to the body mid-write.
+      */
+      const control = within(card("tsk_one")).getAllByRole("button")[0];
+      control.focus();
+      expect(document.activeElement).toBe(control);
+      control.setAttribute("disabled", "");
+      expect(document.activeElement).toBe(document.body);
+
+      /*
+        A refresh lands while the write is still running and leaves both cards
+        standing. The record must survive it: a disabled control is why focus is
+        on the body, and reading that as "the user put it down" throws away the
+        only thing that can catch them when the write then takes the card.
+      */
+      const REFRESHED = taskItem("tsk_one", "First task, refreshed");
+      await today.reread([REFRESHED, TWO], () =>
+        expect(screen.getByText("First task, refreshed")).toBeTruthy(),
+      );
+      expect(document.activeElement).toBe(document.body);
+
+      // Now the write confirms and the authoritative re-read takes the card.
+      await today.reread([TWO], () => expect(cardCount()).toBe(1));
+
+      await waitFor(() => expect(document.activeElement).toBe(card("tsk_two")));
+    } finally {
+      restore();
+    }
+  });
+
+  it("does not yank focus back from wherever the user deliberately went", async () => {
+    const today = renderToday([ONE, TWO]);
+    await waitFor(() => expect(cardCount()).toBe(2));
+
+    card("tsk_one").focus();
+    const elsewhere = screen.getByTestId("elsewhere");
+    elsewhere.focus();
+    expect(document.activeElement).toBe(elsewhere);
+
+    // The restoration frame is given every chance to misfire before we look.
+    await today.reread([TWO], () => expect(cardCount()).toBe(1));
+
+    expect(document.activeElement).toBe(elsewhere);
+  });
+
+  it("leaves focus alone when the card the user is in survives the write", async () => {
+    const today = renderToday([ONE, TWO]);
+    await waitFor(() => expect(cardCount()).toBe(2));
+
+    const control = within(card("tsk_one")).getAllByRole("button")[0];
+    control.focus();
+    expect(document.activeElement).toBe(control);
+
+    // A Reschedule that keeps the Task in Today: both cards come back.
+    await today.reread([taskItem("tsk_one", "First task, rescheduled"), TWO], () =>
+      expect(screen.getByText("First task, rescheduled")).toBeTruthy(),
+    );
+
+    // Still on the control, not hauled up to the card root or anywhere else.
+    expect(document.activeElement).toBe(control);
+  });
+
+  it("falls to a stable heading when the last card leaves, never to the body", async () => {
+    const today = renderToday([ONE]);
+    await waitFor(() => expect(cardCount()).toBe(1));
+
+    card("tsk_one").focus();
+    expect(document.activeElement).toBe(card("tsk_one"));
+
+    await today.reread([], () => expect(screen.getByTestId("today-empty")).toBeTruthy());
+
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByTestId("today-pulse-heading")),
+    );
+    expect(document.activeElement).not.toBe(document.body);
   });
 });

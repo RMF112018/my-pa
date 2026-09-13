@@ -128,6 +128,7 @@ class _FakeRepository(TaskManagementRepository):
         work_start: datetime | None = None,
         work_end: datetime | None = None,
         work_now: datetime | None = None,
+        project_id: str | None = None,
         limit: int,
     ) -> tuple[Task, ...]:
         raise NotImplementedError("this suite does not exercise the read plane")
@@ -779,6 +780,43 @@ def test_atomic_patch_changes_multiple_fields_with_one_version_and_receipt() -> 
     assert receipt.task.role is TaskRole.FOLLOW_UP
     assert receipt.history.action is TaskMutationAction.UPDATE
     assert world.insert_history_calls == writes_before + 1
+
+
+def test_update_task_sets_and_clears_project_id_when_none_is_in_values() -> None:
+    world = _World()
+    service = _service(world)
+    first = issue_identifier(IdKind.PROJECT)
+    second = issue_identifier(IdKind.PROJECT)
+    created = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Attached",
+        origin_kind=TaskOriginKind.EVIDENCE,
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+        project_id=first,
+        idempotency_key=_idempotency_key("project-create"),
+    )
+    assert created.task.project_id == first
+    reassigned = service.update_task(
+        principal_id=PRINCIPAL_A,
+        task_id=created.task.task_id,
+        expected_version=created.task.version,
+        actor=TaskMutationActor.PRINCIPAL,
+        values={"project_id": second},
+        idempotency_key=_idempotency_key("project-reassign"),
+    )
+    assert reassigned.task.project_id == second
+    assert reassigned.task.version == created.task.version + 1
+    cleared = service.update_task(
+        principal_id=PRINCIPAL_A,
+        task_id=created.task.task_id,
+        expected_version=reassigned.task.version,
+        actor=TaskMutationActor.PRINCIPAL,
+        values={"project_id": None},
+        idempotency_key=_idempotency_key("project-clear"),
+    )
+    assert cleared.task.project_id is None
+    assert cleared.task.version == reassigned.task.version + 1
 
 
 def test_idempotency_replay_also_applies_to_a_mutation_on_an_existing_task() -> None:

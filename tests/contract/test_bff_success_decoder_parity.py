@@ -210,6 +210,7 @@ def _task_list_entry() -> dict[str, Any]:
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
         updated_at=datetime(2026, 1, 1, tzinfo=UTC),
         version=1,
+        project_id=None,
     ).model_dump(mode="json")
 
 

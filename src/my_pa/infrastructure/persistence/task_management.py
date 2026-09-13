@@ -193,6 +193,7 @@ class SqlTaskManagementRepository(TaskManagementRepository):
         work_start: datetime | None = None,
         work_end: datetime | None = None,
         work_now: datetime | None = None,
+        project_id: str | None = None,
         limit: int,
     ) -> tuple[Task, ...]:
         conditions = [tasks.c.principal_id == principal_id]
@@ -200,6 +201,8 @@ class SqlTaskManagementRepository(TaskManagementRepository):
             conditions.append(tasks.c.lifecycle_state == lifecycle_state.value)
         if priority is not None:
             conditions.append(tasks.c.priority == priority.value)
+        if project_id is not None:
+            conditions.append(tasks.c.project_id == project_id)
         if archive_mode is TaskArchiveMode.EXCLUDE:
             conditions.append(tasks.c.archived_at.is_(None))
         else:

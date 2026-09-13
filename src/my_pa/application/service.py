@@ -1314,6 +1314,7 @@ def _task_list_entry(task: TaskManagementTask) -> TaskListEntry:
         created_at=task.created_at,
         updated_at=task.updated_at,
         version=task.version,
+        project_id=task.project_id,
     )
 
 
@@ -8165,6 +8166,7 @@ class ApplicationService:
                 work_start=work_start,
                 work_end=work_end,
                 work_now=authorization.at,
+                project_id=command.project_id,
                 limit=page_size + 1,
             )
         truncated = len(found) > page_size
@@ -8375,9 +8377,17 @@ class ApplicationService:
                 values[field_name] = value
         if command.archived is not None:
             values["archived_at"] = self._clock() if command.archived else None
+        if command.clear_project:
+            values["project_id"] = None
+        elif command.project_id is not None:
+            values["project_id"] = command.project_id
         current = unit_of_work.tasks.get(principal_id, command.task_id)
         if current is None:
             raise NotFoundError(SafeDetail.TASK_ID)
+        if command.project_id is not None and (
+            unit_of_work.projects.get_project(principal_id, command.project_id) is None
+        ):
+            raise NotFoundError(SafeDetail.PROJECT_ID)
         commitment_id, role = _task_commitment_state(
             current, values=values, clear_fields=frozenset(command.clear_fields)
         )

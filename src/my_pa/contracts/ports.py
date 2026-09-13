@@ -6342,15 +6342,18 @@ class TaskManagementRepository(ABC):
         work_start: datetime | None = None,
         work_end: datetime | None = None,
         work_now: datetime | None = None,
+        project_id: str | None = None,
         limit: int,
     ) -> tuple[TaskAggregate, ...]:
         """One bounded page of this Principal's own tasks, newest created first.
 
-        `lifecycle_state` and `priority`, when given, are exact matches — a
-        structured filter, not the lexical one `search` performs. Archived
-        tasks are excluded unless `archive_mode` is `only`, for the
-        same reason `ListManagedDocuments` excludes archived documents: a
-        caller who wants a withdrawn task back has to ask for it by name.
+        `lifecycle_state`, `priority`, and `project_id`, when given, are exact
+        matches — a structured filter, not the lexical one `search` performs.
+        `project_id` is applied inside the Principal predicate; omitting it
+        leaves the page unscoped by Project. Archived tasks are excluded
+        unless `archive_mode` is `only`, for the same reason
+        `ListManagedDocuments` excludes archived documents: a caller who wants
+        a withdrawn task back has to ask for it by name.
         """
 
     @abstractmethod

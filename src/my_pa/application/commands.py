@@ -1925,12 +1925,17 @@ class ReadTask:
 class ListTasks:
     """`tasks.list`: one bounded page of this Principal's own tasks, newest first.
 
-    The two filters are structured rather than a free-text query, which is the
-    line this command keeps against `SearchTasks`: a lifecycle state or a
-    priority is a closed enum value the store can index and compare exactly,
-    where a query string is the substring `SearchTasks` matches lexically.
-    Mixing the two into one command would make "no filter supplied" ambiguous
-    between "list everything" and "search for nothing".
+    The structured filters are not a free-text query, which is the line this
+    command keeps against `SearchTasks`: a lifecycle state, a priority, or a
+    Project identifier is a closed value the store can index and compare
+    exactly, where a query string is the substring `SearchTasks` matches
+    lexically. Mixing search text into this command would make "no filter
+    supplied" ambiguous between "list everything" and "search for nothing".
+
+    `project_id`, when omitted, does not narrow the page: an unscoped list is
+    still this Principal's tasks. When set, it is an exact match inside that
+    same partition, not a second lookup that could distinguish a missing
+    Project from a foreign one.
 
     Archived tasks are excluded by default for the reason `ListManagedDocuments`
     excludes archived documents: an archived task withdrew itself from the
@@ -1948,6 +1953,7 @@ class ListTasks:
     work_view: TaskWorkView | None = None
     work_date: date | None = None
     timezone: str | None = None
+    project_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.lifecycle_state is not None and not isinstance(
@@ -1961,6 +1967,8 @@ class ListTasks:
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
         if self.after is not None:
             _identifier(self.after, IdKind.TASK, SafeDetail.CURSOR)
+        if self.project_id is not None:
+            _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
         if self.work_view is not None and not isinstance(self.work_view, TaskWorkView):
             raise InvalidRequestError(SafeDetail.SELECTOR)
         if self.work_view in {
@@ -2195,6 +2203,8 @@ class UpdateTask:
     role: TaskRole | None = None
     clear_fields: tuple[str, ...] = ()
     archived: bool | None = None
+    project_id: str | None = None
+    clear_project: bool = False
     client_context: str | None = None
 
     def __post_init__(self) -> None:
@@ -2218,6 +2228,12 @@ class UpdateTask:
             _identifier(self.commitment_id, IdKind.COMMITMENT, SafeDetail.COMMITMENT_ID)
         if self.role is not None and not isinstance(self.role, TaskRole):
             raise InvalidRequestError(SafeDetail.SELECTOR)
+        if not isinstance(self.clear_project, bool):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        if self.project_id is not None:
+            _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        if self.clear_project and self.project_id is not None:
+            raise InvalidRequestError(SafeDetail.PROJECT_ID)
         allowed_clear = {
             "description",
             "priority",

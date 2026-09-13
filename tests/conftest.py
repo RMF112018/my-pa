@@ -2320,6 +2320,7 @@ class _TasksRead(TaskManagementRepository):
         work_start: datetime | None = None,
         work_end: datetime | None = None,
         work_now: datetime | None = None,
+        project_id: str | None = None,
         limit: int,
     ) -> tuple[TaskV2, ...]:
         owned = [task for task in self._world.tasks_v2 if task.principal_id == principal_id]
@@ -2327,6 +2328,8 @@ class _TasksRead(TaskManagementRepository):
             owned = [task for task in owned if task.lifecycle_state is lifecycle_state]
         if priority is not None:
             owned = [task for task in owned if task.priority is priority]
+        if project_id is not None:
+            owned = [task for task in owned if task.project_id == project_id]
         if archive_mode is TaskArchiveMode.EXCLUDE:
             owned = [task for task in owned if task.archived_at is None]
         else:
@@ -2874,6 +2877,7 @@ class _TasksWrite(TaskManagementRepository):
         work_start: datetime | None = None,
         work_end: datetime | None = None,
         work_now: datetime | None = None,
+        project_id: str | None = None,
         limit: int,
     ) -> tuple[TaskV2, ...]:
         raise NotImplementedError("the write plane's fake does not serve list reads")

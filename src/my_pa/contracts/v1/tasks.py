@@ -117,7 +117,8 @@ class TaskListEntry(StrictModel):
     triage, not for the evidentiary detail `tasks.read` returns about the one
     task a caller already named. The fields kept are exactly the ones a caller
     scanning a page needs to decide which task to read next: what it is
-    called, where it stands, how urgent it is, and when it last moved.
+    called, where it stands, how urgent it is, when it last moved, and which
+    Project it currently belongs to, if any.
     """
 
     task_id: str
@@ -131,10 +132,13 @@ class TaskListEntry(StrictModel):
     created_at: UtcDatetime
     updated_at: UtcDatetime
     version: int = Field(ge=1)
+    project_id: str | None = None
 
     @model_validator(mode="after")
     def _check(self) -> TaskListEntry:
         validate_identifier(self.task_id, IdKind.TASK)
+        if self.project_id is not None:
+            validate_identifier(self.project_id, IdKind.PROJECT)
         return self
 
 

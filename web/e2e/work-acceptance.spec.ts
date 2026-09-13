@@ -471,15 +471,23 @@ test.describe("operational Board and Calendar", () => {
    * expected-failure this test used to carry is gone.
    *
    * **Exactly what is proved, and where the claim stops.** The floor is
-   * *measured* on Chromium (the `desktop`, `tablet` and `mobile` projects) and
-   * on WebKit — 119x44 and 106x44 respectively on the repaired control. Firefox
-   * is **not** verified here: Playwright's Firefox does not launch on the
-   * machine this remediation was executed on, and the CI lane that covers the
-   * `firefox` project is advisory rather than blocking. So the honest statement
-   * is "Chromium and WebKit measured; Firefox pending the advisory CI lane", not
-   * "holds on every engine". The assertions below are unconditional on whatever
-   * engine does run them, so the Firefox lane will state its own result the
-   * moment it runs.
+   * *measured* on Chromium (the `desktop`, `tablet` and `mobile` projects) at
+   * 119x44, and on **macOS** WebKit at 106x44 — the engine and machine where
+   * the 22px defect actually reproduces, which is what makes that measurement
+   * evidence for the fix.
+   *
+   * It does not hold on "every engine", and a green run here on a CI runner is
+   * weaker than it looks: the Linux Playwright builds render this control 44px
+   * whether or not the fix is present, so neither their WebKit nor their
+   * Firefox result can detect this defect. That was established by running a
+   * branch with the fix removed. The full explanation, and the pointer to the
+   * guard that does fail, lives on the sizing-contract test in
+   * `src/components/tasks/task-status-control.test.tsx` — deliberately in one
+   * place rather than restated here.
+   *
+   * The assertions below are unconditional on whatever engine runs them, which
+   * is what keeps this test useful across all of them: it still proves the
+   * absence of overflow, clipping and layout regression everywhere it runs.
    *
    * Each control is still reported by name. The five checks are `expect.soft`,
    * which records a failure and keeps going instead of aborting at the first

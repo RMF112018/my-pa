@@ -1,9 +1,20 @@
 "use client";
 
 /**
- * Foreground Task freshness controller for WP-TUX-02.
+ * Foreground Task freshness adapter for WP-TUX-02.
  *
- * For authenticated, visible, online Task surfaces:
+ * The timing / event / backoff policy itself lives in
+ * `@/lib/task/use-foreground-revalidation` (extracted in WP-TUX-07): a Today /
+ * Pulse query cannot hold a `TaskQueryKey` — `buildTaskQueryKey` only admits
+ * modes `list|search|detail|comments` — and duplicating this policy would
+ * create the second, divergent foreground cadence the architecture forbids.
+ *
+ * This module is now only the Task binding over that one controller: it turns a
+ * canonical `TaskQueryKey` into the controller's opaque string identity, hands
+ * over the `TaskReadCoordinator` (which satisfies the controller's structural
+ * coordinator seam unchanged), and supplies Task notice copy.
+ *
+ * Behaviour is unchanged:
  * - ~5000ms interval polling of the active query key;
  * - immediate revalidate on window focus, hidden→visible, online regain,
  *   and post-mutation hooks;
@@ -16,12 +27,8 @@
  * No jitter: single-operator MCV does not need stampede protection.
  */
 
-import { useEffect, useRef, useState } from "react";
 import type { TaskQueryKey } from "@/lib/task/query-key";
-import {
-  serializeTaskQueryKey,
-  taskQueryKeysEqual,
-} from "@/lib/task/query-key";
+import { serializeTaskQueryKey } from "@/lib/task/query-key";
 import type {
   TaskFreshnessStatus,
   TaskQuerySnapshot,
@@ -29,39 +36,42 @@ import type {
   TaskReadFetcher,
   TaskReadResult,
 } from "@/lib/task/read-coordinator";
+import type {
+  ForegroundReconciliationRegistrar,
+  ForegroundRevalidationMessages,
+  ForegroundRevalidationNotice,
+  ForegroundRevalidationNoticeKind,
+  ForegroundRevalidationTrigger,
+} from "@/lib/task/use-foreground-revalidation";
+import {
+  FOREGROUND_REVALIDATION_BACKOFF_MS,
+  FOREGROUND_REVALIDATION_INTERVAL_MS,
+  ForegroundRevalidationHttpError,
+  useForegroundRevalidation,
+} from "@/lib/task/use-foreground-revalidation";
 
-export const TASK_FRESHNESS_INTERVAL_MS = 5_000;
-export const TASK_FRESHNESS_BACKOFF_MS = [5_000, 10_000, 30_000] as const;
+export const TASK_FRESHNESS_INTERVAL_MS = FOREGROUND_REVALIDATION_INTERVAL_MS;
+export const TASK_FRESHNESS_BACKOFF_MS = FOREGROUND_REVALIDATION_BACKOFF_MS;
 
-export type TaskFreshnessTrigger =
-  | "interval"
-  | "focus"
-  | "visibility"
-  | "online"
-  | "mutation"
-  | "manual";
+export type TaskFreshnessTrigger = ForegroundRevalidationTrigger;
 
-export type TaskFreshnessNoticeKind = "auth" | "forbidden" | "degraded";
+export type TaskFreshnessNoticeKind = ForegroundRevalidationNoticeKind;
 
-export interface TaskFreshnessNotice {
-  readonly kind: TaskFreshnessNoticeKind;
-  readonly message: string;
-}
+export type TaskFreshnessNotice = ForegroundRevalidationNotice;
 
 /**
  * Minimal structural view of the session-scoped reconciliation seam owned by
  * `TaskRuntimeProvider`. Declared structurally so this hook keeps no dependency
  * on the provider module and stays usable in isolation.
  */
-export interface TaskQueryReconciliationRegistrar {
-  readonly registerActiveTaskQuery: (
-    queryId: string,
-    revalidate: () => void | Promise<unknown>,
-  ) => () => void;
-  readonly unregisterActiveTaskQuery: (queryId: string) => void;
-}
+export type TaskQueryReconciliationRegistrar = ForegroundReconciliationRegistrar;
 
-let registrationSequence = 0;
+/** Task-surface notice copy. Unchanged wording from WP-TUX-02. */
+const TASK_FRESHNESS_MESSAGES: ForegroundRevalidationMessages = {
+  auth: "Session expired. Sign in again to refresh tasks.",
+  forbidden: "Task refresh is not permitted for this session.",
+  degraded: "Task updates are temporarily unavailable.",
+};
 
 export interface UseTaskFreshnessOptions<T> {
   readonly queryKey: TaskQueryKey;
@@ -93,36 +103,11 @@ export interface UseTaskFreshnessResult<T> {
   readonly notifyMutationConfirmed: (data?: T) => Promise<TaskReadResult<T> | undefined>;
 }
 
-export class TaskFreshnessHttpError extends Error {
-  readonly status: number;
-
+export class TaskFreshnessHttpError extends ForegroundRevalidationHttpError {
   constructor(status: number, message = `HTTP ${status}`) {
-    super(message);
+    super(status, message);
     this.name = "TaskFreshnessHttpError";
-    this.status = status;
   }
-}
-
-function readHttpStatus(error: unknown): number | null {
-  if (error instanceof TaskFreshnessHttpError) return error.status;
-  if (!error || typeof error !== "object") return null;
-  if ("status" in error && typeof (error as { status: unknown }).status === "number") {
-    return (error as { status: number }).status;
-  }
-  if ("statusCode" in error && typeof (error as { statusCode: unknown }).statusCode === "number") {
-    return (error as { statusCode: number }).statusCode;
-  }
-  return null;
-}
-
-function isDocumentVisible(): boolean {
-  if (typeof document === "undefined") return true;
-  return document.visibilityState === "visible";
-}
-
-function isNavigatorOnline(): boolean {
-  if (typeof navigator === "undefined") return true;
-  return navigator.onLine !== false;
 }
 
 export function useTaskFreshness<T>(options: UseTaskFreshnessOptions<T>): UseTaskFreshnessResult<T> {
@@ -134,279 +119,27 @@ export function useTaskFreshness<T>(options: UseTaskFreshnessOptions<T>): UseTas
     onResult,
     onNotice,
     reconciliation,
-    intervalMs = TASK_FRESHNESS_INTERVAL_MS,
-    backoffMs = TASK_FRESHNESS_BACKOFF_MS,
+    intervalMs,
+    backoffMs,
   } = options;
 
-  const [freshness, setFreshness] = useState<TaskFreshnessStatus>("idle");
-  const [lastSuccessfulAt, setLastSuccessfulAt] = useState<number | null>(null);
-  const [lastConfirmed, setLastConfirmed] = useState<T | undefined>(undefined);
-
-  const keyRef = useRef(queryKey);
-  const fetcherRef = useRef(fetcher);
-  const onResultRef = useRef(onResult);
-  const onNoticeRef = useRef(onNotice);
-  const enabledRef = useRef(enabled);
-  const suspendedRef = useRef(false);
-  const failureCountRef = useRef(0);
-  const nextAllowedAtRef = useRef(0);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const degradedNoticeSentRef = useRef(false);
-  const authNoticeSentRef = useRef(false);
-  const forbiddenNoticeSentRef = useRef(false);
-  const inFlightRef = useRef(false);
-  const mountedRef = useRef(true);
-  const revalidateRef = useRef<(trigger?: TaskFreshnessTrigger) => Promise<TaskReadResult<T> | undefined>>(
-    async () => undefined,
-  );
-  const notifyMutationRef = useRef<(data?: T) => Promise<TaskReadResult<T> | undefined>>(async () => undefined);
-
-  const keyId = serializeTaskQueryKey(queryKey);
-  /** Suspended only while the same query identity remains active. */
-  const [suspendedKeyId, setSuspendedKeyId] = useState<string | null>(null);
-  const suspended = suspendedKeyId === keyId;
-
-  useEffect(() => {
-    keyRef.current = queryKey;
-    fetcherRef.current = fetcher;
-    onResultRef.current = onResult;
-    onNoticeRef.current = onNotice;
-    enabledRef.current = enabled;
-  }, [queryKey, fetcher, onResult, onNotice, enabled]);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    coordinator.retain(queryKey);
-    const unsubscribe = coordinator.subscribe(queryKey, (snapshot) => {
-      if (!mountedRef.current) return;
-      setFreshness(snapshot.freshness);
-      setLastSuccessfulAt(snapshot.lastSuccessfulAt);
-      setLastConfirmed(snapshot.lastConfirmed);
-    });
-    return () => {
-      mountedRef.current = false;
-      unsubscribe();
-      coordinator.release(queryKey);
-    };
-  }, [coordinator, keyId, queryKey]);
-
-  useEffect(() => {
-    // Reset backoff / notices when the active query identity changes.
-    failureCountRef.current = 0;
-    nextAllowedAtRef.current = 0;
-    degradedNoticeSentRef.current = false;
-    authNoticeSentRef.current = false;
-    forbiddenNoticeSentRef.current = false;
-    suspendedRef.current = false;
-  }, [keyId]);
-
-  useEffect(() => {
-    function clearTimer() {
-      if (timerRef.current !== null) {
-        clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
-    }
-
-    function schedule(delayMs: number) {
-      clearTimer();
-      if (!mountedRef.current || !enabledRef.current || suspendedRef.current) return;
-      if (!isDocumentVisible() || !isNavigatorOnline()) return;
-      timerRef.current = setTimeout(() => {
-        timerRef.current = null;
-        void run("interval");
-      }, delayMs);
-    }
-
-    function cadenceDelay(): number {
-      const failures = failureCountRef.current;
-      if (failures <= 0) return intervalMs;
-      const index = Math.min(failures - 1, backoffMs.length - 1);
-      return backoffMs[index] ?? intervalMs;
-    }
-
-    async function run(trigger: TaskFreshnessTrigger): Promise<TaskReadResult<T> | undefined> {
-      if (!mountedRef.current || !enabledRef.current) return undefined;
-      if (suspendedRef.current && trigger !== "manual" && trigger !== "mutation") {
-        return undefined;
-      }
-      if (trigger === "interval") {
-        if (!isDocumentVisible() || !isNavigatorOnline()) return undefined;
-        if (Date.now() < nextAllowedAtRef.current) {
-          schedule(Math.max(0, nextAllowedAtRef.current - Date.now()));
-          return undefined;
-        }
-      }
-      if (trigger === "interval" || trigger === "focus" || trigger === "visibility" || trigger === "online") {
-        if (!isNavigatorOnline() && trigger !== "online") return undefined;
-      }
-
-      // Focus / visibility / online / mutation bypass the backoff gate.
-      if (trigger === "focus" || trigger === "visibility" || trigger === "online" || trigger === "mutation" || trigger === "manual") {
-        nextAllowedAtRef.current = 0;
-      }
-
-      // Ordinary interval reads never stack; coordinator also dedupes.
-      if (trigger === "interval" && inFlightRef.current) {
-        schedule(cadenceDelay());
-        return undefined;
-      }
-
-      const key = keyRef.current;
-      inFlightRef.current = true;
-      try {
-        const force = trigger === "mutation" || trigger === "manual";
-        const result = await coordinator.read(key, fetcherRef.current, { force });
-        if (!mountedRef.current || !taskQueryKeysEqual(key, keyRef.current)) {
-          return result;
-        }
-
-        const snapshot = coordinator.getSnapshot(key);
-        if (snapshot) onResultRef.current?.(result, snapshot);
-
-        if (result.outcome === "applied" || result.outcome === "deduped") {
-          failureCountRef.current = 0;
-          nextAllowedAtRef.current = 0;
-          degradedNoticeSentRef.current = false;
-          if (suspendedRef.current && result.outcome === "applied") {
-            suspendedRef.current = false;
-            setSuspendedKeyId(null);
-            coordinator.markFresh(key);
-          }
-        } else if (result.outcome === "failed" && !result.silent) {
-          const status = readHttpStatus(result.error);
-          if (status === 401) {
-            suspendedRef.current = true;
-            setSuspendedKeyId(serializeTaskQueryKey(key));
-            coordinator.markSuspended(key);
-            clearTimer();
-            if (!authNoticeSentRef.current) {
-              authNoticeSentRef.current = true;
-              onNoticeRef.current?.({
-                kind: "auth",
-                message: "Session expired. Sign in again to refresh tasks.",
-              });
-            }
-            return result;
-          }
-          if (status === 403) {
-            suspendedRef.current = true;
-            setSuspendedKeyId(serializeTaskQueryKey(key));
-            coordinator.markSuspended(key);
-            clearTimer();
-            if (!forbiddenNoticeSentRef.current) {
-              forbiddenNoticeSentRef.current = true;
-              onNoticeRef.current?.({
-                kind: "forbidden",
-                message: "Task refresh is not permitted for this session.",
-              });
-            }
-            return result;
-          }
-          failureCountRef.current += 1;
-          const delay = cadenceDelay();
-          nextAllowedAtRef.current = Date.now() + delay;
-          if (status === 503 || status === null) {
-            coordinator.markStale(key);
-            if (status === 503 && !degradedNoticeSentRef.current) {
-              degradedNoticeSentRef.current = true;
-              onNoticeRef.current?.({
-                kind: "degraded",
-                message: "Task updates are temporarily unavailable.",
-              });
-            }
-          }
-        }
-
-        if (!suspendedRef.current && isDocumentVisible() && isNavigatorOnline()) {
-          schedule(cadenceDelay());
-        }
-        return result;
-      } finally {
-        inFlightRef.current = false;
-      }
-    }
-
-    function onFocus() {
-      void run("focus");
-    }
-
-    function onVisibility() {
-      if (document.visibilityState === "visible") {
-        void run("visibility");
-      } else {
-        clearTimer();
-      }
-    }
-
-    function onOnline() {
-      void run("online");
-    }
-
-    function onOffline() {
-      clearTimer();
-    }
-
-    revalidateRef.current = (trigger: TaskFreshnessTrigger = "manual") => run(trigger);
-    notifyMutationRef.current = async (data?: T) => {
-      const key = keyRef.current;
-      if (data !== undefined) {
-        coordinator.applyConfirmed(key, data);
-      } else {
-        coordinator.raiseMutationBarrier(key);
-      }
-      return run("mutation");
-    };
-
-    if (enabled && isDocumentVisible() && isNavigatorOnline() && !suspendedRef.current) {
-      void run("manual");
-      schedule(intervalMs);
-    }
-
-    if (typeof window !== "undefined") {
-      window.addEventListener("focus", onFocus);
-      window.addEventListener("online", onOnline);
-      window.addEventListener("offline", onOffline);
-    }
-    if (typeof document !== "undefined") {
-      document.addEventListener("visibilitychange", onVisibility);
-    }
-
-    return () => {
-      clearTimer();
-      revalidateRef.current = async () => undefined;
-      notifyMutationRef.current = async () => undefined;
-      if (typeof window !== "undefined") {
-        window.removeEventListener("focus", onFocus);
-        window.removeEventListener("online", onOnline);
-        window.removeEventListener("offline", onOffline);
-      }
-      if (typeof document !== "undefined") {
-        document.removeEventListener("visibilitychange", onVisibility);
-      }
-    };
-  }, [backoffMs, coordinator, enabled, intervalMs, keyId]);
-
-  useEffect(() => {
-    if (!reconciliation || !enabled) return;
-    // One registration per mounted hook instance, so two hooks sharing a query
-    // identity cannot unregister one another.
-    registrationSequence += 1;
-    const queryId = `${keyId}#${registrationSequence}`;
-    // Called with no argument on purpose: a confirmed create is never applied
-    // as list data — it raises the mutation barrier and re-reads the server.
-    reconciliation.registerActiveTaskQuery(queryId, () => notifyMutationRef.current());
-    return () => {
-      reconciliation.unregisterActiveTaskQuery(queryId);
-    };
-  }, [enabled, keyId, reconciliation]);
-
-  return {
-    freshness,
-    lastSuccessfulAt,
-    lastConfirmed,
-    suspended,
-    revalidate: (trigger: TaskFreshnessTrigger = "manual") => revalidateRef.current(trigger),
-    notifyMutationConfirmed: (data?: T) => notifyMutationRef.current(data),
-  };
+  return useForegroundRevalidation<
+    T,
+    TaskQueryKey,
+    TaskReadFetcher<T>,
+    TaskReadResult<T>,
+    TaskQuerySnapshot<T>
+  >({
+    queryId: serializeTaskQueryKey(queryKey),
+    queryKey,
+    enabled,
+    coordinator,
+    fetcher,
+    onResult,
+    onNotice,
+    reconciliation,
+    messages: TASK_FRESHNESS_MESSAGES,
+    intervalMs,
+    backoffMs,
+  });
 }

@@ -3867,12 +3867,16 @@ class _ContinuityAuthoring(ContinuityAuthoringRepository):
             version=1,
         )
         self._world.projects.append(project)
-        self._mint_bound_project_entity(
-            principal_id=principal_id,
-            project_id=project_id,
-            name=name,
-            now=now,
-        )
+        try:
+            self._mint_bound_project_entity(
+                principal_id=principal_id,
+                project_id=project_id,
+                name=name,
+                now=now,
+            )
+        except ValueError:
+            self._world.projects.remove(project)
+            raise
         return project
 
     def _mint_bound_project_entity(

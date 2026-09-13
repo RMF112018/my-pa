@@ -215,6 +215,8 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.CONTINUITY_PROJECTS, Purpose.CAPTURE_REVIEW),
         (Capability.CONTINUITY_PROJECTS_READ, Purpose.CAPTURE_REVIEW),
         (Capability.CONTINUITY_PROJECTS_CREATE, Purpose.CONTINUITY_AUTHORING),
+        (Capability.CONTINUITY_PROJECTS_UPDATE, Purpose.CONTINUITY_AUTHORING),
+        (Capability.CONTINUITY_PROJECTS_CLOSE, Purpose.CONTINUITY_AUTHORING),
         (Capability.CONTINUITY_SITUATIONS_CREATE, Purpose.CONTINUITY_AUTHORING),
         (Capability.CONTINUITY_TASKS_CREATE, Purpose.CONTINUITY_AUTHORING),
         (Capability.KNOWLEDGE_COVERAGE, Purpose.STATUS_OBSERVATION),
@@ -474,9 +476,9 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # purpose and no write gains `constraint_read`: that disjointness is what the
     # plane's read/authoring separation now rests on. WP11 adds seven sync pairs,
     # split between its read and authoring purposes, without widening the canonical grants.
-    # Unioned: 164 capabilities, 45 purposes, 166 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 166
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 166 == 7214
+    # Unioned: 166 capabilities, 45 purposes, 168 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 168
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 168 == 7302
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

@@ -284,6 +284,7 @@ from my_pa.domain.situation.continuity import (
     LifecycleTransition,
     TaskState,
 )
+from my_pa.domain.situation.project_history import ProjectMutationAction
 from my_pa.domain.situation.situation import (
     FrameState,
     ProjectEntityLinkageState,
@@ -2832,6 +2833,66 @@ projects = Table(
         "principal_id",
         text("created_at DESC"),
         text("project_id DESC"),
+    ),
+)
+
+#: `project_history`: one append-only mutation receipt per Continuity Project
+#: write (WP-MCP-PROJ-03), the identical shape `commitment_history` establishes
+#: for the Commitment plane. See `domain.situation.project_history` for the
+#: field-by-field rationale.
+project_history = Table(
+    "project_history",
+    METADATA,
+    Column("history_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("action", Text, nullable=False),
+    Column("actor", Text, nullable=False),
+    Column("outcome", Text, nullable=False),
+    Column("before_version", Integer, nullable=False),
+    Column("after_version", Integer, nullable=False),
+    Column("idempotency_key", Text),
+    Column("request_digest", Text),
+    Column("occurred_at", DateTime(timezone=True), nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("history_id", IdKind.PROJECT_HISTORY),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _one_of("action", ProjectMutationAction, name="a_project_history_action_is_known"),
+    _one_of("actor", TaskMutationActor, name="a_project_history_actor_is_known"),
+    _one_of("outcome", TaskMutationOutcome, name="a_project_history_outcome_is_known"),
+    CheckConstraint(
+        "before_version >= 0", name="a_project_history_before_version_is_non_negative"
+    ),
+    CheckConstraint(
+        "(outcome = 'applied') = (after_version > before_version)",
+        name="an_applied_project_mutation_advances_its_version",
+    ),
+    CheckConstraint(
+        "outcome = 'applied' OR after_version = before_version",
+        name="an_unapplied_project_mutation_records_no_version_change",
+    ),
+    CheckConstraint(
+        "idempotency_key IS NULL OR idempotency_key ~ '^[A-Za-z0-9_-]{8,128}$'",
+        name="a_project_history_idempotency_key_is_bounded",
+    ),
+    CheckConstraint(
+        "request_digest IS NULL OR request_digest ~ '^[0-9a-f]{64}$'",
+        name="a_project_history_request_digest_is_sha256",
+    ),
+    ForeignKeyConstraint(
+        ["project_id", "principal_id"],
+        [f"{SCHEMA}.projects.project_id", f"{SCHEMA}.projects.principal_id"],
+        name="a_project_history_names_a_project_in_its_principal",
+    ),
+    Index("project_history_by_principal", "principal_id"),
+    Index("project_history_by_principal_project", "principal_id", "project_id"),
+    Index(
+        "project_history_idempotency_key_is_unique_per_principal",
+        "principal_id",
+        "idempotency_key",
+        unique=True,
+        postgresql_where=text("idempotency_key IS NOT NULL"),
     ),
 )
 

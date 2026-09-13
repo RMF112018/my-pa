@@ -216,6 +216,7 @@ from my_pa.domain.situation.continuity import (
     Decision,
     Task,
 )
+from my_pa.domain.situation.project_history import ProjectMutationReceipt
 from my_pa.domain.situation.situation import (
     Frame,
     Project,
@@ -5233,6 +5234,44 @@ class ProjectRepository(ABC):
 
         Refuses when either the Project or the Situation is not in this
         Principal's partition. Idempotent per (project, situation).
+        """
+
+    @abstractmethod
+    def update_project(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        expected_version: int,
+        idempotency_key: str,
+        request_digest: str,
+        name: str | None,
+        description: str | None,
+        state: ProjectState | None,
+        now: datetime,
+    ) -> ProjectMutationReceipt | None:
+        """Versioned update of name, description, and/or nonterminal state.
+
+        `SELECT … FOR UPDATE`. Missing row is `None`. Stale `expected_version`
+        writes a rejected history receipt and raises `ProjectVersionConflictError`.
+        Illegal lifecycle transitions raise `ProjectIllegalTransitionError` before
+        any write. `now` is the server clock the application already resolved.
+        """
+
+    @abstractmethod
+    def close_project(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        expected_version: int,
+        idempotency_key: str,
+        request_digest: str,
+        now: datetime,
+    ) -> ProjectMutationReceipt | None:
+        """Versioned close. Missing row is `None`. Already-closed is illegal.
+
+        `now` is the server clock the application already resolved.
         """
 
 

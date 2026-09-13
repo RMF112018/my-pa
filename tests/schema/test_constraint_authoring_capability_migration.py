@@ -52,10 +52,11 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "f7a2c9d51e64"
-CURRENT_HEAD: Final = "b3e9d7a41c25"
+CURRENT_HEAD: Final = "c4f1a8e52d90"
 CAPTURE_LABELS: Final = "c1a8e4d70b29"
 WP_TUX_01: Final = "de5ec1c65857"
 WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
+WP_MCP_PROJ_02: Final = "b3e9d7a41c25"
 CONSTRAINT_SYNC: Final = "b8e4d6f20a11"
 #: The chain parent. `4e9a1c7b2d60` (AUTH-IMP) landed on `c5b71e0a8d43` while
 #: this revision was in review, so this migration was repointed onto it. The
@@ -73,6 +74,9 @@ MIGRATION: Final = (
     MIGRATIONS / "20260907_f7a2c9d51e64_admit_the_constraint_authoring_capabilities.py"
 )
 CURRENT_HEAD_MIGRATION: Final = (
+    MIGRATIONS / "20260913_c4f1a8e52d90_admit_continuity_projects_update_and_close.py"
+)
+WP_MCP_PROJ_02_MIGRATION: Final = (
     MIGRATIONS / "20260913_b3e9d7a41c25_admit_continuity_projects_read.py"
 )
 WP_MCP_PROJ_01_MIGRATION: Final = (
@@ -142,6 +146,7 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_constraint_management_migration.py",
     "tests/schema/test_constraint_read_capability_migration.py",
     "tests/schema/test_constraint_sync_migration.py",
+    "tests/schema/test_continuity_projects_mutation_migration.py",
     "tests/schema/test_continuity_projects_read_capability_migration.py",
     "tests/schema/test_extraction_schema_migration.py",
     "tests/schema/test_goodnotes_browser_contract_migration.py",
@@ -239,7 +244,8 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == WP_MCP_PROJ_01
+    assert script.get_revision(CURRENT_HEAD).down_revision == WP_MCP_PROJ_02
+    assert script.get_revision(WP_MCP_PROJ_02).down_revision == WP_MCP_PROJ_01
     assert script.get_revision(WP_MCP_PROJ_01).down_revision == WP_TUX_01
     assert script.get_revision(WP_TUX_01).down_revision == CAPTURE_LABELS
     assert script.get_revision(CAPTURE_LABELS).down_revision == CONSTRAINT_SYNC
@@ -248,7 +254,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 104
+    assert len(list(MIGRATIONS.glob("*.py"))) == 105
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -387,6 +393,7 @@ def test_no_historical_revision_was_edited() -> None:
     touched = {line for line in changed.stdout.splitlines() if line.strip()}
     assert touched <= {
         CURRENT_HEAD_MIGRATION.relative_to(ROOT).as_posix(),
+        WP_MCP_PROJ_02_MIGRATION.relative_to(ROOT).as_posix(),
         WP_MCP_PROJ_01_MIGRATION.relative_to(ROOT).as_posix(),
     }, f"a revision other than this branch's additive heads changed: {sorted(touched)}"
 

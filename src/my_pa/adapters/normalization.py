@@ -74,6 +74,7 @@ from my_pa.application.commands import (
     CloseCommitment,
     CloseConstraint,
     CloseConstraintWithFollowUp,
+    CloseProject,
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
@@ -222,6 +223,7 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateProject,
     UpdateTask,
     VoidConstraint,
     WaitingOn,
@@ -574,6 +576,21 @@ def _read_project(payload: Mapping[str, Any]) -> Command:
 
 def _create_project(payload: Mapping[str, Any]) -> Command:
     return CreateProject(**payload)
+
+
+def _update_project(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    named = converted.get("state")
+    if isinstance(named, str):
+        try:
+            converted["state"] = ProjectState(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+    return UpdateProject(**converted)
+
+
+def _close_project(payload: Mapping[str, Any]) -> Command:
+    return CloseProject(**payload)
 
 
 def _create_situation(payload: Mapping[str, Any]) -> Command:
@@ -2240,6 +2257,8 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.CONTINUITY_PROJECTS: _list_projects,
         Capability.CONTINUITY_PROJECTS_READ: _read_project,
         Capability.CONTINUITY_PROJECTS_CREATE: _create_project,
+        Capability.CONTINUITY_PROJECTS_UPDATE: _update_project,
+        Capability.CONTINUITY_PROJECTS_CLOSE: _close_project,
         Capability.CONTINUITY_SITUATIONS_CREATE: _create_situation,
         Capability.CONTINUITY_TASKS_CREATE: _record_task,
         Capability.KNOWLEDGE_COVERAGE: _get_corpus_coverage,

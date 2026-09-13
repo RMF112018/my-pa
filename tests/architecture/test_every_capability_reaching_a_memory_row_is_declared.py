@@ -924,7 +924,7 @@ UNCALLED_PORT_METHOD_REFERENCES: Final[dict[tuple[str, str], str]] = {
     ("my_pa.application.service", "receipt.history"): (
         "not a port method. `receipt` is bound from `conflict.receipt` on a caught "
         "conflict, which this walk cannot type, and `history` there is the task "
-        "write receipt's own history field. It collides with "
+        "or Continuity Project write receipt's own history field. It collides with "
         "`RelationshipMemoryRepository.history`, with which it shares nothing but "
         "the word."
     ),

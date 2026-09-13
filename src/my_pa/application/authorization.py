@@ -65,6 +65,7 @@ from my_pa.application.commands import (
     CloseCommitment,
     CloseConstraint,
     CloseConstraintWithFollowUp,
+    CloseProject,
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
@@ -211,6 +212,7 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateProject,
     UpdateTask,
     VoidConstraint,
     WaitingOn,
@@ -345,6 +347,8 @@ def _requested_scope(
             | ListProjects()
             | ReadProject()
             | CreateProject()
+            | UpdateProject()
+            | CloseProject()
             | CreateSituation()
             | RecordTask()
             # A corpus answer names a Principal and no source. The scope it

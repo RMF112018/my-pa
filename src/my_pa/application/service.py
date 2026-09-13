@@ -140,6 +140,7 @@ from my_pa.application.commands import (
     CloseCommitment,
     CloseConstraint,
     CloseConstraintWithFollowUp,
+    CloseProject,
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
@@ -292,6 +293,7 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateProject,
     UpdateTask,
     VoidConstraint,
     WaitingOn,
@@ -5230,6 +5232,107 @@ class ApplicationService:
                 description=command.description,
             )
         return self._project_authoring_result(authorization, project, replayed=False)
+
+    def _continuity_projects_update(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: UpdateProject
+    ) -> _Result:
+        """Versioned update of name, description, and/or nonterminal state."""
+        digest = _authoring_digest(
+            command.capability.value,
+            {
+                "description": command.description,
+                "expected_version": command.expected_version,
+                "name": command.name,
+                "project_id": command.project_id,
+                "state": None if command.state is None else command.state.value,
+            },
+        )
+        return self._continuity_project_mutation(
+            unit_of_work,
+            authorization,
+            project_id=command.project_id,
+            mutate=lambda: unit_of_work.projects.update_project(
+                principal_id=authorization.principal.principal_id,
+                project_id=command.project_id,
+                expected_version=command.expected_version,
+                idempotency_key=command.idempotency_key,
+                request_digest=digest,
+                name=command.name,
+                description=command.description,
+                state=command.state,
+                now=authorization.at,
+            ),
+        )
+
+    def _continuity_projects_close(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: CloseProject
+    ) -> _Result:
+        """Versioned close of an active or on-hold Project."""
+        digest = _authoring_digest(
+            command.capability.value,
+            {
+                "expected_version": command.expected_version,
+                "project_id": command.project_id,
+            },
+        )
+        return self._continuity_project_mutation(
+            unit_of_work,
+            authorization,
+            project_id=command.project_id,
+            mutate=lambda: unit_of_work.projects.close_project(
+                principal_id=authorization.principal.principal_id,
+                project_id=command.project_id,
+                expected_version=command.expected_version,
+                idempotency_key=command.idempotency_key,
+                request_digest=digest,
+                now=authorization.at,
+            ),
+        )
+
+    def _continuity_project_mutation(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        *,
+        project_id: str,
+        mutate: object,
+    ) -> _Result:
+        from my_pa.domain.situation.project_history import (
+            ProjectIdempotencyConflictError,
+            ProjectIllegalTransitionError,
+            ProjectMutationReceipt,
+            ProjectVersionConflictError,
+        )
+
+        principal_id = authorization.principal.principal_id
+        try:
+            with _translated():
+                receipt = mutate()  # type: ignore[operator]
+        except ProjectIllegalTransitionError:
+            raise ConflictError(SafeDetail.PROJECT_ID) from None
+        except ProjectIdempotencyConflictError:
+            raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
+        except ProjectVersionConflictError as conflict:
+            current = unit_of_work.projects.get_project(principal_id, project_id)
+            receipt = conflict.receipt
+            if (
+                not isinstance(receipt, ProjectMutationReceipt)
+                or receipt.history.outcome.value != "rejected"
+                or receipt.history.before_version != receipt.history.after_version
+                or current != receipt.project
+                or current is None
+                or current.version != receipt.history.before_version
+            ):
+                raise InternalError() from None
+            raise _CommitRejectedConflictError(ConflictError(SafeDetail.PROJECT_ID)) from None
+        if receipt is None:
+            raise NotFoundError(SafeDetail.PROJECT_ID)
+        payload = self._continuity_project_payload(receipt.project)
+        payload["replayed"] = receipt.replayed
+        return _Result(
+            payload=payload,
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CONTINUITY_TRUST_BASIS),
+        )
 
     def _continuity_situations_create(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: CreateSituation
@@ -11965,6 +12068,8 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.CONTINUITY_PROJECTS: ApplicationService._continuity_projects,
         Capability.CONTINUITY_PROJECTS_READ: ApplicationService._continuity_projects_read,
         Capability.CONTINUITY_PROJECTS_CREATE: ApplicationService._continuity_projects_create,
+        Capability.CONTINUITY_PROJECTS_UPDATE: ApplicationService._continuity_projects_update,
+        Capability.CONTINUITY_PROJECTS_CLOSE: ApplicationService._continuity_projects_close,
         Capability.CONTINUITY_SITUATIONS_CREATE: ApplicationService._continuity_situations_create,
         Capability.CONTINUITY_TASKS_CREATE: ApplicationService._continuity_tasks_create,
         Capability.DOCUMENTS_CREATE: ApplicationService._documents_create,

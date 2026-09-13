@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-one hundred and sixty-four capabilities. There are two ways to prove that and only one stays
+one hundred and sixty-six capabilities. There are two ways to prove that and only one stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -790,6 +790,8 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     managed_document = staged_managed_document(scene)
     task = staged_task(scene)
     project = staged_continuity_project(scene)
+    update_project = staged_continuity_project(scene, name="a synthetic update project")
+    close_project = staged_continuity_project(scene, name="a synthetic close project")
     commitment = staged_commitment(scene)
     bulk_mutations = [
         {
@@ -950,6 +952,17 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.CONTINUITY_PROJECTS_CREATE: {
             "name": "Parity authoring project",
             "idempotency_key": "parity-project-0001",
+        },
+        Capability.CONTINUITY_PROJECTS_UPDATE: {
+            "project_id": update_project.project_id,
+            "expected_version": update_project.version,
+            "idempotency_key": "parity-project-update-0001",
+            "name": "Parity updated project",
+        },
+        Capability.CONTINUITY_PROJECTS_CLOSE: {
+            "project_id": close_project.project_id,
+            "expected_version": close_project.version,
+            "idempotency_key": "parity-project-close-0001",
         },
         Capability.CONTINUITY_SITUATIONS_CREATE: {
             "title": "Parity authoring situation",
@@ -1928,7 +1941,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 165, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 167, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))

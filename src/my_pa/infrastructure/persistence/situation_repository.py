@@ -81,6 +81,13 @@ from my_pa.domain.situation.continuity import (
     Task,
     TaskState,
 )
+from my_pa.domain.situation.project_history import (
+    ProjectHistoryEntry,
+    ProjectMutationAction,
+    ProjectMutationReceipt,
+    execute_close_project,
+    execute_update_project,
+)
 from my_pa.domain.situation.pulse_derivation import FramedObligation, derive_pulse
 from my_pa.domain.situation.situation import (
     Frame,
@@ -97,6 +104,7 @@ from my_pa.domain.situation.situation import (
     Trace,
 )
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.domain.task.history import TaskMutationActor, TaskMutationOutcome
 from my_pa.domain.task.lifecycle import TaskOriginKind
 from my_pa.infrastructure.persistence.tables import (
     capture_review_decisions,
@@ -105,6 +113,7 @@ from my_pa.infrastructure.persistence.tables import (
     decisions,
     frames,
     project_entity_links,
+    project_history,
     project_situations,
     projects,
     pulse_items,
@@ -693,6 +702,133 @@ class SqlProjectRepository(ProjectRepository):
             evidence_ref=evidence_ref,
             occurred_at=now,
             recorded_at=now,
+        )
+
+    def lock_project(self, principal_id: str, project_id: str) -> Project | None:
+        row = self._connection.execute(
+            select(*projects.c)
+            .where(
+                and_(
+                    projects.c.project_id == project_id,
+                    projects.c.principal_id == principal_id,
+                )
+            )
+            .with_for_update()
+        ).one_or_none()
+        return None if row is None else self._to_project(row)
+
+    def persist_project(self, project: Project) -> None:
+        self._connection.execute(
+            update(projects)
+            .where(
+                and_(
+                    projects.c.project_id == project.project_id,
+                    projects.c.principal_id == project.principal_id,
+                )
+            )
+            .values(
+                name=project.name,
+                description=project.description,
+                state=project.state.value,
+                closed_at=project.closed_at,
+                updated_at=project.updated_at,
+                version=project.version,
+            )
+        )
+
+    def persist_history(self, entry: ProjectHistoryEntry) -> None:
+        self._connection.execute(
+            insert(project_history).values(
+                history_id=entry.history_id,
+                principal_id=entry.principal_id,
+                project_id=entry.project_id,
+                action=entry.action.value,
+                actor=entry.actor.value,
+                outcome=entry.outcome.value,
+                before_version=entry.before_version,
+                after_version=entry.after_version,
+                idempotency_key=entry.idempotency_key,
+                request_digest=entry.request_digest,
+                occurred_at=entry.occurred_at,
+                recorded_at=entry.recorded_at,
+            )
+        )
+
+    def history_for_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> ProjectHistoryEntry | None:
+        row = self._connection.execute(
+            select(*project_history.c).where(
+                and_(
+                    project_history.c.principal_id == principal_id,
+                    project_history.c.idempotency_key == idempotency_key,
+                )
+            )
+        ).one_or_none()
+        return None if row is None else self._to_project_history(row)
+
+    def update_project(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        expected_version: int,
+        idempotency_key: str,
+        request_digest: str,
+        name: str | None,
+        description: str | None,
+        state: ProjectState | None,
+        now: datetime,
+    ) -> ProjectMutationReceipt | None:
+        return execute_update_project(
+            self,
+            principal_id=principal_id,
+            project_id=project_id,
+            expected_version=expected_version,
+            idempotency_key=idempotency_key,
+            request_digest=request_digest,
+            name=name,
+            description=description,
+            state=state,
+            now=now,
+        )
+
+    def close_project(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        expected_version: int,
+        idempotency_key: str,
+        request_digest: str,
+        now: datetime,
+    ) -> ProjectMutationReceipt | None:
+        return execute_close_project(
+            self,
+            principal_id=principal_id,
+            project_id=project_id,
+            expected_version=expected_version,
+            idempotency_key=idempotency_key,
+            request_digest=request_digest,
+            now=now,
+        )
+
+    @staticmethod
+    def _to_project_history(row: Row[Any]) -> ProjectHistoryEntry:
+        mapping = row._mapping
+        return ProjectHistoryEntry(
+            history_id=mapping["history_id"],
+            principal_id=mapping["principal_id"],
+            project_id=mapping["project_id"],
+            action=ProjectMutationAction(mapping["action"]),
+            actor=TaskMutationActor(mapping["actor"]),
+            outcome=TaskMutationOutcome(mapping["outcome"]),
+            before_version=int(mapping["before_version"]),
+            after_version=int(mapping["after_version"]),
+            occurred_at=mapping["occurred_at"],
+            recorded_at=mapping["recorded_at"],
+            idempotency_key=mapping["idempotency_key"],
+            request_digest=mapping["request_digest"],
         )
 
     @staticmethod

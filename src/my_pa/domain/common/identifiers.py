@@ -125,6 +125,14 @@ class IdKind(StrEnum):
     TRACE = "trc"
     PROJECT = "prj"
     PROJECT_SITUATION = "psit"
+    #: WP-MCP-PROJ-03: one append-only mutation receipt per Continuity Project
+    #: write. Its own prefix rather than a reuse of `TASK_HISTORY`: `thst` names
+    #: a Task mutation receipt, and a Project mutation receipt is not a Task
+    #: mutation receipt, so a stored reference has to say which of the two it
+    #: names — the same argument `COMMITMENT_HISTORY` makes against reusing
+    #: `TASK_HISTORY`. Checked against every prior member: `phst` collides with
+    #: none (`prj` / `psit` / `thst` / `cmthst` / `puls` differ).
+    PROJECT_HISTORY = "phst"
     RELATIONSHIP_EVENT = "revt"
     PULSE = "puls"
     #: The continuity objects WP-11 adds, and the one append-only record that

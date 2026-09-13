@@ -475,6 +475,7 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     "de5ec1c65857": frozenset({"task_comments"}),
     "9f2c8a1d4e70": frozenset({"project_entity_links"}),
     "b3e9d7a41c25": frozenset(),
+    "c4f1a8e52d90": frozenset({"project_history"}),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

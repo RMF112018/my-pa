@@ -348,6 +348,12 @@ from my_pa.domain.situation.continuity import (
 )
 from my_pa.domain.situation.continuity import Decision as ContinuityDecision
 from my_pa.domain.situation.continuity import Task as ContinuityTask
+from my_pa.domain.situation.project_history import (
+    ProjectHistoryEntry,
+    ProjectMutationReceipt,
+    execute_close_project,
+    execute_update_project,
+)
 from my_pa.domain.situation.pulse_derivation import FramedObligation, derive_pulse
 from my_pa.domain.situation.situation import (
     Project,
@@ -587,6 +593,7 @@ class World:
     #: pass here against a derivation the store would not reproduce.
     situations: list[Situation] = field(default_factory=list)
     projects: list[Project] = field(default_factory=list)
+    project_history: list[ProjectHistoryEntry] = field(default_factory=list)
     project_situations: list[tuple[str, str, str, str]] = field(default_factory=list)
     project_entity_links: list[ProjectEntityLink] = field(default_factory=list)
     commitments: list[Commitment] = field(default_factory=list)
@@ -3734,6 +3741,75 @@ class _Projects(ProjectRepository):
         link = (principal_id, project_id, situation_id, evidence_ref)
         if link not in self._world.project_situations:
             self._world.project_situations.append(link)
+
+    def lock_project(self, principal_id: str, project_id: str) -> Project | None:
+        return self.get_project(principal_id, project_id)
+
+    def persist_project(self, project: Project) -> None:
+        self._world.projects = [
+            project if row.project_id == project.project_id else row for row in self._world.projects
+        ]
+
+    def persist_history(self, entry: ProjectHistoryEntry) -> None:
+        self._world.project_history.append(entry)
+
+    def history_for_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> ProjectHistoryEntry | None:
+        return next(
+            (
+                entry
+                for entry in self._world.project_history
+                if entry.principal_id == principal_id and entry.idempotency_key == idempotency_key
+            ),
+            None,
+        )
+
+    def update_project(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        expected_version: int,
+        idempotency_key: str,
+        request_digest: str,
+        name: str | None,
+        description: str | None,
+        state: ProjectState | None,
+        now: datetime,
+    ) -> ProjectMutationReceipt | None:
+        return execute_update_project(
+            self,
+            principal_id=principal_id,
+            project_id=project_id,
+            expected_version=expected_version,
+            idempotency_key=idempotency_key,
+            request_digest=request_digest,
+            name=name,
+            description=description,
+            state=state,
+            now=now,
+        )
+
+    def close_project(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        expected_version: int,
+        idempotency_key: str,
+        request_digest: str,
+        now: datetime,
+    ) -> ProjectMutationReceipt | None:
+        return execute_close_project(
+            self,
+            principal_id=principal_id,
+            project_id=project_id,
+            expected_version=expected_version,
+            idempotency_key=idempotency_key,
+            request_digest=request_digest,
+            now=now,
+        )
 
 
 class _ContinuityAuthoring(ContinuityAuthoringRepository):
@@ -8967,9 +9043,19 @@ def staged_review_case(scene: Scene, capture: CaptureVersion | None = None) -> R
 
 
 def staged_continuity_project(scene: Scene, *, name: str = "a synthetic project") -> Project:
-    """One stored Continuity Project so `continuity.projects.read` can answer."""
+    """One stored Continuity Project so `continuity.projects.read` can answer.
+
+    Reused by `(principal_id, name)`, not by Principal alone: an HTTP/MCP
+    negative sweep drives update and close in one pass over one scene, and a
+    second call that returned the read's row would close a Project whose
+    version the update had already moved.
+    """
     existing = next(
-        (row for row in scene.world.projects if row.principal_id == scene.principal.principal_id),
+        (
+            row
+            for row in scene.world.projects
+            if row.principal_id == scene.principal.principal_id and row.name == name
+        ),
         None,
     )
     if existing is not None:

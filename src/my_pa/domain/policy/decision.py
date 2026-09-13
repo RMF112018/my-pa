@@ -168,6 +168,8 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.CONTINUITY_PROJECTS,
         Capability.CONTINUITY_PROJECTS_READ,
         Capability.CONTINUITY_PROJECTS_CREATE,
+        Capability.CONTINUITY_PROJECTS_UPDATE,
+        Capability.CONTINUITY_PROJECTS_CLOSE,
         Capability.CONTINUITY_SITUATIONS_CREATE,
         Capability.CONTINUITY_TASKS_CREATE,
         # `knowledge.coverage` names a Principal, not a source. Its whole subject

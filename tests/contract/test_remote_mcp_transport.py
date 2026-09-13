@@ -59,6 +59,8 @@ def test_remote_profile_is_deterministic_read_only(scene: Scene) -> None:
     assert Capability.GSQS_START.value in first
     assert Capability.GSQS_STATUS.value in first
     assert Capability.CONTINUITY_PROJECTS_CREATE.value not in first
+    assert Capability.CONTINUITY_PROJECTS_UPDATE.value not in first
+    assert Capability.CONTINUITY_PROJECTS_CLOSE.value not in first
     assert Capability.CONTINUITY_PROJECTS_READ.value in first
     assert Capability.SOURCES_ENROLL.value not in first
     assert Capability.DOCUMENTS_CREATE.value not in first
@@ -76,6 +78,8 @@ def test_remote_profile_is_deterministic_read_only(scene: Scene) -> None:
     assert Capability.CONTEXT_FEEDBACK.value in enabled
     assert Capability.GOODNOTES_PROPOSE.value in enabled
     assert Capability.CONTINUITY_PROJECTS_CREATE.value in enabled
+    assert Capability.CONTINUITY_PROJECTS_UPDATE.value in enabled
+    assert Capability.CONTINUITY_PROJECTS_CLOSE.value in enabled
     assert Capability.CONTINUITY_SITUATIONS_CREATE.value in enabled
     assert Capability.CONTINUITY_TASKS_CREATE.value in enabled
     assert Capability.TASKS_CREATE.value in enabled
@@ -289,6 +293,8 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.CAPTURE_REVISE,
         Capability.REVIEW_DECIDE,
         Capability.CONTINUITY_PROJECTS_CREATE,
+        Capability.CONTINUITY_PROJECTS_UPDATE,
+        Capability.CONTINUITY_PROJECTS_CLOSE,
         Capability.CONTINUITY_SITUATIONS_CREATE,
         Capability.CONTINUITY_TASKS_CREATE,
         Capability.DOCUMENTS_CREATE,
@@ -393,6 +399,8 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.TASKS_BULK_CONFIRM,
         Capability.COMMITMENTS_UPDATE,
         Capability.COMMITMENTS_CLOSE,
+        Capability.CONTINUITY_PROJECTS_UPDATE,
+        Capability.CONTINUITY_PROJECTS_CLOSE,
         Capability.CONTEXT_FEEDBACK,
         Capability.REPORTS_COMMIT,
         Capability.RELATIONSHIP_MEMORY_REVISE,

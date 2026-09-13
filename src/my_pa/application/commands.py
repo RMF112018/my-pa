@@ -225,6 +225,7 @@ __all__ = [
     "BulkConfirmTasks",
     "BulkPreviewTasks",
     "CloseCommitment",
+    "CloseProject",
     "CloseSituationCommand",
     "Command",
     "CommitIntelligenceArtifact",
@@ -319,6 +320,7 @@ __all__ = [
     "TransitionTask",
     "UpdateCommitment",
     "UpdateEntity",
+    "UpdateProject",
     "UpdateTask",
     "WaitingOn",
 ]
@@ -1553,6 +1555,69 @@ class CreateProject:
         _idempotency_key(self.idempotency_key)
         if self.description is not None and not isinstance(self.description, str):
             raise InvalidRequestError(SafeDetail.TEXT)
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateProject:
+    """`continuity.projects.update`: change name, description, and/or nonterminal state.
+
+    `expected_version` and `idempotency_key` are required and have no default.
+    At least one of `name`, `description`, or `state` must be supplied. `state`,
+    when present, is `active` or `on_hold` only — closing is
+    `continuity.projects.close`. System-owned fields are absent from this
+    command so the generated schema refuses them (`additionalProperties: false`).
+    """
+
+    capability: ClassVar[Capability] = Capability.CONTINUITY_PROJECTS_UPDATE
+
+    project_id: str
+    expected_version: int
+    idempotency_key: str
+    name: str | None = None
+    description: str | None = None
+    state: ProjectState | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        if type(self.expected_version) is not int or self.expected_version < 1:
+            raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+        _idempotency_key(self.idempotency_key)
+        if self.name is not None:
+            _text(self.name, SafeDetail.NAME)
+            if not self.name.strip():
+                raise InvalidRequestError(SafeDetail.NAME)
+        if self.description is not None and not isinstance(self.description, str):
+            raise InvalidRequestError(SafeDetail.TEXT)
+        if self.state is not None:
+            if not isinstance(self.state, ProjectState):
+                raise InvalidRequestError(SafeDetail.SELECTOR)
+            if self.state is ProjectState.CLOSED:
+                raise InvalidRequestError(SafeDetail.SELECTOR)
+            if self.state not in (ProjectState.ACTIVE, ProjectState.ON_HOLD):
+                raise InvalidRequestError(SafeDetail.SELECTOR)
+        if self.name is None and self.description is None and self.state is None:
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class CloseProject:
+    """`continuity.projects.close`: close a project. Always an explicit, separate call.
+
+    `expected_version` and `idempotency_key` are required and have no default.
+    Already-closed is a conflict, not a silent no-op.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONTINUITY_PROJECTS_CLOSE
+
+    project_id: str
+    expected_version: int
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        if type(self.expected_version) is not int or self.expected_version < 1:
+            raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+        _idempotency_key(self.idempotency_key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -9239,6 +9304,8 @@ type Command = (
     | ListProjects
     | ReadProject
     | CreateProject
+    | UpdateProject
+    | CloseProject
     | CreateSituation
     | RecordTask
     | GetCorpusCoverage

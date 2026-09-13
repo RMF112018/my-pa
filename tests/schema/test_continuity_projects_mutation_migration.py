@@ -1,19 +1,19 @@
-"""Admit `continuity.projects.read` (WP-MCP-PROJ-02).
+"""Admit continuity.projects.update/close and project_history (WP-MCP-PROJ-03).
 
-`b3e9d7a41c25` widens `knowledge.audit_events.capability_is_known` by one name
-and adds the Project list keyset index. Modelled on
-`tests/schema/test_constraint_authoring_capability_migration.py`.
+`c4f1a8e52d90` widens `knowledge.audit_events.capability_is_known` by a pair of
+capability tokens and creates `knowledge.project_history`. Modelled on
+`tests/schema/test_continuity_projects_read_capability_migration.py`.
 
 **The graph.** One head, and it is this revision, descending from
-`9f2c8a1d4e70`. A second head makes `alembic upgrade head` ambiguous.
+`b3e9d7a41c25`. A second head makes `alembic upgrade head` ambiguous.
 
 **The freeze.** The revision imports no domain enum and no declaration module,
 and its `BEFORE` texts are byte-for-byte the `AT` texts of the revision that
-last froze the audited closed sets (`de5ec1c65857`). `9f2c8a1d4e70` did not
-restate those sets.
+last froze the audited closed sets (`b3e9d7a41c25`).
 
 **The database.** Empty to head, previous head to this head, and a downgrade
-that restores refusal of `continuity.projects.read`.
+that restores refusal of the admitted mutation capability tokens and drops
+project_history.
 """
 
 from __future__ import annotations
@@ -38,25 +38,28 @@ from my_pa.infrastructure.database.engine import create_database_engine
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
-REVISION: Final = "b3e9d7a41c25"
+REVISION: Final = "c4f1a8e52d90"
 CURRENT_HEAD: Final = "c4f1a8e52d90"
-PREVIOUS: Final = "9f2c8a1d4e70"
-VOCABULARY_PREDECESSOR: Final = "de5ec1c65857"
+PREVIOUS: Final = "b3e9d7a41c25"
+VOCABULARY_PREDECESSOR: Final = "b3e9d7a41c25"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
-MIGRATION: Final = MIGRATIONS / "20260913_b3e9d7a41c25_admit_continuity_projects_read.py"
-PREVIOUS_MIGRATION: Final = (
-    MIGRATIONS / "20260911_de5ec1c65857_wp_tux_01_task_origin_closure_comments.py"
+MIGRATION: Final = (
+    MIGRATIONS / "20260913_c4f1a8e52d90_admit_continuity_projects_update_and_close.py"
 )
-INDEX: Final = "projects_by_principal_created_at_id_desc"
-ADMITTED_CAPABILITIES: Final[tuple[str, ...]] = ("continuity.projects.read",)
+PREVIOUS_MIGRATION: Final = MIGRATIONS / "20260913_b3e9d7a41c25_admit_continuity_projects_read.py"
+ADMITTED_CAPABILITIES: Final[tuple[str, ...]] = (
+    "continuity.projects.close",
+    "continuity.projects.update",
+)
 SETTLED_CAPABILITY: Final = "capabilities.get"
 SETTLED_PURPOSE: Final = "status_observation"
-CAPTURE_REVIEW: Final = "capture_review"
+CONTINUITY_AUTHORING: Final = "continuity_authoring"
 PRINCIPAL_A: Final = "prn_cccc0001cccc0001cccc0001"
 WHEN: Final = datetime(2026, 9, 13, 12, tzinfo=UTC)
 POLICY_VERSION: Final = "policy-v1"
 _ROWS = count(1)
 AUDITED_CONSTRAINTS: Final[tuple[str, ...]] = ("capability_is_known", "purpose_is_known")
+HISTORY_TABLE: Final = "project_history"
 
 
 def _config(buffer: io.StringIO | None = None) -> Config:
@@ -119,9 +122,7 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == REVISION
-    assert script.get_revision(REVISION).down_revision == PREVIOUS
-    assert script.get_revision(PREVIOUS).down_revision == VOCABULARY_PREDECESSOR
+    assert script.get_revision(CURRENT_HEAD).down_revision == PREVIOUS
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
@@ -165,18 +166,10 @@ def test_no_revision_between_the_vocabulary_predecessor_and_this_one_restates_th
         assert isinstance(current, str), f"{current!r} is a branch point, not a linear parent"
         between.append(current)
         current = script.get_revision(current).down_revision
-    assert between == [PREVIOUS]
-    for revision in between:
-        source = Path(script.get_revision(revision).path).read_text(encoding="utf-8")
-        for constraint in AUDITED_CONSTRAINTS:
-            found = re.search(rf"(?<![A-Za-z0-9_]){re.escape(constraint)}", source)
-            assert found is None, (
-                f"{revision} restates {constraint}, so it — not {VOCABULARY_PREDECESSOR} — "
-                f"is the correct source for this revision's BEFORE literals"
-            )
+    assert between == []
 
 
-def test_the_at_texts_add_exactly_the_new_capability_and_stay_sorted() -> None:
+def test_the_at_texts_add_exactly_the_new_capabilities_and_stay_sorted() -> None:
     source = MIGRATION.read_text(encoding="utf-8")
     before = _literals(_constant(source, "_CAPABILITIES_BEFORE_THIS_REVISION"))
     at = _literals(_constant(source, "_CAPABILITIES_AT_THIS_REVISION"))
@@ -189,41 +182,49 @@ def test_the_at_texts_add_exactly_the_new_capability_and_stay_sorted() -> None:
     assert purposes_at == sorted(purposes_at)
 
 
+def test_revision_uses_frozen_action_and_actor_literals() -> None:
+    source = MIGRATION.read_text(encoding="utf-8")
+    assert "CHECK (action IN ('close', 'update'))" in source
+    assert "CHECK (actor IN ('assistant', 'principal', 'system'))" in source
+    assert "CHECK (outcome IN ('applied', 'no_op', 'rejected'))" in source
+
+
 @pytest.mark.migration
 @pytest.mark.migration_edge
 @pytest.mark.database
-def test_head_admits_continuity_projects_read(migrated_engine: Engine) -> None:
-    _audit(migrated_engine, capability=ADMITTED_CAPABILITIES[0], purpose=CAPTURE_REVIEW)
+def test_head_admits_the_new_capabilities_and_history_table(migrated_engine: Engine) -> None:
+    for capability in ADMITTED_CAPABILITIES:
+        _audit(migrated_engine, capability=capability, purpose=CONTINUITY_AUTHORING)
     _audit(migrated_engine, capability=SETTLED_CAPABILITY, purpose=SETTLED_PURPOSE)
     with migrated_engine.connect() as connection:
         named = connection.execute(
             text(
-                "SELECT indexname FROM pg_indexes WHERE schemaname = :schema AND indexname = :index"
+                "SELECT tablename FROM pg_tables WHERE schemaname = :schema AND tablename = :table"
             ),
-            {"schema": SCHEMA, "index": INDEX},
+            {"schema": SCHEMA, "table": HISTORY_TABLE},
         ).scalar_one_or_none()
-    assert named == INDEX
+    assert named == HISTORY_TABLE
 
 
 @pytest.mark.migration
 @pytest.mark.migration_edge
 @pytest.mark.database
-def test_downgrade_restores_refusal_of_the_new_capability(migrated_engine: Engine) -> None:
+def test_downgrade_restores_refusal_of_the_new_capabilities(migrated_engine: Engine) -> None:
     command.downgrade(_config(), PREVIOUS)
     _audit(migrated_engine, capability=SETTLED_CAPABILITY, purpose=SETTLED_PURPOSE)
     with pytest.raises(IntegrityError) as capability_refusal:
-        _audit(migrated_engine, capability=ADMITTED_CAPABILITIES[0], purpose=CAPTURE_REVIEW)
+        _audit(migrated_engine, capability=ADMITTED_CAPABILITIES[0], purpose=CONTINUITY_AUTHORING)
     assert "capability_is_known" in str(capability_refusal.value)
     with migrated_engine.connect() as connection:
         named = connection.execute(
             text(
-                "SELECT indexname FROM pg_indexes WHERE schemaname = :schema AND indexname = :index"
+                "SELECT tablename FROM pg_tables WHERE schemaname = :schema AND tablename = :table"
             ),
-            {"schema": SCHEMA, "index": INDEX},
+            {"schema": SCHEMA, "table": HISTORY_TABLE},
         ).scalar_one_or_none()
     assert named is None
     command.upgrade(_config(), "head")
-    _audit(migrated_engine, capability=ADMITTED_CAPABILITIES[0], purpose=CAPTURE_REVIEW)
+    _audit(migrated_engine, capability=ADMITTED_CAPABILITIES[0], purpose=CONTINUITY_AUTHORING)
 
 
 @pytest.mark.migration_empty_to_head
@@ -254,6 +255,7 @@ def test_previous_head_upgrades_to_this_revision(disposable_database: str) -> No
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
         assert stamped == REVISION
-        _audit(engine, capability=ADMITTED_CAPABILITIES[0], purpose=CAPTURE_REVIEW)
+        _audit(engine, capability=ADMITTED_CAPABILITIES[0], purpose=CONTINUITY_AUTHORING)
+        _audit(engine, capability=ADMITTED_CAPABILITIES[1], purpose=CONTINUITY_AUTHORING)
     finally:
         engine.dispose()

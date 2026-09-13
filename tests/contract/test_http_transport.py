@@ -2,7 +2,7 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the one hundred and sixty-four capabilities is addressable
+**Reachability.** Every one of the one hundred and sixty-six capabilities is addressable
 over HTTP and answers. Parametrised over `Capability` rather than over a list
 written here, so the next capability added to the domain arrives as
 a failing row instead of as an untested one. Fourteen of the one hundred and forty-two answer a
@@ -103,6 +103,7 @@ from my_pa.application.commands import (
     CloseCommitment,
     CloseConstraint,
     CloseConstraintWithFollowUp,
+    CloseProject,
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
@@ -250,6 +251,7 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateProject,
     UpdateTask,
     VoidConstraint,
     WaitingOn,
@@ -443,6 +445,8 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     document = staged_managed_document(scene)
     task = staged_task(scene)
     project = staged_continuity_project(scene)
+    update_project = staged_continuity_project(scene, name="a synthetic update project")
+    close_project = staged_continuity_project(scene, name="a synthetic close project")
     commitment = staged_commitment(scene)
     work = staged_goodnotes_work(scene)
     raster = staged_goodnotes_raster(scene)
@@ -554,6 +558,17 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.CONTINUITY_PROJECTS_CREATE: {
             "name": "HTTP authoring project",
             "idempotency_key": "http-project-0001",
+        },
+        Capability.CONTINUITY_PROJECTS_UPDATE: {
+            "project_id": update_project.project_id,
+            "expected_version": update_project.version,
+            "idempotency_key": "http-project-update-0001",
+            "name": "HTTP updated project",
+        },
+        Capability.CONTINUITY_PROJECTS_CLOSE: {
+            "project_id": close_project.project_id,
+            "expected_version": close_project.version,
+            "idempotency_key": "http-project-close-0001",
         },
         Capability.CONTINUITY_SITUATIONS_CREATE: {
             "title": "HTTP authoring situation",
@@ -1397,6 +1412,8 @@ def commands_for(
     document = staged_managed_document(scene)
     task = staged_task(scene)
     project = staged_continuity_project(scene)
+    update_project = staged_continuity_project(scene, name="a synthetic update project")
+    close_project = staged_continuity_project(scene, name="a synthetic close project")
     commitment = staged_commitment(scene)
     work = staged_goodnotes_work(scene)
     raster = staged_goodnotes_raster(scene)
@@ -1506,6 +1523,17 @@ def commands_for(
         Capability.CONTINUITY_PROJECTS_READ: ReadProject(project_id=project.project_id),
         Capability.CONTINUITY_PROJECTS_CREATE: CreateProject(
             name="HTTP authoring project", idempotency_key="http-project-0001"
+        ),
+        Capability.CONTINUITY_PROJECTS_UPDATE: UpdateProject(
+            project_id=update_project.project_id,
+            expected_version=update_project.version,
+            idempotency_key="http-project-update-0001",
+            name="HTTP updated project",
+        ),
+        Capability.CONTINUITY_PROJECTS_CLOSE: CloseProject(
+            project_id=close_project.project_id,
+            expected_version=close_project.version,
+            idempotency_key="http-project-close-0001",
         ),
         Capability.CONTINUITY_SITUATIONS_CREATE: CreateSituation(
             title="HTTP authoring situation", idempotency_key="http-situation-0001"

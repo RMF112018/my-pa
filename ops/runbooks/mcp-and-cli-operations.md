@@ -76,7 +76,7 @@ All three transports call one function — `adapters/normalization.normalize` �
 and none of them can build a request value of its own. A request that HTTP
 refuses, MCP and the CLI refuse, with the same code, the same message, the same
 `safe_details`, and the same audit event. That is `SPEC-AC-001`, and
-`tests/contract/test_transport_parity.py` holds it over all one hundred and sixty-four capabilities.
+`tests/contract/test_transport_parity.py` holds it over all one hundred and sixty-six capabilities.
 
 Practically: **there is no capability reachable from a shell that is not
 reachable over HTTP, and no authority that comes with being local.** The CLI is
@@ -181,14 +181,14 @@ one declared capability, `tools`, and nothing else.
 ## The tool list
 
 `tools/list` returns the tools **this process can serve**, and that is not the
-same as the tools this build implements. The build declares **164** capability
+same as the tools this build implements. The build declares **166** capability
 names. The measured application composition with GoodNotes pull enabled has
-**94 application-available capabilities**: 164 less the six `documents.`,
+**96 application-available capabilities**: 166 less the six `documents.`,
 fifty-five `entities.`, and nine `relationship_memory.` capabilities whose
 composition gates remain off. A local stdio MCP session has no authenticated
 client identity, so it additionally withholds the three client-bound GoodNotes
-pull operations and publishes **91 tools**. An authenticated MCP client against
-that same 94-capability application composition sees all 94. These figures are
+pull operations and publishes **93 tools**. An authenticated MCP client against
+that same 96-capability application composition sees all 96. These figures are
 derived in `test_current_state_docs_derive_the_default_capability_split` from a
 real `ApplicationService` and `published_tools`, not from a second list.
 
@@ -197,15 +197,15 @@ configured**, and nothing else gates them. There is no default location and no
 inference: with the variable unset the composition root builds no managed byte
 store, `capabilities.get` omits those names, `tools/list` omits those tools, and
 a `tools/call` naming one is refused `unsupported`. Set the variable and the
-same application composition serves 97 capabilities; its unauthenticated local
-stdio MCP publication serves 94. The remaining composition-gated names are the
+same application composition serves 102 capabilities; its unauthenticated local
+stdio MCP publication serves 99. The remaining composition-gated names are the
 fifty-five `entities.` names, which `D-RI-20`
 gates behind `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` on exactly the same terms
 — and whose thirty-eight writes need
 `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` beside it, so a process with
 the plane switch alone still withholds its write half — and the nine
 `relationship_memory.` names, which need the plane variable *and*
-`MY_PA_RELATIONSHIP_MEMORY_ENABLED`; a child publishing all one hundred and sixty-four has
+`MY_PA_RELATIONSHIP_MEMORY_ENABLED`; a child publishing all one hundred and sixty-six has
 all required feature gates and composition dependencies satisfied. An operator who expects `documents.create`
 on the list and does not find it should look at that variable first — it is the
 only thing that decides it. (Pointing the plane at real storage is `EXT-10` and
@@ -215,10 +215,10 @@ the same gating and the plane's limits.)
 Measured against a real child process — `.venv/bin/python apps/gateway.py mcp`
 — by
 `tests/contract/test_mcp_transport.py::test_a_real_child_process_publishes_only_what_it_was_composed_with`
-(unconfigured local stdio: 91, with the three authenticated-client capabilities
+(unconfigured local stdio: 93, with the three authenticated-client capabilities
 absent) and
 `::test_a_child_with_a_managed_root_publishes_every_locally_available_capability`
-(fully feature-composed local stdio: 161, again excluding exactly those three).
+(fully feature-composed local stdio: 163, again excluding exactly those three).
 
 **Current-state correction (2026-09-08):** earlier snapshots in this section
 mixed declared capability totals, application availability, feature-gated
@@ -261,8 +261,8 @@ that names it again is refused.
 ## Calling a tool
 
 **Current-state correction (2026-08-28):** the tool list is derived from all
-**one hundred and sixty-four** current capabilities, and the schema has
-**one hundred and four** revisions at head `b3e9d7a41c25` (`b3e9d7a41c25` is additive on `9f2c8a1d4e70` for WP-MCP-PROJ-02 continuity.projects.read and the Project list keyset index; `9f2c8a1d4e70` is additive on `de5ec1c65857` for WP-MCP-PROJ-01 Project.version and the Continuity Project↔Entity bridge; `de5ec1c65857` is additive on `c1a8e4d70b29` for WP-TUX-01 task origin/closure/comments; `c1a8e4d70b29` is additive on `b8e4d6f20a11` for append-only `knowledge.capture_labels`; `b8e4d6f20a11` is additive on `f7a2c9d51e64` for the bounded Constraint synchronization backend; `f7a2c9d51e64` is additive on `4e9a1c7b2d60` and widens the two frozen `audit_events` closed sets to admit the twelve Constraint Management authoring capabilities together with the single `constraint_authoring` purpose, and no Constraint synchronisation vocabulary (PC-CM-IMP-WP07); `4e9a1c7b2d60` is additive on `c5b71e0a8d43` and normalizes account identity plus one-time digest-backed auth grants targeting the fixed local operator; `c5b71e0a8d43` is additive on `a1c9e4b72f80` and admits the six Constraint Management read capabilities `constraints.read`, `constraints.list`, `constraints.search`, `constraints.history`, `constraints.overview`, and `constraint_categories.list` together with the single `constraint_read` purpose, and no Constraint authoring or synchronisation vocabulary (PC-CM-IMP-WP04); `a1c9e4b72f80` is additive on `2774329487be` and admits `goodnotes.notebooks.list`, `goodnotes.pages.list`, `goodnotes.runs.list`, `goodnotes.read`, `goodnotes.search`, and `goodnotes.correct` together with `goodnotes_browse`, `goodnotes_read`, and `goodnotes_correction`; `2774329487be` is additive on `e8f2a6c9d104` and adds the fourteen-table Constraint-management plane (PC-CM-IMP-WP02); `e8f2a6c9d104` is additive on `d4e8b1c7a902` and adds immutable GoodNotes client lease policy and client-scoped attempt/completion uniqueness; `d4e8b1c7a902` is additive on `a4d8e31b2c90` and adds the Principal-partitioned canvas workspace overlay; `6a2f9d1c4b80` is additive on `c3f8a1d07e94` and adds five Principal-partitioned, content-free GoodNotes pull and semantic-review ledger tables while admitting `goodnotes.pull`, `goodnotes.complete`, and `goodnotes.status` to the frozen audit vocabulary; `c3f8a1d07e94` admits `entities.graph` on `b8e4d1a6c073`; corrected 2026-09-03 from
+**one hundred and sixty-six** current capabilities, and the schema has
+**one hundred five** revisions at head `c4f1a8e52d90` (`c4f1a8e52d90` is additive on `b3e9d7a41c25` for WP-MCP-PROJ-03 continuity.projects.update/close and project_history; `b3e9d7a41c25` is additive on `9f2c8a1d4e70` for WP-MCP-PROJ-02 continuity.projects.read and the Project list keyset index; `9f2c8a1d4e70` is additive on `de5ec1c65857` for WP-MCP-PROJ-01 Project.version and the Continuity Project↔Entity bridge; `de5ec1c65857` is additive on `c1a8e4d70b29` for WP-TUX-01 task origin/closure/comments; `c1a8e4d70b29` is additive on `b8e4d6f20a11` for append-only `knowledge.capture_labels`; `b8e4d6f20a11` is additive on `f7a2c9d51e64` for the bounded Constraint synchronization backend; `f7a2c9d51e64` is additive on `4e9a1c7b2d60` and widens the two frozen `audit_events` closed sets to admit the twelve Constraint Management authoring capabilities together with the single `constraint_authoring` purpose, and no Constraint synchronisation vocabulary (PC-CM-IMP-WP07); `4e9a1c7b2d60` is additive on `c5b71e0a8d43` and normalizes account identity plus one-time digest-backed auth grants targeting the fixed local operator; `c5b71e0a8d43` is additive on `a1c9e4b72f80` and admits the six Constraint Management read capabilities `constraints.read`, `constraints.list`, `constraints.search`, `constraints.history`, `constraints.overview`, and `constraint_categories.list` together with the single `constraint_read` purpose, and no Constraint authoring or synchronisation vocabulary (PC-CM-IMP-WP04); `a1c9e4b72f80` is additive on `2774329487be` and admits `goodnotes.notebooks.list`, `goodnotes.pages.list`, `goodnotes.runs.list`, `goodnotes.read`, `goodnotes.search`, and `goodnotes.correct` together with `goodnotes_browse`, `goodnotes_read`, and `goodnotes_correction`; `2774329487be` is additive on `e8f2a6c9d104` and adds the fourteen-table Constraint-management plane (PC-CM-IMP-WP02); `e8f2a6c9d104` is additive on `d4e8b1c7a902` and adds immutable GoodNotes client lease policy and client-scoped attempt/completion uniqueness; `d4e8b1c7a902` is additive on `a4d8e31b2c90` and adds the Principal-partitioned canvas workspace overlay; `6a2f9d1c4b80` is additive on `c3f8a1d07e94` and adds five Principal-partitioned, content-free GoodNotes pull and semantic-review ledger tables while admitting `goodnotes.pull`, `goodnotes.complete`, and `goodnotes.status` to the frozen audit vocabulary; `c3f8a1d07e94` admits `entities.graph` on `b8e4d1a6c073`; corrected 2026-09-03 from
 eighty-eight at `16f05c46b8c3`, on which `b8e4d1a6c073` is additive and
 backfills one `display`-typed `entity_names` row per active `entities` row --
 `display_value` from `entities.display_name`, `normalized_value` from

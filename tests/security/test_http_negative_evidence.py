@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes one hundred and sixty-four capability names and none of them
+  ends: the transport routes one hundred and sixty-six capability names and none of them
   mutates a source, and every capability driven over the wire is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -305,6 +305,12 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
     document = staged_managed_document(marked, body=MARKER_CONTENT.encode())
     task = staged_task(marked)
     project = staged_continuity_project(marked)
+    # Two mutation subjects rather than one, on the same argument the four
+    # memories rest on: an update takes the Project to version two, so an
+    # update and a close naming one row would leave close meeting a stale
+    # expectation.
+    update_project = staged_continuity_project(marked, name="a synthetic update project")
+    close_project = staged_continuity_project(marked, name="a synthetic close project")
     commitment = staged_commitment(marked)
     gsqs_run_id = str(seed_gsqs_b0_workflow(idempotency_key="wire-gsqs-start-0001")["run_id"])
     bulk_mutations = [
@@ -438,6 +444,17 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         Capability.CONTINUITY_PROJECTS_CREATE: {
             "name": "Marked authoring project",
             "idempotency_key": "wire-project-0001",
+        },
+        Capability.CONTINUITY_PROJECTS_UPDATE: {
+            "project_id": update_project.project_id,
+            "expected_version": update_project.version,
+            "idempotency_key": "wire-project-update-0001",
+            "name": "Marked updated project",
+        },
+        Capability.CONTINUITY_PROJECTS_CLOSE: {
+            "project_id": close_project.project_id,
+            "expected_version": close_project.version,
+            "idempotency_key": "wire-project-close-0001",
         },
         Capability.CONTINUITY_SITUATIONS_CREATE: {
             "title": "Marked authoring situation",
@@ -1644,6 +1661,8 @@ SCOPED_CAPABILITIES = [
         Capability.CONTINUITY_PROJECTS,
         Capability.CONTINUITY_PROJECTS_READ,
         Capability.CONTINUITY_PROJECTS_CREATE,
+        Capability.CONTINUITY_PROJECTS_UPDATE,
+        Capability.CONTINUITY_PROJECTS_CLOSE,
         Capability.CONTINUITY_SITUATIONS_CREATE,
         Capability.CONTINUITY_TASKS_CREATE,
         Capability.KNOWLEDGE_COVERAGE,
@@ -1958,6 +1977,7 @@ MANAGED_DOCUMENT_EXEMPTION = frozenset({Capability.DOCUMENTS_CREATE})
 CONTINUITY_AUTHORING_EXEMPTION = frozenset(
     {
         Capability.CONTINUITY_PROJECTS_CREATE,
+        Capability.CONTINUITY_PROJECTS_UPDATE,
         Capability.CONTINUITY_SITUATIONS_CREATE,
         Capability.CONTINUITY_TASKS_CREATE,
     }

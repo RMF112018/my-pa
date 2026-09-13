@@ -1015,6 +1015,13 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("commitment", "principal_id"),
         ("entry", "principal_id"),
     ),
+    # Project mutation receipts stamp the stored Project's partition and the
+    # history row's own Principal. Both values are server-owned row identity,
+    # not a request-body owner.
+    "infrastructure/persistence/situation_repository.py": (
+        ("entry", "principal_id"),
+        ("project", "principal_id"),
+    ),
     # Bulk-operation records are internal domain objects loaded from this
     # Principal's repository partition. The two reads verify the record still
     # belongs to the acting Principal before update or confirmation.

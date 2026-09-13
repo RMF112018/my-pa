@@ -111,6 +111,8 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.DOCUMENTS_CREATE,
         Capability.DOCUMENTS_REVISE,
         Capability.CONTINUITY_PROJECTS_CREATE,
+        Capability.CONTINUITY_PROJECTS_UPDATE,
+        Capability.CONTINUITY_PROJECTS_CLOSE,
         Capability.CONTINUITY_SITUATIONS_CREATE,
         Capability.CONTINUITY_TASKS_CREATE,
         Capability.TASKS_CREATE,

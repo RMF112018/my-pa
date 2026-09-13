@@ -425,14 +425,28 @@ jobs:
           python_bin="$(command -v python)"
           test -x "${python_bin}"
           # WP-TUX-06 WebKit remediation. The shared Task Status <select> rendered
-          # 22px tall in WebKit because a default-appearance select resolves the
-          # author min-height to its intrinsic height; it now carries a definite
-          # height. Chromium geometry is already gated by the blocking
+          # 22px tall in macOS WebKit because a default-appearance select resolves
+          # the author min-height to its intrinsic height; it now carries a
+          # definite height.
+          #
+          # READ THIS BEFORE TRUSTING A GREEN HERE. A pass in this step is NOT
+          # evidence that the 22px defect is fixed. On a branch with the fix
+          # removed, this lane measured Status at 130x44 (WebKit) and 122x44
+          # (Firefox) and passed. Both engines honour min-height on a native
+          # select, and ui/select.tsx already sets min-h-[var(--control-height)]
+          # = 44px, so they render 44px either way. The 22px collapse is macOS
+          # WebKit; no Linux runner reproduces it. What this step does prove is
+          # the absence of overflow, clipping and layout regressions at the
+          # measured widths -- which is why it is kept.
+          #
+          # The regression guard for the fix itself is the class contract in
+          # task-status-control.test.tsx, which runs in the blocking
+          # "frontend / unit" job. Chromium geometry is gated by the blocking
           # "frontend / responsive" job, which runs work-acceptance.spec.ts on
           # the Chromium desktop/tablet/mobile projects and feeds the required
-          # gate; the "frontend / e2e-critical" job does not run that spec;
-          # this step is the Firefox/WebKit measurement and is ADVISORY because
-          # this whole job is continue-on-error. Playwright WebKit is not Safari.
+          # gate; the "frontend / e2e-critical" job does not run that spec.
+          # This step is ADVISORY because this whole job is continue-on-error.
+          # Playwright WebKit is not Safari.
           MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/work-acceptance.spec.ts --project=firefox --project=webkit --grep "real touch targets|holds 44px across the width matrix"
 
   visual:

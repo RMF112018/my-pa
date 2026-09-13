@@ -47,6 +47,7 @@ from my_pa.domain.situation.situation import (
     Frame,
     FrameState,
     Project,
+    ProjectEntityLink,
     ProjectState,
     PulseItem,
     PulseItemType,
@@ -251,6 +252,7 @@ class InMemoryProjectRepository(ProjectRepository):
         self._situations = situations
         self._rows: dict[str, Project] = {}
         self._links: set[tuple[str, str, str]] = set()
+        self._entity_links: dict[tuple[str, str], ProjectEntityLink] = {}
         self.association_evidence: dict[tuple[str, str, str], tuple[ClosureEvidenceKind, str]] = {}
 
     def add_project(
@@ -272,6 +274,7 @@ class InMemoryProjectRepository(ProjectRepository):
             updated_at=now,
             description=description,
             participants=tuple(participants),
+            version=1,
         )
         self._rows[project.project_id] = project
         return project
@@ -281,6 +284,11 @@ class InMemoryProjectRepository(ProjectRepository):
         if current is None or current.principal_id != principal_id:
             return None
         return current
+
+    def get_project_entity_link(
+        self, principal_id: str, project_id: str
+    ) -> ProjectEntityLink | None:
+        return self._entity_links.get((principal_id, project_id))
 
     def list_projects(
         self, principal_id: str, state_filter: ProjectState | None = None

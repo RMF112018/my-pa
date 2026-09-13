@@ -133,6 +133,9 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         # extraction plane; name them so a downgrade to EXTRACTION_REVISION
         # does not leave an unnamed table in the equality.
         "task_comments",
+        # WP-MCP-PROJ-01. `9f2c8a1d4e70` adds the Continuity Project↔Entity
+        # bridge above this revision.
+        "project_entity_links",
         "commitment_history",
         "situations",
         "frames",

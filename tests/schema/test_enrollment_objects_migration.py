@@ -118,6 +118,9 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         # revision; name them so a head→this-revision downgrade equality
         # still catches unnamed leftovers.
         "task_comments",
+        # WP-MCP-PROJ-01. `9f2c8a1d4e70` adds the Continuity Project↔Entity
+        # bridge above this revision.
+        "project_entity_links",
         "commitment_history",
         "situations",
         "frames",

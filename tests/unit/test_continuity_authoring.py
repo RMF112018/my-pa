@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
+
+import pytest
 
 from my_pa.application.commands import (
     Command,
@@ -21,8 +23,16 @@ from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.relationship.entity import EntityType
+from my_pa.domain.relationship.normalization import normalize_name
+from my_pa.domain.situation.situation import (
+    Project,
+    ProjectEntityLink,
+    ProjectEntityLinkageState,
+    ProjectState,
+)
 from my_pa.domain.source.registry import issue_identifier
-from tests.conftest import WHEN, Scene, World, build_service, metadata_for, operator
+from tests.conftest import WHEN, FakeUnitOfWork, Scene, World, build_service, metadata_for, operator
 
 
 def _invoke(
@@ -52,6 +62,19 @@ def test_explicit_project_create_is_visible_on_continuity_projects(scene: Scene)
     assert created.result is not None
     assert created.result["name"] == "MCP Write Acceptance Test"
     assert created.result["replayed"] is False
+    project = scene.world.projects[0]
+    assert project.version == 1
+    assert len(scene.world.project_entity_links) == 1
+    link = scene.world.project_entity_links[0]
+    assert link.linkage_state is ProjectEntityLinkageState.BOUND
+    assert link.project_id == project.project_id
+    assert link.principal_id == scene.principal.principal_id
+    assert link.project_entity_id is not None
+    entity = next(row for row in scene.world.entities if row.entity_id == link.project_entity_id)
+    assert entity.entity_type is EntityType.PROJECT
+    assert entity.display_name == "MCP Write Acceptance Test"
+    assert entity.canonical_name == normalize_name("MCP Write Acceptance Test")
+    assert entity.version == 1
     listed = _invoke(
         service,
         scene.principal,
@@ -141,6 +164,8 @@ def test_authoring_replay_returns_the_same_project(scene: Scene) -> None:
     assert first.result["project_id"] == second.result["project_id"]
     assert second.result["replayed"] is True
     assert len(scene.world.projects) == 1
+    assert len(scene.world.project_entity_links) == 1
+    assert len([row for row in scene.world.entities if row.entity_type is EntityType.PROJECT]) == 1
 
 
 def test_reused_key_with_different_content_conflicts(scene: Scene) -> None:
@@ -213,6 +238,16 @@ def test_a_second_principal_does_not_see_another_principals_project(scene: Scene
     assert listed.error is None
     assert listed.result is not None
     assert listed.result["projects"] == []
+    owned = scene.world.projects[0]
+    stranger_view = FakeUnitOfWork(scene.world).projects.get_project_entity_link(
+        stranger.principal_id, owned.project_id
+    )
+    assert stranger_view is None
+    owner_view = FakeUnitOfWork(scene.world).projects.get_project_entity_link(
+        scene.principal.principal_id, owned.project_id
+    )
+    assert owner_view is not None
+    assert owner_view.linkage_state is ProjectEntityLinkageState.BOUND
 
 
 def test_capture_create_does_not_create_a_project(scene: Scene) -> None:
@@ -254,3 +289,47 @@ def test_unknown_project_id_is_not_found_rather_than_attached() -> None:
     )
     assert refused.error is not None
     assert refused.error.code is ErrorCode.NOT_FOUND
+
+
+def test_a_project_version_below_one_is_refused() -> None:
+    when = datetime(2026, 9, 13, 12, tzinfo=UTC)
+    with pytest.raises(ValueError, match="version"):
+        Project(
+            project_id="prj_aaaaaaaa11111111",
+            principal_id="prn_aaaaaaaa11111111",
+            name="Versioned",
+            state=ProjectState.ACTIVE,
+            opened_at=when,
+            created_at=when,
+            updated_at=when,
+            version=0,
+        )
+
+
+def test_a_bound_link_requires_an_entity_and_an_unresolved_link_forbids_one() -> None:
+    when = datetime(2026, 9, 13, 12, tzinfo=UTC)
+    bound = ProjectEntityLink(
+        principal_id="prn_aaaaaaaa11111111",
+        project_id="prj_aaaaaaaa11111111",
+        linkage_state=ProjectEntityLinkageState.BOUND,
+        created_at=when,
+        updated_at=when,
+        project_entity_id="ent_aaaaaaaa11111111",
+    )
+    assert bound.project_entity_id == "ent_aaaaaaaa11111111"
+    ambiguous = ProjectEntityLink(
+        principal_id="prn_aaaaaaaa11111111",
+        project_id="prj_bbbbbbbb22222222",
+        linkage_state=ProjectEntityLinkageState.UNRESOLVED_AMBIGUOUS,
+        created_at=when,
+        updated_at=when,
+    )
+    assert ambiguous.project_entity_id is None
+    with pytest.raises(ValueError, match="bound project-entity link"):
+        ProjectEntityLink(
+            principal_id="prn_aaaaaaaa11111111",
+            project_id="prj_cccccccc33333333",
+            linkage_state=ProjectEntityLinkageState.BOUND,
+            created_at=when,
+            updated_at=when,
+        )

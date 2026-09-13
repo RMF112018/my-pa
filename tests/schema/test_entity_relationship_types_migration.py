@@ -306,6 +306,8 @@ def test_downgrading_one_step_removes_exactly_this_table_and_restores_the_origin
         "capture_labels",
         # WP-TUX-01. Head stacks `task_comments` above this revision.
         "task_comments",
+        # WP-MCP-PROJ-01. `9f2c8a1d4e70` stacks `project_entity_links`.
+        "project_entity_links",
     }
     # The rest of the entity plane survives the downgrade of this revision alone.
     assert {

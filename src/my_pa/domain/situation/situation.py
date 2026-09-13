@@ -50,6 +50,8 @@ __all__ = [
     "Frame",
     "FrameState",
     "Project",
+    "ProjectEntityLink",
+    "ProjectEntityLinkageState",
     "ProjectState",
     "PulseItem",
     "PulseItemType",
@@ -83,6 +85,20 @@ class ProjectState(StrEnum):
     ACTIVE = "active"
     ON_HOLD = "on_hold"
     CLOSED = "closed"
+
+
+class ProjectEntityLinkageState(StrEnum):
+    """How a Continuity Project relates to a project-type Entity.
+
+    `bound` is a minted or later-resolved identity. The two unresolved states
+    are durable backfill outcomes: missing (no candidate) and ambiguous (more
+    than one candidate). Neither unresolved state stores an entity id, and
+    neither is produced by matching on name.
+    """
+
+    BOUND = "bound"
+    UNRESOLVED_MISSING = "unresolved_missing"
+    UNRESOLVED_AMBIGUOUS = "unresolved_ambiguous"
 
 
 class PulseItemType(StrEnum):
@@ -262,6 +278,7 @@ class Project:
     description: str | None = None
     participants: tuple[str, ...] = ()
     closed_at: datetime | None = None
+    version: int = 1
 
     def __post_init__(self) -> None:
         validate_identifier(self.project_id, IdKind.PROJECT)
@@ -270,6 +287,8 @@ class Project:
             raise ValueError("a project carries a non-blank name")
         if not isinstance(self.state, ProjectState):
             raise ValueError("a project names one lifecycle state")
+        if isinstance(self.version, bool) or not isinstance(self.version, int) or self.version < 1:
+            raise ValueError("a project version is an integer of at least one")
         ensure_utc(self.opened_at)
         ensure_utc(self.created_at)
         ensure_utc(self.updated_at)
@@ -277,6 +296,38 @@ class Project:
             ensure_utc(self.closed_at)
         if (self.state is ProjectState.CLOSED) is not (self.closed_at is not None):
             raise ValueError("a closed project records when it closed, and only then")
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectEntityLink:
+    """One Continuity Project's durable binding to a project-type Entity.
+
+    The primary key is the Continuity Project itself `(principal_id, project_id)`.
+    A bound row names exactly one Entity; an unresolved row names none. The
+    pairing is the domain half of the schema CHECK
+    `a_bound_project_entity_link_names_its_entity`.
+    """
+
+    principal_id: str
+    project_id: str
+    linkage_state: ProjectEntityLinkageState
+    created_at: datetime
+    updated_at: datetime
+    project_entity_id: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.project_id, IdKind.PROJECT)
+        if not isinstance(self.linkage_state, ProjectEntityLinkageState):
+            raise ValueError("a project-entity link names one linkage state")
+        if (self.linkage_state is ProjectEntityLinkageState.BOUND) is not (
+            self.project_entity_id is not None
+        ):
+            raise ValueError("a bound project-entity link names its entity, and only then")
+        if self.project_entity_id is not None:
+            validate_identifier(self.project_entity_id, IdKind.ENTITY)
+        ensure_utc(self.created_at)
+        ensure_utc(self.updated_at)
 
 
 @dataclass(frozen=True, slots=True)

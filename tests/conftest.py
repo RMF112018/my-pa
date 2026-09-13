@@ -333,6 +333,7 @@ from my_pa.domain.relationship.memory import (
 from my_pa.domain.relationship.normalization import (
     is_normalized_identifier,
     is_normalized_name,
+    normalize_name,
 )
 from my_pa.domain.search.query import RankCategory, SearchMatch, SearchRequest
 from my_pa.domain.situation.continuity import (
@@ -350,6 +351,8 @@ from my_pa.domain.situation.continuity import Task as ContinuityTask
 from my_pa.domain.situation.pulse_derivation import FramedObligation, derive_pulse
 from my_pa.domain.situation.situation import (
     Project,
+    ProjectEntityLink,
+    ProjectEntityLinkageState,
     ProjectState,
     PulseItem,
     Situation,
@@ -585,6 +588,7 @@ class World:
     situations: list[Situation] = field(default_factory=list)
     projects: list[Project] = field(default_factory=list)
     project_situations: list[tuple[str, str, str, str]] = field(default_factory=list)
+    project_entity_links: list[ProjectEntityLink] = field(default_factory=list)
     commitments: list[Commitment] = field(default_factory=list)
     continuity_tasks: list[ContinuityTask] = field(default_factory=list)
     continuity_decisions: list[ContinuityDecision] = field(default_factory=list)
@@ -3652,6 +3656,7 @@ class _Projects(ProjectRepository):
             updated_at=now,
             description=description,
             participants=tuple(participants),
+            version=1,
         )
         self._world.projects.append(project)
         return project
@@ -3661,6 +3666,18 @@ class _Projects(ProjectRepository):
             (
                 row
                 for row in self._world.projects
+                if row.project_id == project_id and row.principal_id == principal_id
+            ),
+            None,
+        )
+
+    def get_project_entity_link(
+        self, principal_id: str, project_id: str
+    ) -> ProjectEntityLink | None:
+        return next(
+            (
+                row
+                for row in self._world.project_entity_links
                 if row.project_id == project_id and row.principal_id == principal_id
             ),
             None,
@@ -3743,9 +3760,59 @@ class _ContinuityAuthoring(ContinuityAuthoringRepository):
             created_at=now,
             updated_at=now,
             description=description,
+            version=1,
         )
         self._world.projects.append(project)
+        self._mint_bound_project_entity(
+            principal_id=principal_id,
+            project_id=project_id,
+            name=name,
+            now=now,
+        )
         return project
+
+    def _mint_bound_project_entity(
+        self,
+        *,
+        principal_id: str,
+        project_id: str,
+        name: str,
+        now: datetime,
+    ) -> None:
+        canonical_name = normalize_name(name)
+        claimed = [
+            entity
+            for entity in self._world.entities
+            if entity.principal_id == principal_id
+            and entity.entity_type is EntityType.PROJECT
+            and entity.canonical_name == canonical_name
+            and entity.status
+            in (EntityStatus.ACTIVE, EntityStatus.INACTIVE, EntityStatus.HISTORICAL)
+        ]
+        if claimed:
+            raise ValueError("an active project-type canonical name is already held")
+        entity = Entity(
+            entity_id=issue_identifier(IdKind.ENTITY),
+            principal_id=principal_id,
+            entity_type=EntityType.PROJECT,
+            canonical_name=canonical_name,
+            display_name=name,
+            status=EntityStatus.ACTIVE,
+            created_at=now,
+            updated_at=now,
+            version=1,
+        )
+        self._world.entities.append(entity)
+        self._world.project_entity_links.append(
+            ProjectEntityLink(
+                principal_id=principal_id,
+                project_id=project_id,
+                linkage_state=ProjectEntityLinkageState.BOUND,
+                created_at=now,
+                updated_at=now,
+                project_entity_id=entity.entity_id,
+            )
+        )
 
     def author_situation(
         self,

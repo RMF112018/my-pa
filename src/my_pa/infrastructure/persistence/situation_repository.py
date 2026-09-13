@@ -85,6 +85,8 @@ from my_pa.domain.situation.situation import (
     Frame,
     FrameState,
     Project,
+    ProjectEntityLink,
+    ProjectEntityLinkageState,
     ProjectState,
     PulseItem,
     PulseItemType,
@@ -101,6 +103,7 @@ from my_pa.infrastructure.persistence.tables import (
     continuity_lifecycle_events,
     decisions,
     frames,
+    project_entity_links,
     project_situations,
     projects,
     pulse_items,
@@ -535,6 +538,7 @@ class SqlProjectRepository(ProjectRepository):
                 closed_at=None,
                 created_at=now,
                 updated_at=now,
+                version=1,
             )
         )
         return Project(
@@ -547,6 +551,7 @@ class SqlProjectRepository(ProjectRepository):
             updated_at=now,
             description=description,
             participants=tuple(participants),
+            version=1,
         )
 
     def get_project(self, principal_id: str, project_id: str) -> Project | None:
@@ -559,6 +564,19 @@ class SqlProjectRepository(ProjectRepository):
             )
         ).one_or_none()
         return None if row is None else self._to_project(row)
+
+    def get_project_entity_link(
+        self, principal_id: str, project_id: str
+    ) -> ProjectEntityLink | None:
+        row = self._connection.execute(
+            select(*project_entity_links.c).where(
+                and_(
+                    project_entity_links.c.project_id == project_id,
+                    project_entity_links.c.principal_id == principal_id,
+                )
+            )
+        ).one_or_none()
+        return None if row is None else self._to_project_entity_link(row)
 
     def list_projects(
         self, principal_id: str, state_filter: ProjectState | None = None
@@ -658,6 +676,19 @@ class SqlProjectRepository(ProjectRepository):
             description=mapping["description"],
             participants=_as_tuple(mapping["participants"]),
             closed_at=mapping["closed_at"],
+            version=int(mapping["version"]),
+        )
+
+    @staticmethod
+    def _to_project_entity_link(row: Row[Any]) -> ProjectEntityLink:
+        mapping = row._mapping
+        return ProjectEntityLink(
+            principal_id=mapping["principal_id"],
+            project_id=mapping["project_id"],
+            linkage_state=ProjectEntityLinkageState(mapping["linkage_state"]),
+            created_at=mapping["created_at"],
+            updated_at=mapping["updated_at"],
+            project_entity_id=mapping["project_entity_id"],
         )
 
 

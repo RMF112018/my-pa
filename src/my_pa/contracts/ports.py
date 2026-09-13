@@ -219,6 +219,7 @@ from my_pa.domain.situation.continuity import (
 from my_pa.domain.situation.situation import (
     Frame,
     Project,
+    ProjectEntityLink,
     ProjectState,
     PulseItem,
     Situation,
@@ -5193,6 +5194,12 @@ class ProjectRepository(ABC):
     @abstractmethod
     def get_project(self, principal_id: str, project_id: str) -> Project | None:
         """Return the Project the Principal owns, or `None`."""
+
+    @abstractmethod
+    def get_project_entity_link(
+        self, principal_id: str, project_id: str
+    ) -> ProjectEntityLink | None:
+        """Return this Principal's Project↔Entity bridge row, or `None`."""
 
     @abstractmethod
     def list_projects(

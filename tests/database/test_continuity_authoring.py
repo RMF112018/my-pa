@@ -31,6 +31,7 @@ from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.continuity_authoring import SqlContinuityAuthoringRepository
+from my_pa.infrastructure.persistence.situation_repository import SqlProjectRepository
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
 pytestmark = pytest.mark.database
@@ -148,7 +149,40 @@ def test_a_replayed_key_does_not_insert_a_second_project(
         count = connection.execute(
             text(f"SELECT count(*) FROM {SCHEMA}.projects")  # noqa: S608
         ).scalar_one()
+        entities = connection.execute(
+            text(
+                f"SELECT count(*) FROM {SCHEMA}.entities "  # noqa: S608
+                "WHERE entity_type = 'project'"
+            )
+        ).scalar_one()
+        links = connection.execute(
+            text(f"SELECT count(*) FROM {SCHEMA}.project_entity_links")  # noqa: S608
+        ).scalar_one()
+        version = connection.execute(
+            text(
+                f"SELECT version FROM {SCHEMA}.projects "  # noqa: S608
+                "WHERE project_id = :project_id"
+            ),
+            {"project_id": first.result["project_id"]},
+        ).scalar_one()
+        link = (
+            connection.execute(
+                text(
+                    f"SELECT linkage_state, project_entity_id "  # noqa: S608
+                    f"FROM {SCHEMA}.project_entity_links "
+                    "WHERE project_id = :project_id"
+                ),
+                {"project_id": first.result["project_id"]},
+            )
+            .mappings()
+            .one()
+        )
     assert int(count) == 1
+    assert int(entities) == 1
+    assert int(links) == 1
+    assert int(version) == 1
+    assert link["linkage_state"] == "bound"
+    assert link["project_entity_id"] is not None
 
 
 def test_concurrent_same_key_creates_one_project(migrated_engine: Engine) -> None:
@@ -239,3 +273,60 @@ def test_a_reused_key_with_different_content_is_a_conflict_and_inserts_nothing(
             )
             == 1
         )
+
+
+def test_principal_b_cannot_see_principal_a_bridge(migrated_engine: Engine) -> None:
+    principal_b = "prn_bbbb0002bbbb0002bbbb0002"
+    object_id = issue_identifier(IdKind.PROJECT)
+    with migrated_engine.connect() as connection, connection.begin():
+        repository = SqlContinuityAuthoringRepository(connection)
+        assert repository.reserve(
+            principal_id=PRINCIPAL_A,
+            idempotency_key="author-db-bridge-0001",
+            capability=Capability.CONTINUITY_PROJECTS_CREATE.value,
+            payload_digest="bridge-digest",
+            object_id=object_id,
+        )
+        repository.author_project(
+            principal_id=PRINCIPAL_A,
+            project_id=object_id,
+            name="Owner bridge",
+            description=None,
+        )
+        projects = SqlProjectRepository(connection)
+        assert projects.get_project_entity_link(PRINCIPAL_A, object_id) is not None
+        assert projects.get_project_entity_link(principal_b, object_id) is None
+
+
+def test_duplicate_active_project_canonical_name_fails_create(migrated_engine: Engine) -> None:
+    first_id = issue_identifier(IdKind.PROJECT)
+    second_id = issue_identifier(IdKind.PROJECT)
+    with migrated_engine.connect() as connection, connection.begin():
+        repository = SqlContinuityAuthoringRepository(connection)
+        assert repository.reserve(
+            principal_id=PRINCIPAL_A,
+            idempotency_key="author-db-dup-0001",
+            capability=Capability.CONTINUITY_PROJECTS_CREATE.value,
+            payload_digest="dup-digest-1",
+            object_id=first_id,
+        )
+        repository.author_project(
+            principal_id=PRINCIPAL_A,
+            project_id=first_id,
+            name="Duplicate Name",
+            description=None,
+        )
+        assert repository.reserve(
+            principal_id=PRINCIPAL_A,
+            idempotency_key="author-db-dup-0002",
+            capability=Capability.CONTINUITY_PROJECTS_CREATE.value,
+            payload_digest="dup-digest-2",
+            object_id=second_id,
+        )
+        with pytest.raises(ValueError, match="canonical name is already held"):
+            repository.author_project(
+                principal_id=PRINCIPAL_A,
+                project_id=second_id,
+                name="Duplicate Name",
+                description=None,
+            )

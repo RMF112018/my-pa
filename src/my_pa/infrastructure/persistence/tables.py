@@ -286,6 +286,7 @@ from my_pa.domain.situation.continuity import (
 )
 from my_pa.domain.situation.situation import (
     FrameState,
+    ProjectEntityLinkageState,
     ProjectState,
     PulseItemType,
     PulseReasonCode,
@@ -2809,6 +2810,7 @@ projects = Table(
     Column("closed_at", DateTime(timezone=True)),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("version", Integer, nullable=False, server_default=text("1")),
     _is_identifier("project_id", IdKind.PROJECT),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     CheckConstraint("length(trim(name)) > 0", name="a_project_name_is_not_blank"),
@@ -2816,6 +2818,12 @@ projects = Table(
     CheckConstraint(
         "(state = 'closed') = (closed_at IS NOT NULL)",
         name="a_closed_project_records_when_it_closed",
+    ),
+    CheckConstraint("version >= 1", name="a_project_version_is_positive"),
+    UniqueConstraint(
+        "project_id",
+        "principal_id",
+        name="a_project_is_identified_within_its_principal",
     ),
     Index("projects_by_principal", "principal_id"),
     Index("projects_by_principal_state", "principal_id", "state"),
@@ -2966,6 +2974,58 @@ entities = Table(
     Index("entities_by_principal", "principal_id"),
     Index("entities_by_entity_type", "entity_type"),
     Index("entities_by_status", "status"),
+)
+
+#: Continuity Project ↔ project-type Entity bridge. Primary key is the
+#: Continuity Project itself; there is no new identifier kind. A bound row
+#: names exactly one Entity in the same Principal; an unresolved backfill row
+#: names none. Forward create mints a bound Entity in the same transaction as
+#: `author_project`. Existing Projects receive `unresolved_missing` rows with
+#: no name matching.
+project_entity_links = Table(
+    "project_entity_links",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("project_entity_id", Text),
+    Column("linkage_state", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("principal_id", "project_id"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    CheckConstraint(
+        "project_entity_id IS NULL OR project_entity_id ~ "
+        f"'^{IdKind.ENTITY.value}_{_IDENTIFIER_SUFFIX}$'",
+        name="a_project_entity_id_is_an_entity_identifier_when_present",
+    ),
+    _one_of(
+        "linkage_state",
+        ProjectEntityLinkageState,
+        name="a_project_entity_link_state_is_known",
+    ),
+    CheckConstraint(
+        "(linkage_state = 'bound') = (project_entity_id IS NOT NULL)",
+        name="a_bound_project_entity_link_names_its_entity",
+    ),
+    ForeignKeyConstraint(
+        ["project_id", "principal_id"],
+        [f"{SCHEMA}.projects.project_id", f"{SCHEMA}.projects.principal_id"],
+        name="a_project_entity_link_names_a_project_in_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["project_entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        name="a_project_entity_link_names_an_entity_in_its_principal",
+    ),
+    Index("project_entity_links_by_principal", "principal_id"),
+    Index(
+        "a_project_entity_is_linked_once_per_principal",
+        "principal_id",
+        "project_entity_id",
+        unique=True,
+        postgresql_where=text("project_entity_id IS NOT NULL"),
+    ),
 )
 
 #: WP-RI-01: an entity's identity in an external namespace.  Uniqueness is

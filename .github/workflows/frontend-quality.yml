@@ -409,6 +409,13 @@ jobs:
           # Chromium CDP only (HARVEST_CANNOT_PROVE). Playwright WebKit is not Safari.
           MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/browser-security.spec.ts e2e/search-contract.spec.ts --project=firefox --project=webkit
       - name: Run Work control geometry under Firefox/WebKit (INTRODUCED / ADVISORY)
+        # Runs even when the step above fails. That step exercises unrelated
+        # origin/CSRF and Search specs and has a known Firefox failure in
+        # hideNextjsDevOverlay (page.addStyleTag blocked by CSP), which would
+        # otherwise abort the job before this measurement ever executes -- as it
+        # did on the first run of this lane. The geometry evidence must not be
+        # contingent on an unrelated spec passing.
+        if: always()
         env:
           MYPA_E2E_PYTHON: python
           MYPA_E2E_ADMIN_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/postgres

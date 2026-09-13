@@ -441,30 +441,32 @@ test.describe("operational Board and Calendar", () => {
    * WCAG 2.5.8 (AA) sets the minimum target at 24x24 CSS px; this shell builds
    * its controls to a 44px row height, which is the floor asserted here.
    *
-   * **A defect is recorded here rather than asserted away.** On WebKit the
-   * native `<select>` that carries Status renders 22 CSS px tall on the Board
-   * card — below the shell's own 44px floor *and* below WCAG 2.5.8's 24px
-   * minimum — because the element's `min-height` does not take effect on a
-   * default-appearance select in that engine. This test is therefore expected to
-   * fail on WebKit and expected to pass everywhere else: it holds the real
-   * number, it goes red on Chromium the moment that regresses, and it goes red
-   * on WebKit the day the product fixes it. `src/` belongs to another worker in
-   * this package; this is the report, not the fix.
+   * **Every control is proved on its own, and nothing here is expected to
+   * fail.** WebKit once rendered the Status `<select>` 22 CSS px tall, because a
+   * default-appearance select in that engine does not honour `min-height`;
+   * `task-status-control.tsx` now gives it a definite `h-11`, so the floor holds
+   * on every engine and the WebKit expected-failure this test used to carry is
+   * gone. Each control below asserts its own box separately rather than
+   * aggregating into one list, so a regression in Status, Due, Comment, Close
+   * Task or More goes red by name instead of being absorbed by its neighbours.
    */
   test("TASK-AC-017 the Board Status and Due controls are real touch targets", async ({ page }) => {
-    test.fail(
-      test.info().project.name === "webkit",
-      "Reported, not fixed: WebKit renders the Status select 22px tall, below WCAG 2.5.8's 24px and this shell's 44px.",
-    );
     test.setTimeout(180_000);
     const title = await seedTask(page);
     await page.goto("/work?view=all-open&perspective=board");
     const card = boardCard(page, title);
     await expect(card).toHaveCount(1);
 
-    const undersized: string[] = [];
+    // Status carries its own unconditional assertions on every engine: this is
+    // the control the WebKit defect was in, and it is never again allowed to
+    // fail silently behind an aggregate or an expected failure.
+    const statusBox = await card.getByTestId("task-status-control").getByRole("combobox").boundingBox();
+    expect(statusBox, "Status has no box on the Board card").not.toBeNull();
+    expect(statusBox!.height, "Status is below this shell's 44px row height").toBeGreaterThanOrEqual(44);
+    expect(statusBox!.width, "Status is below WCAG 2.5.8's 24px minimum width").toBeGreaterThanOrEqual(24);
+
+    // The remaining four, each asserted in its own right for the same reason.
     for (const [name, control] of [
-      ["Status", card.getByTestId("task-status-control").getByRole("combobox")],
       ["Due", card.getByRole("button", { name: /^Due, / })],
       ["Comment", card.getByTestId("task-board-card-comment")],
       ["Close Task", card.getByRole("button", { name: "Close Task", exact: true })],
@@ -472,11 +474,9 @@ test.describe("operational Board and Calendar", () => {
     ] as const) {
       const box = await control.boundingBox();
       expect(box, `${name} has no box on the Board card`).not.toBeNull();
-      if (box!.height < 44 || box!.width < 24) {
-        undersized.push(`${name} ${box!.width}x${box!.height}`);
-      }
+      expect(box!.height, `${name} is below this shell's 44px row height`).toBeGreaterThanOrEqual(44);
+      expect(box!.width, `${name} is below WCAG 2.5.8's 24px minimum width`).toBeGreaterThanOrEqual(24);
     }
-    expect(undersized, "Board controls below 44px tall or WCAG 2.5.8's 24px wide").toEqual([]);
   });
 
   /**

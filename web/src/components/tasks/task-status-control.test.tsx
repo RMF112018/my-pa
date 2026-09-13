@@ -85,6 +85,35 @@ describe("TaskStatusControl", () => {
     expect(note).toHaveTextContent(CONFLICT_COPY);
   });
 
+  /**
+   * The 44px sizing contract, pinned at the source.
+   *
+   * **This is not browser-rendering proof and must never be read as such.**
+   * jsdom lays nothing out, so this asserts only that the control still carries
+   * the definite block height the fix introduced. The geometry itself — that the
+   * rendered box really is at least 44 CSS px tall — is proved in Playwright by
+   * `e2e/work-acceptance.spec.ts`, "TASK-AC-017 the Board Status and Due
+   * controls are real touch targets", on Chromium and WebKit.
+   *
+   * Why a definite `h-11` rather than `min-h-11` alone: WebKit does not honour
+   * `min-height` on a default-appearance `<select>`, and the control rendered 22
+   * CSS px there. The native select is deliberately kept — no `appearance-none`,
+   * no custom combobox — so the height has to be stated outright.
+   */
+  it("keeps a native select and pins the definite 44px sizing contract", () => {
+    render(<TaskStatusControl value="open" onChange={() => {}} />);
+
+    const select = screen.getByRole("combobox", { name: "Status" });
+    expect(select.tagName).toBe("SELECT");
+
+    // `h-11` is 2.75rem = 44px, the same target `--control-height` names.
+    expect(select.classList.contains("h-11")).toBe(true);
+    expect(select.classList.contains("min-h-11")).toBe(true);
+    expect(select.classList.contains("min-w-11")).toBe(true);
+    // The native control is preserved: nothing strips its platform appearance.
+    expect(select.classList.contains("appearance-none")).toBe(false);
+  });
+
   it("is reachable and operable by keyboard", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

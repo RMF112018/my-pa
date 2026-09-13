@@ -62,6 +62,7 @@ def _applicable(paths: list[str]) -> bool:
         (["src/my_pa/infrastructure/persistence/capture_search.py"], True),
         (["src/my_pa/infrastructure/persistence/situation_repository.py"], True),
         (["src/my_pa/infrastructure/persistence/tables.py"], True),
+        (["src/my_pa/infrastructure/persistence/unit_of_work.py"], True),
         (["src/my_pa/domain/project_controls/settings.py"], True),
         (["src/my_pa/domain/project_controls/business_time.py"], True),
         (["src/my_pa/domain/capture/submission.py"], True),
@@ -102,6 +103,15 @@ def _applicable(paths: list[str]) -> bool:
         (["docs/plans/frontend-acceptance-ledger.md"], False),
         (["README.md"], False),
         (["src/my_pa/application/managed_documents.py"], False),
+        ([".github/workflows/frontend-quality.yml.old"], False),
+        (["src/my_pa/application/service.py.old"], False),
+        (["src/my_pa/adapters/mcp/tools.py.old"], False),
+        (["src/my_pa/infrastructure/persistence/unit_of_work.py.old"], False),
+        (["src/my_pa/domain/situation/project_history.py.old"], False),
+        (["tests/database/test_constraint_read_list.py.old"], False),
+        (["tests/policy/test_application_authorization.py.old"], False),
+        (["tests/security/test_mcp_surface_controls.py.old"], False),
+        (["tests/unit/test_gateway_composition.py.old"], False),
     ],
 )
 def test_frontend_classify_path_sets(paths: list[str], expected: bool) -> None:

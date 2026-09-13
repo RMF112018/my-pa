@@ -121,6 +121,80 @@ test.describe("axe-core, in Chromium, against the rendered page", () => {
     });
   }
 
+  /**
+   * The Board and Calendar perspectives, populated, in both themes (WP-TUX-06).
+   *
+   * The `/work` entry in `PAGES` scans the List perspective only, which is the
+   * default and which renders a different tree: Board and Calendar carry their
+   * own landmarks, their own column headings, and the shared Task-operation
+   * affordances in a different arrangement. An automated pass on List says
+   * nothing about either of them.
+   *
+   * The surfaces are *populated* first, and that is load-bearing: axe finds no
+   * violation in an empty column, so an unpopulated scan would pass vacuously.
+   * The Task is synthetic, created through the real BFF, and carries a Due date
+   * so the Calendar has a marker to render at all.
+   *
+   * Still an automated subset: not screen-reader proof, not a WCAG 2.2 AA claim.
+   */
+  test("populated Board and Calendar perspectives have no detectable violation", async ({ page }) => {
+    test.setTimeout(180_000);
+    await signIn(page);
+    const marker = `a11y-${test.info().project.name}-${Date.now()}`;
+    const title = `E2E perspective task ${marker}`;
+    await page.goto("/work?view=all-open");
+    await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
+    const created = await page.evaluate(
+      async ({ taskTitle, key }) => {
+        const response = await fetch("/api/tasks", {
+          method: "POST",
+          cache: "no-store",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            title: taskTitle,
+            dueAt: "2026-11-18T17:00:00Z",
+            idempotencyKey: key,
+          }),
+        });
+        return response.status;
+      },
+      { taskTitle: title, key: `e2e-${marker}` },
+    );
+    expect(created).toBe(200);
+
+    const board = `/work?view=all-open&q=${encodeURIComponent(marker)}&perspective=board`;
+    const calendar = `/work?view=all-open&q=${encodeURIComponent(marker)}&perspective=calendar`;
+
+    await page.goto(board);
+    await expect(page.getByRole("region", { name: "Task lifecycle board" })).toBeVisible();
+    await expect(page.locator('[data-testid="task-board-card"]').filter({ hasText: title })).toHaveCount(1);
+    expect(await scan(page), "Board perspective accessibility violations").toEqual([]);
+
+    // The Due choices are a popover: a control that only exists once opened is
+    // never scanned by a page-level pass over the closed state.
+    await page
+      .locator('[data-testid="task-board-card"]')
+      .filter({ hasText: title })
+      .getByRole("button", { name: /^Due, / })
+      .click();
+    await expect(page.getByRole("group", { name: "Due choices" })).toBeVisible();
+    expect(await scan(page), "Board Due choices accessibility violations").toEqual([]);
+
+    await page.goto(calendar);
+    await expect(page.getByRole("heading", { name: "Work calendar", level: 2 })).toBeVisible();
+    await expect(page.locator('[data-testid="task-calendar-marker"]').filter({ hasText: title })).toHaveCount(1);
+    expect(await scan(page), "Calendar perspective accessibility violations").toEqual([]);
+
+    // Both perspectives again in the dark theme, where contrast rules are
+    // decided against a different set of computed colours.
+    await useDarkTheme(page);
+    for (const [path, label] of [[board, "Board"], [calendar, "Calendar"]] as const) {
+      await page.goto(path);
+      await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+      expect(await scan(page), `${label} dark-theme accessibility violations`).toEqual([]);
+    }
+  });
+
   test("the capture dialog, open, has no detectable violation", async ({ page }) => {
     await signIn(page);
     // Both stages are scanned: the WP-TUX-04 chooser and the note branch behind it.

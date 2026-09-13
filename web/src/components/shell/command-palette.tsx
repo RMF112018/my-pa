@@ -1,12 +1,22 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { SurfaceState } from "@/components/ui/surface-state";
+import { TaskCompactSheet } from "@/components/tasks/task-compact-sheet";
 
 import {
   admittedEnrollmentId,
@@ -17,6 +27,7 @@ import {
   federatedZeroHitKind,
   presentFederatedHits,
   type PresentedGroup,
+  type PresentedTaskActivation,
   type SearchCoverage,
 } from "@/lib/search/presentation";
 import type { ApiFailure } from "@/lib/api/work-client";
@@ -73,6 +84,14 @@ export function SearchCommandPanel({
 }) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  /**
+   * Focus contract for the in-place Task sheet. The element that opened the
+   * sheet is held so closing can hand focus back to it; the index is held as the
+   * fallback address for when a refresh has removed that exact row.
+   */
+  const taskTrigger = useRef<HTMLElement | null>(null);
+  const taskTriggerIndex = useRef(0);
   const inputId = useId();
   const listId = useId();
   const [query, setQuery] = useState(initialQuery);
@@ -80,6 +99,7 @@ export function SearchCommandPanel({
     initialQuery.trim() ? { kind: "loading" } : { kind: "idle" },
   );
   const [activeIndex, setActiveIndex] = useState(0);
+  const [activeTask, setActiveTask] = useState<PresentedTaskActivation | null>(null);
   const enrollment = heldEnrollment(enrollmentId);
   const trimmed = query.trim();
   const idle = trimmed.length === 0;
@@ -136,10 +156,21 @@ export function SearchCommandPanel({
       return [];
     }
     return [
+      // The last point at which the domain of a hit is still known. Everything
+      // downstream is kind-blind, so a Task must declare itself here or not at all.
       ...groups.flatMap((group) =>
         group.hits
           .filter((hit) => hit.href)
-          .map((hit) => ({ kind: "href" as const, href: hit.href as string, label: hit.label })),
+          .map((hit) =>
+            group.domain === "tasks" && hit.task
+              ? {
+                  kind: "task" as const,
+                  href: hit.href as string,
+                  label: hit.label,
+                  task: hit.task,
+                }
+              : { kind: "href" as const, href: hit.href as string, label: hit.label },
+          ),
       ),
       { kind: "capture" as const, label: "Quick Capture" },
     ];
@@ -171,11 +202,59 @@ export function SearchCommandPanel({
     onCapture();
   }
 
-  function activate(index: number) {
+  /** Result rows currently in the document, in the same order as `activatable`. */
+  const resultElements = useCallback((): readonly HTMLElement[] => {
+    const list = listRef.current;
+    if (!list) return [];
+    return Array.from(list.querySelectorAll<HTMLElement>('[data-search-result="true"]'));
+  }, []);
+
+  const openTask = useCallback(
+    (task: PresentedTaskActivation, index: number, trigger: HTMLElement | null) => {
+      taskTrigger.current = trigger ?? resultElements()[index] ?? null;
+      taskTriggerIndex.current = index;
+      setActiveTask(task);
+    },
+    [resultElements],
+  );
+
+  /**
+   * Closing the sheet returns focus to the result that opened it. If a refresh
+   * removed that row, fall back to the next result at the same position, then to
+   * the previous result, then to the query field. Focus is never left on the body.
+   */
+  const closeTask = useCallback(() => {
+    setActiveTask(null);
+    requestAnimationFrame(() => {
+      const trigger = taskTrigger.current;
+      const index = taskTriggerIndex.current;
+      taskTrigger.current = null;
+      if (trigger && trigger.isConnected) {
+        trigger.focus();
+        return;
+      }
+      const results = resultElements();
+      const fallback = results[index] ?? results[index - 1] ?? inputRef.current;
+      fallback?.focus();
+    });
+  }, [resultElements]);
+
+  function activate(index: number, event?: ReactMouseEvent<HTMLElement>) {
     const item = activatable[index];
     if (!item) return;
-    if (item.kind === "capture") capture();
-    else go(item.href);
+    if (item.kind === "capture") {
+      capture();
+      return;
+    }
+    if (item.kind === "task") {
+      // The row stays a real link — role=link with the Task title as its
+      // accessible name — and its navigation is intercepted, not removed.
+      event?.preventDefault();
+      const trigger = (event?.currentTarget as HTMLElement | undefined) ?? null;
+      openTask(item.task, index, trigger);
+      return;
+    }
+    go(item.href);
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -213,7 +292,7 @@ export function SearchCommandPanel({
         boundedIndex === index ? "bg-interactive-subtle" : "hover:bg-surface-subtle"
       } ${extraClass}`.trim(),
       onMouseEnter: () => setActiveIndex(index),
-      onClick: () => activate(index),
+      onClick: (event: ReactMouseEvent<HTMLElement>) => activate(index, event),
     };
   }
 
@@ -247,6 +326,7 @@ export function SearchCommandPanel({
         Type to search. Destinations are in navigation.
       </p>
       <div
+        ref={listRef}
         id={listId}
         data-testid="search-command-list"
         aria-busy={answer.kind === "loading" || undefined}
@@ -308,7 +388,12 @@ export function SearchCommandPanel({
                   {group.hits.map((hit) => (
                     <li key={hit.key}>
                       {hit.href ? (
-                        <Link href={hit.href} {...optionProps(hitOptionIndex.indices.get(hit.key) ?? 0)}>
+                        <Link
+                          href={hit.href}
+                          data-search-result="true"
+                          data-result-key={hit.key}
+                          {...optionProps(hitOptionIndex.indices.get(hit.key) ?? 0)}
+                        >
                           <span className="flex min-w-0 flex-1 flex-col items-start py-1">
                             <span className="flex w-full items-center justify-between gap-2">
                               <span>{hit.label}</span>
@@ -349,6 +434,16 @@ export function SearchCommandPanel({
         ) : null}
         {answer.kind === "ready" ? <CoverageList coverage={answer.result.coverage} /> : null}
       </div>
+      {activeTask ? (
+        <TaskCompactSheet
+          taskId={activeTask.taskId}
+          open
+          onOpenChange={(open) => {
+            if (!open) closeTask();
+          }}
+          seed={activeTask.seed}
+        />
+      ) : null}
     </div>
   );
 }

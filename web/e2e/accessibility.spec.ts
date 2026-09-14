@@ -233,6 +233,32 @@ test.describe("axe-core, in Chromium, against the rendered page", () => {
   }
 
   /**
+   * The Create Task sheet, open (WP-POSTUX-01).
+   *
+   * The `/work` entry above scans the page with the sheet closed, so it says
+   * nothing about the densest concentration of shared form primitives this head
+   * puts on one screen — a text Input, a Textarea, a native Select and a date
+   * Input inside a modal dialog. WP-POSTUX-01 moved all four onto a shared
+   * typography and shrink contract and migrated Priority from a raw `<select>`
+   * to the shared primitive, so the open state is where a regression in label
+   * association, accessible name, or dialog semantics would actually surface.
+   *
+   * Nothing is submitted, so this creates no Task and seeds nothing to dispose.
+   */
+  test("the open Create Task sheet has no detectable violation", async ({ page }) => {
+    await signIn(page);
+    await page.goto("/work");
+    await page.getByRole("button", { name: "New task" }).click();
+    const sheet = page.getByTestId("task-create-sheet");
+    await expect(sheet).toBeVisible();
+    // Load-bearing: scanning before the controls render would pass vacuously.
+    await expect(sheet.getByLabel("Priority")).toBeVisible();
+    expect(await scan(page), "open Create Task sheet accessibility violations").toEqual([]);
+    await page.getByRole("button", { name: "Close panel" }).click();
+    await expect(page.getByTestId("task-create-sheet")).toHaveCount(0);
+  });
+
+  /**
    * The Board and Calendar perspectives, populated, in both themes (WP-TUX-06).
    *
    * The `/work` entry in `PAGES` scans the List perspective only, which is the

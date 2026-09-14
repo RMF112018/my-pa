@@ -171,7 +171,7 @@ export function GrantEnrollment({
         name="grant"
         autoComplete="off"
         spellCheck={false}
-        className="min-h-11 rounded-md border border-border bg-surface px-3 text-sm"
+        className="min-h-11 rounded-md border border-border bg-surface px-3 text-[length:var(--control-font-size)] leading-[var(--control-line-height)]"
         value={grant}
         onChange={(event) => setGrant(event.target.value)}
       />

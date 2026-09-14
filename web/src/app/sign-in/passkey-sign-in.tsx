@@ -207,7 +207,7 @@ export function PasskeySignIn() {
           id="recovery-code"
           name="code"
           autoComplete="off"
-          className="min-h-11 rounded-md border border-border bg-surface px-3 text-sm"
+          className="min-h-11 rounded-md border border-border bg-surface px-3 text-[length:var(--control-font-size)] leading-[var(--control-line-height)]"
           value={code}
           onChange={(event) => setCode(event.target.value)}
         />

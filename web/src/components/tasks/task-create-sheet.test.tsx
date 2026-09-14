@@ -125,6 +125,19 @@ describe("TaskCreateSheet", () => {
     expect(sheet().textContent ?? "").not.toMatch(/\bp[1-4]\b/);
   });
 
+  it("renders Priority as a labeled native combobox through the shared Select, keeping its 44px coarse target", () => {
+    vi.stubGlobal("fetch", immediateFetch());
+    renderSheet();
+
+    // Priority moved from a raw <select> to the shared Select primitive. The
+    // accessible role and name must be unchanged, and the caller's min-h-11
+    // coarse-pointer target must survive the primitive's class composition.
+    const select = screen.getByRole("combobox", { name: "Priority" });
+    expect(select.tagName).toBe("SELECT");
+    expect(select).toBe(screen.getByLabelText("Priority"));
+    expect(select.className).toMatch(/\bmin-h-11\b/);
+  });
+
   it("serializes a chosen priority and omits it when there is no priority", async () => {
     const user = userEvent.setup();
     const fetcher = immediateFetch();

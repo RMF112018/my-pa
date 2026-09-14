@@ -117,7 +117,7 @@ function SearchForm({ query }: { query: string }) {
           name="q"
           type="search"
           defaultValue={query}
-          className="min-h-11 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm"
+          className="min-h-11 w-full rounded-md border border-border bg-surface px-3 py-2 text-[length:var(--control-font-size)] leading-[var(--control-line-height)]"
           aria-describedby="library-q-hint"
         />
         <p id="library-q-hint" className="text-xs text-muted">

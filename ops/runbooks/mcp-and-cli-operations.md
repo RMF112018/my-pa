@@ -72,11 +72,17 @@ started with. To withdraw a surface immediately, stop the process.
 
 ## What is the same, and why that matters
 
-All three transports call one function — `adapters/normalization.normalize` —
+All three transports call one function — `adapters.normalization.normalize` —
 and none of them can build a request value of its own. A request that HTTP
 refuses, MCP and the CLI refuse, with the same code, the same message, the same
 `safe_details`, and the same audit event. That is `SPEC-AC-001`, and
-`tests/contract/test_transport_parity.py` holds it over all one hundred and seventy-two capabilities.
+The public vocabulary declares one hundred and seventy-two capabilities.
+`tests/contract/test_transport_parity.py` distinguishes that vocabulary from
+the one hundred and sixty-six command-backed names and holds positive request
+and response parity over the latter set. Its
+separate unwired contract holds the exact six Run 01 names as `not_implemented`,
+without an MCP tool or command schema, while the generic HTTP/CLI name path
+returns the canonical unsupported response.
 
 Practically: **there is no capability reachable from a shell that is not
 reachable over HTTP, and no authority that comes with being local.** The CLI is

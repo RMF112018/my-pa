@@ -136,10 +136,14 @@ HTTP under `run` and MCP under `mcp`. Every other reserved directory still holds
 a README and nothing else.
 
 The operator commands and transport entry point share this directory, and the split is
-the reason they sit together rather than a reason to separate them. `invoke.py`
-invokes one of the one hundred and seventy-two capabilities and therefore composes
-`bootstrap.gateway.build_gateway_runtime`, exactly as the served transports do,
-so it cannot differ from them in a limit, a clock, or a principal.
+the reason they sit together rather than a reason to separate them. The public
+vocabulary contains one hundred and seventy-two capabilities. `invoke.py`
+accepts any of those names, but only the one hundred and sixty-six command-backed
+names normalize and invoke;
+the six Run 01 names return the canonical unsupported response until their
+handlers land. It composes `bootstrap.gateway.build_gateway_runtime`, exactly as
+the served transports do, so it cannot differ from them in a limit, a clock, or
+a principal.
 `migration.py` and `sources.py` invoke none, compose their own engine, and reach
 `infrastructure` directly. `D-42` records why source registration is one of the
 second kind: source registration is named by no canonical capability, and a

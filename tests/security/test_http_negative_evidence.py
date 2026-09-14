@@ -11,9 +11,10 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes one hundred and seventy-two capability names and none of them
-  mutates a source, and every capability driven over the wire is shown to have
-  called only the three read-only provider methods;
+  ends: the generic route parses all one hundred and seventy-two declared names,
+  but only the one hundred and sixty-six command-backed names can execute; none
+  mutates a source, and every executable capability driven over the wire is
+  shown to have called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
 * **purpose escalation** — a purpose the domain does not permit for the
   capability, derived from the domain rule rather than listed;
@@ -68,6 +69,8 @@ from tests.conftest import (
 )
 from tests.contract.test_transport_parity import (
     ENTITY_EMAIL,
+    FUTURE_CAPABILITIES,
+    IMPLEMENTED_CAPABILITIES,
     staged_assignment,
     staged_edge,
     staged_entities,
@@ -89,7 +92,7 @@ from my_pa.adapters.normalization import _BUILDERS
 from my_pa.application.intelligence import begin_cycle, commit_artifact
 from my_pa.application.service import ApplicationService, _normalise_bulk_mutations
 from my_pa.contracts.ports import EvidenceUnavailableError, KnowledgeRecord
-from my_pa.contracts.v1.errors import ErrorCode
+from my_pa.contracts.v1.errors import ErrorCode, ProblemDetail
 from my_pa.domain.common.identifiers import IdKind, make_identifier
 from my_pa.domain.common.provenance import Provenance
 from my_pa.domain.identity.operation import Capability, permitted_purposes
@@ -1645,7 +1648,7 @@ def test_an_identifier_the_provider_never_issued_is_denied_over_the_wire(
 #: under `ADR-003` and belongs to no configured source.
 SCOPED_CAPABILITIES = [
     c
-    for c in Capability
+    for c in IMPLEMENTED_CAPABILITIES
     if c
     not in {
         Capability.CAPABILITIES_GET,
@@ -1893,7 +1896,7 @@ def test_every_scoped_capability_is_denied_an_unheld_scope_over_the_wire(
     assert_denied(reply, marked_root, f"{capability.value} on an unheld scope")
 
 
-@pytest.mark.parametrize("capability", list(Capability), ids=lambda c: c.value)
+@pytest.mark.parametrize("capability", IMPLEMENTED_CAPABILITIES, ids=lambda c: c.value)
 def test_every_capability_refuses_a_purpose_it_does_not_permit_over_the_wire(
     capability: Capability, marked: Scene, marked_root: Path, wire: Wire
 ) -> None:
@@ -2162,7 +2165,10 @@ def test_the_transport_routes_no_mutating_capability() -> None:
     assert "{" not in REMOTE_CAPTURE_PATH
     assert REMOTE_CAPTURE_PATH.endswith(Capability.CAPTURE_CREATE.value)
 
-    assert set(_BUILDERS) == set(Capability), "a capability is unreachable over HTTP"
+    assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES), (
+        "an implemented capability is unreachable over HTTP"
+    )
+    assert set(Capability) - set(_BUILDERS) == FUTURE_CAPABILITIES
     assert CAPTURE_CAPABILITIES, "the exemption below covers nothing, so it hides nothing"
     exempt = (
         CAPTURE_CAPABILITIES
@@ -2178,7 +2184,7 @@ def test_the_transport_routes_no_mutating_capability() -> None:
         | CONSTRAINT_AUTHORING_EXEMPTION
     )
     checked = [c for c in _BUILDERS if c not in exempt]
-    assert len(checked) == len(Capability) - len(exempt)
+    assert len(checked) == len(IMPLEMENTED_CAPABILITIES) - len(exempt)
     for capability in checked:
         assert not any(verb in capability.value for verb in MUTATING_NAMES)
     assert {c.value for c in CAPTURE_CAPABILITIES} == {
@@ -2188,6 +2194,21 @@ def test_the_transport_routes_no_mutating_capability() -> None:
         "capture.list",
         "capture.search",
     }, "the exemption is exactly the capture family"
+
+
+@pytest.mark.parametrize("capability", sorted(FUTURE_CAPABILITIES), ids=lambda c: c.value)
+def test_declared_unwired_capability_routes_to_canonical_unsupported(
+    capability: Capability, marked: Scene, wire: Wire
+) -> None:
+    """The generic HTTP name route recognizes future names but cannot execute them."""
+    reply = wire.send(capability.value, document(capability, marked.principal, {}))
+    problem = reply.document()
+    canonical = ProblemDetail.model_validate(problem)
+
+    assert reply.status == 501
+    assert canonical.code is ErrorCode.UNSUPPORTED
+    assert canonical.safe_details == ()
+    assert reply.body == canonical.to_canonical_json()
 
 
 @pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE"], ids=str)

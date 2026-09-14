@@ -10,10 +10,11 @@ proved in one shape is not proved in its neighbours.
 The five, over both:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
-* **source mutation** — proved from both ends: the tool list and the option
-  surface route one hundred and seventy-two capability names and none of them mutates a
-  source, and every capability driven over both transports is shown to have
-  called only the three read-only provider methods;
+* **source mutation** — proved from both ends: the tool and command surfaces
+  publish the one hundred and sixty-six command-backed capability names and
+  none mutates a source; the six future names publish neither a tool nor a
+  command schema, and every executable capability driven over both transports
+  is shown to have called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
 * **purpose escalation** — a purpose the domain does not permit for the
   capability, derived from the domain rule rather than listed;
@@ -77,6 +78,8 @@ from tests.conftest import (
     staged_search,
 )
 from tests.contract.test_transport_parity import (
+    FUTURE_CAPABILITIES,
+    IMPLEMENTED_CAPABILITIES,
     a_forbidden_purpose,
     a_permitted_purpose,
     document,
@@ -295,7 +298,7 @@ def test_an_identifier_the_provider_never_issued_is_denied_over_both_transports(
 #: under `ADR-003` and belongs to no configured source.
 SCOPED_CAPABILITIES = [
     c
-    for c in Capability
+    for c in IMPLEMENTED_CAPABILITIES
     if c
     not in {
         Capability.CAPABILITIES_GET,
@@ -540,7 +543,7 @@ def test_every_scoped_capability_is_denied_an_unheld_scope_over_both_transports(
     assert_denied(answers, marked_root, f"{capability.value} on an unheld scope")
 
 
-@pytest.mark.parametrize("capability", list(Capability), ids=lambda c: c.value)
+@pytest.mark.parametrize("capability", IMPLEMENTED_CAPABILITIES, ids=lambda c: c.value)
 def test_every_capability_refuses_a_purpose_it_does_not_permit_over_both_transports(
     capability: Capability, marked: Scene, marked_root: Path
 ) -> None:
@@ -856,8 +859,11 @@ def test_neither_transport_routes_a_mutating_capability() -> None:
     """
     from my_pa.adapters.normalization import _BUILDERS
 
-    assert {tool.name for tool in TOOLS} == {c.value for c in Capability}
-    assert set(_BUILDERS) == set(Capability), "a capability is unreachable over a transport"
+    assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
+    assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES), (
+        "an implemented capability is unreachable over a transport"
+    )
+    assert set(Capability) - set(_BUILDERS) == FUTURE_CAPABILITIES
     assert CAPTURE_CAPABILITIES, "the exemption below covers nothing, so it hides nothing"
     exempt = (
         CAPTURE_CAPABILITIES
@@ -872,8 +878,8 @@ def test_neither_transport_routes_a_mutating_capability() -> None:
         | CANVAS_WORKSPACE_EXEMPTION
         | CONSTRAINT_AUTHORING_EXEMPTION
     )
-    checked = [c for c in Capability if c not in exempt]
-    assert len(checked) == len(Capability) - len(exempt)
+    checked = [c for c in IMPLEMENTED_CAPABILITIES if c not in exempt]
+    assert len(checked) == len(IMPLEMENTED_CAPABILITIES) - len(exempt)
     for capability in checked:
         assert not any(verb in capability.value for verb in MUTATING_NAMES)
     assert {c.value for c in CAPTURE_CAPABILITIES} == {

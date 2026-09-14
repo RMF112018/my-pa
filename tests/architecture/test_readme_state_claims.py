@@ -623,6 +623,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
         encoding="utf-8"
     )
     runbook = (ROOT / "ops/runbooks/mcp-and-cli-operations.md").read_text(encoding="utf-8")
+    gateway_runbook = (ROOT / "ops/runbooks/gateway-operations.md").read_text(encoding="utf-8")
     assert f"default composition serves {default} of" in architecture_index
     assert "one hundred and seventy-two capabilities" in architecture_index
     assert f"**{default} application-available capabilities**" in runbook
@@ -631,6 +632,15 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert "fully feature-composed local stdio: 163" in runbook
     assert "166 have application commands/handlers" in runbook
     assert "all 166 implemented tools" in runbook
+    assert f"A default process serves\n{SPELLED_COUNTS[default].lower()}" in gateway_runbook
+    assert (
+        f"{SPELLED_COUNTS[len(withheld_families)].lower()} handler-implemented capabilities "
+        "are composition-withheld"
+    ) in gateway_runbook
+    assert "six\nare structurally unwired" in gateway_runbook
+    assert (
+        f"`{withheld} of {total} total capabilities are unavailable or unwired.`" in gateway_runbook
+    )
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
     assert "one hundred and seventy-two capabilities" in module_boundaries

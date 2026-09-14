@@ -259,7 +259,10 @@ def test_head_enforces_composite_scope_and_immutable_settings_history(
                 )
             )
 
-        with engine.begin() as connection, pytest.raises(DBAPIError, match="stay as written"):
+        with (
+            engine.begin() as connection,
+            pytest.raises(DBAPIError, match="is append only; UPDATE is refused"),
+        ):
             connection.execute(
                 update(constraint_project_settings_history)
                 .where(constraint_project_settings_history.c.history_id == "cpsh_aaaaaaaa11111111")

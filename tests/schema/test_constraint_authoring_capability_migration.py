@@ -77,7 +77,6 @@ CURRENT_HEAD_MIGRATION: Final = (
     MIGRATIONS / "20260913_c4f1a8e52d90_admit_continuity_projects_update_and_close.py"
 )
 RUN01_MIGRATION: Final = MIGRATIONS / "20260914_e6a4c2f91b73_project_controls_run01_integrity.py"
-CAPTURE_MIGRATION: Final = MIGRATIONS / "20260803_1a4c9e77b2d5_create_the_capture_tables.py"
 WP_MCP_PROJ_02_MIGRATION: Final = (
     MIGRATIONS / "20260913_b3e9d7a41c25_admit_continuity_projects_read.py"
 )
@@ -397,7 +396,6 @@ def test_no_historical_revision_was_edited() -> None:
     touched = {line for line in changed.stdout.splitlines() if line.strip()}
     assert touched <= {
         RUN01_MIGRATION.relative_to(ROOT).as_posix(),
-        CAPTURE_MIGRATION.relative_to(ROOT).as_posix(),
         CURRENT_HEAD_MIGRATION.relative_to(ROOT).as_posix(),
         WP_MCP_PROJ_02_MIGRATION.relative_to(ROOT).as_posix(),
         WP_MCP_PROJ_01_MIGRATION.relative_to(ROOT).as_posix(),

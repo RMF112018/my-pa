@@ -76,8 +76,9 @@ READS: Final[tuple[Capability, ...]] = (
     Capability.PROJECT_CONTROLS_STATUS,
 )
 
-#: The only two of the twelve that add a durable record and reach no existing
-#: one. Every other one replaces, transitions, supersedes or retires state.
+#: Four of the fourteen are creation/configuration entry points. The two below
+#: are the only ones that add a durable record and reach no existing one; every
+#: other authoring capability changes or depends on existing Project state.
 ADDITIVE: Final[frozenset[Capability]] = frozenset(
     {Capability.CONSTRAINTS_CREATE, Capability.CONSTRAINT_CATEGORIES_CREATE}
 )
@@ -147,7 +148,7 @@ def test_every_constraint_read_is_still_granted_only_the_read_purpose(
     assert permitted_purposes(capability) == frozenset({Purpose.CONSTRAINT_READ})
 
 
-def test_the_authoring_purpose_reaches_the_twelve_and_nothing_else() -> None:
+def test_the_authoring_purpose_reaches_the_fourteen_and_nothing_else() -> None:
     """Read from the purpose's end, which is where a quiet widening would show."""
     reached = {
         capability

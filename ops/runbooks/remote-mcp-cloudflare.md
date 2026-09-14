@@ -171,8 +171,13 @@ python apps/cli/remote_mcp.py control --remote-enabled --no-writes-enabled
 
 Emergency withdrawal is durable: run `control --no-remote-enabled
 --no-writes-enabled`; revoke one client with `revoke --oauth-client-id ...`.
-Revoke an individual grant with `revoke-grant --grant-uuid ...`. Production
-grants should include a UTC `--expires-at` timestamp.
+Revoke an individual grant with `revoke-grant --grant-uuid ...`. Ordinary
+production grants may include a UTC `--expires-at` timestamp. The dedicated
+ChatLLM full-data-management profile is the exception: required application-data
+grants for that client use omitted `--expires-at` (`NULL`). Reconcile that
+profile with `profile-diff` / `profile-plan` / `profile-apply` as documented in
+[`managed-knowledge-context.md`](managed-knowledge-context.md). OAuth token
+lifetimes stay finite.
 For a purpose-bound grant, add `--purpose <canonical-purpose>`. Enabling a
 write-capable client requires all independent inputs: the existing client must
 be marked write-enabled with `set-client-writes --oauth-client-id ...

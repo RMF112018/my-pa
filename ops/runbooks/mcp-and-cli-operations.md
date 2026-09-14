@@ -561,10 +561,11 @@ machine, service supervision, deployment, and production activation. All
 operator-gated (`AGENTS.md` §5); the first three are `P00-OD-010`, which is
 open. Nothing here issues, reads, or requires a credential.
 
-`context.prepare` / `context.feedback` ChatLLM operating contract, recommended
-grants, activation, and rollback are
+ChatLLM full-data-management policy, profile-diff/plan/apply, grant lifetime,
+and commissioning are
 [`managed-knowledge-context.md`](managed-knowledge-context.md). Production is
-not activated. Live Abacus OAuth remains operator-gated.
+not activated. Live Abacus OAuth and production grant mutation remain
+operator-gated.
 
 `continuity.projects` / `.read` / `.create` / `.update` / `.close` nested
 payload, versioning, lifecycle, Task association, and error vocabulary are

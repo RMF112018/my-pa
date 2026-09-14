@@ -595,6 +595,15 @@ class Settings(StrictModel):
             else "127.0.0.1"
         )
 
+    def managed_documents_are_composed(self) -> bool:
+        """Whether the managed-document plane is composed.
+
+        True only when a managed root is configured. Callers that only need this
+        boolean must not read the path: the path reaches only store constructors,
+        where containment and source-root refusal live.
+        """
+        return bool(self.managed_document_root.strip())
+
     #: The single parse of `database_url`, produced by validation and handed on
     #: unchanged. Private because it is not configuration an operator supplies
     #: and must not become a second place a URL can enter from.

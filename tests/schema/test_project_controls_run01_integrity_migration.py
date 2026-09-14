@@ -355,6 +355,35 @@ def test_head_enforces_composite_scope_and_immutable_settings_history(
                 is None
             )
 
+        with engine.begin() as connection, pytest.raises(IntegrityError):
+            connection.execute(
+                insert(constraint_project_settings_history).values(
+                    history_id="cpsh_gggggggg77777777",
+                    principal_id=PRINCIPAL,
+                    project_id=PROJECT,
+                    action="configure",
+                    actor="principal",
+                    outcome="no_op",
+                    before_settings_version=1,
+                    after_settings_version=None,
+                    resulting_timezone_name="America/New_York",
+                    resulting_settings_updated_at=WHEN,
+                    idempotency_key="settings-key-no-op-null",
+                    request_digest="d" * 64,
+                    occurred_at=WHEN,
+                    recorded_at=WHEN,
+                )
+            )
+        with engine.connect() as connection:
+            assert (
+                connection.execute(
+                    select(constraint_project_settings_history.c.history_id).where(
+                        constraint_project_settings_history.c.history_id == "cpsh_gggggggg77777777"
+                    )
+                ).scalar_one_or_none()
+                is None
+            )
+
         with (
             engine.begin() as connection,
             pytest.raises(DBAPIError, match="is append only; UPDATE is refused"),

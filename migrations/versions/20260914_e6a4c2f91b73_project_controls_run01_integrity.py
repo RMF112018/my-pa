@@ -326,6 +326,7 @@ def _create_settings_history() -> None:
           CONSTRAINT a_no_op_constraint_settings_change_preserves_its_version
             CHECK (outcome <> 'no_op' OR
               (before_settings_version IS NOT NULL AND
+               after_settings_version IS NOT NULL AND
                after_settings_version = before_settings_version)),
           CONSTRAINT a_rejected_constraint_settings_change_writes_no_new_version
             CHECK (outcome <> 'rejected' OR

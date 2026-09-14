@@ -135,7 +135,7 @@ CONSTRAINT_TABLES: Final = frozenset(
 #: database CHECK so predecessor receipts remain truthful; it is not a public
 #: `ConstraintSyncResolution` member.
 BASE_CONSTRAINT_TABLES_SHA256: Final = (
-    "64c00a5e335ab1ce383e77ffb6fe3353220482d08a1bca549c20f53d9a621bda"
+    "acb4bda2d167dac089b22ea0954078af272f6afd188725ecdc062ab01dbb05de"
 )
 
 #: Package roots the application read service may never reach. `infrastructure`

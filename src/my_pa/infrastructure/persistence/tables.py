@@ -11340,6 +11340,7 @@ constraint_project_settings_history = Table(
     ),
     CheckConstraint(
         "outcome <> 'no_op' OR (before_settings_version IS NOT NULL "
+        "AND after_settings_version IS NOT NULL "
         "AND after_settings_version = before_settings_version)",
         name="a_no_op_constraint_settings_change_preserves_its_version",
     ),

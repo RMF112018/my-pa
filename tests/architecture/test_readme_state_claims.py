@@ -610,13 +610,14 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     )
     runbook = (ROOT / "ops/runbooks/mcp-and-cli-operations.md").read_text(encoding="utf-8")
     assert f"default composition serves {default} of" in architecture_index
+    assert "one hundred and seventy-two capabilities" in architecture_index
     assert f"**{default} application-available capabilities**" in runbook
     assert f"publishes **{default - 3} tools**" in runbook
     assert "unconfigured local stdio: 93" in runbook
     assert "fully feature-composed local stdio: 163" in runbook
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
-    assert "one hundred and sixty-six capabilities" in module_boundaries
+    assert "one hundred and seventy-two capabilities" in module_boundaries
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:

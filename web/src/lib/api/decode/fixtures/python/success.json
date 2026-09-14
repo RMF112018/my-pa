@@ -1324,6 +1324,24 @@
           "operator_only": false
         },
         {
+          "name": "constraints.portfolio_list",
+          "version": "v1",
+          "availability": "not_implemented",
+          "operator_only": false
+        },
+        {
+          "name": "constraints.portfolio_search",
+          "version": "v1",
+          "availability": "not_implemented",
+          "operator_only": false
+        },
+        {
+          "name": "constraints.portfolio_overview",
+          "version": "v1",
+          "availability": "not_implemented",
+          "operator_only": false
+        },
+        {
           "name": "constraint_categories.list",
           "version": "v1",
           "availability": "available",
@@ -1333,6 +1351,12 @@
           "name": "constraints.create",
           "version": "v1",
           "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "constraints.create_published",
+          "version": "v1",
+          "availability": "not_implemented",
           "operator_only": false
         },
         {
@@ -1399,6 +1423,18 @@
           "name": "constraint_categories.reorder",
           "version": "v1",
           "availability": "available",
+          "operator_only": false
+        },
+        {
+          "name": "project_controls.configure",
+          "version": "v1",
+          "availability": "not_implemented",
+          "operator_only": false
+        },
+        {
+          "name": "project_controls.status",
+          "version": "v1",
+          "availability": "not_implemented",
           "operator_only": false
         },
         {
@@ -1469,8 +1505,9 @@
       "state": "degraded",
       "contract_version": "v1",
       "implemented_capabilities": 166,
-      "total_capabilities": 166,
+      "total_capabilities": 172,
       "limitations": [
+        "6 of 172 capabilities are unwired.",
         "Content types awaiting an operator decision: application/pdf. They are reported rather than silently skipped.",
         "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, constraint_sync.conflicts, constraint_sync.delta, constraints.history, constraints.list, constraints.search, continuity.projects, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.graph, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, goodnotes.notebooks.list, goodnotes.pages.list, goodnotes.pull, goodnotes.runs.list, goodnotes.search, knowledge.search, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.comments.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
         "Model proposals and semantic retrieval are disabled; deterministic lexical retrieval remains active.",

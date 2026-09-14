@@ -11334,7 +11334,8 @@ constraint_project_settings_history = Table(
         name="a_constraint_settings_history_failure_detail_is_bounded",
     ),
     CheckConstraint(
-        "outcome <> 'applied' OR after_settings_version = coalesce(before_settings_version, 0) + 1",
+        "outcome <> 'applied' OR (after_settings_version IS NOT NULL "
+        "AND after_settings_version = coalesce(before_settings_version, 0) + 1)",
         name="an_applied_constraint_settings_change_advances_its_version",
     ),
     CheckConstraint(

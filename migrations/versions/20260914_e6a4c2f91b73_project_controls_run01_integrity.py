@@ -321,7 +321,8 @@ def _create_settings_history() -> None:
           recorded_at timestamptz NOT NULL,
           CONSTRAINT an_applied_constraint_settings_change_advances_its_version
             CHECK (outcome <> 'applied' OR
-              after_settings_version = coalesce(before_settings_version, 0) + 1),
+              (after_settings_version IS NOT NULL AND
+               after_settings_version = coalesce(before_settings_version, 0) + 1)),
           CONSTRAINT a_no_op_constraint_settings_change_preserves_its_version
             CHECK (outcome <> 'no_op' OR
               (before_settings_version IS NOT NULL AND

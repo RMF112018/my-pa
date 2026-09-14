@@ -1,5 +1,7 @@
 import { forwardRef, useId, type ReactNode, type TextareaHTMLAttributes } from "react";
 
+import { Textarea } from "./textarea";
+
 export interface TextFieldProps extends TextareaHTMLAttributes<HTMLTextAreaElement> {
   label: string;
   hint?: ReactNode;
@@ -31,7 +33,7 @@ export const TextField = forwardRef<HTMLTextAreaElement, TextFieldProps>(functio
           </span>
         ) : null}
       </label>
-      <textarea
+      <Textarea
         ref={ref}
         id={fieldId}
         required={required}
@@ -39,7 +41,7 @@ export const TextField = forwardRef<HTMLTextAreaElement, TextFieldProps>(functio
         aria-invalid={isInvalid || undefined}
         aria-describedby={describedBy}
         aria-required={required || undefined}
-        className="min-h-24 rounded-md border border-border bg-surface p-2 text-sm text-text-primary aria-[invalid=true]:border-destructive"
+        className="p-2! text-text-primary aria-[invalid=true]:border-destructive"
         {...props}
       />
       {hint ? (

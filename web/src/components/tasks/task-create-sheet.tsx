@@ -23,6 +23,7 @@ import { useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { MutationFeedbackEvent } from "@/components/ui/mutation-feedback";
+import { Select } from "@/components/ui/select";
 import { Sheet } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { useTaskRuntime } from "@/components/work/task-runtime-provider";
@@ -266,19 +267,19 @@ export function TaskCreateSheet({
           <label htmlFor={priorityId} className="text-sm font-medium text-text-primary">
             {TASK_CREATE_PRIORITY_LABEL}
           </label>
-          <select
+          <Select
             id={priorityId}
             value={priority}
             disabled={inert}
             onChange={(event) => setPriority(event.target.value as "" | TaskPriority)}
-            className="min-h-11 rounded-[var(--radius-md)] border border-border-subtle bg-surface px-3 text-sm text-text-primary disabled:opacity-60"
+            className="min-h-11 text-text-primary disabled:opacity-60"
           >
             {PRIORITY_CHOICES.map((choice) => (
               <option key={choice.value || "none"} value={choice.value}>
                 {choice.label}
               </option>
             ))}
-          </select>
+          </Select>
         </div>
 
         <div className="flex flex-col gap-1">

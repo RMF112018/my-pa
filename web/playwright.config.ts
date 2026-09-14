@@ -125,6 +125,34 @@ export default defineConfig({
       name: "webkit",
       use: { ...devices["Desktop Safari"], viewport: { width: 1280, height: 800 } },
     },
+    {
+      name: "mobile-webkit",
+      // WebKit at phone geometry: 393x659, touch, coarse pointer, mobile UA —
+      // the same shape of profile the `mobile` project takes from `Pixel 7`,
+      // but on the engine Safari actually ships. It exists so the coarse-pointer
+      // control-sizing contract is measured on WebKit's own layout and form
+      // controls, which resolve `<select>` and date-input intrinsics differently
+      // from Chromium.
+      //
+      // **What this lane is not.** It is not physical iOS Safari. Playwright's
+      // WebKit is not the iOS browser binary, and device emulation supplies no
+      // software keyboard, no real visual viewport (no URL bar collapse, no
+      // `visualViewport` resize on focus), no iOS focus-zoom heuristic, no
+      // installed-PWA safe areas, and no VoiceOver. Those remain WP09 and no
+      // assertion here may be read as covering them.
+      //
+      // **Why this lane runs one spec.** The rest of the suite was written
+      // against Chromium at desktop, tablet and Pixel geometry, and 8 of a
+      // sampled 48 existing tests fail on a WebKit phone profile at this head —
+      // stale-response ordering in Search, Board/Calendar operations, and Today
+      // empty/failed-refresh states. None of them is a control-sizing defect and
+      // none is this work package's to fix; widening the lane would hand the
+      // repository a permanently red project and bury the contract it exists to
+      // prove. Expanding this profile across the suite belongs to the regression
+      // campaign (WP-POSTUX-08), which can triage those eight on their merits.
+      testMatch: "**/mobile-foundation.spec.ts",
+      use: { ...devices["iPhone 15"] },
+    },
   ],
   webServer: [
     {

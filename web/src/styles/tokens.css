@@ -7,7 +7,7 @@
   --success: #26734d; --warning: #8a5a12; --destructive: #b33a3a; --on-destructive: #ffffff; --information: #2769a8;
   --space-0: 0; --space-1: .25rem; --space-2: .5rem; --space-3: .75rem; --space-4: 1rem; --space-5: 1.25rem; --space-6: 1.5rem; --space-8: 2rem; --space-10: 2.5rem; --space-12: 3rem; --space-16: 4rem;
   --radius-sm: .25rem; --radius-md: .5rem; --radius-lg: .75rem; --radius-xl: 1rem; --radius-pill: 999px;
-  --shadow-elevated: 0 16px 40px rgb(19 38 61 / 16%); --control-height: 2.75rem; --row-padding-block: .625rem; --motion-fast: 120ms; --motion-normal: 180ms;
+  --shadow-elevated: 0 16px 40px rgb(19 38 61 / 16%); --control-height: 2.75rem; --control-font-size: .875rem; --control-line-height: 1.25rem; --row-padding-block: .625rem; --motion-fast: 120ms; --motion-normal: 180ms;
   --nav-height: 3.5rem;
   --ep-source-fg: #4b6075; --ep-source-bg: #eef2f7; --ep-source-border: #a9b7c6; --ep-source-icon: #4b6075;
   --ep-ai-derived-fg: #5b3a8a; --ep-ai-derived-bg: #f2ecfa; --ep-ai-derived-border: #bda7d9; --ep-ai-derived-icon: #5b3a8a;
@@ -46,4 +46,4 @@
   --ep-pipeline-incomplete-fg: #f1c46e; --ep-pipeline-incomplete-bg: #302613; --ep-pipeline-incomplete-border: #80652d; --ep-pipeline-incomplete-icon: #f1c46e;
 }
 :root[data-density="compact"] { --control-height: 2.25rem; --row-padding-block: .375rem; }
-@media (pointer: coarse) { :root[data-density="compact"] { --control-height: 2.75rem; } }
+@media (pointer: coarse) { :root { --control-font-size: 1rem; --control-line-height: 1.5rem; } :root[data-density="compact"] { --control-height: 2.75rem; } }

@@ -153,6 +153,25 @@ describe("Create Task from Capture", () => {
     expect(offline.queueCaptureOffline).not.toHaveBeenCalled();
   });
 
+  it("puts focus back inside the reopened chooser on Back, not on the page behind it", async () => {
+    // WP02-AC-038. Returning to the chooser is not the same as being able to
+    // carry on from it: Back dismisses a focus-trapping sheet, and if focus fell
+    // to the body a keyboard or screen-reader Principal would be dropped out of
+    // the flow they are still in the middle of.
+    const { user, chooser } = await openCapture();
+    await user.click(within(chooser).getByText("Create Task"));
+    await screen.findByTestId("task-create-sheet");
+
+    await user.click(screen.getByRole("button", { name: "Back" }));
+
+    const reopened = await screen.findByTestId("capture-chooser");
+    await waitFor(() => {
+      const active = document.activeElement;
+      expect(active).not.toBe(document.body);
+      expect(reopened.contains(active)).toBe(true);
+    });
+  });
+
   it("returns focus to the control that opened Capture when the sheet closes", async () => {
     const { user, chooser } = await openCapture();
     const invoker = screen.getByTestId("capture-button-desktop");

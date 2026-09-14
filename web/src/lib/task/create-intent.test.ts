@@ -224,3 +224,189 @@ describe("CreateIntentStore", () => {
     expect(session.getPhase()).toBe("confirmed");
   });
 });
+
+/**
+ * Acceptance traceability: WP02-AC-074.
+ *
+ * Two independently-mounted create surfaces share one session, so the session must
+ * publish snapshot-relevant changes. `subscribe` returns an unsubscribe that leaves
+ * no stale listener behind (WP02-AC-074).
+ */
+describe("CreateIntentSession.subscribe", () => {
+  it("notifies a subscriber and stops after unsubscribe", () => {
+    const store = createIntentStore();
+    const session = store.openSession({ title: "Observe me" });
+    const listener = vi.fn();
+
+    const unsubscribe = session.subscribe(listener);
+    session.updateDraft({ title: "Observed" });
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    unsubscribe();
+    session.updateDraft({ title: "After unsubscribe" });
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("is safe to unsubscribe twice and retains no stale listener (WP02-AC-074)", async () => {
+    const store = createIntentStore();
+    const session = store.openSession({ title: "Stale check" });
+    const listener = vi.fn();
+
+    const unsubscribe = session.subscribe(listener);
+    unsubscribe();
+    expect(() => unsubscribe()).not.toThrow();
+
+    session.updateDraft({ title: "Still quiet" });
+    await session.submit(async () => ({ task_id: "tsk_stale0000000000" }));
+    expect(listener).not.toHaveBeenCalled();
+    expect(session.getPhase()).toBe("confirmed");
+  });
+
+  it("notifies on draft → pending → confirmed transitions", async () => {
+    const store = createIntentStore();
+    const session = store.openSession({ title: "Phase walk" });
+    const gate = deferred<{ task_id: string }>();
+    const phases: string[] = [];
+
+    session.subscribe(() => {
+      phases.push(session.snapshot().phase);
+    });
+
+    const inFlight = session.submit(async () => gate.promise);
+    expect(phases).toContain("pending");
+
+    gate.resolve({ task_id: "tsk_eeeeeeee55555555" });
+    await inFlight;
+
+    expect(phases).toContain("confirmed");
+    expect(session.getPhase()).toBe("confirmed");
+  });
+
+  it("notifies when an ambiguous failure settles", async () => {
+    const store = createIntentStore();
+    const session = store.openSession({ title: "Ambiguous notify" });
+    const phases: string[] = [];
+    session.subscribe(() => {
+      phases.push(session.snapshot().phase);
+    });
+
+    await expect(
+      session.submit(async () => {
+        throw new TypeError("response lost");
+      }),
+    ).rejects.toThrow(/response lost/);
+
+    expect(session.getPhase()).toBe("ambiguous");
+    expect(phases).toContain("ambiguous");
+  });
+
+  it("does not notify when a write leaves snapshot-relevant state unchanged", async () => {
+    const store = createIntentStore();
+    const session = store.openSession({ title: "No-op" });
+    const listener = vi.fn();
+    session.subscribe(listener);
+
+    session.updateDraft({});
+    session.updateDraft({ title: "No-op" });
+    expect(listener).not.toHaveBeenCalled();
+
+    const gate = deferred<{ task_id: string }>();
+    const inFlight = session.submit(async () => gate.promise);
+    listener.mockClear();
+
+    // Refused concurrent submit changes nothing.
+    const refused = await session.submit(async () => ({ task_id: "never" }));
+    expect(refused).toMatchObject({ refused: true });
+    expect(listener).not.toHaveBeenCalled();
+
+    gate.resolve({ task_id: "tsk_ffffffff66666666" });
+    await inFlight;
+  });
+
+  it("keeps notifying other listeners when one throws and leaves the session intact", async () => {
+    const store = createIntentStore();
+    const session = store.openSession({ title: "Throwing listener" });
+    const after = vi.fn();
+
+    session.subscribe(() => {
+      throw new Error("listener exploded");
+    });
+    session.subscribe(after);
+
+    expect(() => session.updateDraft({ title: "Edited" })).not.toThrow();
+    expect(after).toHaveBeenCalled();
+    expect(session.getDraft().title).toBe("Edited");
+
+    const outcome = await session.submit(async () => ({ task_id: "tsk_99999999aaaaaaaa" }));
+    expect(outcome).toMatchObject({ refused: false });
+    expect(session.getPhase()).toBe("confirmed");
+  });
+
+  it("does not skip a listener that is unsubscribed during notification", () => {
+    const store = createIntentStore();
+    const session = store.openSession({ title: "Reentrant" });
+    const second = vi.fn();
+
+    const unsubscribeSecond = () => unsubSecond();
+    const first = vi.fn(() => {
+      unsubscribeSecond();
+    });
+    session.subscribe(first);
+    const unsubSecond = session.subscribe(second);
+
+    session.updateDraft({ title: "Reentrant edit" });
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+
+    session.updateDraft({ title: "Reentrant edit 2" });
+    expect(first).toHaveBeenCalledTimes(2);
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies on abandon and on retry of an ambiguous intent", async () => {
+    const store = createIntentStore();
+    const session = store.openSession({ title: "Retry notify" });
+    const phases: string[] = [];
+    session.subscribe(() => {
+      phases.push(session.snapshot().phase);
+    });
+
+    await expect(
+      session.submit(async () => {
+        throw Object.assign(new Error("gateway"), { status: 503 });
+      }),
+    ).rejects.toMatchObject({ status: 503 });
+    expect(phases).toContain("ambiguous");
+
+    phases.length = 0;
+    await session.retry(async () => ({ task_id: "tsk_77777777bbbbbbbb" }));
+    expect(phases).toContain("pending");
+    expect(phases).toContain("confirmed");
+
+    const other = store.openSession({ title: "Abandon notify" });
+    const abandonListener = vi.fn();
+    other.subscribe(abandonListener);
+    other.abandon();
+    expect(abandonListener).toHaveBeenCalled();
+    expect(other.getPhase()).toBe("abandoned");
+  });
+
+  it("notifies when the dispatching projection clears", async () => {
+    const store = createIntentStore();
+    const session = store.openSession({ title: "Dispatch flag" });
+    const dispatching: boolean[] = [];
+    session.subscribe(() => {
+      dispatching.push(session.snapshot().dispatching);
+    });
+
+    await expect(
+      session.submit(async () => {
+        throw Object.assign(new Error("bad title"), { status: 400, code: "validation" });
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+
+    expect(dispatching).toContain(true);
+    expect(dispatching[dispatching.length - 1]).toBe(false);
+    expect(session.snapshot().dispatching).toBe(false);
+  });
+});

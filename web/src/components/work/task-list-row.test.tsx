@@ -1223,6 +1223,51 @@ describe("TaskListRow — the checkbox's reserved target is operable (WP03-AC-06
     expect(handles.onSelect).toHaveBeenCalledWith(LIST_ROW.task_id);
   });
 
+  it("keeps a click on the padding from reaching a surface rendered behind the row", async () => {
+    /*
+      The reason the wrapper stops propagation, and the only thing that proves
+      it: with the handler removed the label still selects, so every other test
+      here stays green.
+
+      The ancestor is a React handler, not `addEventListener`. React delegates
+      to the root container, so a synthetic `stopPropagation` runs after the
+      native event has already bubbled past any intermediate native listener —
+      it governs React ancestors, which is how a row-level affordance would
+      actually be built. Asserting against a native listener would test React's
+      delegation model rather than this guard.
+
+      Nothing above the row listens today — row root, <li>, <ul> and the
+      perspective region all carry none — so this pins a dormant invariant: the
+      one a future row-level open would break by silently selecting as well as
+      opening.
+    */
+    const user = userEvent.setup();
+    const behind = vi.fn();
+    const onSelect = vi.fn<TaskListRowProps["onSelect"]>();
+    stubFetch();
+    render(
+      <TaskRuntimeProvider principalId="prin_test" sessionEpoch="epoch-test">
+        <div onClick={behind}>
+          <TaskListRow
+            task={LIST_ROW}
+            selected={false}
+            clock={CLOCK}
+            onSelect={onSelect}
+            onOpen={vi.fn()}
+            onMutationConfirmed={vi.fn()}
+          />
+        </div>
+      </TaskRuntimeProvider>,
+    );
+    await hydrated();
+
+    const input = within(row()).getByRole("checkbox", { name: `Select ${TITLE}` });
+    await user.click(input.closest("label")!);
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(behind, "a click on the checkbox padding must not reach the row's surface").not.toHaveBeenCalled();
+  });
+
   it("keeps the accessible name on the input rather than moving it to the wrapper", async () => {
     stubFetch();
     renderRow();

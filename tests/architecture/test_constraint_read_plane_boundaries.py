@@ -1,6 +1,6 @@
-"""The Constraint read plane stays inside the boundaries WP03 was authorised to occupy.
+"""The Constraint read plane stays bounded while Run 01 adds integrity DDL.
 
-WP03 adds a canonical backend read plane: a pure domain read-model module, a
+The earlier read-plane WP03 added a canonical backend read plane: a pure domain read-model module, a
 stateless application read service, and ten repository methods that answer
 questions. It adds no transport, no capability, no schema and no writer. That
 sentence is the work package's whole shape, and every clause of it is a boundary
@@ -30,15 +30,13 @@ Each rule below is one of those clauses, and each names the defect it forecloses
   would arrive by the most ordinary route there is: copying a persisted record's
   field list into the view that renders it. `PersistedConstraintRecord` is the one
   exemption, and this module requires it to be the *only* one.
-* **No Constraint migration, and the Constraint declarations unchanged.** WP03's
-  plan states it adds no migration and edits no table declaration (plan §A). A
-  read plane that quietly added an index or a column would be a schema change
-  delivered under a read package's review. Both rules are scoped to the Constraint
-  tables rather than to the repository: an earlier draft froze the whole revision
-  set and the whole of `tables.py`, and an unrelated GoodNotes revision landing on
-  `main` turned it red — this guard reporting another team's migration as a WP03
-  defect. A tripwire that fires on work it does not govern teaches people to
-  re-pin it without reading, which is how a guard stops guarding.
+* **Only bounded Constraint migrations and declarations.** The earlier read-plane
+  WP03 added no migration. Run 01 now adds one reviewed integrity revision for
+  same-Principal references and settings history. The guard therefore admits
+  exactly the original Constraint revision, the sync revision, and Run 01's
+  integrity revision. The declaration digest is re-pinned to the exact narrow
+  Constraint-table set this read-plane guard owns. Unrelated migrations remain
+  invisible.
 * **Sync read boundary.** WP02 shipped the sync tables; WP11 will ship the sync
   behaviour. WP03 reads four of those columns to derive four states and does
   nothing else — no run, no lease, no baseline write, no workbook, no connector.
@@ -92,11 +90,11 @@ PERSISTENCE_MODULE: Final = (
 TABLES_MODULE: Final = ROOT / "src" / "my_pa" / "infrastructure" / "persistence" / "tables.py"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 
-#: The revision that installed the Constraint tables. WP03 queries what it built
-#: and adds nothing beside it, so it is the one revision permitted to name a
-#: Constraint table and the one that must stay on the path to head.
+#: The three revisions deliberately permitted to name Constraint tables: the
+#: original persistence plane, bounded sync additions, and Run 01 integrity DDL.
 WP02_CONSTRAINT_REVISION: Final = "2774329487be"
 WP11_CONSTRAINT_SYNC_REVISION: Final = "b8e4d6f20a11"
+RUN01_CONSTRAINT_INTEGRITY_REVISION: Final = "e6a4c2f91b73"
 
 #: The fourteen tables WP02 installed plus WP11's three additive sync tables,
 #: including the database-only quarantine for predecessor-unbound history.
@@ -135,7 +133,7 @@ CONSTRAINT_TABLES: Final = frozenset(
 #: database CHECK so predecessor receipts remain truthful; it is not a public
 #: `ConstraintSyncResolution` member.
 BASE_CONSTRAINT_TABLES_SHA256: Final = (
-    "e2e628004c39454d437de0da38a1a2141250c264ccae7ab1fab8ff4ff6bf4c17"
+    "0e64d1b953d088b2f15bd2c941ff3f3e9fa23d36566ddf19ee39e0e2c1ec6e8e"
 )
 
 #: Package roots the application read service may never reach. `infrastructure`
@@ -687,34 +685,24 @@ def test_the_read_plane_names_no_lease_workbook_or_external_connector() -> None:
 
 
 def test_only_bounded_constraint_schema_revisions_touch_constraint_tables() -> None:
-    """WP03 ships no Constraint migration.
+    """Only the three reviewed Constraint schema revisions name these tables.
 
-    Stated as what WP03 actually promised rather than as a frozen snapshot of
-    `migrations/versions/`. An earlier draft of this guard pinned the revision
-    count and a digest of the filenames, and an unrelated GoodNotes revision
-    landing on `main` turned it red — a guard named for this work package
-    reporting another team's migration as a WP03 defect. A tripwire that fires on
-    work it does not govern trains people to re-pin it without reading, which is
-    how a guard stops guarding.
+    Stated as a closed allowlist rather than as a frozen snapshot of every file
+    in `migrations/versions/`. An unrelated migration therefore stays invisible,
+    while a fourth revision naming a Constraint table fails this guard.
 
-    So the question asked here is the narrow one: does any revision other than
-    WP02's own perform DDL that names a Constraint table? Unrelated migrations
-    are invisible to it, and a WP03 migration could not be.
-
-    **What this does not cover, stated plainly.** WP03's promise is the wider
-    "adds no migration", and a revision touching only non-Constraint tables would
-    pass here. Closing that half needs a diff against the merge base, which is
-    precisely what CI's depth-1 clone cannot supply — the constraint that forced
-    this rewrite in the first place. It is therefore a review-time fact rather
-    than a CI-time invariant: `git diff origin/main..HEAD -- migrations/` is
-    empty on this branch, and a reviewer can confirm it in one command. A guard
-    that faked the check by re-freezing the revision set would be the tripwire
-    this rewrite removed.
+    Run 01's revision is intentionally admitted for same-Principal Project
+    foreign keys and append-only settings history. This does not authorize a
+    further migration or a broader table-declaration change.
     """
     offenders: dict[str, list[str]] = {}
     for path in sorted(MIGRATIONS.glob("*.py")):
         revision = _declared_revision(path)
-        if revision in {WP02_CONSTRAINT_REVISION, WP11_CONSTRAINT_SYNC_REVISION}:
+        if revision in {
+            WP02_CONSTRAINT_REVISION,
+            WP11_CONSTRAINT_SYNC_REVISION,
+            RUN01_CONSTRAINT_INTEGRITY_REVISION,
+        }:
             continue
         named = sorted(
             {table for table in CONSTRAINT_TABLES if table in _code_strings(_tree(path))}
@@ -722,11 +710,10 @@ def test_only_bounded_constraint_schema_revisions_touch_constraint_tables() -> N
         if named:
             offenders[path.name] = named
     assert offenders == {}, (
-        f"revisions outside WP02's {WP02_CONSTRAINT_REVISION} and WP11's "
-        f"{WP11_CONSTRAINT_SYNC_REVISION} name Constraint "
-        f"tables: {offenders}. WP03 is a read plane over the schema WP02 already "
-        "installed. If an index or a column is genuinely needed, it is a schema "
-        "change and belongs in its own reviewed migration, not in a read package"
+        f"revisions outside WP02's {WP02_CONSTRAINT_REVISION}, WP11's "
+        f"{WP11_CONSTRAINT_SYNC_REVISION}, and Run 01's "
+        f"{RUN01_CONSTRAINT_INTEGRITY_REVISION} name Constraint tables: {offenders}. "
+        "Any further DDL requires its own reviewed migration and explicit guard update"
     )
     assert any(
         _declared_revision(path) == WP02_CONSTRAINT_REVISION for path in MIGRATIONS.glob("*.py")
@@ -738,6 +725,10 @@ def test_only_bounded_constraint_schema_revisions_touch_constraint_tables() -> N
         _declared_revision(path) == WP11_CONSTRAINT_SYNC_REVISION
         for path in MIGRATIONS.glob("*.py")
     ), f"WP11's revision {WP11_CONSTRAINT_SYNC_REVISION} is missing"
+    assert any(
+        _declared_revision(path) == RUN01_CONSTRAINT_INTEGRITY_REVISION
+        for path in MIGRATIONS.glob("*.py")
+    ), f"Run 01's revision {RUN01_CONSTRAINT_INTEGRITY_REVISION} is missing"
 
 
 def test_the_migration_graph_has_exactly_one_head_descending_from_wp02() -> None:

@@ -6912,7 +6912,7 @@ tasks = Table(
     Column("evidence_state", Text, nullable=False, server_default=text("'proposed'")),
     Column("origin_kind", Text, nullable=False),
     Column("origin_evidence_ref", Text),
-    Column("project_id", Text, ForeignKey(f"{SCHEMA}.projects.project_id")),
+    Column("project_id", Text),
     Column("situation_id", Text, ForeignKey(f"{SCHEMA}.situations.situation_id")),
     Column("due_at", DateTime(timezone=True)),
     Column("opened_at", DateTime(timezone=True), nullable=False),
@@ -7025,6 +7025,11 @@ tasks = Table(
         ["principal_id", "commitment_id"],
         [f"{SCHEMA}.commitments.principal_id", f"{SCHEMA}.commitments.commitment_id"],
         name="tasks_commitment_is_same_principal",
+    ),
+    ForeignKeyConstraint(
+        ["project_id", "principal_id"],
+        [f"{SCHEMA}.projects.project_id", f"{SCHEMA}.projects.principal_id"],
+        name="a_task_names_a_project_in_its_principal",
     ),
     Index("tasks_by_principal", "principal_id"),
     Index("tasks_by_principal_state", "principal_id", "state"),
@@ -11226,7 +11231,7 @@ constraint_project_settings = Table(
     "constraint_project_settings",
     METADATA,
     Column("principal_id", Text, nullable=False),
-    Column("project_id", Text, ForeignKey(f"{SCHEMA}.projects.project_id"), nullable=False),
+    Column("project_id", Text, nullable=False),
     Column("timezone_name", Text, nullable=False),
     Column("version", Integer, nullable=False, server_default=text("1")),
     Column("created_at", DateTime(timezone=True), nullable=False),
@@ -11242,6 +11247,136 @@ constraint_project_settings = Table(
         name="a_constraint_project_timezone_is_a_bare_name",
     ),
     CheckConstraint("version >= 1", name="a_constraint_settings_version_is_positive"),
+    ForeignKeyConstraint(
+        ["project_id", "principal_id"],
+        [f"{SCHEMA}.projects.project_id", f"{SCHEMA}.projects.principal_id"],
+        name="constraint_settings_project_is_same_principal",
+    ),
+)
+
+#: One append-only receipt per attempted explicit Project Controls settings
+#: configuration. This is settings-specific replay evidence, not a second
+#: Project mutation plane: Project identity, version, and generic history stay
+#: owned by `projects` / `project_history`.
+constraint_project_settings_history = Table(
+    "constraint_project_settings_history",
+    METADATA,
+    Column("history_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("project_id", Text, nullable=False),
+    Column("action", Text, nullable=False),
+    Column("actor", Text, nullable=False),
+    Column("outcome", Text, nullable=False),
+    Column("before_settings_version", Integer),
+    Column("after_settings_version", Integer),
+    Column("resulting_timezone_name", Text),
+    Column("resulting_settings_updated_at", DateTime(timezone=True)),
+    Column("idempotency_key", Text, nullable=False),
+    Column("request_digest", Text, nullable=False),
+    Column("client_context", Text),
+    Column("correlation_id", Text),
+    Column("failure_code", Text),
+    Column("failure_detail", Text),
+    Column("occurred_at", DateTime(timezone=True), nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _matches(
+        "history_id",
+        r"^cpsh_[A-Za-z0-9]{8,64}$",
+        name="a_constraint_settings_history_id_is_an_opaque_identifier",
+    ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("project_id", IdKind.PROJECT),
+    CheckConstraint("action = 'configure'", name="a_constraint_settings_history_action_is_known"),
+    CheckConstraint(
+        "actor IN ('assistant', 'principal', 'system')",
+        name="a_constraint_settings_history_actor_is_known",
+    ),
+    CheckConstraint(
+        "outcome IN ('applied', 'no_op', 'rejected')",
+        name="a_constraint_settings_history_outcome_is_known",
+    ),
+    CheckConstraint(
+        "before_settings_version IS NULL OR before_settings_version >= 1",
+        name="a_constraint_settings_history_before_version_is_positive",
+    ),
+    CheckConstraint(
+        "after_settings_version IS NULL OR after_settings_version >= 1",
+        name="a_constraint_settings_history_after_version_is_positive",
+    ),
+    CheckConstraint(
+        "resulting_timezone_name IS NULL OR "
+        "(length(trim(resulting_timezone_name)) BETWEEN 1 AND 64 "
+        "AND resulting_timezone_name !~ '\\s')",
+        name="a_constraint_settings_history_timezone_is_bounded",
+    ),
+    CheckConstraint(
+        "idempotency_key ~ '^[A-Za-z0-9_-]{8,128}$'",
+        name="a_constraint_settings_history_idempotency_key_is_bounded",
+    ),
+    CheckConstraint(
+        "request_digest ~ '^[0-9a-f]{64}$'",
+        name="a_constraint_settings_history_request_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "client_context IS NULL OR length(trim(client_context)) BETWEEN 1 AND 128",
+        name="a_constraint_settings_history_client_context_is_bounded",
+    ),
+    CheckConstraint(
+        "correlation_id IS NULL OR correlation_id ~ '^corr_[A-Za-z0-9]{8,64}$'",
+        name="a_constraint_settings_history_correlation_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        "failure_code IS NULL OR failure_code ~ '^[a-z][a-z0-9_]{0,63}$'",
+        name="a_constraint_settings_history_failure_code_is_bounded",
+    ),
+    CheckConstraint(
+        "failure_detail IS NULL OR length(trim(failure_detail)) BETWEEN 1 AND 256",
+        name="a_constraint_settings_history_failure_detail_is_bounded",
+    ),
+    CheckConstraint(
+        "outcome <> 'applied' OR (after_settings_version IS NOT NULL "
+        "AND after_settings_version = coalesce(before_settings_version, 0) + 1)",
+        name="an_applied_constraint_settings_change_advances_its_version",
+    ),
+    CheckConstraint(
+        "outcome <> 'no_op' OR (before_settings_version IS NOT NULL "
+        "AND after_settings_version IS NOT NULL "
+        "AND after_settings_version = before_settings_version)",
+        name="a_no_op_constraint_settings_change_preserves_its_version",
+    ),
+    CheckConstraint(
+        "outcome <> 'rejected' OR "
+        "after_settings_version IS NOT DISTINCT FROM before_settings_version",
+        name="a_rejected_constraint_settings_change_writes_no_new_version",
+    ),
+    CheckConstraint(
+        "(outcome IN ('applied', 'no_op')) = (resulting_timezone_name IS NOT NULL) "
+        "AND (outcome IN ('applied', 'no_op')) = "
+        "(resulting_settings_updated_at IS NOT NULL)",
+        name="a_successful_constraint_settings_change_records_its_snapshot",
+    ),
+    CheckConstraint(
+        "(outcome = 'rejected') = (failure_code IS NOT NULL)",
+        name="only_a_rejected_constraint_settings_change_records_failure",
+    ),
+    CheckConstraint(
+        "failure_detail IS NULL OR outcome = 'rejected'",
+        name="failure_detail_belongs_only_to_a_rejected_settings_change",
+    ),
+    CheckConstraint(
+        "recorded_at >= occurred_at",
+        name="settings_history_is_recorded_after_it_occurs",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "idempotency_key",
+        name="constraint_settings_history_idempotency_is_unique_per_principal",
+    ),
+    ForeignKeyConstraint(
+        ["project_id", "principal_id"],
+        [f"{SCHEMA}.projects.project_id", f"{SCHEMA}.projects.principal_id"],
+        name="a_constraint_settings_history_names_a_project_in_its_principal",
+    ),
 )
 
 #: A Constraint category: the prefix a Constraint code is issued under, and the
@@ -11255,7 +11390,7 @@ constraint_categories = Table(
     METADATA,
     Column("category_id", Text, primary_key=True),
     Column("principal_id", Text, nullable=False),
-    Column("project_id", Text, ForeignKey(f"{SCHEMA}.projects.project_id"), nullable=False),
+    Column("project_id", Text, nullable=False),
     Column("prefix", Text, nullable=False),
     Column("title", Text, nullable=False),
     Column("description", Text),
@@ -11302,6 +11437,11 @@ constraint_categories = Table(
         "category_id",
         name="constraint_categories_principal_category_is_unique",
     ),
+    ForeignKeyConstraint(
+        ["project_id", "principal_id"],
+        [f"{SCHEMA}.projects.project_id", f"{SCHEMA}.projects.principal_id"],
+        name="constraint_categories_project_is_same_principal",
+    ),
     Index("constraint_categories_by_principal_project", "principal_id", "project_id"),
 )
 
@@ -11315,7 +11455,7 @@ project_constraints = Table(
     METADATA,
     Column("constraint_id", Text, primary_key=True),
     Column("principal_id", Text, nullable=False),
-    Column("project_id", Text, ForeignKey(f"{SCHEMA}.projects.project_id")),
+    Column("project_id", Text),
     Column("category_id", Text),
     Column("constraint_code", Text),
     Column("description", Text),
@@ -11421,6 +11561,11 @@ project_constraints = Table(
         "principal_id",
         "constraint_id",
         name="project_constraints_principal_constraint_is_unique",
+    ),
+    ForeignKeyConstraint(
+        ["project_id", "principal_id"],
+        [f"{SCHEMA}.projects.project_id", f"{SCHEMA}.projects.principal_id"],
+        name="project_constraints_project_is_same_principal",
     ),
     ForeignKeyConstraint(
         ["principal_id", "category_id"],

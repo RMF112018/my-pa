@@ -3,8 +3,9 @@
 `T07-01`, `T07-02` and `T07-03`. Three separate claims, and they fail in
 different ways.
 
-**The names.** The twelve `constraints.` and `constraint_categories.` authoring
-members, with exact string values; one `Purpose`; and the two resulting sizes.
+**The names.** The original twelve `constraints.` and `constraint_categories.`
+authoring members plus the two Run 01 authoring names, with exact string values;
+one `Purpose`; and the two resulting sizes.
 A member spelled `constraints.close-follow-up` would be a different wire name on
 every transport, so the values are asserted rather than the members.
 
@@ -14,7 +15,7 @@ no capability holds both. That disjointness is the read/authoring separation
 `CM-BE-AC-076` asks for, and it is now a property of two mapped sets rather than
 of one absent one.
 
-**The classification.** All twelve are write capabilities; exactly
+**The classification.** All fourteen are write capabilities; exactly
 `constraints.create` and `constraint_categories.create` are additive; none is
 operator-only. This is the assertion `N-03` records the need for:
 `tests/unit/test_policy.py` walks every capability against `_PERMITTED_PURPOSES`
@@ -24,9 +25,8 @@ default of `False`. The consequence is not bookkeeping —
 `_WRITE_CAPABILITIES - _ADDITIVE_WRITE_CAPABILITIES`, so a capability wrongly
 called additive is a lifecycle transition annotated as a plain insert.
 
-And the negative: no `constraint_sync.*` capability and no sync purpose exists.
-That plane is `PC-CM-IMP-WP11`'s, and a name minted here would be one nothing
-dispatches.
+The synchronisation vocabulary also exists now: `PC-CM-IMP-WP11` admits exactly
+seven `constraint_sync.*` capabilities and its two bounded purposes.
 """
 
 from __future__ import annotations
@@ -44,9 +44,10 @@ from my_pa.domain.identity.operation import (
 )
 from my_pa.domain.identity.purpose import Purpose
 
-#: The twelve, by member and by the exact value each publishes.
+#: The fourteen, by member and by the exact value each publishes.
 AUTHORING: Final[tuple[tuple[Capability, str], ...]] = (
     (Capability.CONSTRAINTS_CREATE, "constraints.create"),
+    (Capability.CONSTRAINTS_CREATE_PUBLISHED, "constraints.create_published"),
     (Capability.CONSTRAINTS_PUBLISH, "constraints.publish"),
     (Capability.CONSTRAINTS_UPDATE, "constraints.update"),
     (Capability.CONSTRAINTS_TRANSITION, "constraints.transition"),
@@ -58,6 +59,7 @@ AUTHORING: Final[tuple[tuple[Capability, str], ...]] = (
     (Capability.CONSTRAINT_CATEGORIES_UPDATE, "constraint_categories.update"),
     (Capability.CONSTRAINT_CATEGORIES_DEACTIVATE, "constraint_categories.deactivate"),
     (Capability.CONSTRAINT_CATEGORIES_REORDER, "constraint_categories.reorder"),
+    (Capability.PROJECT_CONTROLS_CONFIGURE, "project_controls.configure"),
 )
 
 READS: Final[tuple[Capability, ...]] = (
@@ -66,11 +68,16 @@ READS: Final[tuple[Capability, ...]] = (
     Capability.CONSTRAINTS_SEARCH,
     Capability.CONSTRAINTS_HISTORY,
     Capability.CONSTRAINTS_OVERVIEW,
+    Capability.CONSTRAINTS_PORTFOLIO_LIST,
+    Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
+    Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
     Capability.CONSTRAINT_CATEGORIES_LIST,
+    Capability.PROJECT_CONTROLS_STATUS,
 )
 
-#: The only two of the twelve that add a durable record and reach no existing
-#: one. Every other one replaces, transitions, supersedes or retires state.
+#: Four of the fourteen are creation/configuration entry points. The two below
+#: are the only ones that add a durable record and reach no existing one; every
+#: other authoring capability changes or depends on existing Project state.
 ADDITIVE: Final[frozenset[Capability]] = frozenset(
     {Capability.CONSTRAINTS_CREATE, Capability.CONSTRAINT_CATEGORIES_CREATE}
 )
@@ -98,7 +105,7 @@ def test_the_authoring_purpose_exists_and_is_the_only_one_added() -> None:
 
 def test_the_two_vocabularies_are_the_sizes_this_package_states() -> None:
     """The counts the census documents and the migration are written against."""
-    assert len(Capability) == 166
+    assert len(Capability) == 172
     assert len(Purpose) == 45
 
 
@@ -140,7 +147,7 @@ def test_every_constraint_read_is_still_granted_only_the_read_purpose(
     assert permitted_purposes(capability) == frozenset({Purpose.CONSTRAINT_READ})
 
 
-def test_the_authoring_purpose_reaches_the_twelve_and_nothing_else() -> None:
+def test_the_authoring_purpose_reaches_the_fourteen_and_nothing_else() -> None:
     """Read from the purpose's end, which is where a quiet widening would show."""
     reached = {
         capability
@@ -197,9 +204,9 @@ def test_no_authoring_capability_is_operator_only(capability: Capability) -> Non
     assert not is_operator_only(capability)
 
 
-def test_exactly_ten_of_the_twelve_are_destructive() -> None:
+def test_every_non_additive_constraint_authoring_capability_is_destructive() -> None:
     destructive = {pair[0] for pair in AUTHORING if is_destructive_capability(pair[0])}
-    assert len(destructive) == 10
+    assert len(destructive) == len(AUTHORING) - len(ADDITIVE) == 12
     assert destructive == {pair[0] for pair in AUTHORING} - ADDITIVE
 
 

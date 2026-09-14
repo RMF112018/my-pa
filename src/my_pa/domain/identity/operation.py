@@ -797,9 +797,9 @@ class Capability(StrEnum):
     CANVAS_WORKSPACE_GET = "canvas.workspace.get"
     CANVAS_WORKSPACE_PUT = "canvas.workspace.put"
 
-    #: `PC-CM-IMP-WP04`. The six Constraint Management reads, and nothing else:
-    #: the plane's authoring and its SharePoint synchronisation are deliberately
-    #: absent, so a grant issued over this family cannot reach either. Each name
+    #: `PC-CM-IMP-WP04` and Run 01. The ten Constraint Management reads, and
+    #: nothing else: a grant issued over this family cannot reach authoring or
+    #: SharePoint synchronisation. Each implemented name
     #: is served by exactly one method of `application.constraints`'s read
     #: service, which is where every derived flag — Overdue, Due Soon, In My
     #: Court, the recent filters, the grouping, the cursor and the overview
@@ -812,7 +812,7 @@ class Capability(StrEnum):
     #: under the `constraints.` prefix would make a grant issued to read the
     #: scheme look like one issued to read the records filed under it.
     #:
-    #: None of the six is in `_WRITE_CAPABILITIES`, `_ADDITIVE_WRITE_CAPABILITIES`
+    #: None of these reads is in `_WRITE_CAPABILITIES`, `_ADDITIVE_WRITE_CAPABILITIES`
     #: or `_OPERATOR_ONLY`, and each absence is a decision rather than an
     #: omission. They change no product-owned state, so the write sets would be
     #: false; and none widens the scope a later request is evaluated against,
@@ -824,14 +824,22 @@ class Capability(StrEnum):
     CONSTRAINTS_SEARCH = "constraints.search"
     CONSTRAINTS_HISTORY = "constraints.history"
     CONSTRAINTS_OVERVIEW = "constraints.overview"
+    CONSTRAINTS_PORTFOLIO_LIST = "constraints.portfolio_list"
+    CONSTRAINTS_PORTFOLIO_SEARCH = "constraints.portfolio_search"
+    CONSTRAINTS_PORTFOLIO_OVERVIEW = "constraints.portfolio_overview"
     CONSTRAINT_CATEGORIES_LIST = "constraint_categories.list"
-    #: Constraint Management authoring (PC-CM-IMP-WP07). The twelve canonical
-    #: mutations of the plane WP06 implemented, admitted here so the one entry
-    #: point can dispatch them. Every one maps to `Purpose.CONSTRAINT_AUTHORING`
-    #: and to nothing else, and none of the six reads above gains it: a grant
+    #: Run 01 reserves the atomic published-create and explicit Project Controls
+    #: configuration/status names alongside the three portfolio reads above.
+    #: Their handlers land in later work packages; enum admission here keeps the
+    #: public and frozen audit vocabularies synchronized while the manifest
+    #: truthfully reports them `not_implemented`.
+    #: Constraint Management authoring (PC-CM-IMP-WP07 and Run 01). Fourteen
+    #: canonical names are admitted; the two Run 01 names remain unavailable
+    #: until their handlers land. Every one maps to `Purpose.CONSTRAINT_AUTHORING`
+    #: and to nothing else, and none of the ten reads above gains it: a grant
     #: issued to read a Project's Register must not also change what is in it.
     #:
-    #: **Ten of the twelve are destructive and two are additive**, which is a
+    #: **Twelve of the fourteen are destructive and two are additive**, which is a
     #: statement about existing state rather than about deletion. `is_destructive_
     #: capability` is `_WRITE_CAPABILITIES - _ADDITIVE_WRITE_CAPABILITIES`, and
     #: `_ADDITIVE_WRITE_CAPABILITIES` means what its comment below says: a write
@@ -854,6 +862,7 @@ class Capability(StrEnum):
     #: with their own read/authoring purposes; they do not widen these direct
     #: Constraint and Category mutation grants.
     CONSTRAINTS_CREATE = "constraints.create"
+    CONSTRAINTS_CREATE_PUBLISHED = "constraints.create_published"
     CONSTRAINTS_PUBLISH = "constraints.publish"
     CONSTRAINTS_UPDATE = "constraints.update"
     CONSTRAINTS_TRANSITION = "constraints.transition"
@@ -865,6 +874,8 @@ class Capability(StrEnum):
     CONSTRAINT_CATEGORIES_UPDATE = "constraint_categories.update"
     CONSTRAINT_CATEGORIES_DEACTIVATE = "constraint_categories.deactivate"
     CONSTRAINT_CATEGORIES_REORDER = "constraint_categories.reorder"
+    PROJECT_CONTROLS_CONFIGURE = "project_controls.configure"
+    PROJECT_CONTROLS_STATUS = "project_controls.status"
     # PC-CM-IMP-WP11. Provider-neutral synchronization receives normalized
     # logical rows; these capabilities never read or write a workbook.
     CONSTRAINT_SYNC_STATE = "constraint_sync.state"
@@ -1345,8 +1356,12 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.CONSTRAINTS_SEARCH: frozenset({Purpose.CONSTRAINT_READ}),
         Capability.CONSTRAINTS_HISTORY: frozenset({Purpose.CONSTRAINT_READ}),
         Capability.CONSTRAINTS_OVERVIEW: frozenset({Purpose.CONSTRAINT_READ}),
+        Capability.CONSTRAINTS_PORTFOLIO_LIST: frozenset({Purpose.CONSTRAINT_READ}),
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH: frozenset({Purpose.CONSTRAINT_READ}),
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW: frozenset({Purpose.CONSTRAINT_READ}),
         Capability.CONSTRAINT_CATEGORIES_LIST: frozenset({Purpose.CONSTRAINT_READ}),
         Capability.CONSTRAINTS_CREATE: frozenset({Purpose.CONSTRAINT_AUTHORING}),
+        Capability.CONSTRAINTS_CREATE_PUBLISHED: frozenset({Purpose.CONSTRAINT_AUTHORING}),
         Capability.CONSTRAINTS_PUBLISH: frozenset({Purpose.CONSTRAINT_AUTHORING}),
         Capability.CONSTRAINTS_UPDATE: frozenset({Purpose.CONSTRAINT_AUTHORING}),
         Capability.CONSTRAINTS_TRANSITION: frozenset({Purpose.CONSTRAINT_AUTHORING}),
@@ -1358,6 +1373,8 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.CONSTRAINT_CATEGORIES_UPDATE: frozenset({Purpose.CONSTRAINT_AUTHORING}),
         Capability.CONSTRAINT_CATEGORIES_DEACTIVATE: frozenset({Purpose.CONSTRAINT_AUTHORING}),
         Capability.CONSTRAINT_CATEGORIES_REORDER: frozenset({Purpose.CONSTRAINT_AUTHORING}),
+        Capability.PROJECT_CONTROLS_CONFIGURE: frozenset({Purpose.CONSTRAINT_AUTHORING}),
+        Capability.PROJECT_CONTROLS_STATUS: frozenset({Purpose.CONSTRAINT_READ}),
         Capability.CONSTRAINT_SYNC_STATE: frozenset({Purpose.CONSTRAINT_SYNC_READ}),
         Capability.CONSTRAINT_SYNC_DELTA: frozenset({Purpose.CONSTRAINT_SYNC_READ}),
         Capability.CONSTRAINT_SYNC_CONFLICTS: frozenset({Purpose.CONSTRAINT_SYNC_READ}),
@@ -1481,11 +1498,13 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_AFFILIATIONS_REVISE,
         Capability.ENTITIES_AFFILIATIONS_END,
         Capability.CANVAS_WORKSPACE_PUT,
-        # PC-CM-IMP-WP07. All twelve Constraint authoring names change
-        # product-owned state, so all twelve are here. The six Constraint reads
+        # The Constraint authoring names change product-owned state. The
+        # original twelve plus Run 01 atomic create and settings configure are
+        # here. The Constraint reads
         # are deliberately still absent, which is what keeps their generated MCP
         # tools annotated `read_only_hint`.
         Capability.CONSTRAINTS_CREATE,
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
         Capability.CONSTRAINTS_PUBLISH,
         Capability.CONSTRAINTS_UPDATE,
         Capability.CONSTRAINTS_TRANSITION,
@@ -1497,6 +1516,7 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.CONSTRAINT_CATEGORIES_UPDATE,
         Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
         Capability.CONSTRAINT_CATEGORIES_REORDER,
+        Capability.PROJECT_CONTROLS_CONFIGURE,
         Capability.CONSTRAINT_SYNC_PREVIEW,
         Capability.CONSTRAINT_SYNC_APPLY,
         Capability.CONSTRAINT_SYNC_ACKNOWLEDGE,

@@ -24,7 +24,7 @@ from typing import Any, Final
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
 from my_pa.application.goodnotes_content import content_payload
 from my_pa.application.goodnotes_semantics import work_payload
-from my_pa.application.service import _constraint_payload
+from my_pa.application.service import _HANDLERS, _constraint_payload
 from my_pa.contracts.ports import CaptureSearchMatch, DirectedReceipt, MutationRecordFamily
 from my_pa.contracts.v1.canvas_workspace import (
     CanvasPointView,
@@ -301,7 +301,7 @@ def _review_decide() -> dict[str, Any]:
 
 def _capabilities_get() -> dict[str, Any]:
     """`capabilities.get` handler shape: manifest, readiness, and worker planes."""
-    manifest = build_capability_manifest(implemented=frozenset(Capability), limits=LIMITS)
+    manifest = build_capability_manifest(implemented=frozenset(_HANDLERS), limits=LIMITS)
     readiness = build_readiness_report(manifest, model_route=ModelRoutePolicy.DISABLED)
     worker_planes: list[dict[str, object]] = [
         {
@@ -1681,6 +1681,14 @@ def _constraint_categories_list() -> dict[str, Any]:
 
 def test_committed_python_fixtures_match_live_model_dumps() -> None:
     """A live Python dump still equals the bytes Vitest decodes, parsed as JSON."""
+    assert set(Capability) - set(_HANDLERS) == {
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
+        Capability.CONSTRAINTS_PORTFOLIO_LIST,
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
+        Capability.PROJECT_CONTROLS_CONFIGURE,
+        Capability.PROJECT_CONTROLS_STATUS,
+    }
     assert SUCCESS_PATH.is_file(), f"committed Python fixtures missing at {SUCCESS_PATH}"
     committed = json.loads(SUCCESS_PATH.read_text(encoding="utf-8"))
     live = python_success_payloads()

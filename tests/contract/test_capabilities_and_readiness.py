@@ -55,7 +55,7 @@ def manifest(implemented: frozenset[Capability] = EVERYTHING) -> CapabilityManif
 
 def test_manifest_lists_every_capability_exactly_once() -> None:
     names = [status.name for status in manifest().capabilities]
-    assert len(names) == len(Capability) == 166
+    assert len(names) == len(Capability) == 172
     assert set(names) == set(Capability)
     assert len(set(names)) == len(names)
 
@@ -208,8 +208,12 @@ def test_capability_names_match_the_published_contract() -> None:
         "constraints.search",
         "constraints.history",
         "constraints.overview",
+        "constraints.portfolio_list",
+        "constraints.portfolio_search",
+        "constraints.portfolio_overview",
         "constraint_categories.list",
         "constraints.create",
+        "constraints.create_published",
         "constraints.publish",
         "constraints.update",
         "constraints.transition",
@@ -221,6 +225,8 @@ def test_capability_names_match_the_published_contract() -> None:
         "constraint_categories.update",
         "constraint_categories.deactivate",
         "constraint_categories.reorder",
+        "project_controls.configure",
+        "project_controls.status",
         "constraint_sync.state",
         "constraint_sync.delta",
         "constraint_sync.conflicts",

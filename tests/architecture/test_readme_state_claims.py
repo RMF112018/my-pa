@@ -198,7 +198,12 @@ def test_the_readme_names_exactly_the_availabilities_the_build_publishes() -> No
 
 
 def test_the_readme_names_the_readiness_state_the_build_reports() -> None:
-    claimed = claimed_tokens() & {member.value for member in ReadinessState}
+    # `not_implemented` is both an Availability and a ReadinessState token.
+    # In this paragraph it qualifies individual capabilities, while `degraded`
+    # is the explicitly stated aggregate readiness.
+    claimed = (claimed_tokens() & {member.value for member in ReadinessState}) - {
+        Availability.NOT_IMPLEMENTED.value
+    }
     _, readiness = published()
     assert claimed == {readiness}, (
         f"The README says readiness is {sorted(claimed)}; it is {readiness!r}."
@@ -400,6 +405,13 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     164: "One hundred and sixty-four",
     165: "One hundred and sixty-five",
     166: "One hundred and sixty-six",
+    167: "One hundred and sixty-seven",
+    168: "One hundred and sixty-eight",
+    169: "One hundred and sixty-nine",
+    170: "One hundred and seventy",
+    171: "One hundred and seventy-one",
+    172: "One hundred and seventy-two",
+    173: "One hundred and seventy-three",
 }
 
 
@@ -520,6 +532,8 @@ def test_current_state_docs_name_the_current_capability_and_migration_counts() -
 def test_current_state_docs_derive_the_default_capability_split() -> None:
     """Bind the default and withheld capability figures to runtime wiring."""
     total = len(Capability)
+    implemented = len(_HANDLERS)
+    unwired = set(Capability) - set(_HANDLERS)
     withheld_families = {
         capability
         for capability in _HANDLERS
@@ -527,6 +541,16 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     }
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
+    assert implemented == 166
+    assert len(withheld_families) == 70
+    assert unwired == {
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
+        Capability.CONSTRAINTS_PORTFOLIO_LIST,
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
+        Capability.PROJECT_CONTROLS_CONFIGURE,
+        Capability.PROJECT_CONTROLS_STATUS,
+    }
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
     # composed by default, and `RI-ENT-WP-10`'s five record-family reads arrived
     # on the withheld side too, as do `RI-ENT-WP-11`'s record-family writes. The
@@ -538,7 +562,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # by six while the withheld figure is unchanged. `PC-CM-IMP-WP07`'s twelve
     # Constraint mutations arrive on the served side for the same reason, and
     # the withheld figure is again unchanged.
-    assert default == 96 and total == 166 and withheld == 70
+    assert default == 96 and total == 172 and withheld == 76
 
     # Exercise the same application and MCP publication composition that owns
     # the current 91-tool measurement. GoodNotes pull is part of that measured
@@ -581,6 +605,8 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     readme = README.read_text(encoding="utf-8")
     assert f"{default} of the {total} capabilities are `available`" in readme
     assert f"`{withheld} of {total} capabilities are unwired.`" in readme
+    assert "166 have application commands/handlers" in readme
+    assert "fully composed authenticated client sees all 166 implemented tools" in readme
     entity_split = (
         f"{SPELLED_COUNTS[entity_total].lower()} `entities.*` capabilities: "
         f"{SPELLED_COUNTS[entity_reads].lower()} reads and "
@@ -591,21 +617,42 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert "twenty-nine writes" not in readme
 
     system_context = SYSTEM_CONTEXT.read_text(encoding="utf-8").lower()
-    assert "one hundred and sixty-six capabilities" in system_context
+    assert "one hundred and seventy-two capabilities" in system_context
     assert f"exposes {default} of them" in system_context
 
     architecture_index = (ROOT / "docs/architecture/00_ARCHITECTURE_INDEX.md").read_text(
         encoding="utf-8"
     )
     runbook = (ROOT / "ops/runbooks/mcp-and-cli-operations.md").read_text(encoding="utf-8")
+    gateway_runbook = (ROOT / "ops/runbooks/gateway-operations.md").read_text(encoding="utf-8")
     assert f"default composition serves {default} of" in architecture_index
+    assert "one hundred and seventy-two capabilities" in architecture_index
     assert f"**{default} application-available capabilities**" in runbook
     assert f"publishes **{default - 3} tools**" in runbook
     assert "unconfigured local stdio: 93" in runbook
     assert "fully feature-composed local stdio: 163" in runbook
+    assert "166 have application commands/handlers" in runbook
+    assert "all 166 implemented tools" in runbook
+    assert f"A default process serves\n{SPELLED_COUNTS[default].lower()}" in gateway_runbook
+    assert (
+        f"{SPELLED_COUNTS[len(withheld_families)].lower()} handler-implemented capabilities "
+        "are composition-withheld"
+    ) in gateway_runbook
+    assert "six\nare structurally unwired" in gateway_runbook
+    assert (
+        f"`{withheld} of {total} total capabilities are unavailable or unwired.`" in gateway_runbook
+    )
+
+    completion_state = section_of(
+        COMPLETION_PLAN.read_text(encoding="utf-8"), "3. What is implemented"
+    )
+    normalized_completion_state = " ".join(completion_state.split()).lower()
+    assert f"all {SPELLED_COUNTS[total].lower()} capability names" in normalized_completion_state
+    assert f"names, {implemented} have application commands/handlers" in normalized_completion_state
+    assert "six run 01 names remain structurally unwired" in normalized_completion_state
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
-    assert "one hundred and sixty-six capabilities" in module_boundaries
+    assert "one hundred and seventy-two capabilities" in module_boundaries
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:

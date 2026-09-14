@@ -220,7 +220,7 @@ from my_pa.application.commands import (
     VoidConstraint,
     WaitingOn,
 )
-from my_pa.application.service import ApplicationService
+from my_pa.application.service import _HANDLERS, ApplicationService
 from my_pa.contracts.v1.envelope import ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.audit.events import AuditOutcome
@@ -688,7 +688,7 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             focus_entity_id=issue_identifier(IdKind.ENTITY),
         ),
         Capability.ENTITIES_UNRESOLVED_MENTIONS: ListUnresolvedMentions(),
-        # PC-CM-IMP-WP04's six Constraint Management reads. Identifiers are minted
+        # PC-CM-IMP-WP04's handler-backed Constraint Management reads. Identifiers are minted
         # for the reason the entity reads above mint theirs: a denial test must
         # fail on the authority and nothing else, so the request has to be well
         # formed enough that an `invalid_request` cannot stand in for a `denied`.
@@ -759,7 +759,7 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             expected_version=1,
             idempotency_key="denial-sync-resolve-0001",
         ),
-        # PC-CM-IMP-WP07's twelve Constraint Management mutations, on the same
+        # PC-CM-IMP-WP07's handler-backed Constraint Management mutations, on the same
         # terms: minted identifiers and a version of 1, so a denial test fails on
         # the authority and never on the shape.
         Capability.CONSTRAINTS_CREATE: CreateConstraintDraft(
@@ -1122,7 +1122,17 @@ def invoke(
 # service handlers. They are intentionally absent from an invocation matrix
 # whose premise is that dispatch reaches an implemented handler; the domain
 # policy pair matrix still exercises every one directly.
-CONTRACT_ONLY_CAPABILITIES = frozenset(
+HANDLER_UNWIRED_CAPABILITIES: Final = frozenset(
+    {
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
+        Capability.CONSTRAINTS_PORTFOLIO_LIST,
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
+        Capability.PROJECT_CONTROLS_CONFIGURE,
+        Capability.PROJECT_CONTROLS_STATUS,
+    }
+)
+CONTRACT_ONLY_CAPABILITIES: Final = frozenset(
     {
         Capability.GOODNOTES_PULL,
         Capability.GOODNOTES_COMPLETE,
@@ -1130,8 +1140,16 @@ CONTRACT_ONLY_CAPABILITIES = frozenset(
     }
 )
 ALL_CAPABILITIES = [
-    capability for capability in Capability if capability not in CONTRACT_ONLY_CAPABILITIES
+    capability
+    for capability in Capability
+    if capability not in CONTRACT_ONLY_CAPABILITIES | HANDLER_UNWIRED_CAPABILITIES
 ]
+
+
+def test_the_handler_invocation_matrix_excludes_only_known_non_handlers() -> None:
+    assert set(Capability) - set(_HANDLERS) == HANDLER_UNWIRED_CAPABILITIES
+    assert set(_HANDLERS) >= CONTRACT_ONLY_CAPABILITIES
+
 
 #: The family whose claim is a zero — a capture reaches no source provider at
 #: all — and which therefore has no non-vacuity control of its own.
@@ -1449,17 +1467,17 @@ SCOPED_CAPABILITIES = [
         # PC-CM-IMP-WP04's Constraint Management reads. A Constraint is a Project
         # control in the acting Principal's own partition; its rows carry no
         # `source_id` and no `enrollment_id` for a scope to be compared against.
-        # All six sit in `domain.policy.decision._SCOPELESS`.
+        # These original handler-backed reads sit in `domain.policy.decision._SCOPELESS`.
         Capability.CONSTRAINTS_READ,
         Capability.CONSTRAINTS_LIST,
         Capability.CONSTRAINTS_SEARCH,
         Capability.CONSTRAINTS_HISTORY,
         Capability.CONSTRAINTS_OVERVIEW,
         Capability.CONSTRAINT_CATEGORIES_LIST,
-        # PC-CM-IMP-WP07's twelve mutations join them, and writing changes
+        # PC-CM-IMP-WP07's original handler-backed mutations join them, and writing changes
         # nothing about the reason: they name a Project or a record in the
         # acting Principal's own partition and never a `src_...` or an
-        # `enr_...`. All twelve sit in `domain.policy.decision._SCOPELESS`.
+        # `enr_...`. They sit in `domain.policy.decision._SCOPELESS`.
         Capability.CONSTRAINTS_CREATE,
         Capability.CONSTRAINTS_PUBLISH,
         Capability.CONSTRAINTS_UPDATE,
@@ -1479,6 +1497,12 @@ SCOPED_CAPABILITIES = [
         Capability.CONSTRAINT_SYNC_APPLY,
         Capability.CONSTRAINT_SYNC_ACKNOWLEDGE,
         Capability.CONSTRAINT_SYNC_RESOLVE,
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
+        Capability.CONSTRAINTS_PORTFOLIO_LIST,
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
+        Capability.PROJECT_CONTROLS_CONFIGURE,
+        Capability.PROJECT_CONTROLS_STATUS,
     }
 ]
 
@@ -1703,17 +1727,17 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         # PC-CM-IMP-WP04's Constraint Management reads. A Constraint is a Project
         # control in the acting Principal's own partition; its rows carry no
         # `source_id` and no `enrollment_id` for a scope to be compared against.
-        # All six sit in `domain.policy.decision._SCOPELESS`.
+        # These original handler-backed reads sit in `domain.policy.decision._SCOPELESS`.
         Capability.CONSTRAINTS_READ,
         Capability.CONSTRAINTS_LIST,
         Capability.CONSTRAINTS_SEARCH,
         Capability.CONSTRAINTS_HISTORY,
         Capability.CONSTRAINTS_OVERVIEW,
         Capability.CONSTRAINT_CATEGORIES_LIST,
-        # PC-CM-IMP-WP07's twelve mutations join them, and writing changes
+        # PC-CM-IMP-WP07's original handler-backed mutations join them, and writing changes
         # nothing about the reason: they name a Project or a record in the
         # acting Principal's own partition and never a `src_...` or an
-        # `enr_...`. All twelve sit in `domain.policy.decision._SCOPELESS`.
+        # `enr_...`. They sit in `domain.policy.decision._SCOPELESS`.
         Capability.CONSTRAINTS_CREATE,
         Capability.CONSTRAINTS_PUBLISH,
         Capability.CONSTRAINTS_UPDATE,
@@ -1733,6 +1757,15 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.CONSTRAINT_SYNC_APPLY,
         Capability.CONSTRAINT_SYNC_ACKNOWLEDGE,
         Capability.CONSTRAINT_SYNC_RESOLVE,
+        # Run 01's six-entry future set names Project controls in the Principal's own
+        # partition. Application handlers supplied later enforce Project
+        # ownership; source scope is neither required nor accepted here.
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
+        Capability.CONSTRAINTS_PORTFOLIO_LIST,
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
+        Capability.PROJECT_CONTROLS_CONFIGURE,
+        Capability.PROJECT_CONTROLS_STATUS,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}
@@ -1749,6 +1782,15 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         "the capture plane, the evidence traversal over it, and the continuity "
         "plane, none of which belongs to a source"
     )
+
+
+@pytest.mark.parametrize(
+    "capability", HANDLER_UNWIRED_CAPABILITIES, ids=lambda capability: capability.value
+)
+def test_run01_project_controls_names_carry_no_source_scope(capability: Capability) -> None:
+    held_source = issue_identifier(IdKind.SOURCE)
+    assert _decision(capability, frozenset(), frozenset())
+    assert not _decision(capability, frozenset({held_source}), frozenset({held_source}))
 
 
 def test_the_operator_only_capability_is_refused_to_a_gateway_principal(
@@ -2059,6 +2101,27 @@ CONSTRAINT_READS: Final[tuple[Capability, ...]] = (
     Capability.CONSTRAINTS_HISTORY,
     Capability.CONSTRAINTS_OVERVIEW,
     Capability.CONSTRAINT_CATEGORIES_LIST,
+    Capability.CONSTRAINTS_PORTFOLIO_LIST,
+    Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
+    Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
+    Capability.PROJECT_CONTROLS_STATUS,
+)
+
+CONSTRAINT_AUTHORING: Final[tuple[Capability, ...]] = (
+    Capability.CONSTRAINTS_CREATE,
+    Capability.CONSTRAINTS_PUBLISH,
+    Capability.CONSTRAINTS_UPDATE,
+    Capability.CONSTRAINTS_TRANSITION,
+    Capability.CONSTRAINTS_CLOSE,
+    Capability.CONSTRAINTS_CLOSE_FOLLOW_UP,
+    Capability.CONSTRAINTS_VOID,
+    Capability.CONSTRAINTS_REOPEN,
+    Capability.CONSTRAINT_CATEGORIES_CREATE,
+    Capability.CONSTRAINT_CATEGORIES_UPDATE,
+    Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
+    Capability.CONSTRAINT_CATEGORIES_REORDER,
+    Capability.CONSTRAINTS_CREATE_PUBLISHED,
+    Capability.PROJECT_CONTROLS_CONFIGURE,
 )
 
 
@@ -2082,7 +2145,7 @@ def test_the_constraint_read_purpose_grants_the_reads_and_nothing_else() -> None
 
     Read from the other end, because the per-capability assertions above cannot
     see a purpose that quietly acquired a *further* capability. A grant issued to
-    read a Project's controls must reach exactly these six.
+    read a Project's controls must reach exactly these ten.
     """
     reached = {
         capability
@@ -2092,17 +2155,25 @@ def test_the_constraint_read_purpose_grants_the_reads_and_nothing_else() -> None
     assert reached == set(CONSTRAINT_READS)
 
 
+def test_the_constraint_authoring_purpose_grants_the_writes_and_nothing_else() -> None:
+    reached = {
+        capability
+        for capability in Capability
+        if Purpose.CONSTRAINT_AUTHORING in permitted_purposes(capability)
+    }
+    assert reached == set(CONSTRAINT_AUTHORING)
+
+
 def test_no_constraint_read_is_granted_an_authoring_or_synchronisation_purpose() -> None:
     """The separation the plane requires, proved by absence rather than by a name.
 
-    `constraint_authoring` now exists -- `PC-CM-IMP-WP07` added it with the
-    twelve mutations that exercise it -- and no `constraint_sync_read` or
-    `constraint_sync_authoring` does, because no `constraint_sync.*` capability
-    does. What is asserted here is unchanged in substance: the Constraint
-    purposes are exactly those two, and none of the six reads is reachable
-    through any purpose whose name says authoring or synchronisation. The second
-    half is what stops a read being quietly folded under an authoring grant --
-    including, now, under the plane's own.
+    `constraint_authoring` exists with fourteen authoring names, and the seven
+    synchronisation capabilities use the bounded `constraint_sync_read` and
+    `constraint_sync_authoring` pair. What is asserted here is unchanged in
+    substance: the Constraint purposes are exactly those four, and none of the
+    ten reads is reachable through any purpose whose name says authoring or
+    synchronisation. The second half is what stops a read being quietly folded
+    under an authoring grant -- including, now, under the plane's own.
     """
     assert {purpose for purpose in Purpose if purpose.value.startswith("constraint_")} == {
         Purpose.CONSTRAINT_READ,

@@ -2,16 +2,14 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the one hundred and sixty-six capabilities is addressable
-over HTTP and answers. Parametrised over `Capability` rather than over a list
-written here, so the next capability added to the domain arrives as
-a failing row instead of as an untested one. Fourteen of the one hundred and forty-two answer a
+**Reachability.** All one hundred and sixty-six handler-backed capabilities are
+addressable over HTTP and answer. The six declared Run 01 names that have no
+handler are separately required to return the canonical `501` problem rather
+than a fabricated result. Fourteen of the handler-backed capabilities answer a
 well-formed `501 unsupported` rather than a result — `_UNCOMPOSED_CAPABILITIES`,
 the plane this harness does not switch on — and one, `tasks.bulk_confirm`,
 answers a well-formed `404 not_found`, because a confirm names a preview this
-harness never took. `_UNIMPLEMENTED_CAPABILITIES` is empty: WP-FE-03 implemented
-the two placeholders it used to hold, and it is kept rather than deleted so the
-next placeholder has somewhere to be recorded.
+harness never took.
 
 **Verbatim.** The bytes a caller receives are the bytes the envelope serialised
 itself to — asserted as byte equality against the envelope the application
@@ -259,10 +257,10 @@ from my_pa.application.commands import (
 )
 from my_pa.application.intelligence import begin_cycle, commit_artifact
 from my_pa.application.producer_origin import ProducerOriginRegistry
-from my_pa.application.service import ApplicationService
+from my_pa.application.service import _HANDLERS, ApplicationService
 from my_pa.contracts.ports import KnowledgeRecord, WorkCursorError
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
-from my_pa.contracts.v1.errors import ErrorCode
+from my_pa.contracts.v1.errors import ErrorCode, ProblemDetail
 from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind, make_identifier
 from my_pa.domain.common.provenance import Provenance
@@ -326,9 +324,18 @@ from my_pa.domain.task.lifecycle import (
     TaskWorkView,
 )
 
-ALL_CAPABILITIES = list(Capability)
+HANDLER_CAPABILITIES = tuple(capability for capability in Capability if capability in _HANDLERS)
 
-_UNIMPLEMENTED_CAPABILITIES: frozenset[Capability] = frozenset()
+_UNIMPLEMENTED_CAPABILITIES: frozenset[Capability] = frozenset(
+    {
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
+        Capability.CONSTRAINTS_PORTFOLIO_LIST,
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
+        Capability.PROJECT_CONTROLS_CONFIGURE,
+        Capability.PROJECT_CONTROLS_STATUS,
+    }
+)
 
 #: The nine `relationship_memory.` names, which are implemented and are refused
 #: here for a different reason: `RecordingService` below leaves
@@ -384,10 +391,10 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
     }
 )
 
-#: Every capability this harness expects a `501 unsupported` from, for either of
-#: the two distinct reasons above. Only the second contributes today, because
-#: WP-FE-03 implemented the two placeholders the first used to hold.
-_UNSUPPORTED_CAPABILITIES = _UNIMPLEMENTED_CAPABILITIES | _UNCOMPOSED_CAPABILITIES
+#: Handler-backed capabilities this harness expects the application to refuse
+#: at its composition floor. Handler-unwired names are refused by HTTP before
+#: application invocation and are proved separately below.
+_UNSUPPORTED_CAPABILITIES = _UNCOMPOSED_CAPABILITIES
 _NOT_FOUND_ON_EMPTY_WORLD = frozenset(
     {
         Capability.TASKS_BULK_CONFIRM,
@@ -2380,7 +2387,7 @@ def wire(staged: tuple[Scene, KnowledgeRecord], service: RecordingService) -> It
 # ---- reachability and verbatim answers --------------------------------------
 
 
-@pytest.mark.parametrize("capability", ALL_CAPABILITIES, ids=lambda c: c.value)
+@pytest.mark.parametrize("capability", HANDLER_CAPABILITIES, ids=lambda c: c.value)
 def test_every_capability_is_reachable_over_http(
     capability: Capability, staged: tuple[Scene, KnowledgeRecord], wire: Wire
 ) -> None:
@@ -2404,6 +2411,22 @@ def test_every_capability_is_reachable_over_http(
     assert envelope["disclosure"] is not None
     assert envelope["request_id"] == f"req-{capability.value}"
     assert envelope["contract_version"] == "v1"
+
+
+@pytest.mark.parametrize(
+    "capability", _UNIMPLEMENTED_CAPABILITIES, ids=lambda capability: capability.value
+)
+def test_handler_unwired_capabilities_return_the_canonical_http_problem(
+    capability: Capability, scene: Scene, wire: Wire
+) -> None:
+    assert set(Capability) - set(_HANDLERS) == _UNIMPLEMENTED_CAPABILITIES
+    assert len(HANDLER_CAPABILITIES) == 166
+    reply = wire.send(capability.value, document_for(capability, scene, {}))
+    problem = ProblemDetail.model_validate(reply.document())
+    assert reply.status == 501
+    assert problem.code is ErrorCode.UNSUPPORTED
+    assert problem.safe_details == ()
+    assert reply.body == problem.to_canonical_json()
 
 
 def test_constraint_sync_delta_hidden_targets_are_identical_not_found_over_http(
@@ -3278,7 +3301,7 @@ def test_expired_or_drifted_bulk_confirm_writes_no_task_or_history(
     assert tuple(scene.world.task_history_v2) == before_drift_history
 
 
-@pytest.mark.parametrize("capability", ALL_CAPABILITIES, ids=lambda c: c.value)
+@pytest.mark.parametrize("capability", HANDLER_CAPABILITIES, ids=lambda c: c.value)
 def test_the_body_is_the_envelope_the_application_produced(
     capability: Capability,
     staged: tuple[Scene, KnowledgeRecord],
@@ -3308,7 +3331,7 @@ def test_the_body_is_the_envelope_the_application_produced(
     assert produced.correlation_id in reply.body
 
 
-@pytest.mark.parametrize("capability", ALL_CAPABILITIES, ids=lambda c: c.value)
+@pytest.mark.parametrize("capability", HANDLER_CAPABILITIES, ids=lambda c: c.value)
 def test_normalisation_builds_the_pair_a_hand_written_request_builds(
     capability: Capability, staged: tuple[Scene, KnowledgeRecord]
 ) -> None:

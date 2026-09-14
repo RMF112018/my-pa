@@ -1,10 +1,12 @@
 """`SPEC-AC-001`: three transports, one request, one answer.
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
-normalised requests** and semantically identical responses and errors, over all
-one hundred and sixty-six capabilities. There are two ways to prove that and only one stays
-true, so this file makes the structural claim first and the comparative claim
-second.
+normalised requests** and semantically identical responses and errors over the
+one hundred and sixty-six command-backed capabilities. The six other declared
+names are held separately as unavailable contracts, so reducing the positive
+matrix cannot hide a newly missing implemented command. There are two ways to
+prove parity and only one stays true, so this file makes the structural claim
+first and the comparative claim second.
 
 **Structural: there is one normalisation, and all three call it.** A comparison
 of three snapshots proves that three implementations agreed on the day the
@@ -26,8 +28,9 @@ way to see what a transport *built* rather than what it returned — and compare
 as bytes: `RequestMetadata` through the contract's own canonical encoding, the
 command through its fields.
 
-**And the answers, over every fully composed capability and ten refusals.** A
-default composition exposes fifty-eight: the six managed-document names, the
+**And the answers, over every fully composed capability and ten refusals.** This
+harness composes one hundred and fifty-nine of the one hundred and sixty-six
+handlers: the six managed-document names, the
 fifty-five `entities.` names and the nine Relationship Memory names are
 withheld without their explicit configuration, and this harness sets all of
 them — including `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED`, which is a
@@ -63,6 +66,7 @@ from typing import Any
 
 import pytest
 from tests.conftest import (
+    DEFAULT_LIMITS,
     WHEN,
     FakeProviders,
     FakeUnitOfWork,
@@ -86,8 +90,10 @@ import my_pa.adapters.cli.app as cli_module
 import my_pa.adapters.http.app as http_module
 import my_pa.adapters.mcp.server as mcp_module
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
+from my_pa.application.capabilities import build_capability_manifest
 from my_pa.application.commands import Command
 from my_pa.application.intelligence import begin_cycle, commit_artifact
+from my_pa.application.service import _HANDLERS
 from my_pa.contracts.ports import KnowledgeRecord, MemoryWriteRequest
 from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.contracts.v1.errors import ErrorCode
@@ -166,6 +172,18 @@ NORMALIZE_SITES = (cli_module, http_module, mcp_module)
 
 TRANSPORT_NAMES = frozenset({"http", "mcp", "cli"})
 CORRECTED_VALUE_MARKER = "PRIVATE-CORRECTED-VALUE-MARKER"
+
+FUTURE_CAPABILITIES = frozenset(
+    {
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
+        Capability.CONSTRAINTS_PORTFOLIO_LIST,
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
+        Capability.PROJECT_CONTROLS_CONFIGURE,
+        Capability.PROJECT_CONTROLS_STATUS,
+    }
+)
+IMPLEMENTED_CAPABILITIES = tuple(capability for capability in Capability if capability in _HANDLERS)
 
 #: Two sets of names used to stand here and neither does now.
 #: `_UNIMPLEMENTED_CAPABILITIES` held `tasks.bulk_preview` and
@@ -2146,7 +2164,7 @@ def normalised_by_each(
     return {name: as_bytes(pairs[0]) for name, pairs in built.items()}
 
 
-@pytest.mark.parametrize("capability", list(Capability), ids=lambda c: c.value)
+@pytest.mark.parametrize("capability", IMPLEMENTED_CAPABILITIES, ids=lambda c: c.value)
 def test_every_capability_normalises_identically_over_all_three_transports(
     capability: Capability,
     staged: tuple[Scene, KnowledgeRecord],
@@ -2293,7 +2311,7 @@ UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
 
 @pytest.mark.parametrize(
     "capability",
-    [c for c in Capability if c not in UNCOMPOSED_HERE],
+    [c for c in IMPLEMENTED_CAPABILITIES if c not in UNCOMPOSED_HERE],
     ids=lambda c: c.value,
 )
 def test_every_capability_answers_identically_over_all_three_transports(
@@ -2691,5 +2709,31 @@ def test_every_transport_answers_a_world_that_is_not_empty(
     """Guard the matrix: 109 capabilities answered from an empty world prove little."""
     scene, record = staged
     assert scene.world.enrollments and scene.world.records
-    assert set(payloads_for(scene, record)) == set(Capability)
+    assert set(payloads_for(scene, record)) == set(IMPLEMENTED_CAPABILITIES)
     assert scene.world.sources and scene.world.objects
+
+
+def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
+    staged: tuple[Scene, KnowledgeRecord],
+) -> None:
+    """The six future names are declared, unavailable, and have no command schema."""
+    from my_pa.adapters.mcp import TOOLS
+    from my_pa.adapters.normalization import _BUILDERS
+    from my_pa.application.errors import UnsupportedError
+
+    assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
+    assert len(IMPLEMENTED_CAPABILITIES) == 166
+    assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
+    assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
+
+    manifest = build_capability_manifest(implemented=frozenset(_HANDLERS), limits=DEFAULT_LIMITS)
+    availability = {status.name: status.availability.value for status in manifest.capabilities}
+    assert {availability[capability] for capability in FUTURE_CAPABILITIES} == {"not_implemented"}
+
+    scene, _record = staged
+    for capability in FUTURE_CAPABILITIES:
+        with pytest.raises(UnsupportedError):
+            normalize(
+                capability.value,
+                document(capability, scene.principal.principal_id, {}),
+            )

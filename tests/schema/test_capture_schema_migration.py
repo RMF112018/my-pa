@@ -28,7 +28,7 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with one hundred and sixty-six capabilities and
+emits what it emitted on the day it merged, with one hundred and seventy-two capabilities and
 forty-five purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
@@ -242,6 +242,14 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         # WP-MCP-PROJ-03. `c4f1a8e52d90` is the forward `ALTER` that admits the pair.
         "continuity.projects.close",
         "continuity.projects.update",
+        # PC-CM Run 01's forward `ALTER` admits the six neutral Project Controls
+        # names.
+        "constraints.create_published",
+        "constraints.portfolio_list",
+        "constraints.portfolio_overview",
+        "constraints.portfolio_search",
+        "project_controls.configure",
+        "project_controls.status",
         # WP-TM-03. `d15c0dc14d09` is the forward `ALTER` that admits the
         # `tasks.` read plane, and the same revision widens `purpose_is_known`
         # for the single `task_read` purpose all four map to.
@@ -1166,6 +1174,7 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             "project_constraint_revision_parties_are_immutable",
             "project_constraint_history_are_immutable",
             "constraint_category_history_are_immutable",
+            "constraint_project_settings_history_are_immutable",
             "constraint_sync_resolution_history_is_append_only",
             "capture_labels_are_append_only",
             # WP-TUX-01. `de5ec1c65857` installs the append-only guard on

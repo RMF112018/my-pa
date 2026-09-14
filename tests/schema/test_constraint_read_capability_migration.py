@@ -50,7 +50,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "c5b71e0a8d43"
 PREVIOUS: Final = "a1c9e4b72f80"
-CURRENT_HEAD: Final = "c4f1a8e52d90"
+CURRENT_HEAD: Final = "e6a4c2f91b73"
 CAPTURE_LABELS: Final = "c1a8e4d70b29"
 WP_TUX_01: Final = "de5ec1c65857"
 WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
@@ -175,7 +175,8 @@ def test_revision_sits_on_the_single_head_chain() -> None:
     # head is no longer its direct child. The path from head down to this
     # revision is asserted link by link rather than loosened to mere
     # reachability, which would be the weaker claim.
-    assert script.get_revision(CURRENT_HEAD).down_revision == WP_MCP_PROJ_02
+    assert script.get_revision(CURRENT_HEAD).down_revision == "c4f1a8e52d90"
+    assert script.get_revision("c4f1a8e52d90").down_revision == WP_MCP_PROJ_02
     assert script.get_revision(WP_MCP_PROJ_02).down_revision == WP_MCP_PROJ_01
     assert script.get_revision(WP_MCP_PROJ_01).down_revision == WP_TUX_01
     assert script.get_revision(WP_TUX_01).down_revision == CAPTURE_LABELS

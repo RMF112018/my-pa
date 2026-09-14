@@ -20,6 +20,7 @@ from my_pa.adapters.remote_request import (
 )
 from my_pa.application.commands import Command, StartGsqsB0
 from my_pa.application.errors import InvalidRequestError, UnsupportedError
+from my_pa.application.service import _HANDLERS
 from my_pa.domain.identity.operation import Capability, is_operator_only, permitted_purposes
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
@@ -30,17 +31,33 @@ PRINCIPAL = Principal(
     authenticated=True,
 )
 FROZEN = datetime(2026, 8, 15, 9, 30, tzinfo=UTC)
+HANDLER_UNWIRED_CAPABILITIES = frozenset(
+    {
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
+        Capability.CONSTRAINTS_PORTFOLIO_LIST,
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
+        Capability.PROJECT_CONTROLS_CONFIGURE,
+        Capability.PROJECT_CONTROLS_STATUS,
+    }
+)
 
 
 def _issue(_kind: object) -> str:
     return "corr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 
+def _command_backed_capabilities() -> frozenset[Capability]:
+    return frozenset(member.capability for member in get_args(Command.__value__))
+
+
 def _remote_read_capabilities() -> tuple[Capability, ...]:
+    command_backed = _command_backed_capabilities()
     return tuple(
         capability
         for capability in Capability
-        if not is_operator_only(capability)
+        if capability in command_backed
+        and not is_operator_only(capability)
         and not (permitted_purposes(capability) & _WRITE_PURPOSES)
     )
 
@@ -150,6 +167,14 @@ def test_every_remote_read_purpose_resolves() -> None:
 
 
 def test_remote_schemas_exclude_server_owned_metadata() -> None:
+    command_backed = _command_backed_capabilities()
+    assert command_backed == set(_HANDLERS)
+    assert set(Capability) - command_backed == HANDLER_UNWIRED_CAPABILITIES
+    remote_capabilities = set(_remote_read_capabilities()) | set(_remote_write_capabilities())
+    assert remote_capabilities == {
+        capability for capability in command_backed if not is_operator_only(capability)
+    }
+    assert not set(_remote_read_capabilities()) & set(_remote_write_capabilities())
     commands = {member.capability: member for member in get_args(Command.__value__)}
     for capability in _remote_read_capabilities():
         schema = remote_tool_schema(input_schema_for(commands[capability]))
@@ -162,10 +187,12 @@ def test_remote_schemas_exclude_server_owned_metadata() -> None:
 
 
 def _remote_write_capabilities() -> tuple[Capability, ...]:
+    command_backed = _command_backed_capabilities()
     return tuple(
         capability
         for capability in Capability
-        if not is_operator_only(capability)
+        if capability in command_backed
+        and not is_operator_only(capability)
         and bool(permitted_purposes(capability) & _WRITE_PURPOSES)
     )
 

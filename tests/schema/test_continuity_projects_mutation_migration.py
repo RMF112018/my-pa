@@ -39,7 +39,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "c4f1a8e52d90"
-CURRENT_HEAD: Final = "c4f1a8e52d90"
+CURRENT_HEAD: Final = "e6a4c2f91b73"
 PREVIOUS: Final = "b3e9d7a41c25"
 VOCABULARY_PREDECESSOR: Final = "b3e9d7a41c25"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
@@ -122,11 +122,12 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == PREVIOUS
+    assert script.get_revision(CURRENT_HEAD).down_revision == REVISION
+    assert script.get_revision(REVISION).down_revision == PREVIOUS
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 105
+    assert len(list(MIGRATIONS.glob("*.py"))) == 106
 
 
 def test_revision_is_frozen_and_does_not_import_live_schema_or_enums() -> None:

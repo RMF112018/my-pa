@@ -25,7 +25,12 @@ from typing import Any, Final
 
 import pytest
 from tests.conftest import Scene, build_service, staged_record
-from tests.contract.test_transport_parity import document, payloads_for
+from tests.contract.test_transport_parity import (
+    FUTURE_CAPABILITIES,
+    IMPLEMENTED_CAPABILITIES,
+    document,
+    payloads_for,
+)
 from tests.transports import McpTransport, mcp_transport
 
 from my_pa.adapters.mcp import TOOLS
@@ -98,7 +103,8 @@ ANOTHER_PRINCIPAL: Final = "prn_ffff0001ffff0001ffff0001"
 def test_twelve_authoring_tools_are_published() -> None:
     for capability in AUTHORING:
         assert capability.value in TOOLS_BY_NAME, f"{capability.value} publishes no tool"
-    assert len(TOOLS) == len(Capability)
+    assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
+    assert not ({tool.name for tool in TOOLS} & {item.value for item in FUTURE_CAPABILITIES})
 
 
 @pytest.mark.parametrize("capability", AUTHORING, ids=lambda c: c.value)
@@ -108,8 +114,9 @@ def test_no_authoring_payload_accepts_a_caller_supplied_principal(
     """`CM-BE-AC-083`, stated about the payload and not about the envelope.
 
     The envelope's `principal_id` is a required v1 contract field and is
-    published on all one hundred and sixty-six tools; it is correlation input.
-    What must not exist is a *command* field a caller could set.
+    published on all one hundred and sixty-six command-backed tools; it is
+    correlation input. What must not exist is a *command* field a caller could
+    set.
     """
     payload = _payload_schema(capability)
     named = [name for name in _property_names(payload) if "principal" in name.lower()]

@@ -608,6 +608,25 @@ def test_constraint_sync_acknowledge_binds_and_returns_plan_cardinality(
 # ---- capabilities.get ------------------------------------------------------
 
 
+_GOODNOTES_PULL_CAPABILITIES = frozenset(
+    {
+        Capability.GOODNOTES_PULL,
+        Capability.GOODNOTES_COMPLETE,
+        Capability.GOODNOTES_STATUS,
+    }
+)
+_RUN01_UNWIRED_CAPABILITIES = frozenset(
+    {
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
+        Capability.CONSTRAINTS_PORTFOLIO_LIST,
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
+        Capability.PROJECT_CONTROLS_CONFIGURE,
+        Capability.PROJECT_CONTROLS_STATUS,
+    }
+)
+
+
 def test_capabilities_get_reports_phase_a_pull_contracts_as_not_implemented(
     scene: Scene,
 ) -> None:
@@ -625,18 +644,17 @@ def test_capabilities_get_reports_phase_a_pull_contracts_as_not_implemented(
     assert isinstance(manifest, dict)
     availability = {c["name"]: c["availability"] for c in manifest["capabilities"]}
     assert set(availability) == {c.value for c in Capability}
-    contract_only = {
-        Capability.GOODNOTES_PULL.value,
-        Capability.GOODNOTES_COMPLETE.value,
-        Capability.GOODNOTES_STATUS.value,
-    }
+    assert set(Capability) - set(_HANDLERS) == _RUN01_UNWIRED_CAPABILITIES
+    contract_only = _GOODNOTES_PULL_CAPABILITIES | _RUN01_UNWIRED_CAPABILITIES
     assert {
-        name for name, state in availability.items() if state == Availability.NOT_IMPLEMENTED.value
+        Capability(name)
+        for name, state in availability.items()
+        if state == Availability.NOT_IMPLEMENTED.value
     } == contract_only
     assert all(
         state == Availability.AVAILABLE.value
         for name, state in availability.items()
-        if name not in contract_only
+        if Capability(name) not in contract_only
     )
 
 
@@ -657,7 +675,9 @@ def test_readiness_stops_reporting_contracts_only_because_the_manifest_is_derive
     readiness = result["readiness"]
     assert isinstance(readiness, dict)
     assert readiness["state"] == ReadinessState.DEGRADED.value
-    assert readiness["implemented_capabilities"] == len(Capability) - 3
+    expected_available = set(_HANDLERS) - _GOODNOTES_PULL_CAPABILITIES
+    assert len(expected_available) == 163
+    assert readiness["implemented_capabilities"] == len(expected_available)
     assert readiness["limitations"]
     assert "Worker-plane health" in readiness["limitations"][-1]
     assert result["worker_planes"] == [

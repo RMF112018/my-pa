@@ -128,8 +128,19 @@ export function TaskListRow({
           24px minimum. The label makes the box that was already reserved
           actually operable. The input keeps `aria-label`, which wins over an
           empty label's (absent) text, so the accessible name is unchanged.
+
+          `stopPropagation` belongs here as well as on the input. The input
+          already stopped its own clicks, but the padding is new operable area,
+          and a click landing on it would otherwise reach an ancestor. Nothing
+          above this row listens for clicks today, so this guards an invariant
+          rather than fixing a live defect — but the invariant is exactly the
+          one a future row-level open would break, silently selecting as well
+          as opening.
         */}
-        <label className="flex min-h-11 min-w-11 items-center justify-center">
+        <label
+          className="flex min-h-11 min-w-11 items-center justify-center"
+          onClick={stopPropagation}
+        >
           <input
             type="checkbox"
             className="size-5 accent-[var(--interactive)]"

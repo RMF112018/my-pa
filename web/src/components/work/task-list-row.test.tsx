@@ -1195,3 +1195,41 @@ describe("TaskListRow — List presentation of the shared controls (WP-POSTUX-03
     expect(more.getAttribute("aria-label")).toBe(accessibleName);
   });
 });
+
+describe("TaskListRow — the checkbox's reserved target is operable (WP03-AC-068)", () => {
+  /*
+    The 44x44 box around the checkbox is the whole point of that wrapper, and
+    until WP-POSTUX-03 it was a `<span>` — which forwards no click, so the area
+    was reserved and operated nothing and the real target was the 20px the
+    checkbox paints. Every other test here clicks `getByLabelText`, which
+    resolves to the input, so reverting the wrapper to a `<span>` would pass the
+    entire suite. This is the guard for that.
+  */
+  it("selects the Task when the click lands on the padding, not the input", async () => {
+    const user = userEvent.setup();
+    stubFetch();
+    const handles = renderRow();
+    await hydrated();
+
+    const input = within(row()).getByRole("checkbox", { name: `Select ${TITLE}` });
+    const target = input.closest("label");
+    expect(target, "the reserved 44px box must be a label, or it forwards no click").not.toBeNull();
+    expect(target).toContainElement(input);
+
+    // The wrapper itself, never the input.
+    await user.click(target!);
+
+    expect(handles.onSelect).toHaveBeenCalledTimes(1);
+    expect(handles.onSelect).toHaveBeenCalledWith(LIST_ROW.task_id);
+  });
+
+  it("keeps the accessible name on the input rather than moving it to the wrapper", async () => {
+    stubFetch();
+    renderRow();
+    await hydrated();
+    // An empty label contributes no text, so `aria-label` still names the control.
+    const input = within(row()).getByRole("checkbox", { name: `Select ${TITLE}` });
+    expect(input.getAttribute("aria-label")).toBe(`Select ${TITLE}`);
+    expect(input.closest("label")?.textContent).toBe("");
+  });
+});

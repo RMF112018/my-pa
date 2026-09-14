@@ -195,36 +195,22 @@ of preserving an authored time. The citation was wrong and has been withdrawn ra
 
 ### TUX08-L049-B — `_tasks_create` accepts a `project_id` it does not check for ownership
 
-**Pre-existing. Outside WP-TUX-08 scope. Recorded here, not fixed here.**
+**Resolved by WP04A.** `ApplicationService._tasks_create` now supplies a first-write gate
+(`src/my_pa/application/service.py:8318`) that qualifies every non-null `project_id` through the
+canonical Principal-scoped Project read (`src/my_pa/application/service.py:8320`) before Task or
+history insertion. The existing assignment/reassignment gate remains at
+`src/my_pa/application/service.py:8400`; explicit clear remains the separate no-lookup branch at
+`src/my_pa/application/service.py:8392`.
 
-`ApplicationService._tasks_update` (`src/my_pa/application/service.py:8347`) refuses a `project_id`
-the calling Principal does not own:
-
-```
-src/my_pa/application/service.py:8390-8392
-    if command.project_id is not None and (
-        unit_of_work.projects.get_project(principal_id, command.project_id) is None
-    ):
-        raise NotFoundError(SafeDetail.PROJECT_ID)
-```
-
-`ApplicationService._tasks_create` (`src/my_pa/application/service.py:8284`) performs no equivalent check. It passes
-`project_id=command.project_id` straight through at `src/my_pa/application/service.py:8326`. The only backstop is the table
-definition at `src/my_pa/infrastructure/persistence/tables.py:6915`:
-
-```
-    Column("project_id", Text, ForeignKey(f"{SCHEMA}.projects.project_id")),
-```
-
-That is a **single-column** foreign key. It enforces that the project row exists; it does not
-enforce that it belongs to the creating Principal, because `principal_id` is not part of the
-reference. A Principal who learns another Principal's `project_id` can therefore create a Task
-against it, where the same value on update would be refused.
-
-This is a create/update asymmetry in a Principal-partitioning boundary, not a Task-UX defect, and
-WP-TUX-08 is a traceability package with no production-source authority. It is routed to the owning
-backend work package. It affects no row above: no TASK-AC criterion asserts create-side project
-ownership.
+The focused regression proves owned create plus canonical readback
+(`tests/unit/test_task_project_assignment.py:134`), identical nondisclosing `NOT_FOUND(project_id)`
+for missing and foreign Projects with neither Task nor history mutation
+(`tests/unit/test_task_project_assignment.py:158`), and digest-bound same-Project replay across a
+reconstructed application service plus different-Project conflict without mutation
+(`tests/unit/test_task_project_assignment.py:191`). The gate uses the existing replay-before-
+mutable-validation sequence (`src/my_pa/application/tasks.py:718`,
+`src/my_pa/application/tasks.py:739`), preserving WP-TUX-08's ambiguous-retry and new-session
+idempotency invariants.
 
 ## Maintenance
 

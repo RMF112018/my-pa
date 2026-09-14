@@ -137,6 +137,62 @@ describe("TaskStatusControl", () => {
     expect(select.classList.contains("appearance-none")).toBe(false);
   });
 
+  /**
+   * WP-POSTUX-03 presentation seam: `labelVisibility`.
+   *
+   * The default must be bit-for-bit today's rendering — Board, Calendar, Task
+   * Detail and Search all mount this control and none of them opts in.
+   * `"sr-only"` hides the label visually only (WP03-AC-053) and must not touch
+   * the definite 44px sizing contract (WP03-AC-054).
+   */
+  it("defaults to a visually shown label with no screen-reader-only treatment", () => {
+    render(<TaskStatusControl value="open" onChange={() => {}} />);
+
+    const select = screen.getByRole("combobox", { name: "Status" });
+    const label = document.querySelector(`label[for="${select.id}"]`);
+    expect(label).not.toBeNull();
+    expect(label).toHaveTextContent("Status");
+    expect(label?.classList.contains("sr-only")).toBe(false);
+    expect(label?.classList.contains("text-text-muted")).toBe(true);
+  });
+
+  it("keeps the label element, its association and the accessible name under sr-only", () => {
+    render(<TaskStatusControl value="open" labelVisibility="sr-only" onChange={() => {}} />);
+
+    // The accessible name still resolves through the real label association.
+    const select = screen.getByRole("combobox", { name: "Status" });
+    expect(select.id).toBeTruthy();
+
+    const label = document.querySelector(`label[for="${select.id}"]`);
+    expect(label).not.toBeNull();
+    expect(label?.tagName).toBe("LABEL");
+    expect(label).toHaveTextContent("Status");
+    // Hidden visually only: still in the DOM, never `hidden`/`aria-hidden`.
+    expect(label?.classList.contains("sr-only")).toBe(true);
+    expect(label).not.toHaveAttribute("hidden");
+    expect(label).not.toHaveAttribute("aria-hidden");
+
+    // The sizing contract is untouched by the presentation seam.
+    expect(select.classList.contains("h-11")).toBe(true);
+    expect(select.classList.contains("min-h-11")).toBe(true);
+    expect(select.classList.contains("min-w-11")).toBe(true);
+  });
+
+  it("keeps the terminal state semantically labelled under sr-only", () => {
+    render(<TaskStatusControl value="completed" labelVisibility="sr-only" onChange={() => {}} />);
+
+    const control = screen.getByTestId("task-status-control");
+    expect(control).toHaveAttribute("data-terminal", "true");
+    // The field label text stays available to assistive technology, and so
+    // does the terminal state itself.
+    expect(control).toHaveTextContent("Status");
+    expect(control).toHaveTextContent("Closed");
+
+    const labelText = screen.getByText("Status");
+    expect(labelText.classList.contains("sr-only")).toBe(true);
+    expect(labelText).not.toHaveAttribute("aria-hidden");
+  });
+
   it("is reachable and operable by keyboard", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

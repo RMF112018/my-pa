@@ -48,6 +48,18 @@ export interface TaskDueControlProps {
    * When absent, behaviour is exactly as before: `Due, <phrase>`.
    */
   readonly triggerLabel?: string;
+  /**
+   * Whether the trigger shows the visual `Due` prefix beside the phrase
+   * (WP-POSTUX-03).
+   *
+   * `"value-only"` drops the `aria-hidden` visual prefix so the trigger reads
+   * as just the phrase; the accessible name stays exactly `Due, <phrase>`. It
+   * is deliberately *not* `triggerLabel`: that prop replaces the accessible
+   * name too and asserts nothing about the current value. When `triggerLabel`
+   * is given it still wins, unchanged. Defaults to `"labeled"`, which is
+   * exactly today's rendering.
+   */
+  readonly presentation?: "labeled" | "value-only";
   /** `null` is an explicit clear intent, never an empty string. */
   onChange(nextIso: string | null): void;
 }
@@ -60,6 +72,7 @@ export function TaskDueControl({
   conflict = false,
   compact = false,
   triggerLabel,
+  presentation = "labeled",
   onChange,
 }: TaskDueControlProps): React.JSX.Element {
   const baseId = useId();
@@ -121,9 +134,11 @@ export function TaskDueControl({
       >
         {triggerLabel === undefined ? (
           <>
-            <span aria-hidden="true" className="text-text-muted">
-              {TASK_DUE_FIELD_LABEL}
-            </span>
+            {presentation === "value-only" ? null : (
+              <span aria-hidden="true" className="text-text-muted">
+                {TASK_DUE_FIELD_LABEL}
+              </span>
+            )}
             <span>{due.phrase}</span>
           </>
         ) : (

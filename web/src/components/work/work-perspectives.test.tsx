@@ -531,3 +531,49 @@ describe("WorkPerspectives — Calendar", () => {
     expect(stub.calls.filter((call) => call.method === "GET")).toHaveLength(0);
   });
 });
+
+describe("WorkPerspectives — List grouping (WP-POSTUX-03)", () => {
+  /*
+    The Work List used to be a stack of independently-bordered cards inside a
+    `grid gap-2`, which is what made it read as a pile of mini detail sheets
+    rather than a list. The grouped surface is a property of the container, not
+    of the row, so it is asserted here rather than in the row's own tests.
+  */
+  it("draws Tasks as one grouped surface with dividers, not a gapped stack of cards", () => {
+    renderPerspective("list", [rowOf()]);
+    const list = screen.getByRole("list", { name: "Work list" });
+    const classes = (list.getAttribute("class") ?? "").split(/\s+/);
+    // One boundary for the whole list...
+    expect(classes).toContain("border");
+    expect(classes.some((token) => token.startsWith("rounded-"))).toBe(true);
+    // ...rows separated by rules rather than by gaps.
+    expect(classes.some((token) => token.startsWith("divide-y"))).toBe(true);
+    expect(classes).not.toContain("gap-2");
+  });
+
+  it("leaves the Commitment list on its existing card treatment", () => {
+    // WP03-AC-039. Both branches share one <ul>, so the Task grouping must be
+    // branched rather than applied to everything the list can render.
+    renderPerspective("list", [], {
+      commitments: true,
+      rows: [
+        {
+          commitment_id: "cmt_aaaaaaaa11111111",
+          title: "Send the signed addendum",
+          state: "open",
+        },
+      ] as unknown as readonly TaskRow[],
+    });
+    const list = screen.getByRole("list", { name: "Work list" });
+    const classes = (list.getAttribute("class") ?? "").split(/\s+/);
+    expect(classes).toContain("gap-2");
+    expect(classes.some((token) => token.startsWith("divide-y"))).toBe(false);
+    expect(classes).not.toContain("border");
+  });
+
+  it("keeps one list item per Task and the accessible list name", () => {
+    renderPerspective("list", [rowOf(), rowOf({ task_id: "tsk_bbbbbbbb22222222", title: "Second" })]);
+    const list = screen.getByRole("list", { name: "Work list" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+  });
+});

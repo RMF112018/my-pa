@@ -19,7 +19,7 @@
 
 import type * as React from "react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { Button } from "@/components/ui/button";
+import { Button, type ButtonProps } from "@/components/ui/button";
 import {
   TASK_CANCEL_ACTION_LABEL,
   TASK_CANCEL_CONFIRM_LABEL,
@@ -41,6 +41,15 @@ export interface TaskCloseControlProps {
   pending?: boolean;
   /** Hide Cancel where a surface has no room for it. Defaults to true. */
   showCancel?: boolean;
+  /**
+   * Appearance of the Close *trigger* only (WP-POSTUX-03).
+   *
+   * A surface that mounts this control inside an already-prominent row may need
+   * a quieter trigger. Nothing else is configurable: the two-step confirmation,
+   * its `alertdialog` semantics and its button variants are fixed. Defaults to
+   * `"primary"`, which is exactly today's rendering.
+   */
+  readonly triggerVariant?: ButtonProps["variant"];
   onClose(): void;
   onCancelTask(): void;
 }
@@ -50,6 +59,7 @@ export function TaskCloseControl({
   disabled = false,
   pending = false,
   showCancel = true,
+  triggerVariant = "primary",
   onClose,
   onCancelTask,
 }: TaskCloseControlProps): React.JSX.Element {
@@ -92,7 +102,7 @@ export function TaskCloseControl({
       <div className="flex flex-wrap items-center gap-2">
         <Button
           ref={closeTriggerRef}
-          variant="primary"
+          variant={triggerVariant}
           disabled={disabled}
           data-prominence="primary"
           data-testid="task-close-trigger"

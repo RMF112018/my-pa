@@ -38,6 +38,15 @@ export interface TaskStatusControlProps {
   readonly conflict?: boolean;
   readonly compact?: boolean;
   readonly id?: string;
+  /**
+   * Whether the field label is shown visually (WP-POSTUX-03).
+   *
+   * `"sr-only"` hides it *visually only*: the `<label htmlFor>` element and its
+   * direct association with the select stay in the DOM, so the accessible name
+   * is unchanged, and the terminal branch keeps its equivalent labelling text.
+   * Defaults to `"visible"`, which is exactly today's rendering.
+   */
+  readonly labelVisibility?: "visible" | "sr-only";
   onChange(next: TaskActiveStatus): void;
 }
 
@@ -48,12 +57,16 @@ export function TaskStatusControl({
   conflict = false,
   compact = false,
   id,
+  labelVisibility = "visible",
   onChange,
 }: TaskStatusControlProps): React.JSX.Element {
   const generatedId = useId();
   const controlId = id ?? `${generatedId}-status`;
   const conflictId = `${controlId}-conflict`;
   const terminal = isTerminalTaskStatus(value);
+  // The repository's existing screen-reader-only utility (see `app/layout.tsx`).
+  const labelClassName =
+    labelVisibility === "sr-only" ? "sr-only" : "text-sm text-text-muted";
 
   const conflictNote = conflict ? (
     <p id={conflictId} className="text-sm text-destructive">
@@ -72,7 +85,12 @@ export function TaskStatusControl({
         aria-busy={pending || undefined}
         className={`flex flex-col gap-1 ${compact ? "text-sm" : ""}`}
       >
-        <span className="text-sm text-text-muted">{TASK_STATUS_FIELD_LABEL}</span>
+        {/*
+          Under `sr-only` this label is hidden visually only: it stays in the
+          DOM so the terminal state remains semantically labelled for assistive
+          technology, exactly as the editable branch's `<label>` does.
+        */}
+        <span className={labelClassName}>{TASK_STATUS_FIELD_LABEL}</span>
         <span className="min-h-11 inline-flex items-center text-sm font-medium text-text-primary">
           {formatTaskStatus(value)}
         </span>
@@ -87,7 +105,7 @@ export function TaskStatusControl({
       aria-busy={pending || undefined}
       className={`flex flex-col gap-1 ${compact ? "text-sm" : ""}`}
     >
-      <label htmlFor={controlId} className="text-sm text-text-muted">
+      <label htmlFor={controlId} className={labelClassName}>
         {TASK_STATUS_FIELD_LABEL}
       </label>
       {/*

@@ -39,6 +39,16 @@ import { formatTaskPriority, type TaskCivilClock } from "@/lib/tasks/presentatio
 /** Product copy owned by this row. Everything else comes from the shared modules. */
 const COMMENT_ACTION_LABEL = "Comment";
 
+/**
+ * List wording for the expanded More disclosure (WP-POSTUX-03).
+ *
+ * The default phrase is a sentence on a line that has three other actions on
+ * it; in a dense list it wraps the action band and costs a row of height. The
+ * accessible name is untouched — the disclosure is still announced as
+ * "More actions for <title>" — so this is visible wording only, and only here.
+ */
+const MORE_EXPANDED_LABEL = "Less";
+
 /** Test-id namespace for the shared affordances rendered in this surface. */
 const ROW_TEST_ID = "task-list-row";
 
@@ -88,17 +98,38 @@ export function TaskListRow({
   const title = ops.display?.title ?? task.title;
   const priority = ops.display?.priority ?? task.priority;
 
+  /*
+    No per-row card chrome (WP03-AC-043). The grouped surface — one border, one
+    rounding, one background for the whole list — belongs to the list container;
+    a row that drew its own repeated that chrome once per Task and turned a list
+    into a column of islands. What is left on the root is layout, and the
+    selected fill.
+
+    Selection is carried by `data-state="selected"`, present only when the row
+    is selected (WP03-AC-051/052), and deliberately not by `aria-selected`: this
+    row is not an option in a listbox, and the checkbox already states selection
+    to assistive technology. The fill is a token tint, not a second card.
+  */
   return (
     <div
       ref={rowRef}
       data-testid={ROW_TEST_ID}
       data-work-item={task.task_id}
       aria-busy={busy || undefined}
-      className="flex min-w-0 flex-col gap-2 rounded-[var(--radius-md)] border border-border-subtle bg-surface p-3"
+      data-state={selected ? "selected" : undefined}
+      className="flex min-w-0 flex-col gap-1.5 px-3 py-2 data-[state=selected]:bg-interactive-subtle"
     >
-      {/* Line one: selection and identity. Nothing else is clickable here. */}
+      {/* Band one: selection and identity. Nothing else is clickable here. */}
       <div className="flex min-w-0 items-start gap-2">
-        <span className="flex min-h-11 min-w-11 items-center justify-center">
+        {/*
+          A `<label>`, not a `<span>`. The 44x44 box was always here, but a bare
+          span forwards no click, so the *effective* target was the 20px box the
+          checkbox paints — under both this shell's 44px floor and WCAG 2.5.8's
+          24px minimum. The label makes the box that was already reserved
+          actually operable. The input keeps `aria-label`, which wins over an
+          empty label's (absent) text, so the accessible name is unchanged.
+        */}
+        <label className="flex min-h-11 min-w-11 items-center justify-center">
           <input
             type="checkbox"
             className="size-5 accent-[var(--interactive)]"
@@ -110,7 +141,7 @@ export function TaskListRow({
               onSelect(task.task_id);
             }}
           />
-        </span>
+        </label>
         <a
           href={`/work/tasks/${encodeURIComponent(task.task_id)}`}
           data-testid="task-list-row-title"
@@ -123,20 +154,36 @@ export function TaskListRow({
         >
           <span className="min-w-0 break-words">{title}</span>
         </a>
+      </div>
+
+      {/*
+        Band two: what state this Task is in and how urgent it is — Priority,
+        Status, Due, read together.
+
+        Priority moved here from the identity line and lost the `sm:` gate that
+        hid it on every phone width in scope (WP03-AC-049): a set Priority is
+        part of the urgency reading, so withholding it exactly where the list is
+        read most made the band incomplete. It is plain text, never invented
+        when the Task has none, and — being a non-interactive `<span>` — it
+        takes no place in the row's interactive DOM order (WP03-AC-102).
+      */}
+      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
         {priority ? (
-          <span className="hidden shrink-0 self-center text-sm text-text-muted sm:inline">
-            {formatTaskPriority(priority)}
-          </span>
+          <span className="shrink-0 text-sm text-text-muted">{formatTaskPriority(priority)}</span>
         ) : null}
+        <TaskStatusOperationControl
+          taskTitle={title}
+          operations={operations}
+          labelVisibility="sr-only"
+        />
+        <TaskDueOperationControl
+          taskTitle={title}
+          operations={operations}
+          presentation="value-only"
+        />
       </div>
 
-      {/* Line two: the two inline field edits. */}
-      <div className="flex min-w-0 flex-wrap items-start gap-3">
-        <TaskStatusOperationControl taskTitle={title} operations={operations} />
-        <TaskDueOperationControl taskTitle={title} operations={operations} />
-      </div>
-
-      {/* Line three: the action row. Comment, Close, and More (which holds Cancel). */}
+      {/* Band three: the action row. Comment, Close, and More (which holds Cancel). */}
       <div className="flex min-w-0 flex-wrap items-start gap-2">
         <Button
           variant="ghost"
@@ -158,7 +205,13 @@ export function TaskListRow({
           lives with the affordance now, so every surface gets it. Rendered
           unconditionally so the disclosure keeps its state.
         */}
-        <TaskTerminalActions taskTitle={title} operations={operations} testIdPrefix={ROW_TEST_ID} />
+        <TaskTerminalActions
+          taskTitle={title}
+          operations={operations}
+          testIdPrefix={ROW_TEST_ID}
+          closeTriggerVariant="secondary"
+          moreExpandedLabel={MORE_EXPANDED_LABEL}
+        />
       </div>
 
       <TaskConflictPanel taskTitle={title} operations={operations} testIdPrefix={ROW_TEST_ID} />

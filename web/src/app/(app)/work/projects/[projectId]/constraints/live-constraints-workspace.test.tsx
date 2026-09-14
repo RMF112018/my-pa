@@ -61,6 +61,7 @@ const PRINCIPAL: PrincipalSession = {
   lifecycleState: "active",
   synthetic: true,
 };
+const SESSION_EPOCH = "test-session-binding";
 
 let fixture: ConstraintWorkspaceFixture;
 const complete = { scope: "constraints", coverage: "complete", freshnessAt: "2026-09-08T12:00:00Z", authority: "accepted", limitations: [], truncated: false } as const;
@@ -93,7 +94,7 @@ afterEach(() => {
 });
 
 function content(projectId = "prj_syn_0001") {
-  return <AppShell principal={PRINCIPAL}><LiveConstraintsWorkspace projectId={projectId} initialState={DEFAULT_CONSTRAINT_URL_STATE} /></AppShell>;
+  return <AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}><LiveConstraintsWorkspace projectId={projectId} initialState={DEFAULT_CONSTRAINT_URL_STATE} /></AppShell>;
 }
 
 function mount(query = "", projectId = "prj_syn_0001") {

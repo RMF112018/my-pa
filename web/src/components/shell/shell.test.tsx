@@ -28,6 +28,7 @@ const PRINCIPAL: PrincipalSession = {
   lifecycleState: "active",
   synthetic: true,
 };
+const SESSION_EPOCH = "test-session-binding";
 
 afterEach(() => {
   cleanup();
@@ -36,7 +37,7 @@ afterEach(() => {
 
 describe("app shell", () => {
   it("renders desktop workspaces and mobile primary Today, Work, People", () => {
-    render(<AppShell principal={PRINCIPAL}>content</AppShell>);
+    render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>content</AppShell>);
     expect(DESKTOP_PRIMARY.map(({ label }) => label)).toEqual([
       "Today",
       "Work",
@@ -99,7 +100,7 @@ describe("app shell", () => {
 
   it("groups More into Workspaces, Global, and Utilities", async () => {
     const user = userEvent.setup();
-    render(<AppShell principal={PRINCIPAL}>content</AppShell>);
+    render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>content</AppShell>);
     await user.click(screen.getByRole("button", { name: "More" }));
     const more = screen.getByRole("dialog", { name: "More" });
     expect(within(more).getByRole("heading", { name: "Workspaces" })).toBeTruthy();
@@ -117,7 +118,7 @@ describe("app shell", () => {
 
   it("shows the signed-in principal and the synthetic badge", async () => {
     const user = userEvent.setup();
-    render(<AppShell principal={PRINCIPAL}>content</AppShell>);
+    render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>content</AppShell>);
     await user.click(within(screen.getByRole("banner")).getByRole("button", { name: "Account" }));
     expect(screen.getByTestId("principal-name")).toHaveTextContent("Synthetic A");
     expect(screen.getByTestId("principal-upn")).toHaveTextContent("synthetic.a@moss.example");
@@ -125,13 +126,13 @@ describe("app shell", () => {
   });
 
   it("marks the active destination with aria-current", () => {
-    render(<AppShell principal={PRINCIPAL}>content</AppShell>);
+    render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>content</AppShell>);
     const todayLinks = screen.getAllByRole("link", { name: "Today" });
     expect(todayLinks.some((l) => l.getAttribute("aria-current") === "page")).toBe(true);
   });
 
   it("opens Search from the keyboard with idle copy, not a destination launcher", async () => {
-    render(<AppShell principal={PRINCIPAL}>content</AppShell>);
+    render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>content</AppShell>);
 
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     const dialog = await screen.findByRole("dialog", { name: "Search" });
@@ -152,7 +153,7 @@ describe("app shell", () => {
         headers: { "content-type": "application/json" },
       }),
     );
-    render(<AppShell principal={PRINCIPAL}>content</AppShell>);
+    render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>content</AppShell>);
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     await screen.findByRole("dialog", { name: "Search" });
     await user.type(screen.getByRole("searchbox", { name: "Search" }), "morning brief");
@@ -162,7 +163,7 @@ describe("app shell", () => {
 
   it("keeps Appearance inside Account and collapses the rail from System", async () => {
     const user = userEvent.setup();
-    render(<AppShell principal={PRINCIPAL}>content</AppShell>);
+    render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>content</AppShell>);
     expect(screen.queryByRole("button", { name: "Use dark theme" })).toBeNull();
     expect(screen.queryByRole("button", { name: /Commands/ })).toBeNull();
     expect(screen.queryByRole("button", { name: "Open Inspector" })).toBeNull();
@@ -221,7 +222,7 @@ describe("app shell", () => {
       ),
     );
 
-    render(<AppShell principal={PRINCIPAL}>content</AppShell>);
+    render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>content</AppShell>);
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     await screen.findByRole("dialog", { name: "Search" });
     await user.type(screen.getByRole("searchbox", { name: "Search" }), "morning");
@@ -256,7 +257,7 @@ describe("app shell", () => {
       ),
     );
 
-    render(<AppShell principal={PRINCIPAL}>content</AppShell>);
+    render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>content</AppShell>);
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     await screen.findByRole("dialog", { name: "Search" });
     await user.type(screen.getByRole("searchbox", { name: "Search" }), "morning");
@@ -280,7 +281,7 @@ describe("app shell", () => {
       ),
     );
 
-    render(<AppShell principal={PRINCIPAL}>content</AppShell>);
+    render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>content</AppShell>);
     await user.click(screen.getByTestId("capture-button-desktop"));
 
     // Capture opens on the chooser; Quick note enters the unchanged note branch.
@@ -312,7 +313,7 @@ describe("app shell", () => {
 
   it("opens Capture from the mobile tab", async () => {
     const user = userEvent.setup();
-    render(<AppShell principal={PRINCIPAL}>content</AppShell>);
+    render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>content</AppShell>);
     await user.click(screen.getByTestId("capture-button-mobile"));
     expect(screen.getByRole("dialog", { name: "Capture" })).toBeInTheDocument();
   });

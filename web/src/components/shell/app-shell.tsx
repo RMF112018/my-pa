@@ -29,10 +29,13 @@ export function useOpenCapture(): () => void {
 
 export function AppShell({
   principal,
+  sessionEpoch,
   initialProjectScope,
   children,
 }: {
   principal: PrincipalSession;
+  /** Browser-safe digest bound to the exact verified HttpOnly session SID. */
+  sessionEpoch: string;
   initialProjectScope?: ResolvedProjectScope;
   children: ReactNode;
 }) {
@@ -87,10 +90,6 @@ export function AppShell({
     onToggleDensity: () =>
       update({ density: preferences.density === "comfortable" ? "compact" : "comfortable" }),
   };
-
-  // Session epoch keys Task client state; Principal replacement remounts/resets it.
-  // identitySubject is the durable auth subject for this shell session — never an API param.
-  const sessionEpoch = `${principal.identityProvider}:${principal.identitySubject}`;
 
   return (
     <ProjectScopeProvider

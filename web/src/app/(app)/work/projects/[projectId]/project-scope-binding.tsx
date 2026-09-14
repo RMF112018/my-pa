@@ -16,7 +16,9 @@ export function ProjectRouteScopeBinding({
 }) {
   const { applyResolution } = useProjectScope();
   const fallbackRef = useRef(fallbackResolution);
-  fallbackRef.current = fallbackResolution;
+  useLayoutEffect(() => {
+    fallbackRef.current = fallbackResolution;
+  }, [fallbackResolution]);
 
   useLayoutEffect(() => applyResolution(resolution), [applyResolution, resolution]);
   // Separate cleanup from the apply effect: a refreshed canonical Project

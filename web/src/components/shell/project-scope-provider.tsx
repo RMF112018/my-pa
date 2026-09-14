@@ -1,12 +1,9 @@
 "use client";
 
 import {
+  Component,
   createContext,
-  useCallback,
   useContext,
-  useMemo,
-  useRef,
-  useState,
   type ReactNode,
 } from "react";
 import {
@@ -26,73 +23,91 @@ export interface ProjectScopeContextValue {
 
 const ProjectScopeContext = createContext<ProjectScopeContextValue | null>(null);
 
-export function ProjectScopeProvider({
-  principalId,
-  sessionEpoch,
-  initialResolution = DEFAULT_PROJECT_SCOPE_RESOLUTION,
-  children,
-}: {
+interface ProjectScopeProviderProps {
   /** Server-authenticated canonical Principal identifier. */
   readonly principalId: string;
   /** Authenticated Principal/session binding; never sent to an API. */
   readonly sessionEpoch: string;
   readonly initialResolution?: ResolvedProjectScope;
   readonly children: ReactNode;
-}) {
-  const [state, setState] = useState({
-    resolution: initialResolution,
-    initialResolution,
+}
+
+interface ProjectScopeOwnerProps extends ProjectScopeProviderProps {
+  readonly initialResolution: ResolvedProjectScope;
+}
+
+interface ProjectScopeOwnerState {
+  readonly resolution: ResolvedProjectScope;
+  readonly initialResolution: ResolvedProjectScope;
+  readonly epoch: number;
+  readonly principalId: string;
+  readonly sessionEpoch: string;
+}
+
+class ProjectScopeOwner extends Component<ProjectScopeOwnerProps, ProjectScopeOwnerState> {
+  state: ProjectScopeOwnerState = {
+    resolution: this.props.initialResolution,
+    initialResolution: this.props.initialResolution,
     epoch: 0,
-    principalId,
-    sessionEpoch,
-  });
-  const epochRef = useRef(0);
+    principalId: this.props.principalId,
+    sessionEpoch: this.props.sessionEpoch,
+  };
 
   // The authenticated layout can be re-resolved without remounting AppShell.
-  // Adjust during the provider render so children never render a prior
-  // Principal's Project. This guarded update is also why route-local scope can
-  // differ from the last initial resolution without being reset on every render.
-  const sessionChanged =
-    state.principalId !== principalId || state.sessionEpoch !== sessionEpoch;
-  const initialResolutionChanged = !sameResolution(
-    state.initialResolution,
-    initialResolution,
-  );
-  if (sessionChanged || initialResolutionChanged) {
-    const epoch = state.epoch + 1;
-    epochRef.current = epoch;
-    setState({
-      resolution: initialResolution,
-      initialResolution,
-      epoch,
-      principalId,
-      sessionEpoch,
-    });
+  // Derive the replacement before descendant render so children never observe
+  // a prior Principal's Project, while route-local scope remains independent.
+  static getDerivedStateFromProps(
+    props: ProjectScopeOwnerProps,
+    state: ProjectScopeOwnerState,
+  ): ProjectScopeOwnerState | null {
+    const sessionChanged =
+      state.principalId !== props.principalId || state.sessionEpoch !== props.sessionEpoch;
+    const initialResolutionChanged = !sameResolution(
+      state.initialResolution,
+      props.initialResolution,
+    );
+    if (!sessionChanged && !initialResolutionChanged) return null;
+    return {
+      resolution: props.initialResolution,
+      initialResolution: props.initialResolution,
+      epoch: state.epoch + 1,
+      principalId: props.principalId,
+      sessionEpoch: props.sessionEpoch,
+    };
   }
 
-  const applyResolution = useCallback((resolution: ResolvedProjectScope) => {
-    setState((current) => {
+  private readonly applyResolution = (resolution: ResolvedProjectScope) => {
+    this.setState((current) => {
       const sameScope = sameProjectScope(current.resolution.scope, resolution.scope);
       const sameVersion = current.resolution.project?.version === resolution.project?.version;
       const sameState = current.resolution.project?.state === resolution.project?.state;
       if (sameScope && sameVersion && sameState) return { ...current, resolution };
-      const epoch = current.epoch + 1;
-      epochRef.current = epoch;
-      return { ...current, resolution, epoch };
+      return { ...current, resolution, epoch: current.epoch + 1 };
     });
-  }, []);
+  };
 
-  const isCurrentEpoch = useCallback((epoch: number) => epochRef.current === epoch, []);
-  const value = useMemo<ProjectScopeContextValue>(
-    () => ({ resolution: state.resolution, epoch: state.epoch, applyResolution, isCurrentEpoch }),
-    [applyResolution, isCurrentEpoch, state],
-  );
+  private readonly isCurrentEpoch = (epoch: number) => this.state.epoch === epoch;
 
-  return (
-    <ProjectScopeContext.Provider value={value}>
-      {children}
-    </ProjectScopeContext.Provider>
-  );
+  render() {
+    const value: ProjectScopeContextValue = {
+      resolution: this.state.resolution,
+      epoch: this.state.epoch,
+      applyResolution: this.applyResolution,
+      isCurrentEpoch: this.isCurrentEpoch,
+    };
+    return (
+      <ProjectScopeContext.Provider value={value}>
+        {this.props.children}
+      </ProjectScopeContext.Provider>
+    );
+  }
+}
+
+export function ProjectScopeProvider({
+  initialResolution = DEFAULT_PROJECT_SCOPE_RESOLUTION,
+  ...props
+}: ProjectScopeProviderProps) {
+  return <ProjectScopeOwner {...props} initialResolution={initialResolution} />;
 }
 
 function sameResolution(left: ResolvedProjectScope, right: ResolvedProjectScope): boolean {

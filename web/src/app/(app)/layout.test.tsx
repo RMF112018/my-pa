@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrincipalSession } from "@/contracts/identity";
 
 const { cookies, redirect, resolveSessionPrincipal, resolveServerProjectScope, invokeGateway } =
@@ -37,6 +37,10 @@ const RESOLUTION = {
   normalized: false,
 } as const;
 
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
 describe("authenticated App layout Project Scope", () => {
   it("passes the HttpOnly preference through authenticated server resolution", async () => {
     cookies.mockResolvedValue({
@@ -56,5 +60,26 @@ describe("authenticated App layout Project Scope", () => {
       preferenceValue: "PROJECT:prj_aaaaaaaa11111111",
     });
     expect(tree.props.initialProjectScope).toEqual(RESOLUTION);
+    expect(tree.props.sessionEpoch).toMatch(/^[0-9a-f]{64}$/);
+    expect(tree.props.sessionEpoch).not.toBe("a".repeat(64));
+  });
+
+  it("derives a distinct browser-safe generation for a new verified SID", async () => {
+    let sid = "a".repeat(64);
+    cookies.mockResolvedValue({
+      get: (name: string) => (name === "mypa_session" ? { value: sid } : undefined),
+    });
+    resolveSessionPrincipal.mockResolvedValue(PRINCIPAL);
+    resolveServerProjectScope.mockResolvedValue(RESOLUTION);
+
+    const first = await AppLayout({ children: "content" });
+    sid = "b".repeat(64);
+    const second = await AppLayout({ children: "content" });
+
+    expect(first.props.sessionEpoch).toMatch(/^[0-9a-f]{64}$/);
+    expect(second.props.sessionEpoch).toMatch(/^[0-9a-f]{64}$/);
+    expect(second.props.sessionEpoch).not.toBe(first.props.sessionEpoch);
+    expect(resolveSessionPrincipal).toHaveBeenNthCalledWith(1, "a".repeat(64));
+    expect(resolveSessionPrincipal).toHaveBeenNthCalledWith(2, "b".repeat(64));
   });
 });

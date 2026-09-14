@@ -58,6 +58,7 @@ const PRINCIPAL: PrincipalSession = {
   lifecycleState: "active",
   synthetic: true,
 };
+const SESSION_EPOCH = "test-session-binding";
 
 afterEach(() => {
   cleanup();
@@ -71,7 +72,7 @@ async function openCapture() {
   const fetchSpy = vi
     .spyOn(globalThis, "fetch")
     .mockResolvedValue(new Response("{}", { status: 200 }));
-  render(<AppShell principal={PRINCIPAL}>content</AppShell>);
+  render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>content</AppShell>);
   await user.click(screen.getByTestId("capture-button-desktop"));
   const chooser = await screen.findByTestId("capture-chooser");
   return { user, chooser, fetchSpy };
@@ -201,7 +202,7 @@ describe("a Capture-launched create reconciles active Task queries", () => {
     });
 
     render(
-      <AppShell principal={PRINCIPAL}>
+      <AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>
         <Probe onRevalidate={revalidate} />
       </AppShell>,
     );

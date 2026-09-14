@@ -1,12 +1,13 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import {
   ProjectScopeProvider,
   useProjectScope,
 } from "@/components/shell/project-scope-provider";
 import type { ResolvedProjectScope } from "@/lib/project-scope/resolver";
+import { sessionReplayBinding } from "@/lib/auth/session";
 
 const PROJECT = "prj_aaaaaaaa11111111";
 const OTHER_PROJECT = "prj_bbbbbbbb22222222";
@@ -23,7 +24,7 @@ const PROJECT_V1: ResolvedProjectScope = {
 function Harness() {
   const { resolution, epoch, applyResolution, isCurrentEpoch } = useProjectScope();
   const [local, setLocal] = useState(0);
-  const initialEpoch = useRef(epoch);
+  const [initialEpoch] = useState(epoch);
   return (
     <div>
       <output data-testid="scope">{resolution.scope.kind}</output>
@@ -34,7 +35,7 @@ function Harness() {
       <output data-testid="epoch">{epoch}</output>
       <output data-testid="local">{local}</output>
       <output data-testid="current">{String(isCurrentEpoch(epoch))}</output>
-      <output data-testid="initial-current">{String(isCurrentEpoch(initialEpoch.current))}</output>
+      <output data-testid="initial-current">{String(isCurrentEpoch(initialEpoch))}</output>
       <button type="button" onClick={() => setLocal((value) => value + 1)}>
         Local
       </button>
@@ -179,11 +180,13 @@ describe("Project Scope provider", () => {
     expect(screen.getByTestId("initial-current")).toHaveTextContent("false");
   });
 
-  it("invalidates the epoch when the authenticated session changes for one Principal", () => {
+  it("uses the verified SID binding to distinguish a new session from an ordinary rerender", async () => {
+    const firstSession = await sessionReplayBinding("a".repeat(64));
+    const nextSession = await sessionReplayBinding("b".repeat(64));
     const { rerender } = render(
       <ProjectScopeProvider
         principalId={PRINCIPAL_A}
-        sessionEpoch="session:a"
+        sessionEpoch={firstSession}
         initialResolution={PROJECT_V1}
       >
         <Harness />
@@ -192,7 +195,18 @@ describe("Project Scope provider", () => {
     rerender(
       <ProjectScopeProvider
         principalId={PRINCIPAL_A}
-        sessionEpoch="session:b"
+        sessionEpoch={firstSession}
+        initialResolution={PROJECT_V1}
+      >
+        <Harness />
+      </ProjectScopeProvider>,
+    );
+    expect(screen.getByTestId("epoch")).toHaveTextContent("0");
+
+    rerender(
+      <ProjectScopeProvider
+        principalId={PRINCIPAL_A}
+        sessionEpoch={nextSession}
         initialResolution={PROJECT_V1}
       >
         <Harness />

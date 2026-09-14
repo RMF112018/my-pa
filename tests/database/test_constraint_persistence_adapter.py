@@ -444,16 +444,8 @@ def test_a_constraint_cannot_borrow_another_principal_s_category(
             repository.insert_constraint(PRINCIPAL_B, _published(project_id=PROJECT_B))
 
 
-def test_a_wrong_project_binding_is_not_silently_re_homed(migrated_engine: Engine) -> None:
-    """A row naming another Principal's Project stays in the writer's own partition.
-
-    `projects` carries no `(principal_id, project_id)` uniqueness for a composite
-    foreign key to reach, so what holds here is the partition: the row is stamped
-    with the authenticated Principal, keeps the `project_id` it was given rather
-    than being re-pointed at one of theirs, and is invisible to the Project's own
-    owner. Refusing the cross-Principal Project reference itself is the
-    application boundary's (WP06), which resolves the Project before it writes.
-    """
+def test_a_cross_principal_project_binding_is_refused(migrated_engine: Engine) -> None:
+    """The composite same-Principal Project foreign key fails closed."""
     with migrated_engine.begin() as connection:
         _seed_all(connection)
         repository = _repository(connection)
@@ -465,12 +457,18 @@ def test_a_wrong_project_binding_is_not_silently_re_homed(migrated_engine: Engin
             project_id=PROJECT_A,
             category_id="ccat_adapterbbbb0002bbb",
         )
-        repository.insert_constraint(PRINCIPAL_B, borrowed)
+        with pytest.raises(IntegrityError), connection.begin_nested():
+            repository.insert_constraint(PRINCIPAL_B, borrowed)
+        assert (
+            connection.execute(
+                select(project_constraints.c.constraint_id).where(
+                    project_constraints.c.constraint_id == CONSTRAINT_A
+                )
+            ).all()
+            == []
+        )
         assert repository.get(PRINCIPAL_A, CONSTRAINT_A) is None
-        stored = repository.get(PRINCIPAL_B, CONSTRAINT_A)
-        assert stored is not None
-        assert stored.principal_id == PRINCIPAL_B
-        assert stored.project_id == PROJECT_A
+        assert repository.get(PRINCIPAL_B, CONSTRAINT_A) is None
 
 
 def test_a_write_is_stamped_with_the_authenticated_principal(migrated_engine: Engine) -> None:
@@ -479,7 +477,9 @@ def test_a_write_is_stamped_with_the_authenticated_principal(migrated_engine: En
         _seed_project(connection, PRINCIPAL_A, PROJECT_A)
         _seed_project(connection, PRINCIPAL_B, PROJECT_B)
         repository = _repository(connection)
-        repository.insert_category(PRINCIPAL_B, _category(principal_id=PRINCIPAL_A))
+        repository.insert_category(
+            PRINCIPAL_B, _category(principal_id=PRINCIPAL_A, project_id=PROJECT_B)
+        )
         assert repository.get_category(PRINCIPAL_A, CATEGORY_A) is None
         stored = repository.get_category(PRINCIPAL_B, CATEGORY_A)
         assert stored is not None

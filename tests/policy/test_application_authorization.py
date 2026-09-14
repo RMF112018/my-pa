@@ -1757,7 +1757,7 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.CONSTRAINT_SYNC_APPLY,
         Capability.CONSTRAINT_SYNC_ACKNOWLEDGE,
         Capability.CONSTRAINT_SYNC_RESOLVE,
-        # Run 01's six public names are Project controls in the Principal's own
+        # Run 01's six-entry future set names Project controls in the Principal's own
         # partition. Application handlers supplied later enforce Project
         # ownership; source scope is neither required nor accepted here.
         Capability.CONSTRAINTS_CREATE_PUBLISHED,

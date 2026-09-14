@@ -1,4 +1,4 @@
-"""Server-owned request fields are refused on **every** capability, derived not listed.
+"""Server-owned request fields are refused on every published remote tool.
 
 `compose_remote_arguments` refuses a caller-supplied envelope field before it
 resolves the capability, so the check is capability-independent by construction.
@@ -11,10 +11,10 @@ at all: it derives from the `entities.` prefix. So every capability this phase
 publishes is covered by the *schema* half of that module and by none of the
 *runtime refusal* half.
 
-A subtraction list is exactly the shape of hole this module exists to close.
-The population here is `Capability` itself with nothing removed, so a capability
-added by any later phase joins this sweep by existing. Operator §26 names the
-fields; `SERVER_OWNED_REMOTE_FIELDS` and `REMOTE_OWNED_PAYLOAD_FIELDS` are the
+The population here is the exact handler-backed command surface. A declared
+capability without a handler publishes no remote tool and therefore has no
+schema or positive request to fabricate. Operator §26 names the fields;
+`SERVER_OWNED_REMOTE_FIELDS` and `REMOTE_OWNED_PAYLOAD_FIELDS` are the
 repository's encoding of them, and both are read rather than restated.
 
 Every case carries a control: the same request without the injected field is
@@ -39,6 +39,7 @@ from my_pa.adapters.remote_request import (
 )
 from my_pa.application.commands import Command
 from my_pa.application.errors import InvalidRequestError
+from my_pa.application.service import _HANDLERS
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
@@ -49,6 +50,17 @@ PRINCIPAL: Final = Principal(
     authenticated=True,
 )
 FROZEN: Final = datetime(2026, 8, 15, 9, 30, tzinfo=UTC)
+PUBLISHED_REMOTE_CAPABILITIES: Final = frozenset(_HANDLERS)
+HANDLER_UNWIRED_CAPABILITIES: Final = frozenset(
+    {
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
+        Capability.CONSTRAINTS_PORTFOLIO_LIST,
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
+        Capability.PROJECT_CONTROLS_CONFIGURE,
+        Capability.PROJECT_CONTROLS_STATUS,
+    }
+)
 
 #: The names Phase B publishes. Written out so the sweep below is provably
 #: about them and not merely about a set that happens to be large: a later
@@ -90,12 +102,17 @@ def _compose(capability: Capability, arguments: dict[str, object]) -> dict[str, 
     )
 
 
-def test_the_population_is_the_whole_capability_set() -> None:
-    """No subtraction. The sweeps below are over everything this build publishes."""
-    population = frozenset(Capability)
+def test_the_population_is_the_handler_backed_remote_tool_set() -> None:
+    """The sweeps cover every published tool and no handler-unwired declaration."""
+    population = PUBLISHED_REMOTE_CAPABILITIES
+    command_backed = frozenset(member.capability for member in get_args(Command.__value__))
     assert population, "there are no capabilities, so nothing below proves anything"
     assert population >= PHASE_B_CAPABILITIES
-    assert len(population) == len(list(Capability))
+    assert population == command_backed
+    assert len(population) == 166
+    assert set(Capability) - population == HANDLER_UNWIRED_CAPABILITIES
+    assert not population & HANDLER_UNWIRED_CAPABILITIES
+    assert population | HANDLER_UNWIRED_CAPABILITIES == set(Capability)
 
 
 def test_the_field_sets_are_the_ones_the_contract_names() -> None:
@@ -120,14 +137,14 @@ def test_no_capability_accepts_a_caller_supplied_envelope_field(field: str) -> N
     as parametrisations: the product is several hundred cases whose failure
     message would say less than the capability name this assertion carries.
     """
-    for capability in Capability:
+    for capability in PUBLISHED_REMOTE_CAPABILITIES:
         with pytest.raises(InvalidRequestError):
             _compose(capability, {field: "forged", "payload": {}})
 
 
 def test_no_capability_accepts_a_caller_supplied_idempotency_key() -> None:
     """The payload half. A model inventing a replay key is inventing a request id."""
-    for capability in Capability:
+    for capability in PUBLISHED_REMOTE_CAPABILITIES:
         for field in sorted(REMOTE_OWNED_PAYLOAD_FIELDS):
             with pytest.raises(InvalidRequestError):
                 _compose(capability, {"payload": {field: "forged"}})
@@ -141,7 +158,7 @@ def test_the_same_request_without_the_field_is_composed() -> None:
     change that made `compose_remote_arguments` refuse everything would pass both
     of them and fail here.
     """
-    for capability in Capability:
+    for capability in PUBLISHED_REMOTE_CAPABILITIES:
         composed = _compose(capability, {"payload": {}})
         assert composed["principal_id"] == PRINCIPAL.principal_id
         assert composed["request_id"]

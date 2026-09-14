@@ -349,11 +349,6 @@ def _create_settings_history() -> None:
         """
     )
     op.execute(
-        f"CREATE INDEX constraint_project_settings_history_by_project_time "
-        f"ON {SCHEMA}.constraint_project_settings_history "
-        "(principal_id, project_id, occurred_at DESC, history_id DESC)"
-    )
-    op.execute(
         f"CREATE TRIGGER constraint_project_settings_history_are_immutable "
         f"BEFORE UPDATE OR DELETE ON {SCHEMA}.constraint_project_settings_history "
         "FOR EACH ROW EXECUTE FUNCTION knowledge.managed_document_rows_stay_as_written()"

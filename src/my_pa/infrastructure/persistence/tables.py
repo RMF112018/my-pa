@@ -1012,25 +1012,9 @@ captures = Table(
     METADATA,
     Column("capture_id", Text, primary_key=True),
     Column("owner_principal_id", Text, nullable=False),
-    Column("project_id", Text),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     _is_identifier("capture_id", IdKind.CAPTURE),
     _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
-    CheckConstraint(
-        "project_id IS NULL OR project_id ~ '^prj_[A-Za-z0-9]{8,64}$'",
-        name="a_capture_project_is_an_opaque_identifier",
-    ),
-    ForeignKeyConstraint(
-        ["project_id", "owner_principal_id"],
-        [f"{SCHEMA}.projects.project_id", f"{SCHEMA}.projects.principal_id"],
-        name="a_capture_names_a_project_in_its_principal",
-    ),
-    Index(
-        "captures_by_principal_project_created_at",
-        "owner_principal_id",
-        "project_id",
-        "created_at",
-    ),
 )
 
 #: One row per immutable version of one capture. Insert only, enforced by the
@@ -11390,13 +11374,6 @@ constraint_project_settings_history = Table(
         ["project_id", "principal_id"],
         [f"{SCHEMA}.projects.project_id", f"{SCHEMA}.projects.principal_id"],
         name="a_constraint_settings_history_names_a_project_in_its_principal",
-    ),
-    Index(
-        "constraint_project_settings_history_by_project_time",
-        "principal_id",
-        "project_id",
-        text("occurred_at DESC"),
-        text("history_id DESC"),
     ),
 )
 

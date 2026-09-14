@@ -18,6 +18,7 @@ from sqlalchemy import (
     Engine,
     ForeignKeyConstraint,
     UniqueConstraint,
+    delete,
     insert,
     select,
     text,
@@ -89,6 +90,13 @@ def _values(expression: str) -> frozenset[str]:
     return frozenset(re.findall(r"'([^']+)'", body))
 
 
+def _offline_sql() -> str:
+    output = io.StringIO()
+    config = Config(str(ROOT / "alembic.ini"), output_buffer=output)
+    command.upgrade(config, f"{PREVIOUS}:{REVISION}", sql=True)
+    return output.getvalue()
+
+
 def test_revision_identity_and_frozen_vocabulary_are_exact() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [REVISION]
@@ -115,7 +123,6 @@ def test_revision_identity_and_frozen_vocabulary_are_exact() -> None:
 
 def test_metadata_declares_every_same_principal_fk_and_history_guard() -> None:
     expected = {
-        captures: "a_capture_names_a_project_in_its_principal",
         tasks: "a_task_names_a_project_in_its_principal",
         constraint_project_settings: "constraint_settings_project_is_same_principal",
         constraint_categories: "constraint_categories_project_is_same_principal",
@@ -130,10 +137,7 @@ def test_metadata_declares_every_same_principal_fk_and_history_guard() -> None:
             for constraint in table.constraints
             if isinstance(constraint, ForeignKeyConstraint) and constraint.name == name
         )
-        assert [column.name for column in foreign_key.columns] in (
-            ["project_id", "owner_principal_id"],
-            ["project_id", "principal_id"],
-        )
+        assert [column.name for column in foreign_key.columns] == ["project_id", "principal_id"]
         assert [element.column.name for element in foreign_key.elements] == [
             "project_id",
             "principal_id",
@@ -156,6 +160,29 @@ def test_metadata_declares_every_same_principal_fk_and_history_guard() -> None:
     snapshot_expression = str(snapshot_check.sqltext)
     assert "= (resulting_timezone_name IS NOT NULL)" in snapshot_expression
     assert "= (resulting_settings_updated_at IS NOT NULL)" in snapshot_expression
+    assert "constraint_project_settings_history_by_project_time" not in {
+        index.name for index in constraint_project_settings_history.indexes
+    }
+
+
+def test_capture_project_mapping_is_deferred_to_wp04() -> None:
+    """WP03 owns forward DDL, while WP04 owns Capture persistence behavior."""
+    # Keeping the Run01 column out of this historically imported shared Table
+    # preserves the absolute freeze of revision 1a4c9e77b2d5. WP03 changes no
+    # Capture read/write behavior; WP04 will add its owned application mapping.
+    assert "project_id" not in captures.c
+
+
+def test_run01_offline_sql_owns_the_capture_project_ddl(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "MY_PA_DATABASE_URL", "postgresql+psycopg://someone@db.invalid:5432/somewhere"
+    )
+    sql = _offline_sql()
+    assert "ALTER TABLE knowledge.captures ADD COLUMN project_id text;" in sql
+    assert "ADD CONSTRAINT a_capture_project_is_an_opaque_identifier" in sql
+    assert "ADD CONSTRAINT a_capture_names_a_project_in_its_principal" in sql
+    assert "CREATE INDEX captures_by_principal_project_created_at" in sql
+    assert "constraint_project_settings_history_by_project_time" not in sql
 
 
 @pytest.mark.database
@@ -176,10 +203,45 @@ def test_predecessor_to_head_preserves_null_capture_scope(empty_database_url: st
         with engine.connect() as connection:
             assert (
                 connection.execute(
-                    select(captures.c.project_id).where(captures.c.capture_id == CAPTURE)
+                    text(
+                        "SELECT project_id FROM knowledge.captures WHERE capture_id = :capture_id"
+                    ),
+                    {"capture_id": CAPTURE},
                 ).scalar_one()
                 is None
             )
+            assert (
+                connection.execute(
+                    text(
+                        "SELECT is_nullable FROM information_schema.columns "
+                        "WHERE table_schema='knowledge' AND table_name='captures' "
+                        "AND column_name='project_id'"
+                    )
+                ).scalar_one()
+                == "YES"
+            )
+            capture_constraints = set(
+                connection.execute(
+                    text(
+                        "SELECT conname FROM pg_constraint c "
+                        "JOIN pg_class t ON t.oid=c.conrelid "
+                        "JOIN pg_namespace n ON n.oid=t.relnamespace "
+                        "WHERE n.nspname='knowledge' AND t.relname='captures'"
+                    )
+                ).scalars()
+            )
+            assert "a_capture_project_is_an_opaque_identifier" in capture_constraints
+            assert "a_capture_names_a_project_in_its_principal" in capture_constraints
+            indexes = set(
+                connection.execute(
+                    text(
+                        "SELECT indexname FROM pg_indexes WHERE schemaname='knowledge' "
+                        "AND tablename IN ('captures', 'constraint_project_settings_history')"
+                    )
+                ).scalars()
+            )
+            assert "captures_by_principal_project_created_at" in indexes
+            assert "constraint_project_settings_history_by_project_time" not in indexes
             assert "a_project_is_identified_within_its_principal" in set(
                 connection.execute(
                     text(
@@ -230,12 +292,17 @@ def test_head_enforces_composite_scope_and_immutable_settings_history(
             try:
                 with pytest.raises(IntegrityError):
                     connection.execute(
-                        insert(captures).values(
-                            capture_id=CAPTURE,
-                            owner_principal_id=OTHER_PRINCIPAL,
-                            project_id=PROJECT,
-                            created_at=WHEN,
-                        )
+                        text(
+                            "INSERT INTO knowledge.captures "
+                            "(capture_id, owner_principal_id, project_id, created_at) "
+                            "VALUES (:capture_id, :principal_id, :project_id, :created_at)"
+                        ),
+                        {
+                            "capture_id": CAPTURE,
+                            "principal_id": OTHER_PRINCIPAL,
+                            "project_id": PROJECT,
+                            "created_at": WHEN,
+                        },
                     )
             finally:
                 cross_principal.rollback()
@@ -267,6 +334,33 @@ def test_head_enforces_composite_scope_and_immutable_settings_history(
                 update(constraint_project_settings_history)
                 .where(constraint_project_settings_history.c.history_id == "cpsh_aaaaaaaa11111111")
                 .values(actor="assistant")
+            )
+        with engine.connect() as connection:
+            assert (
+                connection.execute(
+                    select(constraint_project_settings_history.c.actor).where(
+                        constraint_project_settings_history.c.history_id == "cpsh_aaaaaaaa11111111"
+                    )
+                ).scalar_one()
+                == "principal"
+            )
+        with (
+            engine.begin() as connection,
+            pytest.raises(DBAPIError, match="is append only; DELETE is refused"),
+        ):
+            connection.execute(
+                delete(constraint_project_settings_history).where(
+                    constraint_project_settings_history.c.history_id == "cpsh_aaaaaaaa11111111"
+                )
+            )
+        with engine.connect() as connection:
+            assert (
+                connection.execute(
+                    select(constraint_project_settings_history.c.actor).where(
+                        constraint_project_settings_history.c.history_id == "cpsh_aaaaaaaa11111111"
+                    )
+                ).scalar_one()
+                == "principal"
             )
         with engine.begin() as connection, pytest.raises(IntegrityError):
             connection.execute(

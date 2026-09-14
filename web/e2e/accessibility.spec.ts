@@ -826,3 +826,262 @@ test.describe("Create Task required-field semantics", () => {
     await expect(page.getByTestId("task-create-sheet")).toHaveCount(0);
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * The normalized Work List (WP-POSTUX-03)
+ * ------------------------------------------------------------------ */
+
+/**
+ * The Work List after normalization, scanned and driven where it is operated.
+ *
+ * **Why the `/work` entry in `PAGES` is not enough, and why that matters here
+ * more than anywhere else in this file.** That entry scans whatever the Work
+ * List happens to hold, and on a quiet disposable database that is the Empty
+ * card: axe finds no violation in a list with no rows, so a green result there
+ * says nothing whatever about a Task row. WP03-AC-101 asks for a scan of the
+ * *populated* List, so every test below seeds real Tasks through the canonical
+ * BFF, asserts the rows are on screen, and only then scans or drives them. The
+ * row count is asserted rather than assumed, so a pass cannot be vacuous.
+ *
+ * **What normalization changed that only an accessibility check can catch.**
+ * Three of the row's controls gave up visible text: the Status field label is
+ * now `sr-only`, the Due trigger shows its value without the word `Due`, and
+ * the expanded More disclosure reads `Less`. Each of those is a place where an
+ * accessible name can be lost by accident while the surface still looks right,
+ * so each is asserted as a name rather than as a rendering. The interactive DOM
+ * order is asserted by actually tabbing, because the bands were rearranged and
+ * a reading order that no longer matches the visual one is invisible to axe.
+ *
+ * Still an automated subset, and still bounded the way the rest of this file is
+ * bounded: not screen-reader proof, not a 200%/400% zoom proof, and not a WCAG
+ * 2.2 AA claim.
+ */
+test.describe("the normalized Work List", () => {
+  /**
+   * macOS Tab traverses text fields and lists only unless Full Keyboard Access
+   * is on; Option+Tab is the chord that reaches every control, and Playwright's
+   * WebKit reproduces that operating-system default. The chord differs by
+   * engine; the path being proved — keyboard, no pointer — does not. Same rule
+   * as `work-acceptance.spec.ts`, restated here because this file is driven by
+   * its own project list.
+   */
+  async function pressNextControl(page: Page): Promise<void> {
+    await page.keyboard.press(test.info().project.name === "webkit" ? "Alt+Tab" : "Tab");
+  }
+
+  /**
+   * Put `count` synthetic Tasks in one Work List and hand back the marker that
+   * isolates them.
+   *
+   * The marker goes through the List's own `q=` filter, so the view holds these
+   * rows and nothing else a parallel spec may have left; `seedTask` registers
+   * each one for the file's `afterEach` disposal, so nothing is left behind.
+   */
+  async function seedList(
+    page: Page,
+    count: number,
+  ): Promise<{ marker: string; titles: string[] }> {
+    const marker = `a11ylist-${test.info().project.name}-${Date.now()}`;
+    await page.goto("/work?view=all-open");
+    await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
+    const titles: string[] = [];
+    for (let index = 0; index < count; index += 1) {
+      const title = `E2E list a11y task ${marker} ${index}`;
+      const created = await seedTask(page, {
+        title,
+        dueAt: "2026-12-04T17:00:00Z",
+        idempotencyKey: `e2e-${marker}-${index}`,
+      });
+      expect(created.status, `seeding Task ${index} must succeed`).toBe(200);
+      titles.push(title);
+    }
+    await page.goto(`/work?view=all-open&q=${encodeURIComponent(marker)}`);
+    await expect(page.getByRole("list", { name: "Work list" })).toBeVisible();
+    await expect(page.locator('[data-testid="task-list-row"]')).toHaveCount(count);
+    return { marker, titles };
+  }
+
+  test.beforeEach(async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await signIn(page);
+  });
+
+  /** WP03-AC-101. */
+  test("a populated Work List and its expanded states have no detectable violation", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const { titles } = await seedList(page, 2);
+    const row = page.locator('[data-testid="task-list-row"]').filter({ hasText: titles[0]! });
+    await expect(row).toHaveCount(1);
+
+    // Load-bearing: a scan of an empty `/work` is vacuous, so the rows are
+    // proved present before anything is measured. The count assertion lives in
+    // `seedList`; this one names the row the expanded states are opened on.
+    expect(await scan(page), "populated Work List accessibility violations").toEqual([]);
+
+    // The Due chooser is a popover: a control that only exists once opened is
+    // never seen by a page-level pass over the closed state.
+    await row.getByRole("button", { name: /^Due, / }).click();
+    await expect(page.getByRole("group", { name: "Due choices" })).toBeVisible();
+    expect(await scan(page), "Work List Due chooser accessibility violations").toEqual([]);
+    await page.keyboard.press("Escape");
+
+    // More is a disclosure whose expanded content — Cancel Task — does not
+    // exist in the DOM until it is opened, and whose own visible wording
+    // changes to `Less` while its accessible name must not.
+    const more = row.getByTestId("task-list-row-more");
+    await more.click();
+    await expect(more).toHaveAttribute("aria-expanded", "true");
+    await expect(row.getByRole("button", { name: "Cancel Task", exact: true })).toBeVisible();
+    expect(await scan(page), "Work List expanded More accessibility violations").toEqual([]);
+  });
+
+  /**
+   * WP03-AC-102. The interactive order is proved by tabbing, not by reading the
+   * DOM: a `tabindex`, a portal, or a control rendered in a different band would
+   * all keep the source order this asserts against while changing the order a
+   * keyboard actually visits. Priority is deliberately not in the list — it
+   * moved into the state band as plain text and must remain unfocusable.
+   */
+  test("keyboard order on a row is checkbox, title, Status, Due, Comment, Close, More", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const { titles } = await seedList(page, 1);
+    const title = titles[0]!;
+    const row = page.locator('[data-testid="task-list-row"]').filter({ hasText: title });
+
+    const expected: Array<[string, ReturnType<typeof row.locator>]> = [
+      ["checkbox", row.getByRole("checkbox", { name: `Select ${title}` })],
+      ["title", row.getByTestId("task-list-row-title")],
+      ["Status", row.getByTestId("task-status-control").getByRole("combobox")],
+      ["Due", row.getByRole("button", { name: /^Due, / })],
+      ["Comment", row.getByTestId("task-list-row-comment")],
+      ["Close", row.getByTestId("task-close-trigger")],
+      ["More", row.getByTestId("task-list-row-more")],
+    ];
+
+    // The first stop is reached with the keyboard's own entry point rather than
+    // by a click, so nothing in this test depends on a pointer.
+    await expected[0]![1].focus();
+    await expect(expected[0]![1], "the checkbox must take focus first").toBeFocused();
+    for (let index = 1; index < expected.length; index += 1) {
+      await pressNextControl(page);
+      const [name, locator] = expected[index]!;
+      await expect(locator, `Tab stop ${index} should be ${name}`).toBeFocused();
+    }
+
+    // Priority is a `<span>` in the same band as Status and Due. If it ever
+    // acquired a tabindex it would sit between the title and Status above; this
+    // states the rule directly so the reason is recorded, not inferred.
+    await expect(row.locator("[tabindex]:not([tabindex='-1'])")).toHaveCount(0);
+  });
+
+  /**
+   * WP03-AC-053 and WP03-AC-127. Two controls gave up visible text in the List
+   * and neither may give up its name.
+   *
+   * Status keeps a real `<label for>` that is hidden visually only, so the
+   * association is asserted in the DOM *and* the resolved accessible name is
+   * asserted through the engine's own accessibility tree. The Due trigger's
+   * visible text is the phrase alone; its accessible name must still be exactly
+   * `Due, <phrase>`, which is stated as an equality against the phrase the row
+   * is actually showing rather than against a date this test guessed.
+   */
+  test("Status keeps its name behind a visually hidden label and Due names its value", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const { titles } = await seedList(page, 1);
+    const row = page.locator('[data-testid="task-list-row"]').filter({ hasText: titles[0]! });
+
+    const status = row.getByTestId("task-status-control").getByRole("combobox");
+    await expect(status).toBeVisible();
+    await expect(status, "the Status select must resolve its accessible name").toHaveAccessibleName(
+      "Status",
+    );
+    // The `<label for>` element itself is still in the DOM and still associated:
+    // an `aria-label` bolted on after the label was deleted would satisfy the
+    // name assertion above while losing the click-to-focus behaviour a real
+    // label carries.
+    const labelled = await status.evaluate((node) => {
+      const control = node as HTMLSelectElement;
+      const label = control.labels?.[0] ?? null;
+      if (!label) return null;
+      const style = getComputedStyle(label);
+      return {
+        text: label.textContent?.trim() ?? "",
+        htmlFor: label.getAttribute("for"),
+        id: control.id,
+        // A visually hidden label is clipped, not removed: `display: none` or
+        // `visibility: hidden` would take it out of the accessibility tree too.
+        display: style.display,
+        visibility: style.visibility,
+      };
+    });
+    expect(labelled, "Status must still be labelled by a real <label for>").not.toBeNull();
+    expect(labelled!.htmlFor, "the label must point at the select").toBe(labelled!.id);
+    expect(labelled!.text).toBe("Status");
+    expect(labelled!.display, "a hidden label must not be display:none").not.toBe("none");
+    expect(labelled!.visibility, "a hidden label must not be visibility:hidden").not.toBe("hidden");
+
+    const due = row.getByRole("button", { name: /^Due, / });
+    await expect(due).toBeVisible();
+    const phrase = (await due.innerText()).trim();
+    // Value-only presentation: the visible text is the phrase alone, with no
+    // `Due` prefix drawn beside it.
+    expect(phrase.length, "the Due trigger must state a phrase").toBeGreaterThan(0);
+    expect(phrase, "the List Due trigger draws no visible `Due` prefix").not.toMatch(/^Due\b/);
+    await expect(due, "the Due trigger's accessible name is `Due, <phrase>`").toHaveAccessibleName(
+      `Due, ${phrase}`,
+    );
+  });
+
+  /**
+   * WP03-AC-103. Every keyboard-focusable control on a row paints something.
+   *
+   * Measured the way this suite already measures focus on the Create Task sheet:
+   * an outline of at least 1px, or a ring implemented as a box-shadow. Focus is
+   * moved with the keyboard rather than with `focus()`, because `:focus-visible`
+   * is exactly the rule a pointer-driven focus is allowed not to match — a
+   * scripted focus that happened to satisfy this would prove the wrong thing.
+   */
+  test("every keyboard-focusable row control shows a focus indicator", async ({ page }) => {
+    test.setTimeout(180_000);
+    const { titles } = await seedList(page, 1);
+    const title = titles[0]!;
+    const row = page.locator('[data-testid="task-list-row"]').filter({ hasText: title });
+
+    const checkbox = row.getByRole("checkbox", { name: `Select ${title}` });
+    await checkbox.focus();
+
+    const unindicated: string[] = [];
+    // Seven controls, entered on the first and stepped through with the same
+    // chord the order test uses.
+    for (let index = 0; index < 7; index += 1) {
+      if (index > 0) await pressNextControl(page);
+      const focus = await page.evaluate(() => {
+        const active = document.activeElement as HTMLElement | null;
+        if (!active) return null;
+        const style = getComputedStyle(active);
+        return {
+          name:
+            active.getAttribute("aria-label") ??
+            active.getAttribute("data-testid") ??
+            `${active.tagName.toLowerCase()}`,
+          outlineStyle: style.outlineStyle,
+          outlineWidth: Number.parseFloat(style.outlineWidth) || 0,
+          boxShadow: style.boxShadow,
+          inRow: Boolean(active.closest('[data-testid="task-list-row"]')),
+        };
+      });
+      expect(focus, `something must hold focus at stop ${index}`).not.toBeNull();
+      expect(focus!.inRow, `focus left the row at stop ${index}`).toBe(true);
+      const hasOutline = focus!.outlineStyle !== "none" && focus!.outlineWidth >= 1;
+      const hasRing = focus!.boxShadow !== "none" && focus!.boxShadow !== "";
+      if (!hasOutline && !hasRing) unindicated.push(`${focus!.name}: ${JSON.stringify(focus)}`);
+    }
+    expect(unindicated, "row controls with no visible focus indicator").toEqual([]);
+  });
+});

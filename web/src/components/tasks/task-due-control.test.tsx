@@ -178,6 +178,63 @@ describe("TaskDueControl", () => {
     expect(note).toHaveTextContent(CONFLICT_COPY);
   });
 
+  /**
+   * WP-POSTUX-03 presentation seam: `presentation`.
+   *
+   * `presentation` is deliberately not `triggerLabel` (WP03-AC-127/128):
+   * `triggerLabel` replaces the accessible name and asserts nothing about the
+   * current value, whereas `value-only` drops only the `aria-hidden` visual
+   * "Due" prefix and keeps the accessible name `Due, <phrase>` intact.
+   */
+  it("defaults to showing both the Due prefix and the phrase", () => {
+    render(<TaskDueControl value={TODAY_ISO} clock={clock} onChange={() => {}} />);
+
+    const button = trigger();
+    expect(button).toHaveAccessibleName("Due, Today");
+    expect(button.textContent).toContain("Due");
+    expect(button.textContent).toContain("Today");
+
+    const hidden = button.querySelector("[aria-hidden='true']");
+    expect(hidden).not.toBeNull();
+    expect(hidden?.textContent).toBe("Due");
+  });
+
+  it("shows the phrase alone under value-only while keeping the Due accessible name", () => {
+    render(
+      <TaskDueControl
+        value={TODAY_ISO}
+        clock={clock}
+        presentation="value-only"
+        onChange={() => {}}
+      />,
+    );
+
+    const button = trigger();
+    // The accessible name is unchanged: still exactly `Due, <phrase>`.
+    expect(button).toHaveAccessibleName("Due, Today");
+    // The visible content is the phrase alone; the visual prefix is gone.
+    expect(button.textContent).toBe("Today");
+    expect(button.querySelector("[aria-hidden='true']")).toBeNull();
+  });
+
+  it("lets an explicit triggerLabel win over value-only for name and visible text", () => {
+    render(
+      <TaskDueControl
+        value={OVERDUE_ISO}
+        clock={clock}
+        presentation="value-only"
+        triggerLabel="Reschedule Renew the passport"
+        onChange={() => {}}
+      />,
+    );
+
+    const button = screen.getByRole("button", { name: "Reschedule Renew the passport" });
+    expect(button.textContent).toBe("Reschedule Renew the passport");
+    // The control still asserts nothing about the current due value.
+    expect(button.textContent).not.toMatch(/overdue/i);
+    expect(screen.queryByRole("button", { name: /^Due, / })).toBeNull();
+  });
+
   it("makes no network call of its own", async () => {
     const source = readFileSync("src/components/tasks/task-due-control.tsx", "utf8");
     expect(source).not.toContain("fetch(");

@@ -235,11 +235,30 @@ function CommitmentCard({ row, onOpen }: {
   );
 }
 
+/*
+  The Work list is one surface, not a stack of cards (WP-POSTUX-03).
+
+  Task rows draw no chrome of their own any more, so the boundary is drawn once
+  here: a single low-emphasis border and rounding around the whole list, with
+  rows separated by dividers instead of gaps. `<ul>`/`<li>` semantics and the
+  `Work list` accessible name are unchanged.
+
+  Commitments share this `<ul>` and keep their existing card treatment
+  (WP03-AC-039) — a Commitment card is still a card — so the class is branched
+  rather than changed for both.
+*/
+const TASK_LIST_CLASS_NAME =
+  "divide-y divide-border-subtle rounded-[var(--radius-md)] border border-border-subtle bg-surface";
+const COMMITMENT_LIST_CLASS_NAME = "grid gap-2";
+
 function ListPerspective(props: WorkPerspectivesProps) {
   const taskRows = props.rows as readonly TaskRow[];
   const commitmentRows = props.rows as readonly CommitmentLike[];
   return (
-    <ul aria-label="Work list" className="grid gap-2">
+    <ul
+      aria-label="Work list"
+      className={props.commitments ? COMMITMENT_LIST_CLASS_NAME : TASK_LIST_CLASS_NAME}
+    >
       {props.commitments
         ? commitmentRows.map((row) => <li key={row.commitment_id}><CommitmentCard row={row} onOpen={props.onOpen} /></li>)
         : taskRows.map((task) => (

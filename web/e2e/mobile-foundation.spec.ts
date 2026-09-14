@@ -43,10 +43,31 @@
  * nothing about VoiceOver announcements. All of those are WP09, and none of
  * them may be read out of a green run of this file.
  *
- * **Read-only by construction.** The Create Task sheet is opened and measured
- * but never submitted, so this file creates no Task and leaves no row behind;
- * each test that opens the sheet closes it again through the real "Close panel"
- * control before it ends.
+ * **What WP-POSTUX-03 adds to it.** The normalized Work List, measured on a
+ * *populated* list rather than on an empty one. A row is where this shell puts
+ * the most controls per vertical centimetre — a checkbox, a title, a Status
+ * select, a Due trigger and three buttons — and normalization moved Priority
+ * into that band, hid the Status label, stripped the Due trigger to its value
+ * and re-weighted Close. So the coarse-pointer floors are re-measured on the row
+ * itself, the Status `<select>`'s definite height is asserted on the WebKit lane
+ * where the 22px defect actually reproduces, the four migrated Workbench selects
+ * are measured where a user meets them, and every expanded state the row can
+ * enter — the Due chooser, More with Cancel showing, a real version conflict —
+ * is proved to stay inside the row and inside the viewport at every narrow
+ * width. The row's vertical rhythm is held to a generous ceiling rather than to
+ * an exact pixel count, deliberately: the package forbids a brittle
+ * exact-pixel contract, and a ceiling is what actually states "materially
+ * lighter than the audited stack of cards".
+ *
+ * **Read-only by construction, with one stated exception.** The Create Task
+ * sheet is opened and measured but never submitted, so none of the WP01/WP02
+ * work below creates a Task; each test that opens the sheet closes it again
+ * through the real "Close panel" control before it ends. The WP-POSTUX-03
+ * section cannot be read-only — an empty list has no row to measure and a
+ * measurement of nothing is worse than no measurement — so it seeds synthetic,
+ * marker-named Tasks through the canonical BFF and disposes of every one of
+ * them in an `afterEach` that runs after a failed test as well as a passing one.
+ * Nothing it creates outlives the test that created it.
  */
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
@@ -962,5 +983,767 @@ test.describe("the Create Task surface fits tablet geometry", () => {
       "capture-launched Create Task controls at 768x1024",
     ).toEqual([]);
     await closeCreateTaskSheet(page);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * WP-POSTUX-03 — the normalized Work List at coarse geometry
+ * ------------------------------------------------------------------ */
+
+/** The row height the audit measured on the card-stack List, in CSS px. */
+const AUDITED_ROW_HEIGHT_PX = 196;
+
+/**
+ * The ceiling an ordinary active row must sit under.
+ *
+ * A ceiling, not an equality, and that is the whole point. The package pins a
+ * *materially lighter* rhythm than the audited stack of cards and explicitly
+ * forbids a brittle exact-pixel contract: a row whose height is asserted to the
+ * pixel reddens on a font metric, a line-height token or a one-pixel divider
+ * without anything having regressed. 180px is comfortably under the audited
+ * 196px and comfortably above the three 44px bands plus their gaps and padding,
+ * so it fails a row that has quietly put its card chrome back and passes a row
+ * that is merely being drawn on a different engine.
+ */
+const WORK_ROW_HEIGHT_CEILING_PX = 180;
+
+type ApiAnswer<T> = { status: number; body: T };
+
+async function workListApi<T>(
+  page: Page,
+  path: string,
+  options: { method?: string; body?: Record<string, unknown> } = {},
+): Promise<ApiAnswer<T>> {
+  return page.evaluate(
+    async ({ target, method, payload }) => {
+      const response = await fetch(target, {
+        method: method ?? "GET",
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: payload ? { "content-type": "application/json" } : undefined,
+        body: payload ? JSON.stringify(payload) : undefined,
+      });
+      return { status: response.status, body: (await response.json()) as T };
+    },
+    { target: path, method: options.method, payload: options.body },
+  );
+}
+
+/** The content box of an element: its border box less border and padding. */
+async function contentBox(locator: Locator): Promise<{ left: number; right: number }> {
+  return locator.evaluate((node) => {
+    const style = getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    const px = (value: string) => Number.parseFloat(value) || 0;
+    return {
+      left: rect.left + px(style.borderLeftWidth) + px(style.paddingLeft),
+      right: rect.right - px(style.borderRightWidth) - px(style.paddingRight),
+    };
+  });
+}
+
+/**
+ * The measured height of a control, named, or `null` when it has no box.
+ *
+ * Returned rather than asserted so a caller can report every undersized control
+ * in one run instead of aborting on the first.
+ */
+async function measure(locator: Locator): Promise<{ width: number; height: number } | null> {
+  const box = await locator.boundingBox();
+  return box ? { width: box.width, height: box.height } : null;
+}
+
+test.describe("the normalized Work List at coarse geometry", () => {
+  /**
+   * Seeded Tasks, and putting them back.
+   *
+   * `e2e/stack.sh` builds one disposable database for the whole run, so a row
+   * left behind changes what every later spec sees — `today-tasks.spec.ts`
+   * leaked exactly this way. Disposal is deterministic rather than best-effort:
+   * each row is read, one already terminal is left alone, and the rest are
+   * transitioned with the version that read returned. It runs after a failed
+   * test as well as a passing one, because a test that fails after seeding has
+   * still seeded.
+   */
+  const seeded: string[] = [];
+
+  /** See `today-tasks.spec.ts`: scaffolding was never done, so it is not "Closed". */
+  const TEARDOWN_STATE = "cancelled";
+
+  /** A long title, so wrapping is exercised rather than hoped for. */
+  const LONG_TITLE_TAIL =
+    "with a deliberately long identity line that must wrap across several lines at phone width rather than shoulder its neighbours aside";
+
+  async function seedTask(
+    page: Page,
+    input: { title: string; priority?: string; idempotencyKey: string },
+  ): Promise<string> {
+    const created = await workListApi<{ task?: { task_id: string } }>(page, "/api/tasks", {
+      method: "POST",
+      body: {
+        title: input.title,
+        ...(input.priority ? { priority: input.priority } : {}),
+        idempotencyKey: input.idempotencyKey,
+      },
+    });
+    expect(created.status, `seeding "${input.title}" must succeed`).toBe(200);
+    const taskId = created.body.task?.task_id ?? "";
+    expect(taskId, "the BFF must answer with a Task id").not.toBe("");
+    seeded.push(taskId);
+    return taskId;
+  }
+
+  /**
+   * Put one ordinary Task and one long-titled Task in a List of their own.
+   *
+   * Both carry a Priority, because WP03-AC-049 is about a Priority that is
+   * actually set: a row with none correctly shows none, and measuring that would
+   * pass vacuously. The marker goes through the List's own `q=` filter so the
+   * view holds these rows and nothing another spec left behind.
+   */
+  async function seedWorkList(page: Page): Promise<{
+    tag: string;
+    ordinary: string;
+    long: string;
+    taskId: string;
+  }> {
+    const tag = `wp03m-${test.info().project.name}-${Date.now()}`;
+    // The two titles must not be substrings of one another: rows are located
+    // with `filter({ hasText })`, which is a substring match, so a long title
+    // built by appending to the ordinary one silently matches both rows.
+    const ordinary = `E2E list row ${tag} ordinary`;
+    const long = `E2E list row ${tag} long ${LONG_TITLE_TAIL}`;
+    await page.goto("/work?view=all-open");
+    await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
+    const taskId = await seedTask(page, {
+      title: ordinary,
+      priority: "p1",
+      idempotencyKey: `e2e-${tag}-0`,
+    });
+    await seedTask(page, { title: long, priority: "p2", idempotencyKey: `e2e-${tag}-1` });
+    await page.goto(`/work?view=all-open&q=${encodeURIComponent(tag)}`);
+    await expect(page.getByRole("list", { name: "Work list" })).toBeVisible();
+    await expect(page.locator('[data-testid="task-list-row"]')).toHaveCount(2);
+    return { tag, ordinary, long, taskId };
+  }
+
+  function listRow(page: Page, title: string): Locator {
+    return page.locator('[data-testid="task-list-row"]').filter({ hasText: title });
+  }
+
+  function workList(page: Page): Locator {
+    return page.getByRole("list", { name: "Work list" });
+  }
+
+  /** The seven coarse-pointer targets a row puts under a finger, in band order. */
+  function rowTargets(row: Locator, title: string): Array<[string, Locator]> {
+    return [
+      /*
+        The operable target is the enclosing `<label>`, not the 20px box the
+        checkbox paints. WCAG 2.5.8 measures the region that actually activates
+        the control, and the label is what a finger can land on — measuring the
+        input instead would report a number no user is constrained by. A
+        separate test proves the label really does toggle, so this is not a
+        measurement that flatters itself.
+      */
+      ["checkbox", row.getByRole("checkbox", { name: `Select ${title}` }).locator("xpath=ancestor::label[1]")],
+      ["title", row.getByTestId("task-list-row-title")],
+      ["Status", row.getByTestId("task-status-control").getByRole("combobox")],
+      ["Due", row.getByRole("button", { name: /^Due, / })],
+      ["Comment", row.getByTestId("task-list-row-comment")],
+      ["Close", row.getByTestId("task-close-trigger")],
+      ["More", row.getByTestId("task-list-row-more")],
+    ];
+  }
+
+  test.beforeEach(async ({ page }, testInfo) => {
+    test.skip(!isCoarse(testInfo.project.name), "coarse-pointer emulation lanes only");
+    seeded.length = 0;
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await signIn(page);
+  });
+
+  test.afterEach(async ({ page }, testInfo) => {
+    if (!isCoarse(testInfo.project.name)) return;
+    const ids = [...seeded];
+    seeded.length = 0;
+    for (const taskId of ids) {
+      const read = await workListApi<{ task?: { version: number; lifecycle_state: string } }>(
+        page,
+        `/api/tasks/${taskId}`,
+      );
+      if (read.status !== 200 || !read.body.task) continue;
+      if (["completed", "cancelled"].includes(read.body.task.lifecycle_state)) continue;
+      const disposed = await workListApi<unknown>(page, `/api/tasks/${taskId}/transition`, {
+        method: "POST",
+        body: {
+          toState: TEARDOWN_STATE,
+          expectedVersion: read.body.task.version,
+          idempotencyKey: `wp03m-teardown-${taskId}-${Date.now()}`,
+        },
+      });
+      expect(
+        disposed.status,
+        `teardown must dispose of seeded Task ${taskId}: ${JSON.stringify(disposed.body)}`,
+      ).toBeLessThan(300);
+    }
+  });
+
+  /**
+   * The populated List is bounded at every narrow width, and so is every row
+   * inside it.
+   *
+   * Three measurements, because "no horizontal scroll" can be true of the
+   * document while the list is clipped, and true of the list while a row hangs
+   * out of it. The document's own scroll axis, the list's right edge against the
+   * viewport, and each row's edges against the list's *content* box — the box
+   * less its border and padding, so a row flush against the list's padding is
+   * inside and a row under the padding is out. Both edges are checked: a row
+   * pushed off the left is the same defect as one pushed off the right and only
+   * the right-hand case shows as document overflow.
+   */
+  for (const width of NARROW_WIDTHS) {
+    test(`the populated Work List and its rows stay inside the viewport at ${width}px`, async ({
+      page,
+    }) => {
+      test.setTimeout(180_000);
+      await page.setViewportSize({ width, height: 844 });
+      const { ordinary } = await seedWorkList(page);
+      await expect(listRow(page, ordinary)).toHaveCount(1);
+
+      expect(await documentOverflow(page), `document overflow at ${width}`).toBeLessThanOrEqual(1);
+
+      const list = workList(page);
+      const listBox = await list.boundingBox();
+      expect(listBox, `the Work list must have a box at ${width}`).not.toBeNull();
+      expect(listBox!.x, `the Work list starts left of the viewport at ${width}`).toBeGreaterThanOrEqual(
+        -1,
+      );
+      expect(
+        listBox!.x + listBox!.width,
+        `the Work list exceeds ${width}`,
+      ).toBeLessThanOrEqual(width + 1);
+      expect(
+        await list.evaluate((node) => node.scrollWidth - node.clientWidth),
+        `the Work list clips its own content at ${width}`,
+      ).toBeLessThanOrEqual(1);
+
+      const bounds = await contentBox(list);
+      const rows = page.locator('[data-testid="task-list-row"]');
+      const count = await rows.count();
+      expect(count, `the List must be populated at ${width}`).toBe(2);
+      const escaped: string[] = [];
+      for (let index = 0; index < count; index += 1) {
+        const box = await rows.nth(index).boundingBox();
+        if (!box) {
+          escaped.push(`row ${index} has no box`);
+          continue;
+        }
+        if (box.x < bounds.left - 1 || box.x + box.width > bounds.right + 1) {
+          escaped.push(
+            `row ${index} [${box.x.toFixed(1)}, ${(box.x + box.width).toFixed(1)}] outside [${bounds.left.toFixed(1)}, ${bounds.right.toFixed(1)}]`,
+          );
+        }
+      }
+      expect(escaped, `rows outside the Work list content box at ${width}`).toEqual([]);
+    });
+  }
+
+  /**
+   * WP03-AC-068..074. Every target a finger meets on a row is at least 44 CSS px.
+   *
+   * Seven controls, each named and each measured on its own, with `expect.soft`
+   * so one run enumerates *every* undersized control rather than stopping at the
+   * first. Nothing is lowered to achieve that and the test still fails. The
+   * numbers are printed, so the record carries measurements rather than the word
+   * "passed".
+   *
+   * Height is held to this shell's own 44px row height; width is held to WCAG
+   * 2.5.8's 24px, because inventing a stricter width would be this suite
+   * asserting a standard nobody adopted.
+   */
+  test("WP03-AC-068..074 every coarse-pointer target on a row is at least 44px", async ({ page }) => {
+    test.setTimeout(180_000);
+    const { ordinary } = await seedWorkList(page);
+    const row = listRow(page, ordinary);
+    await expect(row).toHaveCount(1);
+
+    const measured: string[] = [];
+    for (const [name, control] of rowTargets(row, ordinary)) {
+      const box = await measure(control);
+      expect.soft(box, `${name} has no box on the Work List row`).not.toBeNull();
+      if (box === null) continue;
+      measured.push(`${name} ${Math.round(box.width)}x${Math.round(box.height)}`);
+      expect
+        .soft(box.height, `${name} is below this shell's ${MIN_TOUCH_TARGET_PX}px row height`)
+        .toBeGreaterThanOrEqual(MIN_TOUCH_TARGET_PX);
+      expect.soft(box.width, `${name} is below WCAG 2.5.8's 24px minimum width`).toBeGreaterThanOrEqual(24);
+    }
+    console.log(`WP-POSTUX-03 Work List row targets: ${measured.join(", ")}`);
+    expect(measured, "every named row target must have been measured").toHaveLength(7);
+  });
+
+  /**
+   * WP03-AC-054. The Status `<select>` computes at least 44px **tall**.
+   *
+   * Asserted separately from its six neighbours above, and deliberately so. This
+   * is the one control with a documented engine-specific defect behind it:
+   * macOS WebKit does not honour `min-height` on a default-appearance `<select>`
+   * and resolves it down to the ~18px intrinsic, which rendered this control 22
+   * CSS px tall against a 44px target. `task-status-control.tsx` answers that
+   * with a *definite* height, and this lane — WebKit at phone geometry — is
+   * where the answer is measured on the engine the defect lives in.
+   *
+   * The computed `height` is read as well as the measured box, because a box can
+   * be inflated by a wrapper while the control itself stays 22px, and it is the
+   * control the finger lands on.
+   *
+   * Stated so nobody over-reads a green run: Playwright's WebKit is not the iOS
+   * Safari binary, and on Linux Playwright builds this control renders 44px
+   * whether or not the definite height is present — the guard that fails without
+   * the fix is the sizing-contract unit test in `task-status-control.test.tsx`,
+   * which runs in the blocking unit job. This measures the shipped page.
+   */
+  test("WP03-AC-068 the checkbox's 44px target actually toggles selection", async ({ page }) => {
+    // The measurement above is only meaningful if the box it measures is live.
+    // Before WP-POSTUX-03 the 44x44 box was a <span>, which forwards no click:
+    // the reserved area looked compliant and operated nothing.
+    const seeded = await seedWorkList(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    const row = listRow(page, seeded.ordinary);
+    const input = row.getByRole("checkbox", { name: `Select ${seeded.ordinary}` });
+    const target = input.locator("xpath=ancestor::label[1]");
+
+    await expect(input).not.toBeChecked();
+    const box = (await target.boundingBox())!;
+    // Click the corner of the reserved box, well outside the 20px input.
+    await page.mouse.click(box.x + 4, box.y + 4);
+    await expect(input).toBeChecked();
+  });
+
+  test("WP03-AC-054 the row Status select computes at least 44px of height", async ({ page }) => {
+    test.setTimeout(180_000);
+    const { ordinary } = await seedWorkList(page);
+    const status = listRow(page, ordinary).getByTestId("task-status-control").getByRole("combobox");
+    await expect(status).toBeVisible();
+
+    const computed = await status.evaluate((node) => {
+      const style = getComputedStyle(node);
+      return {
+        height: Number.parseFloat(style.height) || 0,
+        minHeight: Number.parseFloat(style.minHeight) || 0,
+        fontSize: Number.parseFloat(style.fontSize) || 0,
+        rendered: node.getBoundingClientRect().height,
+      };
+    });
+    console.log(
+      `WP03-AC-054 Status select on ${test.info().project.name}: ${JSON.stringify(computed)}`,
+    );
+    expect(
+      computed.height,
+      `Status computed height (rendered ${computed.rendered.toFixed(1)}px)`,
+    ).toBeGreaterThanOrEqual(MIN_TOUCH_TARGET_PX);
+    expect(computed.rendered, "Status rendered height").toBeGreaterThanOrEqual(MIN_TOUCH_TARGET_PX);
+    // The same coarse-pointer type floor the rest of this file measures: a
+    // control under 16px is the one iOS raises the page's zoom for.
+    expect(computed.fontSize, "Status computed font-size").toBeGreaterThanOrEqual(COARSE_MIN_FONT_PX);
+  });
+
+  /**
+   * WP03-AC-086..089 and WP03-AC-092. The four migrated Workbench selects.
+   *
+   * Bulk action, Bulk value, Commitment counterparty and Commitment direction
+   * were raw `<select className="h-10 …">` — 40px, and a local `h-10` overrides
+   * the shared primitive's height, so the migration is only real if the rendered
+   * control now takes the token. Measured here on the shipped page under a
+   * coarse pointer rather than inferred from a class list, on both dimensions
+   * the WP01 contract names: at least 44px tall and at least 16px of type.
+   *
+   * Both surfaces need reaching honestly. The Bulk editor exists only once a
+   * Task is selected, so a row is seeded and its checkbox is checked; the
+   * Commitment form is one deliberate activation away on the Commitments view
+   * and needs no seed.
+   */
+  test("WP03-AC-086..089 the migrated Workbench selects are 44px tall and 16px typed", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const { ordinary } = await seedWorkList(page);
+
+    // The premise: a fine-pointer lane would measure the desktop branch of the
+    // token and pass for the wrong reason.
+    expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(true);
+
+    await page.getByRole("checkbox", { name: `Select ${ordinary}` }).check();
+    // Scoped to the Bulk change section itself, so a control of the same name
+    // elsewhere on the page could not stand in for the one being measured.
+    const bulk = page.getByRole("region", { name: "Bulk change" });
+    await expect(bulk).toBeVisible();
+    const named: Array<[string, Locator]> = [
+      ["Bulk action", bulk.getByRole("combobox", { name: "Bulk action" })],
+      ["Bulk value", bulk.getByRole("combobox", { name: "Bulk value" })],
+    ];
+
+    const undersized: string[] = [];
+    const measured: string[] = [];
+    async function record(name: string, control: Locator): Promise<void> {
+      await expect(control, `${name} must be on screen`).toBeVisible();
+      const geometry = await control.evaluate((node) => ({
+        height: node.getBoundingClientRect().height,
+        computedHeight: Number.parseFloat(getComputedStyle(node).height) || 0,
+        fontSize: Number.parseFloat(getComputedStyle(node).fontSize) || 0,
+      }));
+      measured.push(
+        `${name} ${geometry.height.toFixed(1)}px @ ${geometry.fontSize.toFixed(1)}px`,
+      );
+      if (geometry.height < MIN_TOUCH_TARGET_PX || geometry.computedHeight < MIN_TOUCH_TARGET_PX) {
+        undersized.push(`${name} height ${geometry.height.toFixed(1)} (computed ${geometry.computedHeight.toFixed(1)})`);
+      }
+      if (geometry.fontSize < COARSE_MIN_FONT_PX) {
+        undersized.push(`${name} font-size ${geometry.fontSize.toFixed(1)}`);
+      }
+    }
+
+    for (const [name, control] of named) await record(name, control);
+
+    await page.goto("/work?view=commitments");
+    await page.getByRole("button", { name: "New commitment" }).click();
+    const create = page.getByRole("heading", { name: "Create commitment" }).locator("..");
+    await record("Counterparty", create.getByLabel("Counterparty"));
+    await record("Direction", create.getByLabel("Direction"));
+
+    console.log(`WP-POSTUX-03 migrated Workbench selects: ${measured.join(", ")}`);
+    expect(measured, "all four migrated selects must have been measured").toHaveLength(4);
+    expect(undersized, "migrated Workbench selects below the coarse-pointer floors").toEqual([]);
+  });
+
+  /**
+   * WP03-AC-049. A Priority that is set is visible at every narrow width.
+   *
+   * The audited row hid Priority below `sm`, which is every phone width in
+   * scope: the one geometry where the list is read most was the one geometry
+   * where part of the urgency reading was withheld. Visibility is measured, not
+   * asserted from a class — a non-zero box, `display` not `none` and
+   * `visibility` not `hidden` — because `hidden sm:inline` and a zero-height
+   * clip are different implementations of the same defect.
+   */
+  for (const width of NARROW_WIDTHS) {
+    test(`WP03-AC-049 a set Priority is visible on the row at ${width}px`, async ({ page }) => {
+      test.setTimeout(180_000);
+      await page.setViewportSize({ width, height: 844 });
+      const { ordinary } = await seedWorkList(page);
+      const row = listRow(page, ordinary);
+      await expect(row).toHaveCount(1);
+
+      // `p1` was seeded, so the row must state its product label. The label
+      // comes from `src/lib/tasks/presentation.ts`, never a backend token.
+      const priority = row.getByText("Critical", { exact: true });
+      await expect(priority, `Priority is not on the row at ${width}`).toBeVisible();
+      const geometry = await priority.evaluate((node) => {
+        const style = getComputedStyle(node);
+        const rect = node.getBoundingClientRect();
+        return {
+          width: rect.width,
+          height: rect.height,
+          display: style.display,
+          visibility: style.visibility,
+        };
+      });
+      expect(geometry.display, `Priority is display:${geometry.display} at ${width}`).not.toBe("none");
+      expect(geometry.visibility, `Priority is visibility:${geometry.visibility} at ${width}`).not.toBe(
+        "hidden",
+      );
+      expect(geometry.width, `Priority has no width at ${width}`).toBeGreaterThan(0);
+      expect(geometry.height, `Priority has no height at ${width}`).toBeGreaterThan(0);
+
+      // The backend token never reaches the row, at any width.
+      const text = await row.innerText();
+      for (const token of ["p1", "p2", "p3", "p4"]) {
+        expect(text, `the row states the backend token "${token}" at ${width}`).not.toContain(token);
+      }
+    });
+  }
+
+  /**
+   * WP03-AC-047. A long title wraps, and wrapping costs no neighbour its place.
+   *
+   * The defect a dense row invites is a title that either refuses to wrap (and
+   * pushes the row sideways) or wraps over the top of something. Both are
+   * geometry, so both are measured: the title occupies more than one line, the
+   * row introduces no horizontal axis, and the title's box overlaps neither the
+   * selection control beside it nor the state and action bands below it.
+   *
+   * Overlap is computed as a genuine rectangle intersection rather than as an
+   * edge comparison, because two boxes can pass an edge test and still sit on
+   * top of each other.
+   */
+  for (const width of [320, 393] as const) {
+    test(`WP03-AC-047 a long title wraps without colliding at ${width}px`, async ({ page }) => {
+      test.setTimeout(180_000);
+      await page.setViewportSize({ width, height: 844 });
+      const { long } = await seedWorkList(page);
+      const row = listRow(page, long);
+      await expect(row).toHaveCount(1);
+
+      const title = row.getByTestId("task-list-row-title");
+      const lineCount = await title.evaluate((node) => {
+        const style = getComputedStyle(node);
+        const lineHeight = Number.parseFloat(style.lineHeight);
+        const height = node.getBoundingClientRect().height;
+        return Number.isFinite(lineHeight) && lineHeight > 0 ? height / lineHeight : 0;
+      });
+      expect(lineCount, `the long title did not wrap at ${width}`).toBeGreaterThan(1.5);
+
+      expect(await documentOverflow(page), `document overflow at ${width}`).toBeLessThanOrEqual(1);
+      expect(
+        await row.evaluate((node) => node.scrollWidth - node.clientWidth),
+        `the row clips its own content at ${width}`,
+      ).toBeLessThanOrEqual(1);
+
+      const collisions = await row.evaluate((rowNode) => {
+        const titleNode = rowNode.querySelector('[data-testid="task-list-row-title"]');
+        if (!titleNode) return ["the row has no title element"];
+        const others: Array<[string, Element | null]> = [
+          ["selection", rowNode.querySelector('input[type="checkbox"]')],
+          ["Status", rowNode.querySelector('[data-testid="task-status-control"]')],
+          ["Due", rowNode.querySelector('[data-testid="task-due-control"]')],
+          ["Comment", rowNode.querySelector('[data-testid="task-list-row-comment"]')],
+          ["Close", rowNode.querySelector('[data-testid="task-close-trigger"]')],
+          ["More", rowNode.querySelector('[data-testid="task-list-row-more"]')],
+        ];
+        const title = titleNode.getBoundingClientRect();
+        const found: string[] = [];
+        for (const [name, other] of others) {
+          if (!other) {
+            found.push(`${name} is missing from the row`);
+            continue;
+          }
+          const rect = other.getBoundingClientRect();
+          // A genuine rectangle intersection, with a 1px tolerance for the
+          // sub-pixel edges a wrapped inline box leaves behind.
+          const horizontal = Math.min(title.right, rect.right) - Math.max(title.left, rect.left);
+          const vertical = Math.min(title.bottom, rect.bottom) - Math.max(title.top, rect.top);
+          if (horizontal > 1 && vertical > 1) {
+            found.push(
+              `${name} overlaps the title by ${horizontal.toFixed(1)}x${vertical.toFixed(1)}px`,
+            );
+          }
+        }
+        return found;
+      });
+      expect(collisions, `the wrapped title collides with its neighbours at ${width}`).toEqual([]);
+    });
+  }
+
+  /**
+   * WP03-AC-078..080. Every state the row can expand into stays inside it.
+   *
+   * A row that fits until something opens has not been proved to fit. Three
+   * expansions are driven for real at the narrowest supported width — the Due
+   * chooser, More with Cancel revealed, and a genuine version conflict — and
+   * each is held to the same three things: the document grows no horizontal
+   * axis, the revealed controls stay inside the list's content box, and they are
+   * visible and enabled rather than merely present.
+   *
+   * The conflict is real, and produced the only honest way: the row makes one
+   * confirmed write, so its binder holds the canonical version; the Task is then
+   * advanced out of band through the same BFF, which is exactly what "changed
+   * elsewhere" means; and the row's next write arrives stale. No route is
+   * stubbed and no response is rewritten.
+   */
+  test("WP03-AC-078..080 expanded Due, More and a real conflict stay contained and usable", async ({
+    page,
+  }) => {
+    test.setTimeout(300_000);
+    await page.setViewportSize({ width: 320, height: 844 });
+    const { ordinary, taskId } = await seedWorkList(page);
+    const row = listRow(page, ordinary);
+    await expect(row).toHaveCount(1);
+
+    /** Every named control outside the list's content box, with the numbers. */
+    async function outside(names: Array<[string, Locator]>, stage: string): Promise<void> {
+      const bounds = await contentBox(workList(page));
+      const offenders: string[] = [];
+      for (const [name, control] of names) {
+        await expect(control, `${name} must be visible ${stage}`).toBeVisible();
+        await expect(control, `${name} must be enabled ${stage}`).toBeEnabled();
+        const box = await control.boundingBox();
+        if (!box) {
+          offenders.push(`${name} has no box`);
+          continue;
+        }
+        if (box.x < bounds.left - 1 || box.x + box.width > bounds.right + 1) {
+          offenders.push(
+            `${name} [${box.x.toFixed(1)}, ${(box.x + box.width).toFixed(1)}] outside [${bounds.left.toFixed(1)}, ${bounds.right.toFixed(1)}]`,
+          );
+        }
+        if (box.height < MIN_TOUCH_TARGET_PX) {
+          offenders.push(`${name} is ${box.height.toFixed(1)}px tall`);
+        }
+      }
+      expect(offenders, `controls outside the Work list ${stage}`).toEqual([]);
+      expect(await documentOverflow(page), `document overflow ${stage}`).toBeLessThanOrEqual(1);
+    }
+
+    // 1. The Due chooser.
+    await row.getByRole("button", { name: /^Due, / }).click();
+    await expect(page.getByRole("group", { name: "Due choices" })).toBeVisible();
+    await outside(
+      [
+        ["Today", row.getByRole("button", { name: "Today", exact: true })],
+        ["Tomorrow", row.getByRole("button", { name: "Tomorrow", exact: true })],
+        ["Pick date", row.getByRole("button", { name: "Pick date", exact: true })],
+      ],
+      "with the Due chooser open",
+    );
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("group", { name: "Due choices" })).toHaveCount(0);
+
+    // 2. More, with Cancel revealed. The expanded wording is `Less`; the
+    //    accessible name is unchanged, which `work-acceptance.spec.ts` asserts.
+    const more = row.getByTestId("task-list-row-more");
+    await more.click();
+    await expect(more).toHaveAttribute("aria-expanded", "true");
+    await outside(
+      [
+        ["Cancel Task", row.getByRole("button", { name: "Cancel Task", exact: true })],
+        ["Close Task", row.getByTestId("task-close-trigger")],
+        ["More", more],
+      ],
+      "with More expanded",
+    );
+    await more.click();
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+
+    // 3. A real version conflict, and the region that offers the way out.
+    await row.getByTestId("task-status-control").getByRole("combobox").selectOption({ label: "In progress" });
+    await expect(
+      page.getByTestId("mutation-feedback-region").getByText("Status changed to In progress"),
+    ).toBeVisible();
+
+    const read = await workListApi<{ task: { version: number } }>(page, `/api/tasks/${taskId}`);
+    expect(read.status).toBe(200);
+    const bumped = await workListApi<unknown>(page, `/api/tasks/${taskId}`, {
+      method: "PATCH",
+      body: {
+        expectedVersion: read.body.task.version,
+        priority: "p3",
+        idempotencyKey: `wp03m-elsewhere-${taskId}`,
+      },
+    });
+    expect(bumped.status, `the out-of-band write must land: ${JSON.stringify(bumped.body)}`).toBe(200);
+
+    await listRow(page, ordinary)
+      .getByTestId("task-status-control")
+      .getByRole("combobox")
+      .selectOption({ label: "Waiting" });
+    const conflict = listRow(page, ordinary).getByTestId("task-list-row-conflict");
+    await expect(conflict).toBeVisible();
+    await outside(
+      [
+        ["Try again", conflict.getByTestId("task-list-row-conflict-reapply")],
+        ["Leave it", conflict.getByTestId("task-list-row-conflict-dismiss")],
+      ],
+      "with a conflict showing",
+    );
+    const conflictBounds = await contentBox(workList(page));
+    const conflictBox = await conflict.boundingBox();
+    expect(conflictBox, "the conflict region must have a box").not.toBeNull();
+    expect(
+      conflictBox!.x + conflictBox!.width,
+      "the conflict region escapes the Work list",
+    ).toBeLessThanOrEqual(conflictBounds.right + 1);
+
+    // Usable, not merely contained: the way out actually clears it.
+    await conflict.getByTestId("task-list-row-conflict-dismiss").click();
+    await expect(listRow(page, ordinary).getByTestId("task-list-row-conflict")).toHaveCount(0);
+  });
+
+  /**
+   * The row's vertical rhythm is materially lighter than the audited card stack.
+   *
+   * The audit measured ~196 CSS px per row on the stack of cards. The ceiling
+   * asserted here is 180px, and it is a ceiling on purpose: pinning the exact
+   * height would redden on a font metric or a one-pixel divider without anything
+   * having regressed, which is the brittle pixel contract this package forbids.
+   * What a ceiling does catch is the failure that matters — per-row padding,
+   * border and rounding quietly returning, which is worth tens of pixels a row.
+   *
+   * Measured on an *ordinary active* row: short title, nothing expanded, no
+   * conflict. A wrapped title is taller by design and is measured for wrapping,
+   * not for rhythm, in its own test above.
+   */
+  test("an ordinary active row sits under the rhythm ceiling", async ({ page }) => {
+    test.setTimeout(180_000);
+    await page.setViewportSize({ width: 390, height: 844 });
+    const { ordinary } = await seedWorkList(page);
+    const row = listRow(page, ordinary);
+    await expect(row).toHaveCount(1);
+
+    const box = await row.boundingBox();
+    expect(box, "the row must have a box").not.toBeNull();
+    console.log(
+      `WP-POSTUX-03 row rhythm on ${test.info().project.name}: ${box!.height.toFixed(1)}px ` +
+        `(audited ${AUDITED_ROW_HEIGHT_PX}px, ceiling ${WORK_ROW_HEIGHT_CEILING_PX}px)`,
+    );
+    expect(
+      box!.height,
+      `an ordinary active row must sit under the ${WORK_ROW_HEIGHT_CEILING_PX}px ceiling ` +
+        `(the audited card stack measured ~${AUDITED_ROW_HEIGHT_PX}px)`,
+    ).toBeLessThanOrEqual(WORK_ROW_HEIGHT_CEILING_PX);
+    // Still a real row, not a collapsed one: three 44px bands cannot fit in
+    // less than one of them.
+    expect(box!.height, "the row collapsed rather than compacted").toBeGreaterThanOrEqual(
+      MIN_TOUCH_TARGET_PX,
+    );
+  });
+
+  /**
+   * WP03-AC-067. Text scaling reflows the bands downward, never sideways.
+   *
+   * The accessible-zoom case a fixed-height compaction breaks: a row squeezed
+   * with pixel heights either clips its own text or pushes a second axis onto
+   * the page. The root font-size is raised well past the default, both scroll
+   * axes are re-measured, the row is confirmed to have grown *taller*, and the
+   * root is restored so nothing leaks into whatever runs next.
+   */
+  test("WP03-AC-067 raising the root font-size reflows the row downward, not sideways", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    await page.setViewportSize({ width: 390, height: 844 });
+    const { ordinary } = await seedWorkList(page);
+    const row = listRow(page, ordinary);
+    await expect(row).toHaveCount(1);
+
+    const before = {
+      document: await documentOverflow(page),
+      height: (await row.boundingBox())!.height,
+    };
+
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "24px";
+    });
+    // A layout pass has to have happened before the measurement means anything.
+    await expect(row.getByTestId("task-list-row-title")).toBeVisible();
+
+    const scaled = {
+      document: await documentOverflow(page),
+      list: await workList(page).evaluate((node) => node.scrollWidth - node.clientWidth),
+      row: await row.evaluate((node) => node.scrollWidth - node.clientWidth),
+      height: (await row.boundingBox())!.height,
+    };
+    expect(scaled.document, "24px root font-size introduced document overflow").toBeLessThanOrEqual(1);
+    expect(scaled.list, "24px root font-size introduced Work list overflow").toBeLessThanOrEqual(1);
+    expect(scaled.row, "24px root font-size made the row clip its own content").toBeLessThanOrEqual(1);
+    expect(scaled.height, "scaled text must reflow the row downward").toBeGreaterThan(before.height);
+
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "";
+    });
+    expect(
+      await documentOverflow(page),
+      "restoring the root font-size must restore the layout",
+    ).toBe(before.document);
   });
 });

@@ -19,9 +19,12 @@
 
 import { useId, useState } from "react";
 
-import { TaskCloseControl } from "@/components/tasks/task-close-control";
-import { TaskDueControl } from "@/components/tasks/task-due-control";
-import { TaskStatusControl } from "@/components/tasks/task-status-control";
+import { TaskCloseControl, type TaskCloseControlProps } from "@/components/tasks/task-close-control";
+import { TaskDueControl, type TaskDueControlProps } from "@/components/tasks/task-due-control";
+import {
+  TaskStatusControl,
+  type TaskStatusControlProps,
+} from "@/components/tasks/task-status-control";
 import { TASK_OPERATION_CONFLICT_MESSAGE } from "@/components/tasks/use-task-operations";
 import type { TaskRowOperations } from "@/components/tasks/use-task-row-operations";
 import { Button } from "@/components/ui/button";
@@ -47,12 +50,25 @@ interface TaskOperationPieceProps {
   readonly className?: string;
 }
 
+interface TaskStatusOperationControlProps extends TaskOperationPieceProps {
+  /**
+   * Whether the Status field label is drawn visually (WP-POSTUX-03).
+   *
+   * Forwarded verbatim to `TaskStatusControl`, which hides it visually only:
+   * the `<label htmlFor>` stays in the DOM and the accessible name is
+   * unchanged. Omit it and this wrapper renders exactly what it always has,
+   * which is what Board and Calendar rely on.
+   */
+  readonly labelVisibility?: TaskStatusControlProps["labelVisibility"];
+}
+
 /** Status, wrapped in the labelled group that contains its events. */
 export function TaskStatusOperationControl({
   taskTitle,
   operations,
   className = "min-w-0",
-}: TaskOperationPieceProps): React.JSX.Element {
+  labelVisibility,
+}: TaskStatusOperationControlProps): React.JSX.Element {
   const { ops, locked, conflict, handleStatus } = operations;
   return (
     <div
@@ -68,6 +84,7 @@ export function TaskStatusOperationControl({
         disabled={locked}
         pending={ops.pending === "status"}
         conflict={conflict}
+        labelVisibility={labelVisibility}
         onChange={handleStatus}
       />
     </div>
@@ -82,6 +99,13 @@ interface TaskDueOperationControlProps extends TaskOperationPieceProps {
    * the control behaves exactly as it always has.
    */
   readonly triggerLabel?: string;
+  /**
+   * Whether the Due trigger carries its visual `Due` prefix (WP-POSTUX-03).
+   *
+   * Forwarded verbatim to `TaskDueControl`; the accessible name is unaffected.
+   * Omit it and this wrapper renders exactly what it always has.
+   */
+  readonly presentation?: TaskDueControlProps["presentation"];
 }
 
 /** Due date, wrapped in the labelled group that contains its events. */
@@ -90,6 +114,7 @@ export function TaskDueOperationControl({
   operations,
   className = "min-w-0",
   triggerLabel,
+  presentation,
 }: TaskDueOperationControlProps): React.JSX.Element {
   const { ops, civilClock, locked, conflict, handleDue } = operations;
   return (
@@ -108,6 +133,7 @@ export function TaskDueOperationControl({
         pending={ops.pending === "due"}
         conflict={conflict}
         triggerLabel={triggerLabel}
+        presentation={presentation}
         onChange={handleDue}
       />
     </div>
@@ -119,6 +145,17 @@ interface TaskTerminalActionsProps extends TaskOperationPieceProps {
   readonly testIdPrefix: string;
   /** Layout for the More disclosure, which is a sibling of the Close group. */
   readonly moreClassName?: string;
+  /** Button variant for the Close trigger. Forwarded verbatim; default unchanged. */
+  readonly closeTriggerVariant?: TaskCloseControlProps["triggerVariant"];
+  /**
+   * Visible wording of the More disclosure once it is expanded (WP-POSTUX-03).
+   *
+   * The accessible name never changes — it stays `More actions for <title>` in
+   * both states — so this is visible wording only, for a surface whose row
+   * rhythm cannot afford the default phrase. Omit it and the disclosure reads
+   * exactly as it always has.
+   */
+  readonly moreExpandedLabel?: string;
 }
 
 /**
@@ -147,6 +184,8 @@ export function TaskTerminalActions({
   testIdPrefix,
   className = "min-w-0",
   moreClassName = "min-h-11 min-w-11",
+  closeTriggerVariant,
+  moreExpandedLabel = MORE_CLOSE_LABEL,
 }: TaskTerminalActionsProps): React.JSX.Element | null {
   const { ops, locked, terminal, handleClose, handleCancel } = operations;
   const [moreOpen, setMoreOpen] = useState(false);
@@ -172,6 +211,7 @@ export function TaskTerminalActions({
           // Cancel is deliberately not a peer of Close in the card: it is
           // revealed only once More is activated.
           showCancel={moreOpen}
+          triggerVariant={closeTriggerVariant}
           onClose={handleClose}
           onCancelTask={handleCancel}
         />
@@ -190,7 +230,7 @@ export function TaskTerminalActions({
           setMoreOpen((open) => !open);
         }}
       >
-        {moreOpen ? MORE_CLOSE_LABEL : MORE_ACTION_LABEL}
+        {moreOpen ? moreExpandedLabel : MORE_ACTION_LABEL}
       </Button>
     </>
   );

@@ -977,4 +977,304 @@ describe("TaskListRow", () => {
       expect(handles.onMutationConfirmed).toHaveBeenCalledWith({ taskId: TASK_ID, kind: "status" });
     });
   });
+
+  /*
+    WP-POSTUX-03 — the Work list is one grouped surface with dividers, not a
+    stack of mini detail cards. These pin the defects in the Work List.
+  */
+
+  it("WP03-AC-043 — draws no per-row card chrome: the row root carries no full border, rounding or card background", async () => {
+    stubFetch();
+    renderRow();
+    await hydrated();
+
+    const classes = Array.from(row().classList);
+    /*
+      The contract is per-row card chrome, not one exact class string: a row may
+      keep its layout utilities and gain a divider from the list. What it must
+      not keep is its own full rounded border over its own card surface.
+    */
+    expect(classes).not.toContain("border");
+    expect(classes.filter((name) => /^rounded-/.test(name))).toEqual([]);
+    expect(classes.filter((name) => /^bg-surface/.test(name))).toEqual([]);
+  });
+
+  it("WP03-AC-049 — a set Priority is not hidden below sm: the `hidden` class IS the contract here, because jsdom has no layout to measure", async () => {
+    stubFetch();
+    renderRow();
+    await hydrated();
+
+    // LIST_ROW carries priority "p1", so the Task has one to show.
+    const priority = screen.getByText(formatTaskPriority("p1"));
+    expect(row().contains(priority)).toBe(true);
+    /*
+      jsdom computes no breakpoints and no layout, so visibility at 320-430 CSS
+      px cannot be measured here. The class gate is therefore the assertion: a
+      `hidden` that is only lifted at `sm:` makes a set Priority invisible on
+      every phone width in scope, while still reading to a screen reader.
+    */
+    const gated = priority.closest(".hidden");
+    expect(gated).toBeNull();
+    expect(Array.from(priority.classList)).not.toContain("hidden");
+  });
+
+  it("WP03-AC-050 — a Task with no Priority invents none", async () => {
+    stubFetch({ detail: () => ok({ task: { ...CANONICAL, priority: null } }) });
+    renderRow({ task: { ...LIST_ROW, priority: null } });
+    await hydrated();
+
+    const text = row().textContent ?? "";
+    for (const level of ["p1", "p2", "p3", "p4"] as const) {
+      expect(text).not.toContain(formatTaskPriority(level));
+    }
+    expect(text).not.toMatch(/priority/i);
+  });
+
+  it("WP03-AC-051/052 — an unselected row exposes no selected state on the row root", async () => {
+    stubFetch();
+    renderRow({ selected: false });
+    await hydrated();
+
+    expect(screen.getByLabelText(`Select ${TITLE}`)).toHaveProperty("checked", false);
+    expect(row().getAttribute("data-state")).toBeNull();
+    // The package forbids aria-selected here; the hook must be a data attribute.
+    expect(row().getAttribute("aria-selected")).toBeNull();
+  });
+
+  it("WP03-AC-051/052 — a selected row carries a stable selected state on the row root, beyond the checkbox", async () => {
+    stubFetch();
+    renderRow({ selected: true });
+    await hydrated();
+
+    expect(screen.getByLabelText(`Select ${TITLE}`)).toHaveProperty("checked", true);
+    /*
+      The checkbox alone cannot carry a row-level treatment: the selected row is
+      a surface, and styling it needs a stable hook on the root. Not
+      aria-selected — the package forbids adding it to this row.
+    */
+    expect(row().getAttribute("data-state")).toBe("selected");
+    expect(row().getAttribute("aria-selected")).toBeNull();
+  });
+
+  it("WP03-AC-102 — keeps DOM order checkbox, title, Status, Due, Comment, Close, More", async () => {
+    stubFetch();
+    renderRow();
+    await hydrated();
+
+    const nodes = Array.from(row().querySelectorAll("a, button, input, select"));
+    const at = (element: Element | null, what: string): number => {
+      const index = element ? nodes.indexOf(element) : -1;
+      expect(index, `${what} not found in row DOM order`).toBeGreaterThan(-1);
+      return index;
+    };
+
+    const order = [
+      at(screen.getByLabelText(`Select ${TITLE}`), "checkbox"),
+      at(screen.getByTestId("task-list-row-title"), "title"),
+      at(within(row()).getByRole("combobox"), "Status"),
+      at(screen.getByRole("button", { name: "Due, Tomorrow" }), "Due"),
+      at(screen.getByRole("button", { name: `Add comment to ${TITLE}` }), "Comment"),
+      at(screen.getByTestId("task-close-trigger"), "Close"),
+      at(screen.getByTestId("task-list-row-more"), "More"),
+    ];
+
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+  });
+
+  it("WP03-AC-009/010 — the title still opens detail with its own element as the trigger", async () => {
+    stubFetch();
+    const handles = renderRow();
+    await hydrated();
+
+    const title = screen.getByTestId("task-list-row-title");
+    await userEvent.click(title);
+
+    expect(handles.onOpen).toHaveBeenCalledTimes(1);
+    expect(handles.onOpen).toHaveBeenCalledWith("task", TASK_ID, TITLE, title);
+  });
+
+  it("WP03-AC-014 — Comment still routes to the Activity surface when one is offered", async () => {
+    stubFetch();
+    const handles = renderRow();
+    await hydrated();
+
+    const comment = screen.getByTestId("task-list-row-comment");
+    await userEvent.click(comment);
+
+    expect(handles.onOpenActivity).toHaveBeenCalledTimes(1);
+    expect(handles.onOpenActivity).toHaveBeenCalledWith(TASK_ID, TITLE, comment);
+    expect(handles.onOpen).not.toHaveBeenCalled();
+  });
+
+  it("WP03-AC-014 — Comment still falls back to Task detail when no Activity surface is offered", async () => {
+    stubFetch();
+    const handles = renderRow({ onOpenActivity: undefined });
+    await hydrated();
+
+    const comment = screen.getByTestId("task-list-row-comment");
+    await userEvent.click(comment);
+
+    expect(handles.onOpenActivity).not.toHaveBeenCalled();
+    expect(handles.onOpen).toHaveBeenCalledTimes(1);
+    expect(handles.onOpen).toHaveBeenCalledWith("task", TASK_ID, TITLE, comment);
+  });
+
+  it("WP03-AC-021 — the checkbox still reports selection and nothing else", async () => {
+    stubFetch();
+    const handles = renderRow();
+    await hydrated();
+
+    await userEvent.click(screen.getByLabelText(`Select ${TITLE}`));
+
+    expect(handles.onSelect).toHaveBeenCalledTimes(1);
+    expect(handles.onSelect).toHaveBeenCalledWith(TASK_ID);
+    expect(handles.onOpen).not.toHaveBeenCalled();
+    expect(handles.onOpenActivity).not.toHaveBeenCalled();
+  });
+});
+
+describe("TaskListRow — List presentation of the shared controls (WP-POSTUX-03)", () => {
+  /*
+    These four are the List's opt-ins to shared seams whose defaults must stay
+    exactly as they were for Board, Calendar and Task Detail. Nothing else
+    asserted that the List actually passes them, so a silent revert to defaults
+    would have shipped as "no test failed".
+  */
+  it("hides the Status label visually while keeping its direct association and accessible name", async () => {
+    // WP03-AC-053. sr-only, never `hidden` and never removed: the <label for>
+    // must still name the control for assistive tech.
+    stubFetch();
+    renderRow();
+    await hydrated();
+    const status = within(row()).getByRole("combobox", { name: "Status" });
+    const label = row().querySelector(`label[for="${status.id}"]`);
+    expect(label).not.toBeNull();
+    expect(label?.className.split(/\s+/)).toContain("sr-only");
+    expect(label?.className.split(/\s+/)).not.toContain("hidden");
+    expect(label?.getAttribute("aria-hidden")).toBeNull();
+    // WP03-AC-054: the definite height that survives WebKit stays on the select.
+    expect(status.className.split(/\s+/)).toContain("h-11");
+  });
+
+  it("shows Due as its value alone while still announcing Due, <phrase>", async () => {
+    // WP03-AC-055 and AC-127: value-only removes the visual prefix only. The
+    // accessible name is unchanged, and triggerLabel is not involved at all.
+    stubFetch();
+    renderRow();
+    await hydrated();
+    const due = within(row()).getByRole("button", { name: "Due, Tomorrow" });
+    expect(due.textContent).toBe("Tomorrow");
+    expect(due.textContent).not.toContain("Due");
+  });
+
+  it("renders Close as a secondary action while keeping it directly reachable", async () => {
+    // WP03-AC-056. De-emphasised, not demoted into the More disclosure.
+    stubFetch();
+    renderRow();
+    await hydrated();
+    const close = within(row()).getByTestId("task-close-trigger");
+    expect(close).toBeVisible();
+    expect(close.className).not.toMatch(/bg-interactive(?![-\w])/);
+  });
+
+  it("labels the expanded More disclosure Less without changing its accessible name", async () => {
+    // WP03-AC-057. The visible word compacts; the disclosure semantics and the
+    // Task-specific accessible name do not.
+    const user = userEvent.setup();
+    stubFetch();
+    renderRow();
+    await hydrated();
+    const more = within(row()).getByTestId("task-list-row-more");
+    const accessibleName = more.getAttribute("aria-label");
+    expect(more).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(more);
+
+    expect(more).toHaveAttribute("aria-expanded", "true");
+    expect(more.textContent).toBe("Less");
+    expect(more.getAttribute("aria-label")).toBe(accessibleName);
+  });
+});
+
+describe("TaskListRow — the checkbox's reserved target is operable (WP03-AC-068)", () => {
+  /*
+    The 44x44 box around the checkbox is the whole point of that wrapper, and
+    until WP-POSTUX-03 it was a `<span>` — which forwards no click, so the area
+    was reserved and operated nothing and the real target was the 20px the
+    checkbox paints. Every other test here clicks `getByLabelText`, which
+    resolves to the input, so reverting the wrapper to a `<span>` would pass the
+    entire suite. This is the guard for that.
+  */
+  it("selects the Task when the click lands on the padding, not the input", async () => {
+    const user = userEvent.setup();
+    stubFetch();
+    const handles = renderRow();
+    await hydrated();
+
+    const input = within(row()).getByRole("checkbox", { name: `Select ${TITLE}` });
+    const target = input.closest("label");
+    expect(target, "the reserved 44px box must be a label, or it forwards no click").not.toBeNull();
+    expect(target).toContainElement(input);
+
+    // The wrapper itself, never the input.
+    await user.click(target!);
+
+    expect(handles.onSelect).toHaveBeenCalledTimes(1);
+    expect(handles.onSelect).toHaveBeenCalledWith(LIST_ROW.task_id);
+  });
+
+  it("keeps a click on the padding from reaching a surface rendered behind the row", async () => {
+    /*
+      The reason the wrapper stops propagation, and the only thing that proves
+      it: with the handler removed the label still selects, so every other test
+      here stays green.
+
+      The ancestor is a React handler, not `addEventListener`. React delegates
+      to the root container, so a synthetic `stopPropagation` runs after the
+      native event has already bubbled past any intermediate native listener —
+      it governs React ancestors, which is how a row-level affordance would
+      actually be built. Asserting against a native listener would test React's
+      delegation model rather than this guard.
+
+      Nothing above the row listens today — row root, <li>, <ul> and the
+      perspective region all carry none — so this pins a dormant invariant: the
+      one a future row-level open would break by silently selecting as well as
+      opening.
+    */
+    const user = userEvent.setup();
+    const behind = vi.fn();
+    const onSelect = vi.fn<TaskListRowProps["onSelect"]>();
+    stubFetch();
+    render(
+      <TaskRuntimeProvider principalId="prin_test" sessionEpoch="epoch-test">
+        <div onClick={behind}>
+          <TaskListRow
+            task={LIST_ROW}
+            selected={false}
+            clock={CLOCK}
+            onSelect={onSelect}
+            onOpen={vi.fn()}
+            onMutationConfirmed={vi.fn()}
+          />
+        </div>
+      </TaskRuntimeProvider>,
+    );
+    await hydrated();
+
+    const input = within(row()).getByRole("checkbox", { name: `Select ${TITLE}` });
+    await user.click(input.closest("label")!);
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(behind, "a click on the checkbox padding must not reach the row's surface").not.toHaveBeenCalled();
+  });
+
+  it("keeps the accessible name on the input rather than moving it to the wrapper", async () => {
+    stubFetch();
+    renderRow();
+    await hydrated();
+    // An empty label contributes no text, so `aria-label` still names the control.
+    const input = within(row()).getByRole("checkbox", { name: `Select ${TITLE}` });
+    expect(input.getAttribute("aria-label")).toBe(`Select ${TITLE}`);
+    expect(input.closest("label")?.textContent).toBe("");
+  });
 });

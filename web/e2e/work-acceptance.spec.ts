@@ -846,3 +846,645 @@ test.describe("operational Board and Calendar", () => {
     ).toBeGreaterThanOrEqual(ROW_HEIGHT);
   });
 });
+
+/**
+ * WP-POSTUX-03. The Work List, normalized.
+ *
+ * The audited List was a vertical stack of per-row cards: every Task drew its
+ * own border, its own rounding and its own surface, so twenty Tasks read as
+ * twenty islands rather than as one list. Normalization removes that chrome from
+ * the row and gives the grouping to the list itself — one surface, rows
+ * separated by dividers — while the Commitment list, which is not a Task list
+ * and was not audited as one, keeps the card treatment it has.
+ *
+ * **Everything below is asserted on computed style or on live geometry, never on
+ * a class list.** A class name is a claim about intent; `border-width: 0px` read
+ * back out of the engine is the thing the reader's eye actually meets, and it
+ * stays true through a rule that lost to specificity, a purge that dropped a
+ * class, or a token that changed underneath. The one exception is `data-state`,
+ * which is a semantic hook the package pins by name and which this file
+ * therefore reads by name.
+ *
+ * **What is not claimed.** This is not a screen-reader proof, not a 200%/400%
+ * zoom proof and not a WCAG 2.2 AA claim. `accessibility.spec.ts` owns the axe
+ * scan and the keyboard-order and accessible-name contracts for this surface;
+ * `mobile-foundation.spec.ts` owns the coarse-pointer sizing and the narrow
+ * geometry. This file owns the arrangement and the operations.
+ */
+test.describe("normalized Work List", () => {
+  type ApiAnswer<T> = { status: number; body: T };
+
+  async function api<T>(
+    page: Page,
+    path: string,
+    options: { method?: string; body?: Record<string, unknown> } = {},
+  ): Promise<ApiAnswer<T>> {
+    return page.evaluate(
+      async ({ target, method, payload }) => {
+        const response = await fetch(target, {
+          method: method ?? "GET",
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: payload ? { "content-type": "application/json" } : undefined,
+          body: payload ? JSON.stringify(payload) : undefined,
+        });
+        return { status: response.status, body: (await response.json()) as T };
+      },
+      { target: path, method: options.method, payload: options.body },
+    );
+  }
+
+  /**
+   * Seeded Tasks, and putting them back.
+   *
+   * `e2e/stack.sh` builds one disposable database for the whole run and an open
+   * Task sits in several Work views at once, so a row left behind changes what
+   * every later spec sees. `today-tasks.spec.ts` leaked exactly this way and put
+   * four latent defects on screen as a red job. Disposal is deterministic — each
+   * row is read, one already terminal is left alone, and the rest are
+   * transitioned with the version that read returned — and it runs after a
+   * failed test as well as a passing one, because a test that fails after
+   * seeding has still seeded.
+   */
+  const seeded: string[] = [];
+
+  /** See `today-tasks.spec.ts`: scaffolding was never done, so it is not "Closed". */
+  const TEARDOWN_STATE = "cancelled";
+
+  async function seedTaskRow(
+    page: Page,
+    input: { title: string; dueAt?: string; priority?: string; idempotencyKey: string },
+  ): Promise<string> {
+    const created = await api<{ task?: { task_id: string } }>(page, "/api/tasks", {
+      method: "POST",
+      body: {
+        title: input.title,
+        ...(input.dueAt ? { dueAt: input.dueAt } : {}),
+        ...(input.priority ? { priority: input.priority } : {}),
+        idempotencyKey: input.idempotencyKey,
+      },
+    });
+    expect(created.status, `seeding "${input.title}" must succeed`).toBe(200);
+    const taskId = created.body.task?.task_id ?? "";
+    expect(taskId, "the BFF must answer with a Task id").not.toBe("");
+    seeded.push(taskId);
+    return taskId;
+  }
+
+  test.beforeEach(async ({ page }) => {
+    seeded.length = 0;
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await signIn(page);
+  });
+
+  test.afterEach(async ({ page }) => {
+    const ids = [...seeded];
+    seeded.length = 0;
+    for (const taskId of ids) {
+      const read = await api<{ task?: { version: number; lifecycle_state: string } }>(
+        page,
+        `/api/tasks/${taskId}`,
+      );
+      if (read.status !== 200 || !read.body.task) continue;
+      if (["completed", "cancelled"].includes(read.body.task.lifecycle_state)) continue;
+      const disposed = await api<unknown>(page, `/api/tasks/${taskId}/transition`, {
+        method: "POST",
+        body: {
+          toState: TEARDOWN_STATE,
+          expectedVersion: read.body.task.version,
+          idempotencyKey: `wp03-teardown-${taskId}-${Date.now()}`,
+        },
+      });
+      expect(
+        disposed.status,
+        `teardown must dispose of seeded Task ${taskId}: ${JSON.stringify(disposed.body)}`,
+      ).toBeLessThan(300);
+    }
+  });
+
+  /** A marker no other spec can produce, so the `q=` filter isolates these rows. */
+  function marker(): string {
+    return `wp03-${test.info().project.name}-${Date.now()}`;
+  }
+
+  /** Seed `count` Tasks and open the List filtered down to exactly them. */
+  async function seedList(
+    page: Page,
+    count: number,
+    options: { priority?: string } = {},
+  ): Promise<{ tag: string; titles: string[] }> {
+    const tag = marker();
+    await page.goto("/work?view=all-open");
+    await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
+    const titles: string[] = [];
+    for (let index = 0; index < count; index += 1) {
+      const title = `E2E normalized row ${tag} ${index}`;
+      await seedTaskRow(page, {
+        title,
+        priority: options.priority,
+        idempotencyKey: `e2e-${tag}-${index}`,
+      });
+      titles.push(title);
+    }
+    await page.goto(`/work?view=all-open&q=${encodeURIComponent(tag)}`);
+    await expect(page.getByRole("list", { name: "Work list" })).toBeVisible();
+    await expect(page.locator('[data-testid="task-list-row"]')).toHaveCount(count);
+    return { tag, titles };
+  }
+
+  function listRow(page: Page, title: string) {
+    return page.locator('[data-testid="task-list-row"]').filter({ hasText: title });
+  }
+
+  const feedback = (page: Page) => page.getByTestId("mutation-feedback-region");
+
+  /** Every border width and the corner radius the engine resolved, in CSS px. */
+  async function chrome(locator: ReturnType<Page["locator"]>) {
+    return locator.evaluate((node) => {
+      const style = getComputedStyle(node);
+      const px = (value: string) => Number.parseFloat(value) || 0;
+      return {
+        borders: [
+          px(style.borderTopWidth),
+          px(style.borderRightWidth),
+          px(style.borderBottomWidth),
+          px(style.borderLeftWidth),
+        ],
+        radius: Math.max(
+          px(style.borderTopLeftRadius),
+          px(style.borderTopRightRadius),
+          px(style.borderBottomLeftRadius),
+          px(style.borderBottomRightRadius),
+        ),
+        boxShadow: style.boxShadow,
+        background: style.backgroundColor,
+      };
+    });
+  }
+
+  /**
+   * WP03-AC-043. The Task List is one grouped surface, not a column of cards.
+   *
+   * Two things are measured, and neither is a class name. First, the row root
+   * draws no border of its own on any edge and no rounding — that is what made
+   * each Task an island. Second, the rows are actually separated: every row
+   * after the first carries a divider rule, read as a non-zero top border on the
+   * row or on the list item that holds it, which is where both of the plausible
+   * implementations (a `divide-y` on the list, a border on the row) put it.
+   *
+   * Stated rather than assumed: this asserts a divider *exists*, not how thick
+   * it is. Pinning the exact hairline would be a brittle pixel contract of the
+   * kind this package explicitly forbids.
+   */
+  test("WP03-AC-043 the Task List renders as one grouped list with dividers, not per-row cards", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    await seedList(page, 3);
+
+    const rows = page.locator('[data-testid="task-list-row"]');
+    const count = await rows.count();
+    // Guard the guard: one row cannot demonstrate a divider between rows.
+    expect(count, "the grouping claim needs more than one row").toBeGreaterThanOrEqual(3);
+
+    const carded: string[] = [];
+    for (let index = 0; index < count; index += 1) {
+      const measured = await chrome(rows.nth(index));
+      if (measured.borders.some((width) => width > 0.01)) {
+        carded.push(`row ${index} borders ${measured.borders.join("/")}`);
+      }
+      if (measured.radius > 0.01) carded.push(`row ${index} radius ${measured.radius}`);
+      if (measured.boxShadow !== "none" && measured.boxShadow !== "") {
+        carded.push(`row ${index} shadow ${measured.boxShadow}`);
+      }
+    }
+    expect(carded, "rows still carry per-row card chrome").toEqual([]);
+
+    // All the rows belong to one list, which is what "grouped" means.
+    const list = page.getByRole("list", { name: "Work list" });
+    expect(
+      await list.evaluate((node) => node.querySelectorAll('[data-testid="task-list-row"]').length),
+      "every row must live in the one Work list",
+    ).toBe(count);
+
+    const undivided = await list.evaluate((node) => {
+      const px = (value: string) => Number.parseFloat(value) || 0;
+      const rowRoots = Array.from(node.querySelectorAll('[data-testid="task-list-row"]'));
+      const missing: string[] = [];
+      /*
+        A divider between two rows is a rule on either facing edge, and which
+        edge it lands on is an implementation detail: Tailwind v4's `divide-y`
+        puts a *bottom* border on every child but the last, where v3 put a top
+        border on every child but the first. Asserting one edge would make this
+        a test of the utility's internals rather than of the separation a
+        reader actually sees, so both edges of the pair count.
+      */
+      rowRoots.forEach((row, index) => {
+        if (index === 0) return;
+        const previous = rowRoots[index - 1];
+        const rule = Math.max(
+          px(getComputedStyle(row).borderTopWidth),
+          px(getComputedStyle(previous).borderBottomWidth),
+          row.parentElement ? px(getComputedStyle(row.parentElement).borderTopWidth) : 0,
+          previous.parentElement ? px(getComputedStyle(previous.parentElement).borderBottomWidth) : 0,
+        );
+        if (rule <= 0.01) missing.push(`rows ${index - 1} and ${index} are not separated by a rule`);
+      });
+      return missing;
+    });
+    expect(undivided, "a grouped list separates its rows with dividers").toEqual([]);
+  });
+
+  /**
+   * WP03-AC-039. The Commitment list is not a Task list and keeps its cards.
+   *
+   * The normalization is scoped to the Work Task List. A Commitment row is a
+   * different object with a different reading — counterparty, direction, state,
+   * obligation deadline — and it was not audited as a dense operational list, so
+   * flattening it would be a change nobody asked for. Measured on the same
+   * computed properties the Task row is measured on, so the two claims cannot
+   * drift apart.
+   *
+   * The Commitment is created through the product's own form (the only path that
+   * writes the origin evidence the canonical endpoint requires) and closed
+   * through the product's own closure form in the same test, so nothing open is
+   * left behind. `work-mutations.spec.ts` drives the identical pair of forms.
+   */
+  test("WP03-AC-039 the Commitment list keeps its card treatment", async ({ page }) => {
+    test.setTimeout(180_000);
+    const tag = marker();
+    const title = `E2E obligation ${tag}`;
+
+    await page.goto(`/work?view=commitments&commitment=all&q=${encodeURIComponent(tag)}`);
+    await page.getByRole("button", { name: "New commitment" }).click();
+    const create = page.getByRole("heading", { name: "Create commitment" }).locator("..");
+    await create.getByLabel("Summary").fill(title);
+    await create.getByLabel("Counterparty").selectOption({ label: "E2E Synthetic Counterparty" });
+    await create.getByLabel("Direction").selectOption("owed_to_principal");
+    await create
+      .getByLabel("Origin note")
+      .fill("Synthetic Commitment evidence in the disposable browser database.");
+    await create.getByRole("button", { name: "Create commitment" }).click();
+
+    const link = page.getByRole("link", { name: new RegExp(title) });
+    await expect(link).toBeVisible();
+
+    // The card is the element carrying the Commitment's identity attribute —
+    // the same hook Work's own focus restoration uses — so this measures the
+    // card itself rather than whatever wrapper happens to be nearest.
+    const card = page.locator("[data-work-item]").filter({ hasText: title }).first();
+    const measured = await chrome(card);
+    expect(
+      Math.min(...measured.borders),
+      `the Commitment card must keep a border (measured ${measured.borders.join("/")})`,
+    ).toBeGreaterThan(0);
+    expect(measured.radius, "the Commitment card must keep its rounding").toBeGreaterThan(0);
+
+    // Dispose through the product's own explicit closure, which is the only way
+    // a Commitment is closed. Left open, it would sit in every later Commitment
+    // read this run makes.
+    await link.click();
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toBeVisible();
+    await dialog.getByLabel("Closure note").fill("Synthetic explicit Commitment closure evidence.");
+    await dialog.getByRole("button", { name: "Close commitment" }).click();
+    await expect(dialog.getByText("Commitment explicitly closed.")).toBeVisible();
+  });
+
+  /**
+   * A selected row is differentiated, and says so in the way the package pins.
+   *
+   * `data-state="selected"` is the hook — never `aria-selected`, which would be
+   * a lie about the role: these rows are not options in a listbox and a
+   * `aria-selected` on a plain container is a role/state mismatch a screen
+   * reader either ignores or mis-announces. The checkbox already carries the
+   * selection semantics.
+   *
+   * "Visible low-emphasis differentiation" is measured as a real change in the
+   * row's own painted background between the two states — low-emphasis is a
+   * design judgement no automated check can make, but *present* and *painted*
+   * are exactly what this can prove, and a differentiation that does not exist
+   * is the failure that matters.
+   */
+  test("a selected row is visibly differentiated, carries data-state and never aria-selected", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const { titles } = await seedList(page, 2);
+    const title = titles[0]!;
+    const row = listRow(page, title);
+
+    await expect(row).not.toHaveAttribute("data-state", "selected");
+    const unselected = await chrome(row);
+
+    await page.getByRole("checkbox", { name: `Select ${title}` }).check();
+    await expect(row).toHaveAttribute("data-state", "selected");
+    await expect(page.getByRole("checkbox", { name: `Select ${title}` })).toBeChecked();
+
+    /*
+      Polled, not read once. The Work list revalidates against the server after
+      a selection, so a single `getComputedStyle` can land on the frame between
+      React re-creating the row and the style being recalculated — which reads
+      as an unpainted row on a correctly painted surface. This waits for the
+      painted state rather than retrying the whole test, and it still fails if
+      selection genuinely paints nothing.
+    */
+    await expect
+      .poll(
+        async () => (await chrome(row)).background,
+        { message: `selection must paint the row differently (was ${unselected.background})` },
+      )
+      .not.toBe(unselected.background);
+    const selected = await chrome(row);
+    // Differentiation by fill, not by a card growing back around the row.
+    expect(selected.borders.every((width) => width <= 0.01), "selection must not add a border").toBe(
+      true,
+    );
+
+    // The semantics the package forbids, on the row and on everything in it.
+    await expect(row.locator("[aria-selected]")).toHaveCount(0);
+    expect(
+      await row.evaluate((node) => node.hasAttribute("aria-selected")),
+      "the row must not carry aria-selected",
+    ).toBe(false);
+
+    // The unselected sibling is untouched: selection is per row, not per list.
+    const other = listRow(page, titles[1]!);
+    await expect(other).not.toHaveAttribute("data-state", "selected");
+  });
+
+  /**
+   * WP03-AC-030..037. Every ordinary operation still works end to end.
+   *
+   * Normalization moved Priority into the state band, hid the Status label,
+   * stripped the Due trigger to its value, re-weighted Close and re-worded the
+   * expanded More. Each of those is a place where an operation can be lost while
+   * the row still looks operable, so every one of them is driven here against
+   * the real stack — not asserted as present.
+   */
+  test("WP03-AC-030..036 Status, Due, Comment, Close and More all still operate from the row", async ({
+    page,
+  }) => {
+    test.setTimeout(300_000);
+    const { titles } = await seedList(page, 2);
+    const title = titles[0]!;
+
+    // Status, inline, without opening Task detail.
+    await listRow(page, title)
+      .getByTestId("task-status-control")
+      .getByRole("combobox")
+      .selectOption({ label: "In progress" });
+    await expect(feedback(page).getByText("Status changed to In progress")).toBeVisible();
+    await expect(page.getByTestId("task-compact-sheet")).toHaveCount(0);
+
+    // Due, inline, through the value-only trigger.
+    await listRow(page, title).getByRole("button", { name: /^Due, / }).click();
+    await page.getByRole("button", { name: "Today", exact: true }).click();
+    await expect(feedback(page).getByText(/^Due date moved to /)).toBeVisible();
+    await expect(page.getByTestId("task-compact-sheet")).toHaveCount(0);
+
+    // Comment opens the Task's own Activity surface rather than a second
+    // comments implementation, and closing returns focus to the control used.
+    const comment = listRow(page, title).getByTestId("task-list-row-comment");
+    await comment.click();
+    await expect(page.getByTestId("task-compact-sheet")).toBeVisible();
+    await page.getByRole("button", { name: "Close panel" }).click();
+    await expect(page.getByTestId("task-compact-sheet")).toHaveCount(0);
+    await expect(listRow(page, title).getByTestId("task-list-row-comment")).toBeFocused();
+
+    // More reveals Cancel and reads `Less` while expanded — visible wording
+    // only: the accessible name must not have moved with it.
+    const more = listRow(page, title).getByTestId("task-list-row-more");
+    await expect(more).toHaveAccessibleName(`More actions for ${title}`);
+    await expect(more).toHaveText("More");
+    await more.click();
+    await expect(more).toHaveAttribute("aria-expanded", "true");
+    await expect(more).toHaveText("Less");
+    await expect(more, "the accessible name must not change with the wording").toHaveAccessibleName(
+      `More actions for ${title}`,
+    );
+    await expect(
+      listRow(page, title).getByRole("button", { name: "Cancel Task", exact: true }),
+    ).toBeVisible();
+    await more.click();
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+    await expect(more).toHaveText("More");
+
+    // Close, dismissed. The confirmation opens on the non-destructive choice,
+    // asks for no authored text, and leaves the Task exactly as it was.
+    const close = listRow(page, title).getByTestId("task-close-trigger");
+    await close.click();
+    const confirmation = listRow(page, title).getByRole("alertdialog");
+    await expect(confirmation).toBeVisible();
+    await expect(confirmation.getByRole("textbox")).toHaveCount(0);
+    await confirmation.getByRole("button", { name: "Keep open" }).click();
+    await expect(listRow(page, title).getByRole("alertdialog")).toHaveCount(0);
+    await expect(listRow(page, title)).toHaveCount(1);
+
+    // Close, confirmed. The outcome outlives the row that issued it.
+    await listRow(page, title).getByTestId("task-close-trigger").click();
+    await listRow(page, title)
+      .getByRole("alertdialog")
+      .getByRole("button", { name: "Confirm Closed" })
+      .click();
+    await expect(feedback(page).getByText(new RegExp(`${title}.*closed`))).toBeVisible();
+  });
+
+  /**
+   * WP03-AC-037. An operation that removes its own row does not drop the user.
+   *
+   * Closing a Task takes it out of `all-open`, which unmounts the very control
+   * the user activated; a browser answers that by dropping focus to the body,
+   * and a list that leaves it there has stranded a keyboard user in the
+   * document with nothing under them. Two rows are seeded so there is a
+   * survivor to land on, and the whole interaction is driven from the keyboard
+   * so the record of where focus was cannot depend on a pointer focusing a
+   * button — which macOS WebKit deliberately does not do.
+   *
+   * The assertion is on all three of the things that can go wrong: focus on
+   * `body`, focus on a node that has left the document, and focus somewhere
+   * outside Work altogether.
+   */
+  test("WP03-AC-037 closing a row moves focus to a surviving Work target, never the body", async ({
+    page,
+  }) => {
+    test.setTimeout(300_000);
+    const { titles } = await seedList(page, 2);
+    const doomed = titles[0]!;
+    const survivor = titles[1]!;
+
+    const close = listRow(page, doomed).getByTestId("task-close-trigger");
+    await close.focus();
+    await expect(close).toBeFocused();
+    await page.keyboard.press("Enter");
+
+    const confirmation = listRow(page, doomed).getByRole("alertdialog");
+    await expect(confirmation).toBeVisible();
+    await expect(confirmation.getByRole("button", { name: "Keep open" })).toBeFocused();
+    await confirmation.getByRole("button", { name: "Confirm Closed" }).click();
+
+    await expect(feedback(page).getByText(new RegExp(`${doomed}.*closed`))).toBeVisible();
+    await expect(listRow(page, doomed)).toHaveCount(0);
+    await expect(listRow(page, survivor)).toHaveCount(1);
+
+    const landed = await page.evaluate(() => {
+      const active = document.activeElement as HTMLElement | null;
+      if (!active) return null;
+      return {
+        tag: active.tagName.toLowerCase(),
+        connected: active.isConnected,
+        isBody: active === document.body,
+        inWork: Boolean(active.closest("section[aria-labelledby='work-heading']")),
+        row: active.closest("[data-work-item]")?.getAttribute("data-work-item") ?? null,
+        text: (active.textContent ?? "").trim().slice(0, 80),
+      };
+    });
+    expect(landed, "something must hold focus after the row left").not.toBeNull();
+    expect(landed!.isBody, `focus fell to the body: ${JSON.stringify(landed)}`).toBe(false);
+    expect(landed!.connected, `focus landed on a detached node: ${JSON.stringify(landed)}`).toBe(
+      true,
+    );
+    expect(landed!.inWork, `focus left Work entirely: ${JSON.stringify(landed)}`).toBe(true);
+    // With a survivor on screen the placement is a row, not the fallback
+    // heading: landing on the heading is correct only when nothing is left.
+    expect(landed!.row, `focus should be inside a surviving row: ${JSON.stringify(landed)}`).not.toBeNull();
+  });
+
+  /**
+   * WP03-AC-034. A version conflict is recoverable from the row itself.
+   *
+   * A real conflict, produced the only honest way: the row makes one write, so
+   * its binder is holding the canonical version the server answered with; the
+   * Task is then advanced out of band through the same BFF, which is exactly
+   * what "changed elsewhere" means; and the row's next write arrives stale. No
+   * route is stubbed and no response is rewritten — the 409 comes from the real
+   * gateway against the real database.
+   *
+   * Both exits are driven, because a conflict panel that can only be dismissed
+   * is a dead end and one that can only be reapplied is a trap.
+   */
+  test("WP03-AC-034 a real version conflict surfaces on the row and both exits work", async ({
+    page,
+  }) => {
+    test.setTimeout(300_000);
+    const tag = marker();
+    const title = `E2E conflict row ${tag}`;
+    const taskId = await seedTaskRow(page, { title, idempotencyKey: `e2e-${tag}` });
+    await page.goto(`/work?view=all-open&q=${encodeURIComponent(tag)}`);
+    await expect(listRow(page, title)).toHaveCount(1);
+
+    // One confirmed write, so the row is holding a canonical version.
+    await listRow(page, title)
+      .getByTestId("task-status-control")
+      .getByRole("combobox")
+      .selectOption({ label: "In progress" });
+    await expect(feedback(page).getByText("Status changed to In progress")).toBeVisible();
+
+    // The Task changes elsewhere. Read the version the row cannot see, and
+    // advance it through the canonical endpoint.
+    const read = await api<{ task: { version: number } }>(page, `/api/tasks/${taskId}`);
+    expect(read.status).toBe(200);
+    const bumped = await api<unknown>(page, `/api/tasks/${taskId}`, {
+      method: "PATCH",
+      body: {
+        expectedVersion: read.body.task.version,
+        priority: "p1",
+        idempotencyKey: `e2e-${tag}-elsewhere`,
+      },
+    });
+    expect(bumped.status, `the out-of-band write must land: ${JSON.stringify(bumped.body)}`).toBe(
+      200,
+    );
+
+    // The row's next write is stale, and the row says so rather than locking
+    // silently.
+    await listRow(page, title)
+      .getByTestId("task-status-control")
+      .getByRole("combobox")
+      .selectOption({ label: "Waiting" });
+    const conflict = listRow(page, title).getByTestId("task-list-row-conflict");
+    await expect(conflict).toBeVisible();
+    await expect(conflict.getByTestId("task-list-row-conflict-reapply")).toBeVisible();
+    await expect(conflict.getByTestId("task-list-row-conflict-dismiss")).toBeVisible();
+
+    // Exit one: leave it. The panel goes and the row is usable again.
+    await conflict.getByTestId("task-list-row-conflict-dismiss").click();
+    await expect(listRow(page, title).getByTestId("task-list-row-conflict")).toHaveCount(0);
+    await expect(
+      listRow(page, title).getByTestId("task-status-control").getByRole("combobox"),
+    ).toBeEnabled();
+
+    // Exit two: provoke it again and reapply the intent against the version the
+    // conflict exposed. The write lands for real.
+    const reread = await api<{ task: { version: number } }>(page, `/api/tasks/${taskId}`);
+    await api<unknown>(page, `/api/tasks/${taskId}`, {
+      method: "PATCH",
+      body: {
+        expectedVersion: reread.body.task.version,
+        priority: "p2",
+        idempotencyKey: `e2e-${tag}-elsewhere-2`,
+      },
+    });
+    await listRow(page, title)
+      .getByTestId("task-status-control")
+      .getByRole("combobox")
+      .selectOption({ label: "Blocked" });
+    const again = listRow(page, title).getByTestId("task-list-row-conflict");
+    await expect(again).toBeVisible();
+    await again.getByTestId("task-list-row-conflict-reapply").click();
+    await expect(listRow(page, title).getByTestId("task-list-row-conflict")).toHaveCount(0);
+    await expect(feedback(page).getByText("Status changed to Blocked")).toBeVisible();
+
+    const settled = await api<{ task: { lifecycle_state: string } }>(page, `/api/tasks/${taskId}`);
+    expect(settled.body.task.lifecycle_state, "the reapplied intent must have landed").toBe(
+      "blocked",
+    );
+  });
+
+  /**
+   * A terminal row offers nothing it cannot do.
+   *
+   * Close and Cancel are withheld once a Task is closed or cancelled — the rule
+   * lives with the affordance, so it applies on every surface — and Status stops
+   * being an editable choice, because closure and cancellation are distinct
+   * terminal actions and never ordinary Status values. The Completed view is the
+   * one place a whole list of terminal rows exists, which is where offering a
+   * live Close on every one of them was the defect.
+   */
+  test("terminal rows expose no invalid action", async ({ page }) => {
+    test.setTimeout(180_000);
+    const tag = marker();
+    const title = `E2E terminal row ${tag}`;
+    const taskId = await seedTaskRow(page, { title, idempotencyKey: `e2e-${tag}` });
+
+    const read = await api<{ task: { version: number } }>(page, `/api/tasks/${taskId}`);
+    const closed = await api<unknown>(page, `/api/tasks/${taskId}/transition`, {
+      method: "POST",
+      body: {
+        toState: "completed",
+        expectedVersion: read.body.task.version,
+        idempotencyKey: `e2e-${tag}-close`,
+      },
+    });
+    expect(closed.status, `the Task must actually close: ${JSON.stringify(closed.body)}`).toBe(200);
+
+    await page.goto(`/work?view=completed&q=${encodeURIComponent(tag)}`);
+    const row = listRow(page, title);
+    await expect(row).toHaveCount(1);
+
+    // Status is stated, not offered.
+    await expect(row.getByTestId("task-status-control")).toHaveAttribute("data-terminal", "true");
+    await expect(row.getByTestId("task-status-control").getByRole("combobox")).toHaveCount(0);
+    await expect(row.getByText("Closed")).toBeVisible();
+
+    // The terminal actions, and the disclosure that exists only to reveal one of
+    // them, are withheld rather than disabled.
+    await expect(row.getByTestId("task-close-trigger")).toHaveCount(0);
+    await expect(row.getByTestId("task-list-row-more")).toHaveCount(0);
+    await expect(row.getByRole("button", { name: "Cancel Task", exact: true })).toHaveCount(0);
+
+    // What a terminal Task still supports is still there.
+    await expect(row.getByTestId("task-list-row-comment")).toBeVisible();
+    await expect(row.getByTestId("task-list-row-title")).toBeVisible();
+  });
+});

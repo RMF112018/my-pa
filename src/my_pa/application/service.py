@@ -8314,6 +8314,15 @@ class ApplicationService:
                         unit_of_work, principal_id, command.origin_evidence_ref or ""
                     )
                 )
+
+                def validate_first_write() -> None:
+                    if command.project_id is not None and (
+                        unit_of_work.projects.get_project(principal_id, command.project_id) is None
+                    ):
+                        raise NotFoundError(SafeDetail.PROJECT_ID)
+                    if evidence_gate is not None:
+                        evidence_gate()
+
                 receipt = self._tasks.create_task(
                     principal_id=principal_id,
                     title=command.title,
@@ -8331,7 +8340,7 @@ class ApplicationService:
                     commitment_id=command.commitment_id,
                     role=command.role,
                     active_uow=unit_of_work,
-                    validate_first_write=evidence_gate,
+                    validate_first_write=validate_first_write,
                 )
         except TaskIdempotencyConflictError:
             raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None

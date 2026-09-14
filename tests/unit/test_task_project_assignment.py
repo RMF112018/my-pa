@@ -7,6 +7,7 @@ import pytest
 from my_pa.application.commands import (
     Command,
     CreateProject,
+    CreateTask,
     ListTasks,
     ReadTask,
     RecordTask,
@@ -87,6 +88,26 @@ def _attached_task(
     return created.result
 
 
+def _rich_task(
+    service: ApplicationService,
+    principal: Principal,
+    *,
+    title: str,
+    key: str,
+    project_id: str | None,
+) -> ResponseEnvelope:
+    return _invoke(
+        service,
+        principal,
+        CreateTask(
+            title=title,
+            idempotency_key=key,
+            origin_kind=TaskOriginKind.DIRECT_PRINCIPAL,
+            project_id=project_id,
+        ),
+    )
+
+
 def test_clear_project_and_project_id_together_are_invalid_request() -> None:
     with pytest.raises(InvalidRequestError) as refused:
         UpdateTask(
@@ -108,6 +129,107 @@ def test_project_id_is_not_a_clear_fields_member() -> None:
             clear_fields=("project_id",),
         )
     assert refused.value.safe_details == (SafeDetail.SELECTOR,)
+
+
+def test_rich_create_accepts_an_owned_project_and_readback_preserves_it(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    harbour = _project(service, scene.principal, name="Owned Harbour", key="wp04a-owned-project")
+
+    created = _rich_task(
+        service,
+        scene.principal,
+        title="Inspect the owned harbour",
+        key="wp04a-owned-create",
+        project_id=harbour,
+    )
+
+    assert created.error is None and created.result is not None
+    assert created.result["task"]["project_id"] == harbour
+    assert created.result["replayed"] is False
+    read = _invoke(
+        service,
+        scene.principal,
+        ReadTask(task_id=str(created.result["task"]["task_id"])),
+    )
+    assert read.error is None and read.result is not None
+    assert read.result["task"]["project_id"] == harbour
+
+
+def test_rich_create_refuses_missing_and_foreign_projects_without_writes(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    stranger = operator()
+    foreign = _project(service, stranger, name="Foreign Quay", key="wp04a-foreign-project")
+    missing = issue_identifier(IdKind.PROJECT)
+    before_tasks = tuple(scene.world.tasks_v2)
+    before_history = tuple(scene.world.task_history_v2)
+
+    missing_answer = _rich_task(
+        service,
+        scene.principal,
+        title="Must not bind a missing project",
+        key="wp04a-missing-create",
+        project_id=missing,
+    )
+    foreign_answer = _rich_task(
+        service,
+        scene.principal,
+        title="Must not bind a foreign project",
+        key="wp04a-foreign-create",
+        project_id=foreign,
+    )
+
+    assert missing_answer.error is not None and foreign_answer.error is not None
+    assert missing_answer.error.code is ErrorCode.NOT_FOUND
+    assert foreign_answer.error.code is ErrorCode.NOT_FOUND
+    assert missing_answer.error.safe_details == foreign_answer.error.safe_details == ("project_id",)
+    assert missing not in str(missing_answer.error)
+    assert foreign not in str(foreign_answer.error)
+    assert tuple(scene.world.tasks_v2) == before_tasks
+    assert tuple(scene.world.task_history_v2) == before_history
+
+
+def test_rich_create_project_binding_is_digest_bound_and_replays_in_a_new_service(
+    scene: Scene,
+) -> None:
+    service = build_service(scene.world, scene.providers)
+    harbour = _project(service, scene.principal, name="Replay Harbour", key="wp04a-replay-project")
+    quay = _project(service, scene.principal, name="Replay Quay", key="wp04a-conflict-project")
+    key = "wp04a-project-create-replay"
+    first = _rich_task(
+        service,
+        scene.principal,
+        title="Keep one project binding",
+        key=key,
+        project_id=harbour,
+    )
+    assert first.error is None and first.result is not None
+    after_first_tasks = tuple(scene.world.tasks_v2)
+    after_first_history = tuple(scene.world.task_history_v2)
+
+    restarted = build_service(scene.world, scene.providers)
+    replay = _rich_task(
+        restarted,
+        scene.principal,
+        title="Keep one project binding",
+        key=key,
+        project_id=harbour,
+    )
+    conflict = _rich_task(
+        restarted,
+        scene.principal,
+        title="Keep one project binding",
+        key=key,
+        project_id=quay,
+    )
+
+    assert replay.error is None and replay.result is not None
+    assert replay.result["replayed"] is True
+    assert replay.result["task"] == first.result["task"]
+    assert conflict.error is not None
+    assert conflict.error.code is ErrorCode.CONFLICT
+    assert conflict.error.safe_details == ("idempotency_key",)
+    assert tuple(scene.world.tasks_v2) == after_first_tasks
+    assert tuple(scene.world.task_history_v2) == after_first_history
 
 
 def test_create_read_reassign_clear_and_list_by_project(scene: Scene) -> None:
@@ -235,6 +357,8 @@ def test_cross_principal_target_project_matches_missing_not_found(scene: Scene) 
     stranger = operator()
     foreign = _project(service, stranger, name="Foreign Harbour", key="proj-05-foreign-project")
     missing_id = issue_identifier(IdKind.PROJECT)
+    before_tasks = tuple(scene.world.tasks_v2)
+    before_history = tuple(scene.world.task_history_v2)
     missing = _invoke(
         service,
         scene.principal,
@@ -261,6 +385,8 @@ def test_cross_principal_target_project_matches_missing_not_found(scene: Scene) 
     assert missing.error.safe_details == foreign_target.error.safe_details == ("project_id",)
     assert missing_id not in str(missing.error)
     assert foreign not in str(foreign_target.error)
+    assert tuple(scene.world.tasks_v2) == before_tasks
+    assert tuple(scene.world.task_history_v2) == before_history
     held = _invoke(service, scene.principal, ReadTask(task_id=str(attached["task_id"])))
     assert held.error is None and held.result is not None
     assert held.result["task"]["project_id"] == harbour

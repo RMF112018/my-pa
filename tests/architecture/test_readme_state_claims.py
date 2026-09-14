@@ -198,7 +198,12 @@ def test_the_readme_names_exactly_the_availabilities_the_build_publishes() -> No
 
 
 def test_the_readme_names_the_readiness_state_the_build_reports() -> None:
-    claimed = claimed_tokens() & {member.value for member in ReadinessState}
+    # `not_implemented` is both an Availability and a ReadinessState token.
+    # In this paragraph it qualifies individual capabilities, while `degraded`
+    # is the explicitly stated aggregate readiness.
+    claimed = (claimed_tokens() & {member.value for member in ReadinessState}) - {
+        Availability.NOT_IMPLEMENTED.value
+    }
     _, readiness = published()
     assert claimed == {readiness}, (
         f"The README says readiness is {sorted(claimed)}; it is {readiness!r}."
@@ -400,6 +405,12 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     164: "One hundred and sixty-four",
     165: "One hundred and sixty-five",
     166: "One hundred and sixty-six",
+    167: "One hundred and sixty-seven",
+    168: "One hundred and sixty-eight",
+    169: "One hundred and sixty-nine",
+    170: "One hundred and seventy",
+    171: "One hundred and seventy-one",
+    172: "One hundred and seventy-two",
 }
 
 
@@ -538,7 +549,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # by six while the withheld figure is unchanged. `PC-CM-IMP-WP07`'s twelve
     # Constraint mutations arrive on the served side for the same reason, and
     # the withheld figure is again unchanged.
-    assert default == 96 and total == 166 and withheld == 70
+    assert default == 96 and total == 172 and withheld == 76
 
     # Exercise the same application and MCP publication composition that owns
     # the current 91-tool measurement. GoodNotes pull is part of that measured
@@ -591,7 +602,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert "twenty-nine writes" not in readme
 
     system_context = SYSTEM_CONTEXT.read_text(encoding="utf-8").lower()
-    assert "one hundred and sixty-six capabilities" in system_context
+    assert "one hundred and seventy-two capabilities" in system_context
     assert f"exposes {default} of them" in system_context
 
     architecture_index = (ROOT / "docs/architecture/00_ARCHITECTURE_INDEX.md").read_text(

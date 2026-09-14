@@ -229,6 +229,35 @@ def _freeze_out_remediation_retry_state(copy: Table) -> None:
     copy._columns.remove(copy.c.dead_lettered_at)
 
 
+def _freeze_out_run01_project_scope(copy: Table) -> None:
+    """Keep nullable Capture Project scope in `e6a4c2f91b73`, not this revision."""
+    if copy.name != "captures" or "project_id" not in copy.c:
+        return
+    for index in [
+        candidate
+        for candidate in copy.indexes
+        if candidate.name == "captures_by_principal_project_created_at"
+    ]:
+        copy.indexes.discard(index)
+    for constraint in [
+        candidate
+        for candidate in copy.constraints
+        if candidate.name
+        in {
+            "a_capture_project_is_an_opaque_identifier",
+            "a_capture_names_a_project_in_its_principal",
+        }
+    ]:
+        copy.constraints.discard(constraint)
+    # The composite ForeignKey objects are also attached to both participating
+    # columns. Clear those throwaway-copy attachments before removing the new
+    # column, or the historical table still tries to resolve `projects`.
+    copy.foreign_keys.clear()
+    copy.c.project_id.foreign_keys.clear()
+    copy.c.owner_principal_id.foreign_keys.clear()
+    copy._columns.remove(copy.c.project_id)
+
+
 def _historical_capture_tables() -> list[Table]:
     """The five tables as this revision emits them, with the eight checks frozen.
 
@@ -243,6 +272,7 @@ def _historical_capture_tables() -> list[Table]:
     frozen = MetaData(schema=SCHEMA)
     copies = [table.to_metadata(frozen) for table in _TABLES]
     for copy in copies:
+        _freeze_out_run01_project_scope(copy)
         _freeze_out_remediation_retry_state(copy)
         _freeze_out_wp04_queue_principal(copy)
         replacements = _FROZEN.get(copy.name, {})

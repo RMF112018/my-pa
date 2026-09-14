@@ -476,9 +476,9 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # purpose and no write gains `constraint_read`: that disjointness is what the
     # plane's read/authoring separation now rests on. WP11 adds seven sync pairs,
     # split between its read and authoring purposes, without widening the canonical grants.
-    # Unioned: 166 capabilities, 45 purposes, 168 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 168
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 168 == 7302
+    # Unioned: 172 capabilities, 45 purposes, 174 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 174
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 174 == 7566
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

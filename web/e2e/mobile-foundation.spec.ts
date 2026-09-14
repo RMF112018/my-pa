@@ -18,6 +18,20 @@
  * focusing an editable control keeps `document.activeElement` on it, paints a
  * focus indicator, and adds no horizontal overflow.
  *
+ * **What WP-POSTUX-02 adds to it.** The same measurement discipline applied to
+ * the Create Task surface's vertical compaction: that the major-field gap
+ * measures 12 CSS px at narrow/coarse geometry and the Description control's
+ * floor sits at or above 80px but under the shared 96px, that the identical
+ * measurement on the fine-pointer desktop lane still reads 16px and 96px so the
+ * mobile rule provably did not leak, that the field order is unchanged, that the
+ * Due/Clear pair still shares one line at every narrow width rather than being
+ * bought back as a stack, that every control stays inside the sheet's content
+ * box at 320/375/390/393/430 px, in phone landscape, and at tablet and desktop
+ * geometry, that the WP-POSTUX-01 type and touch-target floors still hold *in
+ * the compacted layout*, and that raising the root font-size reflows the surface
+ * downward rather than sideways. Every one of those numbers is read back out of
+ * the engine; none is inferred from a class name.
+ *
  * **What this lane does not prove, stated so no reader can mistake it.**
  * Playwright's WebKit is not the iOS Safari binary and device emulation is not a
  * device. This file says nothing about the iOS software keyboard (its
@@ -34,7 +48,7 @@
  * each test that opens the sheet closes it again through the real "Close panel"
  * control before it ends.
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { signIn } from "./fixtures";
 
@@ -440,5 +454,513 @@ test.describe("fine-pointer desktop density is not enlarged", () => {
     // what they say.
     expect(await page.evaluate(() => matchMedia("(pointer: fine)").matches)).toBe(true);
     expect(await page.evaluate(() => matchMedia("(pointer: coarse)").matches)).toBe(false);
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * WP-POSTUX-02: the Create Task surface's vertical compaction, measured.
+ * ------------------------------------------------------------------------- */
+
+/** The compacted major-field gap the Create Task surface takes at mobile/narrow. */
+const COMPACT_FIELD_GAP_PX = 12;
+/** The uncompacted gap the same surface keeps at desktop (`lg`) density. */
+const ROOMY_FIELD_GAP_PX = 16;
+/** The compacted Description floor at mobile/detail. */
+const COMPACT_DESCRIPTION_MIN_PX = 80;
+/** The shared Textarea floor, which desktop keeps. */
+const SHARED_DESCRIPTION_MIN_PX = 96;
+
+/** Phone landscape: past every width breakpoint, still a coarse pointer. */
+const PHONE_LANDSCAPE = { width: 844, height: 390 } as const;
+/** The `tablet` project's own geometry, restated so a viewport reset is explicit. */
+const TABLET_GEOMETRY = { width: 768, height: 1024 } as const;
+/** The `desktop` project's own geometry, for the same reason. */
+const DESKTOP_GEOMETRY = { width: 1280, height: 800 } as const;
+
+/**
+ * The sheet's major fields, as boxes, in DOM order.
+ *
+ * A "major field" is a direct child of the create form that owns a `<label>` —
+ * Title, Description, Priority and Due. The context chip, the status line and
+ * the sticky footer are not labelled groups and are deliberately not counted.
+ *
+ * `gaps` is the **measured** vertical distance between consecutive groups, not
+ * the declared `row-gap`: it is what a reader's eye actually meets, and it stays
+ * true whether the compaction is implemented as a flex gap, a margin, or
+ * something else. The form's computed `row-gap` is returned alongside it purely
+ * so a failure message can say which mechanism produced the number.
+ */
+async function majorFieldGeometry(sheet: Locator): Promise<{
+  labels: string[];
+  gaps: number[];
+  rowGap: string;
+}> {
+  return sheet.evaluate((form) => {
+    const groups = Array.from(form.children).filter(
+      (child) => child.querySelector(":scope > label") !== null,
+    );
+    const rects = groups.map((group) => group.getBoundingClientRect());
+    return {
+      labels: groups.map((group) => group.querySelector(":scope > label")!.textContent!.trim()),
+      gaps: rects.slice(1).map((rect, index) => rect.top - rects[index]!.bottom),
+      rowGap: getComputedStyle(form).rowGap,
+    };
+  });
+}
+
+/** Description's computed floor and its rendered height, both in CSS px. */
+async function descriptionMetrics(sheet: Locator): Promise<{ minHeight: number; height: number }> {
+  return sheet.getByLabel("Description").evaluate((node) => ({
+    minHeight: Number.parseFloat(getComputedStyle(node).minHeight) || 0,
+    height: node.getBoundingClientRect().height,
+  }));
+}
+
+/**
+ * Named controls that left the sheet's content box, with the numbers that say so.
+ *
+ * The content box is the dialog's border box less its border and padding, so an
+ * element flush against the sheet's `p-5` is inside and an element under the
+ * padding is out. Both edges are checked: a control pushed off the left is the
+ * same defect as one pushed off the right, and only the right-hand case shows up
+ * as document overflow.
+ */
+async function controlsOutsideSheet(
+  page: Page,
+  names: readonly string[],
+): Promise<string[]> {
+  const dialog = page.getByRole("dialog").filter({ has: page.getByTestId("task-create-sheet") });
+  const box = await dialog.evaluate((node) => {
+    const style = getComputedStyle(node);
+    const rect = node.getBoundingClientRect();
+    return {
+      left:
+        rect.left +
+        Number.parseFloat(style.borderLeftWidth) +
+        Number.parseFloat(style.paddingLeft),
+      right:
+        rect.right -
+        Number.parseFloat(style.borderRightWidth) -
+        Number.parseFloat(style.paddingRight),
+    };
+  });
+
+  const sheet = page.getByTestId("task-create-sheet");
+  const offenders: string[] = [];
+  for (const name of names) {
+    const locator = ["Clear", "Create", "Back"].includes(name)
+      ? sheet.getByRole("button", { name, exact: true })
+      : sheet.getByLabel(name);
+    const rect = await locator.boundingBox();
+    if (!rect) {
+      offenders.push(`${name} has no box`);
+      continue;
+    }
+    if (rect.x < box.left - 1 || rect.x + rect.width > box.right + 1) {
+      offenders.push(
+        `${name} [${rect.x.toFixed(1)}, ${(rect.x + rect.width).toFixed(1)}] outside [${box.left.toFixed(1)}, ${box.right.toFixed(1)}]`,
+      );
+    }
+  }
+  return offenders;
+}
+
+/** Open Create Task through the Capture chooser, the launcher that shows Back. */
+async function openCreateTaskSheetFromCapture(page: Page) {
+  await page
+    .locator('[data-testid="capture-button-desktop"], [data-testid="capture-button-mobile"]')
+    .filter({ visible: true })
+    .click();
+  await page.getByTestId("capture-chooser").getByRole("button", { name: "Create Task" }).click();
+  const sheet = page.getByTestId("task-create-sheet");
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByRole("button", { name: "Back", exact: true })).toBeVisible();
+  return sheet;
+}
+
+test.describe("Create Task vertical compaction at coarse geometry", () => {
+  test.beforeEach(async ({ page }, testInfo) => {
+    test.skip(!isCoarse(testInfo.project.name), "coarse-pointer emulation lanes only");
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await signIn(page);
+  });
+
+  test("the major-field gap measures 12px and Description's floor is compacted", async ({
+    page,
+  }) => {
+    // Measured, not matched. A class list saying `gap-3` is a claim about
+    // intent; this is the distance the engine put between the boxes, so a rule
+    // that lost to specificity, or a breakpoint that keyed on the wrong side of
+    // `lg`, reddens here rather than shipping as a green class assertion.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/work");
+    const sheet = await openCreateTaskSheet(page);
+
+    const geometry = await majorFieldGeometry(sheet);
+    expect(geometry.labels, "the four major fields must be the ones measured").toEqual([
+      "Title",
+      "Description",
+      "Priority",
+      TASK_DUE_FIELD_LABEL,
+    ]);
+    for (const [index, gap] of geometry.gaps.entries()) {
+      expect(
+        gap,
+        `gap between ${geometry.labels[index]} and ${geometry.labels[index + 1]} (form row-gap: ${geometry.rowGap})`,
+      ).toBeCloseTo(COMPACT_FIELD_GAP_PX, 0);
+    }
+
+    // The Description floor. `min-height` is the contract — the rendered height
+    // follows it while the control is empty — so both are read and the floor is
+    // the one asserted against the 96px shared value it must now sit under.
+    const description = await descriptionMetrics(sheet);
+    expect(
+      description.minHeight,
+      `Description computed min-height (rendered ${description.height.toFixed(1)}px)`,
+    ).toBeGreaterThanOrEqual(COMPACT_DESCRIPTION_MIN_PX);
+    expect(description.minHeight, "the compaction must actually be below the shared floor").toBeLessThan(
+      SHARED_DESCRIPTION_MIN_PX,
+    );
+    expect(description.height, "Description rendered height").toBeGreaterThanOrEqual(
+      COMPACT_DESCRIPTION_MIN_PX,
+    );
+
+    await closeCreateTaskSheet(page);
+  });
+
+  test("the field order is Title, Description, Priority, Due/Clear", async ({ page }) => {
+    // Compaction is a spacing change and must not have become a reordering. The
+    // Due group is checked one level deeper as well, because its two controls
+    // are the pair the next test asserts stays on one line.
+    await page.goto("/work");
+    const sheet = await openCreateTaskSheet(page);
+
+    const { labels } = await majorFieldGeometry(sheet);
+    expect(labels).toEqual(["Title", "Description", "Priority", TASK_DUE_FIELD_LABEL]);
+
+    const dueRow = await sheet.getByLabel(TASK_DUE_FIELD_LABEL).evaluate((node) => {
+      const row = node.parentElement;
+      if (!row) throw new Error("the Due input has no parent row");
+      return Array.from(row.children).map((child) => child.tagName.toLowerCase());
+    });
+    expect(dueRow, "the date Input precedes the Clear button").toEqual(["input", "button"]);
+
+    await closeCreateTaskSheet(page);
+  });
+
+  test("raising the root font-size reflows vertically, not horizontally", async ({ page }) => {
+    // Text scaling is the accessible-zoom case that a fixed-height compaction
+    // would break: a form squeezed with pixel heights either clips its own text
+    // or pushes a second axis onto the page. Neither is allowed, so the root
+    // font-size is raised well past the default and the two scroll axes are
+    // re-measured. It is restored afterwards so nothing leaks into the close.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/work");
+    const sheet = await openCreateTaskSheet(page);
+
+    const dialog = page.getByRole("dialog").filter({ has: sheet });
+    const before = {
+      document: await documentOverflow(page),
+      sheet: await dialog.evaluate((node) => node.scrollWidth - node.clientWidth),
+    };
+
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "24px";
+    });
+    // A layout pass has to have happened before the measurement means anything.
+    await expect(sheet.getByLabel("Title")).toBeVisible();
+
+    const scaled = {
+      document: await documentOverflow(page),
+      sheet: await dialog.evaluate((node) => node.scrollWidth - node.clientWidth),
+      height: await dialog.evaluate((node) => node.scrollHeight),
+    };
+    expect(scaled.document, "24px root font-size introduced document overflow").toBeLessThanOrEqual(1);
+    expect(scaled.sheet, "24px root font-size introduced sheet overflow").toBeLessThanOrEqual(1);
+    // The reflow is vertical: bigger text on a fixed width has to get taller.
+    expect(scaled.height, "scaled text must reflow downward").toBeGreaterThan(0);
+
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "";
+    });
+    expect(await documentOverflow(page), "restoring the root font-size must restore the layout").toBe(
+      before.document,
+    );
+
+    await closeCreateTaskSheet(page);
+  });
+
+  test("the capture-launched sheet keeps Create and Back inside the sheet", async ({ page }) => {
+    // The Work launcher renders no Back button, so the footer's wrapping
+    // behaviour with two buttons on it is only reachable from Capture. Measured
+    // at the narrowest supported width and again in landscape.
+    for (const size of [{ width: 320, height: 844 }, PHONE_LANDSCAPE]) {
+      await page.setViewportSize(size);
+      await page.goto("/today");
+      await openCreateTaskSheetFromCapture(page);
+
+      expect(
+        await controlsOutsideSheet(page, [
+          "Title",
+          "Description",
+          "Priority",
+          TASK_DUE_FIELD_LABEL,
+          "Clear",
+          "Create",
+          "Back",
+        ]),
+        `capture-launched Create Task controls at ${size.width}x${size.height}`,
+      ).toEqual([]);
+      expect(
+        await documentOverflow(page),
+        `document overflow at ${size.width}x${size.height}`,
+      ).toBeLessThanOrEqual(1);
+
+      await closeCreateTaskSheet(page);
+    }
+  });
+
+  test("phone landscape keeps the surface bounded and the controls contained", async ({ page }) => {
+    // 844 CSS px wide with a coarse pointer: past every width breakpoint a
+    // `sm:`/`md:` rule would key on, while the finger has not changed. The
+    // sibling test above proves the type does not shrink here; this one proves
+    // the compacted layout does not spill here either.
+    await page.setViewportSize(PHONE_LANDSCAPE);
+    await page.goto("/work");
+    const sheet = await openCreateTaskSheet(page);
+
+    expect(
+      await controlsOutsideSheet(page, [
+        "Title",
+        "Description",
+        "Priority",
+        TASK_DUE_FIELD_LABEL,
+        "Clear",
+        "Create",
+      ]),
+      "Create Task controls in phone landscape",
+    ).toEqual([]);
+    expect(await documentOverflow(page), "document overflow in phone landscape").toBeLessThanOrEqual(
+      1,
+    );
+    const dialog = page.getByRole("dialog").filter({ has: sheet });
+    expect(
+      await dialog.evaluate((node) => node.scrollWidth - node.clientWidth),
+      "sheet overflow in phone landscape",
+    ).toBeLessThanOrEqual(1);
+
+    await closeCreateTaskSheet(page);
+  });
+
+  for (const width of NARROW_WIDTHS) {
+    test(`the Due/Clear row stays on one line at ${width}px`, async ({ page }) => {
+      // WP-POSTUX-02 compacts vertically and must **not** buy that space by
+      // stacking the date Input above its Clear button, which would cost a row
+      // of height and change the control's shape. The two assertions are the
+      // two ways "one line" can be stated from geometry: the boxes share a
+      // vertical centre, and Clear begins to the right of where the date input
+      // ends. A stacked or grid-wrapped row fails both.
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto("/work");
+      const sheet = await openCreateTaskSheet(page);
+
+      const due = await sheet.getByLabel(TASK_DUE_FIELD_LABEL).boundingBox();
+      const clear = await sheet.getByRole("button", { name: "Clear", exact: true }).boundingBox();
+      expect(due, `the Due input must have a box at ${width}`).not.toBeNull();
+      expect(clear, `the Clear button must have a box at ${width}`).not.toBeNull();
+
+      const dueCentre = due!.y + due!.height / 2;
+      const clearCentre = clear!.y + clear!.height / 2;
+      expect(
+        Math.abs(dueCentre - clearCentre),
+        `Due centre ${dueCentre.toFixed(1)} vs Clear centre ${clearCentre.toFixed(1)} at ${width}`,
+      ).toBeLessThanOrEqual(2);
+      expect(
+        clear!.x,
+        `Clear left edge (${clear!.x.toFixed(1)}) must sit right of the date input's right edge (${(due!.x + due!.width).toFixed(1)}) at ${width}`,
+      ).toBeGreaterThanOrEqual(due!.x + due!.width - 1);
+
+      await closeCreateTaskSheet(page);
+    });
+
+    test(`the compacted surface contains every control and keeps WP01 sizing at ${width}px`, async ({
+      page,
+    }) => {
+      // The regression this pairs with the compaction: vertical space was taken
+      // out, and neither the type nor the touch targets may have paid for it.
+      // The WP-POSTUX-01 contract is therefore re-measured *in the compacted
+      // layout*, at every narrow width, rather than only at the project's own
+      // default viewport where the earlier tests read it.
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto("/work");
+      const sheet = await openCreateTaskSheet(page);
+
+      expect(
+        await controlsOutsideSheet(page, [
+          "Title",
+          "Description",
+          "Priority",
+          TASK_DUE_FIELD_LABEL,
+          "Clear",
+          "Create",
+        ]),
+        `Create Task controls outside the sheet at ${width}`,
+      ).toEqual([]);
+
+      for (const label of ["Title", "Description", "Priority", TASK_DUE_FIELD_LABEL]) {
+        const fontPx = await sheet
+          .getByLabel(label)
+          .evaluate((node) => Number.parseFloat(getComputedStyle(node).fontSize));
+        expect(fontPx, `compacted ${label} computed font-size at ${width}`).toBeGreaterThanOrEqual(
+          COARSE_MIN_FONT_PX,
+        );
+      }
+
+      // Description is excluded from the target floor for the reason the
+      // earlier suite gives: a Textarea's height is content-driven and is not a
+      // touch-target claim. Its floor is asserted separately, above.
+      for (const label of ["Title", "Priority", TASK_DUE_FIELD_LABEL]) {
+        const box = await sheet.getByLabel(label).boundingBox();
+        expect(box, `${label} must have a box at ${width}`).not.toBeNull();
+        expect(box!.height, `compacted ${label} height at ${width}`).toBeGreaterThanOrEqual(
+          MIN_TOUCH_TARGET_PX,
+        );
+      }
+      for (const name of ["Clear", "Create"]) {
+        const box = await sheet.getByRole("button", { name, exact: true }).boundingBox();
+        expect(box, `${name} must have a box at ${width}`).not.toBeNull();
+        expect(box!.height, `compacted ${name} height at ${width}`).toBeGreaterThanOrEqual(
+          MIN_TOUCH_TARGET_PX,
+        );
+      }
+
+      await closeCreateTaskSheet(page);
+    });
+  }
+});
+
+test.describe("the Create Task compaction did not leak to desktop density", () => {
+  test.beforeEach(async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop", "the fine-pointer reference lane only");
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await signIn(page);
+  });
+
+  test("the major-field gap measures the uncompacted 16px", async ({ page }) => {
+    // The regression guard for the whole work package. The compaction is scoped
+    // to the Create Task surface at mobile/narrow; if it had been written as an
+    // unconditional rule, or keyed on the wrong side of `lg`, this is where the
+    // desktop density it was never meant to touch reddens. Exactly 16px, not
+    // "at most 16": the roomier desktop spacing is an intentional value.
+    await page.setViewportSize(DESKTOP_GEOMETRY);
+    await page.goto("/work");
+    const sheet = await openCreateTaskSheet(page);
+
+    const geometry = await majorFieldGeometry(sheet);
+    expect(geometry.labels).toEqual(["Title", "Description", "Priority", TASK_DUE_FIELD_LABEL]);
+    for (const [index, gap] of geometry.gaps.entries()) {
+      expect(
+        gap,
+        `desktop gap between ${geometry.labels[index]} and ${geometry.labels[index + 1]} (form row-gap: ${geometry.rowGap})`,
+      ).toBeCloseTo(ROOMY_FIELD_GAP_PX, 0);
+    }
+
+    await closeCreateTaskSheet(page);
+  });
+
+  test("the Description floor is not compacted on desktop", async ({ page }) => {
+    // The second half of the same guard, on the other property the compaction
+    // moves. Stated as a floor rather than an equality because the work package
+    // pins the mobile value and leaves desktop free to keep the shared 96px or
+    // exceed it; what it may not do is inherit the mobile 80px.
+    await page.setViewportSize(DESKTOP_GEOMETRY);
+    await page.goto("/work");
+    const sheet = await openCreateTaskSheet(page);
+
+    const description = await descriptionMetrics(sheet);
+    expect(
+      description.minHeight,
+      `desktop Description computed min-height (rendered ${description.height.toFixed(1)}px)`,
+    ).toBeGreaterThanOrEqual(SHARED_DESCRIPTION_MIN_PX);
+
+    await closeCreateTaskSheet(page);
+  });
+
+  test("every control stays inside the sheet at desktop geometry", async ({ page }) => {
+    await page.setViewportSize(DESKTOP_GEOMETRY);
+    await page.goto("/work");
+    const sheet = await openCreateTaskSheet(page);
+
+    expect(
+      await controlsOutsideSheet(page, [
+        "Title",
+        "Description",
+        "Priority",
+        TASK_DUE_FIELD_LABEL,
+        "Clear",
+        "Create",
+      ]),
+      "Create Task controls at 1280x800",
+    ).toEqual([]);
+    expect(await documentOverflow(page), "document overflow at 1280x800").toBeLessThanOrEqual(1);
+    const dialog = page.getByRole("dialog").filter({ has: sheet });
+    expect(
+      await dialog.evaluate((node) => node.scrollWidth - node.clientWidth),
+      "sheet overflow at 1280x800",
+    ).toBeLessThanOrEqual(1);
+
+    await closeCreateTaskSheet(page);
+  });
+});
+
+test.describe("the Create Task surface fits tablet geometry", () => {
+  test.beforeEach(async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "tablet", "the tablet lane only");
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await signIn(page);
+  });
+
+  /**
+   * 768 CSS px is below `lg`, so this lane takes the compacted spacing while
+   * reporting a fine pointer — the one geometry where the two axes of the
+   * contract disagree. No gap value is asserted here, because the work package
+   * pins the compacted number at mobile/narrow and the roomy number at desktop
+   * and says nothing about which side of the line a fine-pointer tablet falls
+   * on; what it does require everywhere is that nothing spills.
+   */
+  test("nothing spills at 768x1024, from either launcher", async ({ page }) => {
+    await page.setViewportSize(TABLET_GEOMETRY);
+
+    await page.goto("/work");
+    await openCreateTaskSheet(page);
+    expect(
+      await controlsOutsideSheet(page, [
+        "Title",
+        "Description",
+        "Priority",
+        TASK_DUE_FIELD_LABEL,
+        "Clear",
+        "Create",
+      ]),
+      "Work-launched Create Task controls at 768x1024",
+    ).toEqual([]);
+    expect(await documentOverflow(page), "document overflow at 768x1024").toBeLessThanOrEqual(1);
+    await closeCreateTaskSheet(page);
+
+    await page.goto("/today");
+    await openCreateTaskSheetFromCapture(page);
+    expect(
+      await controlsOutsideSheet(page, [
+        "Title",
+        "Description",
+        "Priority",
+        TASK_DUE_FIELD_LABEL,
+        "Clear",
+        "Create",
+        "Back",
+      ]),
+      "capture-launched Create Task controls at 768x1024",
+    ).toEqual([]);
+    await closeCreateTaskSheet(page);
   });
 });

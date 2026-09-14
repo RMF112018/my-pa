@@ -684,3 +684,145 @@ test.describe("People search, warnings, and profile extras", () => {
     expect(await scan(page), "/people/ detail accessibility violations").toEqual([]);
   });
 });
+
+/**
+ * The Create Task Title field's required-ness, and the validation that governs it.
+ *
+ * WP-POSTUX-02 exposes the Title input as `aria-required="true"` so assistive
+ * technology announces the field as required *before* anyone submits — which is
+ * the point of the attribute, and the reason the first assertion below is made
+ * on a freshly opened sheet rather than after a failure.
+ *
+ * What it deliberately does **not** add is the native `required` attribute, and
+ * that omission is the contract the rest of this block defends. Native
+ * constraint validation would pre-empt the form's own handler: the browser would
+ * block submission itself, show its own locale-dependent bubble instead of the
+ * product's "Enter a task title.", and never run the code that sets
+ * `aria-invalid`, wires `aria-describedby`, renders the `role="alert"` message
+ * and returns focus to Title. `aria-required` announces; it does not validate.
+ * So the tests here assert the custom path still runs end to end, and — the
+ * assertion that actually discriminates the two designs — that submitting an
+ * empty Title issues no `POST /api/tasks` at all.
+ *
+ * Nothing is ever submitted successfully, so this block creates no Task.
+ */
+test.describe("Create Task required-field semantics", () => {
+  /** The product's own missing-title message. `task-create-sheet.tsx`, read not guessed. */
+  const TITLE_REQUIRED_MESSAGE = "Enter a task title.";
+
+  async function openCreateTask(page: Page) {
+    await page.goto("/work");
+    await page.getByRole("button", { name: "New task" }).click();
+    const sheet = page.getByTestId("task-create-sheet");
+    await expect(sheet).toBeVisible();
+    // Load-bearing: asserting against a half-rendered form would pass vacuously.
+    await expect(sheet.getByLabel("Priority")).toBeVisible();
+    return sheet;
+  }
+
+  test.beforeEach(async ({ page }) => {
+    await signIn(page);
+  });
+
+  test("Title is announced as required before anything is submitted", async ({ page }) => {
+    const sheet = await openCreateTask(page);
+    const title = sheet.getByLabel("Title");
+
+    await expect(title).toHaveAttribute("aria-required", "true");
+    // The negative half of the same contract, and the load-bearing one: native
+    // `required` must be absent, or the custom validation below never runs.
+    expect(
+      await title.evaluate((node) => node.hasAttribute("required")),
+      "native `required` must not be present — it would pre-empt the product's own validation",
+    ).toBe(false);
+    // Announced as required, not yet announced as invalid. A field that starts
+    // out `aria-invalid` tells a screen-reader user they have already made a
+    // mistake they have not had the chance to make.
+    await expect(title).not.toHaveAttribute("aria-invalid", "true");
+
+    await page.getByRole("button", { name: "Close panel" }).click();
+    await expect(page.getByTestId("task-create-sheet")).toHaveCount(0);
+  });
+
+  test("an empty Title is refused by the product, not by the browser, and reaches no network", async ({
+    page,
+  }) => {
+    const creates: string[] = [];
+    page.on("request", (request) => {
+      if (request.method() !== "POST") return;
+      if (new URL(request.url()).pathname === "/api/tasks") creates.push(request.url());
+    });
+
+    const sheet = await openCreateTask(page);
+    const title = sheet.getByLabel("Title");
+
+    await sheet.getByRole("button", { name: "Create", exact: true }).click();
+
+    // 1. The product's own copy, exposed as a live region so it is announced
+    //    rather than merely painted.
+    const alert = sheet.getByRole("alert");
+    await expect(alert).toHaveText(TITLE_REQUIRED_MESSAGE);
+
+    // 2. Programmatically associated with the field, not just adjacent to it.
+    //    The association is checked by resolving the id, because an
+    //    `aria-describedby` pointing at nothing is worse than none at all.
+    await expect(title).toHaveAttribute("aria-invalid", "true");
+    const describedBy = await title.getAttribute("aria-describedby");
+    expect(describedBy, "Title must describe itself by the error's id").toBeTruthy();
+    // Addressed by attribute rather than by `#id`: React's `useId` emits ids
+    // containing characters an id selector would have to escape, and `CSS.escape`
+    // does not exist in the Node process this assertion runs in.
+    const described = sheet.locator(`[id="${describedBy}"]`);
+    await expect(described).toHaveText(TITLE_REQUIRED_MESSAGE);
+    await expect(described).toHaveAttribute("role", "alert");
+
+    // 3. Focus is returned to the field the person must fix, so a keyboard or
+    //    screen-reader user is not left at the submit button.
+    await expect(title).toBeFocused();
+
+    // 4. The assertion native `required` could not survive. The form's own
+    //    handler refuses before it builds a request, so nothing is dispatched;
+    //    a short settle gives any stray request time to land and be counted.
+    await page.waitForTimeout(500);
+    expect(creates, "a refused create must issue no POST /api/tasks").toEqual([]);
+
+    // Typing clears the error, so the state is not sticky.
+    await title.fill("Draft that is never submitted");
+    await expect(sheet.getByRole("alert")).toHaveCount(0);
+    await expect(title).not.toHaveAttribute("aria-invalid", "true");
+
+    await page.getByRole("button", { name: "Close panel" }).click();
+    await expect(page.getByTestId("task-create-sheet")).toHaveCount(0);
+  });
+
+  test("the sheet is a named dialog with a named close control", async ({ page }) => {
+    // Dialog semantics are the frame everything above depends on: an error
+    // announced inside an unnamed, non-dialog container is announced into a
+    // context the reader cannot place.
+    const sheet = await openCreateTask(page);
+    const dialog = page.getByRole("dialog").filter({ has: sheet });
+
+    await expect(dialog).toHaveCount(1);
+    await expect(dialog.getByRole("heading", { name: "Create task" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Close panel" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Close panel" }).click();
+    await expect(page.getByTestId("task-create-sheet")).toHaveCount(0);
+  });
+
+  test("the compacted sheet in its error state has no detectable violation", async ({ page }) => {
+    // The WP-POSTUX-01 scan covers the sheet at rest. This one scans it after
+    // the compaction has been applied *and* the validation has fired, which is
+    // where a mis-wired `aria-describedby`, an orphaned live region, or a
+    // contrast failure on the error copy would surface. Same `scan` helper, so
+    // the rule set and the dev-overlay exclusion cannot drift apart.
+    const sheet = await openCreateTask(page);
+    await sheet.getByRole("button", { name: "Create", exact: true }).click();
+    await expect(sheet.getByRole("alert")).toHaveText(TITLE_REQUIRED_MESSAGE);
+
+    expect(await scan(page), "Create Task error-state accessibility violations").toEqual([]);
+
+    await page.getByRole("button", { name: "Close panel" }).click();
+    await expect(page.getByTestId("task-create-sheet")).toHaveCount(0);
+  });
+});

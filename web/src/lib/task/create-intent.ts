@@ -99,6 +99,7 @@ export class CreateIntentSession {
   private error?: MutationError;
   private dispatchToken: symbol | null = null;
   private retired = false;
+  private listeners = new Set<() => void>();
 
   constructor(initialDraft: TaskCreateRequest = { title: "" }, intentId = mintIntentId()) {
     this.intentId = intentId;
@@ -119,6 +120,61 @@ export class CreateIntentSession {
       error: this.error,
       dispatching: this.dispatchToken !== null,
     };
+  }
+
+  /**
+   * Observe snapshot-relevant changes. Two independently-mounted create surfaces may
+   * share one session; each subscribes so neither diverges from the other's writes.
+   * Returns an idempotent unsubscribe.
+   */
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    let subscribed = true;
+    return () => {
+      if (!subscribed) return;
+      subscribed = false;
+      this.listeners.delete(listener);
+    };
+  }
+
+  /** Cheap fingerprint of exactly the fields `snapshot()` exposes as mutable. */
+  private observableFingerprint(): unknown[] {
+    return [
+      this.phase,
+      materialSignature(this.draft),
+      this.frozenRequest ? materialSignature(this.frozenRequest) : null,
+      this.result,
+      this.error ? `${this.error.subtype}:${this.error.message}` : null,
+      this.dispatchToken !== null,
+      this.retired,
+    ];
+  }
+
+  private fingerprintsEqual(a: unknown[], b: unknown[]): boolean {
+    return a.length === b.length && a.every((value, index) => Object.is(value, b[index]));
+  }
+
+  private emit(): void {
+    // Copy so subscribe/unsubscribe during notification cannot skip or double-notify.
+    for (const listener of [...this.listeners]) {
+      try {
+        listener();
+      } catch {
+        // A faulty observer must not break the session or starve other observers.
+      }
+    }
+  }
+
+  /** Run a synchronous state transition and notify only if the snapshot changed. */
+  private mutate<T>(apply: () => T): T {
+    const before = this.observableFingerprint();
+    try {
+      return apply();
+    } finally {
+      if (!this.fingerprintsEqual(before, this.observableFingerprint())) {
+        this.emit();
+      }
+    }
   }
 
   getPhase(): CreateIntentPhase {
@@ -153,7 +209,9 @@ export class CreateIntentSession {
     if (this.phase === "confirmed" || this.phase === "abandoned") {
       throw new Error(`create draft cannot change in phase ${this.phase}`);
     }
-    this.draft = cloneRequest({ ...this.draft, ...partial });
+    this.mutate(() => {
+      this.draft = cloneRequest({ ...this.draft, ...partial });
+    });
   }
 
   /** Pre-dispatch cancel. Unresolved pending/ambiguous intents are retained by the store. */
@@ -162,12 +220,14 @@ export class CreateIntentSession {
     if (this.phase === "pending" || this.phase === "ambiguous") {
       throw new Error("cannot abandon an unresolved create intent; dismiss UI only");
     }
-    if (this.phase === "confirmed") {
+    this.mutate(() => {
+      if (this.phase === "confirmed") {
+        this.retired = true;
+        return;
+      }
+      this.phase = "abandoned";
       this.retired = true;
-      return;
-    }
-    this.phase = "abandoned";
-    this.retired = true;
+    });
   }
 
   /**
@@ -215,34 +275,41 @@ export class CreateIntentSession {
     try {
       hooks.validate?.(candidate);
     } catch (error) {
-      this.phase = "failed";
-      this.error = classifyMutationError(error);
-      this.frozenRequest = undefined;
-      return { refused: true, reason: this.error.message };
+      return this.mutate(() => {
+        this.phase = "failed";
+        this.error = classifyMutationError(error);
+        this.frozenRequest = undefined;
+        return { refused: true as const, reason: this.error.message };
+      });
     }
 
     if (!candidate.title.trim()) {
-      this.phase = "failed";
-      this.error = { subtype: "validation", message: "title is required" };
-      return { refused: true, reason: this.error.message };
+      return this.mutate(() => {
+        this.phase = "failed";
+        this.error = { subtype: "validation", message: "title is required" };
+        return { refused: true as const, reason: this.error.message };
+      });
     }
 
     const token = Symbol("create-dispatch");
-    this.dispatchToken = token;
-    this.frozenRequest = cloneRequest(candidate);
-    this.draft = cloneRequest(candidate);
-    this.phase = "pending";
-    this.error = undefined;
-    this.result = undefined;
+    const frozen = cloneRequest(candidate);
+    this.mutate(() => {
+      this.dispatchToken = token;
+      this.frozenRequest = frozen;
+      this.draft = cloneRequest(candidate);
+      this.phase = "pending";
+      this.error = undefined;
+      this.result = undefined;
+    });
 
     try {
       const result = await dispatch({
-        request: cloneRequest(this.frozenRequest),
+        request: cloneRequest(frozen),
         idempotencyKey: this.idempotencyKey,
         intentId: this.intentId,
       });
       if (this.dispatchToken !== token) {
-        return { refused: true, reason: "create dispatch ownership lost" };
+        return this.mutate(() => ({ refused: true as const, reason: "create dispatch ownership lost" }));
       }
       await this.confirm(result, hooks);
       return { refused: false, result };
@@ -250,7 +317,9 @@ export class CreateIntentSession {
       this.settleFailure(error);
       throw error;
     } finally {
-      if (this.dispatchToken === token) this.dispatchToken = null;
+      this.mutate(() => {
+        if (this.dispatchToken === token) this.dispatchToken = null;
+      });
     }
   }
 
@@ -268,9 +337,11 @@ export class CreateIntentSession {
     }
 
     const token = Symbol("create-retry");
-    this.dispatchToken = token;
-    this.phase = "pending";
-    this.error = undefined;
+    this.mutate(() => {
+      this.dispatchToken = token;
+      this.phase = "pending";
+      this.error = undefined;
+    });
 
     try {
       const result = await dispatch({
@@ -279,7 +350,7 @@ export class CreateIntentSession {
         intentId: this.intentId,
       });
       if (this.dispatchToken !== token) {
-        return { refused: true, reason: "create dispatch ownership lost" };
+        return this.mutate(() => ({ refused: true as const, reason: "create dispatch ownership lost" }));
       }
       await this.confirm(result, hooks);
       return { refused: false, result };
@@ -287,7 +358,9 @@ export class CreateIntentSession {
       this.settleFailure(error);
       throw error;
     } finally {
-      if (this.dispatchToken === token) this.dispatchToken = null;
+      this.mutate(() => {
+        if (this.dispatchToken === token) this.dispatchToken = null;
+      });
     }
   }
 
@@ -296,9 +369,11 @@ export class CreateIntentSession {
    * Hook failures must not roll a confirmed create back into ambiguous/failed.
    */
   private async confirm<TResult>(result: TResult, hooks: CreateIntentHooks<TResult>): Promise<void> {
-    this.phase = "confirmed";
-    this.result = result;
-    this.error = undefined;
+    this.mutate(() => {
+      this.phase = "confirmed";
+      this.result = result;
+      this.error = undefined;
+    });
     try {
       await hooks.reconcile?.(result);
     } catch {
@@ -309,7 +384,9 @@ export class CreateIntentSession {
     } catch {
       // Feedback is best-effort; the create itself already confirmed.
     }
-    this.retired = true;
+    this.mutate(() => {
+      this.retired = true;
+    });
   }
 
   private settleFailure(error: unknown): void {
@@ -317,15 +394,17 @@ export class CreateIntentSession {
     const ambiguous =
       isAmbiguousMutationFailure(error) ||
       (!isDefinitiveAttemptFailure(error) && classified.subtype !== "contract");
-    if (ambiguous) {
-      this.phase = "ambiguous";
+    this.mutate(() => {
+      if (ambiguous) {
+        this.phase = "ambiguous";
+        this.error = classified;
+        return;
+      }
+      // Definitive: preserve draft; keep frozen for unchanged re-auth retry identity.
+      this.phase = "failed";
       this.error = classified;
-      return;
-    }
-    // Definitive: preserve draft; keep frozen for unchanged re-auth retry identity.
-    this.phase = "failed";
-    this.error = classified;
-    if (!this.frozenRequest) this.frozenRequest = cloneRequest(this.draft);
+      if (!this.frozenRequest) this.frozenRequest = cloneRequest(this.draft);
+    });
   }
 
   private assertNotRetired(): void {

@@ -318,6 +318,7 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         # PC-CM-IMP-WP02's Constraint-management plane, likewise removed when
         # downgrading from the current head.
         "constraint_project_settings",
+        "constraint_project_settings_history",
         "constraint_categories",
         "project_constraints",
         "project_constraint_parties",

@@ -216,6 +216,7 @@ def test_downgrading_one_step_removes_exactly_these_two_tables(migrated_engine: 
         # PC-CM-IMP-WP02's Constraint-management plane, likewise removed when
         # downgrading from the current head.
         "constraint_project_settings",
+        "constraint_project_settings_history",
         "constraint_categories",
         "project_constraints",
         "project_constraint_parties",

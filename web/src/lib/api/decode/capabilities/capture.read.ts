@@ -28,6 +28,7 @@ export interface CaptureReadResult {
   readonly supersedes_version_id: string | null;
   readonly is_current: boolean;
   readonly owner_principal_id: string;
+  readonly project_id: string | null;
   readonly classification: CaptureClassification;
   readonly processing_policy: CaptureProcessingPolicy;
   readonly content_sha256: string;
@@ -48,6 +49,7 @@ const VERSION_KEYS = [
   "supersedes_version_id",
   "is_current",
   "owner_principal_id",
+  "project_id",
   "classification",
   "processing_policy",
   "content_sha256",
@@ -76,6 +78,8 @@ export const decodeCaptureRead: Decoder<CaptureReadResult> = (input) => {
   if (!isCurrent.ok) return isCurrent;
   const owner = requiredString(known.value.owner_principal_id);
   if (!owner.ok) return owner;
+  const projectId = requiredNullableString(known.value.project_id);
+  if (!projectId.ok) return projectId;
   const classification = oneOf(known.value.classification, CAPTURE_CLASSIFICATIONS);
   if (!classification.ok) return classification;
   const processingPolicy = oneOf(known.value.processing_policy, CAPTURE_PROCESSING_POLICIES);
@@ -105,6 +109,7 @@ export const decodeCaptureRead: Decoder<CaptureReadResult> = (input) => {
     supersedes_version_id: supersedes.value,
     is_current: isCurrent.value,
     owner_principal_id: owner.value,
+    project_id: projectId.value,
     classification: classification.value,
     processing_policy: processingPolicy.value,
     content_sha256: digest.value,

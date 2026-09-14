@@ -87,10 +87,12 @@ from typing import Any, Final
 from sqlalchemy import (
     Column,
     ColumnElement,
+    DateTime,
     Row,
     Select,
     String,
     Table,
+    Text,
     and_,
     bindparam,
     case,
@@ -98,6 +100,7 @@ from sqlalchemy import (
     func,
     literal_column,
     select,
+    table,
     text,
 )
 from sqlalchemy.dialects.postgresql import REGCONFIG
@@ -121,7 +124,7 @@ from my_pa.infrastructure.persistence.principal_scope import (
     PrincipalContext,
     partition_criterion,
 )
-from my_pa.infrastructure.persistence.tables import capture_receipts, capture_versions
+from my_pa.infrastructure.persistence.tables import SCHEMA, capture_receipts, capture_versions
 
 __all__ = [
     "CAPTURE_VERSIONS",
@@ -144,6 +147,17 @@ __all__ = [
 #: session setting would let the same query mean different things to two
 #: connections.
 SEARCH_CONFIG: Final = "simple"
+
+#: Read-only runtime projection of the WP03 Capture-root shape. It has no
+#: MetaData and therefore cannot emit DDL or mutate the frozen canonical table.
+_capture_roots = table(
+    "captures",
+    column("capture_id", Text),
+    column("owner_principal_id", Text),
+    column("created_at", DateTime(timezone=True)),
+    column("project_id", Text),
+    schema=SCHEMA,
+)
 
 #: Every text-search configuration this module may compile into a statement.
 #: Closed and checked rather than trusted, because `_configuration` interpolates
@@ -514,6 +528,10 @@ def match_statement(
             func.length(plane.text_column).label("character_count"),
             plane.table.c.recorded_at,
             current_display_label(plane.table.c.capture_id).label("display_label"),
+            select(_capture_roots.c.project_id)
+            .where(_capture_roots.c.capture_id == plane.table.c.capture_id)
+            .scalar_subquery()
+            .label("project_id"),
         )
         .where(
             *capture_text_in_scope(context),
@@ -678,6 +696,7 @@ def search_captures(
                 character_count=int(row.character_count),
                 recorded_at=row.recorded_at,
                 display_label=row.display_label,
+                project_id=row.project_id,
             )
             for row in rows[: request.limit]
         ),

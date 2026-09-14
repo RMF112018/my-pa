@@ -50,9 +50,20 @@ Principal's replay can never return another's receipt.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Final, NamedTuple
+from typing import Final, NamedTuple, cast
 
-from sqlalchemy import ColumnElement, Connection, Row, func, select
+from sqlalchemy import (
+    ColumnElement,
+    Connection,
+    DateTime,
+    Row,
+    Table,
+    Text,
+    column,
+    func,
+    select,
+    table,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from my_pa.contracts.ports import (
@@ -86,13 +97,13 @@ from my_pa.infrastructure.persistence.principal_scope import (
 )
 from my_pa.infrastructure.persistence.review import mark_changed_assertions_for_revalidation
 from my_pa.infrastructure.persistence.tables import (
+    SCHEMA,
     capture_context_links,
     capture_conversations,
     capture_labels,
     capture_receipts,
     capture_submissions,
     capture_versions,
-    captures,
     source_object_versions,
 )
 
@@ -103,6 +114,18 @@ __all__ = [
     "capture_version",
     "current_display_label",
 ]
+
+#: Runtime projection of the physical root shape introduced by WP03. The
+#: canonical frozen table intentionally remains the pre-WP03 shape; this
+#: lightweight clause carries no MetaData and cannot emit DDL.
+_capture_roots = table(
+    "captures",
+    column("capture_id", Text),
+    column("owner_principal_id", Text),
+    column("created_at", DateTime(timezone=True)),
+    column("project_id", Text),
+    schema=SCHEMA,
+)
 
 #: The columns a stored version is rebuilt from. Written out rather than
 #: `select(capture_versions)`, so a column added to the table has to be
@@ -124,6 +147,7 @@ _VERSION_COLUMNS: Final = (
     capture_versions.c.occurred_at,
     capture_versions.c.accepted_at,
     capture_versions.c.recorded_at,
+    _capture_roots.c.project_id,
 )
 
 
@@ -148,6 +172,7 @@ def _to_version(row: Row[tuple[object, ...]]) -> CaptureVersion:
         idempotency_key=str(mapping["idempotency_key"]),
         correlation_id=str(mapping["correlation_id"]),
         audit_id=str(mapping["audit_id"]),
+        project_id=mapping["project_id"],
         client_created_at=mapping["client_created_at"],
         server_received_at=mapping["server_received_at"],
         occurred_at=mapping["occurred_at"],
@@ -196,8 +221,8 @@ def append_capture_label(
     capture_id = validate_identifier(capture_id, IdKind.CAPTURE)
     owned = connection.execute(
         principal_scoped(
-            select(captures.c.capture_id).where(captures.c.capture_id == capture_id),
-            captures,
+            select(_capture_roots.c.capture_id).where(_capture_roots.c.capture_id == capture_id),
+            cast(Table, _capture_roots),
             context,
         )
     ).one_or_none()
@@ -273,8 +298,10 @@ def _receipt(connection: Connection, receipt_id: str) -> CaptureReceipt:
             capture_versions.c.version_id,
             capture_versions.c.version_number,
             capture_versions.c.content_sha256,
+            _capture_roots.c.project_id,
         )
         .join(capture_versions, capture_versions.c.version_id == capture_receipts.c.version_id)
+        .join(_capture_roots, _capture_roots.c.capture_id == capture_versions.c.capture_id)
         .where(capture_receipts.c.receipt_id == receipt_id)
     ).one()
     mapping = row._mapping
@@ -286,6 +313,7 @@ def _receipt(connection: Connection, receipt_id: str) -> CaptureReceipt:
         idempotency_key=str(mapping["idempotency_key"]),
         content_sha256=str(mapping["content_sha256"]),
         issued_at=mapping["issued_at"],
+        project_id=mapping["project_id"],
     )
 
 
@@ -447,9 +475,10 @@ def _chain(
     if request.capture_id is None:
         capture_id = issue_identifier(IdKind.CAPTURE)
         connection.execute(
-            captures.insert().values(
+            _capture_roots.insert().values(
                 capture_id=capture_id,
                 owner_principal_id=request.principal_id,
+                project_id=request.project_id,
             )
         )
         version_number, supersedes, prior = 1, None, None
@@ -548,7 +577,13 @@ def capture_version(
     """
     validate_identifier(capture_id, IdKind.CAPTURE)
     statement = principal_scoped(
-        select(*_VERSION_COLUMNS).where(capture_versions.c.capture_id == capture_id),
+        select(*_VERSION_COLUMNS)
+        .select_from(
+            capture_versions.join(
+                _capture_roots, _capture_roots.c.capture_id == capture_versions.c.capture_id
+            )
+        )
+        .where(capture_versions.c.capture_id == capture_id),
         capture_versions,
         context,
     )
@@ -578,19 +613,29 @@ def capture_page(
     rows = connection.execute(
         principal_scoped(
             select(
-                captures.c.capture_id,
-                captures.c.owner_principal_id,
-                captures.c.created_at,
+                _capture_roots.c.capture_id,
+                _capture_roots.c.owner_principal_id,
+                _capture_roots.c.created_at,
+                _capture_roots.c.project_id,
                 func.count().label("version_count"),
                 latest_number.label("latest_version_number"),
-                current_display_label(captures.c.capture_id).label("display_label"),
-            ).join(capture_versions, capture_versions.c.capture_id == captures.c.capture_id),
-            captures,
+                current_display_label(_capture_roots.c.capture_id).label("display_label"),
+            )
+            .join(
+                capture_versions,
+                capture_versions.c.capture_id == _capture_roots.c.capture_id,
+            )
+            .group_by(
+                _capture_roots.c.capture_id,
+                _capture_roots.c.owner_principal_id,
+                _capture_roots.c.created_at,
+                _capture_roots.c.project_id,
+            )
+            .order_by(_capture_roots.c.created_at.desc(), _capture_roots.c.capture_id)
+            .limit(limit),
+            cast(Table, _capture_roots),
             context,
         )
-        .group_by(captures.c.capture_id, captures.c.owner_principal_id, captures.c.created_at)
-        .order_by(captures.c.created_at.desc(), captures.c.capture_id)
-        .limit(limit)
     ).all()
     return tuple(_summary(connection, row) for row in rows)
 
@@ -614,4 +659,5 @@ def _summary(connection: Connection, row: Row[tuple[object, ...]]) -> CaptureSum
         latest_version_number=int(mapping["latest_version_number"]),
         latest_recorded_at=head[1],
         display_label=mapping["display_label"],
+        project_id=mapping["project_id"],
     )

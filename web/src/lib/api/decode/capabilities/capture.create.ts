@@ -4,6 +4,7 @@ import {
   pick,
   requiredBoolean,
   requiredIntGe,
+  requiredNullableString,
   requiredSha256,
   requiredString,
 } from "./_mutation-helpers";
@@ -15,6 +16,7 @@ export interface CaptureCreateResult {
   readonly version_number: number;
   readonly idempotency_key: string;
   readonly content_sha256: string;
+  readonly project_id: string | null;
   readonly issued_at: string;
   readonly created: boolean;
 }
@@ -26,6 +28,7 @@ const KEYS = [
   "version_number",
   "idempotency_key",
   "content_sha256",
+  "project_id",
   "issued_at",
   "created",
 ] as const;
@@ -45,6 +48,8 @@ export const decodeCaptureCreate: Decoder<CaptureCreateResult> = (input) => {
   if (!idempotencyKey.ok) return idempotencyKey;
   const digest = requiredSha256(known.value.content_sha256);
   if (!digest.ok) return digest;
+  const projectId = requiredNullableString(known.value.project_id);
+  if (!projectId.ok) return projectId;
   const issuedAt = requiredString(known.value.issued_at);
   if (!issuedAt.ok) return issuedAt;
   const created = requiredBoolean(known.value.created);
@@ -61,6 +66,7 @@ export const decodeCaptureCreate: Decoder<CaptureCreateResult> = (input) => {
       version_number: versionNumber.value,
       idempotency_key: idempotencyKey.value,
       content_sha256: digest.value,
+      project_id: projectId.value,
       issued_at: issuedAt.value,
       created: created.value,
     },

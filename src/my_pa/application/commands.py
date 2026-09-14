@@ -1166,6 +1166,7 @@ class CreateCapture:
 
     text: str = field(repr=False)
     idempotency_key: str
+    project_id: str | None = None
     capture_kind: CaptureKind = CaptureKind.QUICK_NOTE
     context_source_object_id: str | None = None
     context_source_version_id: str | None = None
@@ -1176,6 +1177,8 @@ class CreateCapture:
     def __post_init__(self) -> None:
         _text(self.text, SafeDetail.TEXT)
         _idempotency_key(self.idempotency_key)
+        if self.project_id is not None:
+            _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
         object.__setattr__(
             self,
             "display_label",

@@ -48,6 +48,7 @@
       "payloadFields": [
         "text",
         "idempotency_key",
+        "project_id",
         "capture_kind",
         "context_source_object_id",
         "context_source_version_id",

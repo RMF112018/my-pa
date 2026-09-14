@@ -6,6 +6,7 @@
     "version_number": 1,
     "idempotency_key": "idem-1",
     "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "project_id": null,
     "issued_at": "2026-08-09T12:00:00.000Z",
     "created": true
   },
@@ -19,7 +20,8 @@
         "latest_version_id": "capver_aaaaaaaa11111111",
         "latest_version_number": 1,
         "latest_recorded_at": "2026-08-09T12:00:00.000Z",
-        "display_label": null
+        "display_label": null,
+        "project_id": null
       }
     ]
   },
@@ -30,6 +32,7 @@
     "supersedes_version_id": null,
     "is_current": true,
     "owner_principal_id": "prn_aaaaaaaa11111111",
+    "project_id": null,
     "classification": "synthetic_test",
     "processing_policy": "local_only",
     "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -50,7 +53,8 @@
         "version_number": 1,
         "character_count": 12,
         "recorded_at": "2026-08-09T12:00:00.000Z",
-        "display_label": null
+        "display_label": null,
+        "project_id": null
       }
     ],
     "searchable_versions": 1,

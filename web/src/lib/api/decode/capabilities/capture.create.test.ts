@@ -13,6 +13,7 @@ function receipt(overrides: Record<string, unknown> = {}) {
     version_number: 1,
     idempotency_key: "idem-1",
     content_sha256: DIGEST,
+    project_id: null,
     issued_at: AT,
     created: true,
     ...overrides,
@@ -27,7 +28,20 @@ describe("decodeCaptureCreate", () => {
       expect(decoded.value.receipt_id).toBe("rcpt_aaaaaaaa11111111");
       expect(decoded.value.version_number).toBe(1);
       expect(decoded.value.created).toBe(true);
+      expect(decoded.value.project_id).toBeNull();
     }
+  });
+
+  it("accepts a canonical Project identifier", () => {
+    const decoded = decodeCaptureCreate(receipt({ project_id: "prj_aaaaaaaa11111111" }));
+    expect(decoded.ok).toBe(true);
+    if (decoded.ok) expect(decoded.value.project_id).toBe("prj_aaaaaaaa11111111");
+  });
+
+  it("fails closed when project_id is missing or has the wrong non-null type", () => {
+    const { project_id: _, ...rest } = receipt();
+    expect(decodeCaptureCreate(rest).ok).toBe(false);
+    expect(decodeCaptureCreate(receipt({ project_id: 1 })).ok).toBe(false);
   });
 
   it("fails closed when receipt_id is missing", () => {

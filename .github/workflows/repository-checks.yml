@@ -17,15 +17,13 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    # 30, raised from 20 on 2026-09-03. The FAST selection this job runs grew to
-    # 16,380 tests. Across six runs in under twenty hours (2026-09-02 20:38 to
-    # 2026-09-03 15:58) this job's wall clock measured 19m43s, 19m42s and 19m36s
-    # (1687b634, 5cc645d8, 251a495c), then timed out at 20m02s and 20m18s
-    # (9c1e463b, 53797f5b), then ran 14m45s at 8f981f1c while the dependency-floor
-    # job took 20m39s. A timeout that fires on a green suite reports a red job for
-    # a reason no test names; the value is sized to the measured duration, not to
-    # a guess.
-    timeout-minutes: 30
+    # 40, raised from 30 on 2026-09-13. Structured Actions timing (no job logs)
+    # recorded successful wall clocks of 24m16s, 23m04s, and 29m42s in runs
+    # 34776159694, 34783229248, and 34788354083. The same preserved FAST step in
+    # WP02 run 34792305535 ended at 29m32s and the job failed at 29m41s, at the
+    # prior budget boundary. Ten minutes of headroom keeps the complete gate and
+    # reports actual test failures instead of runner-capacity exhaustion.
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -224,10 +222,7 @@ jobs:
           npm run build
 
   dependency-floor:
-    # **Twenty minutes, not ten.** Both this job and `validate` run the whole
-    # FAST tier, which has grown to 8,419 collected tests. At ten minutes
-    # `validate` was finishing in 8m24s and this job was cancelled at 10m16s --
-    # a budget set when the suite was smaller, failing a tree that was green.
+    # **Forty minutes.** Both this job and `validate` run the whole FAST tier.
     # `database-tier` is an aggregator over split lanes; each lane sizes its
     # own timeout. A tier's budget is sized
     # to the tier. Guard cost was cut in the same change that raised this, so
@@ -244,15 +239,13 @@ jobs:
     # green. `src/my_pa/contracts/v1/envelope.py` avoids that form for this
     # reason, and this job is what keeps that reason true.
     runs-on: ubuntu-latest
-    # 30, raised from 20 on 2026-09-03. The FAST selection this job runs grew to
-    # 16,380 tests. Across six runs in under twenty hours (2026-09-02 20:38 to
-    # 2026-09-03 15:58) this job's wall clock measured 19m49s, 19m10s and 19m41s
-    # (1687b634, 5cc645d8, 251a495c), then timed out at 20m15s and 20m17s
-    # (9c1e463b, 53797f5b), then ran 20m39s at 8f981f1c, the run that made 30 the
-    # value for this job as well as for validate. A timeout that fires on a green
-    # suite reports a red job for a reason no test names; the value is sized to
-    # the measured duration, not to a guess.
-    timeout-minutes: 30
+    # 40, raised from 30 on 2026-09-13. Structured Actions timing (no job logs)
+    # recorded successful wall clocks of 29m04s, 28m31s, and 29m25s in runs
+    # 34776159694, 34783229248, and 34788354083. WP02 run 34792305535 reached
+    # 30m15s job wall clock and was cancelled while the unchanged floor step was
+    # still running. Ten minutes of headroom preserves the full floor gate while
+    # separating test results from the runner budget.
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -829,4 +822,3 @@ jobs:
               exit 1
             fi
           done
-

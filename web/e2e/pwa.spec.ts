@@ -41,8 +41,10 @@ test("the manifest is linked, parses, and carries the install fields", async ({ 
     icons?: Array<{ src: string; sizes: string; type: string; purpose?: string }>;
   };
 
-  expect(manifest.name, "name").toBeTruthy();
-  expect(manifest.short_name, "short_name").toBeTruthy();
+  expect(manifest.name, "name").toBe("My PA");
+  expect(manifest.short_name, "short_name").toBe("My PA");
+  expect((manifest.icons ?? []).map((icon) => icon.src)).not.toContain("/icons/icon.svg");
+  expect((manifest.icons ?? []).some((icon) => icon.src.includes("icon.svg"))).toBe(false);
   expect(manifest.start_url, "start_url").toBeTruthy();
   expect(manifest.scope, "scope").toBeTruthy();
   expect(["standalone", "fullscreen", "minimal-ui"]).toContain(manifest.display);
@@ -226,7 +228,7 @@ test("the System page shows this-browser PWA observations, not server-invented S
   await expect(page.getByTestId("system-pwa-queue")).toBeVisible();
   await expect(page.getByTestId("system-pwa-online")).toContainText(/this browser/i);
   await expect(page.getByTestId("system-pwa-sw")).toContainText(/controlling this page/i);
-  await expect(page.getByTestId("system-pwa-caches")).toContainText("mypa-static-v2");
+  await expect(page.getByTestId("system-pwa-caches")).toContainText("mypa-static-v3");
   await expect(page.getByTestId("system-pwa-queue")).toContainText(/this browser/i);
   await expect(page.getByTestId("system-pwa-queue")).toContainText(/not the server/i);
   await expect(page.getByTestId("system-pwa-limits")).toContainText(/no Background Sync/i);

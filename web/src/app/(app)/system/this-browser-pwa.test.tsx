@@ -32,7 +32,7 @@ describe("this-browser PWA observations", () => {
       configurable: true,
       value: { controller: { scriptURL: "https://synthetic.example/sw.js" } },
     });
-    vi.stubGlobal("caches", { keys: async () => ["mypa-static-v2"] });
+    vi.stubGlobal("caches", { keys: async () => ["mypa-static-v3"] });
     const db = await openOfflineDatabase();
     const key = await principalContentKey(db, PRINCIPAL);
     await enqueueCapture(db, key, {
@@ -49,7 +49,7 @@ describe("this-browser PWA observations", () => {
     expect(screen.getByTestId("system-pwa-online").textContent).toMatch(/online \(this browser\)/);
     expect(screen.getByTestId("system-pwa-sw").textContent).toMatch(/controlling this page/);
     expect(screen.getByTestId("system-pwa-sw").textContent).toMatch(/\/sw\.js/);
-    expect(screen.getByTestId("system-pwa-caches").textContent).toBe("mypa-static-v2");
+    expect(screen.getByTestId("system-pwa-caches").textContent).toBe("mypa-static-v3");
     expect(screen.getByTestId("system-pwa-queue").textContent).toMatch(/1 pending/);
     expect(screen.getByTestId("system-pwa-queue").textContent).toMatch(/this browser/);
     expect(screen.getByTestId("system-pwa-queue").textContent).toMatch(/not the server/);

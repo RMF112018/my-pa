@@ -45,7 +45,7 @@
  */
 
 /** Bump to invalidate everything this worker cached. */
-const CACHE_NAME = "mypa-static-v2";
+const CACHE_NAME = "mypa-static-v3";
 
 /**
  * Precached at install. Static, principal-free, and short by design.
@@ -54,7 +54,6 @@ const CACHE_NAME = "mypa-static-v2";
  */
 const PRECACHE = [
   "/manifest.webmanifest",
-  "/icons/icon.svg",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
   "/icons/icon-maskable-512.png",

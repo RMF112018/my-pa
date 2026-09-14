@@ -67,6 +67,11 @@ describe("route guard middleware", () => {
     expect((await middleware(requestFor("/api/health"))).status).toBe(200);
   });
 
+  it("leaves /apple-icon and /apple-icon.png unguarded", async () => {
+    expect((await middleware(requestFor("/apple-icon"))).status).toBe(200);
+    expect((await middleware(requestFor("/apple-icon.png"))).status).toBe(200);
+  });
+
   it("leaves the exact public WebAuthn and first-user paths unguarded", async () => {
     for (const path of [
       "/setup",

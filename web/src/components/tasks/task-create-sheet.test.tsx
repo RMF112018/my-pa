@@ -680,4 +680,53 @@ describe("TaskCreateSheet resumes the session's unresolved create", () => {
     // And one idempotency key across every POST the session ever issued.
     expect(Array.from(new Set(postBodies(fetcher).map((body) => String(body.idempotencyKey))))).toHaveLength(1);
   });
+
+  it("drops the stale announcement once the shared retry fails definitively", async () => {
+    // The observer branch used to fall through without touching anything when a
+    // session left `ambiguous`/`pending` for `failed`. The retry announces
+    // "Creating task…" on its way through pending, so an observer was left
+    // claiming a create was still in flight under a session that had since been
+    // definitively refused. Asserting the live region is gone catches that;
+    // asserting only the absence of the ambiguous copy would not, because the
+    // pending copy had already replaced it.
+    const harness = renderRuntimeHarness();
+    const runtime = harness.runtime();
+    const seeded = await seedAmbiguousSession(runtime);
+
+    harness.show(<TaskCreateSheet open onOpenChange={() => {}} entry="work" />);
+    await waitFor(() => expect(primaryAction(sheet())).toHaveTextContent("Retry same create"));
+    expect(screen.getByRole("status")).toHaveTextContent(/may still have succeeded/i);
+
+    // Someone else's retry comes back definitively refused: not applied, not ambiguous.
+    await expect(
+      seeded.retry(async () => {
+        throw Object.assign(new Error("bad title"), { status: 400, code: "validation" });
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+
+    await waitFor(() => {
+      // No announcement at all: not the ambiguous copy, not a stale "Creating task…".
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+  });
+
+  it("mints no replacement intent when the shared create confirms in another launcher", async () => {
+    // One confirm emits more than once. Minting a session per emission stranded a
+    // fresh draft in the store on every one of them, and `pruneTerminal` never
+    // reclaims a draft that was never dispatched.
+    const harness = renderRuntimeHarness();
+    const runtime = harness.runtime();
+    const seeded = await seedAmbiguousSession(runtime);
+
+    harness.show(<TaskCreateSheet open onOpenChange={() => {}} entry="work" />);
+    await waitFor(() => expect(primaryAction(sheet())).toHaveTextContent("Retry same create"));
+
+    const mint = vi.spyOn(runtime.createIntents, "openSession");
+    const outcome = await seeded.retry(async () => CREATED);
+    expect(outcome.refused).toBe(false);
+
+    await waitFor(() => expect(screen.queryByText(/may still have succeeded/i)).toBeNull());
+    // The observer settles; it does not mint. The next open re-resolves instead.
+    expect(mint).not.toHaveBeenCalled();
+  });
 });

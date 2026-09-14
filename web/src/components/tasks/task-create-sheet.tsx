@@ -222,9 +222,9 @@ export function TaskCreateSheet({
   }, [open, runtime, bindSession]);
 
   /**
-   * Observe the bound session (WP02-AC-070) and rebind when it retires
-   * (WP02-AC-074). The subscription is keyed on the session identity, so
-   * replacing the binding unsubscribes the old one — no stale listeners.
+   * Observe the bound session (WP02-AC-070). The subscription is keyed on the
+   * session identity, so replacing the binding unsubscribes the old one, and
+   * unmounting unsubscribes too — no stale listeners (WP02-AC-074).
    */
   useEffect(() => {
     return session.subscribe(() => {
@@ -236,14 +236,23 @@ export function TaskCreateSheet({
         showFrozenRequest(session);
         return;
       }
-      if (!isSpent(session)) return;
-      // Confirmed, abandoned or pruned under us: re-resolve through the store and
-      // settle quietly — no second reconcile, no second announcement.
-      const store = runtime.createIntents;
-      bindSession(store.getUnresolvedSession() ?? store.openSession());
+      if (!isSpent(session)) {
+        // Resolved, but still this surface's session — an ambiguous attempt that
+        // came back definitively failed. The frozen values are still what the
+        // Principal wrote, but "may still have succeeded" is now untrue, so the
+        // announcement must not outlive the phase that justified it.
+        setStatus("");
+        return;
+      }
+      // Confirmed, abandoned or pruned under us: settle quietly — no second
+      // reconcile, no second announcement. Deliberately no new session here: one
+      // confirm emits more than once, and minting per emission would strand a
+      // fresh draft in the store on each. The spent binding is harmless while
+      // closed, and the open effect re-resolves on the next open.
+      clearFields();
       if (openRef.current) onOpenChangeRef.current(false);
     });
-  }, [session, runtime, showFrozenRequest, bindSession]);
+  }, [session, showFrozenRequest, clearFields]);
 
   /**
    * Resumed-state focus (WP02-AC-034). A fresh form keeps Title's autofocus; a

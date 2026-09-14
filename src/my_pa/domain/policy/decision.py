@@ -316,6 +316,16 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.CONSTRAINT_SYNC_APPLY,
         Capability.CONSTRAINT_SYNC_ACKNOWLEDGE,
         Capability.CONSTRAINT_SYNC_RESOLVE,
+        # Run 01's six public Project-controls names are Principal/Project-owned,
+        # not source- or enrollment-owned. They therefore accept no caller-stated
+        # source scope; application handlers added by later work packages enforce
+        # same-Principal Project ownership before touching Project data.
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
+        Capability.CONSTRAINTS_PORTFOLIO_LIST,
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
+        Capability.PROJECT_CONTROLS_CONFIGURE,
+        Capability.PROJECT_CONTROLS_STATUS,
         # `context.feedback` names a ranking preference, not a source. The rows
         # it writes belong to the acting Principal's partition and carry no
         # `enrollment_id` and no grant a scope could be compared against.

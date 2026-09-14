@@ -6,9 +6,9 @@ that a parity matrix therefore cannot reach:
 
 * the **handshake** — `initialize` answers, negotiates a protocol version, and
   declares a tools capability;
-* the **tool list** — derived from the capability set rather than maintained, so
-  a new capability appears without anyone editing the adapter, and the schema
-  for a capability is derived from the command it builds;
+* the **tool list** — derived from the handler-backed capability set rather than
+  maintained, so a declared name without a handler is not published, and the
+  schema for an implemented capability is derived from the command it builds;
 * **stdio, in a real child process** — the transport `D-26` and `D-30` actually
   authorise, driven once end to end by the SDK's own client over pipes, because
   every other test here uses in-memory streams and would pass on a build whose
@@ -52,11 +52,26 @@ from my_pa.adapters.mcp import TOOLS, create_mcp_server
 from my_pa.adapters.mcp.tools import payload_schema_for
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, PAYLOAD_KEY
 from my_pa.application.commands import Command, ListTasks
+from my_pa.application.service import _HANDLERS
 from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.identity.operation import Capability
 
 MCP_SOURCE = Path(mcp_module.__file__).read_text(encoding="utf-8")
+
+HANDLER_CAPABILITIES: Final = tuple(
+    capability for capability in Capability if capability in _HANDLERS
+)
+HANDLER_UNWIRED_CAPABILITIES: Final = frozenset(
+    {
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
+        Capability.CONSTRAINTS_PORTFOLIO_LIST,
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
+        Capability.PROJECT_CONTROLS_CONFIGURE,
+        Capability.PROJECT_CONTROLS_STATUS,
+    }
+)
 
 
 def _gateway_child_command(*arguments: str) -> list[str]:
@@ -115,10 +130,22 @@ def test_tools_list_publishes_exactly_the_local_capability_set(
         listed = session.list_tools()
     assert [tool.name for tool in listed.tools] == [
         capability.value
-        for capability in Capability
+        for capability in HANDLER_CAPABILITIES
         if capability not in _AUTHENTICATED_CLIENT_CAPABILITIES
     ]
+    assert len(listed.tools) == 163
     assert all(tool.description for tool in listed.tools), "a tool has no description"
+
+
+def test_handler_unwired_capabilities_publish_no_mcp_tools() -> None:
+    assert set(Capability) - set(_HANDLERS) == HANDLER_UNWIRED_CAPABILITIES
+    assert {tool.name for tool in TOOLS} == {
+        capability.value for capability in HANDLER_CAPABILITIES
+    }
+    assert len(TOOLS) == 166
+    assert not {capability.value for capability in HANDLER_UNWIRED_CAPABILITIES} & {
+        tool.name for tool in TOOLS
+    }
 
 
 def test_no_capability_name_is_written_down_in_the_adapter() -> None:
@@ -126,8 +153,8 @@ def test_no_capability_name_is_written_down_in_the_adapter() -> None:
 
     The derived expectation above could also be satisfied by names typed out by
     hand that happen to match today. What rules that out is that none of the
-    capability strings appears in the adapter's source at all — so a new
-    capability cannot be missing from a list nobody wrote.
+    capability strings appears in the adapter's source at all: implemented
+    handlers publish generically, while handler-unwired names stay absent.
     """
     adapters = Path(mcp_module.__file__).resolve().parent
     for path in sorted(adapters.rglob("*.py")):
@@ -194,7 +221,7 @@ def test_a_tool_schema_is_the_document_normalize_reads() -> None:
     `capability` is the one deliberate removal: the tool name carries it, and a
     document that names it again is refused.
     """
-    for capability, tool in zip(Capability, TOOLS, strict=True):
+    for capability, tool in zip(HANDLER_CAPABILITIES, TOOLS, strict=True):
         properties = set(tool.input_schema["properties"])
         assert "capability" not in properties
         assert properties == (set(RequestMetadata.model_fields) - {"capability"}) | {PAYLOAD_KEY}
@@ -554,7 +581,7 @@ def test_a_real_child_process_publishes_only_what_it_was_composed_with() -> None
     unconfigured, _errors = _child_tool_list()
     assert unconfigured == [
         capability.value
-        for capability in Capability
+        for capability in HANDLER_CAPABILITIES
         if capability not in _UNCONFIGURED_LOCAL_CAPABILITIES
     ]
     assert not any(name.startswith("documents.") for name in unconfigured)
@@ -608,9 +635,10 @@ def test_a_child_with_a_managed_root_publishes_every_locally_available_capabilit
     )
     expected = [
         capability.value
-        for capability in Capability
+        for capability in HANDLER_CAPABILITIES
         if capability not in _AUTHENTICATED_CLIENT_CAPABILITIES
     ]
+    assert len(expected) == 163
     assert composed == expected
     assert {capability.value for capability in _COMPOSED_CAPABILITIES} <= set(composed)
     assert not {capability.value for capability in _AUTHENTICATED_CLIENT_CAPABILITIES} & set(

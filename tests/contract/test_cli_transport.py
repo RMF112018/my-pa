@@ -45,13 +45,25 @@ from tests.contract.test_transport_parity import (
 from tests.transports import Answer, CliTransport, http_transport
 
 from my_pa.adapters.cli import EXIT_FAILED, EXIT_OK, build_parser, run
-from my_pa.adapters.normalization import MAX_REQUEST_BYTES
-from my_pa.application.service import ApplicationService
+from my_pa.adapters.normalization import _BUILDERS, MAX_REQUEST_BYTES
+from my_pa.application.service import _HANDLERS, ApplicationService
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability, is_operator_only
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.source.registry import issue_identifier
+
+HANDLER_CAPABILITIES = tuple(capability for capability in Capability if capability in _HANDLERS)
+HANDLER_UNWIRED_CAPABILITIES = frozenset(
+    {
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
+        Capability.CONSTRAINTS_PORTFOLIO_LIST,
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
+        Capability.PROJECT_CONTROLS_CONFIGURE,
+        Capability.PROJECT_CONTROLS_STATUS,
+    }
+)
 
 
 def not_an_operator() -> Principal:
@@ -158,7 +170,7 @@ def test_a_supplied_principal_id_does_not_become_authority(scene: Scene) -> None
     assert answer.document["error"]["code"] == ErrorCode.DENIED.value
 
 
-@pytest.mark.parametrize("capability", list(Capability), ids=lambda c: c.value)
+@pytest.mark.parametrize("capability", HANDLER_CAPABILITIES, ids=lambda c: c.value)
 def test_the_cli_reaches_nothing_http_would_deny(capability: Capability, scene: Scene) -> None:
     """Capability by capability, the CLI's answer is the gateway's answer.
 
@@ -182,6 +194,13 @@ def test_the_cli_reaches_nothing_http_would_deny(capability: Capability, scene: 
     cli_error = over_cli.document.get("error") or {}
     http_error = over_http.document.get("error") or {}
     assert cli_error.get("code") == http_error.get("code"), capability.value
+
+
+def test_the_cli_publishes_no_command_for_handler_unwired_capabilities() -> None:
+    assert set(Capability) - set(_HANDLERS) == HANDLER_UNWIRED_CAPABILITIES
+    assert set(_BUILDERS) == set(_HANDLERS)
+    assert len(_BUILDERS) == 166
+    assert not HANDLER_UNWIRED_CAPABILITIES & set(_BUILDERS)
 
 
 # ---- argparse never speaks ---------------------------------------------------
@@ -287,7 +306,7 @@ def test_the_exit_status_follows_the_envelope_and_nothing_else(scene: Scene) -> 
 
 def test_every_answer_is_one_line_of_json(cli: CliTransport, scene: Scene) -> None:
     """One document per invocation, newline-terminated, parseable by a pipe."""
-    for capability in Capability:
+    for capability in HANDLER_CAPABILITIES:
         request = document(
             capability,
             scene.principal.principal_id,

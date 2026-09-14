@@ -36,7 +36,7 @@ All application pages require a verified session. `/sign-in`, `/setup`, and
 |---|---|---|
 | `/today`, `GET /api/pulse` | `continuity.pulse` | Ranked accepted commitments, tasks, decisions, and current obligations |
 | `/situations`, `GET /api/situations` | `continuity.situations` | Principal-scoped Situation list and relationship events |
-| `GET /api/projects` | `continuity.projects` | Principal-scoped Project list used by the Situation surface |
+| `GET /api/projects` | `continuity.projects`, `continuity.projects.read` | Principal-scoped Project list via `continuity.projects`; exact Project validation and read via `continuity.projects.read` |
 | `/relationships/:personId`, `GET /api/relationships/:personId/timeline` | `continuity.situations` | Filters the accepted relationship events returned by the continuity read model for that person |
 | `/library`, `GET /api/library` | `knowledge.read`, `knowledge.search`, `capture.search`, or `capture.list` | Chooses one capability from the request shape; no synthetic Library fixture is invented |
 | `GET /api/goodnotes/notebooks` | `goodnotes.notebooks.list` | Principal-scoped notebook catalog; no filesystem paths |

@@ -93,7 +93,11 @@ export function AppShell({
   const sessionEpoch = `${principal.identityProvider}:${principal.identitySubject}`;
 
   return (
-    <ProjectScopeProvider initialResolution={initialProjectScope}>
+    <ProjectScopeProvider
+      principalId={principal.principalId}
+      sessionEpoch={sessionEpoch}
+      initialResolution={initialProjectScope}
+    >
       <TaskRuntimeProvider principalId={principal.principalId} sessionEpoch={sessionEpoch}>
         <OpenCaptureContext.Provider value={openCapture}>
           <InspectorSelectionProvider onSelectionPublished={() => setUtilityOpen(true)}>

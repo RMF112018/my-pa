@@ -9,6 +9,9 @@ import {
 import type { ResolvedProjectScope } from "@/lib/project-scope/resolver";
 
 const PROJECT = "prj_aaaaaaaa11111111";
+const OTHER_PROJECT = "prj_bbbbbbbb22222222";
+const PRINCIPAL_A = "prn_aaaaaaaa11111111";
+const PRINCIPAL_B = "prn_bbbbbbbb22222222";
 
 const PROJECT_V1: ResolvedProjectScope = {
   scope: { kind: "PROJECT", projectId: PROJECT },
@@ -24,6 +27,10 @@ function Harness() {
   return (
     <div>
       <output data-testid="scope">{resolution.scope.kind}</output>
+      <output data-testid="project">
+        {resolution.scope.kind === "PROJECT" ? resolution.scope.projectId : "all"}
+      </output>
+      <output data-testid="version">{resolution.project?.version ?? "none"}</output>
       <output data-testid="epoch">{epoch}</output>
       <output data-testid="local">{local}</output>
       <output data-testid="current">{String(isCurrentEpoch(epoch))}</output>
@@ -66,7 +73,7 @@ describe("Project Scope provider", () => {
   it("increments a monotonic epoch without broadly remounting authenticated shell state", async () => {
     const user = userEvent.setup();
     render(
-      <ProjectScopeProvider>
+      <ProjectScopeProvider principalId={PRINCIPAL_A} sessionEpoch="session:a">
         <Harness />
       </ProjectScopeProvider>,
     );
@@ -85,7 +92,11 @@ describe("Project Scope provider", () => {
   it("does not advance for the same scope/version but does for a new canonical version", async () => {
     const user = userEvent.setup();
     render(
-      <ProjectScopeProvider initialResolution={PROJECT_V1}>
+      <ProjectScopeProvider
+        principalId={PRINCIPAL_A}
+        sessionEpoch="session:a"
+        initialResolution={PROJECT_V1}
+      >
         <Harness />
       </ProjectScopeProvider>,
     );
@@ -98,11 +109,96 @@ describe("Project Scope provider", () => {
   it("advances when canonical lifecycle state changes even if an upstream response repeats a version", async () => {
     const user = userEvent.setup();
     render(
-      <ProjectScopeProvider initialResolution={PROJECT_V1}>
+      <ProjectScopeProvider
+        principalId={PRINCIPAL_A}
+        sessionEpoch="session:a"
+        initialResolution={PROJECT_V1}
+      >
         <Harness />
       </ProjectScopeProvider>,
     );
     await user.click(screen.getByRole("button", { name: "Hold" }));
     expect(screen.getByTestId("epoch")).toHaveTextContent("1");
+  });
+
+  it("reconciles a new authenticated Principal without remounting shell-local state", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <ProjectScopeProvider
+        principalId={PRINCIPAL_A}
+        sessionEpoch="session:a"
+        initialResolution={PROJECT_V1}
+      >
+        <Harness />
+      </ProjectScopeProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Local" }));
+
+    const replacement: ResolvedProjectScope = {
+      ...PROJECT_V1,
+      scope: { kind: "PROJECT", projectId: OTHER_PROJECT },
+      project: { project_id: OTHER_PROJECT, state: "active", version: 4 },
+    };
+    rerender(
+      <ProjectScopeProvider
+        principalId={PRINCIPAL_B}
+        sessionEpoch="session:b"
+        initialResolution={replacement}
+      >
+        <Harness />
+      </ProjectScopeProvider>,
+    );
+
+    expect(screen.getByTestId("project")).toHaveTextContent(OTHER_PROJECT);
+    expect(screen.getByTestId("version")).toHaveTextContent("4");
+    expect(screen.getByTestId("epoch")).toHaveTextContent("1");
+    expect(screen.getByTestId("initial-current")).toHaveTextContent("false");
+    expect(screen.getByTestId("local")).toHaveTextContent("1");
+  });
+
+  it("invalidates the epoch when a new Principal resolves the same Project version", () => {
+    const { rerender } = render(
+      <ProjectScopeProvider
+        principalId={PRINCIPAL_A}
+        sessionEpoch="session:a"
+        initialResolution={PROJECT_V1}
+      >
+        <Harness />
+      </ProjectScopeProvider>,
+    );
+    rerender(
+      <ProjectScopeProvider
+        principalId={PRINCIPAL_B}
+        sessionEpoch="session:a"
+        initialResolution={PROJECT_V1}
+      >
+        <Harness />
+      </ProjectScopeProvider>,
+    );
+    expect(screen.getByTestId("epoch")).toHaveTextContent("1");
+    expect(screen.getByTestId("initial-current")).toHaveTextContent("false");
+  });
+
+  it("invalidates the epoch when the authenticated session changes for one Principal", () => {
+    const { rerender } = render(
+      <ProjectScopeProvider
+        principalId={PRINCIPAL_A}
+        sessionEpoch="session:a"
+        initialResolution={PROJECT_V1}
+      >
+        <Harness />
+      </ProjectScopeProvider>,
+    );
+    rerender(
+      <ProjectScopeProvider
+        principalId={PRINCIPAL_A}
+        sessionEpoch="session:b"
+        initialResolution={PROJECT_V1}
+      >
+        <Harness />
+      </ProjectScopeProvider>,
+    );
+    expect(screen.getByTestId("epoch")).toHaveTextContent("1");
+    expect(screen.getByTestId("initial-current")).toHaveTextContent("false");
   });
 });

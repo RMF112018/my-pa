@@ -17,6 +17,7 @@ const PUBLIC_PATHS = new Set(["/sign-in", "/setup", "/recover/operator"]);
 
 function isPublicPath(pathname: string): boolean {
   if (PUBLIC_PATHS.has(pathname)) return true;
+  if (pathname === "/apple-icon" || pathname === "/apple-icon.png") return true;
   if (pathname === "/api/health") return true;
   if (pathname.startsWith("/api/session")) return true;
   if (pathname.startsWith("/api/webauthn/authentication/")) return true;
@@ -56,6 +57,6 @@ export const config = {
     /*
      * Guard everything except Next.js internals and static assets.
      */
-    "/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|sw.js|icons/|.*\\.svg$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|apple-icon.png|apple-icon|manifest.webmanifest|sw.js|icons/|.*\\.svg$).*)",
   ],
 };

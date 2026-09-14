@@ -6,6 +6,27 @@ export const metadata: Metadata = {
   title: "My PA",
   description: "Evidence-first, principal-scoped personal assistant.",
   manifest: "/manifest.webmanifest",
+  icons: {
+    icon: [
+      {
+        url: "/icons/favicon-light-32.png",
+        type: "image/png",
+        sizes: "32x32",
+        media: "(prefers-color-scheme: light)",
+      },
+      {
+        url: "/icons/favicon-dark-32.png",
+        type: "image/png",
+        sizes: "32x32",
+        media: "(prefers-color-scheme: dark)",
+      },
+      {
+        url: "/favicon.ico",
+        type: "image/x-icon",
+        sizes: "any",
+      },
+    ],
+  },
 };
 
 export const viewport: Viewport = {

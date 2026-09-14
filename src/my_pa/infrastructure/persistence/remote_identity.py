@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -24,6 +25,7 @@ from sqlalchemy import (
     select,
     update,
 )
+from sqlalchemy.engine import Row
 
 from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID
 from my_pa.domain.identity.operation import Capability
@@ -312,7 +314,7 @@ class RemoteIdentityRepository:
         ).scalar_one_or_none()
         return None if row is None else row
 
-    def list_capability_grants(self, *, remote_client_id: UUID) -> tuple[object, ...]:
+    def list_capability_grants(self, *, remote_client_id: UUID) -> tuple[Row[Any], ...]:
         """Return every grant row for a client, including expired and revoked."""
         return tuple(
             self._connection.execute(

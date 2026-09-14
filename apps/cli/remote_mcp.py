@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.engine import Row
 
 from my_pa.application.chatllm_data_profile import (
     ChatLLMCompositionPlanes,
@@ -55,7 +57,7 @@ def _add_profile_arguments(parser: argparse.ArgumentParser) -> None:
 
 def _planes_from_settings(settings: Settings) -> ChatLLMCompositionPlanes:
     return ChatLLMCompositionPlanes(
-        managed_documents=bool(settings.managed_document_root),
+        managed_documents=settings.managed_documents_are_composed(),
         relationship_intelligence=settings.relationship_intelligence_enabled,
         relationship_intelligence_writes=settings.relationship_intelligence_writes_enabled,
         relationship_memory=settings.relationship_memory_enabled,
@@ -63,7 +65,7 @@ def _planes_from_settings(settings: Settings) -> ChatLLMCompositionPlanes:
     )
 
 
-def _grant_records(rows: tuple[object, ...]) -> tuple[ChatLLMGrantRecord, ...]:
+def _grant_records(rows: tuple[Row[Any], ...]) -> tuple[ChatLLMGrantRecord, ...]:
     records: list[ChatLLMGrantRecord] = []
     for row in rows:
         try:

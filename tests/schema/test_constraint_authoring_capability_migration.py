@@ -137,6 +137,7 @@ CONSTRAINT_TABLES: Final[frozenset[str]] = frozenset(
 #: Fixed and written out, so the recurrence guard below is a bounded check over a
 #: named list rather than a repository-wide scan.
 HEAD_PIN_FILES: Final[tuple[str, ...]] = (
+    "tests/architecture/test_constraint_read_plane_boundaries.py",
     "tests/database/test_cli_auth.py",
     "tests/database/test_entities_graph_vocabulary_migration.py",
     "tests/database/test_legacy_entity_backfill_migration.py",

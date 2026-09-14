@@ -96,8 +96,9 @@ WP02_CONSTRAINT_REVISION: Final = "2774329487be"
 WP11_CONSTRAINT_SYNC_REVISION: Final = "b8e4d6f20a11"
 RUN01_CONSTRAINT_INTEGRITY_REVISION: Final = "e6a4c2f91b73"
 
-#: The fourteen tables WP02 installed plus WP11's three additive sync tables,
-#: including the database-only quarantine for predecessor-unbound history.
+#: The fourteen tables WP02 installed, WP11's three additive sync tables,
+#: including the database-only quarantine for predecessor-unbound history, and
+#: Run 01's append-only settings history.
 #: Named here rather than derived from
 #: `tables.py`, so that deleting a declaration cannot quietly shrink the set this
 #: module claims to cover.
@@ -106,6 +107,7 @@ CONSTRAINT_TABLES: Final = frozenset(
         "constraint_categories",
         "constraint_category_history",
         "constraint_project_settings",
+        "constraint_project_settings_history",
         "constraint_sync_baselines",
         "constraint_sync_conflicts",
         "constraint_sync_legacy_unbound_conflicts",
@@ -133,7 +135,7 @@ CONSTRAINT_TABLES: Final = frozenset(
 #: database CHECK so predecessor receipts remain truthful; it is not a public
 #: `ConstraintSyncResolution` member.
 BASE_CONSTRAINT_TABLES_SHA256: Final = (
-    "0e64d1b953d088b2f15bd2c941ff3f3e9fa23d36566ddf19ee39e0e2c1ec6e8e"
+    "64c00a5e335ab1ce383e77ffb6fe3353220482d08a1bca549c20f53d9a621bda"
 )
 
 #: Package roots the application read service may never reach. `infrastructure`
@@ -365,6 +367,23 @@ def _declared_revision(path: Path) -> str | None:
             if isinstance(value, ast.Constant) and isinstance(value.value, str):
                 return value.value
     return None
+
+
+def _constraint_schema_revision_offenders(directory: Path) -> dict[str, list[str]]:
+    """Unreviewed revisions that name one or more guarded Constraint tables."""
+    admitted = {
+        WP02_CONSTRAINT_REVISION,
+        WP11_CONSTRAINT_SYNC_REVISION,
+        RUN01_CONSTRAINT_INTEGRITY_REVISION,
+    }
+    offenders: dict[str, list[str]] = {}
+    for path in sorted(directory.glob("*.py")):
+        if _declared_revision(path) in admitted:
+            continue
+        named = sorted(table for table in CONSTRAINT_TABLES if table in _code_strings(_tree(path)))
+        if named:
+            offenders[path.name] = named
+    return offenders
 
 
 def _constraint_table_declarations(path: Path) -> dict[str, str]:
@@ -695,20 +714,7 @@ def test_only_bounded_constraint_schema_revisions_touch_constraint_tables() -> N
     foreign keys and append-only settings history. This does not authorize a
     further migration or a broader table-declaration change.
     """
-    offenders: dict[str, list[str]] = {}
-    for path in sorted(MIGRATIONS.glob("*.py")):
-        revision = _declared_revision(path)
-        if revision in {
-            WP02_CONSTRAINT_REVISION,
-            WP11_CONSTRAINT_SYNC_REVISION,
-            RUN01_CONSTRAINT_INTEGRITY_REVISION,
-        }:
-            continue
-        named = sorted(
-            {table for table in CONSTRAINT_TABLES if table in _code_strings(_tree(path))}
-        )
-        if named:
-            offenders[path.name] = named
+    offenders = _constraint_schema_revision_offenders(MIGRATIONS)
     assert offenders == {}, (
         f"revisions outside WP02's {WP02_CONSTRAINT_REVISION}, WP11's "
         f"{WP11_CONSTRAINT_SYNC_REVISION}, and Run 01's "
@@ -729,6 +735,24 @@ def test_only_bounded_constraint_schema_revisions_touch_constraint_tables() -> N
         _declared_revision(path) == RUN01_CONSTRAINT_INTEGRITY_REVISION
         for path in MIGRATIONS.glob("*.py")
     ), f"Run 01's revision {RUN01_CONSTRAINT_INTEGRITY_REVISION} is missing"
+
+
+def test_a_fourth_revision_cannot_escape_by_touching_only_settings_history(
+    tmp_path: Path,
+) -> None:
+    """The Run 01 table remains inside the closed revision allowlist."""
+    planted = tmp_path / "20990101_deadbeef0001_later_constraint_change.py"
+    planted.write_text(
+        'revision = "deadbeef0001"\n'
+        f'down_revision = "{RUN01_CONSTRAINT_INTEGRITY_REVISION}"\n'
+        'op.create_table("constraint_project_settings_history")\n',
+        encoding="utf-8",
+    )
+
+    assert _declared_revision(planted) == "deadbeef0001"
+    assert _constraint_schema_revision_offenders(tmp_path) == {
+        planted.name: ["constraint_project_settings_history"]
+    }
 
 
 def test_the_migration_graph_has_exactly_one_head_descending_from_wp02() -> None:

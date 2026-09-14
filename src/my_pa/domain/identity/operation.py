@@ -797,9 +797,9 @@ class Capability(StrEnum):
     CANVAS_WORKSPACE_GET = "canvas.workspace.get"
     CANVAS_WORKSPACE_PUT = "canvas.workspace.put"
 
-    #: `PC-CM-IMP-WP04`. The six Constraint Management reads, and nothing else:
-    #: the plane's authoring and its SharePoint synchronisation are deliberately
-    #: absent, so a grant issued over this family cannot reach either. Each name
+    #: `PC-CM-IMP-WP04` and Run 01. The ten Constraint Management reads, and
+    #: nothing else: a grant issued over this family cannot reach authoring or
+    #: SharePoint synchronisation. Each implemented name
     #: is served by exactly one method of `application.constraints`'s read
     #: service, which is where every derived flag — Overdue, Due Soon, In My
     #: Court, the recent filters, the grouping, the cursor and the overview
@@ -833,13 +833,13 @@ class Capability(StrEnum):
     #: Their handlers land in later work packages; enum admission here keeps the
     #: public and frozen audit vocabularies synchronized while the manifest
     #: truthfully reports them `not_implemented`.
-    #: Constraint Management authoring (PC-CM-IMP-WP07). The twelve canonical
-    #: mutations of the plane WP06 implemented, admitted here so the one entry
-    #: point can dispatch them. Every one maps to `Purpose.CONSTRAINT_AUTHORING`
-    #: and to nothing else, and none of the six reads above gains it: a grant
+    #: Constraint Management authoring (PC-CM-IMP-WP07 and Run 01). Fourteen
+    #: canonical names are admitted; the two Run 01 names remain unavailable
+    #: until their handlers land. Every one maps to `Purpose.CONSTRAINT_AUTHORING`
+    #: and to nothing else, and none of the ten reads above gains it: a grant
     #: issued to read a Project's Register must not also change what is in it.
     #:
-    #: **Ten of the twelve are destructive and two are additive**, which is a
+    #: **Twelve of the fourteen are destructive and two are additive**, which is a
     #: statement about existing state rather than about deletion. `is_destructive_
     #: capability` is `_WRITE_CAPABILITIES - _ADDITIVE_WRITE_CAPABILITIES`, and
     #: `_ADDITIVE_WRITE_CAPABILITIES` means what its comment below says: a write

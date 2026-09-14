@@ -688,7 +688,7 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             focus_entity_id=issue_identifier(IdKind.ENTITY),
         ),
         Capability.ENTITIES_UNRESOLVED_MENTIONS: ListUnresolvedMentions(),
-        # PC-CM-IMP-WP04's six Constraint Management reads. Identifiers are minted
+        # PC-CM-IMP-WP04's handler-backed Constraint Management reads. Identifiers are minted
         # for the reason the entity reads above mint theirs: a denial test must
         # fail on the authority and nothing else, so the request has to be well
         # formed enough that an `invalid_request` cannot stand in for a `denied`.
@@ -759,7 +759,7 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             expected_version=1,
             idempotency_key="denial-sync-resolve-0001",
         ),
-        # PC-CM-IMP-WP07's twelve Constraint Management mutations, on the same
+        # PC-CM-IMP-WP07's handler-backed Constraint Management mutations, on the same
         # terms: minted identifiers and a version of 1, so a denial test fails on
         # the authority and never on the shape.
         Capability.CONSTRAINTS_CREATE: CreateConstraintDraft(
@@ -1467,17 +1467,17 @@ SCOPED_CAPABILITIES = [
         # PC-CM-IMP-WP04's Constraint Management reads. A Constraint is a Project
         # control in the acting Principal's own partition; its rows carry no
         # `source_id` and no `enrollment_id` for a scope to be compared against.
-        # All six sit in `domain.policy.decision._SCOPELESS`.
+        # These original handler-backed reads sit in `domain.policy.decision._SCOPELESS`.
         Capability.CONSTRAINTS_READ,
         Capability.CONSTRAINTS_LIST,
         Capability.CONSTRAINTS_SEARCH,
         Capability.CONSTRAINTS_HISTORY,
         Capability.CONSTRAINTS_OVERVIEW,
         Capability.CONSTRAINT_CATEGORIES_LIST,
-        # PC-CM-IMP-WP07's twelve mutations join them, and writing changes
+        # PC-CM-IMP-WP07's original handler-backed mutations join them, and writing changes
         # nothing about the reason: they name a Project or a record in the
         # acting Principal's own partition and never a `src_...` or an
-        # `enr_...`. All twelve sit in `domain.policy.decision._SCOPELESS`.
+        # `enr_...`. They sit in `domain.policy.decision._SCOPELESS`.
         Capability.CONSTRAINTS_CREATE,
         Capability.CONSTRAINTS_PUBLISH,
         Capability.CONSTRAINTS_UPDATE,
@@ -1727,17 +1727,17 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         # PC-CM-IMP-WP04's Constraint Management reads. A Constraint is a Project
         # control in the acting Principal's own partition; its rows carry no
         # `source_id` and no `enrollment_id` for a scope to be compared against.
-        # All six sit in `domain.policy.decision._SCOPELESS`.
+        # These original handler-backed reads sit in `domain.policy.decision._SCOPELESS`.
         Capability.CONSTRAINTS_READ,
         Capability.CONSTRAINTS_LIST,
         Capability.CONSTRAINTS_SEARCH,
         Capability.CONSTRAINTS_HISTORY,
         Capability.CONSTRAINTS_OVERVIEW,
         Capability.CONSTRAINT_CATEGORIES_LIST,
-        # PC-CM-IMP-WP07's twelve mutations join them, and writing changes
+        # PC-CM-IMP-WP07's original handler-backed mutations join them, and writing changes
         # nothing about the reason: they name a Project or a record in the
         # acting Principal's own partition and never a `src_...` or an
-        # `enr_...`. All twelve sit in `domain.policy.decision._SCOPELESS`.
+        # `enr_...`. They sit in `domain.policy.decision._SCOPELESS`.
         Capability.CONSTRAINTS_CREATE,
         Capability.CONSTRAINTS_PUBLISH,
         Capability.CONSTRAINTS_UPDATE,
@@ -2145,7 +2145,7 @@ def test_the_constraint_read_purpose_grants_the_reads_and_nothing_else() -> None
 
     Read from the other end, because the per-capability assertions above cannot
     see a purpose that quietly acquired a *further* capability. A grant issued to
-    read a Project's controls must reach exactly these six.
+    read a Project's controls must reach exactly these ten.
     """
     reached = {
         capability
@@ -2167,14 +2167,13 @@ def test_the_constraint_authoring_purpose_grants_the_writes_and_nothing_else() -
 def test_no_constraint_read_is_granted_an_authoring_or_synchronisation_purpose() -> None:
     """The separation the plane requires, proved by absence rather than by a name.
 
-    `constraint_authoring` now exists -- `PC-CM-IMP-WP07` added it with the
-    twelve mutations that exercise it -- and no `constraint_sync_read` or
-    `constraint_sync_authoring` does, because no `constraint_sync.*` capability
-    does. What is asserted here is unchanged in substance: the Constraint
-    purposes are exactly those two, and none of the six reads is reachable
-    through any purpose whose name says authoring or synchronisation. The second
-    half is what stops a read being quietly folded under an authoring grant --
-    including, now, under the plane's own.
+    `constraint_authoring` exists with fourteen authoring names, and the seven
+    synchronisation capabilities use the bounded `constraint_sync_read` and
+    `constraint_sync_authoring` pair. What is asserted here is unchanged in
+    substance: the Constraint purposes are exactly those four, and none of the
+    ten reads is reachable through any purpose whose name says authoring or
+    synchronisation. The second half is what stops a read being quietly folded
+    under an authoring grant -- including, now, under the plane's own.
     """
     assert {purpose for purpose in Purpose if purpose.value.startswith("constraint_")} == {
         Purpose.CONSTRAINT_READ,

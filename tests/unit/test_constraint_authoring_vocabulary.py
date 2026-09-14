@@ -25,9 +25,8 @@ default of `False`. The consequence is not bookkeeping —
 `_WRITE_CAPABILITIES - _ADDITIVE_WRITE_CAPABILITIES`, so a capability wrongly
 called additive is a lifecycle transition annotated as a plain insert.
 
-And the negative: no `constraint_sync.*` capability and no sync purpose exists.
-That plane is `PC-CM-IMP-WP11`'s, and a name minted here would be one nothing
-dispatches.
+The synchronisation vocabulary also exists now: `PC-CM-IMP-WP11` admits exactly
+seven `constraint_sync.*` capabilities and its two bounded purposes.
 """
 
 from __future__ import annotations

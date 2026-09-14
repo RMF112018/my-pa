@@ -466,6 +466,15 @@ _ORDINAL_UNITS = (
     "hundred-sixty-fifth",
     "hundred-sixty-sixth",
     "hundred-sixty-seventh",
+    # R01-WP03 admits six declared names and takes the public set to one hundred
+    # and seventy-two. The green-half plant indexes the next ordinal, so keep
+    # this table dense through one hundred and seventy-third.
+    "hundred-sixty-eighth",
+    "hundred-sixty-ninth",
+    "hundred-seventieth",
+    "hundred-seventy-first",
+    "hundred-seventy-second",
+    "hundred-seventy-third",
 )
 
 

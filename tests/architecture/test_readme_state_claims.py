@@ -411,6 +411,7 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     170: "One hundred and seventy",
     171: "One hundred and seventy-one",
     172: "One hundred and seventy-two",
+    173: "One hundred and seventy-three",
 }
 
 
@@ -641,6 +642,14 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert (
         f"`{withheld} of {total} total capabilities are unavailable or unwired.`" in gateway_runbook
     )
+
+    completion_state = section_of(
+        COMPLETION_PLAN.read_text(encoding="utf-8"), "3. What is implemented"
+    )
+    normalized_completion_state = " ".join(completion_state.split()).lower()
+    assert f"all {SPELLED_COUNTS[total].lower()} capability names" in normalized_completion_state
+    assert f"names, {implemented} have application commands/handlers" in normalized_completion_state
+    assert "six run 01 names remain structurally unwired" in normalized_completion_state
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
     assert "one hundred and seventy-two capabilities" in module_boundaries

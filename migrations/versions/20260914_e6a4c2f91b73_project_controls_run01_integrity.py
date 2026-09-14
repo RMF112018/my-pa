@@ -330,9 +330,10 @@ def _create_settings_history() -> None:
             CHECK (outcome <> 'rejected' OR
               after_settings_version IS NOT DISTINCT FROM before_settings_version),
           CONSTRAINT a_successful_constraint_settings_change_records_its_snapshot
-            CHECK ((outcome IN ('applied', 'no_op')) =
-              (resulting_timezone_name IS NOT NULL AND
-               resulting_settings_updated_at IS NOT NULL)),
+            CHECK (
+              (outcome IN ('applied', 'no_op')) = (resulting_timezone_name IS NOT NULL) AND
+              (outcome IN ('applied', 'no_op')) =
+                (resulting_settings_updated_at IS NOT NULL)),
           CONSTRAINT only_a_rejected_constraint_settings_change_records_failure
             CHECK ((outcome = 'rejected') = (failure_code IS NOT NULL)),
           CONSTRAINT failure_detail_belongs_only_to_a_rejected_settings_change

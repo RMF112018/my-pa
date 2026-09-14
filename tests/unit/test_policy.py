@@ -382,11 +382,16 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.CONSTRAINTS_SEARCH, Purpose.CONSTRAINT_READ),
         (Capability.CONSTRAINTS_HISTORY, Purpose.CONSTRAINT_READ),
         (Capability.CONSTRAINTS_OVERVIEW, Purpose.CONSTRAINT_READ),
+        (Capability.CONSTRAINTS_PORTFOLIO_LIST, Purpose.CONSTRAINT_READ),
+        (Capability.CONSTRAINTS_PORTFOLIO_SEARCH, Purpose.CONSTRAINT_READ),
+        (Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW, Purpose.CONSTRAINT_READ),
+        (Capability.PROJECT_CONTROLS_STATUS, Purpose.CONSTRAINT_READ),
         (Capability.CONSTRAINT_CATEGORIES_LIST, Purpose.CONSTRAINT_READ),
         # PC-CM-IMP-WP07's twelve authoring names, each under
         # `constraint_authoring` and under nothing else. No read gains the
         # authoring purpose and no write gains `constraint_read`.
         (Capability.CONSTRAINTS_CREATE, Purpose.CONSTRAINT_AUTHORING),
+        (Capability.CONSTRAINTS_CREATE_PUBLISHED, Purpose.CONSTRAINT_AUTHORING),
         (Capability.CONSTRAINTS_PUBLISH, Purpose.CONSTRAINT_AUTHORING),
         (Capability.CONSTRAINTS_UPDATE, Purpose.CONSTRAINT_AUTHORING),
         (Capability.CONSTRAINTS_TRANSITION, Purpose.CONSTRAINT_AUTHORING),
@@ -398,6 +403,7 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.CONSTRAINT_CATEGORIES_UPDATE, Purpose.CONSTRAINT_AUTHORING),
         (Capability.CONSTRAINT_CATEGORIES_DEACTIVATE, Purpose.CONSTRAINT_AUTHORING),
         (Capability.CONSTRAINT_CATEGORIES_REORDER, Purpose.CONSTRAINT_AUTHORING),
+        (Capability.PROJECT_CONTROLS_CONFIGURE, Purpose.CONSTRAINT_AUTHORING),
         (Capability.CONSTRAINT_SYNC_STATE, Purpose.CONSTRAINT_SYNC_READ),
         (Capability.CONSTRAINT_SYNC_DELTA, Purpose.CONSTRAINT_SYNC_READ),
         (Capability.CONSTRAINT_SYNC_CONFLICTS, Purpose.CONSTRAINT_SYNC_READ),
@@ -474,7 +480,8 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # and to nothing else, so it contributes twelve pairs rather than the five
     # hundred and sixteen a cross product would give. No read gains the authoring
     # purpose and no write gains `constraint_read`: that disjointness is what the
-    # plane's read/authoring separation now rests on. WP11 adds seven sync pairs,
+    # plane's read/authoring separation now rests on. Run 01 adds four read
+    # pairs and two authoring pairs without adding a purpose. WP11 adds seven sync pairs,
     # split between its read and authoring purposes, without widening the canonical grants.
     # Unioned: 172 capabilities, 45 purposes, 174 permitted pairs.
     assert len(PERMITTED_PAIRS) == 174

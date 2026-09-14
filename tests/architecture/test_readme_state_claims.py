@@ -531,6 +531,8 @@ def test_current_state_docs_name_the_current_capability_and_migration_counts() -
 def test_current_state_docs_derive_the_default_capability_split() -> None:
     """Bind the default and withheld capability figures to runtime wiring."""
     total = len(Capability)
+    implemented = len(_HANDLERS)
+    unwired = set(Capability) - set(_HANDLERS)
     withheld_families = {
         capability
         for capability in _HANDLERS
@@ -538,6 +540,16 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     }
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
+    assert implemented == 166
+    assert len(withheld_families) == 70
+    assert unwired == {
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
+        Capability.CONSTRAINTS_PORTFOLIO_LIST,
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
+        Capability.PROJECT_CONTROLS_CONFIGURE,
+        Capability.PROJECT_CONTROLS_STATUS,
+    }
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
     # composed by default, and `RI-ENT-WP-10`'s five record-family reads arrived
     # on the withheld side too, as do `RI-ENT-WP-11`'s record-family writes. The
@@ -592,6 +604,8 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     readme = README.read_text(encoding="utf-8")
     assert f"{default} of the {total} capabilities are `available`" in readme
     assert f"`{withheld} of {total} capabilities are unwired.`" in readme
+    assert "166 have application commands/handlers" in readme
+    assert "fully composed authenticated client sees all 166 implemented tools" in readme
     entity_split = (
         f"{SPELLED_COUNTS[entity_total].lower()} `entities.*` capabilities: "
         f"{SPELLED_COUNTS[entity_reads].lower()} reads and "
@@ -615,6 +629,8 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert f"publishes **{default - 3} tools**" in runbook
     assert "unconfigured local stdio: 93" in runbook
     assert "fully feature-composed local stdio: 163" in runbook
+    assert "166 have application commands/handlers" in runbook
+    assert "all 166 implemented tools" in runbook
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
     assert "one hundred and seventy-two capabilities" in module_boundaries

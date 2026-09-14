@@ -13,7 +13,16 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import Engine, ForeignKeyConstraint, UniqueConstraint, insert, select, text, update
+from sqlalchemy import (
+    CheckConstraint,
+    Engine,
+    ForeignKeyConstraint,
+    UniqueConstraint,
+    insert,
+    select,
+    text,
+    update,
+)
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
@@ -138,6 +147,15 @@ def test_metadata_declares_every_same_principal_fk_and_history_guard() -> None:
         and [column.name for column in constraint.columns] == ["principal_id", "idempotency_key"]
         for constraint in constraint_project_settings_history.constraints
     )
+    snapshot_check = next(
+        constraint
+        for constraint in constraint_project_settings_history.constraints
+        if isinstance(constraint, CheckConstraint)
+        and constraint.name == "a_successful_constraint_settings_change_records_its_snapshot"
+    )
+    snapshot_expression = str(snapshot_check.sqltext)
+    assert "= (resulting_timezone_name IS NOT NULL)" in snapshot_expression
+    assert "= (resulting_settings_updated_at IS NOT NULL)" in snapshot_expression
 
 
 @pytest.mark.database
@@ -266,6 +284,30 @@ def test_head_enforces_composite_scope_and_immutable_settings_history(
                     recorded_at=WHEN,
                 )
             )
+        for suffix, timezone_name, updated_at in (
+            ("dddddddd44444444", "America/New_York", None),
+            ("eeeeeeee55555555", None, WHEN),
+        ):
+            with engine.begin() as connection, pytest.raises(IntegrityError):
+                connection.execute(
+                    insert(constraint_project_settings_history).values(
+                        history_id=f"cpsh_{suffix}",
+                        principal_id=PRINCIPAL,
+                        project_id=PROJECT,
+                        action="configure",
+                        actor="principal",
+                        outcome="rejected",
+                        before_settings_version=1,
+                        after_settings_version=1,
+                        resulting_timezone_name=timezone_name,
+                        resulting_settings_updated_at=updated_at,
+                        idempotency_key=f"settings-{suffix}",
+                        request_digest="c" * 64,
+                        failure_code="invalid_configuration",
+                        occurred_at=WHEN,
+                        recorded_at=WHEN,
+                    )
+                )
         with engine.begin() as connection, pytest.raises(IntegrityError):
             connection.execute(
                 insert(constraint_project_settings_history).values(

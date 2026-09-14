@@ -81,6 +81,7 @@ const PRINCIPAL: PrincipalSession = {
   lifecycleState: "active",
   synthetic: true,
 };
+const SESSION_EPOCH = "test-session-binding";
 
 let workspace: ConstraintWorkspaceFixture;
 
@@ -100,7 +101,7 @@ afterEach(() => {
 function mount(query = "") {
   if (query) urlStore.go(`/work/projects/prj_syn_0001/constraints?${query}`);
   return render(
-    <AppShell principal={PRINCIPAL}>
+    <AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>
       <ConstraintsWorkspace
         workspace={workspace}
         projects={syntheticConstraintProjects()}

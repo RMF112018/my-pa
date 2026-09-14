@@ -16,6 +16,8 @@ import { InspectorSelectionProvider } from "@/components/shell/inspector-selecti
 import { useShellPreferences } from "@/components/shell/shell-preferences";
 import { TaskRuntimeProvider } from "@/components/work/task-runtime-provider";
 import { TaskCreateSheet } from "@/components/tasks/task-create-sheet";
+import { ProjectScopeProvider } from "@/components/shell/project-scope-provider";
+import type { ResolvedProjectScope } from "@/lib/project-scope/resolver";
 
 const OpenCaptureContext = createContext<() => void>(() => {
   throw new Error("useOpenCapture is only valid inside AppShell");
@@ -27,9 +29,14 @@ export function useOpenCapture(): () => void {
 
 export function AppShell({
   principal,
+  sessionEpoch,
+  initialProjectScope,
   children,
 }: {
   principal: PrincipalSession;
+  /** Browser-safe digest bound to the exact verified HttpOnly session SID. */
+  sessionEpoch: string;
+  initialProjectScope?: ResolvedProjectScope;
   children: ReactNode;
 }) {
   const [captureOpen, setCaptureOpen] = useState(false);
@@ -84,14 +91,15 @@ export function AppShell({
       update({ density: preferences.density === "comfortable" ? "compact" : "comfortable" }),
   };
 
-  // Session epoch keys Task client state; Principal replacement remounts/resets it.
-  // identitySubject is the durable auth subject for this shell session — never an API param.
-  const sessionEpoch = `${principal.identityProvider}:${principal.identitySubject}`;
-
   return (
-    <TaskRuntimeProvider principalId={principal.principalId} sessionEpoch={sessionEpoch}>
-      <OpenCaptureContext.Provider value={openCapture}>
-        <InspectorSelectionProvider onSelectionPublished={() => setUtilityOpen(true)}>
+    <ProjectScopeProvider
+      principalId={principal.principalId}
+      sessionEpoch={sessionEpoch}
+      initialResolution={initialProjectScope}
+    >
+      <TaskRuntimeProvider principalId={principal.principalId} sessionEpoch={sessionEpoch}>
+        <OpenCaptureContext.Provider value={openCapture}>
+          <InspectorSelectionProvider onSelectionPublished={() => setUtilityOpen(true)}>
           <div className="flex min-h-screen flex-col">
             <ContextHeader
               principal={account.principal}
@@ -142,8 +150,9 @@ export function AppShell({
             <CommandPalette open={searchOpen} onOpenChange={setSearchOpen} onCapture={openCapture} />
             <OfflineQueueStatus principalId={principal.principalId} />
           </div>
-        </InspectorSelectionProvider>
-      </OpenCaptureContext.Provider>
-    </TaskRuntimeProvider>
+          </InspectorSelectionProvider>
+        </OpenCaptureContext.Provider>
+      </TaskRuntimeProvider>
+    </ProjectScopeProvider>
   );
 }

@@ -61,6 +61,7 @@ const CAPTURE: CaptureSearchMatch = {
   character_count: 48,
   recorded_at: "2026-01-01T00:00:00Z",
   display_label: null,
+  project_id: null,
 };
 
 const REPORT: ReportSearchMatch = {

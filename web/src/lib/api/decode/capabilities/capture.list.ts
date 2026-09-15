@@ -6,6 +6,7 @@ import {
   optionalNullableString,
   pick,
   requiredInt,
+  requiredNullableString,
   requiredString,
 } from "./_read-helpers";
 
@@ -18,6 +19,7 @@ export interface CaptureListEntry {
   readonly latest_version_number: number;
   readonly latest_recorded_at: string;
   readonly display_label: string | null;
+  readonly project_id: string | null;
 }
 
 export interface CaptureListResult {
@@ -33,6 +35,7 @@ const ENTRY_KEYS = [
   "latest_version_number",
   "latest_recorded_at",
   "display_label",
+  "project_id",
 ] as const;
 
 function decodeEntry(input: unknown): DecodeResult<CaptureListEntry> {
@@ -54,6 +57,8 @@ function decodeEntry(input: unknown): DecodeResult<CaptureListEntry> {
   if (!latestRecordedAt.ok) return latestRecordedAt;
   const displayLabel = optionalNullableString(known.value.display_label);
   if (!displayLabel.ok) return displayLabel;
+  const projectId = requiredNullableString(known.value.project_id);
+  if (!projectId.ok) return projectId;
   return ok({
     capture_id: captureId.value,
     owner_principal_id: owner.value,
@@ -63,6 +68,7 @@ function decodeEntry(input: unknown): DecodeResult<CaptureListEntry> {
     latest_version_number: latestVersionNumber.value,
     latest_recorded_at: latestRecordedAt.value,
     display_label: displayLabel.value,
+    project_id: projectId.value,
   });
 }
 

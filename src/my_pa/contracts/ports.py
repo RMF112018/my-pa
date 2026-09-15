@@ -3582,6 +3582,9 @@ class CaptureAdmissionRequest:
     accepted_at: datetime
     client_created_at: datetime | None = None
     occurred_at: datetime | None = None
+    #: Optional Project binding for a new Capture root. Revisions leave this
+    #: absent and inherit the root's immutable binding.
+    project_id: str | None = None
     capture_kind: CaptureKind = CaptureKind.QUICK_NOTE
     context_source_object_id: str | None = None
     context_source_version_id: str | None = None
@@ -3621,6 +3624,10 @@ class CaptureAdmissionRequest:
         # conflict, not a replay.
         if self.display_label is not None:
             payload["display_label"] = self.display_label
+        # Preserve the historical digest for an unbound root while making a
+        # supplied Project a material idempotency input.
+        if self.project_id is not None:
+            payload["project_id"] = self.project_id
         canonical = json.dumps(
             payload,
             sort_keys=True,
@@ -3633,6 +3640,8 @@ class CaptureAdmissionRequest:
             raise ValueError("an admission names one capture kind")
         if not isinstance(self.transport, CaptureTransport):
             raise ValueError("an admission names one transport")
+        if self.project_id is not None:
+            validate_identifier(self.project_id, IdKind.PROJECT)
         if (self.context_source_object_id is None) is not (self.context_source_version_id is None):
             raise ValueError("a launch context names both object and version")
         if self.context_source_object_id is not None:
@@ -3675,10 +3684,13 @@ class CaptureSummary:
     latest_version_number: int
     latest_recorded_at: datetime
     display_label: str | None = None
+    project_id: str | None = None
 
     def __post_init__(self) -> None:
         validate_identifier(self.capture_id, IdKind.CAPTURE)
         validate_identifier(self.latest_version_id, IdKind.CAPTURE_VERSION)
+        if self.project_id is not None:
+            validate_identifier(self.project_id, IdKind.PROJECT)
 
 
 @dataclass(frozen=True, slots=True)
@@ -3725,10 +3737,13 @@ class CaptureSearchMatch:
     character_count: int
     recorded_at: datetime
     display_label: str | None = None
+    project_id: str | None = None
 
     def __post_init__(self) -> None:
         validate_identifier(self.capture_id, IdKind.CAPTURE)
         validate_identifier(self.version_id, IdKind.CAPTURE_VERSION)
+        if self.project_id is not None:
+            validate_identifier(self.project_id, IdKind.PROJECT)
         if self.version_number < 1:
             raise ValueError("version numbers start at one")
         if self.character_count < 1:

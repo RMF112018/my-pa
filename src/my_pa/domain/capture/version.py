@@ -134,17 +134,20 @@ class CaptureContent:
 class Capture:
     """The stable identity of one user-authored record.
 
-    Three fields, and the two that are not here are the design: no
+    Four fields, and the two that are not here are the design: no
     `current_version_id` and no `lifecycle_state`. See the module docstring.
     """
 
     capture_id: str
     owner_principal_id: str
     created_at: datetime
+    project_id: str | None = None
 
     def __post_init__(self) -> None:
         validate_identifier(self.capture_id, IdKind.CAPTURE)
         validate_identifier(self.owner_principal_id, IdKind.PRINCIPAL)
+        if self.project_id is not None:
+            validate_identifier(self.project_id, IdKind.PROJECT)
         ensure_utc(self.created_at)
 
 
@@ -181,6 +184,7 @@ class CaptureVersion:
     recorded_at: datetime
     client_created_at: datetime | None = None
     occurred_at: datetime | None = None
+    project_id: str | None = None
 
     def __post_init__(self) -> None:
         validate_identifier(self.version_id, IdKind.CAPTURE_VERSION)
@@ -188,6 +192,8 @@ class CaptureVersion:
         validate_identifier(self.owner_principal_id, IdKind.PRINCIPAL)
         validate_identifier(self.correlation_id, IdKind.CORRELATION)
         validate_identifier(self.audit_id, IdKind.AUDIT)
+        if self.project_id is not None:
+            validate_identifier(self.project_id, IdKind.PROJECT)
         if isinstance(self.version_number, bool) or not isinstance(self.version_number, int):
             raise SupersessionError("a version number must be an integer")
         if self.version_number < 1:

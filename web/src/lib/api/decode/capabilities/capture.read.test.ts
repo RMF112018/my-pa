@@ -9,6 +9,7 @@ const VALID = {
   supersedes_version_id: null,
   is_current: true,
   owner_principal_id: "prn_aaaa0001aaaa0001aaaa0001",
+  project_id: null,
   classification: "synthetic_test",
   processing_policy: "local_only",
   content_sha256: "a".repeat(64),
@@ -26,7 +27,22 @@ describe("decodeCaptureRead", () => {
   it("accepts a Python-derived success payload including text", () => {
     const decoded = decodeCaptureRead(VALID);
     expect(decoded.ok).toBe(true);
-    if (decoded.ok) expect(decoded.value.text).toBe("hello world");
+    if (decoded.ok) {
+      expect(decoded.value.text).toBe("hello world");
+      expect(decoded.value.project_id).toBeNull();
+    }
+  });
+
+  it("accepts a canonical Project identifier", () => {
+    const decoded = decodeCaptureRead({ ...VALID, project_id: "prj_aaaaaaaa11111111" });
+    expect(decoded.ok).toBe(true);
+    if (decoded.ok) expect(decoded.value.project_id).toBe("prj_aaaaaaaa11111111");
+  });
+
+  it("fails closed when project_id is missing or has the wrong non-null type", () => {
+    const { project_id: _, ...rest } = VALID;
+    expect(decodeCaptureRead(rest).ok).toBe(false);
+    expect(decodeCaptureRead({ ...VALID, project_id: 1 }).ok).toBe(false);
   });
 
   it("ignores unknown extra fields", () => {

@@ -214,11 +214,14 @@ class CaptureReceipt:
     idempotency_key: str
     content_sha256: str
     issued_at: datetime
+    project_id: str | None = None
 
     def __post_init__(self) -> None:
         validate_identifier(self.receipt_id, IdKind.RECEIPT)
         validate_identifier(self.capture_id, IdKind.CAPTURE)
         validate_identifier(self.version_id, IdKind.CAPTURE_VERSION)
+        if self.project_id is not None:
+            validate_identifier(self.project_id, IdKind.PROJECT)
         if isinstance(self.version_number, bool) or not isinstance(self.version_number, int):
             raise CaptureError("a receipt names an integer version number")
         if self.version_number < 1:

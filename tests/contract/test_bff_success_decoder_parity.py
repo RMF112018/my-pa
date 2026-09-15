@@ -452,6 +452,7 @@ def _capture_search() -> dict[str, Any]:
                 "character_count": match.character_count,
                 "recorded_at": format_rfc3339(match.recorded_at),
                 "display_label": match.display_label,
+                "project_id": match.project_id,
             }
         ],
         "searchable_versions": 1,

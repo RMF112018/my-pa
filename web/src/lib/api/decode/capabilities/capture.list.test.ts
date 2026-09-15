@@ -10,6 +10,7 @@ const ENTRY = {
   latest_version_id: "capver_aaaa0001aaaa0001aaaa0001",
   latest_version_number: 1,
   latest_recorded_at: "2026-01-01T00:00:00Z",
+  project_id: null,
 };
 
 describe("decodeCaptureList", () => {
@@ -19,7 +20,22 @@ describe("decodeCaptureList", () => {
     if (decoded.ok) {
       expect("text" in decoded.value.captures[0]!).toBe(false);
       expect(decoded.value.captures[0]!.display_label).toBeNull();
+      expect(decoded.value.captures[0]!.project_id).toBeNull();
     }
+  });
+
+  it("accepts a canonical Project identifier", () => {
+    const decoded = decodeCaptureList({
+      captures: [{ ...ENTRY, project_id: "prj_aaaaaaaa11111111" }],
+    });
+    expect(decoded.ok).toBe(true);
+    if (decoded.ok) expect(decoded.value.captures[0]!.project_id).toBe("prj_aaaaaaaa11111111");
+  });
+
+  it("fails closed when project_id is missing or has the wrong non-null type", () => {
+    const { project_id: _, ...rest } = ENTRY;
+    expect(decodeCaptureList({ captures: [rest] }).ok).toBe(false);
+    expect(decodeCaptureList({ captures: [{ ...ENTRY, project_id: 1 }] }).ok).toBe(false);
   });
 
   it("accepts a null or present display_label without treating it as text", () => {

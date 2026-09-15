@@ -1256,6 +1256,7 @@ def _capture_version_view(version: CaptureVersion, *, is_current: bool) -> Captu
         supersedes_version_id=version.supersedes_version_id,
         is_current=is_current,
         owner_principal_id=version.owner_principal_id,
+        project_id=version.project_id,
         classification=version.classification,
         processing_policy=version.processing_policy.value,
         content_sha256=version.content.digest,
@@ -4195,10 +4196,20 @@ class ApplicationService:
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: CreateCapture
     ) -> _Result:
         """Store one user-authored note as the first version of a new capture."""
+        principal_id = authorization.principal.principal_id
+        if command.project_id is not None:
+            with _translated():
+                project = unit_of_work.projects.get_project(principal_id, command.project_id)
+            if project is None:
+                # Missing and foreign are deliberately the same answer. This
+                # check precedes Capture admission, so no work-plane row can be
+                # written; D-34's redacted authorization audit remains durable.
+                raise NotFoundError(SafeDetail.PROJECT_ID)
         return self._admit(
             unit_of_work,
             authorization,
             capture_id=None,
+            project_id=command.project_id,
             text=command.text,
             idempotency_key=command.idempotency_key,
             client_created_at=command.client_created_at,
@@ -4231,6 +4242,7 @@ class ApplicationService:
             unit_of_work,
             authorization,
             capture_id=command.capture_id,
+            project_id=None,
             text=command.text,
             idempotency_key=command.idempotency_key,
             client_created_at=command.client_created_at,
@@ -4292,6 +4304,7 @@ class ApplicationService:
                         latest_version_number=summary.latest_version_number,
                         latest_recorded_at=summary.latest_recorded_at,
                         display_label=summary.display_label,
+                        project_id=summary.project_id,
                     ).to_canonical_dict()
                     for summary in page
                 ]
@@ -4385,6 +4398,7 @@ class ApplicationService:
                         "character_count": match.character_count,
                         "recorded_at": format_rfc3339(match.recorded_at),
                         "display_label": match.display_label,
+                        "project_id": match.project_id,
                     }
                     for match in outcome.matches
                 ],
@@ -10654,6 +10668,7 @@ class ApplicationService:
         authorization: Authorization,
         *,
         capture_id: str | None,
+        project_id: str | None,
         text: str,
         idempotency_key: str,
         client_created_at: datetime | None,
@@ -10686,6 +10701,7 @@ class ApplicationService:
         content = _capture_content(text)
         request = CaptureAdmissionRequest(
             capture_id=capture_id,
+            project_id=project_id,
             content=content,
             idempotency_key=idempotency_key,
             request_id=authorization.request_id,
@@ -10765,6 +10781,7 @@ class ApplicationService:
                 version_number=receipt.version_number,
                 idempotency_key=receipt.idempotency_key,
                 content_sha256=receipt.content_sha256,
+                project_id=receipt.project_id,
                 issued_at=receipt.issued_at,
                 created=admission.created,
             ).to_canonical_dict(),

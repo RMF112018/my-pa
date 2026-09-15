@@ -120,6 +120,7 @@ describe("CaptureItem read path", () => {
       supersedes_version_id: null,
       is_current: true,
       owner_principal_id: ENTRY.ownerPrincipalId,
+      project_id: null,
       classification: "synthetic_test",
       processing_policy: "local_only",
       content_sha256: "a".repeat(64),

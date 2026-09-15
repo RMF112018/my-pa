@@ -59,6 +59,7 @@ class CaptureReceiptView(StrictModel):
     version_number: int = Field(ge=1)
     idempotency_key: str = Field(min_length=1, max_length=128)
     content_sha256: str = _Digest
+    project_id: str | None = None
     issued_at: UtcDatetime
     #: False when this answer is the replay of an earlier identical request.
     #: A caller retrying after a lost response needs to be able to tell that its
@@ -71,6 +72,8 @@ class CaptureReceiptView(StrictModel):
         validate_identifier(self.receipt_id, IdKind.RECEIPT)
         validate_identifier(self.capture_id, IdKind.CAPTURE)
         validate_identifier(self.version_id, IdKind.CAPTURE_VERSION)
+        if self.project_id is not None:
+            validate_identifier(self.project_id, IdKind.PROJECT)
         return self
 
 
@@ -89,6 +92,7 @@ class CaptureVersionView(StrictModel):
     supersedes_version_id: str | None = None
     is_current: bool
     owner_principal_id: str
+    project_id: str | None = None
     classification: Classification
     processing_policy: str
     content_sha256: str = _Digest
@@ -106,6 +110,8 @@ class CaptureVersionView(StrictModel):
         validate_identifier(self.capture_id, IdKind.CAPTURE)
         validate_identifier(self.version_id, IdKind.CAPTURE_VERSION)
         validate_identifier(self.owner_principal_id, IdKind.PRINCIPAL)
+        if self.project_id is not None:
+            validate_identifier(self.project_id, IdKind.PROJECT)
         if self.supersedes_version_id is not None:
             validate_identifier(self.supersedes_version_id, IdKind.CAPTURE_VERSION)
         if (self.version_number == 1) is not (self.supersedes_version_id is None):
@@ -131,12 +137,15 @@ class CaptureListEntry(StrictModel):
     latest_version_number: int = Field(ge=1)
     latest_recorded_at: UtcDatetime
     display_label: str | None = Field(default=None, min_length=1, max_length=120)
+    project_id: str | None = None
 
     @model_validator(mode="after")
     def _check(self) -> CaptureListEntry:
         validate_identifier(self.capture_id, IdKind.CAPTURE)
         validate_identifier(self.owner_principal_id, IdKind.PRINCIPAL)
         validate_identifier(self.latest_version_id, IdKind.CAPTURE_VERSION)
+        if self.project_id is not None:
+            validate_identifier(self.project_id, IdKind.PROJECT)
         if self.latest_version_number > self.version_count:
             raise ValueError("a capture cannot have fewer versions than its highest version number")
         return self

@@ -48,19 +48,32 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 #: collide — the database tier runs serially and these names are server-global.
 DISPOSABLE_DATABASE: Final = "my_pa_capture_plane_test"
 
-#: Capture identity, versions, labels, receipts, submissions, jobs, the client
-#: plane, and the audit table, emptied between tests. Named rather than
-#: cascaded, so a further table is a decision
-#: rather than an omission — which is why `capture_clients` is here (WP-10)
-#: rather than accumulating credentials across the package.
+#: The closed inventory of every Capture-owned table, followed by the audit
+#: table that D-34 commits separately. Named rather than dynamically discovered
+#: or cascaded from the root, so a new Capture table makes the inventory guard
+#: fail until the test boundary explicitly acknowledges it.
 _EMPTIED: Final = (
     "knowledge.captures",
     "knowledge.capture_versions",
     "knowledge.capture_labels",
-    "knowledge.capture_receipts",
     "knowledge.capture_submissions",
+    "knowledge.capture_receipts",
     "knowledge.capture_jobs",
     "knowledge.capture_clients",
+    "knowledge.capture_processing_text",
+    "knowledge.capture_stage_results",
+    "knowledge.capture_spans",
+    "knowledge.capture_proposals",
+    "knowledge.capture_proposal_spans",
+    "knowledge.capture_classifications",
+    "knowledge.capture_entity_mentions",
+    "knowledge.capture_review_cases",
+    "knowledge.capture_review_decisions",
+    "knowledge.capture_assertions",
+    "knowledge.capture_assertion_spans",
+    "knowledge.capture_promotion_receipts",
+    "knowledge.capture_context_links",
+    "knowledge.capture_conversations",
     "knowledge.audit_events",
 )
 

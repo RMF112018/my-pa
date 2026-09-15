@@ -6,6 +6,7 @@ import {
   optionalNullableString,
   pick,
   requiredInt,
+  requiredNullableString,
   requiredString,
 } from "./_read-helpers";
 
@@ -16,6 +17,7 @@ export interface CaptureSearchMatch {
   readonly character_count: number;
   readonly recorded_at: string;
   readonly display_label: string | null;
+  readonly project_id: string | null;
 }
 
 export interface CaptureSearchResult {
@@ -31,6 +33,7 @@ const MATCH_KEYS = [
   "character_count",
   "recorded_at",
   "display_label",
+  "project_id",
 ] as const;
 
 function decodeMatch(input: unknown): DecodeResult<CaptureSearchMatch> {
@@ -48,6 +51,8 @@ function decodeMatch(input: unknown): DecodeResult<CaptureSearchMatch> {
   if (!recordedAt.ok) return recordedAt;
   const displayLabel = optionalNullableString(known.value.display_label);
   if (!displayLabel.ok) return displayLabel;
+  const projectId = requiredNullableString(known.value.project_id);
+  if (!projectId.ok) return projectId;
   return ok({
     capture_id: captureId.value,
     version_id: versionId.value,
@@ -55,6 +60,7 @@ function decodeMatch(input: unknown): DecodeResult<CaptureSearchMatch> {
     character_count: characterCount.value,
     recorded_at: recordedAt.value,
     display_label: displayLabel.value,
+    project_id: projectId.value,
   });
 }
 

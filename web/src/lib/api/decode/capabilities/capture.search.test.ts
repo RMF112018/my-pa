@@ -8,6 +8,7 @@ const MATCH = {
   version_number: 1,
   character_count: 12,
   recorded_at: "2026-01-01T00:00:00Z",
+  project_id: null,
 };
 
 const VALID = { matches: [MATCH], searchable_versions: 1, stored_versions: 1 };
@@ -19,7 +20,25 @@ describe("decodeCaptureSearch", () => {
     if (decoded.ok) {
       expect("text" in decoded.value.matches[0]!).toBe(false);
       expect(decoded.value.matches[0]!.display_label).toBeNull();
+      expect(decoded.value.matches[0]!.project_id).toBeNull();
     }
+  });
+
+  it("accepts a canonical Project identifier", () => {
+    const decoded = decodeCaptureSearch({
+      ...VALID,
+      matches: [{ ...MATCH, project_id: "prj_aaaaaaaa11111111" }],
+    });
+    expect(decoded.ok).toBe(true);
+    if (decoded.ok) expect(decoded.value.matches[0]!.project_id).toBe("prj_aaaaaaaa11111111");
+  });
+
+  it("fails closed when project_id is missing or has the wrong non-null type", () => {
+    const { project_id: _, ...rest } = MATCH;
+    expect(decodeCaptureSearch({ ...VALID, matches: [rest] }).ok).toBe(false);
+    expect(
+      decodeCaptureSearch({ ...VALID, matches: [{ ...MATCH, project_id: 1 }] }).ok,
+    ).toBe(false);
   });
 
   it("accepts an optional display_label", () => {

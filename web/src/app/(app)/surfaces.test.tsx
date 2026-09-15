@@ -213,6 +213,7 @@ const CAPTURE = {
   latest_version_id: "capver_aaaa0001aaaa0001aaaa0001",
   latest_version_number: 1,
   latest_recorded_at: "2026-01-01T00:00:00Z",
+  project_id: null,
 };
 
 const REVIEW_CASE = {
@@ -364,6 +365,7 @@ const CAPTURE_VERSION = {
   supersedes_version_id: null,
   is_current: true,
   owner_principal_id: CAPTURE.owner_principal_id,
+  project_id: null,
   classification: "synthetic_test",
   processing_policy: "local_only",
   content_sha256: "a".repeat(64),

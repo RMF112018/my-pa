@@ -26,13 +26,23 @@
  *   `not_configured` state. It is an answer, not an absence: the capability
  *   returns that state explicitly, and the browser may see it only *after*
  *   same-Principal Project authorization has succeeded.
- * - A foreign, unknown or deleted Project is a nondisclosing `404`, translated
- *   from the gateway's `unavailable` by `gatewayRefusal`. The three are one
- *   external answer on purpose — distinguishing them would be an oracle for
- *   whether another Principal's Project exists.
- * - A transient upstream failure is `503`, and so is a success whose shape the
- *   decoder refuses (`upstream_contract_invalid`). A malformed success is an
- *   unavailable backend, not a half-trusted answer.
+ * - A foreign, unknown or deleted Project is a nondisclosing `503`, translated
+ *   from the gateway's `unavailable` by `gatewayRefusal`. The landed capability
+ *   maps all three to the one `unavailable` code, which `adapters/http/app.py`
+ *   serves as 503, so the three are one external answer on purpose:
+ *   distinguishing them would be an oracle for whether another Principal's
+ *   Project exists.
+ * - A transient upstream failure is the *same* `503`, deliberately, and so is a
+ *   success whose shape the decoder refuses (`upstream_contract_invalid`). A
+ *   malformed success is an unavailable backend, not a half-trusted answer.
+ *   Telling "foreign" apart from "transient" here would mean rebuilding inside
+ *   the BFF exactly the oracle §14 forbids, so this route does not try — which
+ *   is why two cases it elsewhere calls indistinguishable share one status.
+ * - Open question, escalated to the operator: plan §15 asks for `404` on the
+ *   foreign/unknown/deleted case. The BFF cannot produce one without making
+ *   that distinction, so the landed behavior is `503` and the divergence from
+ *   the plan is recorded here rather than resolved here.
+ *   `settings-route.test.ts` pins all of this, and states the same reasoning.
  *
  * The `POST` body vocabulary is `SETTINGS_FIELDS`, which admits three names and
  * refuses every other — including a `projectId`, because the Project is fixed

@@ -150,7 +150,7 @@ and `relationship_memory_enabled` to `False`, in `bootstrap/settings.py`), so a
 default process publishes a manifest
 in which 98 of the 172 capabilities are `available` and 74 — the six `documents.`
 names, the fifty-five `entities.` names, the nine `relationship_memory.` names,
-and the six new Run 01 names — are
+and the four remaining Run 01 names — are
 `not_implemented`, and readiness is `degraded` with the limitation
 `74 of 172 capabilities are unwired.` Derived by building the manifest both ways
 from the dispatch table, exactly as `_capabilities_get` does:

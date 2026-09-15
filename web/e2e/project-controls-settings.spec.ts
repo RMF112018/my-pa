@@ -43,35 +43,53 @@ type Answer = {
   body: Record<string, unknown>;
 };
 
+/**
+ * The exact shape the BFF publishes, in the exact spelling it publishes it.
+ *
+ * The Python capability answers in snake_case and `lib/api/decode` renames
+ * every field; what leaves the route is camelCase throughout, which
+ * `lib/api/decode/capabilities/project_controls.status.ts` and its decoder
+ * tests already pin. The first draft of this spec accepted either spelling at
+ * every accessor, so it passed whichever one arrived — evidence that something
+ * answered, not evidence that the contract holds. These names are exact now,
+ * and `controls()` refuses the snake_case spelling outright.
+ */
 type ProjectControls = {
-  projectId?: string;
-  project_id?: string;
-  state?: string;
-  timezoneName?: string | null;
-  timezone_name?: string | null;
-  settingsVersion?: number | null;
-  settings_version?: number | null;
-  settingsUpdatedAt?: string | null;
-  settings_updated_at?: string | null;
+  projectId: string;
+  state: string;
+  timezoneName: string | null;
+  settingsVersion: number | null;
+  settingsUpdatedAt: string | null;
 };
 
-/** The `project_controls` object, whichever spelling the BFF publishes. */
+/** The renamed keys, which the decoder must not have let through. */
+const SNAKE_CASE_KEYS = ["project_id", "timezone_name", "settings_version", "settings_updated_at"];
+
+/** The `projectControls` object, in the one spelling the BFF publishes. */
 function controls(body: Record<string, unknown>): ProjectControls {
-  const value = (body.project_controls ?? body.projectControls) as ProjectControls | undefined;
-  expect(value, "the answer must carry a project_controls object").toBeTruthy();
+  expect(body, "the BFF publishes camelCase; snake_case is a contract break").not.toHaveProperty(
+    "project_controls",
+  );
+  const value = body.projectControls as ProjectControls | undefined;
+  expect(value, "the answer must carry a projectControls object").toBeTruthy();
+  expect(typeof value!.projectId, "projectControls.projectId is a string").toBe("string");
+  expect(typeof value!.state, "projectControls.state is a string").toBe("string");
+  for (const renamed of SNAKE_CASE_KEYS) {
+    expect(value, `projectControls must not carry ${renamed}`).not.toHaveProperty(renamed);
+  }
   return value!;
 }
 
-function stateOf(value: ProjectControls): string | undefined {
+function stateOf(value: ProjectControls): string {
   return value.state;
 }
 
-function timezoneOf(value: ProjectControls): string | null | undefined {
-  return value.timezoneName ?? value.timezone_name;
+function timezoneOf(value: ProjectControls): string | null {
+  return value.timezoneName;
 }
 
-function versionOf(value: ProjectControls): number | null | undefined {
-  return value.settingsVersion ?? value.settings_version;
+function versionOf(value: ProjectControls): number | null {
+  return value.settingsVersion;
 }
 
 async function readStatus(page: Page, projectId: string): Promise<Answer> {

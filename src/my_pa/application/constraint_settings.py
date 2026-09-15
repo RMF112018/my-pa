@@ -629,13 +629,36 @@ class ProjectControlsConfigurationService:
 def _replayed(prior: ConstraintProjectSettingsHistoryEntry) -> ProjectControlsConfigurationResult:
     """The original answer, rebuilt from the receipt that recorded it.
 
-    Only a succeeded receipt can be replayed, which the stored snapshot pairing
-    already guarantees: `resulting_timezone_name` and
+    Only a succeeded receipt carries an answer to replay, which the stored
+    snapshot pairing already guarantees: `resulting_timezone_name` and
     `resulting_settings_updated_at` are present exactly when the outcome was
-    `APPLIED` or `NO_OP`. A `REJECTED` receipt is never reached here, because a
-    rejection raises rather than binding a key to an answer — the transaction
-    that wrote it committed the receipt and then refused, and a retry carrying
-    that key finds the rejection's digest and is told so.
+    `APPLIED` or `NO_OP`.
+
+    A `REJECTED` receipt *is* reachable here, and this says what happens then.
+    A rejection binds its key — the transaction commits the receipt and then
+    refuses — so a retry under that key passes the replay gate whenever the
+    digests match, which is exactly the case of an honest client repeating its
+    request byte for byte. There is no answer to rebuild, so this raises
+    `ProjectControlsIdempotencyConflictError`. The message names the
+    idempotency key, and for an identical retry that attribution is a
+    misdirection: the caller did not reuse the key for different content. The
+    guarantee it makes is still kept — nothing is written, the caller is
+    refused, and a raw `IntegrityError` never leaves this module — and the
+    public classification is a conflict either way
+    (`service._constraint_mutation_translated`), but the detail it names is
+    `idempotency_key` rather than the `expected_version` the original rejection
+    named.
+
+    Re-raising the *original* refusal is not done here on purpose.
+    `_FAILURE_NOT_CONFIGURED` could be re-derived from `failure_code` alone, but
+    `_FAILURE_VERSION_CONFLICT` and `_FAILURE_VERSION_REQUIRED` raise
+    `ProjectControlsVersionConflictError`, which carries the settings row *as it
+    still stands* so the caller can see what to expect. The stored receipt does
+    not hold that row, and re-reading it would mean adding a second settings
+    read inside the replay gate whose result could differ from the receipt —
+    a change to what the gate is, not a correction to what it says. Until that
+    is decided, this states the behavior rather than claiming a better one.
+    `tests/unit/test_project_controls_settings_service.py` pins both halves.
     """
     if (
         prior.resulting_timezone_name is None

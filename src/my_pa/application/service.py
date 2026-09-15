@@ -3062,13 +3062,30 @@ def _constraint_mutation_translated() -> Iterator[None]:
         failure = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
     except ProjectControlsOperationError:
         failure = InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
-    # A timezone the tz database does not know, a blank one, or one carrying
-    # whitespace. `invalid_request` naming the field, never the value: the name
-    # a caller sent is a caller-chosen string and has no business in an error.
-    # This also covers the Constraint plane's own reads of a *stored* timezone,
-    # which stay fail-closed until the Project is explicitly reconfigured.
+    # A stored Project timezone that is absent or is not a zone `zoneinfo`
+    # knows. Reaching here means one of the twelve Constraint authoring
+    # mutations asked `_project_today` for a backend-defaulted date and the
+    # Project's own settings row could not answer — so the value at fault is a
+    # *stored* one the caller neither sent nor can change from this request.
+    #
+    # `unavailable` naming the Project, therefore, and deliberately not
+    # `invalid_request`: there is no request field to correct, and telling a
+    # caller its request was invalid would send it looking for a mistake it did
+    # not make. This is the same answer `constraints._project_today` already
+    # gives the read plane for the same fact, so both planes report an
+    # unusable Project calendar identically. It is reachable only after
+    # `_require_project` has proved ownership, so it discloses nothing: a
+    # foreign or absent Project is still the `not_found` above.
+    #
+    # Corrected in the PC-CM-RUN01-WP05 corrective cycle. Admitting this clause
+    # for the configure path silently reclassified those twelve pre-existing
+    # mutations from an internal error to `invalid_request`. Fail-closed was
+    # right; the classification was not. The configure path's own
+    # caller-supplied timezone is translated by
+    # `_project_controls_timezone_translated`, nearer the call, where
+    # `invalid_request` is the truth.
     except ProjectTimezoneError:
-        failure = InvalidRequestError(SafeDetail.SELECTOR)
+        failure = UnavailableError(SafeDetail.PROJECT_ID)
     except (ConstraintPartyError, PartyRefError):
         failure = InvalidRequestError(SafeDetail.SELECTOR)
     except (ConstraintLifecycleError, ConstraintPublishError):
@@ -3080,6 +3097,41 @@ def _constraint_mutation_translated() -> Iterator[None]:
         ConstraintInvariantError,
         ConstraintRelationshipError,
     ):
+        failure = InvalidRequestError(SafeDetail.SELECTOR)
+    if failure is not None:
+        raise failure
+
+
+@contextmanager
+def _project_controls_timezone_translated() -> Iterator[None]:
+    """Classify a timezone the *caller* supplied, for `project_controls.configure`.
+
+    The one place a `ProjectTimezoneError` is genuinely about a request field:
+    `ProjectControlsConfigurationService.configure` validates
+    `command.timezone_name` before it reads or locks anything, so every failure
+    that can escape from inside this block is the caller's own string.
+    `invalid_request` naming the field and never the value — the name a caller
+    sent is a caller-chosen string and has no business in an error.
+
+    Nested *inside* `_constraint_mutation_translated` at the one call site, so
+    this narrower answer is reached first and the wider one never sees a
+    caller-supplied zone. That is the whole point of it being separate: the
+    wider translator also wraps the twelve Constraint authoring mutations, where
+    the same exception carries a *stored* value and `invalid_request` would be
+    a lie.
+
+    The `raise` is outside the handler, as everywhere else in this file, and
+    here it matters more than usual: `project_today` and
+    `validate_project_timezone_name` put the offending name *into* the message
+    (`unknown IANA timezone 'Mars/Olympus_Mons'`), so a chained cause would
+    carry the caller's own string into anything that rendered a traceback —
+    the exact disclosure `SafeDetail.SELECTOR` exists to avoid. Leaving the
+    handler first is what actually empties `__context__`.
+    """
+    failure: ApplicationError | None = None
+    try:
+        yield
+    except ProjectTimezoneError:
         failure = InvalidRequestError(SafeDetail.SELECTOR)
     if failure is not None:
         raise failure
@@ -10309,7 +10361,11 @@ class ApplicationService:
         takes is scoped to it, and that lock is the ownership proof.
         """
         del unit_of_work
-        with _translated(), _constraint_mutation_translated():
+        with (
+            _translated(),
+            _constraint_mutation_translated(),
+            _project_controls_timezone_translated(),
+        ):
             result = self._project_controls().configure(
                 principal_id=authorization.principal.principal_id,
                 actor=ConstraintMutationActor.PRINCIPAL,

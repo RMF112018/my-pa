@@ -576,6 +576,48 @@ def test_a_key_the_same_principal_bound_on_a_rejection_conflicts_on_a_new_intent
     assert not world.state.settings
 
 
+@pytest.mark.parametrize(
+    ("configured", "attempt", "refusal"),
+    [
+        (False, {"expected_version": 1}, ProjectControlsNotConfiguredError),
+        (True, {"timezone_name": OTHER_ZONE}, ProjectControlsVersionConflictError),
+        (
+            True,
+            {"timezone_name": OTHER_ZONE, "expected_version": 7},
+            ProjectControlsVersionConflictError,
+        ),
+    ],
+    ids=["not_configured", "expected_version_required", "expected_version_conflict"],
+)
+def test_an_identical_retry_after_a_rejection_is_a_conflict_that_writes_nothing(
+    configured: bool,
+    attempt: dict[str, object],
+    refusal: type[Exception],
+) -> None:
+    """The rejected-receipt replay path, pinned — including what it misnames.
+
+    A rejection binds its key, so an honest retry carrying the *same* key and
+    the *same* digest passes the replay gate and reaches `_replayed`, which
+    finds no answer to rebuild. What comes back is a typed idempotency conflict
+    rather than the rejection the caller originally got: still a conflict, still
+    nondisclosing, still no write, and never a raw integrity error — but the
+    detail it names is `idempotency_key`, which for a byte-identical retry is
+    not what the caller did. `_replayed.__doc__` says so; this proves it, so a
+    later package changing it changes a test rather than a silent answer.
+    """
+    world = _world(configure_a=configured)
+    before = dict(world.state.settings)
+    with pytest.raises(refusal):
+        _configure(world, **attempt)
+    assert len(world.state.history) == 1
+    assert world.state.settings == before
+
+    with pytest.raises(ProjectControlsIdempotencyConflictError):
+        _configure(world, **attempt)
+    assert len(world.state.history) == 1
+    assert world.state.settings == before
+
+
 def test_a_key_bound_by_this_principal_is_invisible_to_another() -> None:
     """The key is unique within the Principal, never across the table."""
     world = _world()

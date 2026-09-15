@@ -45,6 +45,10 @@ function renderComments(overrides: Partial<TaskCommentsProps> = {}) {
   return props;
 }
 
+async function openComposer(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByTestId("task-comments-add"));
+}
+
 describe("TaskCommentCount", () => {
   it("invites a first comment when there are none", () => {
     render(<TaskCommentCount count={0} />);
@@ -69,12 +73,13 @@ describe("TaskCommentCount", () => {
  * leaks no identifier (021), and no edit, delete or remove affordance exists (023).
  */
 describe("TaskComments", () => {
-  it("renders the empty state with the composer", () => {
+  it("renders the empty state without the composer", () => {
     renderComments();
     expect(screen.getByTestId("task-comments")).toBeInTheDocument();
     expect(screen.getByText("No comments yet.")).toBeInTheDocument();
-    expect(screen.getByLabelText("Add comment")).toBeInTheDocument();
-    expect(screen.getByTestId("task-comments-submit")).toBeInTheDocument();
+    expect(screen.getByTestId("task-comments-add")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Add comment")).toBeNull();
+    expect(screen.queryByTestId("task-comments-submit")).toBeNull();
   });
 
   it("renders the loading state", () => {
@@ -142,9 +147,10 @@ describe("TaskComments", () => {
     }
   });
 
-  it("blocks submission until there is real text, then submits trimmed and clears", async () => {
+  it("blocks submission until there is real text, then submits trimmed and closes", async () => {
     const user = userEvent.setup();
     const props = renderComments();
+    await openComposer(user);
     const submit = screen.getByTestId("task-comments-submit");
     const field = screen.getByLabelText("Add comment");
 
@@ -160,13 +166,15 @@ describe("TaskComments", () => {
     await user.click(submit);
     expect(props.onSubmit).toHaveBeenCalledTimes(1);
     expect(props.onSubmit).toHaveBeenCalledWith("a real note");
-    expect(field).toHaveValue("");
+    expect(screen.queryByLabelText("Add comment")).toBeNull();
+    expect(screen.getByTestId("task-comments-add")).toHaveFocus();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("blocks submission while submitting", async () => {
     const user = userEvent.setup();
     const props = renderComments({ submitting: true });
+    await openComposer(user);
     const field = screen.getByLabelText("Add comment");
     await user.type(field, "note");
     const submit = screen.getByTestId("task-comments-submit");
@@ -178,6 +186,7 @@ describe("TaskComments", () => {
   it("blocks submission while no canonical snapshot is held", async () => {
     const user = userEvent.setup();
     const props = renderComments({ disabled: true, comments: [comment()] });
+    await openComposer(user);
     expect(screen.getByLabelText("Add comment")).toBeDisabled();
     const submit = screen.getByTestId("task-comments-submit");
     expect(submit).toBeDisabled();
@@ -239,10 +248,40 @@ describe("TaskComments", () => {
     expect(screen.queryAllByRole("button", { name: /edit|delete|remove/i })).toHaveLength(0);
   });
 
-  it("does not autofocus the composer", () => {
+  it("does not mount the composer until Add comment is chosen", () => {
     renderComments();
-    expect(screen.getByLabelText("Add comment")).not.toHaveFocus();
+    expect(screen.queryByLabelText("Add comment")).toBeNull();
     expect(document.activeElement).toBe(document.body);
+  });
+
+  it("opens the composer and focuses the field from Add comment", async () => {
+    const user = userEvent.setup();
+    renderComments();
+    await openComposer(user);
+    expect(screen.getByLabelText("Add comment")).toHaveFocus();
+    expect(screen.getByTestId("task-comments-submit")).toBeInTheDocument();
+  });
+
+  it("cancels an unsubmitted composer and restores focus to Add comment", async () => {
+    const user = userEvent.setup();
+    const props = renderComments();
+    await openComposer(user);
+    await user.type(screen.getByLabelText("Add comment"), "draft");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByLabelText("Add comment")).toBeNull();
+    expect(screen.getByTestId("task-comments-add")).toHaveFocus();
+    expect(props.onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("closes an unsubmitted composer on Escape and restores focus to Add comment", async () => {
+    const user = userEvent.setup();
+    const props = renderComments();
+    await openComposer(user);
+    await user.type(screen.getByLabelText("Add comment"), "draft");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByLabelText("Add comment")).toBeNull();
+    expect(screen.getByTestId("task-comments-add")).toHaveFocus();
+    expect(props.onSubmit).not.toHaveBeenCalled();
   });
 
   it("never performs a network call across a full interaction pass", async () => {
@@ -254,6 +293,7 @@ describe("TaskComments", () => {
       onRetryLoad: vi.fn(),
     });
 
+    await openComposer(user);
     await user.type(screen.getByLabelText("Add comment"), "hello");
     await user.click(screen.getByTestId("task-comments-submit"));
     await user.click(screen.getByRole("button", { name: "Load more" }));

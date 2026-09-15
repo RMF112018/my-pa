@@ -52,6 +52,13 @@ const TASK_V3 = {
   updated_at: "2026-08-23T12:00:00Z",
 };
 
+const TASK_WITH_CONTEXT = {
+  ...TASK_V2,
+  project_id: "prj_aaaaaaaa11111111",
+  situation_id: "sit_aaaaaaaa11111111",
+  commitment_id: "cmt_aaaaaaaa11111111",
+};
+
 function json(data: unknown, status = 200, extra?: { current?: unknown }) {
   const body =
     status >= 400
@@ -78,6 +85,15 @@ function stubDetailFetch(handlers: {
     if (path.includes("/history")) return json({ history: [] });
     if (path.includes("/comments")) return json({ comments: [] });
     if (path === "/api/commitments?pageSize=100") return json({ commitments: [] });
+    if (path === "/api/situations") {
+      return json({
+        situations: [{ situationId: TASK_WITH_CONTEXT.situation_id, title: "Permit season" }],
+      });
+    }
+    if (path.startsWith("/api/projects/")) return json({ project: { name: "Riverside permit" } });
+    if (/^\/api\/commitments\/[^/?]+$/.test(path) && method === "GET") {
+      return json({ commitment: { title: "Permit follow-up" } });
+    }
     if (path === `/api/tasks/${TASK_V2.task_id}` && method === "GET") {
       return json(taskFactory());
     }
@@ -93,6 +109,31 @@ function stubDetailFetch(handlers: {
     }
     throw new Error(`unexpected request: ${method} ${path}`);
   });
+}
+
+function requestedPaths(fetcher: ReturnType<typeof vi.fn<typeof fetch>>) {
+  return fetcher.mock.calls.map(([input]) => String(input));
+}
+
+function expectNoEagerCommitmentList(fetcher: ReturnType<typeof vi.fn<typeof fetch>>) {
+  expect(requestedPaths(fetcher).includes("/api/commitments?pageSize=100")).toBe(false);
+}
+
+async function waitForCanonical() {
+  return screen.findByTestId("task-edit-title");
+}
+
+async function activateTitleEditor(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByTestId("task-edit-title"));
+  return screen.getByLabelText("Title");
+}
+
+async function refreshFromMore(user: ReturnType<typeof userEvent.setup>) {
+  const more = screen.getByTestId("task-more-actions");
+  if (!more.hasAttribute("open")) {
+    await user.click(within(more).getByText("More"));
+  }
+  await user.click(screen.getByTestId("task-detail-refresh"));
 }
 
 /**
@@ -128,6 +169,49 @@ function expectNoVersionNumber(element: HTMLElement) {
  * does not overwrite a dirty editor (040).
  */
 describe("TaskDetailView authoritative draft / conflict", () => {
+  it("renders title and description as text until Edit is chosen", async () => {
+    const fetcher = stubDetailFetch({});
+    vi.stubGlobal("fetch", fetcher);
+
+    render(<TaskDetailView taskId={TASK_V2.task_id} />);
+    await waitForCanonical();
+
+    expect(screen.getByRole("heading", { name: "Coordinate review" })).toBeTruthy();
+    expect(screen.queryByLabelText("Title")).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Description" })).toBeNull();
+    expect(screen.getByTestId("task-add-description")).toBeTruthy();
+    expect(screen.queryByTestId("task-comments-submit")).toBeNull();
+    expectNoEagerCommitmentList(fetcher);
+  });
+
+  it("does not fetch commitment choices or Context labels until Context is opened", async () => {
+    const user = userEvent.setup();
+    const fetcher = stubDetailFetch({
+      task: () => ({ task: TASK_WITH_CONTEXT }),
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    render(<TaskDetailView taskId={TASK_V2.task_id} />);
+    await waitForCanonical();
+
+    const before = requestedPaths(fetcher);
+    expect(before.includes("/api/commitments?pageSize=100")).toBe(false);
+    expect(before.some((path) => path.startsWith("/api/projects/"))).toBe(false);
+    expect(before.includes("/api/situations")).toBe(false);
+    expect(before.some((path) => /^\/api\/commitments\/[^/?]+$/.test(path))).toBe(false);
+
+    await user.click(screen.getByText(/^Context/));
+    expect(await screen.findByText("Riverside permit")).toBeTruthy();
+    expect(screen.getByText("Permit season")).toBeTruthy();
+    expect(screen.getByText("Permit follow-up")).toBeTruthy();
+
+    const after = requestedPaths(fetcher);
+    expect(after).toContain(`/api/projects/${TASK_WITH_CONTEXT.project_id}`);
+    expect(after).toContain(`/api/commitments/${TASK_WITH_CONTEXT.commitment_id}`);
+    expect(after).toContain("/api/situations");
+    expect(after.includes("/api/commitments?pageSize=100")).toBe(false);
+  });
+
   it("preserves draft on 409 with current and does not auto-resubmit", async () => {
     const user = userEvent.setup();
     let patchCount = 0;
@@ -141,7 +225,7 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     vi.stubGlobal("fetch", fetcher);
 
     render(<TaskDetailView taskId={TASK_V2.task_id} />);
-    const title = await screen.findByDisplayValue("Coordinate review");
+    const title = await activateTitleEditor(user);
     await user.clear(title);
     await user.type(title, "My dirty title");
     await user.click(screen.getByRole("button", { name: "Save title" }));
@@ -174,7 +258,7 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     vi.stubGlobal("fetch", fetcher);
 
     render(<TaskDetailView taskId={TASK_V2.task_id} />);
-    const title = await screen.findByDisplayValue("Coordinate review");
+    const title = await activateTitleEditor(user);
     await user.clear(title);
     await user.type(title, "Kept draft title");
     await user.click(screen.getByRole("button", { name: "Save title" }));
@@ -194,12 +278,12 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     vi.stubGlobal("fetch", fetcher);
 
     render(<TaskDetailView taskId={TASK_V2.task_id} />);
-    const title = await screen.findByDisplayValue("Coordinate review");
+    const title = await activateTitleEditor(user);
     await user.clear(title);
     await user.type(title, "Local unsaved title");
 
     version = 3;
-    await user.click(screen.getByTestId("task-detail-refresh"));
+    await refreshFromMore(user);
 
     expect(await screen.findByTestId("task-changed-elsewhere")).toBeTruthy();
     expect(screen.getByDisplayValue("Local unsaved title")).toBeTruthy();
@@ -223,7 +307,7 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     vi.stubGlobal("fetch", fetcher);
 
     render(<TaskDetailView taskId={TASK_V2.task_id} />);
-    const title = await screen.findByDisplayValue("Coordinate review");
+    const title = await activateTitleEditor(user);
     await user.clear(title);
     await user.type(title, "Proposed title");
     await user.click(screen.getByRole("button", { name: "Save title" }));
@@ -235,7 +319,7 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     await waitFor(() => expect(patchCount).toBe(2));
     expect(keys[0]).not.toBe(keys[1]);
     expect(screen.queryByTestId("task-changed-elsewhere")).toBeNull();
-    expect(screen.getByDisplayValue("Proposed title")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Proposed title" })).toBeTruthy();
   });
 
   it("marks mutation controls pending / aria-busy while a save is in flight", async () => {
@@ -250,7 +334,7 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     vi.stubGlobal("fetch", fetcher);
 
     render(<TaskDetailView taskId={TASK_V2.task_id} />);
-    const pendingTitle = await screen.findByDisplayValue("Coordinate review");
+    const pendingTitle = await activateTitleEditor(user);
     await user.type(pendingTitle, " now");
     await user.click(screen.getByRole("button", { name: "Save title" }));
 
@@ -263,7 +347,9 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     expect(within(statusControl).getByRole("combobox")).toBeDisabled();
 
     release(json({ task: { ...TASK_V2, version: 3 } }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Save title" }).getAttribute("aria-busy")).toBeNull());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Save title" }).getAttribute("aria-busy")).toBeNull(),
+    );
   });
 
   it("routes mutations through the shared TaskRuntimeProvider coordinator when connected", async () => {
@@ -277,7 +363,7 @@ describe("TaskDetailView authoritative draft / conflict", () => {
       </TaskRuntimeProvider>,
     );
 
-    const connectedTitle = await screen.findByDisplayValue("Coordinate review");
+    const connectedTitle = await activateTitleEditor(user);
     await user.type(connectedTitle, " again");
     await user.click(screen.getByRole("button", { name: "Save title" }));
     await waitFor(() =>
@@ -307,7 +393,7 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     vi.stubGlobal("fetch", fetcher);
 
     render(<TaskDetailView taskId={TASK_V2.task_id} />);
-    await screen.findByDisplayValue("Coordinate review");
+    await waitForCanonical();
     const statusSelect = within(screen.getByTestId("task-status-control")).getByRole("combobox");
     await user.selectOptions(statusSelect, "in_progress");
 
@@ -345,7 +431,7 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     vi.stubGlobal("fetch", fetcher);
 
     render(<TaskDetailView taskId={TASK_V2.task_id} />);
-    await screen.findByDisplayValue("Coordinate review");
+    await waitForCanonical();
     await user.click(screen.getByTestId("task-close-trigger"));
     await user.click(screen.getByTestId("task-close-confirm"));
 
@@ -358,6 +444,10 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     expect(await screen.findByTestId("task-terminal-summary")).toBeTruthy();
     // Product copy for the confirmed closure comes from the shared binder.
     expect(await screen.findByText(taskClosedMessage(TASK_V2.title))).toBeTruthy();
+    expect(screen.queryByTestId("task-status-control")).toBeNull();
+    expect(screen.queryByTestId("task-due-control")).toBeNull();
+    expect(screen.queryByTestId("task-close-trigger")).toBeNull();
+    expect(screen.queryByTestId("task-cancel-trigger")).toBeNull();
   });
 
   it("states an operation conflict in product language with no version number", async () => {
@@ -368,7 +458,7 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     vi.stubGlobal("fetch", fetcher);
 
     render(<TaskDetailView taskId={TASK_V2.task_id} />);
-    await screen.findByDisplayValue("Coordinate review");
+    await waitForCanonical();
     const statusSelect = within(screen.getByTestId("task-status-control")).getByRole("combobox");
     await user.selectOptions(statusSelect, "waiting");
 
@@ -384,17 +474,33 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     await expectCanonicalVersionBehindTechnicalDetails(user, "3");
   });
 
-  it("binds comments through the shared binder in Activity", async () => {
+  it("binds comments through the shared binder without mounting the composer", async () => {
     const fetcher = stubDetailFetch({});
     vi.stubGlobal("fetch", fetcher);
 
     render(<TaskDetailView taskId={TASK_V2.task_id} />);
-    await screen.findByDisplayValue("Coordinate review");
-    // Comments live in Description & Activity, never as a lifecycle form.
-    const activity = screen.getByTestId("task-comments");
-    expect(within(activity).getByLabelText("Add comment")).toBeTruthy();
+    await waitForCanonical();
+    const activity = await screen.findByTestId("task-comments");
+    expect(within(activity).getByTestId("task-comments-add")).toBeTruthy();
+    expect(within(activity).queryByLabelText("Add comment")).toBeNull();
     expect(screen.queryByRole("button", { name: /Apply transition/i })).toBeNull();
     expect(screen.queryByLabelText(/closure note/i)).toBeNull();
+  });
+
+  it("states a loaded terminal Task without status, due, close, or cancel controls", async () => {
+    const fetcher = stubDetailFetch({
+      task: () => ({
+        task: { ...TASK_V2, lifecycle_state: "completed", closed_at: "2026-08-24T12:00:00Z" },
+      }),
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    render(<TaskDetailView taskId={TASK_V2.task_id} />);
+    expect(await screen.findByTestId("task-terminal-summary")).toBeTruthy();
+    expect(screen.queryByTestId("task-status-control")).toBeNull();
+    expect(screen.queryByTestId("task-due-control")).toBeNull();
+    expect(screen.queryByTestId("task-close-trigger")).toBeNull();
+    expect(screen.queryByTestId("task-cancel-trigger")).toBeNull();
   });
 });
 
@@ -418,7 +524,7 @@ describe("standalone Task route", () => {
         {page}
       </TaskRuntimeProvider>,
     );
-    await screen.findByDisplayValue("Coordinate review");
+    await waitForCanonical();
 
     // Shell-persistent feedback survives on this route: the binder's own copy
     // is published into the shell feedback region.
@@ -428,4 +534,3 @@ describe("standalone Task route", () => {
     expect(screen.getByText("Status changed to In progress")).toBeTruthy();
   });
 });
-

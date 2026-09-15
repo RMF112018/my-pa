@@ -1880,3 +1880,232 @@ describe("Work surface", () => {
   });
 });
 
+
+/*
+  WP-POSTUX-03 / W4. The Bulk Task Editor and Commitment creation selects were
+  raw `<select className="h-10 …">` (40px) and now use the shared
+  `@/components/ui/select` primitive, which carries the WP01 coarse-pointer
+  control contract. These guard the migration by behaviour and semantics —
+  accessible name, `name`, option copy and order, `required`, `disabled`, and
+  the surrounding form — rather than by whole Tailwind class strings.
+*/
+function classTokens(element: Element): string[] {
+  return element.className.split(/\s+/).filter(Boolean);
+}
+
+function optionEntries(select: HTMLSelectElement) {
+  return Array.from(select.options).map((option) => [option.value, option.textContent] as const);
+}
+
+describe("Work bench controls on the shared Select primitive", () => {
+  const bulkTask = { task_id: "tsk_aaaaaaaa11111111", title: "Synthetic follow up", lifecycle_state: "waiting", priority: "p2", due_at: null, archived_at: null, created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z" };
+
+  async function openBulkEditor(fetcher: ReturnType<typeof vi.fn<typeof fetch>>) {
+    vi.stubGlobal("fetch", fetcher);
+    history.replaceState(null, "", "/work?view=waiting");
+    renderFromUrl();
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Select Synthetic follow up" }));
+  }
+
+  function bulkListFetcher() {
+    return vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ tasks: [bulkTask] }), { status: 200, headers: { "content-type": "application/json" } }));
+  }
+
+  const commitmentCounterparty = { person_id: "per_aaaaaaaa11111111", display_name: "Sam Rivera" };
+
+  async function openCommitmentForm(fetcher: ReturnType<typeof vi.fn<typeof fetch>>) {
+    vi.stubGlobal("fetch", fetcher);
+    history.replaceState(null, "", "/work?view=commitments");
+    renderFromUrl();
+    await userEvent.click(await screen.findByRole("button", { name: "New commitment" }));
+  }
+
+  function commitmentFetcher(extra?: (path: string, init?: RequestInit) => Response | undefined) {
+    return vi.fn<typeof fetch>(async (input, init) => {
+      const path = String(input);
+      const override = extra?.(path, init ?? undefined);
+      if (override) return override;
+      if (path.startsWith("/api/commitments")) {
+        return new Response(JSON.stringify({ commitments: [], counterparty_options: [commitmentCounterparty], counterparty_options_truncated: false }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+  }
+
+  it("keeps Bulk action a native combobox with its accessible name and exact option copy and order", async () => {
+    await openBulkEditor(bulkListFetcher());
+    const action = (await screen.findByRole("combobox", { name: "Bulk action" })) as HTMLSelectElement;
+    expect(action.tagName).toBe("SELECT");
+    expect(optionEntries(action)).toEqual([
+      ["priority", "Set priority"],
+      ["transition", "Move lifecycle"],
+    ]);
+    expect(action.value).toBe("priority");
+  });
+
+  it("keeps Bulk value a native combobox whose options and order still follow the chosen action", async () => {
+    await openBulkEditor(bulkListFetcher());
+    const value = (await screen.findByRole("combobox", { name: "Bulk value" })) as HTMLSelectElement;
+    expect(value.tagName).toBe("SELECT");
+    expect(optionEntries(value)).toEqual([
+      ["p1", "P1"],
+      ["p2", "P2"],
+      ["p3", "P3"],
+      ["p4", "P4"],
+      ["clear", "Clear priority"],
+    ]);
+  });
+
+  it("still fires the Bulk action handler on selection, swapping the value options and noting the reset", async () => {
+    await openBulkEditor(bulkListFetcher());
+    const action = (await screen.findByRole("combobox", { name: "Bulk action" })) as HTMLSelectElement;
+    await userEvent.selectOptions(action, "transition");
+    expect(action.value).toBe("transition");
+    const value = screen.getByRole("combobox", { name: "Bulk value" }) as HTMLSelectElement;
+    expect(optionEntries(value)).toEqual([
+      ["open", "Open"],
+      ["in_progress", "In progress"],
+      ["waiting", "Waiting"],
+      ["blocked", "Blocked"],
+    ]);
+    expect(value.value).toBe("open");
+    expect(screen.getByText(/Action changed\. Preview the retained selection before confirmation\./)).toBeTruthy();
+  });
+
+  it("still fires the Bulk value handler on selection and carries the choice into the preview request", async () => {
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      const path = String(input);
+      if (path.includes("/bulk/preview")) return new Response(JSON.stringify({ bulk_operation_id: "bulk_aaaaaaaa11111111", expires_at: "2099-08-21T12:15:00Z", affected: 1, no_op: 0, rejected: 0, replayed: false }), { status: 200, headers: { "content-type": "application/json" } });
+      if (path === "/api/tasks/tsk_aaaaaaaa11111111") return new Response(JSON.stringify({ task: { ...bulkTask, version: 4 } }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ tasks: [bulkTask] }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    await openBulkEditor(fetcher);
+    const value = (await screen.findByRole("combobox", { name: "Bulk value" })) as HTMLSelectElement;
+    await userEvent.selectOptions(value, "p3");
+    expect(value.value).toBe("p3");
+    await userEvent.click(screen.getByRole("button", { name: "Preview change" }));
+    expect(await screen.findByText("Preview ready")).toBeTruthy();
+    const previewCall = fetcher.mock.calls.find(([path]) => String(path).includes("/bulk/preview"));
+    expect(JSON.stringify(JSON.parse(String(previewCall?.[1]?.body)).mutations)).toContain("p3");
+  });
+
+  it("still disables both bulk comboboxes while a bulk preview is in flight", async () => {
+    let releasePreview!: (response: Response) => void;
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      const path = String(input);
+      if (path.includes("/bulk/preview")) return new Promise<Response>((next) => { releasePreview = next; });
+      if (path === "/api/tasks/tsk_aaaaaaaa11111111") return new Response(JSON.stringify({ task: { ...bulkTask, version: 4 } }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ tasks: [bulkTask] }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    await openBulkEditor(fetcher);
+    const action = await screen.findByRole("combobox", { name: "Bulk action" });
+    const value = screen.getByRole("combobox", { name: "Bulk value" });
+    expect(action).toBeEnabled();
+    expect(value).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "Preview change" }));
+    await waitFor(() => expect(action).toBeDisabled());
+    expect(value).toBeDisabled();
+    await waitFor(() => expect(releasePreview).toEqual(expect.any(Function)));
+    await act(async () => releasePreview(new Response(JSON.stringify({ bulk_operation_id: "bulk_aaaaaaaa11111111", expires_at: "2099-08-21T12:15:00Z", affected: 1, no_op: 0, rejected: 0, replayed: false }), { status: 200, headers: { "content-type": "application/json" } })));
+    await waitFor(() => expect(action).toBeEnabled());
+    expect(value).toBeEnabled();
+  });
+
+  it("keeps Counterparty a native required combobox named counterparty with its placeholder and verified options in order", async () => {
+    await openCommitmentForm(commitmentFetcher());
+    const counterparty = (await screen.findByLabelText("Counterparty")) as HTMLSelectElement;
+    expect(counterparty.tagName).toBe("SELECT");
+    expect(counterparty).toHaveAttribute("name", "counterparty");
+    expect(counterparty).toBeRequired();
+    await waitFor(() => expect(optionEntries(counterparty)).toEqual([
+      ["", "Choose a person"],
+      ["per_aaaaaaaa11111111", "Sam Rivera"],
+    ]));
+  });
+
+  it("still disables Counterparty when no verified relationship people are available", async () => {
+    const fetcher = commitmentFetcher((path) => path.startsWith("/api/commitments")
+      ? new Response(JSON.stringify({ commitments: [], counterparty_options: [], counterparty_options_truncated: false }), { status: 200, headers: { "content-type": "application/json" } })
+      : undefined);
+    await openCommitmentForm(fetcher);
+    const counterparty = (await screen.findByLabelText("Counterparty")) as HTMLSelectElement;
+    await waitFor(() => expect(counterparty).toBeDisabled());
+    expect(screen.getByText("No verified relationship people are available for selection.")).toBeTruthy();
+  });
+
+  it("keeps Direction a native combobox named direction with its exact option copy and order", async () => {
+    await openCommitmentForm(commitmentFetcher());
+    const direction = (await screen.findByLabelText("Direction")) as HTMLSelectElement;
+    expect(direction.tagName).toBe("SELECT");
+    expect(direction).toHaveAttribute("name", "direction");
+    expect(direction).not.toBeRequired();
+    expect(optionEntries(direction)).toEqual([
+      ["owed_to_principal", "Owed to me"],
+      ["owed_by_principal", "Owed by me"],
+    ]);
+  });
+
+  it("still submits the commitment form through the named comboboxes, sending the chosen counterparty and direction", async () => {
+    const fetcher = commitmentFetcher((path, init) => {
+      if (path === "/api/capture" && init?.method === "POST") return new Response(JSON.stringify({ status: "persisted", receipt: { captureId: "cap_aaaaaaaa11111111" } }), { status: 200, headers: { "content-type": "application/json" } });
+      if (path === "/api/commitments" && init?.method === "POST") return new Response(JSON.stringify({ commitment: { commitment_id: "cmt_aaaaaaaa11111111" }, replayed: false }), { status: 200, headers: { "content-type": "application/json" } });
+      return undefined;
+    });
+    await openCommitmentForm(fetcher);
+    const counterparty = (await screen.findByLabelText("Counterparty")) as HTMLSelectElement;
+    await waitFor(() => expect(counterparty.options).toHaveLength(2));
+    await userEvent.type(screen.getByLabelText("Summary"), "Revised schedule");
+    await userEvent.selectOptions(counterparty, "per_aaaaaaaa11111111");
+    await userEvent.selectOptions(screen.getByLabelText("Direction"), "owed_by_principal");
+    await userEvent.type(screen.getByLabelText(/Origin note/), "Agreed on the call");
+    await userEvent.click(screen.getByRole("button", { name: "Create commitment" }));
+    await waitFor(() => expect(fetcher.mock.calls.some(([path, init]) => String(path) === "/api/commitments" && init?.method === "POST")).toBe(true));
+    const createCall = fetcher.mock.calls.find(([path, init]) => String(path) === "/api/commitments" && init?.method === "POST");
+    expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
+      summary: "Revised schedule",
+      counterpartyPersonId: "per_aaaaaaaa11111111",
+      direction: "owed_by_principal",
+    });
+  });
+
+  it("still refuses a commitment whose counterparty is not a verified option, proving the named field still feeds submit", async () => {
+    const fetcher = commitmentFetcher();
+    await openCommitmentForm(fetcher);
+    const counterparty = (await screen.findByLabelText("Counterparty")) as HTMLSelectElement;
+    await waitFor(() => expect(counterparty.options).toHaveLength(2));
+    await userEvent.type(screen.getByLabelText("Summary"), "Revised schedule");
+    await userEvent.type(screen.getByLabelText(/Origin note/), "Agreed on the call");
+    fireEvent.submit(screen.getByRole("button", { name: "Create commitment" }).closest("form") as HTMLFormElement);
+    expect(await screen.findByText("Choose a verified counterparty from the list.")).toBeTruthy();
+    expect(fetcher.mock.calls.some(([path, init]) => String(path) === "/api/commitments" && init?.method === "POST")).toBe(false);
+  });
+
+  /*
+    `h-[var(--control-height)]` IS the contract, not decoration. `--control-height`
+    is 2.75rem = 44px, the repository's coarse-pointer target. WebKit refuses to
+    honour `min-height` on a default-appearance `<select>` and collapses it to its
+    ~22px intrinsic height, so only a *definite* height holds the target there.
+    The old local `h-10` was 40px and would override the primitive's height, so its
+    absence is as load-bearing as the token's presence.
+  */
+  it("gives every migrated bench select the primitive's definite h-[var(--control-height)] and no local h-10", async () => {
+    await openBulkEditor(bulkListFetcher());
+    const bulkControls = [
+      await screen.findByRole("combobox", { name: "Bulk action" }),
+      screen.getByRole("combobox", { name: "Bulk value" }),
+    ];
+    cleanup();
+    await openCommitmentForm(commitmentFetcher());
+    const commitmentControls = [
+      (await screen.findByLabelText("Counterparty")) as HTMLSelectElement,
+      screen.getByLabelText("Direction") as HTMLSelectElement,
+    ];
+    for (const control of [...bulkControls, ...commitmentControls]) {
+      const tokens = classTokens(control);
+      expect(tokens).toContain("h-[var(--control-height)]");
+      expect(tokens).toContain("min-h-[var(--control-height)]");
+      expect(tokens).toContain("text-[length:var(--control-font-size)]");
+      expect(tokens).not.toContain("h-10");
+    }
+  });
+});

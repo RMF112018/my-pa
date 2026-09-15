@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -24,6 +25,7 @@ from sqlalchemy import (
     select,
     update,
 )
+from sqlalchemy.engine import Row
 
 from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID
 from my_pa.domain.identity.operation import Capability
@@ -305,6 +307,34 @@ class RemoteIdentityRepository:
             )
         )
         return identifier
+
+    def client_id_for_oauth_id(self, oauth_client_id: str) -> UUID | None:
+        row = self._connection.execute(
+            select(remote_clients.c.id).where(remote_clients.c.oauth_client_id == oauth_client_id)
+        ).scalar_one_or_none()
+        return None if row is None else row
+
+    def list_capability_grants(self, *, remote_client_id: UUID) -> tuple[Row[Any], ...]:
+        """Return every grant row for a client, including expired and revoked."""
+        return tuple(
+            self._connection.execute(
+                select(remote_capability_grants).where(
+                    remote_capability_grants.c.remote_client_id == remote_client_id
+                )
+            ).all()
+        )
+
+    def clear_grant_expiry(self, *, grant_id: UUID) -> bool:
+        """Make one unrevoked grant non-expiring. Does not change capability."""
+        result = self._connection.execute(
+            update(remote_capability_grants)
+            .where(
+                remote_capability_grants.c.id == grant_id,
+                remote_capability_grants.c.revoked_at.is_(None),
+            )
+            .values(expires_at=None)
+        )
+        return result.rowcount == 1
 
     def set_client_writes(self, *, oauth_client_id: str, writes_enabled: bool) -> bool:
         """Toggle writes on one unrevoked client. Does not change client identity."""

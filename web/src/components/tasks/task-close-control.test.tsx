@@ -223,6 +223,51 @@ describe("TaskCloseControl", () => {
     }
   });
 
+  /**
+   * WP-POSTUX-03 presentation seam: `triggerVariant`.
+   *
+   * Only the Close trigger's appearance is configurable. The two-step
+   * confirmation, its `alertdialog` semantics and its button variants are
+   * fixed — WP05 owns any confirmation redesign.
+   */
+  it("defaults the Close trigger to the primary variant", () => {
+    renderControl();
+
+    const close = closeTrigger();
+    expect(close.className).toContain("bg-interactive");
+    expect(close.className).not.toContain("border-interactive");
+    expect(close).toHaveAttribute("data-prominence", "primary");
+  });
+
+  it("renders a secondary Close trigger without altering the confirmation flow", async () => {
+    const user = userEvent.setup();
+    const { onClose, onCancelTask } = renderControl({ triggerVariant: "secondary" });
+
+    const close = closeTrigger();
+    expect(close.className).toContain("border-interactive");
+    expect(close.className).not.toContain("bg-interactive ");
+    expect(close.textContent).toBe("Close Task");
+
+    // The confirmation is identical to the default path in every respect.
+    await user.click(close);
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog).toHaveAttribute("aria-labelledby");
+    expect(dialog).toHaveTextContent(TASK_TITLE);
+    expect(onClose).not.toHaveBeenCalled();
+
+    const keepOpen = screen.getByRole("button", { name: "Keep open" });
+    expect(document.activeElement).toBe(keepOpen);
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(document.activeElement).toBe(close);
+
+    await user.click(close);
+    await user.click(screen.getByRole("button", { name: "Confirm Closed" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onCancelTask).not.toHaveBeenCalled();
+  });
+
   it("hides Cancel Task when the surface has no room for it", () => {
     renderControl({ showCancel: false });
     expect(screen.queryByRole("button", { name: "Cancel Task" })).toBeNull();

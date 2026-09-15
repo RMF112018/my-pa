@@ -5,11 +5,23 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.engine import Row
 
-from my_pa.bootstrap.settings import load_settings
+from my_pa.application.chatllm_data_profile import (
+    ChatLLMCompositionPlanes,
+    ChatLLMGrantRecord,
+    composed_capabilities,
+    diff_chatllm_data_profile,
+    plan_chatllm_grant_actions,
+    profile_diff_as_json,
+)
+from my_pa.application.service import _HANDLERS
+from my_pa.bootstrap.settings import Settings, load_settings
+from my_pa.domain.identity.chatllm_capability_policy import CHATLLM_DATA_PROFILE_VERSION
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.infrastructure.database.engine import create_database_engine
@@ -30,6 +42,131 @@ def _instant(value: str) -> datetime:
     if parsed.tzinfo is None:
         raise argparse.ArgumentTypeError("timestamp must include an offset or Z")
     return parsed.astimezone(UTC)
+
+
+def _add_profile_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--oauth-client-id", required=True)
+    parser.add_argument("--scope", required=True)
+    parser.add_argument("--resource", required=True)
+    parser.add_argument(
+        "--profile-version",
+        required=True,
+        help="must match the repository ChatLLM data profile version",
+    )
+
+
+def _planes_from_settings(settings: Settings) -> ChatLLMCompositionPlanes:
+    return ChatLLMCompositionPlanes(
+        managed_documents=settings.managed_documents_are_composed(),
+        relationship_intelligence=settings.relationship_intelligence_enabled,
+        relationship_intelligence_writes=settings.relationship_intelligence_writes_enabled,
+        relationship_memory=settings.relationship_memory_enabled,
+        constraints=True,
+    )
+
+
+def _grant_records(rows: tuple[Row[Any], ...]) -> tuple[ChatLLMGrantRecord, ...]:
+    records: list[ChatLLMGrantRecord] = []
+    for row in rows:
+        try:
+            capability = Capability(row.capability)
+        except ValueError:
+            continue
+        try:
+            purpose = None if row.purpose is None else Purpose(row.purpose)
+        except ValueError:
+            continue
+        records.append(
+            ChatLLMGrantRecord(
+                capability=capability,
+                purpose=purpose,
+                is_write=bool(row.is_write),
+                resource=row.resource,
+                scope=row.external_scope,
+                expires_at=row.expires_at,
+                revoked_at=row.revoked_at,
+                grant_id=row.id,
+            )
+        )
+    return tuple(records)
+
+
+def _run_profile_command(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+    repository: RemoteIdentityRepository,
+    settings: Settings,
+    now: datetime,
+) -> int:
+    if args.profile_version != CHATLLM_DATA_PROFILE_VERSION:
+        parser.error(
+            f"profile version must be {CHATLLM_DATA_PROFILE_VERSION}; got {args.profile_version}"
+        )
+    remote_client_id = repository.client_id_for_oauth_id(args.oauth_client_id)
+    if remote_client_id is None:
+        parser.error("remote client not found")
+    implemented = frozenset(_HANDLERS)
+    composed = composed_capabilities(implemented, _planes_from_settings(settings))
+    records = _grant_records(repository.list_capability_grants(remote_client_id=remote_client_id))
+    diff = diff_chatllm_data_profile(
+        implemented=implemented,
+        composed=composed,
+        grants=records,
+        now=now,
+        resource=args.resource,
+        scope=args.scope,
+    )
+    if args.command == "profile-diff":
+        print(json.dumps(profile_diff_as_json(diff), indent=2, sort_keys=True))
+        return 0 if diff.is_healthy() else 1
+    actions = plan_chatllm_grant_actions(
+        diff, records, now=now, resource=args.resource, scope=args.scope
+    )
+    payload = {
+        "profile_version": diff.profile_version,
+        "healthy": diff.is_healthy(),
+        "actions": [
+            {
+                "kind": action.kind,
+                "capability": action.capability.value,
+                "purpose": action.purpose.value,
+                "write": action.is_write,
+                "grant_id": None if action.grant_id is None else str(action.grant_id),
+            }
+            for action in actions
+            if action.kind != "noop"
+        ],
+        "unexpected_control_plane": sorted(item.value for item in diff.unexpected_control_plane),
+        "policy_required_not_implemented": sorted(
+            item.value for item in diff.policy_required_not_implemented
+        ),
+    }
+    if args.command == "profile-plan":
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0 if diff.is_healthy() else 1
+    if not args.apply:
+        parser.error("profile-apply requires --apply after reviewing profile-plan")
+    for action in actions:
+        if action.kind == "noop":
+            continue
+        if action.kind == "renew":
+            if action.grant_id is None or not repository.clear_grant_expiry(
+                grant_id=action.grant_id
+            ):
+                parser.error(f"failed to renew {action.capability.value}")
+            continue
+        repository.grant(
+            remote_client_id=remote_client_id,
+            external_scope=args.scope,
+            capability=action.capability,
+            now=now,
+            is_write=action.is_write,
+            resource=args.resource,
+            expires_at=None,
+            purpose=action.purpose,
+        )
+    print(json.dumps({"applied": True, **payload}, indent=2, sort_keys=True))
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -71,6 +208,13 @@ def main(argv: list[str] | None = None) -> int:
         action=argparse.BooleanOptionalAction,
         required=True,
     )
+    profile_diff = sub.add_parser("profile-diff")
+    _add_profile_arguments(profile_diff)
+    profile_plan = sub.add_parser("profile-plan")
+    _add_profile_arguments(profile_plan)
+    profile_apply = sub.add_parser("profile-apply")
+    _add_profile_arguments(profile_apply)
+    profile_apply.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
 
     settings = load_settings()
@@ -155,6 +299,8 @@ def main(argv: list[str] | None = None) -> int:
                     "remote MCP client refresh "
                     + ("enabled" if args.refresh_enabled else "disabled")
                 )
+            elif args.command in {"profile-diff", "profile-plan", "profile-apply"}:
+                return _run_profile_command(parser, args, repository, settings, now)
     finally:
         engine.dispose()
     return 0

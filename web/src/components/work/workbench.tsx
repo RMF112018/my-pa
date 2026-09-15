@@ -982,19 +982,18 @@ function BulkTaskEditor({ taskIds, onConfirmed }: { taskIds: readonly string[]; 
       </div>
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
         <Labeled label="Action">
-          <select
+          <Select
             aria-label="Bulk action"
             value={kind}
             disabled={busy}
             onChange={(event) => changeKind(event.target.value as "priority" | "transition")}
-            className="h-10 rounded-md border bg-surface px-3"
           >
             <option value="priority">Set priority</option>
             <option value="transition">Move lifecycle</option>
-          </select>
+          </Select>
         </Labeled>
         <Labeled label={kind === "priority" ? "Priority" : "Lifecycle state"}>
-          <select
+          <Select
             aria-label="Bulk value"
             value={value}
             disabled={busy}
@@ -1004,7 +1003,6 @@ function BulkTaskEditor({ taskIds, onConfirmed }: { taskIds: readonly string[]; 
               setMutations(undefined);
               note("Action changed. Preview the retained selection before confirmation.");
             }}
-            className="h-10 rounded-md border bg-surface px-3"
           >
             {kind === "priority" ? (
               <>
@@ -1022,7 +1020,7 @@ function BulkTaskEditor({ taskIds, onConfirmed }: { taskIds: readonly string[]; 
                 <option value="blocked">Blocked</option>
               </>
             )}
-          </select>
+          </Select>
         </Labeled>
       </div>
       <div className="mt-4 flex flex-wrap gap-2">
@@ -1107,11 +1105,10 @@ function CommitmentCreate({ onDone }: { onDone: () => void }) {
       </Labeled>
       <div className="grid gap-4 sm:grid-cols-2">
         <Labeled label="Counterparty">
-          <select
+          <Select
             name="counterparty"
             required
             disabled={Boolean(optionsStatus) || counterparties.length === 0}
-            className="h-10 rounded-md border bg-surface px-3"
           >
             <option value="">Choose a person</option>
             {counterparties.map((item) => (
@@ -1119,13 +1116,13 @@ function CommitmentCreate({ onDone }: { onDone: () => void }) {
                 {item.display_name}
               </option>
             ))}
-          </select>
+          </Select>
         </Labeled>
         <Labeled label="Direction">
-          <select name="direction" className="h-10 rounded-md border bg-surface px-3">
+          <Select name="direction">
             <option value="owed_to_principal">Owed to me</option>
             <option value="owed_by_principal">Owed by me</option>
-          </select>
+          </Select>
         </Labeled>
         <Labeled label="Due">
           <Input name="dueAt" type="datetime-local" />

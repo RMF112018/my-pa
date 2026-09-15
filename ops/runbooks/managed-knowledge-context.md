@@ -58,36 +58,48 @@ returns a complete no-match or empty package and must not fabricate evidence.
 
 ## Recommended grant profile
 
-Read path, **before** the remote-write gate:
+ChatLLM is a **full MY-PA application data manager**, not a system
+administrator. The machine-readable policy is
+`src/my_pa/domain/identity/chatllm_capability_policy.py` at profile version
+`chatllm-data-v1`. Do not grant every `Capability` enum member.
 
-- `context.prepare`
-- `knowledge.read`
-- `knowledge.reveal`
-- `knowledge.coverage`
-- `capture.search`
-- `capture.read`
-- `continuity.pulse`
-- `continuity.situations`
-- `continuity.projects`
-- `tasks.read`
-- `tasks.list`
-- `tasks.search`
-- `tasks.history`
+On the current head, the derived **effective** ChatLLM catalog is 144 names
+when documents, relationship intelligence (with writes), relationship memory,
+and constraints are composed. Six Run 01 Project Controls names remain
+`not_implemented` and must not be treated as grant failures until handlers
+exist. `gsqs.start` / `gsqs.status` and report-cycle writes stay omitted
+pending a separate reclassification. `continuity.tasks.create` is
+compatibility-only; use Work `tasks.create`. Identity correction, source
+enrollment, GoodNotes pull, and `constraint_sync.*` are control-plane
+exclusions.
 
-Only after the remote-write gate (operator-only):
+Dedicated ChatLLM **required data grants** use `expires_at = NULL`. OAuth
+access and refresh tokens remain finite (ADR-009). Client revoke, per-client
+writes, and the global remote-write kill switch remain independent.
 
-- `context.feedback`
-- `capture.create`
-- `tasks.create`
-- `tasks.update`
-- `tasks.transition`
-- `tasks.bulk_preview`
-- `tasks.bulk_confirm`
+Inspect and (operator-gated) reconcile with:
 
-Task writes are classified as writes (`task_authoring`). They stay hidden from
-`tools/list` and are skipped at grant resolution until both the process write
-gate (`MY_PA_REMOTE_WRITES_ENABLED`) and the client's `writes_enabled` flag
-are on. The remote adapter stamps `idempotency_key`; ChatLLM must still supply
+```bash
+python apps/cli/remote_mcp.py profile-diff \
+  --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v1
+python apps/cli/remote_mcp.py profile-plan \
+  --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v1
+# operator-gated; never run against production from this runbook alone
+python apps/cli/remote_mcp.py profile-apply \
+  --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v1 \
+  --apply
+```
+
+Reconnect ChatLLM after grants change so it reloads `tools/list` /
+`my_pa.describe`. Post-apply, the effective catalog must match the derived
+desired set. Live grant mutation remains operator-only (`AGENTS.md` §8.2).
+
+Task writes stay hidden from `tools/list` until both the process write gate
+(`MY_PA_REMOTE_WRITES_ENABLED`) and the client's `writes_enabled` flag are
+on. The remote adapter stamps `idempotency_key`; ChatLLM must still supply
 `origin_evidence_ref` on `tasks.create` and `expected_version` on
 `tasks.update` / `tasks.transition`.
 
@@ -111,31 +123,29 @@ steps require a separate operator decision.
    `tests/contract/test_context_prepare_canary.py`.
 5. OAuth canary (`tools/list` against a registered client) — **operator-only**.
    Live Abacus OAuth, account, or grant mutation is not in this change.
-6. Operator grants the read profile above — **operator-only**. Include the
-   `tasks.read` / `tasks.list` / `tasks.search` / `tasks.history` grants on the
-   ChatLLM client's `my-pa.read` scope, for example:
+6. Reconcile the ChatLLM **full-data** profile — **operator-only**. Do not
+   hand-grant a subset. Review `profile-diff` / `profile-plan`, then apply:
 
    ```bash
-   python apps/cli/remote_mcp.py grant \
+   python apps/cli/remote_mcp.py profile-diff \
      --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-     --capability tasks.list --purpose task_read --resource "$OAUTH_AUDIENCE"
-   python apps/cli/remote_mcp.py grant \
+     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v1
+   python apps/cli/remote_mcp.py profile-plan \
      --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-     --capability tasks.read --purpose task_read --resource "$OAUTH_AUDIENCE"
-   python apps/cli/remote_mcp.py grant \
+     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v1
+   python apps/cli/remote_mcp.py profile-apply \
      --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-     --capability tasks.search --purpose task_read --resource "$OAUTH_AUDIENCE"
-   python apps/cli/remote_mcp.py grant \
-     --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
-     --capability tasks.history --purpose task_read --resource "$OAUTH_AUDIENCE"
+     --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v1 \
+     --apply
    ```
 
-   Task writes additionally require `set-client-writes --writes-enabled`,
-   `control --remote-enabled --writes-enabled`, process
-   `MY_PA_REMOTE_WRITES_ENABLED=true`, and `--write --purpose task_authoring`
-   grants for `tasks.create`, `tasks.update`, `tasks.transition`,
-   `tasks.bulk_preview`, and `tasks.bulk_confirm`. Reconnect ChatLLM after
-   granting so it reloads `tools/list`.
+   Confirm the plan's `add` set is application-data only, Run 01 names are
+   `policy_required_not_implemented` rather than grant failures, and
+   `unexpected_control_plane` is empty. Task writes additionally require
+   `set-client-writes --writes-enabled`, `control --remote-enabled
+   --writes-enabled`, and process `MY_PA_REMOTE_WRITES_ENABLED=true`. Reconnect
+   ChatLLM after applying so it reloads `tools/list` / `my_pa.describe`.
+   Attestation: effective catalog equals the derived desired set.
 7. Inspect `tools/list` and confirm the `context.prepare` / `context.feedback`
    descriptions carry the operating contract.
 8. Confirm ChatLLM instructions match the contract above (embed the contract in
@@ -148,10 +158,12 @@ steps require a separate operator decision.
 
 ## Rollback
 
-1. Revoke remote grants for `context.prepare`, `context.feedback`, and the
-   `tasks.*` names granted above. Canonical knowledge, captures, continuity,
-   and task rows stay; context-run metadata is insert-only and is not deleted
-   as rollback (capability revoke, not a row delete).
+1. Run `profile-diff` against the ChatLLM client. If the desired data grants
+   must come out, revoke that client or revoke the named grants — **operator-only**.
+   Canonical knowledge, captures, continuity, and task rows stay; context-run
+   metadata is insert-only and is not deleted as rollback (capability revoke,
+   not a row delete). Do not revoke every `Capability` enum member as a
+   substitute for a targeted client or grant revoke.
 2. Leave semantic retrieval disabled. It is already off
    (`SEMANTIC_GATE_FAIL`).
 3. Restore the previous application image if the deploy itself is the defect —

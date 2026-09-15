@@ -179,8 +179,6 @@ FUTURE_CAPABILITIES = frozenset(
         Capability.CONSTRAINTS_PORTFOLIO_LIST,
         Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
         Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
-        Capability.PROJECT_CONTROLS_CONFIGURE,
-        Capability.PROJECT_CONTROLS_STATUS,
     }
 )
 IMPLEMENTED_CAPABILITIES = tuple(capability for capability in Capability if capability in _HANDLERS)
@@ -1281,6 +1279,16 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.CONSTRAINTS_HISTORY: {"constraint_id": scene.constraint_id},
         Capability.CONSTRAINTS_OVERVIEW: {"project_id": scene.constraint_project_id},
         Capability.CONSTRAINT_CATEGORIES_LIST: {"project_id": scene.constraint_project_id},
+        # PC-CM-RUN01-WP05. The status read names the configured Project; the
+        # configure names the one Project of the scene that nobody has
+        # configured, so it creates version 1 rather than colliding with a
+        # calendar another row of this matrix is reading.
+        Capability.PROJECT_CONTROLS_STATUS: {"project_id": scene.constraint_project_id},
+        Capability.PROJECT_CONTROLS_CONFIGURE: {
+            "project_id": scene.constraint_unconfigured_project_id,
+            "timezone_name": "America/Chicago",
+            "idempotency_key": "parity-project-controls-0001",
+        },
         Capability.CONSTRAINT_SYNC_STATE: {
             "project_id": scene.constraint_project_id,
             "target_id": make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
@@ -1985,7 +1993,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 167, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 169, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -2722,7 +2730,7 @@ def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 166
+    assert len(IMPLEMENTED_CAPABILITIES) == 168
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 

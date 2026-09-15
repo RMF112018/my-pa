@@ -1687,8 +1687,6 @@ def test_committed_python_fixtures_match_live_model_dumps() -> None:
         Capability.CONSTRAINTS_PORTFOLIO_LIST,
         Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
         Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
-        Capability.PROJECT_CONTROLS_CONFIGURE,
-        Capability.PROJECT_CONTROLS_STATUS,
     }
     assert SUCCESS_PATH.is_file(), f"committed Python fixtures missing at {SUCCESS_PATH}"
     committed = json.loads(SUCCESS_PATH.read_text(encoding="utf-8"))

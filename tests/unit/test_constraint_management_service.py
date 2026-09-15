@@ -37,6 +37,7 @@ from my_pa.application.constraint_management import (
     ConstraintReorderError,
     ConstraintVersionConflictError,
 )
+from my_pa.domain.project_controls.business_time import ProjectTimezoneError
 from my_pa.domain.project_controls.category import (
     ConstraintCategory,
     ConstraintCategoryError,
@@ -67,6 +68,7 @@ from my_pa.domain.project_controls.read_models import (
 from my_pa.domain.project_controls.relationship import ConstraintRelationship
 from my_pa.domain.project_controls.revision import ConstraintRevision
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
+from my_pa.domain.situation.situation import Project, ProjectState
 
 PRINCIPAL_A: Final = "prn_wp06aaaa0001aaaa0001"
 PRINCIPAL_B: Final = "prn_wp06bbbb0002bbbb0002"
@@ -101,6 +103,12 @@ class _CategoryRecord:
 class _State:
     """One shared in-memory partition set, keyed the way the tables are."""
 
+    #: PC-CM-RUN01-WP05. The Projects this Principal owns, which is now what
+    #: `_require_project` asks about. Settings presence is a separate key below,
+    #: and the two are deliberately seeded independently so a Project that is
+    #: owned but unconfigured -- the state the old conflation made unreachable --
+    #: can be expressed here at all.
+    projects: dict[tuple[str, str], Project] = field(default_factory=dict)
     settings: dict[tuple[str, str], ConstraintProjectSettings] = field(default_factory=dict)
     categories: dict[tuple[str, str], _CategoryRecord] = field(default_factory=dict)
     constraints: dict[tuple[str, str], ProjectConstraint] = field(default_factory=dict)
@@ -362,6 +370,25 @@ class _FakeRepository:
         }
 
 
+class _FakeProjectRepository:
+    """The canonical Project reader, answering only inside one partition.
+
+    Two methods and no writer: what a Constraint transaction is entitled to is
+    the ownership answer, and `lock_project` is spelled beside `get_project`
+    because the port declares both and a fake that offered one would let a
+    caller take the wrong one without noticing.
+    """
+
+    def __init__(self, state: _State) -> None:
+        self._state = state
+
+    def get_project(self, principal_id: str, project_id: str) -> Project | None:
+        return self._state.projects.get((principal_id, project_id))
+
+    def lock_project(self, principal_id: str, project_id: str) -> Project | None:
+        return self._state.projects.get((principal_id, project_id))
+
+
 class _FakeUnitOfWork:
     """One transaction: it snapshots on entry and restores on any exception.
 
@@ -392,6 +419,10 @@ class _FakeUnitOfWork:
     def constraints(self) -> _FakeRepository:
         return _FakeRepository(self._state)
 
+    @property
+    def projects(self) -> _FakeProjectRepository:
+        return _FakeProjectRepository(self._state)
+
 
 @dataclass
 class _World:
@@ -409,6 +440,16 @@ class _World:
 
 def _world(*, timezone_name: str | None = ZONE) -> _World:
     state = _State()
+    for principal, project in ((PRINCIPAL_A, PROJECT_A), (PRINCIPAL_B, PROJECT_B)):
+        state.projects[(principal, project)] = Project(
+            project_id=project,
+            principal_id=principal,
+            name="A Synthetic Project",
+            state=ProjectState.ACTIVE,
+            opened_at=T0,
+            created_at=T0,
+            updated_at=T0,
+        )
     if timezone_name is not None:
         for principal, project in ((PRINCIPAL_A, PROJECT_A), (PRINCIPAL_B, PROJECT_B)):
             state.settings[(principal, project)] = ConstraintProjectSettings(
@@ -608,15 +649,42 @@ def test_publish_defaults_date_identified_to_the_project_calendar_date() -> None
 def test_publish_fails_closed_when_the_project_calendar_is_not_available() -> None:
     """The accepted typed refusal, rather than a guessed fallback timezone.
 
-    The Project seam and the calendar are the same settings row, so a Publish
-    that needs a defaulted Date Identified from a Project this Principal has no
-    settings for is refused before anything is written — and refused
-    identically to naming another Principal's Project, which is the
-    nondisclosure the read plane already keeps.
+    PC-CM-RUN01-WP05 corrected *which* refusal this is. The Project seam and the
+    calendar used to be the same settings row, so removing the row said "not
+    your Project". They are now two separate checks: the Project is still this
+    Principal's, and what is missing is the calendar — so a Publish that needs a
+    defaulted Date Identified is refused as `project_timezone_unconfigured`,
+    which is the fail-closed answer this build has always given a Project with
+    no timezone. Nothing is written either way, which is what the two
+    assertions below measure.
     """
     world = _world()
     draft = _draft(world, date_identified=None)
     del world.state.settings[(PRINCIPAL_A, PROJECT_A)]
+    with pytest.raises(ProjectTimezoneError) as refusal:
+        world.service.publish(
+            principal_id=PRINCIPAL_A,
+            constraint_id=draft.constraint_id,
+            expected_version=1,
+            actor=ConstraintMutationActor.PRINCIPAL,
+        )
+    assert refusal.value.code == "project_timezone_unconfigured"
+    assert world.state.constraints[(PRINCIPAL_A, draft.constraint_id)].constraint_code is None
+    row = world.state.categories[(PRINCIPAL_A, world.category())]
+    assert (row.next_sequence, row.issued_count) == (1, 0)
+
+
+def test_publish_on_a_project_this_principal_does_not_own_is_a_different_refusal() -> None:
+    """The other half of the split: not-yours and no-calendar are now two answers.
+
+    Both still write nothing, and both are still nondisclosing — a foreign
+    Project and an absent one produce the identical
+    `ConstraintProjectUnavailableError` — but a caller who owns the Project is
+    no longer told it does not exist merely because nobody has configured it.
+    """
+    world = _world()
+    draft = _draft(world, date_identified=None)
+    del world.state.projects[(PRINCIPAL_A, PROJECT_A)]
     with pytest.raises(ConstraintProjectUnavailableError):
         world.service.publish(
             principal_id=PRINCIPAL_A,
@@ -625,8 +693,47 @@ def test_publish_fails_closed_when_the_project_calendar_is_not_available() -> No
             actor=ConstraintMutationActor.PRINCIPAL,
         )
     assert world.state.constraints[(PRINCIPAL_A, draft.constraint_id)].constraint_code is None
-    row = world.state.categories[(PRINCIPAL_A, world.category())]
-    assert (row.next_sequence, row.issued_count) == (1, 0)
+
+
+def test_a_draft_binds_to_an_owned_project_that_nobody_has_configured() -> None:
+    """The correction stated positively (PC-CM-RUN01-WP05).
+
+    Under the old conflation this refused: the Project had no settings row, and
+    settings presence was being read as proof of ownership. Ownership is now
+    `ProjectRepository.get_project`, and a Draft needs no calendar unless it is
+    asking this build to default a date.
+    """
+    world = _world()
+    del world.state.settings[(PRINCIPAL_A, PROJECT_A)]
+    result = world.service.create_draft(
+        principal_id=PRINCIPAL_A,
+        actor=ConstraintMutationActor.PRINCIPAL,
+        project_id=PROJECT_A,
+        description="The permit set is not stamped.",
+        date_identified=date(2026, 9, 2),
+    )
+    assert result.record.project_id == PROJECT_A
+
+
+def test_an_unknown_and_a_foreign_project_are_the_same_refusal_on_a_draft() -> None:
+    """Nondisclosure equivalence, after the split as before it.
+
+    Unknown, deleted and foreign all leave `create_draft` through the identical
+    exception type carrying the identical message, so separating ownership from
+    settings presence gave a caller nothing new to distinguish them by.
+    """
+    world = _world()
+    del world.state.projects[(PRINCIPAL_A, PROJECT_A)]
+    refusals = []
+    for project_id in (PROJECT_A, PROJECT_B, "prj_pcnone0003nono"):
+        with pytest.raises(ConstraintProjectUnavailableError) as refusal:
+            world.service.create_draft(
+                principal_id=PRINCIPAL_A,
+                actor=ConstraintMutationActor.PRINCIPAL,
+                project_id=project_id,
+            )
+        refusals.append((type(refusal.value), str(refusal.value)))
+    assert len(set(refusals)) == 1
 
 
 @pytest.mark.parametrize(

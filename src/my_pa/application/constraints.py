@@ -546,11 +546,30 @@ class ConstraintReadService:
     def _settings(
         self, repository: ConstraintReadRepository, principal_id: str, project_id: str
     ) -> ConstraintProjectSettings:
+        """This Project's Constraint calendar, or the refusal that says there is none.
+
+        **This is a settings-presence check and it is not Project
+        authorization** (PC-CM-RUN01-WP05). It used to be read as both, because
+        a missing row and a foreign Project produce the same refusal — but they
+        produce it for different reasons, and a helper that cannot tell them
+        apart cannot be the place ownership is decided. Ownership is decided by
+        the canonical Principal-scoped `ProjectRepository.get_project`, which
+        `ApplicationService` asks on this unit of work's own connection before
+        it calls any exact-Project read here; this port is the narrow read port
+        WP03 defined and declares no Project read at all.
+
+        The refusal stays identical on purpose. An unknown, deleted, foreign or
+        merely unconfigured Project must all answer `unavailable` naming
+        `project_id`, so separating the checks internally cannot make the four
+        externally distinguishable. What separating them buys is that an owned
+        Project with no calendar can now be configured, which is the thing the
+        old conflation made impossible.
+
+        Unavailable rather than empty, as before: without a calendar there is no
+        defensible Overdue boundary to count against.
+        """
         settings = repository.get_project_settings(principal_id, project_id)
         if settings is None:
-            # Unconfigured and foreign are the same answer here, and both are
-            # unavailable rather than empty: without a calendar there is no
-            # defensible Overdue boundary to count against.
             raise UnavailableError(SafeDetail.PROJECT_ID)
         return settings
 
@@ -816,7 +835,15 @@ def _nullable_anchor(value: str | None) -> tuple[str | int | None, ...]:
 
 
 def _project_today(as_of: datetime, settings: ConstraintProjectSettings) -> date:
-    """The Project's calendar date, or an unavailable answer. Never a guess."""
+    """The Project's calendar date, or an unavailable answer. Never a guess.
+
+    The third of the three separate checks (PC-CM-RUN01-WP05): ownership was
+    established before the read service was called and presence by `_settings`,
+    and what is left is whether the *stored* name is still a zone `zoneinfo`
+    knows. A row whose name it does not know stays fail-closed here — the
+    Register refuses rather than substituting a calendar — until somebody
+    explicitly reconfigures the Project through `project_controls.configure`.
+    """
     try:
         return project_today(as_of, settings.timezone_name)
     except ProjectTimezoneError as error:

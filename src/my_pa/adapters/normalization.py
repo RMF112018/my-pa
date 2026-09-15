@@ -78,6 +78,7 @@ from my_pa.application.commands import (
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
+    ConfigureProjectControls,
     ConstraintUpdateField,
     CorrectGoodNotes,
     CreateCapture,
@@ -173,6 +174,7 @@ from my_pa.application.commands import (
     ReadKnowledge,
     ReadManagedDocument,
     ReadProject,
+    ReadProjectControlsStatus,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -2153,6 +2155,22 @@ def _reorder_constraint_categories(payload: Mapping[str, Any]) -> Command:
     return ReorderConstraintCategories(**_constraint_authoring(payload))
 
 
+# PC-CM-RUN01-WP05. Neither Project Controls payload carries a date, a party
+# collection or a clear list, so neither goes through `_constraint_authoring`:
+# every field is already the scalar the command declares, and a shape
+# conversion that converts nothing would only be a place for one to appear
+# later without being noticed. Closed the way every builder here is closed --
+# the dataclass names its fields and an unknown key is a `TypeError` the
+# boundary reports as an invalid request -- so no server-owned field is
+# reachable from a payload.
+def _configure_project_controls(payload: Mapping[str, Any]) -> Command:
+    return ConfigureProjectControls(**payload)
+
+
+def _read_project_controls_status(payload: Mapping[str, Any]) -> Command:
+    return ReadProjectControlsStatus(**payload)
+
+
 _SYNC_ROW_KEYS: Final[frozenset[str]] = frozenset(
     {
         "external_row_key",
@@ -2305,6 +2323,8 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.CONSTRAINT_CATEGORIES_UPDATE: _update_constraint_category,
         Capability.CONSTRAINT_CATEGORIES_DEACTIVATE: _deactivate_constraint_category,
         Capability.CONSTRAINT_CATEGORIES_REORDER: _reorder_constraint_categories,
+        Capability.PROJECT_CONTROLS_CONFIGURE: _configure_project_controls,
+        Capability.PROJECT_CONTROLS_STATUS: _read_project_controls_status,
         Capability.CONSTRAINT_SYNC_STATE: _read_constraint_sync_state,
         Capability.CONSTRAINT_SYNC_DELTA: _read_constraint_sync_delta,
         Capability.CONSTRAINT_SYNC_CONFLICTS: _list_constraint_sync_conflicts,

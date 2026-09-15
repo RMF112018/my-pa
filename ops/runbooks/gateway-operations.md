@@ -46,9 +46,9 @@ request does too, because `1a4c9e77b2d5` creates the capture tables and widens
 ## What the gateway is, and what it does not yet do
 
 `apps/gateway.py` routes the one hundred and seventy-two public capabilities over HTTP on
-loopback. One hundred and sixty-six have application handlers. A default process serves
-ninety-six: seventy handler-implemented capabilities are composition-withheld, and six
-are structurally unwired, so 76 of 172 total capabilities are unavailable or unwired.
+loopback. One hundred and sixty-eight have application handlers. A default process serves
+ninety-eight: seventy handler-implemented capabilities are composition-withheld, and four
+are structurally unwired, so 74 of 172 total capabilities are unavailable or unwired.
 One request is one call to `ApplicationService.invoke`, and the response body is
 the envelope that call produced — the transport maps and does not decide.
 
@@ -65,7 +65,7 @@ reaches the handler, which refuses with `unsupported` and the transport maps tha
 to **`501`**. This section already discloses the source-root gate below in the
 same detail; it said nothing about these two, which is the omission being
 corrected. `capabilities.get` on such a process reports readiness `degraded` and
-`76 of 172 total capabilities are unavailable or unwired.` rather than `ready`.
+`74 of 172 total capabilities are unavailable or unwired.` rather than `ready`.
 
 **It is bound to `127.0.0.1` and there is no option to bind elsewhere.** That is
 `D-30` and `AGENTS.md` §5: `P00-OD-010` — which authentication mechanism this

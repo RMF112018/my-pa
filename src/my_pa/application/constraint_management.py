@@ -73,7 +73,11 @@ from datetime import date, datetime
 from enum import StrEnum
 from typing import Any, Final, Protocol
 
-from my_pa.contracts.ports import ConstraintManagementRepository, ConstraintManagementUnitOfWork
+from my_pa.contracts.ports import (
+    ConstraintManagementRepository,
+    ConstraintManagementUnitOfWork,
+    ProjectRepository,
+)
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import utc_now
 from my_pa.domain.project_controls.business_time import default_due_date, project_today
@@ -323,6 +327,18 @@ class ConstraintFollowUpResult:
 class _ActiveConstraintUnitOfWork(Protocol):
     @property
     def constraints(self) -> ConstraintManagementRepository: ...
+
+    @property
+    def projects(self) -> ProjectRepository:
+        """The canonical Project repository, on this transaction's connection.
+
+        PC-CM-RUN01-WP05. Named here so `_require_project` can ask the one
+        question that actually is Project authorization. Nothing in this module
+        writes through it: what a Constraint mutation is entitled to is the
+        Principal-scoped ownership answer `get_project` returns, and nothing
+        else.
+        """
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -1806,13 +1822,24 @@ class ConstraintManagementService:
     def _require_project(
         self, uow: _ActiveConstraintUnitOfWork, principal_id: str, project_id: str
     ) -> None:
-        """Refuse a Project this Principal has no Constraint settings for.
+        """Refuse a Project this Principal does not own.
 
-        The same seam and the same answer the WP03 read plane uses: unconfigured
-        and foreign are indistinguishable, so naming another Principal's Project
-        discloses nothing about whether it exists.
+        PC-CM-RUN01-WP05 corrected what this asks. It used to ask whether the
+        Project had a Constraint *settings* row, which made the presence of a
+        configuration serve as proof of ownership — and therefore made an owned
+        Project nobody had configured indistinguishable from another Principal's.
+        The canonical question is `ProjectRepository.get_project`, which answers
+        a row only inside `principal_id`'s partition: unknown, deleted,
+        inaccessible and foreign all come back `None` from this one call, so the
+        correction removes a conflation without weakening the nondisclosure the
+        old spelling happened to provide.
+
+        Settings presence is a separate question, asked by `_project_today` of
+        the callers that actually need a calendar, and timezone validity is a
+        third asked of `zoneinfo`. A Draft binds to a Project; it does not need
+        that Project's calendar unless it is asking this build to default a date.
         """
-        if uow.constraints.get_project_settings(principal_id, project_id) is None:
+        if uow.projects.get_project(principal_id, project_id) is None:
             raise ConstraintProjectUnavailableError(
                 "the project is not available to this principal"
             )
@@ -1870,15 +1897,26 @@ class ConstraintManagementService:
     ) -> date:
         """The Project's own calendar date, or the typed failure that says why not.
 
-        `project_today` raises `project_timezone_unconfigured` for a Project
-        with no settings row, which is the accepted fail-closed behaviour: this
-        build never guesses a fallback timezone on a caller's behalf.
+        Three questions, asked in order and answered separately
+        (PC-CM-RUN01-WP05). Whether the Project is this Principal's is
+        `_require_project`'s, and a Project that is not comes back as
+        `ConstraintProjectUnavailableError` — not as a missing calendar.
+        Whether an owned Project has a settings row at all is the second, and a
+        Project nobody has configured raises `project_timezone_unconfigured`,
+        which is the accepted fail-closed behaviour: this build never guesses a
+        fallback timezone on a caller's behalf. Whether a stored name is a real
+        zone is `zoneinfo`'s, and an invalid stored row stays fail-closed with
+        `project_timezone_invalid` until the Project is explicitly reconfigured.
+
+        The version before this one collapsed the first two: a missing row meant
+        `project_timezone_unconfigured` whether the Project was absent, foreign,
+        or merely unconfigured, so a Project that could be configured and one
+        that could not were reported identically.
         """
-        settings = (
-            None
-            if project_id is None
-            else uow.constraints.get_project_settings(principal_id, project_id)
-        )
+        if project_id is None:
+            return project_today(now, None)
+        self._require_project(uow, principal_id, project_id)
+        settings = uow.constraints.get_project_settings(principal_id, project_id)
         return project_today(now, None if settings is None else settings.timezone_name)
 
     def _resolve_publication(

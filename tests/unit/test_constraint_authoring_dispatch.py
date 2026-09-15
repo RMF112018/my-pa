@@ -46,6 +46,10 @@ AUTHORING: Final[frozenset[Capability]] = frozenset(
         Capability.CONSTRAINT_CATEGORIES_UPDATE,
         Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
         Capability.CONSTRAINT_CATEGORIES_REORDER,
+        # PC-CM-RUN01-WP05. Stating a Project's calendar is the thirteenth
+        # authoring grant: it moves a settings version, writes a receipt, and
+        # changes what every date-derived reading of that Project means.
+        Capability.PROJECT_CONTROLS_CONFIGURE,
     }
 )
 
@@ -58,7 +62,7 @@ def _uncomposed(scene: Scene) -> ApplicationService:
 # ---- the wiring --------------------------------------------------------------
 
 
-def test_the_declared_authoring_set_is_the_twelve() -> None:
+def test_the_declared_authoring_set_is_the_thirteen() -> None:
     assert _CONSTRAINT_AUTHORING_CAPABILITIES == AUTHORING
 
 

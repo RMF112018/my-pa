@@ -106,6 +106,7 @@ from my_pa.application.commands import (
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
+    ConfigureProjectControls,
     CorrectGoodNotes,
     CreateCapture,
     CreateCommitment,
@@ -200,6 +201,7 @@ from my_pa.application.commands import (
     ReadKnowledge,
     ReadManagedDocument,
     ReadProject,
+    ReadProjectControlsStatus,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -332,8 +334,6 @@ _UNIMPLEMENTED_CAPABILITIES: frozenset[Capability] = frozenset(
         Capability.CONSTRAINTS_PORTFOLIO_LIST,
         Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
         Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
-        Capability.PROJECT_CONTROLS_CONFIGURE,
-        Capability.PROJECT_CONTROLS_STATUS,
     }
 )
 
@@ -848,6 +848,16 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.CONSTRAINTS_HISTORY: {"constraint_id": scene.constraint_id},
         Capability.CONSTRAINTS_OVERVIEW: {"project_id": scene.constraint_project_id},
         Capability.CONSTRAINT_CATEGORIES_LIST: {"project_id": scene.constraint_project_id},
+        # PC-CM-RUN01-WP05. The status read names the configured Project; the
+        # configure names the one Project of the scene that nobody has
+        # configured, so it creates version 1 rather than colliding with a
+        # calendar another row of this matrix is reading.
+        Capability.PROJECT_CONTROLS_STATUS: {"project_id": scene.constraint_project_id},
+        Capability.PROJECT_CONTROLS_CONFIGURE: {
+            "project_id": scene.constraint_unconfigured_project_id,
+            "timezone_name": "America/Chicago",
+            "idempotency_key": "parity-project-controls-0001",
+        },
         Capability.CONSTRAINT_SYNC_STATE: {
             "project_id": scene.constraint_project_id,
             "target_id": make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
@@ -1798,6 +1808,15 @@ def commands_for(
         Capability.CONSTRAINT_CATEGORIES_LIST: ListConstraintCategories(
             project_id=scene.constraint_project_id
         ),
+        # PC-CM-RUN01-WP05, the pair the payload table above states in wire shape.
+        Capability.PROJECT_CONTROLS_STATUS: ReadProjectControlsStatus(
+            project_id=scene.constraint_project_id
+        ),
+        Capability.PROJECT_CONTROLS_CONFIGURE: ConfigureProjectControls(
+            project_id=scene.constraint_unconfigured_project_id,
+            timezone_name="America/Chicago",
+            idempotency_key="parity-project-controls-0001",
+        ),
         Capability.CONSTRAINT_SYNC_STATE: ReadConstraintSyncState(
             project_id=scene.constraint_project_id,
             target_id=make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
@@ -2420,7 +2439,7 @@ def test_handler_unwired_capabilities_return_the_canonical_http_problem(
     capability: Capability, scene: Scene, wire: Wire
 ) -> None:
     assert set(Capability) - set(_HANDLERS) == _UNIMPLEMENTED_CAPABILITIES
-    assert len(HANDLER_CAPABILITIES) == 166
+    assert len(HANDLER_CAPABILITIES) == 168
     reply = wire.send(capability.value, document_for(capability, scene, {}))
     problem = ProblemDetail.model_validate(reply.document())
     assert reply.status == 501

@@ -57,8 +57,6 @@ HANDLER_UNWIRED_CAPABILITIES: Final = frozenset(
         Capability.CONSTRAINTS_PORTFOLIO_LIST,
         Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
         Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
-        Capability.PROJECT_CONTROLS_CONFIGURE,
-        Capability.PROJECT_CONTROLS_STATUS,
     }
 )
 
@@ -109,7 +107,7 @@ def test_the_population_is_the_handler_backed_remote_tool_set() -> None:
     assert population, "there are no capabilities, so nothing below proves anything"
     assert population >= PHASE_B_CAPABILITIES
     assert population == command_backed
-    assert len(population) == 166
+    assert len(population) == 168
     assert set(Capability) - population == HANDLER_UNWIRED_CAPABILITIES
     assert not population & HANDLER_UNWIRED_CAPABILITIES
     assert population | HANDLER_UNWIRED_CAPABILITIES == set(Capability)

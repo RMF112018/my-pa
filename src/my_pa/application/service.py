@@ -144,6 +144,7 @@ from my_pa.application.commands import (
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
+    ConfigureProjectControls,
     CorrectGoodNotes,
     CreateCapture,
     CreateCommitment,
@@ -241,6 +242,7 @@ from my_pa.application.commands import (
     ReadManagedDocument,
     ReadManagedDocumentCommand,
     ReadProject,
+    ReadProjectControlsStatus,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -312,6 +314,17 @@ from my_pa.application.constraint_management import (
     ConstraintProjectUnavailableError,
     ConstraintReorderError,
     ConstraintVersionConflictError,
+)
+from my_pa.application.constraint_settings import (
+    ProjectControlsConfigurationResult,
+    ProjectControlsConfigurationService,
+    ProjectControlsIdempotencyConflictError,
+    ProjectControlsNotConfiguredError,
+    ProjectControlsOperationError,
+    ProjectControlsProjectUnavailableError,
+    ProjectControlsState,
+    ProjectControlsStatusResult,
+    ProjectControlsVersionConflictError,
 )
 from my_pa.application.constraints import ConstraintReadService
 from my_pa.application.context import ContextPreparationService
@@ -552,6 +565,7 @@ from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.policy.decision import POLICY_VERSION
+from my_pa.domain.project_controls.business_time import ProjectTimezoneError
 from my_pa.domain.project_controls.category import ConstraintCategoryError
 from my_pa.domain.project_controls.constraint import (
     ConstraintInvariantError,
@@ -567,6 +581,7 @@ from my_pa.domain.project_controls.read_models import (
     ConstraintQueryError,
 )
 from my_pa.domain.project_controls.relationship import ConstraintRelationshipError
+from my_pa.domain.project_controls.settings import ConstraintProjectSettings
 from my_pa.domain.project_controls.sync import ConstraintSyncAction, NormalizedExternalConstraintRow
 from my_pa.domain.relationship.authoring import (
     AmbiguousEntityError,
@@ -2838,6 +2853,76 @@ def _constraint_payload(value: object) -> object:
     return value
 
 
+def _project_controls_settings_payload(
+    *, project_id: str, state: ProjectControlsState, settings: ConstraintProjectSettings | None
+) -> dict[str, Any]:
+    """One Project's Constraint-settings state, as both capabilities carry it.
+
+    PC-CM-RUN01-WP05. **One object shape for the status read and the configure
+    write**, so a client decodes the Project's configuration once rather than
+    twice. `state` is the closed two-member vocabulary and the four values
+    beneath it are present exactly when it is `configured` — a client that
+    branches on `state` never has to decide what a null timezone means.
+
+    `principal_id` is not here and cannot be: the settings row carries one, and
+    this function names the four fields it publishes rather than dumping the
+    dataclass, so a field added to `ConstraintProjectSettings` later cannot
+    arrive on the wire by accident. `created_at` is not published either — it
+    is the row's own bookkeeping and says nothing a caller can act on.
+
+    Timestamps are ISO-8601 through `_constraint_payload`, which is the
+    rendering every other Constraint document already uses.
+    """
+    return {
+        "project_id": project_id,
+        "state": state.value,
+        "timezone_name": None if settings is None else settings.timezone_name,
+        "settings_version": None if settings is None else settings.version,
+        "settings_updated_at": (
+            None if settings is None else _constraint_payload(settings.updated_at)
+        ),
+    }
+
+
+def _project_controls_status_payload(status: ProjectControlsStatusResult) -> dict[str, Any]:
+    """`project_controls.status`'s whole answer: one `project_controls` object."""
+    return {
+        "project_controls": _project_controls_settings_payload(
+            project_id=status.project_id, state=status.state, settings=status.settings
+        )
+    }
+
+
+def _project_controls_configuration_payload(
+    result: ProjectControlsConfigurationResult,
+) -> dict[str, Any]:
+    """`project_controls.configure`'s answer: the same object, plus a disposition.
+
+    A configure that returns at all left the Project configured, whichever of
+    `applied`, `no_op` and `replayed` it was, so `state` is `configured` here by
+    construction rather than by a second decision. The three settings values are
+    the service's own — for a replay they are the ledger's snapshot of what the
+    *original* attempt produced, not a re-read of a row that may since have
+    moved on.
+
+    The receipt is deliberately not rendered. It is read back through the
+    settings history, which is its own authorized read, and putting one in a
+    mutation response would be a second disclosure path with no purpose gate —
+    the reason `_constraint_mutation_translated` gives for keeping a rejected
+    receipt out of an error payload.
+    """
+    return {
+        "disposition": result.disposition.value,
+        "project_controls": {
+            "project_id": result.project_id,
+            "state": ProjectControlsState.CONFIGURED.value,
+            "timezone_name": result.timezone_name,
+            "settings_version": result.settings_version,
+            "settings_updated_at": _constraint_payload(result.settings_updated_at),
+        },
+    }
+
+
 def _sync_request_digest(**values: object) -> str:
     return hashlib.sha256(
         json.dumps(values, sort_keys=True, separators=(",", ":"), default=str).encode()
@@ -2952,6 +3037,38 @@ def _constraint_mutation_translated() -> Iterator[None]:
         failure = ConflictError(SafeDetail.EXPECTED_VERSION)
     except ConstraintIdempotencyConflictError:
         failure = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+    # PC-CM-RUN01-WP05. The Project Controls plane's four refusals, classified
+    # here beside the twelve authoring ones because they are the same kind of
+    # thing: a decided refusal carrying a stable module-local code, given its
+    # public classification at the one boundary that knows a caller is waiting.
+    #
+    # `unavailable` rather than `not_found` for a Project this Principal does
+    # not own, which is the answer the exact-Project read plane already gives
+    # for the same fact -- and it is one answer for unknown, deleted,
+    # inaccessible and foreign alike, so the split introduced by making
+    # ownership a separate check from settings presence cannot make those four
+    # externally distinguishable.
+    #
+    # `not_configured` is a `conflict` naming `expected_version`, and it is
+    # deliberately *not* the unavailable answer above: it is reachable only
+    # after Project ownership has already been proved, so it discloses nothing,
+    # and what the caller did wrong was expect a version of a row that does not
+    # exist yet. The request it meant is the same one with no `expected_version`.
+    except ProjectControlsProjectUnavailableError:
+        failure = UnavailableError(SafeDetail.PROJECT_ID)
+    except (ProjectControlsVersionConflictError, ProjectControlsNotConfiguredError):
+        failure = ConflictError(SafeDetail.EXPECTED_VERSION)
+    except ProjectControlsIdempotencyConflictError:
+        failure = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+    except ProjectControlsOperationError:
+        failure = InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+    # A timezone the tz database does not know, a blank one, or one carrying
+    # whitespace. `invalid_request` naming the field, never the value: the name
+    # a caller sent is a caller-chosen string and has no business in an error.
+    # This also covers the Constraint plane's own reads of a *stored* timezone,
+    # which stay fail-closed until the Project is explicitly reconfigured.
+    except ProjectTimezoneError:
+        failure = InvalidRequestError(SafeDetail.SELECTOR)
     except (ConstraintPartyError, PartyRefError):
         failure = InvalidRequestError(SafeDetail.SELECTOR)
     except (ConstraintLifecycleError, ConstraintPublishError):
@@ -3282,6 +3399,19 @@ class ApplicationService:
         #: names under, so `tools/list` and `tools/call` cannot disagree.
         self._constraint_mutation_service = (
             ConstraintManagementService(
+                unit_of_work=constraint_management_unit_of_work, clock=clock
+            )
+            if constraint_management_unit_of_work is not None
+            else None
+        )
+        #: PC-CM-RUN01-WP05. The Project Controls configuration plane, built from
+        #: the same factory and held on the same condition as the two above. It
+        #: is a separate service rather than a pair of methods on the mutation
+        #: service because its subject is a Project's settings row and not a
+        #: Constraint: it takes the canonical Project lock, writes its own
+        #: ledger, and shares no transaction shape with `_mutate`.
+        self._project_controls_configuration = (
+            ProjectControlsConfigurationService(
                 unit_of_work=constraint_management_unit_of_work, clock=clock
             )
             if constraint_management_unit_of_work is not None
@@ -9247,6 +9377,34 @@ class ApplicationService:
             raise UnsupportedError()
         return factory()
 
+    def _require_constraint_project(
+        self, work: ConstraintManagementUnitOfWork, principal_id: str, project_id: str
+    ) -> None:
+        """Refuse an exact-Project read naming a Project this Principal does not own.
+
+        PC-CM-RUN01-WP05. The canonical Project check, made *before* the read
+        service is asked anything, so that Project authorization is
+        `ProjectRepository.get_project` and never the presence of a Constraint
+        settings row. The three questions stay three: this one is ownership,
+        `ConstraintReadService._settings` is settings presence, and
+        `constraints._project_today` is timezone validity.
+
+        It is placed here rather than inside the read service because
+        `ConstraintReadRepository` is a narrow read port with no Project read on
+        it at all, and widening it would mean changing `contracts.ports` and the
+        persistence adapter that satisfies it. This unit of work already carries
+        the canonical `ProjectRepository` on the same connection, which is the
+        seam the plan asked for without inventing a second one.
+
+        The external answer does not change and must not: an unknown, deleted,
+        foreign or merely unconfigured Project all still leave this handler as
+        `UnavailableError(PROJECT_ID)` -- the first three from here, the fourth
+        from `_settings` -- so nothing about which of the four it was is
+        observable.
+        """
+        if work.projects.get_project(principal_id, project_id) is None:
+            raise UnavailableError(SafeDetail.PROJECT_ID)
+
     def _constraints_read(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadConstraint
     ) -> _Result:
@@ -9279,6 +9437,9 @@ class ApplicationService:
         with _constraint_translated():
             query = self._constraint_query(command)
         with _translated(), _constraint_translated(), self._constraint_work() as work:
+            self._require_constraint_project(
+                work, authorization.principal.principal_id, command.project_id
+            )
             page = self._constraint_reads.list_constraints(
                 work.constraints,
                 principal_id=authorization.principal.principal_id,
@@ -9312,6 +9473,9 @@ class ApplicationService:
         with _constraint_translated():
             query = self._constraint_query(command, search_text=command.query)
         with _translated(), _constraint_translated(), self._constraint_work() as work:
+            self._require_constraint_project(
+                work, authorization.principal.principal_id, command.project_id
+            )
             page = self._constraint_reads.list_constraints(
                 work.constraints,
                 principal_id=authorization.principal.principal_id,
@@ -9379,6 +9543,9 @@ class ApplicationService:
         """`constraints.overview`: the Project's position, counted once by WP03."""
         del unit_of_work
         with _translated(), self._constraint_work() as work:
+            self._require_constraint_project(
+                work, authorization.principal.principal_id, command.project_id
+            )
             overview = self._constraint_reads.read_overview(
                 work.constraints,
                 principal_id=authorization.principal.principal_id,
@@ -10112,6 +10279,67 @@ class ApplicationService:
                 "categories": _constraint_payload(result.records),
                 "receipts": _constraint_payload(result.receipts),
             },
+        )
+
+    # --- Project Controls configuration (PC-CM-RUN01-WP05) ---------------
+
+    def _project_controls(self) -> ProjectControlsConfigurationService:
+        """The Project Controls configuration service, or the same refusal.
+
+        `UnsupportedError` on `_constraint_mutations()`'s exact terms and for
+        the same reason: it is composed from the one factory, it is withheld by
+        `available_capabilities` under the one condition, and this is the floor
+        beneath that rather than the gate.
+        """
+        service = self._project_controls_configuration
+        if service is None:
+            raise UnsupportedError()
+        return service
+
+    def _project_controls_configure(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ConfigureProjectControls,
+    ) -> _Result:
+        """`project_controls.configure`: state one Project's Constraint calendar.
+
+        The Principal is `authorization.principal.principal_id` and never a
+        field of the command, which carries none — the Project lock the service
+        takes is scoped to it, and that lock is the ownership proof.
+        """
+        del unit_of_work
+        with _translated(), _constraint_mutation_translated():
+            result = self._project_controls().configure(
+                principal_id=authorization.principal.principal_id,
+                actor=ConstraintMutationActor.PRINCIPAL,
+                project_id=command.project_id,
+                timezone_name=command.timezone_name,
+                idempotency_key=command.idempotency_key,
+                expected_version=command.expected_version,
+                client_context=command.client_context,
+                correlation_id=command.correlation_id,
+            )
+        return self._constraint_authoring_result(
+            authorization, _project_controls_configuration_payload(result)
+        )
+
+    def _project_controls_status(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadProjectControlsStatus,
+    ) -> _Result:
+        """`project_controls.status`: whether this Project's calendar is stated."""
+        del unit_of_work
+        with _translated(), _constraint_mutation_translated():
+            status = self._project_controls().read_status(
+                principal_id=authorization.principal.principal_id,
+                project_id=command.project_id,
+            )
+        return _Result(
+            payload=_project_controls_status_payload(status),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CONSTRAINT_TRUST_BASIS),
         )
 
     @staticmethod
@@ -12266,6 +12494,8 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
             ApplicationService._constraint_categories_deactivate
         ),
         Capability.CONSTRAINT_CATEGORIES_REORDER: ApplicationService._constraint_categories_reorder,
+        Capability.PROJECT_CONTROLS_CONFIGURE: ApplicationService._project_controls_configure,
+        Capability.PROJECT_CONTROLS_STATUS: ApplicationService._project_controls_status,
         Capability.CONSTRAINT_SYNC_STATE: ApplicationService._constraint_sync_state,
         Capability.CONSTRAINT_SYNC_DELTA: ApplicationService._constraint_sync_delta,
         Capability.CONSTRAINT_SYNC_CONFLICTS: ApplicationService._constraint_sync_conflicts,
@@ -12603,6 +12833,11 @@ _CONSTRAINT_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.CONSTRAINTS_HISTORY,
         Capability.CONSTRAINTS_OVERVIEW,
         Capability.CONSTRAINT_CATEGORIES_LIST,
+        # PC-CM-RUN01-WP05. Whether a Project's calendar has been stated is a
+        # Constraint read: it answers from the same settings row every Overdue
+        # and Due Soon boundary is computed from, and it is withheld on exactly
+        # the composition the other six are withheld on.
+        Capability.PROJECT_CONTROLS_STATUS,
     }
 )
 
@@ -12625,6 +12860,11 @@ _CONSTRAINT_AUTHORING_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.CONSTRAINT_CATEGORIES_UPDATE,
         Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
         Capability.CONSTRAINT_CATEGORIES_REORDER,
+        # PC-CM-RUN01-WP05. Stating a Project's calendar is an authoring grant
+        # and belongs with the other twelve: it moves a version, writes a
+        # receipt, and changes what every date-derived reading of that Project
+        # means.
+        Capability.PROJECT_CONTROLS_CONFIGURE,
     }
 )
 

@@ -225,6 +225,8 @@ from my_pa.domain.project_controls.constraint import (
 from my_pa.domain.project_controls.history import (
     ConstraintCategoryHistoryEntry,
     ConstraintHistoryEntry,
+    ConstraintProjectSettingsHistoryEntry,
+    ConstraintProjectSettingsHistoryKeyConflictError,
 )
 from my_pa.domain.project_controls.party import PartyKind, PartyRef
 from my_pa.domain.project_controls.read_models import (
@@ -537,6 +539,25 @@ class World:
     #: test prove something the read service does not do.
     constraint_settings: dict[tuple[str, str], ConstraintProjectSettings] = field(
         default_factory=dict
+    )
+    #: PC-CM-RUN01-WP05. The Projects the synthetic Constraint plane owns.
+    #:
+    #: Held beside `projects` rather than in it, and the reason is the fixture
+    #: rather than the product. In PostgreSQL there is one `projects` table and
+    #: a settings row cannot name a Project absent from it -- which is exactly
+    #: what `tests/database/test_project_controls_configure_persistence.py`
+    #: proves. Here, the scene seeds four Constraint Projects for the capability
+    #: sweeps to name, and putting them in `projects` would make every
+    #: `continuity.projects` listing, keyset page and count in this repository
+    #: answer with four rows no test asked for. So the Constraint unit of work
+    #: reads the union of the two, and the Continuity plane reads only its own.
+    constraint_projects: list[Project] = field(default_factory=list)
+    #: PC-CM-RUN01-WP05. The settings-configure receipt ledger, append-only and
+    #: keyed by `(principal_id, idempotency_key)` exactly as the stored partial
+    #: unique index is -- the fake enforces that uniqueness itself, because it
+    #: is what separates a replay from a conflict.
+    constraint_settings_history: list[tuple[str, ConstraintProjectSettingsHistoryEntry]] = field(
+        default_factory=list
     )
     project_constraints: dict[tuple[str, str], PersistedConstraintRecord] = field(
         default_factory=dict
@@ -3143,6 +3164,37 @@ class _ConstraintReads:
     ) -> None:
         self._world.constraint_settings[(principal_id, settings.project_id)] = settings
 
+    # --- the Project Controls settings plane (PC-CM-RUN01-WP05) --------------
+    #
+    # Three more stored shapes and no decisions: the locking read is the plain
+    # read because a single-threaded in-memory world has nothing to lock, the
+    # keyed lookup is the partition predicate written out, and the insert
+    # enforces the one uniqueness rule the replay gate depends on -- raising the
+    # narrowed key conflict the real adapter raises, never a driver error.
+
+    def get_project_settings_for_update(
+        self, principal_id: str, project_id: str
+    ) -> ConstraintProjectSettings | None:
+        return self._world.constraint_settings.get((principal_id, project_id))
+
+    def get_project_settings_history_by_idempotency_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> ConstraintProjectSettingsHistoryEntry | None:
+        for owner, entry in self._world.constraint_settings_history:
+            if owner == principal_id and entry.idempotency_key == idempotency_key:
+                return entry
+        return None
+
+    def insert_project_settings_history(
+        self, principal_id: str, entry: ConstraintProjectSettingsHistoryEntry
+    ) -> None:
+        for owner, stored in self._world.constraint_settings_history:
+            if owner == principal_id and stored.idempotency_key == entry.idempotency_key:
+                raise ConstraintProjectSettingsHistoryKeyConflictError(
+                    "the idempotency key is already bound for this principal"
+                )
+        self._world.constraint_settings_history.append((principal_id, entry))
+
     def _category_row(
         self, principal_id: str, category_id: str
     ) -> tuple[str, ConstraintCategoryRow] | None:
@@ -3570,8 +3622,11 @@ class FakeConstraintManagementUnitOfWork(ConstraintManagementUnitOfWork):
     def projects(self) -> ProjectRepository:
         # The same `_Projects` the gateway unit of work hands out, over the same
         # `World`, so a Constraint service that locks a Project in the fake sees
-        # exactly the Projects the rest of the scene created.
-        return _Projects(self._world)
+        # exactly the Projects the rest of the scene created -- plus the
+        # scene's own synthetic Constraint Projects, which `World.constraint_
+        # projects` explains are held separately so they do not appear in every
+        # Continuity listing in the repository.
+        return _ConstraintPlaneProjects(self._world)
 
 
 class _Situations(SituationRepository):
@@ -3831,6 +3886,30 @@ class _Projects(ProjectRepository):
             request_digest=request_digest,
             now=now,
         )
+
+
+class _ConstraintPlaneProjects(_Projects):
+    """`_Projects`, widened to the scene's synthetic Constraint Projects.
+
+    Reads only. Everything a Constraint transaction is entitled to do with a
+    Project is ask whose it is, so the two methods that answer that are the two
+    that consult the extra store; `add_project` and the rest are inherited
+    unchanged and still write into the one Continuity list.
+    """
+
+    def _owned(self, principal_id: str, project_id: str) -> Project | None:
+        for project in self._world.constraint_projects:
+            if project.principal_id == principal_id and project.project_id == project_id:
+                return project
+        return None
+
+    def get_project(self, principal_id: str, project_id: str) -> Project | None:
+        found = super().get_project(principal_id, project_id)
+        return found if found is not None else self._owned(principal_id, project_id)
+
+    def lock_project(self, principal_id: str, project_id: str) -> Project | None:
+        found = super().lock_project(principal_id, project_id)
+        return found if found is not None else self._owned(principal_id, project_id)
 
 
 class _ContinuityAuthoring(ContinuityAuthoringRepository):
@@ -8539,6 +8618,10 @@ class Scene:
         self.constraint_mutation_project_id = issue_identifier(IdKind.PROJECT)
         self.constraint_category_project_id = issue_identifier(IdKind.PROJECT)
         self.constraint_reorder_project_id = issue_identifier(IdKind.PROJECT)
+        #: PC-CM-RUN01-WP05. One further Project this Principal owns and nobody
+        #: has configured, so `project_controls.configure` has somewhere to
+        #: create a settings row without colliding with the four above.
+        self.constraint_unconfigured_project_id = issue_identifier(IdKind.PROJECT)
         self.constraint_mutation_category_id = issue_identifier(IdKind.CONSTRAINT_CATEGORY)
         self.constraint_update_category_id = issue_identifier(IdKind.CONSTRAINT_CATEGORY)
         self.constraint_deactivate_category_id = issue_identifier(IdKind.CONSTRAINT_CATEGORY)
@@ -8549,6 +8632,32 @@ class Scene:
         self.constraint_close_id = issue_identifier(IdKind.PROJECT_CONSTRAINT)
         self.constraint_follow_up_id = issue_identifier(IdKind.PROJECT_CONSTRAINT)
         self.constraint_void_id = issue_identifier(IdKind.PROJECT_CONSTRAINT)
+        # PC-CM-RUN01-WP05. A real Project row for every synthetic Constraint
+        # Project. Project ownership is now asked of `ProjectRepository` rather
+        # than inferred from the presence of a settings row -- which is what the
+        # stored composite foreign key has always required anyway, so a scene
+        # with settings and no Project was describing a state the database would
+        # refuse. `project_controls.status` also needs a Project with *no*
+        # settings, which is `constraint_unconfigured_project_id` below.
+        for owned_project in (
+            self.constraint_project_id,
+            self.constraint_mutation_project_id,
+            self.constraint_category_project_id,
+            self.constraint_reorder_project_id,
+            self.constraint_unconfigured_project_id,
+        ):
+            world.constraint_projects.append(
+                Project(
+                    project_id=owned_project,
+                    principal_id=self.principal.principal_id,
+                    name=f"A Synthetic Constraint Project {owned_project[-6:]}",
+                    state=ProjectState.ACTIVE,
+                    opened_at=WHEN,
+                    created_at=WHEN,
+                    updated_at=WHEN,
+                    version=1,
+                )
+            )
         world.constraint_settings[(self.principal.principal_id, self.constraint_project_id)] = (
             ConstraintProjectSettings(
                 principal_id=self.principal.principal_id,

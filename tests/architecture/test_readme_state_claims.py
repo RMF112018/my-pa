@@ -541,15 +541,13 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     }
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
-    assert implemented == 166
+    assert implemented == 168
     assert len(withheld_families) == 70
     assert unwired == {
         Capability.CONSTRAINTS_CREATE_PUBLISHED,
         Capability.CONSTRAINTS_PORTFOLIO_LIST,
         Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
         Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
-        Capability.PROJECT_CONTROLS_CONFIGURE,
-        Capability.PROJECT_CONTROLS_STATUS,
     }
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
     # composed by default, and `RI-ENT-WP-10`'s five record-family reads arrived
@@ -562,7 +560,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # by six while the withheld figure is unchanged. `PC-CM-IMP-WP07`'s twelve
     # Constraint mutations arrive on the served side for the same reason, and
     # the withheld figure is again unchanged.
-    assert default == 96 and total == 172 and withheld == 76
+    assert default == 98 and total == 172 and withheld == 74
 
     # Exercise the same application and MCP publication composition that owns
     # the current 91-tool measurement. GoodNotes pull is part of that measured
@@ -589,7 +587,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert authenticated_mcp_capabilities == {
         capability.value for capability in application_capabilities
     }
-    assert len(local_mcp_capabilities) == default - 3 == 93
+    assert len(local_mcp_capabilities) == default - 3 == 95
     assert authenticated_mcp_capabilities - local_mcp_capabilities == {
         "goodnotes.pull",
         "goodnotes.complete",
@@ -605,8 +603,8 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     readme = README.read_text(encoding="utf-8")
     assert f"{default} of the {total} capabilities are `available`" in readme
     assert f"`{withheld} of {total} capabilities are unwired.`" in readme
-    assert "166 have application commands/handlers" in readme
-    assert "fully composed authenticated client sees all 166 implemented tools" in readme
+    assert "168 have application commands/handlers" in readme
+    assert "fully composed authenticated client sees all 168 implemented tools" in readme
     entity_split = (
         f"{SPELLED_COUNTS[entity_total].lower()} `entities.*` capabilities: "
         f"{SPELLED_COUNTS[entity_reads].lower()} reads and "
@@ -629,16 +627,16 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert "one hundred and seventy-two capabilities" in architecture_index
     assert f"**{default} application-available capabilities**" in runbook
     assert f"publishes **{default - 3} tools**" in runbook
-    assert "unconfigured local stdio: 93" in runbook
-    assert "fully feature-composed local stdio: 163" in runbook
-    assert "166 have application commands/handlers" in runbook
-    assert "all 166 implemented tools" in runbook
+    assert "unconfigured local stdio: 95" in runbook
+    assert "fully feature-composed local stdio: 165" in runbook
+    assert "168 have application commands/handlers" in runbook
+    assert "all 168 implemented tools" in runbook
     assert f"A default process serves\n{SPELLED_COUNTS[default].lower()}" in gateway_runbook
     assert (
         f"{SPELLED_COUNTS[len(withheld_families)].lower()} handler-implemented capabilities "
         "are composition-withheld"
     ) in gateway_runbook
-    assert "six\nare structurally unwired" in gateway_runbook
+    assert "four\nare structurally unwired" in gateway_runbook
     assert (
         f"`{withheld} of {total} total capabilities are unavailable or unwired.`" in gateway_runbook
     )
@@ -649,7 +647,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     normalized_completion_state = " ".join(completion_state.split()).lower()
     assert f"all {SPELLED_COUNTS[total].lower()} capability names" in normalized_completion_state
     assert f"names, {implemented} have application commands/handlers" in normalized_completion_state
-    assert "six run 01 names remain structurally unwired" in normalized_completion_state
+    assert "four remaining run 01 names remain structurally unwired" in normalized_completion_state
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
     assert "one hundred and seventy-two capabilities" in module_boundaries

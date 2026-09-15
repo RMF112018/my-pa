@@ -387,6 +387,9 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.CONSTRAINT_SYNC_APPLY,
         Capability.CONSTRAINT_SYNC_ACKNOWLEDGE,
         Capability.CONSTRAINT_SYNC_RESOLVE,
+        # PC-CM-RUN01-WP05. Stating a Project's calendar moves a settings version
+        # and writes a receipt; reading whether one is stated does neither.
+        Capability.PROJECT_CONTROLS_CONFIGURE,
     }
     destructive_writes = {
         Capability.CAPTURE_REVISE,
@@ -470,6 +473,11 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.CONSTRAINT_SYNC_APPLY,
         Capability.CONSTRAINT_SYNC_ACKNOWLEDGE,
         Capability.CONSTRAINT_SYNC_RESOLVE,
+        # PC-CM-RUN01-WP05. Not additive: a configure may *replace* a Project's
+        # calendar, and every Overdue and Due Soon boundary in that Project moves
+        # with it. It is in `_WRITE_CAPABILITIES` and deliberately not in
+        # `_ADDITIVE_WRITE_CAPABILITIES`, which holds only the two `create`s.
+        Capability.PROJECT_CONTROLS_CONFIGURE,
     }
     for capability in Capability:
         tool = tools.get(capability.value)

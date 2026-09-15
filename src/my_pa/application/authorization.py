@@ -69,6 +69,7 @@ from my_pa.application.commands import (
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
+    ConfigureProjectControls,
     CorrectGoodNotes,
     CreateCapture,
     CreateCommitment,
@@ -163,6 +164,7 @@ from my_pa.application.commands import (
     ReadKnowledge,
     ReadManagedDocument,
     ReadProject,
+    ReadProjectControlsStatus,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -424,6 +426,12 @@ def _requested_scope(
             | UpdateConstraintCategory()
             | DeactivateConstraintCategory()
             | ReorderConstraintCategories()
+            # The two Project Controls names (PC-CM-RUN01-WP05) name a Project
+            # in the Principal's own partition and never a configured source,
+            # on the identical argument. `domain.policy.decision._SCOPELESS`
+            # already lists both, and this is the application half of that.
+            | ConfigureProjectControls()
+            | ReadProjectControlsStatus()
             | ReadConstraintSyncState()
             | ReadConstraintSyncDelta()
             | ListConstraintSyncConflicts()

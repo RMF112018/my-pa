@@ -183,18 +183,24 @@ def test_chatllm_grant_purpose_matches_the_remote_canonical_stamp() -> None:
         assert chatllm_grant_purpose(capability) == resolve_remote_purpose(capability, None)
 
 
-def test_full_plane_effective_target_is_one_hundred_forty_four() -> None:
+def test_full_plane_effective_target_is_one_hundred_forty_six() -> None:
+    """144 until PC-CM-RUN01-WP05 supplied the two Project Controls handlers.
+
+    The target is derived — `implemented` intersected with what the policy
+    already classifies as data management — so wiring a name the policy had
+    already classified moves it without anything here being reclassified.
+    """
     composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
     desired = desired_effective_capabilities(composed)
-    assert len(desired) == 144
+    assert len(desired) == 146
     assert all(capability in IMPLEMENTED for capability in desired)
     assert all(is_chatllm_data_management(capability) for capability in desired)
 
 
-def test_default_plane_effective_target_is_seventy_eight() -> None:
+def test_default_plane_effective_target_is_eighty() -> None:
     composed = composed_capabilities(IMPLEMENTED, _DEFAULT_PLANES)
     desired = desired_effective_capabilities(composed)
-    assert len(desired) == 78
+    assert len(desired) == 80
     assert Capability.DOCUMENTS_READ not in desired
     assert Capability.ENTITIES_SEARCH not in desired
     assert Capability.CONSTRAINTS_LIST in desired
@@ -216,7 +222,13 @@ def test_unimplemented_run01_names_are_not_grant_failures() -> None:
         is ChatLLMProfileOutcome.POLICY_REQUIRED_NOT_IMPLEMENTED
     )
     assert Capability.CONSTRAINTS_PORTFOLIO_LIST not in diff.add
-    assert Capability.PROJECT_CONTROLS_CONFIGURE not in diff.add
+    # PC-CM-RUN01-WP05. The two Project Controls names are no longer among the
+    # unimplemented, so they are ordinary grants to add rather than policy-
+    # required-not-implemented. Asserted both ways round so this row cannot
+    # quietly become vacuous.
+    assert Capability.PROJECT_CONTROLS_CONFIGURE in diff.add
+    assert Capability.PROJECT_CONTROLS_STATUS in diff.add
+    assert Capability.PROJECT_CONTROLS_CONFIGURE not in diff.policy_required_not_implemented
 
 
 def test_september13_partial_regrant_fails_attestation() -> None:

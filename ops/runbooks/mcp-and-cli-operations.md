@@ -188,13 +188,13 @@ one declared capability, `tools`, and nothing else.
 
 `tools/list` returns the tools **this process can serve**, and that is not the
 same as the tools this build implements. The build declares **172** capability
-names; 166 have application commands/handlers and the exact six Run 01 names
+names; 168 have application commands/handlers and the exact four remaining Run 01 names
 remain unwired. The measured application composition with GoodNotes pull enabled has
-**96 application-available capabilities**: 166 implemented handlers less the six
+**98 application-available capabilities**: 168 implemented handlers less the six
 `documents.`, fifty-five `entities.`, and nine `relationship_memory.` handlers
 whose composition gates remain off. A local stdio MCP session has no authenticated
 client identity, so it additionally withholds the three client-bound GoodNotes
-pull operations and publishes **93 tools**. An authenticated MCP client against
+pull operations and publishes **95 tools**. An authenticated MCP client against
 that same 96-capability application composition sees all 96. These figures are
 derived in `test_current_state_docs_derive_the_default_capability_split` from a
 real `ApplicationService` and `published_tools`, not from a second list.
@@ -213,7 +213,7 @@ gates behind `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` on exactly the same terms
 the plane switch alone still withholds its write half — and the nine
 `relationship_memory.` names, which need the plane variable *and*
 `MY_PA_RELATIONSHIP_MEMORY_ENABLED`; a fully composed authenticated child publishes
-all 166 implemented tools, while the six declared Run 01 names remain absent until
+all 168 implemented tools, while the four declared Run 01 names remain absent until
 their handlers land. An operator who expects `documents.create`
 on the list and does not find it should look at that variable first — it is the
 only thing that decides it. (Pointing the plane at real storage is `EXT-10` and
@@ -223,10 +223,10 @@ the same gating and the plane's limits.)
 Measured against a real child process — `.venv/bin/python apps/gateway.py mcp`
 — by
 `tests/contract/test_mcp_transport.py::test_a_real_child_process_publishes_only_what_it_was_composed_with`
-(unconfigured local stdio: 93, with the three authenticated-client capabilities
+(unconfigured local stdio: 95, with the three authenticated-client capabilities
 absent) and
 `::test_a_child_with_a_managed_root_publishes_every_locally_available_capability`
-(fully feature-composed local stdio: 163, again excluding exactly those three).
+(fully feature-composed local stdio: 165, again excluding exactly those three).
 
 **Current-state correction (2026-09-08):** earlier snapshots in this section
 mixed declared capability totals, application availability, feature-gated

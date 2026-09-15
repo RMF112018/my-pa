@@ -719,6 +719,14 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         Capability.CONSTRAINTS_HISTORY: {"constraint_id": marked.constraint_id},
         Capability.CONSTRAINTS_OVERVIEW: {"project_id": marked.constraint_project_id},
         Capability.CONSTRAINT_CATEGORIES_LIST: {"project_id": marked.constraint_project_id},
+        # PC-CM-RUN01-WP05. Well-formed, so the only thing wrong in each sweep
+        # below is the authority under test.
+        Capability.PROJECT_CONTROLS_STATUS: {"project_id": marked.constraint_project_id},
+        Capability.PROJECT_CONTROLS_CONFIGURE: {
+            "project_id": marked.constraint_unconfigured_project_id,
+            "timezone_name": "America/Chicago",
+            "idempotency_key": "negative-project-controls-1",
+        },
         Capability.CONSTRAINT_SYNC_STATE: {
             "project_id": marked.constraint_project_id,
             "target_id": make_identifier(IdKind.CONSTRAINT_SYNC_TARGET, "synctarget0000000001"),
@@ -1870,6 +1878,11 @@ SCOPED_CAPABILITIES = [
         Capability.CONSTRAINT_CATEGORIES_UPDATE,
         Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
         Capability.CONSTRAINT_CATEGORIES_REORDER,
+        # PC-CM-RUN01-WP05's two Project Controls names, on the identical
+        # reading and already in `domain.policy.decision._SCOPELESS`: a
+        # Project's Constraint calendar is its owner's own and names no source.
+        Capability.PROJECT_CONTROLS_CONFIGURE,
+        Capability.PROJECT_CONTROLS_STATUS,
     }
 ]
 

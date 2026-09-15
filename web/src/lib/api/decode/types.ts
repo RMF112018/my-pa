@@ -59,6 +59,8 @@ import type { GoodNotesReadResult } from "./capabilities/goodnotes.read";
 import type { GoodNotesRunsListResult } from "./capabilities/goodnotes.runs.list";
 import type { GoodNotesSearchResult } from "./capabilities/goodnotes.search";
 import type { GoodNotesWorkResult } from "./capabilities/goodnotes.work";
+import type { ProjectControlsConfigureResult } from "./capabilities/project_controls.configure";
+import type { ProjectControlsStatusResult } from "./capabilities/project_controls.status";
 import type { KnowledgeReadResult } from "./capabilities/knowledge.read";
 import type { KnowledgeRevealResult } from "./capabilities/knowledge.reveal";
 import type { KnowledgeSearchResult } from "./capabilities/knowledge.search";
@@ -145,6 +147,8 @@ export type CapabilityResults = {
   readonly "goodnotes.work": GoodNotesWorkResult;
   readonly "knowledge.read": KnowledgeReadResult;
   readonly "knowledge.reveal": KnowledgeRevealResult;
+  readonly "project_controls.configure": ProjectControlsConfigureResult;
+  readonly "project_controls.status": ProjectControlsStatusResult;
   readonly "knowledge.search": KnowledgeSearchResult;
   readonly "reports.latest": ReportsLatestResult;
   readonly "reports.list": ReportsListResult;

@@ -72,6 +72,7 @@ from my_pa.application.commands import (
     Command,
     CommitIntelligenceArtifact,
     CompleteGoodNotesPull,
+    ConfigureProjectControls,
     CorrectGoodNotes,
     CreateCapture,
     CreateCommitment,
@@ -166,6 +167,7 @@ from my_pa.application.commands import (
     ReadKnowledge,
     ReadManagedDocument,
     ReadProject,
+    ReadProjectControlsStatus,
     ReadTask,
     RecordContextFeedback,
     RecordIntelligenceRunState,
@@ -708,6 +710,17 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.CONSTRAINT_CATEGORIES_LIST: ListConstraintCategories(
             project_id=issue_identifier(IdKind.PROJECT)
         ),
+        # PC-CM-RUN01-WP05. Well-formed and naming nothing the scene owns, on
+        # the same terms as every row here: the only thing wrong in a denial
+        # test must be the authority.
+        Capability.PROJECT_CONTROLS_STATUS: ReadProjectControlsStatus(
+            project_id=issue_identifier(IdKind.PROJECT)
+        ),
+        Capability.PROJECT_CONTROLS_CONFIGURE: ConfigureProjectControls(
+            project_id=issue_identifier(IdKind.PROJECT),
+            timezone_name="America/Chicago",
+            idempotency_key="policy-project-controls-01",
+        ),
         Capability.CONSTRAINT_SYNC_STATE: ReadConstraintSyncState(
             project_id=issue_identifier(IdKind.PROJECT),
             target_id=issue_identifier(IdKind.CONSTRAINT_SYNC_TARGET),
@@ -1128,8 +1141,6 @@ HANDLER_UNWIRED_CAPABILITIES: Final = frozenset(
         Capability.CONSTRAINTS_PORTFOLIO_LIST,
         Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
         Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
-        Capability.PROJECT_CONTROLS_CONFIGURE,
-        Capability.PROJECT_CONTROLS_STATUS,
     }
 )
 CONTRACT_ONLY_CAPABILITIES: Final = frozenset(

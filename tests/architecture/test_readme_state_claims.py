@@ -223,6 +223,17 @@ def _alembic_identity() -> tuple[int, str]:
 #: Spelled revision counts, so a guard states the count the chain actually has
 #: rather than a literal that goes stale in step with the prose it guards.
 SPELLED_COUNTS: Final[dict[int, str]] = {
+    # The structurally unwired Run 01 remainder lives down here; it shrinks as
+    # each of those names is wired, so the small end of the vocabulary is spelled
+    # too rather than left for a later package to discover missing.
+    4: "Four",
+    5: "Five",
+    6: "Six",
+    7: "Seven",
+    8: "Eight",
+    9: "Nine",
+    10: "Ten",
+    11: "Eleven",
     12: "Twelve",
     13: "Thirteen",
     14: "Fourteen",
@@ -541,15 +552,13 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     }
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
-    assert implemented == 166
+    assert implemented == 168
     assert len(withheld_families) == 70
     assert unwired == {
         Capability.CONSTRAINTS_CREATE_PUBLISHED,
         Capability.CONSTRAINTS_PORTFOLIO_LIST,
         Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
         Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
-        Capability.PROJECT_CONTROLS_CONFIGURE,
-        Capability.PROJECT_CONTROLS_STATUS,
     }
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
     # composed by default, and `RI-ENT-WP-10`'s five record-family reads arrived
@@ -562,7 +571,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # by six while the withheld figure is unchanged. `PC-CM-IMP-WP07`'s twelve
     # Constraint mutations arrive on the served side for the same reason, and
     # the withheld figure is again unchanged.
-    assert default == 96 and total == 172 and withheld == 76
+    assert default == 98 and total == 172 and withheld == 74
 
     # Exercise the same application and MCP publication composition that owns
     # the current 91-tool measurement. GoodNotes pull is part of that measured
@@ -589,7 +598,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert authenticated_mcp_capabilities == {
         capability.value for capability in application_capabilities
     }
-    assert len(local_mcp_capabilities) == default - 3 == 93
+    assert len(local_mcp_capabilities) == default - 3 == 95
     assert authenticated_mcp_capabilities - local_mcp_capabilities == {
         "goodnotes.pull",
         "goodnotes.complete",
@@ -605,8 +614,8 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     readme = README.read_text(encoding="utf-8")
     assert f"{default} of the {total} capabilities are `available`" in readme
     assert f"`{withheld} of {total} capabilities are unwired.`" in readme
-    assert "166 have application commands/handlers" in readme
-    assert "fully composed authenticated client sees all 166 implemented tools" in readme
+    assert "168 have application commands/handlers" in readme
+    assert "fully composed authenticated client sees all 168 implemented tools" in readme
     entity_split = (
         f"{SPELLED_COUNTS[entity_total].lower()} `entities.*` capabilities: "
         f"{SPELLED_COUNTS[entity_reads].lower()} reads and "
@@ -616,7 +625,27 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert "forty-two `entities.*` capabilities" not in readme
     assert "twenty-nine writes" not in readme
 
-    system_context = SYSTEM_CONTEXT.read_text(encoding="utf-8").lower()
+    # PC-CM-RUN01-WP05 corrective cycle. Three derived counts went stale across
+    # WP04/WP07 because nothing here named the sentences that carried them: the
+    # README's breakdown of the withheld 74, the system-context wiring figure,
+    # and the MCP/CLI runbook's command-backed and unwired figures. They are
+    # bound now, from `_HANDLERS` and `Capability` rather than from a literal,
+    # so the next package that moves the numbers moves these too.
+    unwired_count = len(unwired)
+    assert withheld == len(withheld_families) + unwired_count
+    readme_breakdown = (
+        f"and the {SPELLED_COUNTS[unwired_count].lower()} remaining Run 01 names — are\n"
+        "`not_implemented`"
+    )
+    assert readme_breakdown in readme, (
+        "The README's breakdown of the withheld capabilities no longer names the "
+        f"{unwired_count} structurally unwired Run 01 names. It is the sentence "
+        f"that accounts for all {withheld} of them."
+    )
+
+    system_context_text = SYSTEM_CONTEXT.read_text(encoding="utf-8")
+    assert f"wires {implemented} through HTTP, MCP, and CLI composition" in system_context_text
+    system_context = system_context_text.lower()
     assert "one hundred and seventy-two capabilities" in system_context
     assert f"exposes {default} of them" in system_context
 
@@ -629,16 +658,24 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert "one hundred and seventy-two capabilities" in architecture_index
     assert f"**{default} application-available capabilities**" in runbook
     assert f"publishes **{default - 3} tools**" in runbook
-    assert "unconfigured local stdio: 93" in runbook
-    assert "fully feature-composed local stdio: 163" in runbook
-    assert "166 have application commands/handlers" in runbook
-    assert "all 166 implemented tools" in runbook
+    assert "unconfigured local stdio: 95" in runbook
+    assert "fully feature-composed local stdio: 165" in runbook
+    assert "168 have application commands/handlers" in runbook
+    assert "all 168 implemented tools" in runbook
+    normalized_runbook = " ".join(runbook.split()).lower()
+    assert (
+        f"the {SPELLED_COUNTS[implemented].lower()} command-backed names" in normalized_runbook
+    ), "the MCP/CLI runbook's command-backed figure no longer matches the dispatch table"
+    assert (
+        f"the exact {SPELLED_COUNTS[unwired_count].lower()} remaining run 01 names "
+        "as `not_implemented`" in normalized_runbook
+    ), "the MCP/CLI runbook's unwired Run 01 figure no longer matches the dispatch table"
     assert f"A default process serves\n{SPELLED_COUNTS[default].lower()}" in gateway_runbook
     assert (
         f"{SPELLED_COUNTS[len(withheld_families)].lower()} handler-implemented capabilities "
         "are composition-withheld"
     ) in gateway_runbook
-    assert "six\nare structurally unwired" in gateway_runbook
+    assert "four\nare structurally unwired" in gateway_runbook
     assert (
         f"`{withheld} of {total} total capabilities are unavailable or unwired.`" in gateway_runbook
     )
@@ -649,7 +686,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     normalized_completion_state = " ".join(completion_state.split()).lower()
     assert f"all {SPELLED_COUNTS[total].lower()} capability names" in normalized_completion_state
     assert f"names, {implemented} have application commands/handlers" in normalized_completion_state
-    assert "six run 01 names remain structurally unwired" in normalized_completion_state
+    assert "four remaining run 01 names remain structurally unwired" in normalized_completion_state
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
     assert "one hundred and seventy-two capabilities" in module_boundaries

@@ -501,6 +501,27 @@
       "purpose": "constraint_read",
       "payloadFields": ["project_id", "states"],
       "probe": { "project_id": "prj_aaaaaaaa11111111" }
+    },
+    "project_controls.status": {
+      "purpose": "constraint_read",
+      "payloadFields": ["project_id"],
+      "probe": { "project_id": "prj_aaaaaaaa11111111" }
+    },
+    "project_controls.configure": {
+      "purpose": "constraint_authoring",
+      "payloadFields": [
+        "project_id",
+        "timezone_name",
+        "idempotency_key",
+        "expected_version",
+        "client_context",
+        "correlation_id"
+      ],
+      "probe": {
+        "project_id": "prj_aaaaaaaa11111111",
+        "timezone_name": "America/New_York",
+        "idempotency_key": "idk_aaaaaaaa11111111"
+      }
     }
   },
   "_dispositionComment": [

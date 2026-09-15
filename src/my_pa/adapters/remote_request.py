@@ -131,6 +131,17 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # still requires `idempotency_key`; the server stamps it because the
         # caller must not.
         Capability.GSQS_START,
+        # PC-CM-RUN01-WP05. `project_controls.configure` is here and
+        # deliberately **not** in `_SERVER_REPLAY_REMOTE_CAPABILITIES`, which is
+        # the set for writes that have no `idempotency_key` field at all and are
+        # replayed through the canonical request ledger instead. This command
+        # requires one -- its replay and conflict semantics are defined against
+        # `constraint_project_settings_history (principal_id, idempotency_key)`
+        # and are not expressible without it -- and `REMOTE_OWNED_PAYLOAD_FIELDS`
+        # refuses a caller-supplied key, so without this entry a remote MCP
+        # caller could not name one and could not call the tool at all. The
+        # `gsqs.start` line above states the same arrangement in the same words.
+        Capability.PROJECT_CONTROLS_CONFIGURE,
         # Report writes require `idempotency_key` on the command. ChatLLM cannot
         # send the key (`REMOTE_OWNED_PAYLOAD_FIELDS`) and the command cannot
         # omit it, so the server stamps it.

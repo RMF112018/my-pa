@@ -171,6 +171,11 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_webauthn_auth_persistence_migration.py",
     "tests/schema/test_work_task_commitment_migration.py",
     "tests/unit/test_cli_auth.py",
+    # PC-CM-RUN01-WP05 (`b43e9b0a`) added this module and it names the head; the
+    # list is checked against the tree by
+    # `test_the_head_pin_list_is_the_files_that_actually_pin_the_head`, which
+    # this entry is what satisfies.
+    "tests/unit/test_project_controls_settings_history.py",
 )
 
 #: The constant names those files use for the chain's head.

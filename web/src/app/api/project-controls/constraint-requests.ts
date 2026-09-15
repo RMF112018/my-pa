@@ -131,8 +131,46 @@ export const CATEGORY_FIELDS: Readonly<Record<string, WorkField>> = {
   state: { gateway: "states", type: "string-array", values: CATEGORY_STATES, maxItems: 3 },
 } as const;
 
-/** `ReadConstraintOverview` and `ReadConstraint` take no query at all. */
+/** `ReadConstraintOverview`, `ReadConstraint` and `ReadProjectControlsStatus` take no query at all. */
 export const NO_FIELDS: Readonly<Record<string, WorkField>> = {} as const;
+
+/**
+ * `ConfigureProjectControls`: the only write vocabulary in this family.
+ *
+ * Three names, and deliberately not six. `ConfigureProjectControls` also
+ * accepts `client_context` and `correlation_id`, and both are omitted here
+ * because the accepted BFF plan admits only
+ * `{timezoneName, idempotencyKey, expectedVersion?}` from the browser. A field
+ * absent from this map is refused as an unknown field by the shared work-route
+ * body mapper, so the omission is enforcement rather than an oversight: a
+ * browser cannot label its own request for the server's telemetry, and a
+ * correlation identifier the
+ * caller chose is not one this transport is willing to attribute to a Principal.
+ *
+ * `project_id` is not here either, and cannot be. It is fixed from the route
+ * segment, so a body naming a *different* Project is an unknown field and a
+ * `400` — the URL and the body cannot disagree, because only one of them is
+ * ever consulted.
+ *
+ * `idempotencyKey` is required by the backend command rather than optional as
+ * it is on every other Constraint-plane write; the gateway refuses a request
+ * without one, and nothing here supplies a default. A key this layer invented
+ * would make replay protection depend on the transport rather than the caller.
+ *
+ * `expectedVersion` is an integer and genuinely optional: a Project nobody has
+ * configured has no version to expect, and omitting the field is how a caller
+ * says "I believe there is nothing here yet".
+ *
+ * No timezone vocabulary is transcribed. The IANA zone set is `zoneinfo`'s
+ * answer, it is not closed, and a copy of it here would be a second opinion
+ * that drifts — `timezoneName` is admitted as a string and validated by the
+ * domain before anything is written.
+ */
+export const SETTINGS_FIELDS: Readonly<Record<string, WorkField>> = {
+  timezoneName: { gateway: "timezone_name", type: "string" },
+  idempotencyKey: { gateway: "idempotency_key", type: "string" },
+  expectedVersion: { gateway: "expected_version", type: "integer" },
+} as const;
 
 /**
  * The refusal for a path segment that is not the identifier kind it must be.

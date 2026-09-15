@@ -15,6 +15,7 @@ here is the floor beneath that: the one composition input they need, absent.
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Final
 
 import pytest
@@ -26,7 +27,7 @@ from my_pa.application.service import (
     _HANDLERS,
     ApplicationService,
 )
-from my_pa.contracts.v1.envelope import RequestMetadata
+from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.purpose import Purpose
@@ -46,6 +47,10 @@ AUTHORING: Final[frozenset[Capability]] = frozenset(
         Capability.CONSTRAINT_CATEGORIES_UPDATE,
         Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
         Capability.CONSTRAINT_CATEGORIES_REORDER,
+        # PC-CM-RUN01-WP05. Stating a Project's calendar is the thirteenth
+        # authoring grant: it moves a settings version, writes a receipt, and
+        # changes what every date-derived reading of that Project means.
+        Capability.PROJECT_CONTROLS_CONFIGURE,
     }
 )
 
@@ -58,7 +63,7 @@ def _uncomposed(scene: Scene) -> ApplicationService:
 # ---- the wiring --------------------------------------------------------------
 
 
-def test_the_declared_authoring_set_is_the_twelve() -> None:
+def test_the_declared_authoring_set_is_the_thirteen() -> None:
     assert _CONSTRAINT_AUTHORING_CAPABILITIES == AUTHORING
 
 
@@ -122,3 +127,85 @@ def _request(capability: Capability, scene: Scene) -> tuple[RequestMetadata, obj
     record = staged_record(scene, text="a synthetic record")
     payload = payloads_for(scene, record)[capability]
     return normalize(capability.value, document(capability, scene.principal.principal_id, payload))
+
+
+# ---- what a *stored* Project timezone failure is classified as ---------------
+
+
+def _invoke(capability: Capability, scene: Scene, payload: dict[str, object]) -> ResponseEnvelope:
+    """One authoring request, normalized and invoked against a composed build."""
+    from my_pa.adapters.normalization import normalize
+    from tests.contract.test_transport_parity import document
+
+    metadata, command = normalize(
+        capability.value, document(capability, scene.principal.principal_id, payload)
+    )
+    return build_service(scene.world, scene.providers).invoke(
+        metadata, command, principal=scene.principal
+    )
+
+
+def test_a_stored_project_timezone_the_database_refuses_is_unavailable_not_invalid(
+    scene: Scene,
+) -> None:
+    """PC-CM-RUN01-WP05 corrective cycle, N6. `unavailable`, and pinned here.
+
+    `_constraint_mutation_translated` wraps the twelve pre-existing authoring
+    mutations as well as the two Project Controls ones, so admitting a
+    `ProjectTimezoneError` clause for the configure path decided an answer for
+    these twelve too. Fail-closed is right — this build never substitutes a
+    calendar — but the value at fault is a *stored* one this caller neither sent
+    nor can change from this request, so `invalid_request` would send it looking
+    for a mistake in a field it does not have. `unavailable` naming the Project
+    is the same answer `constraints._project_today` already gives the read plane
+    for the same fact.
+
+    Reached with `completion_date` omitted, which is the only way a close asks
+    the Project's calendar anything: a request carrying the date never asks.
+    """
+    principal_id = scene.principal.principal_id
+    project_id = scene.world.project_constraints[
+        (principal_id, scene.constraint_close_id)
+    ].project_id
+    key = (principal_id, project_id)
+    stored = scene.world.constraint_settings[key]
+    scene.world.constraint_settings[key] = dataclasses.replace(
+        stored, timezone_name="Mars/Olympus_Mons"
+    )
+
+    envelope = _invoke(
+        Capability.CONSTRAINTS_CLOSE,
+        scene,
+        {
+            "constraint_id": scene.constraint_close_id,
+            "expected_version": 1,
+            "closure_commentary": "Resolved on site.",
+        },
+    )
+    assert envelope.error is not None
+    assert envelope.error.code is ErrorCode.UNAVAILABLE
+
+
+def test_a_caller_supplied_timezone_the_database_refuses_is_still_invalid_request(
+    scene: Scene,
+) -> None:
+    """The other half of the same narrowing, so neither can drift alone.
+
+    `project_controls.configure` validates the caller's own string before it
+    reads or locks anything, so here the fault genuinely is a request field and
+    `invalid_request` is the truth. `_project_controls_timezone_translated` is
+    nested inside the wider translator at that one call site to keep it so.
+    """
+    envelope = _invoke(
+        Capability.PROJECT_CONTROLS_CONFIGURE,
+        scene,
+        {
+            "project_id": scene.constraint_unconfigured_project_id,
+            "timezone_name": "Mars/Olympus_Mons",
+            "idempotency_key": "pc-wp05-corrective-01",
+        },
+    )
+    assert envelope.error is not None
+    assert envelope.error.code is ErrorCode.INVALID_REQUEST
+    # And never the value: the refused name is the caller's own string.
+    assert "Mars/Olympus_Mons" not in envelope.model_dump_json()

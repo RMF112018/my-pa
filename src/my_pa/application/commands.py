@@ -9511,6 +9511,81 @@ class ReorderConstraintCategories:
         _constraint_optional_text(self.correlation_id, SafeDetail.SELECTOR)
 
 
+# --- Project Controls configuration (PC-CM-RUN01-WP05) ----------------------
+#
+# The two names that make a Project's Constraint calendar an explicitly
+# administered thing rather than a row somebody happened to seed. They are the
+# Constraint plane's commands and use its helpers, but they name no Constraint:
+# their subject is the Project's settings row, which is why they live at the
+# end of the family rather than inside it.
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigureProjectControls:
+    """`project_controls.configure`: state which calendar one Project's dates mean.
+
+    **`idempotency_key` is required here, and it is the only Constraint-plane
+    write of which that is true.** Every other one treats a key as optional,
+    because a caller that supplies none is simply not replay-protected and the
+    worst case is a second Draft. This capability's accepted semantics are not
+    like that: the plan requires that the same key with the same normalized
+    intent replay the original answer and that the same key with a different
+    Project, timezone or expected version be a typed conflict rather than a
+    second write. Neither is expressible without a key, and a null key would
+    make the replay and conflict behaviour depend on whether the caller
+    happened to ask for it.
+
+    `expected_version` is the settings row's version and is deliberately
+    nullable: a Project nobody has configured has no version to expect, and
+    null is how a caller says "I believe there is nothing here yet". It is part
+    of the request digest exactly as it arrives, null included, so a retry that
+    quietly supplied one is a different request rather than the same one.
+
+    `timezone_name` is checked here only for being a non-blank string. Whether
+    a well-formed name is a real IANA zone is `zoneinfo`'s answer and is asked
+    by the domain validator before anything is written; this layer performs no
+    trim, no case folding and no canonicalization, so the value that reaches
+    storage is the value the caller sent or no value at all.
+    """
+
+    capability: ClassVar[Capability] = Capability.PROJECT_CONTROLS_CONFIGURE
+
+    project_id: str
+    timezone_name: str
+    idempotency_key: str
+    expected_version: int | None = None
+    client_context: str | None = None
+    correlation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _constraint_required_text(self.timezone_name, SafeDetail.SELECTOR)
+        _idempotency_key(self.idempotency_key)
+        _constraint_idempotency_key(self.idempotency_key)
+        if self.expected_version is not None:
+            _constraint_expected_version(self.expected_version)
+        _constraint_optional_text(self.client_context, SafeDetail.SELECTOR)
+        _constraint_optional_text(self.correlation_id, SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadProjectControlsStatus:
+    """`project_controls.status`: whether one Project's Constraint calendar is stated.
+
+    The minimal exact-Project read, the shape `ReadConstraintOverview` already
+    has. It names one Project and takes no filter, page or cursor, because the
+    answer is one row's presence and — when present — that row's three public
+    values.
+    """
+
+    capability: ClassVar[Capability] = Capability.PROJECT_CONTROLS_STATUS
+
+    project_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+
+
 type Command = (
     GetCapabilities
     | ListSources
@@ -9678,6 +9753,8 @@ type Command = (
     | UpdateConstraintCategory
     | DeactivateConstraintCategory
     | ReorderConstraintCategories
+    | ConfigureProjectControls
+    | ReadProjectControlsStatus
 )
 
 

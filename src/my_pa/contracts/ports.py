@@ -100,6 +100,7 @@ from my_pa.domain.project_controls.constraint import ProjectConstraint
 from my_pa.domain.project_controls.history import (
     ConstraintCategoryHistoryEntry,
     ConstraintHistoryEntry,
+    ConstraintProjectSettingsHistoryEntry,
 )
 from my_pa.domain.project_controls.read_models import (
     ConstraintCategoryRow,
@@ -5212,6 +5213,28 @@ class ProjectRepository(ABC):
         """Return the Project the Principal owns, or `None`."""
 
     @abstractmethod
+    def lock_project(self, principal_id: str, project_id: str) -> Project | None:
+        """The same row as `get_project`, `SELECT ... FOR UPDATE`, or `None`.
+
+        The one primitive that serialises Project-bound mutation. Every write
+        that must not race another write for the same Project takes this lock
+        first, and `domain.situation.project_history` has required it through
+        its narrow `ProjectHistoryOps` protocol since Projects gained a version;
+        promoting it here makes the canonical port say what every implementation
+        already had to provide, so a collaborator handed a `ProjectRepository`
+        can serialise without knowing which implementation it holds.
+
+        It is also the **ownership proof**, and it is that before it is anything
+        else: it returns a row only inside `principal_id`'s partition, so a
+        Project another Principal owns — or one that does not exist — is
+        answered identically as `None`, and a caller that locked successfully
+        has established the Project is the caller's. It is deliberately not a
+        settings, membership, or configuration lookup: whether a Project has
+        been configured for some feature is a separate question asked of that
+        feature's own table, after this one has already said whose Project it is.
+        """
+
+    @abstractmethod
     def get_project_entity_link(
         self, principal_id: str, project_id: str
     ) -> ProjectEntityLink | None:
@@ -6682,6 +6705,46 @@ class ConstraintManagementRepository(ABC):
         """Overwrite the mutable columns of an existing settings row."""
 
     @abstractmethod
+    def get_project_settings_for_update(
+        self, principal_id: str, project_id: str
+    ) -> ConstraintProjectSettings | None:
+        """The same row as `get_project_settings`, `SELECT ... FOR UPDATE`, or `None`.
+
+        Read this when the settings row is about to be written, so a concurrent
+        configure of the same Project cannot interleave between the version this
+        one read and the version it writes. `None` still means only "no settings
+        row", never "not your Project": ownership was established by
+        `ProjectRepository.lock_project` before this method was called, and an
+        absent row is the ordinary state of a Project nobody has configured yet.
+        """
+
+    @abstractmethod
+    def get_project_settings_history_by_idempotency_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> ConstraintProjectSettingsHistoryEntry | None:
+        """This Principal's settings-configure receipt for `idempotency_key`, or `None`.
+
+        The key is unique within the Principal, so this answers at most one row.
+        Comparing its `request_digest` with the digest of the request in hand is
+        what separates a replay (same digest, return the stored snapshot) from a
+        conflict (same key, different intent) — this method makes no such
+        judgement itself.
+        """
+
+    @abstractmethod
+    def insert_project_settings_history(
+        self, principal_id: str, entry: ConstraintProjectSettingsHistoryEntry
+    ) -> None:
+        """Append one settings-configure receipt.
+
+        Raises `ConstraintProjectSettingsHistoryKeyConflictError` when this Principal
+        has already bound that idempotency key, so the caller may re-read and
+        decide replay versus conflict; every other integrity violation is left
+        exactly as the driver raised it, to be handled as the internal failure
+        it is.
+        """
+
+    @abstractmethod
     def get_category(self, principal_id: str, category_id: str) -> ConstraintCategory | None:
         """One Constraint Category in this Principal's partition, unlocked, or `None`."""
 
@@ -6988,3 +7051,22 @@ class ConstraintManagementUnitOfWork(ABC):
     @abstractmethod
     def constraints(self) -> ConstraintManagementRepository:
         """The constraint-management repository, inside this transaction."""
+
+    @property
+    @abstractmethod
+    def projects(self) -> ProjectRepository:
+        """The canonical Project repository, on this same connection.
+
+        Constraint Management does not own Projects and does not get a second
+        copy of them: this is `ProjectRepository`, the same port the Situation
+        plane hands out, reached here only so that a Constraint transaction can
+        take `lock_project` *inside itself*. A Project qualified on one
+        connection and written on another is not qualified at all — the lock
+        would be released, or never held, by the time the Constraint rows land —
+        so sharing the transaction is the whole reason this property exists.
+
+        Nothing in Constraint Management may use it to create, rename, close or
+        re-version a Project; the Situation plane remains the only writer of
+        Project state. What a Constraint service is entitled to is the lock and
+        the ownership answer it returns.
+        """

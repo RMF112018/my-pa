@@ -68,8 +68,6 @@ HANDLER_UNWIRED_CAPABILITIES: Final = frozenset(
         Capability.CONSTRAINTS_PORTFOLIO_LIST,
         Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
         Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
-        Capability.PROJECT_CONTROLS_CONFIGURE,
-        Capability.PROJECT_CONTROLS_STATUS,
     }
 )
 
@@ -133,7 +131,7 @@ def test_tools_list_publishes_exactly_the_local_capability_set(
         for capability in HANDLER_CAPABILITIES
         if capability not in _AUTHENTICATED_CLIENT_CAPABILITIES
     ]
-    assert len(listed.tools) == 163
+    assert len(listed.tools) == 165
     assert all(tool.description for tool in listed.tools), "a tool has no description"
 
 
@@ -142,7 +140,7 @@ def test_handler_unwired_capabilities_publish_no_mcp_tools() -> None:
     assert {tool.name for tool in TOOLS} == {
         capability.value for capability in HANDLER_CAPABILITIES
     }
-    assert len(TOOLS) == 166
+    assert len(TOOLS) == 168
     assert not {capability.value for capability in HANDLER_UNWIRED_CAPABILITIES} & {
         tool.name for tool in TOOLS
     }
@@ -638,7 +636,7 @@ def test_a_child_with_a_managed_root_publishes_every_locally_available_capabilit
         for capability in HANDLER_CAPABILITIES
         if capability not in _AUTHENTICATED_CLIENT_CAPABILITIES
     ]
-    assert len(expected) == 163
+    assert len(expected) == 165
     assert composed == expected
     assert {capability.value for capability in _COMPOSED_CAPABILITIES} <= set(composed)
     assert not {capability.value for capability in _AUTHENTICATED_CLIENT_CAPABILITIES} & set(

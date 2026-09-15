@@ -22,9 +22,20 @@ from pathlib import Path
 from typing import Any, Final
 
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
+from my_pa.application.constraint_settings import (
+    ProjectControlsConfigurationResult,
+    ProjectControlsDisposition,
+    ProjectControlsState,
+    ProjectControlsStatusResult,
+)
 from my_pa.application.goodnotes_content import content_payload
 from my_pa.application.goodnotes_semantics import work_payload
-from my_pa.application.service import _HANDLERS, _constraint_payload
+from my_pa.application.service import (
+    _HANDLERS,
+    _constraint_payload,
+    _project_controls_configuration_payload,
+    _project_controls_status_payload,
+)
 from my_pa.contracts.ports import CaptureSearchMatch, DirectedReceipt, MutationRecordFamily
 from my_pa.contracts.v1.canvas_workspace import (
     CanvasPointView,
@@ -67,6 +78,8 @@ from my_pa.domain.project_controls.history import (
     ConstraintMutationActor,
     ConstraintMutationOperation,
     ConstraintMutationOutcome,
+    ConstraintProjectSettingsHistoryEntry,
+    ConstraintProjectSettingsOutcome,
 )
 from my_pa.domain.project_controls.party import PartyKind
 from my_pa.domain.project_controls.read_models import (
@@ -84,6 +97,7 @@ from my_pa.domain.project_controls.read_models import (
     PartyRefView,
     RelationshipDirection,
 )
+from my_pa.domain.project_controls.settings import ConstraintProjectSettings
 from my_pa.domain.relationship.entity import RelationshipState
 from my_pa.domain.search.query import RankCategory, SearchMatch, label_for_media_type
 from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
@@ -1464,6 +1478,8 @@ def python_success_payloads() -> dict[str, dict[str, Any]]:
         "constraints.history": _constraints_history(),
         "constraints.overview": _constraints_overview(),
         "constraint_categories.list": _constraint_categories_list(),
+        "project_controls.status": _project_controls_status(),
+        "project_controls.configure": _project_controls_configure(),
     }
 
 
@@ -1678,6 +1694,79 @@ def _constraints_overview() -> dict[str, Any]:
 
 def _constraint_categories_list() -> dict[str, Any]:
     return {"categories": _constraint_dump((_constraint_category_view(),))}
+
+
+# --- Project Controls settings (PC-CM-RUN01-WP05) ----------------------------
+#
+# Built through the *handlers' own* payload functions rather than as hand-written
+# dicts, the discipline the section above states: a field renamed or dropped in
+# `_project_controls_settings_payload` fails here rather than in the browser.
+# The status read is dumped in its `not_configured` shape deliberately, because
+# that is the half a hand-written fixture is most likely to get wrong — the same
+# five keys with four nulls, rather than a shorter object.
+
+PROJECT_CONTROLS_ZONE: Final = "America/Chicago"
+PROJECT_CONTROLS_UNCONFIGURED_PROJECT_ID: Final = "prj_bbbbbbbb22222222"
+
+
+def _project_controls_settings() -> ConstraintProjectSettings:
+    return ConstraintProjectSettings(
+        principal_id="prn_aaaaaaaa11111111aaaaaaaa11111111",
+        project_id=CONSTRAINT_PROJECT_ID,
+        timezone_name=PROJECT_CONTROLS_ZONE,
+        version=2,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        updated_at=AT,
+    )
+
+
+def _project_controls_receipt() -> ConstraintProjectSettingsHistoryEntry:
+    """The receipt the configure attempt wrote — and deliberately does not publish.
+
+    Carried through the result object so the payload function is called with the
+    shape the handler actually hands it. Nothing from it reaches the fixture,
+    which is exactly the claim `test_configure_reports_the_declared_shape`
+    states and this builder makes falsifiable here too.
+    """
+    return ConstraintProjectSettingsHistoryEntry(
+        history_id="cpsh_aaaaaaaa11111111aaaaaaaa11111111",
+        principal_id="prn_aaaaaaaa11111111aaaaaaaa11111111",
+        project_id=CONSTRAINT_PROJECT_ID,
+        actor=ConstraintMutationActor.PRINCIPAL,
+        outcome=ConstraintProjectSettingsOutcome.APPLIED,
+        idempotency_key="parity-project-controls-1",
+        request_digest="a" * 64,
+        occurred_at=AT,
+        recorded_at=AT,
+        before_settings_version=1,
+        after_settings_version=2,
+        resulting_timezone_name=PROJECT_CONTROLS_ZONE,
+        resulting_settings_updated_at=AT,
+    )
+
+
+def _project_controls_status() -> dict[str, Any]:
+    return _project_controls_status_payload(
+        ProjectControlsStatusResult(
+            project_id=PROJECT_CONTROLS_UNCONFIGURED_PROJECT_ID,
+            state=ProjectControlsState.NOT_CONFIGURED,
+            settings=None,
+        )
+    )
+
+
+def _project_controls_configure() -> dict[str, Any]:
+    settings = _project_controls_settings()
+    return _project_controls_configuration_payload(
+        ProjectControlsConfigurationResult(
+            disposition=ProjectControlsDisposition.APPLIED,
+            project_id=settings.project_id,
+            timezone_name=settings.timezone_name,
+            settings_version=settings.version,
+            settings_updated_at=settings.updated_at,
+            receipt=_project_controls_receipt(),
+        )
+    )
 
 
 def test_committed_python_fixtures_match_live_model_dumps() -> None:

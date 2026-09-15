@@ -2644,5 +2644,24 @@
         "prefix_locked": true
       }
     ]
+  },
+  "project_controls.status": {
+    "project_controls": {
+      "project_id": "prj_bbbbbbbb22222222",
+      "state": "not_configured",
+      "timezone_name": null,
+      "settings_version": null,
+      "settings_updated_at": null
+    }
+  },
+  "project_controls.configure": {
+    "disposition": "applied",
+    "project_controls": {
+      "project_id": "prj_aaaaaaaa11111111",
+      "state": "configured",
+      "timezone_name": "America/Chicago",
+      "settings_version": 2,
+      "settings_updated_at": "2026-08-09T12:00:00+00:00"
+    }
   }
 }

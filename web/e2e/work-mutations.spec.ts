@@ -140,8 +140,8 @@ test("real stack preserves deliberate Task and Commitment mutation semantics", a
   // never as a raw identifier in the primary surface.
   const context = taskSheet.getByTestId("task-context-section");
   await context.locator("summary").click();
-  await expect(context.getByText(commitmentTitle)).toBeVisible();
-  await expect(context.getByText("Follow up")).toBeVisible();
+  await expect(context.locator("dd", { hasText: commitmentTitle })).toBeVisible();
+  await expect(context.locator("dd", { hasText: "Follow up" })).toBeVisible();
 
   // Bounded field saves replace the whole-Task atomic patch form. Title,
   // description and priority are read-first: the editor is not on the

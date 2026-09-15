@@ -1,6 +1,6 @@
 "use client";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 
 export type SheetPlacement = "menu" | "detail" | "inspector";
 export type SheetTitleVisibility = "visible" | "sr-only";
@@ -31,13 +31,21 @@ export function Sheet({
   placement?: SheetPlacement;
   titleVisibility?: SheetTitleVisibility;
 }) {
+  const contentRef = useRef<HTMLDivElement>(null);
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-text-primary/45" />
         <DialogPrimitive.Content
+          ref={contentRef}
           className={PLACEMENT_CLASS[placement]}
           data-placement={placement}
+          onEscapeKeyDown={(event) => {
+            // Inline alertdialog (Close confirmation) owns Escape.
+            if (contentRef.current?.querySelector('[role="alertdialog"]')) {
+              event.preventDefault();
+            }
+          }}
         >
           <DialogPrimitive.Title
             className={titleVisibility === "sr-only" ? "sr-only" : "text-lg font-semibold"}

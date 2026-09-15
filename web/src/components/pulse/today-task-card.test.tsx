@@ -349,9 +349,10 @@ describe("TodayTaskCard", () => {
       expect(document.activeElement).toBe(confirm);
       await userEvent.click(confirm);
 
-      // The browser lets go of the control the moment the write disables it.
+      // Confirm disabling must not dump focus to the document body: the Close
+      // control parks it on the pending status until the parent unmounts.
       await waitFor(() => expect(confirm.hasAttribute("disabled")).toBe(true));
-      expect(document.activeElement).toBe(document.body);
+      expect(document.activeElement).toBe(screen.getByTestId("task-close-pending-status"));
       release();
 
       // The Task is terminal: the whole Close affordance has withdrawn.

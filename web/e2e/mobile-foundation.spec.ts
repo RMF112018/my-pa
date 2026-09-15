@@ -1890,3 +1890,167 @@ test.describe("Task detail geometry at coarse pointer (WP-POSTUX-04)", () => {
     expect(await documentOverflow(page), "title editor introduced horizontal overflow").toBe(before);
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * WP-POSTUX-05 — Close confirmation and terminal detail at coarse geometry
+ * ------------------------------------------------------------------ */
+
+/**
+ * The Close confirmation is an inline `alertdialog` inside the existing sheet,
+ * not a nested modal. Keep open and Confirm Closed are the finger targets.
+ *
+ * Playwright WebKit is engine emulation, not a physical iPhone and not
+ * VoiceOver. Nothing below claims a software keyboard or WP09 device checks.
+ */
+test.describe("Task close confirmation geometry at coarse pointer (WP-POSTUX-05)", () => {
+  const seeded: string[] = [];
+  const TEARDOWN_STATE = "cancelled";
+
+  async function seedTask(
+    page: Page,
+    input: { title: string; idempotencyKey: string },
+  ): Promise<string> {
+    const created = await workListApi<{ task?: { task_id: string } }>(page, "/api/tasks", {
+      method: "POST",
+      body: { title: input.title, idempotencyKey: input.idempotencyKey },
+    });
+    expect(created.status, `seeding "${input.title}" must succeed`).toBe(200);
+    const taskId = created.body.task?.task_id ?? "";
+    expect(taskId, "the BFF must answer with a Task id").not.toBe("");
+    seeded.push(taskId);
+    return taskId;
+  }
+
+  async function openTaskDetail(page: Page): Promise<{ title: string; sheet: Locator }> {
+    const tag = `wp05m-${test.info().project.name}-${Date.now()}`;
+    const title = `E2E close geometry ${tag}`;
+    await page.goto("/work?view=all-open");
+    await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
+    await seedTask(page, { title, idempotencyKey: `e2e-${tag}` });
+    await page.goto(`/work?view=all-open&q=${encodeURIComponent(tag)}`);
+    const trigger = page.getByRole("link", { name: new RegExp(title) });
+    await expect(trigger).toBeVisible();
+    await trigger.click();
+    const sheet = page.getByTestId("task-compact-sheet");
+    await expect(sheet.getByTestId("task-summary")).toBeVisible();
+    return { title, sheet };
+  }
+
+  test.beforeEach(async ({ page }, testInfo) => {
+    test.skip(!isCoarse(testInfo.project.name), "coarse-pointer emulation lanes only");
+    seeded.length = 0;
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await signIn(page);
+  });
+
+  test.afterEach(async ({ page }, testInfo) => {
+    if (!isCoarse(testInfo.project.name)) return;
+    const ids = [...seeded];
+    seeded.length = 0;
+    for (const taskId of ids) {
+      const read = await workListApi<{ task?: { version: number; lifecycle_state: string } }>(
+        page,
+        `/api/tasks/${taskId}`,
+      );
+      if (read.status !== 200 || !read.body.task) continue;
+      if (["completed", "cancelled"].includes(read.body.task.lifecycle_state)) continue;
+      const disposed = await workListApi<unknown>(page, `/api/tasks/${taskId}/transition`, {
+        method: "POST",
+        body: {
+          toState: TEARDOWN_STATE,
+          expectedVersion: read.body.task.version,
+          idempotencyKey: `wp05m-teardown-${taskId}-${Date.now()}`,
+        },
+      });
+      expect(
+        disposed.status,
+        `teardown must dispose of seeded Task ${taskId}: ${JSON.stringify(disposed.body)}`,
+      ).toBeLessThan(300);
+    }
+  });
+
+  test("Keep open and Confirm Closed are 44px targets inside an inline alertdialog", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    await page.setViewportSize({ width: 390, height: 844 });
+    const { sheet } = await openTaskDetail(page);
+    await sheet.getByTestId("task-close-control").getByRole("button", { name: "Close Task", exact: true }).click();
+
+    const confirmation = sheet.getByRole("alertdialog");
+    await expect(confirmation).toBeVisible();
+    await expect(confirmation.getByRole("button", { name: "Keep open" })).toBeFocused();
+    await expect(page.getByRole("dialog")).toHaveCount(1);
+    expect(await documentOverflow(page), "document overflow with Close confirmation open").toBeLessThanOrEqual(
+      1,
+    );
+
+    const named: Array<[string, Locator]> = [
+      ["Keep open", confirmation.getByRole("button", { name: "Keep open" })],
+      ["Confirm Closed", confirmation.getByRole("button", { name: "Confirm Closed" })],
+    ];
+    const measured: string[] = [];
+    for (const [name, control] of named) {
+      const box = await control.boundingBox();
+      expect.soft(box, `${name} has no box on Close confirmation`).not.toBeNull();
+      if (box === null) continue;
+      measured.push(`${name} ${Math.round(box.width)}x${Math.round(box.height)}`);
+      expect
+        .soft(box.height, `${name} is below this shell's ${MIN_TOUCH_TARGET_PX}px row height`)
+        .toBeGreaterThanOrEqual(MIN_TOUCH_TARGET_PX);
+      expect.soft(box.width, `${name} is below WCAG 2.5.8's 24px minimum width`).toBeGreaterThanOrEqual(
+        24,
+      );
+    }
+    console.log(
+      `WP-POSTUX-05 Close confirmation targets on ${test.info().project.name}: ${measured.join(", ")}`,
+    );
+    expect(measured, "Keep open and Confirm Closed must have been measured").toHaveLength(2);
+
+    await confirmation.getByRole("button", { name: "Keep open" }).click();
+    await expect(sheet.getByRole("alertdialog")).toHaveCount(0);
+  });
+
+  for (const width of NARROW_WIDTHS) {
+    test(`Close confirmation does not overflow horizontally at ${width}px`, async ({ page }) => {
+      test.setTimeout(180_000);
+      await page.setViewportSize({ width, height: 844 });
+      const { sheet } = await openTaskDetail(page);
+      await sheet.getByTestId("task-close-control").getByRole("button", { name: "Close Task", exact: true }).click();
+      await expect(sheet.getByRole("alertdialog")).toBeVisible();
+      expect(await documentOverflow(page), `document overflow at ${width} with confirmation`).toBeLessThanOrEqual(
+        1,
+      );
+      const dialog = page.getByRole("dialog").filter({ has: sheet });
+      expect(
+        await dialog.evaluate((node) => node.scrollWidth - node.clientWidth),
+        `Task detail sheet overflow at ${width} with confirmation`,
+      ).toBeLessThanOrEqual(1);
+      await sheet.getByRole("alertdialog").getByRole("button", { name: "Keep open" }).click();
+    });
+  }
+
+  test("a closed Task keeps Add comment at 44px and introduces no horizontal overflow", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    await page.setViewportSize({ width: 390, height: 844 });
+    const { sheet } = await openTaskDetail(page);
+    await sheet.getByTestId("task-close-control").getByRole("button", { name: "Close Task", exact: true }).click();
+    await sheet.getByRole("alertdialog").getByRole("button", { name: "Confirm Closed" }).click();
+    await expect(sheet.getByTestId("task-terminal-summary")).toHaveText("This task is closed.");
+    await expect(sheet.getByTestId("task-edit-title")).toHaveCount(0);
+    await expect(sheet.getByTestId("task-close-control")).toHaveCount(0);
+
+    const add = sheet.getByTestId("task-comments-add");
+    await expect(add).toBeVisible();
+    const box = await add.boundingBox();
+    expect(box, "Add comment must have a box on a terminal Task").not.toBeNull();
+    expect(box!.height, "Add comment height on a terminal Task").toBeGreaterThanOrEqual(
+      MIN_TOUCH_TARGET_PX,
+    );
+    expect(await documentOverflow(page), "document overflow on terminal Task detail").toBeLessThanOrEqual(
+      1,
+    );
+  });
+});

@@ -119,6 +119,24 @@ test.describe("representative 390-width reflow", () => {
  * absence of backend vocabulary from the primary surface, and the two-activation
  * close. Board, Calendar, Search and Today journeys are owned elsewhere.
  */
+
+/** Terminal Task detail: read facts plus comments, no operational editors. */
+async function expectTerminalReadOnly(sheet: ReturnType<Page["getByTestId"]>): Promise<void> {
+  await expect(sheet.getByTestId("task-terminal-summary")).toBeVisible();
+  await expect(sheet.getByTestId("task-edit-title")).toHaveCount(0);
+  await expect(sheet.getByTestId("task-edit-priority")).toHaveCount(0);
+  await expect(sheet.getByTestId("task-edit-description")).toHaveCount(0);
+  await expect(sheet.getByTestId("task-add-description")).toHaveCount(0);
+  await expect(sheet.getByTestId("task-status-control")).toHaveCount(0);
+  await expect(sheet.getByTestId("task-due-control")).toHaveCount(0);
+  await expect(sheet.getByTestId("task-close-control")).toHaveCount(0);
+  await expect(sheet.getByRole("button", { name: "Close Task", exact: true })).toHaveCount(0);
+  await expect(sheet.getByRole("button", { name: "Cancel Task", exact: true })).toHaveCount(0);
+  await expect(sheet.getByRole("textbox", { name: "Title" })).toHaveCount(0);
+  await expect(sheet.getByRole("textbox", { name: "Description" })).toHaveCount(0);
+  await expect(sheet.getByTestId("task-comments-add")).toBeVisible();
+}
+
 test.describe("compact Task detail", () => {
   /** Backend vocabulary and dead controls that must never reach the primary Task surface. */
   const FORBIDDEN_COPY = [
@@ -238,12 +256,273 @@ test.describe("compact Task detail", () => {
     await expect(confirmation.getByRole("textbox")).toHaveCount(0);
     await expect(confirmation.locator("input, textarea")).toHaveCount(0);
     await expect(confirmation.getByRole("button", { name: "Keep open" })).toBeVisible();
+    // Entry focus is the non-destructive choice. The confirmation is inline
+    // `alertdialog`, not a nested modal — the sheet remains the one dialog.
+    await expect(confirmation.getByRole("button", { name: "Keep open" })).toBeFocused();
+    await expect(page.getByRole("dialog")).toHaveCount(1);
 
     await confirmation.getByRole("button", { name: "Confirm Closed" }).click();
     await expect(sheet.getByTestId("task-terminal-summary")).toHaveText("This task is closed.");
+    await expect(sheet.getByTestId("task-terminal-summary")).toBeFocused();
     await expect(sheet.getByTestId("task-status-control")).toHaveCount(0);
     await expect(sheet.getByTestId("task-due-control")).toHaveCount(0);
     await expect(sheet.getByTestId("task-close-control")).toHaveCount(0);
+    await expectTerminalReadOnly(sheet);
+  });
+
+  test("Keep open and Escape dismiss Close confirmation without acting", async ({ page }) => {
+    const sheet = await openTask(page);
+    const close = sheet.getByTestId("task-close-control").getByRole("button", { name: "Close Task", exact: true });
+    await close.click();
+
+    const confirmation = sheet.getByRole("alertdialog");
+    await expect(confirmation.getByRole("button", { name: "Keep open" })).toBeFocused();
+    await confirmation.getByRole("button", { name: "Keep open" }).click();
+    await expect(sheet.getByRole("alertdialog")).toHaveCount(0);
+    await expect(close).toBeFocused();
+    await expect(sheet.getByTestId("task-terminal-summary")).toHaveCount(0);
+
+    await close.click();
+    await expect(sheet.getByRole("alertdialog")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(sheet.getByRole("alertdialog")).toHaveCount(0);
+    await expect(close).toBeFocused();
+    await expect(page.getByTestId("task-compact-sheet")).toBeVisible();
+  });
+
+  test("a dirty title or description blocks Close until it is saved or discarded", async ({ page }) => {
+    const sheet = await openTask(page);
+    const close = sheet.getByTestId("task-close-control").getByRole("button", { name: "Close Task", exact: true });
+    await expect(close).toBeEnabled();
+    await expect(sheet.getByTestId("task-close-blocked-reason")).toHaveCount(0);
+
+    await sheet.getByTestId("task-edit-title").click();
+    await sheet.getByRole("textbox", { name: "Title" }).fill("Unsaved title draft");
+    await expect(close).toBeDisabled();
+    await expect(sheet.getByTestId("task-close-blocked-reason")).toHaveText(
+      "Edits must be saved or discarded first.",
+    );
+    await expect(sheet.getByRole("alertdialog")).toHaveCount(0);
+
+    await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(close).toBeEnabled();
+    await expect(sheet.getByTestId("task-close-blocked-reason")).toHaveCount(0);
+
+    await sheet.getByTestId("task-add-description").click();
+    await sheet.getByRole("textbox", { name: "Description", exact: true }).fill("Unsaved description draft");
+    await expect(close).toBeDisabled();
+    await expect(sheet.getByTestId("task-close-blocked-reason")).toHaveText(
+      "Edits must be saved or discarded first.",
+    );
+  });
+
+  test("Cancel under More is a cancel-only two-step control, not a nested Close", async ({ page }) => {
+    const sheet = await openTask(page);
+    const more = sheet.getByTestId("task-more-actions");
+    await more.locator("summary").click();
+
+    const cancelOnly = more.getByTestId("task-cancel-control");
+    await expect(cancelOnly.getByRole("button", { name: "Cancel Task", exact: true })).toBeVisible();
+    await expect(cancelOnly.getByRole("button", { name: "Close Task", exact: true })).toHaveCount(0);
+    await expect(sheet.getByRole("button", { name: "Close Task", exact: true })).toHaveCount(1);
+
+    await cancelOnly.getByRole("button", { name: "Cancel Task", exact: true }).click();
+    const confirmation = cancelOnly.getByRole("alertdialog");
+    await expect(confirmation).toBeVisible();
+    await expect(confirmation.getByRole("textbox")).toHaveCount(0);
+    await expect(confirmation.getByRole("button", { name: "Keep open" })).toBeFocused();
+    await expect(confirmation.getByRole("button", { name: "Confirm Closed" })).toHaveCount(0);
+    await expect(page.getByRole("dialog")).toHaveCount(1);
+
+    await confirmation.getByRole("button", { name: "Confirm Cancelled" }).click();
+    await expect(sheet.getByTestId("task-terminal-summary")).toHaveText("This task is cancelled.");
+    await expectTerminalReadOnly(sheet);
+  });
+});
+
+/**
+ * WP-POSTUX-05. Close confirmation lock, terminal read, and Workbench sheet
+ * focus after Close panel.
+ *
+ * Not claimed: VoiceOver, a physical iPhone, or a nested modal. The
+ * confirmation is the inline `alertdialog` already on the sheet.
+ */
+test.describe("WP-POSTUX-05 Close pending lock and sheet focus", () => {
+  type ApiAnswer<T> = { status: number; body: T };
+
+  async function api<T>(
+    page: Page,
+    path: string,
+    options: { method?: string; body?: Record<string, unknown> } = {},
+  ): Promise<ApiAnswer<T>> {
+    return page.evaluate(
+      async ({ target, method, payload }) => {
+        const response = await fetch(target, {
+          method: method ?? "GET",
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: payload ? { "content-type": "application/json" } : undefined,
+          body: payload ? JSON.stringify(payload) : undefined,
+        });
+        return { status: response.status, body: (await response.json()) as T };
+      },
+      { target: path, method: options.method, payload: options.body },
+    );
+  }
+
+  async function createAndOpen(
+    page: Page,
+    title: string,
+  ): Promise<{ sheet: ReturnType<Page["getByTestId"]>; taskId: string }> {
+    await page.getByRole("button", { name: "New task" }).click();
+    await page.getByTestId("task-create-sheet").getByLabel("Title").fill(title);
+    await page.getByTestId("task-create-sheet").getByRole("button", { name: "Create", exact: true }).click();
+    await expect(page.getByTestId("task-create-sheet")).toHaveCount(0);
+    const trigger = page.getByRole("link", { name: new RegExp(title) });
+    await expect(trigger).toBeVisible();
+    const listed = await api<{ tasks: { task_id: string; title: string }[] }>(
+      page,
+      `/api/tasks?q=${encodeURIComponent(title)}&pageSize=50&workView=unscheduled&archived=exclude`,
+    );
+    expect(listed.status).toBe(200);
+    const taskId = listed.body.tasks.find((row) => row.title === title)?.task_id ?? "";
+    expect(taskId, "the created Task must be listed").toMatch(/^tsk_/);
+    await trigger.click();
+    const sheet = page.getByTestId("task-compact-sheet");
+    await expect(sheet.getByTestId("task-summary")).toBeVisible();
+    return { sheet, taskId };
+  }
+
+  test.beforeEach(async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await signIn(page);
+  });
+
+  test("while Close is pending the confirmation stays, Keep open is disabled, and Escape is ignored", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const title = `E2E pending close ${test.info().project.name} ${Date.now()}`;
+    await page.goto("/work?view=unscheduled");
+    await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
+    const { sheet, taskId } = await createAndOpen(page, title);
+
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route(
+      (url) => url.pathname === `/api/tasks/${taskId}/transition`,
+      async (route) => {
+        if (route.request().method() !== "POST") {
+          await route.fallback();
+          return;
+        }
+        await held;
+        await route.continue();
+      },
+    );
+
+    try {
+      await sheet.getByTestId("task-close-control").getByRole("button", { name: "Close Task", exact: true }).click();
+      const confirmation = sheet.getByRole("alertdialog");
+      await confirmation.getByRole("button", { name: "Confirm Closed" }).click();
+
+      const pending = sheet.getByTestId("task-close-pending-status");
+      await expect(pending).toBeVisible();
+      await expect(pending).toHaveText("Closing…");
+      await expect(pending).toBeFocused();
+      await expect(confirmation.getByRole("button", { name: "Keep open" })).toBeDisabled();
+      await expect(confirmation.getByRole("button", { name: /Confirm Closed/ })).toBeDisabled();
+      await expect(sheet.getByRole("button", { name: "Close Task", exact: true })).toBeDisabled();
+
+      await page.keyboard.press("Escape");
+      await expect(confirmation).toBeVisible();
+      await expect(page.getByTestId("task-compact-sheet")).toBeVisible();
+      await expect(sheet.getByTestId("task-terminal-summary")).toHaveCount(0);
+    } finally {
+      release();
+    }
+
+    await expect(sheet.getByTestId("task-terminal-summary")).toHaveText("This task is closed.");
+    await expectTerminalReadOnly(sheet);
+  });
+
+  test("Close panel restores the original trigger when the row is still there", async ({ page }) => {
+    test.setTimeout(180_000);
+    const title = `E2E sheet restore trigger ${test.info().project.name} ${Date.now()}`;
+    await page.goto("/work?view=unscheduled");
+    await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
+    await createAndOpen(page, title);
+
+    const trigger = page.getByRole("link", { name: new RegExp(title) });
+    await page.getByRole("button", { name: "Close panel" }).click();
+    await expect(page.getByTestId("task-compact-sheet")).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+  });
+
+  test("Close panel after closing a Task lands on a surviving Work row, never the body", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const marker = `wp05-surv-${test.info().project.name}-${Date.now()}`;
+    const doomed = `E2E sheet restore doomed ${marker}`;
+    const survivor = `E2E sheet restore survivor ${marker}`;
+    await page.goto(`/work?view=unscheduled&q=${encodeURIComponent(marker)}`);
+    await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
+
+    await page.getByRole("button", { name: "New task" }).click();
+    await page.getByTestId("task-create-sheet").getByLabel("Title").fill(survivor);
+    await page.getByTestId("task-create-sheet").getByRole("button", { name: "Create", exact: true }).click();
+    await expect(page.getByTestId("task-create-sheet")).toHaveCount(0);
+    await expect(page.getByRole("link", { name: new RegExp(survivor) })).toBeVisible();
+
+    const { sheet } = await createAndOpen(page, doomed);
+    await sheet.getByTestId("task-close-control").getByRole("button", { name: "Close Task", exact: true }).click();
+    await sheet.getByRole("alertdialog").getByRole("button", { name: "Confirm Closed" }).click();
+    await expect(sheet.getByTestId("task-terminal-summary")).toHaveText("This task is closed.");
+    await expect(page.getByRole("link", { name: new RegExp(doomed) })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: new RegExp(survivor) })).toBeVisible();
+
+    await page.getByRole("button", { name: "Close panel" }).click();
+    await expect(page.getByTestId("task-compact-sheet")).toHaveCount(0);
+
+    const landed = await page.evaluate(() => {
+      const active = document.activeElement as HTMLElement | null;
+      if (!active) return null;
+      return {
+        tag: active.tagName.toLowerCase(),
+        connected: active.isConnected,
+        isBody: active === document.body,
+        inWork: Boolean(active.closest("section[aria-labelledby='work-heading']")),
+        row: active.closest("[data-work-item]")?.getAttribute("data-work-item") ?? null,
+        heading: active.id === "work-heading",
+      };
+    });
+    expect(landed, "something must hold focus after Close panel").not.toBeNull();
+    expect(landed!.isBody, `focus fell to the body: ${JSON.stringify(landed)}`).toBe(false);
+    expect(landed!.connected, `focus landed on a detached node: ${JSON.stringify(landed)}`).toBe(true);
+    expect(landed!.inWork, `focus left Work entirely: ${JSON.stringify(landed)}`).toBe(true);
+    expect(landed!.row, `focus should be inside a surviving row: ${JSON.stringify(landed)}`).not.toBeNull();
+    await expect(page.getByRole("link", { name: new RegExp(survivor) })).toBeFocused();
+  });
+
+  test("Close panel after closing the last Task lands on the Work heading", async ({ page }) => {
+    test.setTimeout(180_000);
+    const marker = `wp05-last-${test.info().project.name}-${Date.now()}`;
+    const title = `E2E sheet restore last ${marker}`;
+    await page.goto(`/work?view=unscheduled&q=${encodeURIComponent(marker)}`);
+    await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
+    const { sheet } = await createAndOpen(page, title);
+
+    await sheet.getByTestId("task-close-control").getByRole("button", { name: "Close Task", exact: true }).click();
+    await sheet.getByRole("alertdialog").getByRole("button", { name: "Confirm Closed" }).click();
+    await expect(sheet.getByTestId("task-terminal-summary")).toHaveText("This task is closed.");
+    await expect(page.locator('[data-testid="task-list-row"]')).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Close panel" }).click();
+    await expect(page.getByTestId("task-compact-sheet")).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeFocused();
   });
 });
 

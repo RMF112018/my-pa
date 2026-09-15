@@ -3566,6 +3566,13 @@ class FakeConstraintManagementUnitOfWork(ConstraintManagementUnitOfWork):
     def constraints(self) -> ConstraintManagementRepository:
         return _ConstraintReads(self._world)
 
+    @property
+    def projects(self) -> ProjectRepository:
+        # The same `_Projects` the gateway unit of work hands out, over the same
+        # `World`, so a Constraint service that locks a Project in the fake sees
+        # exactly the Projects the rest of the scene created.
+        return _Projects(self._world)
+
 
 class _Situations(SituationRepository):
     """Situations over the `World`, with the partition predicate written out.

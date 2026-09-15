@@ -84,10 +84,12 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.engine import Connection, Row
+from sqlalchemy.exc import IntegrityError
 
 from my_pa.contracts.ports import (
     ConstraintManagementRepository,
     ConstraintManagementUnitOfWork,
+    ProjectRepository,
 )
 from my_pa.domain.common.identifiers import IdKind, make_identifier
 from my_pa.domain.project_controls.category import ConstraintCategory, ConstraintCategoryState
@@ -105,6 +107,9 @@ from my_pa.domain.project_controls.history import (
     ConstraintMutationActor,
     ConstraintMutationOperation,
     ConstraintMutationOutcome,
+    ConstraintProjectSettingsHistoryEntry,
+    ConstraintProjectSettingsHistoryKeyConflictError,
+    ConstraintProjectSettingsOutcome,
 )
 from my_pa.domain.project_controls.party import PartyKind, PartyRef
 from my_pa.domain.project_controls.read_models import (
@@ -153,10 +158,12 @@ from my_pa.infrastructure.persistence.principal_scope import (
     principal_bound_values,
     principal_scoped,
 )
+from my_pa.infrastructure.persistence.situation_repository import SqlProjectRepository
 from my_pa.infrastructure.persistence.tables import (
     constraint_categories,
     constraint_category_history,
     constraint_project_settings,
+    constraint_project_settings_history,
     constraint_sync_baselines,
     constraint_sync_conflicts,
     constraint_sync_resolution_history,
@@ -227,6 +234,27 @@ def _mine(table: Table, principal_id: str) -> ColumnElement[bool]:
 
 def _bound(table: Table, principal_id: str, values: dict[str, object]) -> dict[str, object]:
     return principal_bound_values(values, table, capture_context(principal_id))
+
+
+#: SQLSTATE for a unique violation, restated here for the same reason
+#: `entity_authoring.py` restates it: classifying one `IntegrityError` should
+#: not oblige every reader of this module to import psycopg.
+_UNIQUE_VIOLATION: Final = "23505"
+
+#: The one unique constraint on the settings receipt ledger this module is
+#: entitled to interpret. Named, not inferred: a bare `except IntegrityError`
+#: would report a malformed digest or a foreign Project as an idempotency
+#: conflict, which tells a caller to change its key over someone else's defect.
+_SETTINGS_HISTORY_IDEMPOTENCY_CONSTRAINT: Final = (
+    "constraint_settings_history_idempotency_is_unique_per_principal"
+)
+
+
+def _constraint_name(error: IntegrityError) -> str | None:
+    """Return psycopg's stable constraint identity without exposing its message."""
+    diagnostic = getattr(error.orig, "diag", None)
+    name = getattr(diagnostic, "constraint_name", None)
+    return None if name is None else str(name)
 
 
 def _party_assignment_id(constraint_id: str, role: str, ordinal: int) -> str:
@@ -319,6 +347,30 @@ def _to_settings(row: Row[Any]) -> ConstraintProjectSettings:
         version=mapping["version"],
         created_at=mapping["created_at"],
         updated_at=mapping["updated_at"],
+    )
+
+
+def _to_settings_history(row: Row[Any]) -> ConstraintProjectSettingsHistoryEntry:
+    mapping = row._mapping
+    return ConstraintProjectSettingsHistoryEntry(
+        history_id=mapping["history_id"],
+        principal_id=mapping["principal_id"],
+        project_id=mapping["project_id"],
+        action=mapping["action"],
+        actor=ConstraintMutationActor(mapping["actor"]),
+        outcome=ConstraintProjectSettingsOutcome(mapping["outcome"]),
+        idempotency_key=mapping["idempotency_key"],
+        request_digest=mapping["request_digest"],
+        before_settings_version=mapping["before_settings_version"],
+        after_settings_version=mapping["after_settings_version"],
+        resulting_timezone_name=mapping["resulting_timezone_name"],
+        resulting_settings_updated_at=mapping["resulting_settings_updated_at"],
+        client_context=mapping["client_context"],
+        correlation_id=mapping["correlation_id"],
+        failure_code=mapping["failure_code"],
+        failure_detail=mapping["failure_detail"],
+        occurred_at=mapping["occurred_at"],
+        recorded_at=mapping["recorded_at"],
     )
 
 
@@ -1076,6 +1128,82 @@ class SqlConstraintManagementRepository(ConstraintManagementRepository):
                 updated_at=settings.updated_at,
             )
         )
+
+    def get_project_settings_for_update(
+        self, principal_id: str, project_id: str
+    ) -> ConstraintProjectSettings | None:
+        row = self._connection.execute(
+            principal_scoped(
+                select(*constraint_project_settings.c),
+                constraint_project_settings,
+                capture_context(principal_id),
+            )
+            .where(constraint_project_settings.c.project_id == project_id)
+            .with_for_update()
+        ).one_or_none()
+        return None if row is None else _to_settings(row)
+
+    # --- Settings configuration receipts ---------------------------------
+
+    def get_project_settings_history_by_idempotency_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> ConstraintProjectSettingsHistoryEntry | None:
+        row = self._connection.execute(
+            principal_scoped(
+                select(*constraint_project_settings_history.c),
+                constraint_project_settings_history,
+                capture_context(principal_id),
+            ).where(constraint_project_settings_history.c.idempotency_key == idempotency_key)
+        ).one_or_none()
+        return None if row is None else _to_settings_history(row)
+
+    def insert_project_settings_history(
+        self, principal_id: str, entry: ConstraintProjectSettingsHistoryEntry
+    ) -> None:
+        try:
+            self._connection.execute(
+                insert(constraint_project_settings_history).values(
+                    _bound(
+                        constraint_project_settings_history,
+                        principal_id,
+                        {
+                            "history_id": entry.history_id,
+                            "project_id": entry.project_id,
+                            "action": entry.action,
+                            "actor": entry.actor.value,
+                            "outcome": entry.outcome.value,
+                            "before_settings_version": entry.before_settings_version,
+                            "after_settings_version": entry.after_settings_version,
+                            "resulting_timezone_name": entry.resulting_timezone_name,
+                            "resulting_settings_updated_at": entry.resulting_settings_updated_at,
+                            "idempotency_key": entry.idempotency_key,
+                            "request_digest": entry.request_digest,
+                            "client_context": entry.client_context,
+                            "correlation_id": entry.correlation_id,
+                            "failure_code": entry.failure_code,
+                            "failure_detail": entry.failure_detail,
+                            "occurred_at": entry.occurred_at,
+                            "recorded_at": entry.recorded_at,
+                        },
+                    )
+                )
+            )
+        except IntegrityError as violated:
+            # Exactly one constraint is translated, and it is identified twice:
+            # by SQLSTATE, because only a unique violation can be an idempotency
+            # collision, and by name, because this table holds one unique
+            # constraint today and a second one added later must not silently
+            # inherit this meaning. Everything else -- the same-Principal Project
+            # foreign key, the outcome/version pairing CHECKs, a malformed
+            # digest -- leaves as it arrived.
+            if (
+                getattr(violated.orig, "sqlstate", None) != _UNIQUE_VIOLATION
+                or _constraint_name(violated) != _SETTINGS_HISTORY_IDEMPOTENCY_CONSTRAINT
+            ):
+                raise
+            raise ConstraintProjectSettingsHistoryKeyConflictError(
+                "a project controls settings idempotency key is already bound"
+            ) from None
 
     # --- Categories ------------------------------------------------------
 
@@ -3535,3 +3663,18 @@ class SqlAlchemyConstraintManagementUnitOfWork(ConstraintManagementUnitOfWork):
         if connection is None:
             raise RuntimeError("this unit of work is not inside a transaction")
         return SqlConstraintManagementRepository(connection)
+
+    @property
+    def projects(self) -> ProjectRepository:
+        """The canonical Project repository, on this unit of work's connection.
+
+        `SqlProjectRepository` rather than anything local: Constraint Management
+        borrows the Project plane's reader, it does not keep a second one. The
+        connection is this transaction's, which is the entire point -- a
+        `lock_project` taken on any other connection would be released before
+        the Constraint rows of this transaction were written.
+        """
+        connection = self._connection
+        if connection is None:
+            raise RuntimeError("this unit of work is not inside a transaction")
+        return SqlProjectRepository(connection)

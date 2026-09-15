@@ -29,6 +29,7 @@ from my_pa.domain.project_controls.constraint import (
     ACTIVE_CONSTRAINT_LIFECYCLE_STATES,
     ConstraintLifecycleState,
 )
+from my_pa.domain.project_controls.settings import MAX_PROJECT_TIMEZONE_NAME_CHARACTERS
 
 __all__ = [
     "DEFAULT_DUE_BUSINESS_DAYS",
@@ -43,6 +44,7 @@ __all__ = [
     "is_overdue",
     "is_weekday",
     "project_today",
+    "validate_project_timezone_name",
 ]
 
 #: Default Due is this many working days after Date Identified.
@@ -59,6 +61,11 @@ class ProjectTimezoneError(ValueError):
     `project_timezone_unconfigured`: no timezone was supplied. The Draft may
     still be saved with explicit dates; only a backend-defaulted date fails.
     `project_timezone_invalid`: the name is not a known IANA zone.
+    `project_timezone_blank`: the caller supplied an empty or whitespace-only
+    name, which `validate_project_timezone_name` refuses before `zoneinfo`.
+    `project_timezone_too_long`: the name exceeds the stored column bound.
+    `project_timezone_has_whitespace`: the name carries whitespace, which no
+    IANA key does and which a trimming validator would silently repair.
     """
 
     def __init__(self, code: str, message: str) -> None:
@@ -99,6 +106,48 @@ def project_today(instant: datetime, timezone_name: str | None) -> date:
             "project_timezone_invalid", f"unknown IANA timezone {timezone_name!r}"
         ) from error
     return utc_instant.astimezone(zone).date()
+
+
+def validate_project_timezone_name(timezone_name: str) -> str:
+    """Return `timezone_name` byte-for-byte, or raise `ProjectTimezoneError`.
+
+    The one place a caller-supplied IANA name is admitted before it is stored.
+    It is deliberately a *validator* and not a normaliser: it performs no
+    `strip()`, no case folding, no alias canonicalisation, and falls back to no
+    default. A configure request that says `" UTC"` is a request this build
+    cannot honour as written, and repairing it would store a name the caller
+    never asked for and never sees again — the same reason
+    `ConstraintProjectSettings` declares no default timezone at all.
+
+    Shape is checked first, against the same three bounds the stored column and
+    `ConstraintProjectSettings` already enforce (non-blank, at most
+    `MAX_PROJECT_TIMEZONE_NAME_CHARACTERS`, no whitespace anywhere), so a value
+    that could never be a key never reaches the tz database. Only then is
+    `ZoneInfo` asked, which is the single authority on whether a well-formed
+    name is a real zone. Both of its refusals are caught: `ZoneInfoNotFoundError`
+    for an unknown key, and `ValueError` for the keys it rejects structurally —
+    `""`, `"."`, `".."` and absolute paths — and both become the one stable
+    `project_timezone_invalid`, because the caller is owed "that is not a zone"
+    and nothing about this process's TZPATH.
+    """
+    if not timezone_name.strip():
+        raise ProjectTimezoneError("project_timezone_blank", "a project timezone name is non-blank")
+    if len(timezone_name) > MAX_PROJECT_TIMEZONE_NAME_CHARACTERS:
+        raise ProjectTimezoneError(
+            "project_timezone_too_long", "a project timezone name exceeds the stored bound"
+        )
+    if any(character.isspace() for character in timezone_name):
+        raise ProjectTimezoneError(
+            "project_timezone_has_whitespace",
+            "a project timezone name carries no whitespace",
+        )
+    try:
+        ZoneInfo(timezone_name)
+    except (ZoneInfoNotFoundError, ValueError) as error:
+        raise ProjectTimezoneError(
+            "project_timezone_invalid", f"unknown IANA timezone {timezone_name!r}"
+        ) from error
+    return timezone_name
 
 
 def business_day_add(start: date, n: int) -> date:

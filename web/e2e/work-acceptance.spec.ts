@@ -8,6 +8,29 @@ async function horizontalOverflow(page: Page): Promise<number> {
   );
 }
 
+/**
+ * After Create, the first list page can already be full from earlier tests in
+ * the same disposable database (desktop → tablet → mobile). Wait for the
+ * create result, then search so the new Task is locatable.
+ */
+async function waitForCreateSettled(page: Page, title: string): Promise<void> {
+  await expect(page.getByTestId("task-create-sheet")).toHaveCount(0);
+  await expect(page.getByTestId("mutation-feedback-region").getByText(`Task created: ${title}`)).toBeVisible();
+}
+
+async function revealCreatedTask(page: Page, title: string): Promise<void> {
+  const trigger = page.getByRole("link", { name: new RegExp(title) });
+  if (await trigger.isVisible()) return;
+  await page.getByRole("textbox", { name: "Search tasks" }).fill(title);
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(trigger).toBeVisible();
+}
+
+async function createdTaskAppearsInWork(page: Page, title: string): Promise<void> {
+  await waitForCreateSettled(page, title);
+  await revealCreatedTask(page, title);
+}
+
 test.describe("Work acceptance", () => {
   test.beforeEach(async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" });
@@ -37,13 +60,13 @@ test.describe("Work acceptance", () => {
     await page.getByRole("button", { name: "New task" }).click();
     await page.getByTestId("task-create-sheet").getByLabel("Title").fill(title);
     await page.getByTestId("task-create-sheet").getByRole("button", { name: "Create", exact: true }).click();
-    await expect(page.getByTestId("task-create-sheet")).toHaveCount(0);
+    await waitForCreateSettled(page, title);
     // Creation sets no work date, so the canonical Today view must continue to
     // exclude this Task. Read it from the server-backed Unscheduled view instead.
     await page.getByRole("button", { name: "Work views" }).click();
     await page.getByRole("menuitem", { name: "Unscheduled" }).click();
+    await revealCreatedTask(page, title);
     const trigger = page.getByRole("link", { name: new RegExp(title) });
-    await expect(trigger).toBeVisible();
     await page.getByRole("checkbox", { name: `Select ${title}` }).check();
     await page.getByRole("button", { name: "Board" }).click();
     await expect(page.getByRole("checkbox", { name: `Select ${title}` })).toBeChecked();
@@ -165,9 +188,8 @@ test.describe("compact Task detail", () => {
     await page.getByRole("button", { name: "New task" }).click();
     await page.getByTestId("task-create-sheet").getByLabel("Title").fill(title);
     await page.getByTestId("task-create-sheet").getByRole("button", { name: "Create", exact: true }).click();
-    await expect(page.getByTestId("task-create-sheet")).toHaveCount(0);
+    await createdTaskAppearsInWork(page, title);
     const trigger = page.getByRole("link", { name: new RegExp(title) });
-    await expect(trigger).toBeVisible();
     await trigger.click();
     const sheet = page.getByTestId("task-compact-sheet");
     await expect(sheet.getByTestId("task-summary")).toBeVisible();
@@ -377,9 +399,8 @@ test.describe("WP-POSTUX-05 Close pending lock and sheet focus", () => {
     await page.getByRole("button", { name: "New task" }).click();
     await page.getByTestId("task-create-sheet").getByLabel("Title").fill(title);
     await page.getByTestId("task-create-sheet").getByRole("button", { name: "Create", exact: true }).click();
-    await expect(page.getByTestId("task-create-sheet")).toHaveCount(0);
+    await createdTaskAppearsInWork(page, title);
     const trigger = page.getByRole("link", { name: new RegExp(title) });
-    await expect(trigger).toBeVisible();
     const listed = await api<{ tasks: { task_id: string; title: string }[] }>(
       page,
       `/api/tasks?q=${encodeURIComponent(title)}&pageSize=50&workView=unscheduled&archived=exclude`,
@@ -474,8 +495,7 @@ test.describe("WP-POSTUX-05 Close pending lock and sheet focus", () => {
     await page.getByRole("button", { name: "New task" }).click();
     await page.getByTestId("task-create-sheet").getByLabel("Title").fill(survivor);
     await page.getByTestId("task-create-sheet").getByRole("button", { name: "Create", exact: true }).click();
-    await expect(page.getByTestId("task-create-sheet")).toHaveCount(0);
-    await expect(page.getByRole("link", { name: new RegExp(survivor) })).toBeVisible();
+    await createdTaskAppearsInWork(page, survivor);
 
     const { sheet } = await createAndOpen(page, doomed);
     await sheet.getByTestId("task-close-control").getByRole("button", { name: "Close Task", exact: true }).click();
@@ -549,7 +569,7 @@ test.describe("operational Work List", () => {
     await page.getByRole("button", { name: "New task" }).click();
     await page.getByTestId("task-create-sheet").getByLabel("Title").fill(title);
     await page.getByTestId("task-create-sheet").getByRole("button", { name: "Create", exact: true }).click();
-    await expect(page.getByTestId("task-create-sheet")).toHaveCount(0);
+    await createdTaskAppearsInWork(page, title);
     const row = page.locator('[data-testid="task-list-row"]').filter({ hasText: title });
     await expect(row).toBeVisible();
     return { row, title };

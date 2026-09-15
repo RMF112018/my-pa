@@ -78,6 +78,8 @@ import { decodeConstraintsSearch } from "./capabilities/constraints.search";
 import { decodeConstraintsHistory } from "./capabilities/constraints.history";
 import { decodeConstraintsOverview } from "./capabilities/constraints.overview";
 import { decodeConstraintCategoriesList } from "./capabilities/constraint_categories.list";
+import { decodeProjectControlsStatus } from "./capabilities/project_controls.status";
+import { decodeProjectControlsConfigure } from "./capabilities/project_controls.configure";
 import type { CapabilityResults, Decoder, GatewayCapability } from "./types";
 
 export type { CapabilityResults, DecodeResult, Decoder } from "./types";
@@ -161,6 +163,8 @@ export const DECODERS = {
   "constraints.history": decodeConstraintsHistory,
   "constraints.overview": decodeConstraintsOverview,
   "constraint_categories.list": decodeConstraintCategoriesList,
+  "project_controls.status": decodeProjectControlsStatus,
+  "project_controls.configure": decodeProjectControlsConfigure,
 } satisfies { [K in GatewayCapability]: Decoder<CapabilityResults[K]> };
 
 /**

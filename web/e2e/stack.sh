@@ -129,6 +129,14 @@ from my_pa.infrastructure.persistence.tables import projects
 
 #: Published so the browser spec can address the same rows without guessing.
 PROJECT_ID = "prj_e2ecst0000000001"
+#: A second Project of the same Principal, deliberately left without a settings
+#: row. R01-WP05: `project_controls.status` must answer an *authorized* Project
+#: with no settings as a typed `not_configured`, and that state is only
+#: reachable behind same-Principal Project authorization — so proving it needs a
+#: real Project this Principal owns and has never configured, which is exactly
+#: what this row is. It carries no Constraint, category or history on purpose:
+#: nothing but the settings read addresses it.
+UNCONFIGURED_PROJECT_ID = "prj_e2ecst0000000002"
 CATEGORY_ID = "ccat_e2ecst0000000001"
 FIRST_CONSTRAINT_ID = "cst_e2ecst0000000001"
 SECOND_CONSTRAINT_ID = "cst_e2ecst0000000002"
@@ -146,6 +154,18 @@ def main() -> None:
                 project_id=PROJECT_ID,
                 principal_id=principal_id,
                 name="E2E Synthetic Project",
+                state="active",
+                participants=[],
+                opened_at=T0,
+                created_at=T0,
+                updated_at=T0,
+            )
+        )
+        connection.execute(
+            insert(projects).values(
+                project_id=UNCONFIGURED_PROJECT_ID,
+                principal_id=principal_id,
+                name="E2E Synthetic Unconfigured Project",
                 state="active",
                 participants=[],
                 opened_at=T0,

@@ -26,6 +26,7 @@ from typing import Any, Final
 
 import pytest
 from sqlalchemy import Engine, delete, event, func, insert, select, text, update
+from sqlalchemy.exc import IntegrityError
 
 from my_pa.application.constraint_settings import (
     ProjectControlsConfigurationResult,
@@ -62,6 +63,7 @@ PROJECT_ABSENT: Final = "prj_pcsnone0003nono"
 ZONE: Final = "America/Chicago"
 OTHER_ZONE: Final = "America/New_York"
 KEY: Final = "pcs-configure-0001"
+NO_OP_KEY: Final = "pcs-no-op-0000001"
 
 T0: Final = datetime(2026, 9, 2, 15, 0, tzinfo=UTC)
 
@@ -225,13 +227,41 @@ def test_an_update_moves_the_version_once_and_preserves_the_creation_time(
 
 
 def test_the_same_timezone_writes_one_receipt_and_no_settings_change(staged: Engine) -> None:
+    """Two requests, two receipts, one unchanged settings row — and in that order.
+
+    The outcomes cannot be read off row order here. This module's clock is
+    frozen at `T0`, so both receipts carry the *same* `recorded_at` and the
+    `history_id` tiebreaker `_receipts` falls back on is an opaque random
+    identifier: PostgreSQL is free to return either receipt first, and does.
+    So the readback is keyed by the one column that genuinely discriminates the
+    two requests — each one's own idempotency key — which binds an outcome to
+    the request that produced it rather than to a position.
+
+    The ordering claim is then made explicitly, from the receipts' own content
+    rather than from their arrival order: the applied receipt is the earlier one
+    because it alone found no settings row (`before_settings_version is None`),
+    and the no-op receipt is the later one because it saw the version the
+    applied one had just created. That is a strictly stronger statement than
+    `outcomes == ["applied", "no_op"]`, which only ever claimed adjacency.
+    """
     _configure(staged)
     before = _settings_rows(staged)[0]
-    result = _configure(staged, idempotency_key="pcs-no-op-0000001")
+    result = _configure(staged, idempotency_key=NO_OP_KEY)
     assert result.disposition is ProjectControlsDisposition.NO_OP
     assert _settings_rows(staged)[0] == before
-    outcomes = [receipt["outcome"] for receipt in _receipts(staged)]
-    assert outcomes == ["applied", "no_op"]
+
+    receipts = {receipt["idempotency_key"]: receipt for receipt in _receipts(staged)}
+    assert sorted(receipts) == sorted([KEY, NO_OP_KEY])
+    assert receipts[KEY]["outcome"] == "applied"
+    assert receipts[NO_OP_KEY]["outcome"] == "no_op"
+    assert (receipts[KEY]["before_settings_version"], receipts[KEY]["after_settings_version"]) == (
+        None,
+        1,
+    )
+    assert (
+        receipts[NO_OP_KEY]["before_settings_version"],
+        receipts[NO_OP_KEY]["after_settings_version"],
+    ) == (1, 1)
 
 
 # --- the three separate checks -------------------------------------------------
@@ -249,17 +279,46 @@ def test_a_project_outside_this_principals_partition_writes_nothing(
 
 
 def test_a_deleted_project_answers_exactly_as_a_foreign_one(staged: Engine) -> None:
-    """Nondisclosure equivalence against the server, not against a dictionary."""
+    """Nondisclosure equivalence against the server, not against a dictionary.
+
+    This test used to configure `PROJECT_A` and then delete its Project row,
+    which the server does not permit and never did: the receipts `configure`
+    wrote are append-only and name the Project through
+    `a_constraint_settings_history_names_a_project_in_its_principal`, the
+    same-Principal composite foreign key, so the delete is *refused* rather
+    than cascading the ledger away. `deleted` is therefore not a state a
+    **configured** Project can reach at all, and the first half of this test now
+    asserts that refusal by name instead of pretending otherwise. The foreign
+    key is the integrity defense under test here; weakening it, or clearing the
+    history to let the delete through, would have deleted the guarantee rather
+    than proven it.
+
+    The second half then proves the nondisclosure claim on the deleted state
+    that *is* reachable: `PROJECT_A2`, owned by `PRINCIPAL_A`, never configured,
+    and so carrying no receipts to hold its row in place. A Project this
+    Principal genuinely owned and that genuinely no longer exists must be
+    indistinguishable from another Principal's Project and from one that never
+    existed — same exception type, same refusal text, to the character. That is
+    the identical equivalence the previous body claimed, now made against a
+    Project the database actually let us delete.
+    """
     _configure(staged)
-    with staged.begin() as connection:
+    with pytest.raises(IntegrityError) as refused, staged.begin() as connection:
         connection.execute(
             delete(constraint_project_settings).where(
                 constraint_project_settings.c.project_id == PROJECT_A
             )
         )
         connection.execute(delete(projects).where(projects.c.project_id == PROJECT_A))
+    assert "a_constraint_settings_history_names_a_project_in_its_principal" in str(refused.value)
+    assert _count(staged, constraint_project_settings_history) == 1
+    assert _count(staged, constraint_project_settings) == 1
+
+    with staged.begin() as connection:
+        connection.execute(delete(projects).where(projects.c.project_id == PROJECT_A2))
+
     answers = []
-    for project_id in (PROJECT_A, PROJECT_B, PROJECT_ABSENT):
+    for project_id in (PROJECT_A2, PROJECT_B, PROJECT_ABSENT):
         with pytest.raises(ProjectControlsProjectUnavailableError) as refusal:
             _service(staged).read_status(principal_id=PRINCIPAL_A, project_id=project_id)
         answers.append((type(refusal.value), str(refusal.value)))

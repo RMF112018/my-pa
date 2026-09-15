@@ -15,7 +15,7 @@ from typing import Final
 
 from my_pa.domain.identity.operation import Capability
 
-CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v1"
+CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v2"
 
 
 class ChatLLMCapabilityClass(StrEnum):
@@ -86,9 +86,12 @@ _DATA_REQUIRED: Final[frozenset[Capability]] = frozenset(
         Capability.KNOWLEDGE_READ,
         Capability.KNOWLEDGE_REVEAL,
         Capability.KNOWLEDGE_SEARCH,
+        Capability.REPORTS_BEGIN_CYCLE,
+        Capability.REPORTS_COMMIT,
         Capability.REPORTS_LATEST,
         Capability.REPORTS_LIST,
         Capability.REPORTS_READ,
+        Capability.REPORTS_RECORD_RUN_STATE,
         Capability.REPORTS_RESOLVE_SET,
         Capability.REPORTS_SEARCH,
         Capability.REVIEW_DECIDE,
@@ -237,9 +240,6 @@ _OPERATOR_DECISION_REQUIRED: Final[frozenset[Capability]] = frozenset(
     {
         Capability.GSQS_START,
         Capability.GSQS_STATUS,
-        Capability.REPORTS_BEGIN_CYCLE,
-        Capability.REPORTS_COMMIT,
-        Capability.REPORTS_RECORD_RUN_STATE,
     }
 )
 
@@ -253,7 +253,6 @@ _COMPATIBILITY_REPLACEMENTS: Final[Mapping[Capability, Capability]] = MappingPro
 
 _SYNC_EXCLUSION: Final = "device sync protocol, not constraint record management"
 _GSQS_EXCLUSION: Final = "GSQS campaign lifecycle held out pending reclassification"
-_REPORT_CYCLE_EXCLUSION: Final = "report pipeline control held out pending reclassification"
 
 _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
     {
@@ -275,9 +274,6 @@ _EXCLUSION_RATIONALE: Final[Mapping[Capability, str]] = MappingProxyType(
         Capability.GOODNOTES_STATUS: "source ingest/pull pipeline",
         Capability.GSQS_START: _GSQS_EXCLUSION,
         Capability.GSQS_STATUS: _GSQS_EXCLUSION,
-        Capability.REPORTS_BEGIN_CYCLE: _REPORT_CYCLE_EXCLUSION,
-        Capability.REPORTS_COMMIT: _REPORT_CYCLE_EXCLUSION,
-        Capability.REPORTS_RECORD_RUN_STATE: _REPORT_CYCLE_EXCLUSION,
         Capability.SOURCES_ENROLL: "operator-only source enrollment / authority expansion",
     }
 )

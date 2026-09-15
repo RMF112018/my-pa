@@ -200,7 +200,7 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     expect(before.includes("/api/situations")).toBe(false);
     expect(before.some((path) => /^\/api\/commitments\/[^/?]+$/.test(path))).toBe(false);
 
-    await user.click(screen.getByText("Context"));
+    await user.click(screen.getByText(/^Context/));
     expect(await screen.findByText("Riverside permit")).toBeTruthy();
     expect(screen.getByText("Permit season")).toBeTruthy();
     expect(screen.getByText("Permit follow-up")).toBeTruthy();

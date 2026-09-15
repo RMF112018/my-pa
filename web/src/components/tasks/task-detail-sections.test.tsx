@@ -209,7 +209,7 @@ describe("progressive Task detail", () => {
   it("states missing Context rather than guessing a name or printing a raw reference", async () => {
     const user = userEvent.setup();
     renderSections();
-    await user.click(screen.getByText("Context"));
+    await user.click(screen.getByText(/^Context/));
     const context = screen.getByTestId("task-context-section");
     expect(within(context).getByText("Project details unavailable")).toBeTruthy();
     expect(within(context).getByText("Situation details unavailable")).toBeTruthy();
@@ -219,7 +219,7 @@ describe("progressive Task detail", () => {
   it("shows a human Context label when one is available", async () => {
     const user = userEvent.setup();
     renderSections({}, { project: { state: "ready", label: "Riverside permit" } });
-    await user.click(screen.getByText("Context"));
+    await user.click(screen.getByText(/^Context/));
     expect(within(screen.getByTestId("task-context-section")).getByText("Riverside permit")).toBeTruthy();
   });
 
@@ -227,10 +227,10 @@ describe("progressive Task detail", () => {
     const user = userEvent.setup();
     const { onContextOpen } = renderSections();
     expect(onContextOpen).not.toHaveBeenCalled();
-    await user.click(screen.getByText("Context"));
+    await user.click(screen.getByText(/^Context/));
     expect(onContextOpen).toHaveBeenCalledTimes(1);
-    await user.click(screen.getByText("Context"));
-    await user.click(screen.getByText("Context"));
+    await user.click(screen.getByText(/^Context/));
+    await user.click(screen.getByText(/^Context/));
     expect(onContextOpen).toHaveBeenCalledTimes(1);
   });
 

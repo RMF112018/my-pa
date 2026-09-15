@@ -43,7 +43,7 @@ describe("Work detail context", () => {
     render(<TaskDetailView taskId={TASK.task_id} />);
     await screen.findByTestId("task-detail-sections");
 
-    await userEvent.setup().click(screen.getByText("Context"));
+    await userEvent.setup().click(screen.getByText(/^Context/));
     expect(await screen.findByText("Project details unavailable")).toBeTruthy();
     expect(screen.getByText("Situation details unavailable")).toBeTruthy();
     expect(screen.queryByText(/prj_aaaaaaaa11111111/)).toBeNull();

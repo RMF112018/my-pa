@@ -286,7 +286,6 @@ export function TaskComments({
 
   return (
     <section className="flex flex-col gap-3" data-testid="task-comments">
-      <h3 className="text-sm font-medium text-text-primary">Comments</h3>
       {body}
     </section>
   );

@@ -692,6 +692,20 @@ export interface TaskContextSectionProps {
   onOpen?(): void;
 }
 
+function contextSummaryTitle(
+  project: TaskContextFact,
+  situation: TaskContextFact,
+  commitment: TaskContextFact,
+  role: TaskContextFact,
+): string {
+  const labels: string[] = [];
+  for (const fact of [project, situation, commitment]) {
+    if (fact.state === "ready") labels.push(fact.label);
+  }
+  if (role.state === "ready" && role.label !== "No role set") labels.push(role.label);
+  return labels.length > 0 ? `Context · ${labels.join(" · ")}` : "Context";
+}
+
 export function TaskContextSection({
   project,
   situation,
@@ -703,7 +717,7 @@ export function TaskContextSection({
   const [open, setOpen] = useState(false);
   return (
     <ProgressiveSection
-      title="Context"
+      title={contextSummaryTitle(project, situation, commitment, role)}
       testId="task-context-section"
       onToggle={(nextOpen) => {
         setOpen(nextOpen);

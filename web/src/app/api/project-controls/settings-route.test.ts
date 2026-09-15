@@ -434,9 +434,15 @@ describe("a Project the Principal may not see is answered as an unknown one", ()
    * guarantee §14 requires: no status, body or error code distinguishes a
    * Project that never existed from one belonging to another Principal.
    *
-   * See the work-package handoff: plan §15 asks for 404 here. The BFF cannot
-   * produce one without distinguishing a foreign Project from a transient
-   * failure, and those are the same code by design.
+   * Plan §15 requires exactly this. As amended on 2026-09-15 by
+   * `PC-CM-D02-PLAN-REVISION-20260915-001`, it reads that foreign, unknown,
+   * deleted and inaccessible Projects and transient failure alike answer with
+   * a nondisclosing 503, per §14, and that the transport does not distinguish
+   * them. Its earlier text asked for 404 here; the plan was corrected to match
+   * this behavior rather than the behavior changed to match the plan. (That
+   * artifact lives outside this repository and cannot be found by grepping the
+   * tree.) The BFF could not produce a 404 anyway without telling a foreign
+   * Project from a transient failure, and those are one code by design.
    */
   it.each([
     ["an unknown Project", PROJECT],

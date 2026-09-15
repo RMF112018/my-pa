@@ -38,10 +38,14 @@
  *   Telling "foreign" apart from "transient" here would mean rebuilding inside
  *   the BFF exactly the oracle §14 forbids, so this route does not try — which
  *   is why two cases it elsewhere calls indistinguishable share one status.
- * - Open question, escalated to the operator: plan §15 asks for `404` on the
- *   foreign/unknown/deleted case. The BFF cannot produce one without making
- *   that distinction, so the landed behavior is `503` and the divergence from
- *   the plan is recorded here rather than resolved here.
+ * - This is what plan §15 requires, not a divergence from it. As amended on
+ *   2026-09-15 by `PC-CM-D02-PLAN-REVISION-20260915-001`, §15 reads that
+ *   foreign, unknown, deleted and inaccessible Projects and transient failure
+ *   alike answer with a nondisclosing `503` unavailable, per §14, and that the
+ *   transport does not distinguish them. Its earlier text asked for `404`
+ *   here; it was the plan that was corrected to match this code, not this code
+ *   that was changed to match the plan. (That artifact lives outside this
+ *   repository, so the citation cannot be followed by grepping the tree.)
  *   `settings-route.test.ts` pins all of this, and states the same reasoning.
  *
  * The `POST` body vocabulary is `SETTINGS_FIELDS`, which admits three names and

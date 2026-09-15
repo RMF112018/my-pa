@@ -33,7 +33,7 @@ export function TaskCompactSheet({ taskId, open, onOpenChange, seed }: TaskCompa
       open={open}
       onOpenChange={onOpenChange}
       title={seed?.title ?? "Task detail"}
-      description="Closing restores your place in Work."
+      titleVisibility="sr-only"
       placement="detail"
     >
       <div data-testid="task-compact-sheet" className="pb-[env(safe-area-inset-bottom)]">

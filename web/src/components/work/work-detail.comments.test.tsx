@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { TaskDetailView } from "@/components/work/work-detail";
@@ -80,6 +80,11 @@ function commentStub(postOutcomes: readonly (number | "throw")[]) {
     if (path.includes("/comments")) return json({ comments: persisted });
     if (path.includes("/history")) return json({ history: [] });
     if (path === "/api/commitments?pageSize=100") return json({ commitments: [] });
+    if (path.startsWith("/api/projects/")) return json({ project: { name: "Linked project" } });
+    if (path === "/api/situations") return json({ situations: [] });
+    if (/^\/api\/commitments\/[^/?]+$/.test(path) && method === "GET") {
+      return json({ commitment: { title: "Linked commitment" } });
+    }
     if (path === `/api/tasks/${TASK_ID}` && method === "PATCH") {
       version += 1;
       return json({ task: { ...TASK, version } });
@@ -91,8 +96,9 @@ function commentStub(postOutcomes: readonly (number | "throw")[]) {
 }
 
 async function addComment(user: ReturnType<typeof userEvent.setup>, text: string) {
-  await user.type(await screen.findByLabelText("Add comment"), text);
-  await user.click(screen.getByRole("button", { name: "Add comment" }));
+  await user.click(await screen.findByTestId("task-comments-add"));
+  await user.type(screen.getByLabelText("Add comment"), text);
+  await user.click(screen.getByTestId("task-comments-submit"));
 }
 
 describe("Task comments through the shared mutation coordinator", () => {
@@ -165,7 +171,8 @@ describe("Task comments through the shared mutation coordinator", () => {
     expect(failed.getAttribute("data-status")).toBe("failed");
 
     // Save a bounded field, which advances the canonical version.
-    const title = await screen.findByDisplayValue(TASK.title);
+    await user.click(screen.getByTestId("task-edit-title"));
+    const title = screen.getByLabelText("Title");
     await user.type(title, " revised");
     await user.click(screen.getByRole("button", { name: "Save title" }));
     await waitFor(() =>
@@ -191,7 +198,10 @@ describe("Task comments through the shared mutation coordinator", () => {
     render(<TaskDetailView taskId={TASK_ID} />);
     // Before hydration there is no detail at all, so no composer can submit.
     expect(screen.queryByRole("button", { name: "Add comment" })).toBeNull();
-    expect(await screen.findByLabelText("Add comment")).toBeTruthy();
+    expect(screen.queryByLabelText("Add comment")).toBeNull();
+    expect(await screen.findByTestId("task-comments-add")).toBeTruthy();
+    expect(screen.queryByLabelText("Add comment")).toBeNull();
+    expect(screen.queryByTestId("task-comments-submit")).toBeNull();
   });
 
   it("offers no edit or delete affordance on a persisted comment", async () => {
@@ -203,6 +213,7 @@ describe("Task comments through the shared mutation coordinator", () => {
     await addComment(user, "Reviewer confirmed the revised scope.");
     await screen.findByText("Reviewer confirmed the revised scope.");
 
-    expect(screen.queryByRole("button", { name: /edit|delete|remove/i })).toBeNull();
+    const comments = screen.getByTestId("task-comments");
+    expect(within(comments).queryByRole("button", { name: /edit|delete|remove/i })).toBeNull();
   });
 });

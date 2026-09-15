@@ -156,14 +156,24 @@ test.describe("compact Task detail", () => {
     return sheet;
   }
 
-  // TASK-AC-045. Narrow-width reflow is measured at the four widths the work
-  // package pins. This is not 200%/400% zoom and not a WCAG 2.2 AA claim.
-  for (const width of [320, 375, 390, 430] as const) {
+  // TASK-AC-045. Narrow-width reflow is measured at the widths the work
+  // package pins. 393 sits between 390 and 430 so a phone-width gap cannot
+  // hide wrapping. This is not 200%/400% zoom and not a WCAG 2.2 AA claim.
+  for (const width of [320, 375, 390, 393, 430] as const) {
     test(`TASK-AC-045 compact Task detail fits ${width}px without horizontal scroll`, async ({ page }) => {
       await page.setViewportSize({ width, height: 844 });
       const sheet = await openTask(page);
 
       expect(await horizontalOverflow(page), `Task detail overflows horizontally at ${width}`).toBeLessThanOrEqual(1);
+
+      // Read-first default: editors stay off the primary surface until asked.
+      await expect(sheet.getByRole("textbox", { name: "Description" })).toHaveCount(0);
+      await expect(sheet.locator("textarea")).toHaveCount(0);
+      await expect(sheet.getByTestId("task-status-control")).toBeVisible();
+      await expect(sheet.getByTestId("task-due-control")).toBeVisible();
+      await expect(sheet.getByTestId("task-edit-title")).toBeVisible();
+      await expect(sheet.getByTestId("task-comments-add")).toBeVisible();
+      await expect(sheet.getByRole("textbox", { name: "Add comment" })).toHaveCount(0);
 
       // Terminal action stays reachable in the primary surface: Technical
       // details must still be collapsed when Close Task is available.
@@ -174,6 +184,25 @@ test.describe("compact Task detail", () => {
       expect(await horizontalOverflow(page)).toBeLessThanOrEqual(1);
     });
   }
+
+  test("the default Task detail keeps description and comments closed until Edit or Add", async ({
+    page,
+  }) => {
+    const sheet = await openTask(page);
+
+    await expect(sheet.getByRole("textbox", { name: "Title" })).toHaveCount(0);
+    await expect(sheet.getByRole("textbox", { name: "Description" })).toHaveCount(0);
+    await expect(sheet.getByRole("combobox", { name: "Priority" })).toHaveCount(0);
+    await expect(sheet.getByTestId("task-status-control")).toBeVisible();
+    await expect(sheet.getByTestId("task-due-control")).toBeVisible();
+    await expect(sheet.getByTestId("task-edit-title")).toBeVisible();
+    await expect(sheet.getByTestId("task-add-description")).toBeVisible();
+    await expect(sheet.getByTestId("task-comments-add")).toBeVisible();
+    await expect(sheet.getByRole("textbox", { name: "Add comment" })).toHaveCount(0);
+
+    await sheet.getByTestId("task-comments-add").click();
+    await expect(sheet.getByRole("textbox", { name: "Add comment" })).toBeVisible();
+  });
 
   test("TASK-AC-042/043 the primary Task surface states no backend token or opaque identifier, and diagnostics keep them", async ({ page }) => {
     const sheet = await openTask(page);
@@ -212,7 +241,9 @@ test.describe("compact Task detail", () => {
 
     await confirmation.getByRole("button", { name: "Confirm Closed" }).click();
     await expect(sheet.getByTestId("task-terminal-summary")).toHaveText("This task is closed.");
-    await expect(sheet.getByTestId("task-status-control")).toHaveAttribute("data-terminal", "true");
+    await expect(sheet.getByTestId("task-status-control")).toHaveCount(0);
+    await expect(sheet.getByTestId("task-due-control")).toHaveCount(0);
+    await expect(sheet.getByTestId("task-close-control")).toHaveCount(0);
   });
 });
 

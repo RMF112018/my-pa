@@ -3,6 +3,7 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import type { ReactNode } from "react";
 
 export type SheetPlacement = "menu" | "detail" | "inspector";
+export type SheetTitleVisibility = "visible" | "sr-only";
 
 const PLACEMENT_CLASS: Record<SheetPlacement, string> = {
   menu:
@@ -20,6 +21,7 @@ export function Sheet({
   description,
   children,
   placement = "inspector",
+  titleVisibility = "visible",
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -27,6 +29,7 @@ export function Sheet({
   description?: string;
   children: ReactNode;
   placement?: SheetPlacement;
+  titleVisibility?: SheetTitleVisibility;
 }) {
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
@@ -36,7 +39,11 @@ export function Sheet({
           className={PLACEMENT_CLASS[placement]}
           data-placement={placement}
         >
-          <DialogPrimitive.Title className="text-lg font-semibold">{title}</DialogPrimitive.Title>
+          <DialogPrimitive.Title
+            className={titleVisibility === "sr-only" ? "sr-only" : "text-lg font-semibold"}
+          >
+            {title}
+          </DialogPrimitive.Title>
           {description ? (
             <DialogPrimitive.Description className="mt-1 text-sm text-text-secondary">
               {description}

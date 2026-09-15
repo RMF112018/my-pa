@@ -43,9 +43,8 @@ describe("Work detail context", () => {
     render(<TaskDetailView taskId={TASK.task_id} />);
     await screen.findByTestId("task-detail-sections");
 
-    // Primary Task UX states the absence rather than guessing a name — and never
-    // prints the raw reference. The raw id lives only in Technical details.
-    expect(screen.getByText("Project details unavailable")).toBeTruthy();
+    await userEvent.setup().click(screen.getByText("Context"));
+    expect(await screen.findByText("Project details unavailable")).toBeTruthy();
     expect(screen.getByText("Situation details unavailable")).toBeTruthy();
     expect(screen.queryByText(/prj_aaaaaaaa11111111/)).toBeNull();
     expect(screen.queryByText(/sit_aaaaaaaa11111111/)).toBeNull();

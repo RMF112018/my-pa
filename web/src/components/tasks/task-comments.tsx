@@ -12,7 +12,7 @@
  * The contract has no edit and no delete, so this component offers neither.
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { Button } from "@/components/ui/button";
 import { TextField } from "@/components/ui/field";
@@ -113,25 +113,54 @@ export function TaskComments({
   onRetryLoad,
 }: TaskCommentsProps): React.JSX.Element {
   const [draft, setDraft] = useState("");
+  const [composerOpen, setComposerOpen] = useState(false);
+  const addButtonRef = useRef<HTMLButtonElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const restoreAddFocusRef = useRef(false);
   const trimmed = draft.trim();
   const canSubmit = trimmed.length > 0 && !disabled && !submitting;
+
+  useEffect(() => {
+    if (composerOpen) {
+      textareaRef.current?.focus();
+      return;
+    }
+    if (!restoreAddFocusRef.current) return;
+    restoreAddFocusRef.current = false;
+    addButtonRef.current?.focus();
+  }, [composerOpen]);
+
+  function closeComposer(): void {
+    restoreAddFocusRef.current = true;
+    setComposerOpen(false);
+    setDraft("");
+  }
 
   function handleSubmit(event: React.FormEvent<HTMLFormElement>): void {
     event.preventDefault();
     if (!canSubmit) return;
     onSubmit(trimmed);
-    setDraft("");
+    closeComposer();
+  }
+
+  function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeComposer();
   }
 
   const composer = (
     <form className="flex flex-col gap-2" onSubmit={handleSubmit}>
       <TextField
+        ref={textareaRef}
         label={COMPOSER_LABEL}
         value={draft}
         disabled={disabled}
         onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={handleComposerKeyDown}
       />
-      <div>
+      <div className="flex flex-wrap gap-2">
         <Button
           type="submit"
           className="min-h-11"
@@ -141,9 +170,27 @@ export function TaskComments({
         >
           {COMPOSER_LABEL}
         </Button>
+        <Button type="button" variant="secondary" className="min-h-11" onClick={closeComposer}>
+          Cancel
+        </Button>
       </div>
     </form>
   );
+
+  const addButton = (
+    <div>
+      <Button
+        ref={addButtonRef}
+        className="min-h-11"
+        onClick={() => setComposerOpen(true)}
+        data-testid="task-comments-add"
+      >
+        {COMPOSER_LABEL}
+      </Button>
+    </div>
+  );
+
+  const composerOrTrigger = composerOpen ? composer : addButton;
 
   let body: React.JSX.Element;
 
@@ -171,7 +218,7 @@ export function TaskComments({
     body = (
       <div className="flex flex-col gap-3">
         <p className="text-sm text-muted">{EMPTY_COPY}</p>
-        {composer}
+        {composerOrTrigger}
       </div>
     );
   } else {
@@ -232,7 +279,7 @@ export function TaskComments({
           </div>
         ) : null}
 
-        {composer}
+        {composerOrTrigger}
       </div>
     );
   }

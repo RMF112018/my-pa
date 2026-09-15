@@ -259,6 +259,75 @@ test.describe("axe-core, in Chromium, against the rendered page", () => {
   });
 
   /**
+   * A populated Task detail in its read-first default, then with the title
+   * editor open, then with Planning and Context expanded (WP-POSTUX-04).
+   *
+   * The Create Task scan above is a different sheet and must stay that way:
+   * Task detail no longer mounts Title/Description/Priority editors or the
+   * comment composer until asked. An empty `/work` scan never opens this
+   * dialog, so a pass there would say nothing about it.
+   *
+   * Still an automated subset: not screen-reader proof, not VoiceOver, and not
+   * a WCAG 2.2 AA claim.
+   */
+  test("a populated Task detail default, title edit, and expanded Planning/Context have no detectable violation", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    await signIn(page);
+    const marker = `a11y-detail-${test.info().project.name}-${Date.now()}`;
+    const title = `E2E task detail a11y ${marker}`;
+    const created = await seedTask(page, {
+      title,
+      dueAt: "2026-12-18T17:00:00Z",
+      idempotencyKey: `e2e-${marker}`,
+    });
+    expect(created.status).toBe(200);
+
+    await page.goto(`/work?view=all-open&q=${encodeURIComponent(marker)}`);
+    await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
+    await page.getByRole("link", { name: new RegExp(title) }).click();
+    const sheet = page.getByTestId("task-compact-sheet");
+    await expect(sheet.getByTestId("task-summary")).toBeVisible();
+    await expect(sheet.getByTestId("task-edit-title")).toBeVisible();
+    await expect(sheet.getByTestId("task-comments-add")).toBeVisible();
+    await expect(sheet.getByRole("textbox", { name: "Title" })).toHaveCount(0);
+    await expect(sheet.getByRole("textbox", { name: "Description" })).toHaveCount(0);
+    await expect(sheet.getByRole("textbox", { name: "Add comment" })).toHaveCount(0);
+
+    const dialog = page.getByRole("dialog", { name: title });
+    await expect(dialog).toBeVisible();
+    const sheetTitle = dialog.getByRole("heading", { name: title }).and(dialog.locator(".sr-only"));
+    await expect(sheetTitle).toHaveCount(1);
+    await expect(sheetTitle).toHaveClass(/sr-only/);
+    await expect(dialog.locator("h1:not(.sr-only)")).toHaveCount(1);
+    await expect(dialog.locator("h1:not(.sr-only)")).toHaveText(title);
+
+    expect(await scan(page), "populated Task detail default accessibility violations").toEqual([]);
+
+    await sheet.getByTestId("task-edit-title").click();
+    const titleInput = sheet.getByRole("textbox", { name: "Title" });
+    await expect(titleInput).toBeVisible();
+    await expect(titleInput).toBeFocused();
+    await expect(dialog.locator("h1:not(.sr-only)")).toHaveCount(0);
+    await expect(dialog.locator("h1.sr-only")).toHaveCount(1);
+    expect(await scan(page), "Task detail title-edit accessibility violations").toEqual([]);
+
+    await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(sheet.getByTestId("task-edit-title")).toBeVisible();
+
+    await sheet.getByTestId("task-planning-section").locator("summary").click();
+    await expect(sheet.getByTestId("task-planning-section")).toHaveAttribute("open", "");
+    await sheet.getByTestId("task-context-section").locator("summary").click();
+    await expect(sheet.getByTestId("task-context-section")).toHaveAttribute("open", "");
+    await expect(sheet.getByText("No project linked")).toBeVisible();
+    expect(
+      await scan(page),
+      "Task detail expanded Planning/Context accessibility violations",
+    ).toEqual([]);
+  });
+
+  /**
    * The Board and Calendar perspectives, populated, in both themes (WP-TUX-06).
    *
    * The `/work` entry in `PAGES` scans the List perspective only, which is the
@@ -617,6 +686,37 @@ test.describe("touch targets at a phone viewport", () => {
   test("the Inspector sheet is a named dialog at a phone viewport", async ({ page }) => {
     await pinInspector(page);
     await expect(page.getByRole("dialog", { name: "Inspector" })).toBeVisible();
+  });
+});
+
+test.describe("Task detail keyboard and named dialog (WP-POSTUX-04)", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await signIn(page);
+  });
+
+  test("Edit title focuses the Title input", async ({ page }) => {
+    test.setTimeout(180_000);
+    const marker = `a11y-detail-kb-${test.info().project.name}-${Date.now()}`;
+    const title = `E2E task detail keyboard ${marker}`;
+    const created = await seedTask(page, {
+      title,
+      dueAt: "2026-12-18T17:00:00Z",
+      idempotencyKey: `e2e-${marker}`,
+    });
+    expect(created.status).toBe(200);
+
+    await page.goto(`/work?view=all-open&q=${encodeURIComponent(marker)}`);
+    await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
+    await page.getByRole("link", { name: new RegExp(title) }).click();
+    const sheet = page.getByTestId("task-compact-sheet");
+    const edit = sheet.getByTestId("task-edit-title");
+    await expect(edit).toBeVisible();
+
+    await edit.focus();
+    await expect(edit).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(sheet.getByRole("textbox", { name: "Title" })).toBeFocused();
   });
 });
 

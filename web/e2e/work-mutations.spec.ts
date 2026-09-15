@@ -143,13 +143,17 @@ test("real stack preserves deliberate Task and Commitment mutation semantics", a
   await expect(context.getByText(commitmentTitle)).toBeVisible();
   await expect(context.getByText("Follow up")).toBeVisible();
 
-  // Bounded field saves replace the whole-Task atomic patch form.
+  // Bounded field saves replace the whole-Task atomic patch form. Title,
+  // description and priority are read-first: the editor is not on the
+  // primary surface until Edit / Add is chosen.
+  await taskSheet.getByTestId("task-add-description").click();
   await taskSheet.getByRole("textbox", { name: "Description", exact: true }).fill("Safe atomic browser edit");
   await taskSheet.getByRole("button", { name: "Save description" }).click();
   await expect(taskSheet.getByText("Task saved.")).toBeVisible();
   const described = await api<{ task: { description: string | null } }>(page, `/api/tasks/${taskId}`);
   expect(described.body.task.description).toBe("Safe atomic browser edit");
 
+  await taskSheet.getByTestId("task-edit-priority").click();
   await taskSheet.getByRole("combobox", { name: "Priority" }).selectOption({ label: "High" });
   await expect(taskSheet.getByText("Task saved.")).toBeVisible();
   await expect
@@ -158,6 +162,7 @@ test("real stack preserves deliberate Task and Commitment mutation semantics", a
 
   const beforeConflict = await api<{ task: { version: number } }>(page, `/api/tasks/${taskId}`);
   expect(beforeConflict.status).toBe(200);
+  await taskSheet.getByTestId("task-edit-title").click();
   await taskSheet.getByRole("textbox", { name: "Title" }).fill(reappliedTitle);
   const concurrent = await api<Record<string, unknown>>(page, `/api/tasks/${taskId}`, {
     method: "PATCH",

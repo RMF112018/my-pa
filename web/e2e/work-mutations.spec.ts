@@ -196,7 +196,7 @@ test("real stack preserves deliberate Task and Commitment mutation semantics", a
     it changed to, not a generic acknowledgement.
   */
   await expect(feedback(page).getByText("Status changed to In progress")).toBeVisible();
-  await expect(taskSheet.getByText(/^In progress · /)).toBeVisible();
+  await expect(statusControl.getByRole("combobox")).toHaveValue("in_progress");
   const running = await api<{ task: { lifecycle_state: string } }>(page, `/api/tasks/${taskId}`);
   expect(running.body.task.lifecycle_state).toBe("in_progress");
 
@@ -208,8 +208,9 @@ test("real stack preserves deliberate Task and Commitment mutation semantics", a
   await closeConfirmation.getByRole("button", { name: "Confirm Closed" }).click();
   await expect(feedback(page).getByText(/closed$/)).toBeVisible();
   await expect(taskSheet.getByTestId("task-terminal-summary")).toHaveText("This task is closed.");
-  await expect(statusControl).toHaveAttribute("data-terminal", "true");
-  await expect(statusControl).toContainText("Closed");
+  await expect(taskSheet.getByTestId("task-status-control")).toHaveCount(0);
+  await expect(taskSheet.getByTestId("task-due-control")).toHaveCount(0);
+  await expect(taskSheet.getByTestId("task-close-control")).toHaveCount(0);
   await expect(taskSheet.getByRole("button", { name: "Close Task", exact: true })).toHaveCount(0);
 
   const completed = await api<{ task: { lifecycle_state: string; closure_evidence_ref: string | null; origin_kind: string } }>(page, `/api/tasks/${taskId}`);

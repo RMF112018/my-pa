@@ -43,7 +43,12 @@ import {
   TASK_OPERATION_FAILURE_MESSAGE,
   useTaskOperations,
 } from "@/components/tasks/use-task-operations";
-import { formatTaskStatus, toTaskPresentationModel, type TaskCivilClock } from "@/lib/tasks/presentation";
+import {
+  formatTaskStatus,
+  isTerminalTaskStatus,
+  toTaskPresentationModel,
+  type TaskCivilClock,
+} from "@/lib/tasks/presentation";
 import {
   browserWorkClock,
   captureEvidence,
@@ -544,8 +549,10 @@ function TaskDetailViewInner({
       return;
     }
 
-    // Coordinator preserves draft on conflict/failure — reaffirm local draft identity.
-    if (outcome.draft && typeof outcome.draft === "object") {
+    // Coordinator preserves draft on conflict/failure. Confirmed saves already
+    // force-synced the draft in reconcile; restoring outcome.draft here would
+    // re-dirty Close against leftover local description.
+    if (outcome.state.phase !== "confirmed" && outcome.draft && typeof outcome.draft === "object") {
       setDraft(outcome.draft as TaskDraft);
       draftRef.current = outcome.draft as TaskDraft;
     }
@@ -634,7 +641,7 @@ function TaskDetailViewInner({
             <Button type="button" variant="secondary" onClick={discardDraftForLatest}>
               Discard edits and load latest
             </Button>
-            {conflict && proposal ? (
+            {conflict && proposal && !isTerminalTaskStatus(authoritative.lifecycle_state) ? (
               <Button
                 type="button"
                 variant="secondary"
@@ -878,6 +885,9 @@ function TaskOperationSurface({
   }
 
   const terminal = Boolean(model.terminalSummary);
+  const titleDirty = draft.title !== task.title;
+  const descriptionDirty = draft.description !== (task.description ?? "");
+  const closeBlocked = titleDirty || descriptionDirty;
 
   return (
     <div className={embedded ? "" : "mt-4"}>
@@ -889,9 +899,11 @@ function TaskOperationSurface({
         >
           <p>{TASK_OPERATION_CONFLICT_MESSAGE}</p>
           <div className="mt-3 flex flex-wrap gap-2">
-            <Button type="button" variant="secondary" pending={busy} onClick={() => void ops.reapply()}>
-              Try my change again
-            </Button>
+            {terminal ? null : (
+              <Button type="button" variant="secondary" pending={busy} onClick={() => void ops.reapply()}>
+                Try my change again
+              </Button>
+            )}
             <Button type="button" variant="secondary" onClick={ops.dismissConflict}>
               Keep the latest details
             </Button>
@@ -904,10 +916,10 @@ function TaskOperationSurface({
         task={current}
         clock={clock}
         title={draft.title}
-        titleDirty={draft.title !== task.title}
+        titleDirty={titleDirty}
         priority={current.priority}
         description={draft.description}
-        descriptionDirty={draft.description !== (task.description ?? "")}
+        descriptionDirty={descriptionDirty}
         disabled={!canMutate || busy}
         pending={busy}
         project={contextFacts.project}
@@ -942,7 +954,7 @@ function TaskOperationSurface({
         closeControl={
           <TaskCloseControl
             taskTitle={current.title}
-            disabled={!canMutate}
+            disabled={!canMutate || busy || closeBlocked}
             pending={busy}
             triggerVariant="secondary"
             showCancel={false}

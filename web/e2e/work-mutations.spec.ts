@@ -178,6 +178,10 @@ test("real stack preserves deliberate Task and Commitment mutation semantics", a
   const reapply = taskSheet.getByRole("button", { name: "Reapply my change to the latest version" });
   await expect(reapply).toBeVisible();
   await reapply.click();
+  await expect(taskSheet.getByTestId("task-changed-elsewhere")).toHaveCount(0);
+  await expect
+    .poll(async () => (await api<{ task: { title: string } }>(page, `/api/tasks/${taskId}`)).body.task.title)
+    .toBe(reappliedTitle);
   await expect(taskSheet.getByRole("heading", { name: reappliedTitle })).toBeVisible();
   const reappliedRead = await api<{ task: { title: string; description: string | null } }>(page, `/api/tasks/${taskId}`);
   expect(reappliedRead.body.task.title).toBe(reappliedTitle);
@@ -205,6 +209,8 @@ test("real stack preserves deliberate Task and Commitment mutation semantics", a
   const closeConfirmation = taskSheet.getByRole("alertdialog");
   await expect(closeConfirmation).toBeVisible();
   await expect(closeConfirmation.getByRole("button", { name: "Keep open" })).toBeVisible();
+  await expect(closeConfirmation.getByRole("button", { name: "Keep open" })).toBeFocused();
+  await expect(page.getByRole("dialog")).toHaveCount(1);
   await closeConfirmation.getByRole("button", { name: "Confirm Closed" }).click();
   await expect(feedback(page).getByText(/closed$/)).toBeVisible();
   await expect(taskSheet.getByTestId("task-terminal-summary")).toHaveText("This task is closed.");
@@ -212,6 +218,16 @@ test("real stack preserves deliberate Task and Commitment mutation semantics", a
   await expect(taskSheet.getByTestId("task-due-control")).toHaveCount(0);
   await expect(taskSheet.getByTestId("task-close-control")).toHaveCount(0);
   await expect(taskSheet.getByRole("button", { name: "Close Task", exact: true })).toHaveCount(0);
+  await expect(taskSheet.getByRole("button", { name: "Cancel Task", exact: true })).toHaveCount(0);
+  await expect(taskSheet.getByTestId("task-edit-title")).toHaveCount(0);
+  await expect(taskSheet.getByTestId("task-edit-priority")).toHaveCount(0);
+  await expect(taskSheet.getByTestId("task-edit-description")).toHaveCount(0);
+  await expect(taskSheet.getByTestId("task-add-description")).toHaveCount(0);
+  await expect(taskSheet.getByRole("textbox", { name: "Title" })).toHaveCount(0);
+  await expect(taskSheet.getByRole("textbox", { name: "Description" })).toHaveCount(0);
+  await expect(taskSheet.getByTestId("task-comments-add")).toBeVisible();
+  await taskSheet.getByTestId("task-comments-add").click();
+  await expect(taskSheet.getByRole("textbox", { name: "Add comment" })).toBeVisible();
 
   const completed = await api<{ task: { lifecycle_state: string; closure_evidence_ref: string | null; origin_kind: string } }>(page, `/api/tasks/${taskId}`);
   expect(completed.body.task.lifecycle_state).toBe("completed");

@@ -720,6 +720,96 @@ test.describe("Task detail keyboard and named dialog (WP-POSTUX-04)", () => {
   });
 });
 
+test.describe("Task close confirmation and terminal read (WP-POSTUX-05)", () => {
+  /**
+   * macOS Tab vs Option+Tab: same chord rule as the Work List block above.
+   * This is not VoiceOver and not a WCAG 2.2 AA claim.
+   */
+  async function pressNextControl(page: Page): Promise<void> {
+    await page.keyboard.press(test.info().project.name === "webkit" ? "Alt+Tab" : "Tab");
+  }
+
+  test.beforeEach(async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await signIn(page);
+  });
+
+  test("Close confirmation is an inline named alertdialog with Keep open focused", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const marker = `a11y-close-${test.info().project.name}-${Date.now()}`;
+    const title = `E2E task close a11y ${marker}`;
+    const created = await seedTask(page, {
+      title,
+      dueAt: "2026-12-18T17:00:00Z",
+      idempotencyKey: `e2e-${marker}`,
+    });
+    expect(created.status).toBe(200);
+
+    await page.goto(`/work?view=all-open&q=${encodeURIComponent(marker)}`);
+    await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
+    await page.getByRole("link", { name: new RegExp(title) }).click();
+    const sheet = page.getByTestId("task-compact-sheet");
+    await expect(sheet.getByTestId("task-summary")).toBeVisible();
+
+    const dialog = page.getByRole("dialog", { name: title });
+    await expect(dialog).toBeVisible();
+    await sheet.getByTestId("task-close-control").getByRole("button", { name: "Close Task", exact: true }).click();
+
+    const confirmation = sheet.getByRole("alertdialog");
+    await expect(confirmation).toBeVisible();
+    await expect(confirmation).toHaveAccessibleName("Close Task");
+    await expect(confirmation.getByRole("button", { name: "Keep open" })).toBeFocused();
+    await expect(confirmation.getByRole("textbox")).toHaveCount(0);
+    // Inline region, not a second modal: the sheet remains the one dialog.
+    await expect(page.getByRole("dialog")).toHaveCount(1);
+    expect(await scan(page), "Task Close confirmation accessibility violations").toEqual([]);
+
+    await pressNextControl(page);
+    await expect(confirmation.getByRole("button", { name: "Confirm Closed" })).toBeFocused();
+
+    await confirmation.getByRole("button", { name: "Keep open" }).click();
+    await expect(sheet.getByRole("alertdialog")).toHaveCount(0);
+    await expect(sheet.getByRole("button", { name: "Close Task", exact: true })).toBeFocused();
+  });
+
+  test("a closed Task remains a named dialog and a read-only scannable surface", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const marker = `a11y-term-${test.info().project.name}-${Date.now()}`;
+    const title = `E2E task terminal a11y ${marker}`;
+    const created = await seedTask(page, {
+      title,
+      dueAt: "2026-12-18T17:00:00Z",
+      idempotencyKey: `e2e-${marker}`,
+    });
+    expect(created.status).toBe(200);
+
+    await page.goto(`/work?view=all-open&q=${encodeURIComponent(marker)}`);
+    await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
+    await page.getByRole("link", { name: new RegExp(title) }).click();
+    const sheet = page.getByTestId("task-compact-sheet");
+    await sheet.getByTestId("task-close-control").getByRole("button", { name: "Close Task", exact: true }).click();
+    await sheet.getByRole("alertdialog").getByRole("button", { name: "Confirm Closed" }).click();
+
+    await expect(sheet.getByTestId("task-terminal-summary")).toHaveText("This task is closed.");
+    await expect(sheet.getByTestId("task-terminal-summary")).toBeFocused();
+    await expect(sheet.getByTestId("task-edit-title")).toHaveCount(0);
+    await expect(sheet.getByTestId("task-edit-priority")).toHaveCount(0);
+    await expect(sheet.getByTestId("task-add-description")).toHaveCount(0);
+    await expect(sheet.getByTestId("task-close-control")).toHaveCount(0);
+    await expect(sheet.getByTestId("task-comments-add")).toBeVisible();
+
+    const dialog = page.getByRole("dialog").filter({ has: sheet });
+    await expect(dialog).toBeVisible();
+    await expect(sheet.locator("h1:not(.sr-only)")).toHaveCount(1);
+    await expect(sheet.locator("h1:not(.sr-only)")).toHaveText(title);
+    expect(await scan(page), "terminal Task detail accessibility violations").toEqual([]);
+  });
+});
+
 test.describe("Intelligence working surface landmarks", () => {
   test.beforeEach(async ({ page }) => {
     await signIn(page);

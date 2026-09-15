@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 
 import { Sheet } from "@/components/ui/sheet";
 
@@ -50,5 +51,37 @@ describe("Sheet titleVisibility", () => {
       </Sheet>,
     );
     expect(screen.getByRole("dialog").getAttribute("data-placement")).toBe("detail");
+  });
+
+  it("closes on Escape when no inline confirmation is open", async () => {
+    const user = userEvent.setup();
+    const onOpenChange = vi.fn();
+    render(
+      <Sheet open onOpenChange={onOpenChange} title="Task detail" placement="detail">
+        Body
+      </Sheet>,
+    );
+
+    await user.keyboard("{Escape}");
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("does not close on Escape while an inline alertdialog confirmation is open", async () => {
+    const user = userEvent.setup();
+    const onOpenChange = vi.fn();
+    render(
+      <Sheet open onOpenChange={onOpenChange} title="Task detail" placement="detail">
+        <div role="alertdialog" aria-labelledby="confirm-title">
+          <p id="confirm-title">Close Task</p>
+          <button type="button">Keep open</button>
+        </div>
+      </Sheet>,
+    );
+
+    screen.getByRole("button", { name: "Keep open" }).focus();
+    await user.keyboard("{Escape}");
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Task detail" })).toBeInTheDocument();
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
   });
 });

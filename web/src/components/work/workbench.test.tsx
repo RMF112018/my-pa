@@ -583,6 +583,121 @@ describe("Work surface", () => {
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Work", level: 1 }));
   });
 
+  it("restores focus to the same Task row when the original trigger has been replaced", async () => {
+    /*
+      The remembered trigger is a specific node. A list refresh can remount the
+      same Task under a new element, so that node is detached while the row is
+      still on screen. Restoration must find the surviving row by identity, not
+      give up and jump to a neighbour or the heading.
+    */
+    const task = {
+      task_id: "tsk_aaaaaaaa11111111", title: "Still on the list", lifecycle_state: "open",
+      priority: null, due_at: null, scheduled_at: null, deferred_until: null, archived_at: null,
+      created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-22T12:00:00Z", version: 2,
+    };
+    const neighbour = {
+      task_id: "tsk_bbbbbbbb22222222", title: "A neighbour", lifecycle_state: "open",
+      priority: null, due_at: null, scheduled_at: null, deferred_until: null, archived_at: null,
+      created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-22T12:00:00Z", version: 2,
+    };
+    const body = (data: unknown) =>
+      new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
+
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      const path = String(input);
+      if (path === `/api/tasks/${task.task_id}`) return body({ task });
+      if (path === `/api/tasks/${neighbour.task_id}`) return body({ task: neighbour });
+      if (path.includes("/comments")) return body({ comments: [] });
+      if (path.includes("/history")) return body({ history: [] });
+      if (path.startsWith("/api/commitments")) return body({ commitments: [] });
+      return body({ tasks: [task, neighbour] });
+    }));
+
+    history.replaceState(null, "", "/work?view=all-open");
+    renderFromUrl();
+    const trigger = await screen.findByRole("link", { name: /Still on the list/ });
+    const user = userEvent.setup();
+    await user.click(trigger);
+    await screen.findByRole("dialog");
+
+    const row = trigger.closest("[data-work-item]");
+    expect(row).toBeTruthy();
+    const replacement = trigger.cloneNode(true) as HTMLElement;
+    trigger.replaceWith(replacement);
+    expect(trigger.isConnected).toBe(false);
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement?.tagName).not.toBe("H1");
+    expect(document.activeElement?.textContent).toContain("Still on the list");
+    expect(document.activeElement).toBe(row!.querySelector("a[href]"));
+  });
+
+  it("restores focus to the nearest surviving row when the opened Task has left", async () => {
+    /*
+      Closing from the Sheet removes the Task the user opened. The original
+      trigger is gone and no row carries that identity; focus must land on
+      whatever now occupies the remembered place, not on the Work heading while
+      neighbours remain.
+    */
+    const leaving = {
+      task_id: "tsk_aaaaaaaa11111111", title: "Closed from the sheet", lifecycle_state: "open",
+      priority: null, due_at: null, scheduled_at: null, deferred_until: null, archived_at: null,
+      created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-22T12:00:00Z", version: 2,
+    };
+    const staying = {
+      task_id: "tsk_bbbbbbbb22222222", title: "Takes its place", lifecycle_state: "open",
+      priority: null, due_at: null, scheduled_at: null, deferred_until: null, archived_at: null,
+      created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-22T12:00:00Z", version: 2,
+    };
+    let listed = [leaving, staying];
+    const body = (data: unknown) =>
+      new Response(JSON.stringify(data), { status: 200, headers: { "content-type": "application/json" } });
+
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      const path = String(input);
+      if (path === `/api/tasks/${leaving.task_id}`) return body({ task: leaving });
+      if (path === `/api/tasks/${staying.task_id}`) return body({ task: staying });
+      if (path.includes("/comments")) return body({ comments: [] });
+      if (path.includes("/history")) return body({ history: [] });
+      if (path.startsWith("/api/commitments")) return body({ commitments: [] });
+      return body({ tasks: listed });
+    }));
+
+    history.replaceState(null, "", "/work?view=all-open");
+    renderFromUrl();
+    await screen.findByText("Closed from the sheet");
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("link", { name: /Closed from the sheet/ }));
+    await screen.findByRole("dialog");
+
+    listed = [staying];
+    await waitFor(() => {
+      fireEvent(window, new Event("focus"));
+      expect(screen.queryByRole("link", { name: /Closed from the sheet/ })).toBeNull();
+    });
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement?.tagName).not.toBe("H1");
+    expect(document.activeElement?.textContent).toContain("Takes its place");
+  });
+
   it("waits a frame before deciding focus was lost", async () => {
     /*
       The decision is "has focus fallen to nothing", and it cannot be taken in

@@ -3,6 +3,7 @@
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -13,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { TaskCloseControl } from "@/components/tasks/task-close-control";
 import type { TaskDetail, TaskPriority } from "@/contracts/work";
 import {
   civilDayInZone,
@@ -20,8 +22,6 @@ import {
   formatTaskPlanningDate,
   formatTaskPriority,
   TASK_ARCHIVED_LABEL,
-  TASK_CANCEL_ACTION_LABEL,
-  TASK_CANCEL_CONFIRM_LABEL,
   TASK_PLANNED_FOR_LABEL,
   TASK_SNOOZED_UNTIL_LABEL,
   TASK_PRIORITY_LABELS,
@@ -30,17 +30,19 @@ import {
 } from "@/lib/tasks/presentation";
 
 /**
- * Compact, read-first Task detail (WP-POSTUX-04).
+ * Compact, read-first Task detail (WP-POSTUX-04 / WP-POSTUX-05).
  *
  * Title, description and priority are text until explicitly edited. Status and
- * Due stay immediate. Planning, Context and Administrative remain collapsed.
- * Cancel and Refresh live under More. Every edit is still a bounded field- or
- * section-level mutation intent.
+ * Due stay immediate. Dirty title or description blocks Close. A terminal Task
+ * is a canonical read surface: no field editors, no Close/Cancel, and a one-time
+ * focus move onto the terminal summary after an active→terminal transition.
  */
 
 const PRIORITY_TOKENS: readonly TaskPriority[] = ["p1", "p2", "p3", "p4"];
-const KEEP_OPEN_LABEL = "Keep open";
-const TOUCH_TARGET = "min-h-11 min-w-11";
+const CLOSE_BLOCKED_REASON = "Edits must be saved or discarded first.";
+
+/** Close is never offered in cancel-only mode; the prop remains required. */
+function unusedClose(): void {}
 
 export type TaskContextFact =
   | { state: "idle" }
@@ -83,110 +85,12 @@ function ProgressiveSection({
   );
 }
 
-function TaskCancelUnderMore({
-  taskTitle,
-  disabled,
-  pending,
-  onCancelTask,
-}: {
-  taskTitle: string;
-  disabled: boolean;
-  pending: boolean;
-  onCancelTask(): void;
-}) {
-  const [confirming, setConfirming] = useState(false);
-  const restoreFocusRef = useRef(false);
-  const triggerRef = useRef<HTMLButtonElement | null>(null);
-  const keepOpenRef = useRef<HTMLButtonElement | null>(null);
-  const baseId = useId();
-  const titleId = `${baseId}-title`;
-  const descriptionId = `${baseId}-description`;
-
-  useEffect(() => {
-    if (confirming) {
-      keepOpenRef.current?.focus();
-      return;
-    }
-    if (!restoreFocusRef.current) return;
-    restoreFocusRef.current = false;
-    triggerRef.current?.focus();
-  }, [confirming]);
-
-  function dismiss() {
-    restoreFocusRef.current = true;
-    setConfirming(false);
-  }
-
-  return (
-    <div className="flex flex-col gap-3">
-      <Button
-        ref={triggerRef}
-        variant="ghost"
-        disabled={disabled}
-        data-prominence="secondary"
-        data-testid="task-cancel-trigger"
-        className={TOUCH_TARGET}
-        aria-expanded={confirming}
-        onClick={() => {
-          if (disabled) return;
-          setConfirming(true);
-        }}
-      >
-        {TASK_CANCEL_ACTION_LABEL}
-      </Button>
-      {confirming ? (
-        <div
-          role="alertdialog"
-          aria-labelledby={titleId}
-          aria-describedby={descriptionId}
-          data-testid="task-cancel-confirmation"
-          onKeyDown={(event) => {
-            if (event.key !== "Escape") return;
-            event.stopPropagation();
-            dismiss();
-          }}
-          className="flex flex-col gap-3 rounded-[var(--radius-md)] border border-border bg-surface p-3"
-        >
-          <p id={titleId} className="text-sm font-medium text-text-primary">
-            {TASK_CANCEL_ACTION_LABEL}
-          </p>
-          <p id={descriptionId} className="text-sm text-text-secondary">
-            {`\u201C${taskTitle}\u201D will be cancelled, not closed.`}
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              ref={keepOpenRef}
-              variant="secondary"
-              className={TOUCH_TARGET}
-              data-testid="task-cancel-keep-open"
-              onClick={dismiss}
-            >
-              {KEEP_OPEN_LABEL}
-            </Button>
-            <Button
-              variant="danger"
-              pending={pending}
-              className={TOUCH_TARGET}
-              data-testid="task-cancel-confirm"
-              onClick={() => {
-                if (pending) return;
-                onCancelTask();
-              }}
-            >
-              {TASK_CANCEL_CONFIRM_LABEL}
-            </Button>
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 export interface TaskHeaderSectionProps {
   model: TaskPresentationModel;
   title: string;
   committedTitle: string;
   titleDirty: boolean;
+  descriptionDirty: boolean;
   priority: TaskPriority | null;
   disabled: boolean;
   pending: boolean;
@@ -205,6 +109,7 @@ export function TaskHeaderSection({
   title,
   committedTitle,
   titleDirty,
+  descriptionDirty,
   priority,
   disabled,
   pending,
@@ -223,9 +128,13 @@ export function TaskHeaderSection({
   const [editingPriority, setEditingPriority] = useState(false);
   const titleEditRef = useRef<HTMLButtonElement | null>(null);
   const titleInputRef = useRef<HTMLInputElement | null>(null);
+  const terminalSummaryRef = useRef<HTMLParagraphElement | null>(null);
   const focusTitleEdit = useRef(false);
-  const showTitleEditor = editingTitle || titleDirty;
+  const sawActiveRef = useRef(!Boolean(model.terminalSummary));
+  const focusedTransitionRef = useRef<string | null>(null);
   const terminal = Boolean(model.terminalSummary);
+  const showTitleEditor = !terminal && (editingTitle || titleDirty);
+  const closeBlocked = !terminal && (titleDirty || descriptionDirty);
 
   useEffect(() => {
     if (showTitleEditor) titleInputRef.current?.focus();
@@ -237,11 +146,30 @@ export function TaskHeaderSection({
     titleEditRef.current?.focus();
   }, [showTitleEditor]);
 
+  useLayoutEffect(() => {
+    if (!terminal) {
+      sawActiveRef.current = true;
+      return;
+    }
+    if (!sawActiveRef.current) return;
+    const key = `${model.taskId}:terminal`;
+    if (focusedTransitionRef.current === key) return;
+    focusedTransitionRef.current = key;
+    terminalSummaryRef.current?.focus();
+  }, [terminal, model.taskId]);
+
   function cancelTitle() {
     if (title !== committedTitle) onTitleChange(committedTitle);
     focusTitleEdit.current = true;
     setEditingTitle(false);
   }
+
+  const priorityRead = (
+    <div className="grid gap-1">
+      <p className="text-sm font-medium text-text-primary">Priority</p>
+      <p className="text-sm text-text-secondary">{formatTaskPriority(priority)}</p>
+    </div>
+  );
 
   const priorityEditor = editingPriority ? (
     <div className="grid gap-1">
@@ -329,18 +257,22 @@ export function TaskHeaderSection({
         </div>
       ) : (
         <div className="flex flex-wrap items-start gap-3">
-          <h1 className="text-2xl font-semibold text-text-primary">{title}</h1>
-          <Button
-            ref={titleEditRef}
-            size="sm"
-            variant="secondary"
-            className="min-h-11"
-            disabled={disabled}
-            data-testid="task-edit-title"
-            onClick={() => setEditingTitle(true)}
-          >
-            Edit title
-          </Button>
+          <h1 className="text-2xl font-semibold text-text-primary">
+            {terminal ? committedTitle : title}
+          </h1>
+          {terminal ? null : (
+            <Button
+              ref={titleEditRef}
+              size="sm"
+              variant="secondary"
+              className="min-h-11"
+              disabled={disabled}
+              data-testid="task-edit-title"
+              onClick={() => setEditingTitle(true)}
+            >
+              Edit title
+            </Button>
+          )}
         </div>
       )}
 
@@ -354,8 +286,13 @@ export function TaskHeaderSection({
             <span className="font-medium text-text-primary">Due</span>{" "}
             <span className="text-text-secondary">{model.due.phrase}</span>
           </p>
-          {priorityEditor}
-          <p className="text-sm text-muted" data-testid="task-terminal-summary">
+          {priorityRead}
+          <p
+            ref={terminalSummaryRef}
+            tabIndex={-1}
+            className="text-sm text-muted"
+            data-testid="task-terminal-summary"
+          >
             {model.terminalSummary}
           </p>
         </div>
@@ -376,17 +313,26 @@ export function TaskHeaderSection({
         </details>
       ) : (
         <div className="flex flex-wrap items-start gap-3">
-          {closeControl}
+          <div className="grid gap-2">
+            {closeControl}
+            {closeBlocked ? (
+              <p data-testid="task-close-blocked-reason" className="text-sm text-text-secondary">
+                {CLOSE_BLOCKED_REASON}
+              </p>
+            ) : null}
+          </div>
           <details data-testid="task-more-actions">
             <summary className="flex min-h-11 cursor-pointer items-center font-medium text-text-primary">
               More
             </summary>
             <div className="mt-2 grid gap-3">
               {onCancelTask ? (
-                <TaskCancelUnderMore
+                <TaskCloseControl
                   taskTitle={committedTitle}
                   disabled={disabled}
                   pending={pending}
+                  mode="cancel-only"
+                  onClose={unusedClose}
                   onCancelTask={onCancelTask}
                 />
               ) : null}
@@ -405,6 +351,8 @@ export interface TaskDescriptionSectionProps {
   descriptionDirty: boolean;
   disabled: boolean;
   pending: boolean;
+  /** Terminal Tasks are a canonical read; no Add/Edit description. */
+  readOnly?: boolean;
   onDescriptionChange(next: string): void;
   onDescriptionSave(): void;
 }
@@ -415,17 +363,20 @@ export function TaskDescriptionSection({
   descriptionDirty,
   disabled,
   pending,
+  readOnly = false,
   onDescriptionChange,
   onDescriptionSave,
 }: TaskDescriptionSectionProps) {
   const fieldId = useId();
-  const empty = description.trim().length === 0 && !descriptionDirty;
+  const empty = readOnly
+    ? committedDescription.trim().length === 0
+    : description.trim().length === 0 && !descriptionDirty;
   const [editing, setEditing] = useState(descriptionDirty);
   const editRef = useRef<HTMLButtonElement | null>(null);
   const addRef = useRef<HTMLButtonElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const focusDescriptionTrigger = useRef<"add" | "edit" | null>(null);
-  const showEditor = editing || descriptionDirty;
+  const showEditor = !readOnly && (editing || descriptionDirty);
 
   useEffect(() => {
     if (showEditor) textareaRef.current?.focus();
@@ -489,36 +440,42 @@ export function TaskDescriptionSection({
       ) : empty ? (
         <div className="grid gap-2">
           <p className="whitespace-pre-wrap text-sm text-text-secondary">No description.</p>
-          <div>
-            <Button
-              ref={addRef}
-              size="sm"
-              variant="secondary"
-              className="min-h-11"
-              disabled={disabled}
-              data-testid="task-add-description"
-              onClick={() => setEditing(true)}
-            >
-              Add description
-            </Button>
-          </div>
+          {readOnly ? null : (
+            <div>
+              <Button
+                ref={addRef}
+                size="sm"
+                variant="secondary"
+                className="min-h-11"
+                disabled={disabled}
+                data-testid="task-add-description"
+                onClick={() => setEditing(true)}
+              >
+                Add description
+              </Button>
+            </div>
+          )}
         </div>
       ) : (
         <div className="grid gap-2">
-          <p className="whitespace-pre-wrap text-sm text-text-primary">{description}</p>
-          <div>
-            <Button
-              ref={editRef}
-              size="sm"
-              variant="secondary"
-              className="min-h-11"
-              disabled={disabled}
-              data-testid="task-edit-description"
-              onClick={() => setEditing(true)}
-            >
-              Edit description
-            </Button>
-          </div>
+          <p className="whitespace-pre-wrap text-sm text-text-primary">
+            {readOnly ? committedDescription : description}
+          </p>
+          {readOnly ? null : (
+            <div>
+              <Button
+                ref={editRef}
+                size="sm"
+                variant="secondary"
+                className="min-h-11"
+                disabled={disabled}
+                data-testid="task-edit-description"
+                onClick={() => setEditing(true)}
+              >
+                Edit description
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </section>
@@ -593,6 +550,8 @@ export interface TaskPlanningSectionProps {
   clock: TaskCivilClock;
   disabled: boolean;
   pending: boolean;
+  /** Terminal Tasks keep planning as read facts only. */
+  readOnly?: boolean;
   onPlannedForChange(next: string | null): void;
   onSnoozedUntilChange(next: string | null): void;
 }
@@ -602,12 +561,14 @@ export function TaskPlanningSection({
   clock,
   disabled,
   pending,
+  readOnly = false,
   onPlannedForChange,
   onSnoozedUntilChange,
 }: TaskPlanningSectionProps) {
   const [editing, setEditing] = useState(false);
   const planned = formatTaskPlanningDate(task.scheduled_at, clock, "Not planned");
   const snoozed = formatTaskPlanningDate(task.deferred_until, clock, "Not snoozed");
+  const showEditors = !readOnly && editing;
 
   return (
     <ProgressiveSection
@@ -628,7 +589,7 @@ export function TaskPlanningSection({
             <span className="text-text-secondary">{snoozed}</span>
           </p>
         </div>
-        {editing ? (
+        {showEditors ? (
           <>
             <CivilDateField
               label={TASK_PLANNED_FOR_LABEL}
@@ -649,7 +610,7 @@ export function TaskPlanningSection({
               onChange={onSnoozedUntilChange}
             />
           </>
-        ) : (
+        ) : readOnly ? null : (
           <div>
             <Button
               size="sm"
@@ -838,6 +799,12 @@ export function TaskDetailSections(props: TaskDetailSectionsProps) {
     onContextOpen,
   } = props;
 
+  const terminal = Boolean(model.terminalSummary);
+  const unsavedLocal =
+    terminal && (titleDirty || descriptionDirty)
+      ? { title: titleDirty ? title : null, description: descriptionDirty ? description : null }
+      : null;
+
   return (
     <div data-testid="task-detail-sections" className="flex flex-col gap-6">
       <TaskHeaderSection
@@ -845,7 +812,8 @@ export function TaskDetailSections(props: TaskDetailSectionsProps) {
         title={title}
         committedTitle={task.title}
         titleDirty={titleDirty}
-        priority={priority}
+        descriptionDirty={descriptionDirty}
+        priority={terminal ? task.priority : priority}
         disabled={disabled}
         pending={pending}
         statusControl={statusControl}
@@ -857,12 +825,36 @@ export function TaskDetailSections(props: TaskDetailSectionsProps) {
         onPriorityChange={onPriorityChange}
         onCancelTask={onCancelTask}
       />
+      {unsavedLocal ? (
+        <aside
+          data-testid="task-unsaved-local-evidence"
+          className="rounded-[var(--radius-md)] border border-border bg-surface p-3 text-sm"
+        >
+          <p className="font-medium text-text-primary">Unsaved local edits</p>
+          <p className="text-text-secondary">
+            These words are still on this device. They are not the title or description of this task.
+          </p>
+          {unsavedLocal.title ? (
+            <p className="mt-2 whitespace-pre-wrap text-text-primary">
+              <span className="font-medium">Unsaved title. </span>
+              {unsavedLocal.title}
+            </p>
+          ) : null}
+          {unsavedLocal.description ? (
+            <p className="mt-2 whitespace-pre-wrap text-text-primary">
+              <span className="font-medium">Unsaved description. </span>
+              {unsavedLocal.description}
+            </p>
+          ) : null}
+        </aside>
+      ) : null}
       <TaskDescriptionSection
         description={description}
         committedDescription={task.description ?? ""}
         descriptionDirty={descriptionDirty}
         disabled={disabled}
         pending={pending}
+        readOnly={terminal}
         onDescriptionChange={onDescriptionChange}
         onDescriptionSave={onDescriptionSave}
       />
@@ -877,6 +869,7 @@ export function TaskDetailSections(props: TaskDetailSectionsProps) {
         clock={clock}
         disabled={disabled}
         pending={pending}
+        readOnly={terminal}
         onPlannedForChange={onPlannedForChange}
         onSnoozedUntilChange={onSnoozedUntilChange}
       />

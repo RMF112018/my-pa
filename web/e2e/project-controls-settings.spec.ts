@@ -218,8 +218,21 @@ test("a Project this Principal does not have is nondisclosing and equivalent to 
   expect((foreign.body.error as { code?: string })?.code).toBe(
     (unknown.body.error as { code?: string })?.code,
   );
-  expect(JSON.stringify(foreign.body).replaceAll(FOREIGN_PROJECT, "«project»")).toBe(
-    JSON.stringify(unknown.body).replaceAll(UNKNOWN_PROJECT, "«project»"),
+  // A correlation id is minted per request, so it differs between any two
+  // calls and says nothing about the Project. Neutralize it — and only it —
+  // so the comparison still fails on any field that *would* distinguish the
+  // two cases, rather than passing because the bodies were trimmed.
+  const comparable = (serialized: string, projectId: string): string =>
+    serialized
+      .replaceAll(projectId, "«project»")
+      .replace(/"correlationId":"corr_[0-9a-f]+"/g, '"correlationId":"«correlation»"');
+  expect(comparable(JSON.stringify(foreign.body), FOREIGN_PROJECT)).toBe(
+    comparable(JSON.stringify(unknown.body), UNKNOWN_PROJECT),
+  );
+  // The neutralization must have actually matched, or the assertion above
+  // would be comparing two raw bodies and could only pass by luck.
+  expect(comparable(JSON.stringify(foreign.body), FOREIGN_PROJECT)).toContain(
+    "«correlation»",
   );
   for (const answer of [foreign, unknown]) {
     const serialized = JSON.stringify(answer.body);

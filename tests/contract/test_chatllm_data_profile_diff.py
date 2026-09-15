@@ -183,24 +183,32 @@ def test_chatllm_grant_purpose_matches_the_remote_canonical_stamp() -> None:
         assert chatllm_grant_purpose(capability) == resolve_remote_purpose(capability, None)
 
 
-def test_full_plane_effective_target_is_one_hundred_forty_six() -> None:
+def test_full_plane_effective_target_is_one_hundred_forty_nine() -> None:
     """144 until PC-CM-RUN01-WP05 supplied the two Project Controls handlers.
 
     The target is derived — `implemented` intersected with what the policy
     already classifies as data management — so wiring a name the policy had
-    already classified moves it without anything here being reclassified.
+    already classified moves it without anything here being reclassified. The
+    two Project Controls names and the three Report-authoring names landed on
+    disjoint paths; the figure below was re-measured on the merged tree rather
+    than summed from the two branches' deltas.
     """
     composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
     desired = desired_effective_capabilities(composed)
-    assert len(desired) == 146
+    assert len(desired) == 149
+    assert Capability.PROJECT_CONTROLS_CONFIGURE in desired
+    assert Capability.PROJECT_CONTROLS_STATUS in desired
+    assert Capability.REPORTS_BEGIN_CYCLE in desired
+    assert Capability.REPORTS_COMMIT in desired
+    assert Capability.REPORTS_RECORD_RUN_STATE in desired
     assert all(capability in IMPLEMENTED for capability in desired)
     assert all(is_chatllm_data_management(capability) for capability in desired)
 
 
-def test_default_plane_effective_target_is_eighty() -> None:
+def test_default_plane_effective_target_is_eighty_three() -> None:
     composed = composed_capabilities(IMPLEMENTED, _DEFAULT_PLANES)
     desired = desired_effective_capabilities(composed)
-    assert len(desired) == 80
+    assert len(desired) == 83
     assert Capability.DOCUMENTS_READ not in desired
     assert Capability.ENTITIES_SEARCH not in desired
     assert Capability.CONSTRAINTS_LIST in desired
@@ -279,6 +287,18 @@ def test_september13_partial_regrant_fails_attestation() -> None:
         is ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANT_EXPIRED
     )
     assert diff.outcomes[Capability.CONTINUITY_TASKS_CREATE] is ChatLLMProfileOutcome.EXCLUDED
+    assert (
+        diff.outcomes[Capability.REPORTS_BEGIN_CYCLE]
+        is ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANT_MISSING
+    )
+    assert (
+        diff.outcomes[Capability.REPORTS_COMMIT]
+        is ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANT_MISSING
+    )
+    assert (
+        diff.outcomes[Capability.REPORTS_RECORD_RUN_STATE]
+        is ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANT_MISSING
+    )
 
 
 def test_documents_not_composed_is_excluded_not_a_grant_gap() -> None:
@@ -374,4 +394,63 @@ def test_no_path_grants_every_capability_enum_member() -> None:
     assert Capability.SOURCES_ENROLL not in desired
     assert Capability.GSQS_START not in desired
     assert Capability.CONTINUITY_TASKS_CREATE not in desired
-    assert CHATLLM_DATA_PROFILE_VERSION
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v2"
+
+
+def test_mismatched_purpose_or_write_is_add_not_noop() -> None:
+    composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
+    desired = desired_effective_capabilities(composed)
+    grants = tuple(
+        _grant(capability, purpose=Purpose.STATUS_OBSERVATION)
+        if capability is Capability.TASKS_LIST
+        else _grant(capability, is_write=True)
+        if capability is Capability.TASKS_READ
+        else _grant(capability)
+        for capability in desired
+    )
+    diff = diff_chatllm_data_profile(
+        implemented=IMPLEMENTED,
+        composed=composed,
+        grants=grants,
+        now=NOW,
+        resource=RESOURCE,
+        scope=SCOPE,
+    )
+    for capability in (Capability.TASKS_LIST, Capability.TASKS_READ):
+        assert (
+            diff.outcomes[capability] is ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANT_MISMATCHED
+        )
+    actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
+    mismatched = [
+        action.kind
+        for action in actions
+        if action.capability in {Capability.TASKS_LIST, Capability.TASKS_READ}
+    ]
+    assert mismatched == ["add", "add"]
+
+
+def test_revoked_desired_grant_is_added() -> None:
+    composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
+    desired = desired_effective_capabilities(composed)
+    grants = tuple(
+        _grant(capability, revoked_at=EXPIRED_AT)
+        if capability is Capability.TASKS_LIST
+        else _grant(capability)
+        for capability in desired
+    )
+    diff = diff_chatllm_data_profile(
+        implemented=IMPLEMENTED,
+        composed=composed,
+        grants=grants,
+        now=NOW,
+        resource=RESOURCE,
+        scope=SCOPE,
+    )
+    assert (
+        diff.outcomes[Capability.TASKS_LIST]
+        is ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANT_REVOKED
+    )
+    assert Capability.TASKS_LIST in diff.add
+    actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
+    revoked = [action for action in actions if action.capability is Capability.TASKS_LIST]
+    assert [action.kind for action in revoked] == ["add"]

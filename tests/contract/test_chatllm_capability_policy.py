@@ -38,6 +38,10 @@ _ODR = frozenset(
     {
         Capability.GSQS_START,
         Capability.GSQS_STATUS,
+    }
+)
+_REPORT_WRITES = frozenset(
+    {
         Capability.REPORTS_BEGIN_CYCLE,
         Capability.REPORTS_COMMIT,
         Capability.REPORTS_RECORD_RUN_STATE,
@@ -48,18 +52,18 @@ _ODR = frozenset(
 def test_policy_covers_every_public_capability_exactly_once() -> None:
     assert set(CHATLLM_CAPABILITY_POLICY) == set(Capability)
     assert len(CHATLLM_CAPABILITY_POLICY) == 172
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v1"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v2"
 
 
 def test_classification_counts_match_the_approved_plan() -> None:
     counts = dict.fromkeys(ChatLLMCapabilityClass, 0)
     for policy in CHATLLM_CAPABILITY_POLICY.values():
         counts[policy.classification] += 1
-    assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 60
+    assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 63
     assert counts[ChatLLMCapabilityClass.DATA_CONDITIONAL] == 90
     assert counts[ChatLLMCapabilityClass.COMPATIBILITY_ONLY] == 2
     assert counts[ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED] == 15
-    assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 5
+    assert counts[ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED] == 2
     assert counts[ChatLLMCapabilityClass.RETIRED] == 0
 
 
@@ -99,6 +103,15 @@ def test_odr_holdout_is_explicit() -> None:
             CHATLLM_CAPABILITY_POLICY[capability].classification
             is ChatLLMCapabilityClass.OPERATOR_DECISION_REQUIRED
         )
+
+
+def test_report_authoring_writes_are_data_required() -> None:
+    for capability in _REPORT_WRITES:
+        policy = CHATLLM_CAPABILITY_POLICY[capability]
+        assert policy.classification is ChatLLMCapabilityClass.DATA_REQUIRED
+        assert is_chatllm_data_management(capability)
+        assert policy.composition_prerequisite is ChatLLMCompositionPrerequisite.ALWAYS
+        assert policy.exclusion_rationale is None
 
 
 def test_continuity_tasks_create_names_the_work_plane_replacement() -> None:

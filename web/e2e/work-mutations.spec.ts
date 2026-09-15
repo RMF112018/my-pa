@@ -140,16 +140,20 @@ test("real stack preserves deliberate Task and Commitment mutation semantics", a
   // never as a raw identifier in the primary surface.
   const context = taskSheet.getByTestId("task-context-section");
   await context.locator("summary").click();
-  await expect(context.getByText(commitmentTitle)).toBeVisible();
-  await expect(context.getByText("Follow up")).toBeVisible();
+  await expect(context.locator("dd", { hasText: commitmentTitle })).toBeVisible();
+  await expect(context.locator("dd", { hasText: "Follow up" })).toBeVisible();
 
-  // Bounded field saves replace the whole-Task atomic patch form.
+  // Bounded field saves replace the whole-Task atomic patch form. Title,
+  // description and priority are read-first: the editor is not on the
+  // primary surface until Edit / Add is chosen.
+  await taskSheet.getByTestId("task-add-description").click();
   await taskSheet.getByRole("textbox", { name: "Description", exact: true }).fill("Safe atomic browser edit");
   await taskSheet.getByRole("button", { name: "Save description" }).click();
   await expect(taskSheet.getByText("Task saved.")).toBeVisible();
   const described = await api<{ task: { description: string | null } }>(page, `/api/tasks/${taskId}`);
   expect(described.body.task.description).toBe("Safe atomic browser edit");
 
+  await taskSheet.getByTestId("task-edit-priority").click();
   await taskSheet.getByRole("combobox", { name: "Priority" }).selectOption({ label: "High" });
   await expect(taskSheet.getByText("Task saved.")).toBeVisible();
   await expect
@@ -158,6 +162,7 @@ test("real stack preserves deliberate Task and Commitment mutation semantics", a
 
   const beforeConflict = await api<{ task: { version: number } }>(page, `/api/tasks/${taskId}`);
   expect(beforeConflict.status).toBe(200);
+  await taskSheet.getByTestId("task-edit-title").click();
   await taskSheet.getByRole("textbox", { name: "Title" }).fill(reappliedTitle);
   const concurrent = await api<Record<string, unknown>>(page, `/api/tasks/${taskId}`, {
     method: "PATCH",
@@ -191,7 +196,7 @@ test("real stack preserves deliberate Task and Commitment mutation semantics", a
     it changed to, not a generic acknowledgement.
   */
   await expect(feedback(page).getByText("Status changed to In progress")).toBeVisible();
-  await expect(taskSheet.getByText(/^In progress · /)).toBeVisible();
+  await expect(statusControl.getByRole("combobox")).toHaveValue("in_progress");
   const running = await api<{ task: { lifecycle_state: string } }>(page, `/api/tasks/${taskId}`);
   expect(running.body.task.lifecycle_state).toBe("in_progress");
 
@@ -203,8 +208,9 @@ test("real stack preserves deliberate Task and Commitment mutation semantics", a
   await closeConfirmation.getByRole("button", { name: "Confirm Closed" }).click();
   await expect(feedback(page).getByText(/closed$/)).toBeVisible();
   await expect(taskSheet.getByTestId("task-terminal-summary")).toHaveText("This task is closed.");
-  await expect(statusControl).toHaveAttribute("data-terminal", "true");
-  await expect(statusControl).toContainText("Closed");
+  await expect(taskSheet.getByTestId("task-status-control")).toHaveCount(0);
+  await expect(taskSheet.getByTestId("task-due-control")).toHaveCount(0);
+  await expect(taskSheet.getByTestId("task-close-control")).toHaveCount(0);
   await expect(taskSheet.getByRole("button", { name: "Close Task", exact: true })).toHaveCount(0);
 
   const completed = await api<{ task: { lifecycle_state: string; closure_evidence_ref: string | null; origin_kind: string } }>(page, `/api/tasks/${taskId}`);

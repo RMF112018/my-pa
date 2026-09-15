@@ -142,6 +142,12 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # caller could not name one and could not call the tool at all. The
         # `gsqs.start` line above states the same arrangement in the same words.
         Capability.PROJECT_CONTROLS_CONFIGURE,
+        # Report writes require `idempotency_key` on the command. ChatLLM cannot
+        # send the key (`REMOTE_OWNED_PAYLOAD_FIELDS`) and the command cannot
+        # omit it, so the server stamps it.
+        Capability.REPORTS_BEGIN_CYCLE,
+        Capability.REPORTS_COMMIT,
+        Capability.REPORTS_RECORD_RUN_STATE,
         # The entity plane's eighteen keyed writes (Phase A). Every one of them
         # carries an `idempotency_key` its command validates and its repository
         # arbitrates against

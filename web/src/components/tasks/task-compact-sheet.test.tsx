@@ -46,8 +46,23 @@ const CANONICAL: TaskDetail = {
   closed_at: null,
 };
 
+const TERMINAL: TaskDetail = {
+  ...CANONICAL,
+  lifecycle_state: "completed",
+  closed_at: "2026-08-24T12:00:00Z",
+};
+
+function contextHandlers(path: string) {
+  if (path.startsWith("/api/projects/")) return Response.json({ project: { name: "Linked project" } });
+  if (path === "/api/situations") return Response.json({ situations: [] });
+  if (/^\/api\/commitments\/[^/?]+$/.test(path)) {
+    return Response.json({ commitment: { title: "Linked commitment" } });
+  }
+  return null;
+}
+
 /** A canonical read that only resolves when the test releases it. */
-function gatedFetch() {
+function gatedFetch(canonical: TaskDetail = CANONICAL) {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -57,9 +72,11 @@ function gatedFetch() {
     if (path.includes("/comments")) return Response.json({ comments: [] });
     if (path.includes("/history")) return Response.json({ history: [] });
     if (path === "/api/commitments?pageSize=100") return Response.json({ commitments: [] });
+    const context = contextHandlers(path);
+    if (context) return context;
     if (path === `/api/tasks/${TASK_ID}`) {
       await gate;
-      return Response.json({ task: CANONICAL });
+      return Response.json({ task: canonical });
     }
     throw new Error(`unexpected request: ${path}`);
   });
@@ -78,6 +95,16 @@ function renderSheet(
   return { onOpenChange };
 }
 
+function visualHeadings(name: string) {
+  return screen.getAllByRole("heading", { name }).filter((heading) => !heading.classList.contains("sr-only"));
+}
+
+function expectNoEagerCommitmentList(fetcher: ReturnType<typeof vi.fn<typeof fetch>>) {
+  expect(
+    fetcher.mock.calls.some(([input]) => String(input) === "/api/commitments?pageSize=100"),
+  ).toBe(false);
+}
+
 describe("TaskCompactSheet", () => {
   it("paints a projection immediately but mounts no mutation control before canonical hydration", async () => {
     const { fetcher, release } = gatedFetch();
@@ -88,13 +115,19 @@ describe("TaskCompactSheet", () => {
     // Seeded paint: human title and status, straight from the projection.
     const hydrating = await screen.findByTestId("task-detail-hydrating");
     expect(within(hydrating).getByText("Coordinate the review")).toBeTruthy();
-    expect(within(hydrating).getByText("In progress")).toBeTruthy();
+    expect(hydrating.textContent).toContain("In progress");
+    expect(within(hydrating).getByRole("heading", { level: 1, name: "Coordinate the review" })).toBeTruthy();
 
     // No mutation control exists at all while the version is untrusted.
     expect(screen.queryByTestId("task-status-control")).toBeNull();
     expect(screen.queryByTestId("task-due-control")).toBeNull();
     expect(screen.queryByTestId("task-close-control")).toBeNull();
+    expect(screen.queryByTestId("task-edit-title")).toBeNull();
+    expect(screen.queryByTestId("task-edit-priority")).toBeNull();
     expect(screen.queryByRole("button", { name: "Add comment" })).toBeNull();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expectNoEagerCommitmentList(fetcher);
 
     release();
 
@@ -102,6 +135,34 @@ describe("TaskCompactSheet", () => {
     expect(await screen.findByTestId("task-status-control")).toBeTruthy();
     expect(screen.getByTestId("task-close-control")).toBeTruthy();
     expect(screen.getByTestId("task-due-control")).toBeTruthy();
+    expect(screen.queryByTestId("task-detail-hydrating")).toBeNull();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(visualHeadings("Coordinate the review")).toHaveLength(1);
+    expectNoEagerCommitmentList(fetcher);
+  });
+
+  it("names the dialog from a visually hidden title", async () => {
+    const { fetcher, release } = gatedFetch();
+    vi.stubGlobal("fetch", fetcher);
+
+    renderSheet(SEED);
+    await screen.findByTestId("task-detail-hydrating");
+
+    const dialog = screen.getByRole("dialog", { name: "Coordinate the review" });
+    const dialogTitle = within(dialog)
+      .getAllByRole("heading", { name: "Coordinate the review" })
+      .find((heading) => heading.classList.contains("sr-only"));
+    expect(dialogTitle).toBeTruthy();
+
+    release();
+    await screen.findByTestId("task-status-control");
+    expect(screen.getByRole("dialog", { name: "Coordinate the review" })).toBeTruthy();
+    expect(
+      within(screen.getByRole("dialog"))
+        .getAllByRole("heading", { name: "Coordinate the review" })
+        .some((heading) => heading.classList.contains("sr-only")),
+    ).toBe(true);
+    expect(visualHeadings("Coordinate the review")).toHaveLength(1);
   });
 
   it("enables Status only once a canonical version is held", async () => {
@@ -125,6 +186,9 @@ describe("TaskCompactSheet", () => {
     expect(screen.queryByTestId("task-detail-hydrating")).toBeNull();
     release();
     expect(await screen.findByTestId("task-status-control")).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Task detail" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Task detail" }).classList.contains("sr-only")).toBe(true);
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
   });
 
   it("presents the Task as a dialog with an accessible name and closes on Escape", async () => {
@@ -161,5 +225,20 @@ describe("TaskCompactSheet", () => {
 
     await user.click(screen.getByText("Technical details"));
     await waitFor(() => expect(screen.getByTestId("task-compact-sheet").textContent).toContain(TASK_ID));
+  });
+
+  it("states a terminal Task without status, due, close, or cancel choosers", async () => {
+    const { fetcher, release } = gatedFetch(TERMINAL);
+    vi.stubGlobal("fetch", fetcher);
+
+    renderSheet(SEED);
+    release();
+
+    expect(await screen.findByTestId("task-terminal-summary")).toBeTruthy();
+    expect(screen.queryByTestId("task-status-control")).toBeNull();
+    expect(screen.queryByTestId("task-due-control")).toBeNull();
+    expect(screen.queryByTestId("task-close-trigger")).toBeNull();
+    expect(screen.queryByTestId("task-cancel-trigger")).toBeNull();
+    expect(screen.queryByRole("combobox")).toBeNull();
   });
 });

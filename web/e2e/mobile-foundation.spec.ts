@@ -1747,3 +1747,146 @@ test.describe("the normalized Work List at coarse geometry", () => {
     ).toBe(before.document);
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * WP-POSTUX-04 — populated Task detail at coarse geometry
+ * ------------------------------------------------------------------ */
+
+/**
+ * Task detail is a different density problem from Create Task: the default
+ * surface is read-first (no Title Input, no Description Textarea, no comment
+ * composer) and the finger lands on Edit title, Close Task, and Add comment.
+ *
+ * Playwright's WebKit project is engine emulation at iPhone 15 geometry, not
+ * the iOS Safari binary or a physical iPhone. Nothing below claims a software
+ * keyboard, visualViewport chrome, or the physical iOS focus-zoom heuristic.
+ */
+test.describe("Task detail geometry at coarse pointer (WP-POSTUX-04)", () => {
+  const seeded: string[] = [];
+  const TEARDOWN_STATE = "cancelled";
+
+  async function seedTask(
+    page: Page,
+    input: { title: string; idempotencyKey: string },
+  ): Promise<string> {
+    const created = await workListApi<{ task?: { task_id: string } }>(page, "/api/tasks", {
+      method: "POST",
+      body: { title: input.title, idempotencyKey: input.idempotencyKey },
+    });
+    expect(created.status, `seeding "${input.title}" must succeed`).toBe(200);
+    const taskId = created.body.task?.task_id ?? "";
+    expect(taskId, "the BFF must answer with a Task id").not.toBe("");
+    seeded.push(taskId);
+    return taskId;
+  }
+
+  async function openTaskDetail(page: Page): Promise<{ title: string; sheet: Locator }> {
+    const tag = `wp04m-${test.info().project.name}-${Date.now()}`;
+    const title = `E2E task detail ${tag}`;
+    await page.goto("/work?view=all-open");
+    await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
+    await seedTask(page, { title, idempotencyKey: `e2e-${tag}` });
+    await page.goto(`/work?view=all-open&q=${encodeURIComponent(tag)}`);
+    const trigger = page.getByRole("link", { name: new RegExp(title) });
+    await expect(trigger).toBeVisible();
+    await trigger.click();
+    const sheet = page.getByTestId("task-compact-sheet");
+    await expect(sheet.getByTestId("task-summary")).toBeVisible();
+    await expect(sheet.getByTestId("task-edit-title")).toBeVisible();
+    return { title, sheet };
+  }
+
+  test.beforeEach(async ({ page }, testInfo) => {
+    test.skip(!isCoarse(testInfo.project.name), "coarse-pointer emulation lanes only");
+    seeded.length = 0;
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await signIn(page);
+  });
+
+  test.afterEach(async ({ page }, testInfo) => {
+    if (!isCoarse(testInfo.project.name)) return;
+    const ids = [...seeded];
+    seeded.length = 0;
+    for (const taskId of ids) {
+      const read = await workListApi<{ task?: { version: number; lifecycle_state: string } }>(
+        page,
+        `/api/tasks/${taskId}`,
+      );
+      if (read.status !== 200 || !read.body.task) continue;
+      if (["completed", "cancelled"].includes(read.body.task.lifecycle_state)) continue;
+      const disposed = await workListApi<unknown>(page, `/api/tasks/${taskId}/transition`, {
+        method: "POST",
+        body: {
+          toState: TEARDOWN_STATE,
+          expectedVersion: read.body.task.version,
+          idempotencyKey: `wp04m-teardown-${taskId}-${Date.now()}`,
+        },
+      });
+      expect(
+        disposed.status,
+        `teardown must dispose of seeded Task ${taskId}: ${JSON.stringify(disposed.body)}`,
+      ).toBeLessThan(300);
+    }
+  });
+
+  test("Task detail has no document overflow and 44px targets on Edit title, Close Task, and Add comment", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const { sheet } = await openTaskDetail(page);
+
+    expect(await documentOverflow(page), "document overflow with Task detail open").toBeLessThanOrEqual(
+      1,
+    );
+
+    const named: Array<[string, Locator]> = [
+      ["Edit title", sheet.getByTestId("task-edit-title")],
+      [
+        "Close Task",
+        sheet.getByTestId("task-close-control").getByRole("button", { name: "Close Task", exact: true }),
+      ],
+      ["Add comment", sheet.getByTestId("task-comments-add")],
+    ];
+    const measured: string[] = [];
+    for (const [name, control] of named) {
+      await expect(control, `${name} must be on the default Task detail`).toBeVisible();
+      const box = await control.boundingBox();
+      expect.soft(box, `${name} has no box on Task detail`).not.toBeNull();
+      if (box === null) continue;
+      measured.push(`${name} ${Math.round(box.width)}x${Math.round(box.height)}`);
+      expect
+        .soft(box.height, `${name} is below this shell's ${MIN_TOUCH_TARGET_PX}px row height`)
+        .toBeGreaterThanOrEqual(MIN_TOUCH_TARGET_PX);
+      expect.soft(box.width, `${name} is below WCAG 2.5.8's 24px minimum width`).toBeGreaterThanOrEqual(
+        24,
+      );
+    }
+    console.log(
+      `WP-POSTUX-04 Task detail targets on ${test.info().project.name}: ${measured.join(", ")}`,
+    );
+    expect(measured, "every named Task detail target must have been measured").toHaveLength(3);
+
+    const dialog = page.getByRole("dialog").filter({ has: sheet });
+    expect(
+      await dialog.evaluate((node) => node.scrollWidth - node.clientWidth),
+      "Task detail sheet overflow",
+    ).toBeLessThanOrEqual(1);
+  });
+
+  test("opening the title editor keeps type at 16px and adds no horizontal overflow", async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const { sheet } = await openTaskDetail(page);
+    const before = await documentOverflow(page);
+
+    await sheet.getByTestId("task-edit-title").click();
+    const title = sheet.getByRole("textbox", { name: "Title" });
+    await expect(title).toBeVisible();
+    await expect(title).toBeFocused();
+
+    const fontPx = await title.evaluate((node) => Number.parseFloat(getComputedStyle(node).fontSize));
+    expect(fontPx, "title editor computed font-size").toBeGreaterThanOrEqual(COARSE_MIN_FONT_PX);
+    expect(await documentOverflow(page), "title editor introduced horizontal overflow").toBe(before);
+  });
+});

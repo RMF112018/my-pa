@@ -18,7 +18,7 @@ from my_pa.adapters.remote_request import (
     remote_tool_schema,
     resolve_remote_purpose,
 )
-from my_pa.application.commands import Command, StartGsqsB0
+from my_pa.application.commands import BeginIntelligenceCycle, Command, StartGsqsB0
 from my_pa.application.errors import InvalidRequestError, UnsupportedError
 from my_pa.application.service import _HANDLERS
 from my_pa.domain.identity.operation import Capability, is_operator_only, permitted_purposes
@@ -311,6 +311,55 @@ def test_gsqs_start_is_server_stamped_on_the_remote_read_profile() -> None:
     assert command.idempotency_key == key
     replay = compose_remote_arguments(
         capability_name=Capability.GSQS_START.value,
+        arguments=arguments,
+        principal=PRINCIPAL,
+        grants=None,
+        clock=lambda: FROZEN,
+        issue_id=_issue,
+    )
+    assert replay["payload"]["idempotency_key"] == key
+
+
+def test_report_writes_are_server_stamped_on_the_remote_write_profile() -> None:
+    """ChatLLM cannot send `idempotency_key` and cannot omit it either.
+
+    Report writes require `idempotency_key` on the command. Without a server
+    stamp MCP cannot construct them. Identical payloads must replay.
+    """
+    assert {
+        Capability.REPORTS_BEGIN_CYCLE,
+        Capability.REPORTS_COMMIT,
+        Capability.REPORTS_RECORD_RUN_STATE,
+    } <= _IDEMPOTENT_REMOTE_CAPABILITIES
+    arguments = {
+        "payload": {
+            "cycle_id": "morning_intelligence",
+            "business_date": "2026-08-20",
+        }
+    }
+    with pytest.raises(InvalidRequestError):
+        compose_remote_arguments(
+            capability_name=Capability.REPORTS_BEGIN_CYCLE.value,
+            arguments={"payload": {**arguments["payload"], "idempotency_key": "caller-key"}},
+            principal=PRINCIPAL,
+            grants=None,
+            clock=lambda: FROZEN,
+            issue_id=_issue,
+        )
+    composed = compose_remote_arguments(
+        capability_name=Capability.REPORTS_BEGIN_CYCLE.value,
+        arguments=arguments,
+        principal=PRINCIPAL,
+        grants=None,
+        clock=lambda: FROZEN,
+        issue_id=_issue,
+    )
+    key = composed["payload"]["idempotency_key"]
+    assert isinstance(key, str) and key.startswith("idk_")
+    command = BeginIntelligenceCycle(**composed["payload"])
+    assert command.idempotency_key == key
+    replay = compose_remote_arguments(
+        capability_name=Capability.REPORTS_BEGIN_CYCLE.value,
         arguments=arguments,
         principal=PRINCIPAL,
         grants=None,

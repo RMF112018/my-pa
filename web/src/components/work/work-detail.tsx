@@ -24,7 +24,6 @@ import type { DisclosureEnvelope } from "@/contracts/envelope";
 import type {
   CommitmentDetail,
   CommitmentFollowUp,
-  CommitmentRow,
   CounterpartyOption,
   TaskComment,
   TaskDetail,
@@ -33,9 +32,8 @@ import type {
   WorkHistoryRow,
 } from "@/contracts/work";
 import { TaskCloseControl } from "@/components/tasks/task-close-control";
-import { TaskCompact } from "@/components/tasks/task-compact";
 import { TaskComments } from "@/components/tasks/task-comments";
-import { TaskDetailSections } from "@/components/tasks/task-detail-sections";
+import { TaskDetailSections, type TaskContextFact } from "@/components/tasks/task-detail-sections";
 import { TaskDueControl } from "@/components/tasks/task-due-control";
 import { TaskStatusControl } from "@/components/tasks/task-status-control";
 import { TaskTechnicalDetails } from "@/components/tasks/task-technical-details";
@@ -109,6 +107,68 @@ function draftsEqual(a: TaskDraft, b: TaskDraft): boolean {
 
 function isDraftDirty(draft: TaskDraft, authoritative: TaskDetail): boolean {
   return !draftsEqual(draft, taskDraft(authoritative));
+}
+
+const CONTEXT_ABSENT = {
+  project: "No project linked",
+  situation: "No situation linked",
+  commitment: "No commitment linked",
+} as const;
+
+const CONTEXT_UNAVAILABLE = {
+  project: "Project details unavailable",
+  situation: "Situation details unavailable",
+  commitment: "Commitment details unavailable",
+} as const;
+
+function readNonEmptyString(record: unknown, key: string): string | undefined {
+  if (!record || typeof record !== "object") return undefined;
+  const value = (record as Record<string, unknown>)[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function contextSeed(id: string | null, absent: string): TaskContextFact {
+  return id ? { state: "idle" } : { state: "absent", message: absent };
+}
+
+function contextFactsFromTask(task: TaskDetail): {
+  project: TaskContextFact;
+  situation: TaskContextFact;
+  commitment: TaskContextFact;
+} {
+  return {
+    project: contextSeed(task.project_id, CONTEXT_ABSENT.project),
+    situation: contextSeed(task.situation_id, CONTEXT_ABSENT.situation),
+    commitment: contextSeed(task.commitment_id, CONTEXT_ABSENT.commitment),
+  };
+}
+
+function roleFact(role: string | null): TaskContextFact {
+  return { state: "ready", label: role === "follow_up" ? "Follow up" : "No role set" };
+}
+
+function projectDisplayName(body: unknown): string | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const project = "project" in body ? (body as { project: unknown }).project : body;
+  return readNonEmptyString(project, "name");
+}
+
+function commitmentDisplayTitle(body: unknown): string | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const commitment = "commitment" in body ? (body as { commitment: unknown }).commitment : body;
+  return readNonEmptyString(commitment, "title");
+}
+
+function situationDisplayTitle(body: unknown, situationId: string): string | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const situations = (body as { situations?: unknown }).situations;
+  if (!Array.isArray(situations)) return undefined;
+  const match = situations.find((row) => {
+    if (!row || typeof row !== "object") return false;
+    const record = row as Record<string, unknown>;
+    return record.situationId === situationId || record.situation_id === situationId;
+  });
+  return readNonEmptyString(match, "title");
 }
 
 function isTaskDetail(value: unknown): value is TaskDetail {
@@ -205,7 +265,6 @@ function TaskDetailViewInner({
   const [failure, setFailure] = useState<UserErrorPresentation>();
   const [conflict, setConflict] = useState(false);
   const [proposal, setProposal] = useState<Record<string, unknown>>();
-  const [commitments, setCommitments] = useState<readonly CommitmentRow[]>([]);
   const [mutationPending, setMutationPending] = useState(false);
   const [readPending, setReadPending] = useState(false);
   const [ambiguousAttemptId, setAmbiguousAttemptId] = useState<string | null>(null);
@@ -298,19 +357,16 @@ function TaskDetailViewInner({
     async (options?: { forceDraft?: boolean }) => {
       setReadPending(true);
       try {
-        const [detailResult, choices] = await Promise.all([
-          readCoordinator.read(
-            detailKey,
-            async () => {
-              const detail = await workRequest<{ task: TaskDetail }>(
-                `/api/tasks/${encodeURIComponent(taskId)}`,
-              );
-              return detail.task;
-            },
-            { force: true },
-          ),
-          workRequest<{ commitments: readonly CommitmentRow[] }>("/api/commitments?pageSize=100"),
-        ]);
+        const detailResult = await readCoordinator.read(
+          detailKey,
+          async () => {
+            const detail = await workRequest<{ task: TaskDetail }>(
+              `/api/tasks/${encodeURIComponent(taskId)}`,
+            );
+            return detail.task;
+          },
+          { force: true },
+        );
 
         if (detailResult.silent && detailResult.outcome !== "applied" && detailResult.outcome !== "deduped") {
           return;
@@ -319,17 +375,9 @@ function TaskDetailViewInner({
           throw detailResult.error ?? new Error("Task detail read failed");
         }
 
-        let available = requiredCollection(choices.commitments, "commitments");
-        const task = detailResult.data;
-        if (task.commitment_id && !available.some((item) => item.commitment_id === task.commitment_id)) {
-          const linked = await workRequest<{ commitment: CommitmentRow }>(
-            `/api/commitments/${encodeURIComponent(task.commitment_id)}`,
-          );
-          available = [...available, linked.commitment];
-        }
-
-        setCommitments(available);
-        applyCanonical(task, { forceDraft: options?.forceDraft ?? authoritativeRef.current === undefined });
+        applyCanonical(detailResult.data, {
+          forceDraft: options?.forceDraft ?? authoritativeRef.current === undefined,
+        });
         setStatus("");
         setFailure(undefined);
       } catch (error) {
@@ -556,10 +604,14 @@ function TaskDetailViewInner({
   if (!authoritative || !draft) {
     if (!seed) return <LoadingStatus label={status} />;
     // A projection paints immediately but owns no trustworthy version, so it renders
-    // read-only: no Status, Due, Close or comment control is mounted at all.
+    // read-only: title, status and due phrases only — no mutation controls.
+    const seedModel = toTaskPresentationModel(seed, { clock, canMutate: false });
     return (
       <div data-testid="task-detail-hydrating">
-        <TaskCompact model={toTaskPresentationModel(seed, { clock, canMutate: false })} />
+        <h1 className="text-2xl font-semibold text-text-primary">{seedModel.title}</h1>
+        <p className="mt-1 text-sm text-text-secondary">
+          {seedModel.statusLabel} · {seedModel.due.phrase}
+        </p>
         <LoadingStatus label={status} />
       </div>
     );
@@ -599,17 +651,6 @@ function TaskDetailViewInner({
       <p role="status" className="mt-4 text-sm text-muted">
         {status}
       </p>
-      <div className="mt-2">
-        <Button
-          type="button"
-          variant="secondary"
-          pending={readPending}
-          onClick={() => void loadTaskBundle()}
-          data-testid="task-detail-refresh"
-        >
-          Refresh task
-        </Button>
-      </div>
 
       {/*
         Keyed on the Task, not its version. The binder adopts a newer
@@ -626,11 +667,8 @@ function TaskDetailViewInner({
         embedded={embedded}
         locked={controlsLocked}
         updatePending={mutationPending}
-        commitmentLabel={
-          authoritative.commitment_id
-            ? commitments.find((item) => item.commitment_id === authoritative.commitment_id)?.title ?? null
-            : "No commitment linked"
-        }
+        readPending={readPending}
+        onRefresh={() => void loadTaskBundle()}
         comments={comments}
         commentsLoading={commentsLoading}
         commentsUnavailable={commentsUnavailable}
@@ -673,7 +711,8 @@ interface TaskOperationSurfaceProps {
   /** A newer unseen canonical or an in-flight bounded save locks blind writes. */
   readonly locked: boolean;
   readonly updatePending: boolean;
-  readonly commitmentLabel: string | null;
+  readonly readPending: boolean;
+  onRefresh(): void;
   readonly comments: readonly TaskComment[];
   readonly commentsLoading: boolean;
   readonly commentsUnavailable: boolean;
@@ -707,7 +746,8 @@ function TaskOperationSurface({
   embedded,
   locked,
   updatePending,
-  commitmentLabel,
+  readPending,
+  onRefresh,
   comments,
   commentsLoading,
   commentsUnavailable,
@@ -736,6 +776,96 @@ function TaskOperationSurface({
   const model = toTaskPresentationModel(displayed, { clock, canMutate });
 
   const writeVersion = typeof current.version === "number" ? current.version : task.version;
+  const contextIds = `${current.project_id ?? ""}:${current.situation_id ?? ""}:${current.commitment_id ?? ""}`;
+  const [contextFacts, setContextFacts] = useState(() => contextFactsFromTask(current));
+  const contextIdsRef = useRef(contextIds);
+  const contextOpenedRef = useRef(false);
+  const contextCacheRef = useRef<Partial<Record<"project" | "situation" | "commitment", TaskContextFact>>>({});
+
+  const loadContext = useCallback(async (snapshot: TaskDetail) => {
+    const next: {
+      project: TaskContextFact;
+      situation: TaskContextFact;
+      commitment: TaskContextFact;
+    } = contextFactsFromTask(snapshot);
+    const cached = contextCacheRef.current;
+
+    if (snapshot.project_id && cached.project) next.project = cached.project;
+    else if (snapshot.project_id) next.project = { state: "loading" };
+    if (snapshot.situation_id && cached.situation) next.situation = cached.situation;
+    else if (snapshot.situation_id) next.situation = { state: "loading" };
+    if (snapshot.commitment_id && cached.commitment) next.commitment = cached.commitment;
+    else if (snapshot.commitment_id) next.commitment = { state: "loading" };
+    setContextFacts(next);
+
+    const pending: Array<Promise<void>> = [];
+    if (snapshot.project_id && !cached.project) {
+      const projectId = snapshot.project_id;
+      pending.push(
+        workRequest<unknown>(`/api/projects/${encodeURIComponent(projectId)}`)
+          .then((body) => {
+            const label = projectDisplayName(body);
+            const fact: TaskContextFact = label
+              ? { state: "ready", label }
+              : { state: "unavailable", message: CONTEXT_UNAVAILABLE.project };
+            contextCacheRef.current.project = fact;
+            setContextFacts((currentFacts) => ({ ...currentFacts, project: fact }));
+          })
+          .catch(() => {
+            const fact: TaskContextFact = { state: "unavailable", message: CONTEXT_UNAVAILABLE.project };
+            contextCacheRef.current.project = fact;
+            setContextFacts((currentFacts) => ({ ...currentFacts, project: fact }));
+          }),
+      );
+    }
+    if (snapshot.commitment_id && !cached.commitment) {
+      const commitmentId = snapshot.commitment_id;
+      pending.push(
+        workRequest<unknown>(`/api/commitments/${encodeURIComponent(commitmentId)}`)
+          .then((body) => {
+            const label = commitmentDisplayTitle(body);
+            const fact: TaskContextFact = label
+              ? { state: "ready", label }
+              : { state: "unavailable", message: CONTEXT_UNAVAILABLE.commitment };
+            contextCacheRef.current.commitment = fact;
+            setContextFacts((currentFacts) => ({ ...currentFacts, commitment: fact }));
+          })
+          .catch(() => {
+            const fact: TaskContextFact = { state: "unavailable", message: CONTEXT_UNAVAILABLE.commitment };
+            contextCacheRef.current.commitment = fact;
+            setContextFacts((currentFacts) => ({ ...currentFacts, commitment: fact }));
+          }),
+      );
+    }
+    if (snapshot.situation_id && !cached.situation) {
+      const situationId = snapshot.situation_id;
+      pending.push(
+        workRequest<unknown>("/api/situations")
+          .then((body) => {
+            const label = situationDisplayTitle(body, situationId);
+            const fact: TaskContextFact = label
+              ? { state: "ready", label }
+              : { state: "unavailable", message: CONTEXT_UNAVAILABLE.situation };
+            contextCacheRef.current.situation = fact;
+            setContextFacts((currentFacts) => ({ ...currentFacts, situation: fact }));
+          })
+          .catch(() => {
+            const fact: TaskContextFact = { state: "unavailable", message: CONTEXT_UNAVAILABLE.situation };
+            contextCacheRef.current.situation = fact;
+            setContextFacts((currentFacts) => ({ ...currentFacts, situation: fact }));
+          }),
+      );
+    }
+    await Promise.all(pending);
+  }, []);
+
+  useEffect(() => {
+    if (contextIdsRef.current === contextIds) return;
+    contextIdsRef.current = contextIds;
+    contextCacheRef.current = {};
+    setContextFacts(contextFactsFromTask(current));
+    if (contextOpenedRef.current) void loadContext(current);
+  }, [contextIds, current, loadContext]);
 
   async function addComment(body: string) {
     await ops.addComment(body);
@@ -747,13 +877,10 @@ function TaskOperationSurface({
     onCommentsSettled();
   }
 
-  return (
-    <>
-      <header className={embedded ? "" : "mt-4"}>
-        <h1 className="text-2xl font-semibold text-moss-slate">{current.title}</h1>
-        <p className="mt-1 text-sm text-muted">{model.statusLabel} · {model.due.phrase}</p>
-      </header>
+  const terminal = Boolean(model.terminalSummary);
 
+  return (
+    <div className={embedded ? "" : "mt-4"}>
       {ops.conflict ? (
         <section
           role="alert"
@@ -783,10 +910,16 @@ function TaskOperationSurface({
         descriptionDirty={draft.description !== (task.description ?? "")}
         disabled={!canMutate || busy}
         pending={busy}
-        projectLabel={null}
-        situationLabel={null}
-        commitmentLabel={commitmentLabel}
-        roleLabel={current.role === "follow_up" ? "Follow up" : "No role set"}
+        project={contextFacts.project}
+        situation={contextFacts.situation}
+        commitment={contextFacts.commitment}
+        role={roleFact(current.role)}
+        onContextOpen={() => {
+          if (contextOpenedRef.current) return;
+          contextOpenedRef.current = true;
+          void loadContext(current);
+        }}
+        onCancelTask={terminal ? undefined : () => void ops.cancelTask()}
         statusControl={
           <TaskStatusControl
             value={ops.status.value}
@@ -811,9 +944,22 @@ function TaskOperationSurface({
             taskTitle={current.title}
             disabled={!canMutate}
             pending={busy}
+            triggerVariant="secondary"
+            showCancel={false}
             onClose={() => void ops.closeTask()}
             onCancelTask={() => void ops.cancelTask()}
           />
+        }
+        refreshControl={
+          <Button
+            type="button"
+            variant="secondary"
+            pending={readPending}
+            onClick={onRefresh}
+            data-testid="task-detail-refresh"
+          >
+            Refresh task
+          </Button>
         }
         comments={
           <TaskComments
@@ -864,7 +1010,7 @@ function TaskOperationSurface({
         }
         onArchivedChange={(next) => onSaveFields({ archived: next }, [], writeVersion)}
       />
-    </>
+    </div>
   );
 }
 

@@ -283,6 +283,192 @@ async def test_remote_gsqs_start_completes_without_a_caller_idempotency_key(
     assert result["automatic_next_repetition"] is False
 
 
+@pytest.mark.anyio
+async def test_remote_report_authoring_completes_without_a_caller_idempotency_key(
+    scene: Scene,
+) -> None:
+    """ChatLLM's production MCP path must construct report writes after stamping."""
+    writes = frozenset(
+        {
+            Capability.REPORTS_BEGIN_CYCLE.value,
+            Capability.REPORTS_COMMIT.value,
+            Capability.REPORTS_RECORD_RUN_STATE.value,
+        }
+    )
+    reads = frozenset(
+        {
+            Capability.REPORTS_READ.value,
+            Capability.REPORTS_LATEST.value,
+            Capability.REPORTS_LIST.value,
+        }
+    )
+    write_grants = frozenset(
+        {
+            (Capability.REPORTS_BEGIN_CYCLE, Purpose.REPORT_AUTHORING),
+            (Capability.REPORTS_COMMIT, Purpose.REPORT_AUTHORING),
+            (Capability.REPORTS_RECORD_RUN_STATE, Purpose.REPORT_AUTHORING),
+        }
+    )
+    read_grants = frozenset(
+        {
+            (Capability.REPORTS_READ, Purpose.REPORT_READ),
+            (Capability.REPORTS_LATEST, Purpose.REPORT_READ),
+            (Capability.REPORTS_LIST, Purpose.REPORT_READ),
+        }
+    )
+    service = build_service(scene.world, scene.providers)
+
+    def application(
+        *,
+        allowed: frozenset[str],
+        purposes: frozenset[tuple[Capability, Purpose | None]],
+    ) -> object:
+        return create_remote_mcp_app(
+            service,
+            resolve_access=lambda _authorization: RemoteAccessContext(
+                scene.principal,
+                allowed_capabilities=allowed,
+                capability_purposes=purposes,
+            ),
+            allowed_hosts=("testserver",),
+            remote_enabled=True,
+            writes_enabled=True,
+            resource="https://mcp.example.invalid",
+            authorization_servers=("https://issuer.example.invalid",),
+            scopes=frozenset({"my-pa.write"}),
+        )
+
+    app = application(allowed=writes | reads, purposes=write_grants | read_grants)
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app),
+            base_url="http://testserver",
+            headers={"Authorization": "Bearer synthetic"},
+        ) as http,
+        streamable_http_client("http://testserver/mcp", http_client=http) as streams,
+        ClientSession(*streams[:2]) as session,
+    ):
+        await session.initialize()
+        names = {tool.name for tool in (await session.list_tools()).tools}
+        assert writes | reads <= names
+        begun = await session.call_tool(
+            Capability.REPORTS_BEGIN_CYCLE.value,
+            remote_arguments(
+                {
+                    "cycle_id": "morning_intelligence",
+                    "business_date": "2026-08-20",
+                }
+            ),
+        )
+        assert begun.is_error is False
+        cycle_run_id = json.loads(begun.content[0].text)["result"]["cycle_run_id"]
+        committed = await session.call_tool(
+            Capability.REPORTS_COMMIT.value,
+            remote_arguments(
+                {
+                    "cycle_run_id": cycle_run_id,
+                    "stage": "collector",
+                    "artifact_kind": "collector_candidates",
+                    "focus_area_id": "communications",
+                    "producer_task_id": "synthetic-collector",
+                    "producer_task_name": "Synthetic Collector",
+                    "automation_platform": "abacus_chatllm",
+                    "report_date": "2026-08-20",
+                    "title": "Synthetic collector",
+                    "body_markdown": "synthetic collector",
+                    "artifact_state": "final",
+                    "schema_version": "1",
+                }
+            ),
+        )
+        assert committed.is_error is False
+        commit_result = json.loads(committed.content[0].text)["result"]
+        report_id = commit_result["report_id"]
+        recorded = await session.call_tool(
+            Capability.REPORTS_RECORD_RUN_STATE.value,
+            remote_arguments(
+                {
+                    "cycle_run_id": cycle_run_id,
+                    "stage": "researcher",
+                    "artifact_kind": "research_context",
+                    "focus_area_id": "communications",
+                    "source_lane": "teams",
+                    "producer_task_id": "synthetic-researcher",
+                    "producer_task_name": "Synthetic Researcher",
+                    "automation_platform": "abacus_chatllm",
+                    "report_date": "2026-08-20",
+                    "state": "failed",
+                    "failure_code": "source_unavailable",
+                }
+            ),
+        )
+        assert recorded.is_error is False
+        assert json.loads(recorded.content[0].text)["result"]["state"] == "failed"
+        read = await session.call_tool(
+            Capability.REPORTS_READ.value,
+            remote_arguments({"report_id": report_id, "include_body": True}),
+        )
+        latest = await session.call_tool(
+            Capability.REPORTS_LATEST.value,
+            remote_arguments(
+                {
+                    "cycle_run_id": cycle_run_id,
+                    "stage": "collector",
+                    "focus_area_id": "communications",
+                }
+            ),
+        )
+        listed = await session.call_tool(
+            Capability.REPORTS_LIST.value,
+            remote_arguments({"cycle_run_id": cycle_run_id, "page_size": 10}),
+        )
+    assert read.is_error is False and latest.is_error is False and listed.is_error is False
+    read_result = json.loads(read.content[0].text)["result"]
+    latest_result = json.loads(latest.content[0].text)["result"]
+    listed_result = json.loads(listed.content[0].text)["result"]
+    assert read_result["report_id"] == report_id
+    assert read_result["body_markdown"] == "synthetic collector"
+    assert read_result["cycle_run_id"] == cycle_run_id
+    assert latest_result["report_id"] == report_id
+    assert report_id in [row["report_id"] for row in listed_result["items"]]
+
+    ungranted = application(allowed=reads, purposes=read_grants)
+    async with (
+        ungranted.router.lifespan_context(ungranted),
+        httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=ungranted),
+            base_url="http://testserver",
+            headers={"Authorization": "Bearer synthetic"},
+        ) as http,
+        streamable_http_client("http://testserver/mcp", http_client=http) as streams,
+        ClientSession(*streams[:2]) as session,
+    ):
+        await session.initialize()
+        withheld = {tool.name for tool in (await session.list_tools()).tools}
+        denied = await session.call_tool(
+            Capability.REPORTS_COMMIT.value,
+            remote_arguments(
+                {
+                    "cycle_run_id": cycle_run_id,
+                    "stage": "collector",
+                    "artifact_kind": "collector_candidates",
+                    "focus_area_id": "communications",
+                    "producer_task_id": "synthetic-collector",
+                    "producer_task_name": "Synthetic Collector",
+                    "automation_platform": "abacus_chatllm",
+                    "report_date": "2026-08-20",
+                    "title": "Should not land",
+                    "body_markdown": "synthetic collector",
+                    "artifact_state": "final",
+                    "schema_version": "1",
+                }
+            ),
+        )
+    assert Capability.REPORTS_COMMIT.value not in withheld
+    assert denied.is_error is True
+
+
 def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) -> None:
     tools = {
         tool.name: tool for tool in published_tools(build_service(scene.world, scene.providers))

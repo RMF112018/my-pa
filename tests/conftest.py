@@ -499,7 +499,7 @@ class World:
     #: since `PKL-MYPA-D-WP03-001`, so the same key held by two principals is two
     #: independent admissions and never a replay; a fake that decided that some
     #: other way would let a test prove a behaviour the constraint does not give.
-    captures: dict[str, tuple[str, datetime]] = field(default_factory=dict)
+    captures: dict[str, tuple[str, datetime, str | None]] = field(default_factory=dict)
     #: Append-only display labels, newest last. Not capture text.
     capture_labels: dict[str, list[str]] = field(default_factory=dict)
     capture_versions: list[CaptureVersion] = field(default_factory=list)
@@ -1112,13 +1112,19 @@ class _Captures(CaptureRepository):
 
         if request.capture_id is None:
             capture_id = issue_identifier(IdKind.CAPTURE)
-            self._world.captures[capture_id] = (request.principal_id, request.accepted_at)
+            project_id = request.project_id
+            self._world.captures[capture_id] = (
+                request.principal_id,
+                request.accepted_at,
+                project_id,
+            )
             number, supersedes = 1, None
         else:
             capture_id = request.capture_id
             head = self._head(capture_id, principal_id=principal_id)
             if head is None:
                 raise UnknownScopeError("the request names no stored capture")
+            project_id = self._world.captures[capture_id][2]
             number, supersedes = head.version_number + 1, head.version_id
 
         version = CaptureVersion(
@@ -1142,6 +1148,7 @@ class _Captures(CaptureRepository):
             # server clock to be different from. A test that needs the five to
             # differ needs the `database` tier.
             recorded_at=request.accepted_at,
+            project_id=project_id,
         )
         self._world.capture_versions.append(version)
         receipt = CaptureReceipt(
@@ -1152,6 +1159,7 @@ class _Captures(CaptureRepository):
             idempotency_key=request.idempotency_key,
             content_sha256=request.content.digest,
             issued_at=request.accepted_at,
+            project_id=project_id,
         )
         self._world.capture_receipts[receipt.receipt_id] = receipt
         self._world.capture_keys[(principal_id, request.idempotency_key)] = (
@@ -1185,7 +1193,7 @@ class _Captures(CaptureRepository):
     def captures(self, *, limit: int, principal_id: str) -> tuple[CaptureSummary, ...]:
         self._world.fail("capture_page")
         summaries: list[CaptureSummary] = []
-        for capture_id, (owner, created_at) in self._world.captures.items():
+        for capture_id, (owner, created_at, project_id) in self._world.captures.items():
             if owner != principal_id:
                 continue
             head = self._head(capture_id, principal_id=principal_id)
@@ -1203,6 +1211,7 @@ class _Captures(CaptureRepository):
                     latest_version_number=head.version_number,
                     latest_recorded_at=head.recorded_at,
                     display_label=self._latest_label(capture_id),
+                    project_id=project_id,
                 )
             )
         summaries.sort(key=lambda s: (s.created_at, s.capture_id), reverse=True)
@@ -1265,6 +1274,7 @@ class _Captures(CaptureRepository):
                     character_count=version.content.character_count,
                     recorded_at=version.recorded_at,
                     display_label=self._latest_label(version.capture_id),
+                    project_id=version.project_id,
                 )
                 for version in found[: request.limit]
             ),
@@ -1304,7 +1314,7 @@ class _Captures(CaptureRepository):
             )
         if kind is RevealSubjectKind.ASSERTION:
             return self._reveal_assertion(subject_id, principal_id=principal_id)
-        owner = self._world.captures.get(subject_id, (None, None))[0]
+        owner = self._world.captures.get(subject_id, (None, None, None))[0]
         if owner != principal_id:
             return None
         versions = self._revealed_versions(subject_id, principal_id=principal_id)

@@ -37,6 +37,7 @@ const CAPTURE_RECEIPT = {
   version_number: 1,
   idempotency_key: "k1",
   content_sha256: "0".repeat(64),
+  project_id: null,
   issued_at: "2026-08-09T12:00:00Z",
   created: true,
 };

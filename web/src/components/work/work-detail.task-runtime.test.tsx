@@ -11,13 +11,14 @@ import {
   taskClosedMessage,
 } from "@/components/tasks/use-task-operations";
 import TaskPage from "@/app/(app)/work/tasks/[taskId]/page";
+import type { TaskDetail } from "@/contracts/work";
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
 
-const TASK_V2 = {
+const TASK_V2: TaskDetail = {
   task_id: "tsk_aaaaaaaa11111111",
   title: "Coordinate review",
   description: null,
@@ -295,13 +296,16 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     const user = userEvent.setup();
     const keys: string[] = [];
     let patchCount = 0;
+    const concurrent = { ...TASK_V3, description: "Concurrent canonical edit" };
     const fetcher = stubDetailFetch({
       patch: (body) => {
         patchCount += 1;
         keys.push(String((body as { idempotencyKey: string }).idempotencyKey));
-        if (patchCount === 1) return json(null, 409, { current: TASK_V3 });
+        if (patchCount === 1) return json(null, 409, { current: concurrent });
         expect((body as { expectedVersion: number }).expectedVersion).toBe(3);
-        return json({ task: { ...TASK_V3, title: (body as { title: string }).title, version: 4 } });
+        return json({
+          task: { ...concurrent, title: (body as { title: string }).title, version: 4 },
+        });
       },
     });
     vi.stubGlobal("fetch", fetcher);
@@ -320,6 +324,8 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     expect(keys[0]).not.toBe(keys[1]);
     expect(screen.queryByTestId("task-changed-elsewhere")).toBeNull();
     expect(screen.getByRole("heading", { name: "Proposed title" })).toBeTruthy();
+    expect(screen.queryByTestId("task-close-blocked-reason")).toBeNull();
+    expect(screen.getByRole("button", { name: "Close Task" })).not.toBeDisabled();
   });
 
   it("marks mutation controls pending / aria-busy while a save is in flight", async () => {
@@ -347,9 +353,10 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     expect(within(statusControl).getByRole("combobox")).toBeDisabled();
 
     release(json({ task: { ...TASK_V2, version: 3 } }));
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Save title" }).getAttribute("aria-busy")).toBeNull(),
-    );
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Save title" })).toBeNull();
+      expect(screen.getByTestId("task-status-control").getAttribute("aria-busy")).not.toBe("true");
+    });
   });
 
   it("routes mutations through the shared TaskRuntimeProvider coordinator when connected", async () => {
@@ -441,13 +448,92 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     expect(screen.queryByText("This task is closed.")).toBeNull();
 
     release(json({ task: { ...TASK_V2, lifecycle_state: "completed", closed_at: "2026-08-24T12:00:00Z", version: 3 } }));
-    expect(await screen.findByTestId("task-terminal-summary")).toBeTruthy();
+    const summary = await screen.findByTestId("task-terminal-summary");
+    expect(summary).toBeTruthy();
+    expect(summary).toHaveFocus();
     // Product copy for the confirmed closure comes from the shared binder.
     expect(await screen.findByText(taskClosedMessage(TASK_V2.title))).toBeTruthy();
     expect(screen.queryByTestId("task-status-control")).toBeNull();
     expect(screen.queryByTestId("task-due-control")).toBeNull();
     expect(screen.queryByTestId("task-close-trigger")).toBeNull();
     expect(screen.queryByTestId("task-cancel-trigger")).toBeNull();
+  });
+
+  it("blocks Close while the title is dirty and does not auto-save", async () => {
+    const user = userEvent.setup();
+    const fetcher = stubDetailFetch({});
+    vi.stubGlobal("fetch", fetcher);
+
+    render(<TaskDetailView taskId={TASK_V2.task_id} />);
+    await waitForCanonical();
+    expect(screen.getByTestId("task-close-trigger")).not.toBeDisabled();
+
+    const title = await activateTitleEditor(user);
+    await user.type(title, " extra");
+    expect(screen.getByTestId("task-close-blocked-reason").textContent).toMatch(
+      /saved or discarded/i,
+    );
+    expect(screen.getByTestId("task-close-trigger")).toBeDisabled();
+    await user.click(screen.getByTestId("task-close-trigger"));
+    expect(
+      fetcher.mock.calls.some(
+        ([input, init]) =>
+          String(input) === `/api/tasks/${TASK_V2.task_id}/transition` &&
+          String(init?.method).toUpperCase() === "POST",
+      ),
+    ).toBe(false);
+    expect(
+      fetcher.mock.calls.some(
+        ([input, init]) =>
+          String(input) === `/api/tasks/${TASK_V2.task_id}` &&
+          String(init?.method).toUpperCase() === "PATCH",
+      ),
+    ).toBe(false);
+  });
+
+  it("blocks Close while the description is dirty", async () => {
+    const user = userEvent.setup();
+    const fetcher = stubDetailFetch({});
+    vi.stubGlobal("fetch", fetcher);
+
+    render(<TaskDetailView taskId={TASK_V2.task_id} />);
+    await waitForCanonical();
+    await user.click(screen.getByTestId("task-add-description"));
+    await user.type(screen.getByRole("textbox", { name: "Description" }), "Unsaved notes");
+    expect(screen.getByTestId("task-close-blocked-reason")).toBeTruthy();
+    expect(screen.getByTestId("task-close-trigger")).toBeDisabled();
+  });
+
+  it("keeps a dirty local title as unsaved evidence after the Task becomes terminal elsewhere", async () => {
+    const user = userEvent.setup();
+    let current = TASK_V2;
+    const fetcher = stubDetailFetch({
+      task: () => ({ task: current }),
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    render(<TaskDetailView taskId={TASK_V2.task_id} />);
+    const title = await activateTitleEditor(user);
+    await user.clear(title);
+    await user.type(title, "Local unsaved title");
+
+    current = {
+      ...TASK_V2,
+      lifecycle_state: "completed",
+      closed_at: "2026-08-24T12:00:00Z",
+      version: 3,
+    };
+    await refreshFromMore(user);
+
+    expect(await screen.findByTestId("task-terminal-summary")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Coordinate review" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Local unsaved title" })).toBeNull();
+    expect(screen.queryByLabelText("Title")).toBeNull();
+    expect(screen.queryByTestId("task-edit-title")).toBeNull();
+    const evidence = screen.getByTestId("task-unsaved-local-evidence");
+    expect(evidence.textContent).toContain("Local unsaved title");
+    expect(screen.queryByRole("button", { name: /Reapply my change/i })).toBeNull();
+    expect(screen.getByRole("button", { name: "Discard edits and load latest" })).toBeTruthy();
   });
 
   it("states an operation conflict in product language with no version number", async () => {
@@ -496,11 +582,16 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     vi.stubGlobal("fetch", fetcher);
 
     render(<TaskDetailView taskId={TASK_V2.task_id} />);
-    expect(await screen.findByTestId("task-terminal-summary")).toBeTruthy();
+    const summary = await screen.findByTestId("task-terminal-summary");
+    expect(summary).not.toHaveFocus();
     expect(screen.queryByTestId("task-status-control")).toBeNull();
     expect(screen.queryByTestId("task-due-control")).toBeNull();
     expect(screen.queryByTestId("task-close-trigger")).toBeNull();
     expect(screen.queryByTestId("task-cancel-trigger")).toBeNull();
+    expect(screen.queryByTestId("task-edit-title")).toBeNull();
+    expect(screen.queryByTestId("task-edit-priority")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(within(screen.getByTestId("task-comments")).getByTestId("task-comments-add")).toBeTruthy();
   });
 });
 

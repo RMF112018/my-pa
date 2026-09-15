@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { TaskCloseControl } from "@/components/tasks/task-close-control";
 import {
   TaskDetailSections,
   type TaskContextFact,
@@ -344,19 +345,213 @@ describe("progressive Task detail", () => {
     expect(within(screen.getByTestId("task-more-actions")).getByTestId("slot-refresh")).toBeTruthy();
   });
 
-  it("replaces the Close affordance with a terminal summary once the Task is closed", () => {
+  it("replaces the Close affordance with a terminal summary once the Task is closed", async () => {
+    const user = userEvent.setup();
     renderSections({ lifecycle_state: "completed", closed_at: "2026-09-11T12:00:00Z" }, { onCancelTask: vi.fn() });
     expect(screen.getByTestId("task-terminal-summary").textContent).toBe("This task is closed.");
+    expect(screen.getByRole("heading", { name: "Coordinate the review" })).toBeTruthy();
     expect(screen.queryByTestId("slot-close")).toBeNull();
     expect(screen.queryByTestId("slot-status")).toBeNull();
     expect(screen.queryByTestId("slot-due")).toBeNull();
     expect(screen.queryByTestId("task-cancel-trigger")).toBeNull();
+    expect(screen.queryByTestId("task-close-trigger")).toBeNull();
+    expect(screen.queryByTestId("task-edit-title")).toBeNull();
+    expect(screen.queryByTestId("task-edit-priority")).toBeNull();
+    expect(screen.queryByTestId("task-edit-description")).toBeNull();
+    expect(screen.queryByTestId("task-add-description")).toBeNull();
+    expect(screen.queryByLabelText("Title")).toBeNull();
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
     expect(within(screen.getByTestId("task-more-actions")).getByTestId("slot-refresh")).toBeTruthy();
+    expect(screen.getByTestId("slot-comments")).toBeTruthy();
+    expect(screen.getByTestId("slot-technical")).toBeTruthy();
+
+    await user.click(screen.getByText(/^Planning/));
+    expect(screen.queryByRole("button", { name: "Edit planning" })).toBeNull();
+    expect(screen.queryByLabelText("Planned for")).toBeNull();
+    expect(screen.queryByLabelText("Snoozed until")).toBeNull();
   });
 
   it("distinguishes a cancelled Task from a closed one", () => {
     renderSections({ lifecycle_state: "cancelled" });
     expect(screen.getByTestId("task-terminal-summary").textContent).toBe("This task is cancelled.");
+  });
+
+  it("does not steal focus when opening an already-terminal Task", () => {
+    renderSections({ lifecycle_state: "completed", closed_at: "2026-09-11T12:00:00Z" });
+    expect(screen.getByTestId("task-terminal-summary")).not.toHaveFocus();
+  });
+
+  it("focuses the terminal summary once when an active Task becomes terminal", async () => {
+    const user = userEvent.setup();
+    const record = task();
+    function Harness() {
+      const [closed, setClosed] = useState(false);
+      const current = closed
+        ? task({ lifecycle_state: "completed", closed_at: "2026-09-11T12:00:00Z" })
+        : record;
+      return (
+        <>
+          <button type="button" onClick={() => setClosed(true)}>
+            Become terminal
+          </button>
+          <TaskDetailSections
+            model={toTaskPresentationModel(current, { clock: CLOCK, canMutate: true })}
+            task={current}
+            clock={CLOCK}
+            title={current.title}
+            titleDirty={false}
+            priority={current.priority}
+            description={current.description ?? ""}
+            descriptionDirty={false}
+            disabled={false}
+            pending={false}
+            {...DEFAULT_CONTEXT}
+            {...slotProps()}
+            onTitleChange={vi.fn()}
+            onTitleSave={vi.fn()}
+            onPriorityChange={vi.fn()}
+            onDescriptionChange={vi.fn()}
+            onDescriptionSave={vi.fn()}
+            onPlannedForChange={vi.fn()}
+            onSnoozedUntilChange={vi.fn()}
+            onArchivedChange={vi.fn()}
+          />
+        </>
+      );
+    }
+    render(<Harness />);
+    expect(screen.queryByTestId("task-terminal-summary")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Become terminal" }));
+    expect(screen.getByTestId("task-terminal-summary")).toHaveFocus();
+  });
+
+  it("renders a dirty local draft as unsaved evidence on a terminal Task, not as the title", () => {
+    renderSections(
+      { lifecycle_state: "completed", closed_at: "2026-09-11T12:00:00Z" },
+      {
+        title: "Local unsaved title",
+        titleDirty: true,
+        description: "Local unsaved description",
+        descriptionDirty: true,
+      },
+    );
+    expect(screen.getByRole("heading", { name: "Coordinate the review" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Local unsaved title" })).toBeNull();
+    expect(screen.getByText("Confirm the revised scope.")).toBeTruthy();
+    const evidence = screen.getByTestId("task-unsaved-local-evidence");
+    expect(evidence.textContent).toContain("Local unsaved title");
+    expect(evidence.textContent).toContain("Local unsaved description");
+    expect(screen.queryByTestId("task-edit-title")).toBeNull();
+    expect(screen.queryByLabelText("Title")).toBeNull();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Reapply my change/i })).toBeNull();
+  });
+
+  it("blocks Close with an explanation while the title is dirty", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const onTitleSave = vi.fn();
+    const record = task();
+    function Harness() {
+      const [title, setTitle] = useState(record.title);
+      const titleDirty = title !== record.title;
+      return (
+        <TaskDetailSections
+          model={toTaskPresentationModel(record, { clock: CLOCK, canMutate: true })}
+          task={record}
+          clock={CLOCK}
+          title={title}
+          titleDirty={titleDirty}
+          priority={record.priority}
+          description={record.description ?? ""}
+          descriptionDirty={false}
+          disabled={false}
+          pending={false}
+          {...DEFAULT_CONTEXT}
+          {...slotProps()}
+          closeControl={
+            <TaskCloseControl
+              taskTitle={record.title}
+              disabled={titleDirty}
+              showCancel={false}
+              onClose={onClose}
+              onCancelTask={vi.fn()}
+            />
+          }
+          onTitleChange={setTitle}
+          onTitleSave={onTitleSave}
+          onPriorityChange={vi.fn()}
+          onDescriptionChange={vi.fn()}
+          onDescriptionSave={vi.fn()}
+          onPlannedForChange={vi.fn()}
+          onSnoozedUntilChange={vi.fn()}
+          onArchivedChange={vi.fn()}
+        />
+      );
+    }
+    render(<Harness />);
+    expect(screen.getByTestId("task-close-trigger")).not.toBeDisabled();
+    expect(screen.queryByTestId("task-close-blocked-reason")).toBeNull();
+
+    await user.click(screen.getByTestId("task-edit-title"));
+    await user.type(screen.getByLabelText("Title"), " extra");
+    expect(screen.getByTestId("task-close-blocked-reason").textContent).toMatch(
+      /saved or discarded/i,
+    );
+    expect(screen.getByTestId("task-close-trigger")).toBeDisabled();
+    await user.click(screen.getByTestId("task-close-trigger"));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onTitleSave).not.toHaveBeenCalled();
+  });
+
+  it("blocks Close with an explanation while the description is dirty", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const record = task();
+    function Harness() {
+      const [description, setDescription] = useState(record.description ?? "");
+      const descriptionDirty = description !== (record.description ?? "");
+      return (
+        <TaskDetailSections
+          model={toTaskPresentationModel(record, { clock: CLOCK, canMutate: true })}
+          task={record}
+          clock={CLOCK}
+          title={record.title}
+          titleDirty={false}
+          priority={record.priority}
+          description={description}
+          descriptionDirty={descriptionDirty}
+          disabled={false}
+          pending={false}
+          {...DEFAULT_CONTEXT}
+          {...slotProps()}
+          closeControl={
+            <TaskCloseControl
+              taskTitle={record.title}
+              disabled={descriptionDirty}
+              showCancel={false}
+              onClose={onClose}
+              onCancelTask={vi.fn()}
+            />
+          }
+          onTitleChange={vi.fn()}
+          onTitleSave={vi.fn()}
+          onPriorityChange={vi.fn()}
+          onDescriptionChange={setDescription}
+          onDescriptionSave={vi.fn()}
+          onPlannedForChange={vi.fn()}
+          onSnoozedUntilChange={vi.fn()}
+          onArchivedChange={vi.fn()}
+        />
+      );
+    }
+    render(<Harness />);
+    await user.click(screen.getByTestId("task-edit-description"));
+    await user.type(screen.getByRole("textbox", { name: "Description" }), " extra");
+    expect(screen.getByTestId("task-close-blocked-reason")).toBeTruthy();
+    expect(screen.getByTestId("task-close-trigger")).toBeDisabled();
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("places Archive under Administrative rather than in ordinary operation", async () => {

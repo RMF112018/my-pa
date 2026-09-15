@@ -71,6 +71,41 @@ function sync(parameters: Record<string, string | undefined>) {
   history.replaceState(null, "", url);
 }
 
+/** The title/details trigger of a row — the stable thing to hand focus to. */
+function rowTarget(row: HTMLElement | undefined): HTMLElement | null {
+  return row?.querySelector<HTMLElement>("a[href]") ?? null;
+}
+
+/**
+ * After the detail Sheet closes, put focus back in Work.
+ *
+ * The original trigger is preferred when it is still in the document. Closing a
+ * Task often removes that node; the same Task's surviving row, then the row
+ * that now occupies its remembered place, then the Work heading, are the rest
+ * of the chain — never the document body.
+ */
+function restoreFocusAfterDetailClose(
+  trigger: HTMLElement | null,
+  remembered: { readonly taskId: string; readonly index: number } | null,
+  rows: readonly HTMLElement[],
+  heading: HTMLElement | null,
+): void {
+  if (trigger?.isConnected) {
+    trigger.focus();
+    return;
+  }
+  const survivor = remembered
+    ? rows.find((candidate) => candidate.getAttribute("data-work-item") === remembered.taskId)
+    : undefined;
+  const clamped = remembered ? Math.min(remembered.index, rows.length - 1) : -1;
+  const target = rowTarget(survivor) ?? rowTarget(rows[clamped]);
+  if (target) {
+    target.focus();
+    return;
+  }
+  heading?.focus();
+}
+
 export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: WorkUrlState }) {
   const runtime = useTaskRuntime();
   const [view, setView] = useState<WorkView>(initialState.view);
@@ -102,6 +137,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   const commitmentGeneration = useRef(0);
   const activeCommitmentRead = useRef<AbortController | null>(null);
   const detailTrigger = useRef<HTMLElement | null>(null);
+  const detailSource = useRef<{ readonly taskId: string; readonly index: number } | null>(null);
   const workHeading = useRef<HTMLHeadingElement | null>(null);
   /**
    * The row that currently holds focus, and where it sits in the visible list.
@@ -140,11 +176,6 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   /** Whether a control is disabled, which is why the browser let go of it. */
   function isDisabled(element: HTMLElement): boolean {
     return typeof element.matches === "function" && element.matches(":disabled");
-  }
-
-  /** The title/details trigger of a row — the stable thing to hand focus to. */
-  function rowTarget(row: HTMLElement | undefined): HTMLElement | null {
-    return row?.querySelector<HTMLElement>("a[href]") ?? null;
   }
 
   /**
@@ -522,6 +553,16 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
 
   function openDetail(type: "task" | "commitment", id: string, title: string, trigger: HTMLElement) {
     detailTrigger.current = trigger;
+    const recorded = focusedRow.current;
+    if (recorded) {
+      detailSource.current = { taskId: recorded.taskId, index: recorded.index };
+    } else {
+      const row = trigger.closest<HTMLElement>("[data-work-item]");
+      detailSource.current = {
+        taskId: row?.getAttribute("data-work-item") ?? id,
+        index: row ? visibleRowElements().indexOf(row) : -1,
+      };
+    }
     setDetail({ type, id, title });
     sync({ task: type === "task" ? id : undefined, commitmentId: type === "commitment" ? id : undefined });
   }
@@ -548,7 +589,14 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
   function closeDetail() {
     setDetail(undefined);
     sync({ task: undefined, commitmentId: undefined });
-    requestAnimationFrame(() => detailTrigger.current?.focus());
+    requestAnimationFrame(() => {
+      restoreFocusAfterDetailClose(
+        detailTrigger.current,
+        detailSource.current,
+        visibleRowElements(),
+        workHeading.current,
+      );
+    });
   }
 
   const waitingOnSearch = view === "commitments" && commitmentFilter === "waiting-on";

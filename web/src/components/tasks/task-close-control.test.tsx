@@ -188,6 +188,91 @@ describe("TaskCloseControl", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("does not dispatch Confirm twice even before pending lands", async () => {
+    const user = userEvent.setup();
+    const { onClose } = renderControl();
+
+    await user.click(closeTrigger());
+    const confirm = screen.getByRole("button", { name: "Confirm Closed" });
+    await user.click(confirm);
+    await user.click(confirm);
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+  });
+
+  it("locks the open confirmation while pending: Keep open, Escape, and intent stay put", async () => {
+    const user = userEvent.setup();
+    const { onClose, onCancelTask, rerender, props } = renderControl();
+
+    await user.click(closeTrigger());
+    await user.click(screen.getByRole("button", { name: "Confirm Closed" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    rerender(<TaskCloseControl {...props} pending />);
+
+    const dialog = screen.getByRole("alertdialog");
+    const keepOpen = screen.getByRole("button", { name: "Keep open" });
+    const status = screen.getByTestId("task-close-pending-status");
+
+    expect(keepOpen).toBeDisabled();
+    expect(status).toHaveTextContent("Closing…");
+    expect(status).toHaveAttribute("aria-live", "polite");
+    expect(document.activeElement).toBe(status);
+
+    expect(closeTrigger()).toBeDisabled();
+    expect(cancelTrigger()).toBeDisabled();
+    await user.click(cancelTrigger());
+    expect(screen.getByRole("button", { name: /Confirm Closed/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Confirm Cancelled/ })).toBeNull();
+    expect(onCancelTask).not.toHaveBeenCalled();
+
+    await user.click(keepOpen);
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("alertdialog")).toBe(dialog);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores Keep open and Confirm after a failed pending close", async () => {
+    const user = userEvent.setup();
+    const { onClose, rerender, props } = renderControl();
+
+    await user.click(closeTrigger());
+    await user.click(screen.getByRole("button", { name: "Confirm Closed" }));
+    rerender(<TaskCloseControl {...props} pending />);
+    rerender(<TaskCloseControl {...props} />);
+
+    const keepOpen = screen.getByRole("button", { name: "Keep open" });
+    const confirm = screen.getByRole("button", { name: "Confirm Closed" });
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    expect(screen.queryByTestId("task-close-pending-status")).toBeNull();
+    expect(keepOpen).not.toBeDisabled();
+    expect(confirm).not.toBeDisabled();
+    expect(document.activeElement).toBe(confirm);
+
+    await user.click(confirm);
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it("locks Cancel confirmation with Cancelling status while pending", async () => {
+    const user = userEvent.setup();
+    const { onCancelTask, onClose, rerender, props } = renderControl();
+
+    await user.click(cancelTrigger());
+    await user.click(screen.getByRole("button", { name: "Confirm Cancelled" }));
+    rerender(<TaskCloseControl {...props} pending />);
+
+    const status = screen.getByTestId("task-close-pending-status");
+    expect(status).toHaveTextContent("Cancelling…");
+    expect(document.activeElement).toBe(status);
+    expect(screen.getByRole("button", { name: "Keep open" })).toBeDisabled();
+    expect(closeTrigger()).toBeDisabled();
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    expect(onCancelTask).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("prevents the confirmation from opening at all when disabled", async () => {
     const user = userEvent.setup();
     const { onClose, onCancelTask } = renderControl({ disabled: true });
@@ -215,8 +300,15 @@ describe("TaskCloseControl", () => {
     expect(screen.getByTestId("task-close-control").textContent).not.toMatch(/reopen/i);
   });
 
-  it("gives every interactive control a 44px touch target", () => {
+  it("gives every interactive control a 44px touch target", async () => {
+    const user = userEvent.setup();
     renderControl();
+    for (const button of screen.getAllByRole("button")) {
+      expect(button.className).toContain("min-h-11");
+      expect(button.className).toContain("min-w-11");
+    }
+
+    await user.click(closeTrigger());
     for (const button of screen.getAllByRole("button")) {
       expect(button.className).toContain("min-h-11");
       expect(button.className).toContain("min-w-11");
@@ -272,5 +364,23 @@ describe("TaskCloseControl", () => {
     renderControl({ showCancel: false });
     expect(screen.queryByRole("button", { name: "Cancel Task" })).toBeNull();
     expect(closeTrigger()).toBeTruthy();
+  });
+
+  it("hides Close Task in cancel-only mode without changing the two-step Cancel path", async () => {
+    const user = userEvent.setup();
+    const { onClose, onCancelTask } = renderControl({ mode: "cancel-only" });
+
+    expect(screen.queryByRole("button", { name: "Close Task" })).toBeNull();
+    expect(cancelTrigger()).toBeTruthy();
+
+    await user.click(cancelTrigger());
+    expect(onCancelTask).not.toHaveBeenCalled();
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Keep open" }));
+    expect(within(screen.getByRole("alertdialog")).queryByRole("textbox")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Confirm Cancelled" }));
+    expect(onCancelTask).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

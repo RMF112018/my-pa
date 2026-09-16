@@ -1330,19 +1330,19 @@
         {
           "name": "constraints.portfolio_list",
           "version": "v1",
-          "availability": "not_implemented",
+          "availability": "available",
           "operator_only": false
         },
         {
           "name": "constraints.portfolio_search",
           "version": "v1",
-          "availability": "not_implemented",
+          "availability": "available",
           "operator_only": false
         },
         {
           "name": "constraints.portfolio_overview",
           "version": "v1",
-          "availability": "not_implemented",
+          "availability": "available",
           "operator_only": false
         },
         {
@@ -1508,12 +1508,12 @@
     "readiness": {
       "state": "degraded",
       "contract_version": "v1",
-      "implemented_capabilities": 168,
+      "implemented_capabilities": 171,
       "total_capabilities": 172,
       "limitations": [
-        "4 of 172 capabilities are unwired.",
+        "1 of 172 capabilities are unwired.",
         "Content types awaiting an operator decision: application/pdf. They are reported rather than silently skipped.",
-        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, constraint_sync.conflicts, constraint_sync.delta, constraints.history, constraints.list, constraints.search, continuity.projects, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.graph, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, goodnotes.notebooks.list, goodnotes.pages.list, goodnotes.pull, goodnotes.runs.list, goodnotes.search, knowledge.search, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.comments.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
+        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, constraint_sync.conflicts, constraint_sync.delta, constraints.history, constraints.list, constraints.portfolio_list, constraints.portfolio_search, constraints.search, continuity.projects, entities.addresses.list, entities.aliases.list, entities.assignments.list, entities.communication.list, entities.graph, entities.identifiers.list, entities.identity_history, entities.names.list, entities.observations.list, entities.participations.list, entities.relationships, entities.search, entities.unresolved_mentions, goodnotes.notebooks.list, goodnotes.pages.list, goodnotes.pull, goodnotes.runs.list, goodnotes.search, knowledge.search, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.comments.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
         "Model proposals and semantic retrieval are disabled; deterministic lexical retrieval remains active.",
         "Worker-plane health is unavailable, stale, absent for queued work, or reports dead-lettered work; inspect worker_planes."
       ]
@@ -2625,6 +2625,261 @@
         "open_conflict_count": 0,
         "last_verified_at": null
       },
+      "as_of": "2026-08-09T12:00:00+00:00"
+    }
+  },
+  "constraints.portfolio_list": {
+    "constraints": [
+      {
+        "constraint_id": "cst_aaaaaaaa11111111",
+        "project_id": "prj_aaaaaaaa11111111",
+        "constraint_code": "2.01",
+        "description": "Synthetic access constraint",
+        "category": {
+          "category_id": "ccat_aaaaaaaa11111111",
+          "prefix": "2",
+          "title": "Site access"
+        },
+        "status": "in_progress",
+        "date_identified": "2026-07-28",
+        "due_date": "2026-08-14",
+        "bic": [
+          {
+            "kind": "principal",
+            "party_ref_id": "principal",
+            "display_label": "You",
+            "entity_id": null
+          },
+          {
+            "kind": "entity",
+            "party_ref_id": "ent_aaaaaaaa11111111",
+            "display_label": "Pat Synthetic",
+            "entity_id": "ent_aaaaaaaa11111111"
+          }
+        ],
+        "responsible": [
+          {
+            "kind": "unresolved",
+            "party_ref_id": null,
+            "display_label": "Steel subcontractor",
+            "entity_id": null
+          }
+        ],
+        "reference": "RFI-014",
+        "days_elapsed": 8,
+        "version": 3,
+        "updated_at": "2026-08-09T12:00:00+00:00",
+        "is_overdue": false,
+        "is_due_soon": true,
+        "in_my_court": true,
+        "record_quality": "normal",
+        "needs_attention": false,
+        "sync_state": "never_synced",
+        "group_keys": [
+          "ccat_aaaaaaaa11111111"
+        ]
+      },
+      {
+        "constraint_id": "cst_cccccccc33333333",
+        "project_id": "prj_cccccccc33333333",
+        "constraint_code": "1.04",
+        "description": "Synthetic switchgear constraint",
+        "category": {
+          "category_id": "ccat_cccccccc33333333",
+          "prefix": "1",
+          "title": "Power"
+        },
+        "status": "in_progress",
+        "date_identified": "2026-07-28",
+        "due_date": "2026-08-14",
+        "bic": [
+          {
+            "kind": "principal",
+            "party_ref_id": "principal",
+            "display_label": "You",
+            "entity_id": null
+          },
+          {
+            "kind": "entity",
+            "party_ref_id": "ent_aaaaaaaa11111111",
+            "display_label": "Pat Synthetic",
+            "entity_id": "ent_aaaaaaaa11111111"
+          }
+        ],
+        "responsible": [
+          {
+            "kind": "unresolved",
+            "party_ref_id": null,
+            "display_label": "Steel subcontractor",
+            "entity_id": null
+          }
+        ],
+        "reference": "RFI-014",
+        "days_elapsed": 8,
+        "version": 3,
+        "updated_at": "2026-08-09T12:00:00+00:00",
+        "is_overdue": false,
+        "is_due_soon": true,
+        "in_my_court": true,
+        "record_quality": "normal",
+        "needs_attention": false,
+        "sync_state": "never_synced",
+        "group_keys": [
+          "ccat_cccccccc33333333"
+        ]
+      }
+    ]
+  },
+  "constraints.portfolio_search": {
+    "constraints": [
+      {
+        "constraint_id": "cst_aaaaaaaa11111111",
+        "project_id": "prj_aaaaaaaa11111111",
+        "constraint_code": "2.01",
+        "description": "Synthetic access constraint",
+        "category": {
+          "category_id": "ccat_aaaaaaaa11111111",
+          "prefix": "2",
+          "title": "Site access"
+        },
+        "status": "in_progress",
+        "date_identified": "2026-07-28",
+        "due_date": "2026-08-14",
+        "bic": [
+          {
+            "kind": "principal",
+            "party_ref_id": "principal",
+            "display_label": "You",
+            "entity_id": null
+          },
+          {
+            "kind": "entity",
+            "party_ref_id": "ent_aaaaaaaa11111111",
+            "display_label": "Pat Synthetic",
+            "entity_id": "ent_aaaaaaaa11111111"
+          }
+        ],
+        "responsible": [
+          {
+            "kind": "unresolved",
+            "party_ref_id": null,
+            "display_label": "Steel subcontractor",
+            "entity_id": null
+          }
+        ],
+        "reference": "RFI-014",
+        "days_elapsed": 8,
+        "version": 3,
+        "updated_at": "2026-08-09T12:00:00+00:00",
+        "is_overdue": false,
+        "is_due_soon": true,
+        "in_my_court": true,
+        "record_quality": "normal",
+        "needs_attention": false,
+        "sync_state": "never_synced",
+        "group_keys": [
+          "ccat_aaaaaaaa11111111"
+        ]
+      },
+      {
+        "constraint_id": "cst_cccccccc33333333",
+        "project_id": "prj_cccccccc33333333",
+        "constraint_code": "1.04",
+        "description": "Synthetic switchgear constraint",
+        "category": {
+          "category_id": "ccat_cccccccc33333333",
+          "prefix": "1",
+          "title": "Power"
+        },
+        "status": "in_progress",
+        "date_identified": "2026-07-28",
+        "due_date": "2026-08-14",
+        "bic": [
+          {
+            "kind": "principal",
+            "party_ref_id": "principal",
+            "display_label": "You",
+            "entity_id": null
+          },
+          {
+            "kind": "entity",
+            "party_ref_id": "ent_aaaaaaaa11111111",
+            "display_label": "Pat Synthetic",
+            "entity_id": "ent_aaaaaaaa11111111"
+          }
+        ],
+        "responsible": [
+          {
+            "kind": "unresolved",
+            "party_ref_id": null,
+            "display_label": "Steel subcontractor",
+            "entity_id": null
+          }
+        ],
+        "reference": "RFI-014",
+        "days_elapsed": 8,
+        "version": 3,
+        "updated_at": "2026-08-09T12:00:00+00:00",
+        "is_overdue": false,
+        "is_due_soon": true,
+        "in_my_court": true,
+        "record_quality": "normal",
+        "needs_attention": false,
+        "sync_state": "never_synced",
+        "group_keys": [
+          "ccat_cccccccc33333333"
+        ]
+      }
+    ]
+  },
+  "constraints.portfolio_overview": {
+    "overview": {
+      "projects": [
+        {
+          "project_id": "prj_aaaaaaaa11111111",
+          "project_today": "2026-08-09",
+          "project_timezone": "America/New_York",
+          "total_open": 4,
+          "overdue": 1,
+          "due_soon": 2,
+          "due_soon_through": "2026-08-16",
+          "average_open_age_business_days": 6.5,
+          "in_my_court": 2,
+          "on_hold": 1,
+          "recently_changed": 3,
+          "recently_closed": 1,
+          "draft": 1,
+          "needs_attention": 1,
+          "sync_health": {
+            "state": "never_synced",
+            "open_conflict_count": 0,
+            "last_verified_at": null
+          },
+          "as_of": "2026-08-09T12:00:00+00:00"
+        },
+        {
+          "project_id": "prj_cccccccc33333333",
+          "project_today": "2026-08-09",
+          "project_timezone": "America/Chicago",
+          "total_open": 0,
+          "overdue": 0,
+          "due_soon": 0,
+          "due_soon_through": "2026-08-16",
+          "average_open_age_business_days": null,
+          "in_my_court": 0,
+          "on_hold": 0,
+          "recently_changed": 0,
+          "recently_closed": 0,
+          "draft": 0,
+          "needs_attention": 0,
+          "sync_health": {
+            "state": "never_synced",
+            "open_conflict_count": 0,
+            "last_verified_at": null
+          },
+          "as_of": "2026-08-09T12:00:00+00:00"
+        }
+      ],
       "as_of": "2026-08-09T12:00:00+00:00"
     }
   },

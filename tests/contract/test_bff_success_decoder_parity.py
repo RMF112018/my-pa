@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import zlib
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Final
@@ -89,6 +90,7 @@ from my_pa.domain.project_controls.read_models import (
     ConstraintHistoryEntryView,
     ConstraintListEntry,
     ConstraintOverview,
+    ConstraintPortfolioOverview,
     ConstraintRelationshipView,
     ConstraintSyncHealthView,
     ConstraintSyncStateView,
@@ -1477,6 +1479,9 @@ def python_success_payloads() -> dict[str, dict[str, Any]]:
         "constraints.search": _constraints_search(),
         "constraints.history": _constraints_history(),
         "constraints.overview": _constraints_overview(),
+        "constraints.portfolio_list": _constraints_portfolio_list(),
+        "constraints.portfolio_search": _constraints_portfolio_search(),
+        "constraints.portfolio_overview": _constraints_portfolio_overview(),
         "constraint_categories.list": _constraint_categories_list(),
         "project_controls.status": _project_controls_status(),
         "project_controls.configure": _project_controls_configure(),
@@ -1696,6 +1701,87 @@ def _constraint_categories_list() -> dict[str, Any]:
     return {"categories": _constraint_dump((_constraint_category_view(),))}
 
 
+# --- the portfolio reads (PC-CM-RUN01-WP06) ----------------------------------
+#
+# The same read models the exact-Project reads publish, dumped through the same
+# handler serialiser. A portfolio row *is* a Register row and a portfolio
+# overview entry *is* a `ConstraintOverview`, so the fixtures below reuse those
+# builders rather than describing a second shape the browser would then have to
+# decode differently.
+
+PORTFOLIO_SECOND_PROJECT_ID: Final = "prj_cccccccc33333333"
+
+
+def _constraint_portfolio_overview() -> ConstraintPortfolioOverview:
+    """Two owned Projects on two calendars, and no combined figure.
+
+    The second Project is deliberately the empty one: a Project in scope that
+    holds no Constraints appears with zeroes and its own timezone rather than
+    being dropped, so the collection's membership never signals which owned
+    Projects hold rows. `average_open_age_business_days` is `None` there rather
+    than `0.0`, because an average of nothing is not zero.
+    """
+    return ConstraintPortfolioOverview(
+        projects=(
+            _constraint_overview(),
+            ConstraintOverview(
+                project_id=PORTFOLIO_SECOND_PROJECT_ID,
+                project_today=PROJECT_TODAY,
+                project_timezone="America/Chicago",
+                total_open=0,
+                overdue=0,
+                due_soon=0,
+                due_soon_through=date(2026, 8, 16),
+                average_open_age_business_days=None,
+                in_my_court=0,
+                on_hold=0,
+                recently_changed=0,
+                recently_closed=0,
+                draft=0,
+                needs_attention=0,
+                sync_health=ConstraintSyncHealthView(
+                    state=ConstraintSyncStateView.NEVER_SYNCED,
+                    open_conflict_count=0,
+                    last_verified_at=None,
+                ),
+                as_of=AT,
+            ),
+        ),
+        as_of=AT,
+    )
+
+
+def _constraint_portfolio_entries() -> tuple[ConstraintListEntry, ...]:
+    """One row from each of the two Projects, which is what makes it a portfolio page."""
+    first = _constraint_list_entry()
+    return (
+        first,
+        replace(
+            first,
+            constraint_id="cst_cccccccc33333333",
+            project_id=PORTFOLIO_SECOND_PROJECT_ID,
+            constraint_code="1.04",
+            description="Synthetic switchgear constraint",
+            category=ConstraintCategoryRef(
+                category_id="ccat_cccccccc33333333", prefix="1", title="Power"
+            ),
+            group_keys=("ccat_cccccccc33333333",),
+        ),
+    )
+
+
+def _constraints_portfolio_list() -> dict[str, Any]:
+    return {"constraints": _constraint_dump(_constraint_portfolio_entries())}
+
+
+def _constraints_portfolio_search() -> dict[str, Any]:
+    return {"constraints": _constraint_dump(_constraint_portfolio_entries())}
+
+
+def _constraints_portfolio_overview() -> dict[str, Any]:
+    return {"overview": _constraint_dump(_constraint_portfolio_overview())}
+
+
 # --- Project Controls settings (PC-CM-RUN01-WP05) ----------------------------
 #
 # Built through the *handlers' own* payload functions rather than as hand-written
@@ -1773,10 +1859,10 @@ def test_committed_python_fixtures_match_live_model_dumps() -> None:
     """A live Python dump still equals the bytes Vitest decodes, parsed as JSON."""
     # `PC-CM-RUN01-WP06` wired `constraints.portfolio_list`,
     # `constraints.portfolio_search` and `constraints.portfolio_overview`, so
-    # the Run 01 remainder is the name below. The BFF does not yet reach them:
-    # `web/src/contracts/gateway.json` declares them only once the BFF package
-    # lands, and this module's claim is about the Python dumps the committed
-    # fixtures were taken from rather than about what `web/` routes.
+    # the Run 01 remainder is the name below. The BFF now reaches all of them:
+    # `web/src/contracts/gateway.json` declares them and
+    # `test_live_python_payloads_cover_every_gateway_capability` is what ties
+    # that declaration to a live Python dump rather than to a belief about one.
     assert set(Capability) - set(_HANDLERS) == {Capability.CONSTRAINTS_CREATE_PUBLISHED}
     assert SUCCESS_PATH.is_file(), f"committed Python fixtures missing at {SUCCESS_PATH}"
     committed = json.loads(SUCCESS_PATH.read_text(encoding="utf-8"))

@@ -18,6 +18,9 @@ import type { ConstraintCategoriesListResult } from "./capabilities/constraint_c
 import type { ConstraintsHistoryResult } from "./capabilities/constraints.history";
 import type { ConstraintsListResult } from "./capabilities/constraints.list";
 import type { ConstraintsOverviewResult } from "./capabilities/constraints.overview";
+import type { ConstraintsPortfolioListResult } from "./capabilities/constraints.portfolio_list";
+import type { ConstraintsPortfolioOverviewResult } from "./capabilities/constraints.portfolio_overview";
+import type { ConstraintsPortfolioSearchResult } from "./capabilities/constraints.portfolio_search";
 import type { ConstraintsReadResult } from "./capabilities/constraints.read";
 import type { ConstraintsSearchResult } from "./capabilities/constraints.search";
 import type { CommitmentsCreateResult } from "./capabilities/commitments.create";
@@ -111,6 +114,9 @@ export type CapabilityResults = {
   readonly "constraints.history": ConstraintsHistoryResult;
   readonly "constraints.list": ConstraintsListResult;
   readonly "constraints.overview": ConstraintsOverviewResult;
+  readonly "constraints.portfolio_list": ConstraintsPortfolioListResult;
+  readonly "constraints.portfolio_overview": ConstraintsPortfolioOverviewResult;
+  readonly "constraints.portfolio_search": ConstraintsPortfolioSearchResult;
   readonly "constraints.read": ConstraintsReadResult;
   readonly "constraints.search": ConstraintsSearchResult;
   readonly "continuity.projects": ContinuityProjectsResult;

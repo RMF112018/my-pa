@@ -120,6 +120,57 @@ export const SEARCH_FIELDS: Readonly<Record<string, WorkField>> = {
   cursor: { gateway: "cursor", type: "string" },
 } as const;
 
+/**
+ * The portfolio Register allowlist, from `ListPortfolioConstraints`.
+ *
+ * `REGISTER_FIELDS` minus every Project field, and that subtraction is the
+ * security property rather than a tidy-up. A portfolio read derives its Project
+ * set server-side from the Principal; admitting a caller-supplied Project
+ * identifier here would let a caller ask "does this Project answer for me?" and
+ * read ownership off the difference between the answers, which is the existence
+ * oracle the nondisclosure rule forbids. There is no `project` browser name and
+ * no `project_id` gateway name in this map, so either spelling is refused as an
+ * unknown field before a capability is spent.
+ */
+export const PORTFOLIO_REGISTER_FIELDS: Readonly<Record<string, WorkField>> = {
+  scope: { gateway: "scope", type: "string", values: LIST_SCOPES },
+  status: { gateway: "statuses", type: "string-array", values: LIFECYCLE_STATES, maxItems: 7 },
+  category: { gateway: "category_ids", type: "string-array", maxItems: 32 },
+  bic: { gateway: "bic_party_refs", type: "string-array", maxItems: 32 },
+  responsible: { gateway: "responsible_party_refs", type: "string-array", maxItems: 32 },
+  sync: { gateway: "sync_states", type: "string-array", values: SYNC_STATES, maxItems: 4 },
+  quality: {
+    gateway: "record_qualities",
+    type: "string-array",
+    values: RECORD_QUALITIES,
+    maxItems: 2,
+  },
+  overdue: { gateway: "overdue", type: "boolean" },
+  dueSoon: { gateway: "due_soon", type: "boolean" },
+  inMyCourt: { gateway: "my_court", type: "boolean" },
+  needsAttention: { gateway: "needs_attention", type: "boolean" },
+  recent: { gateway: "recent", type: "string", values: RECENT_FILTERS },
+  sort: { gateway: "sort", type: "string", values: SORTS },
+  dir: { gateway: "sort_order", type: "string", values: SORT_DIRECTIONS },
+  group: { gateway: "grouping", type: "string", values: GROUPINGS },
+  pageSize: { gateway: "limit", type: "integer" },
+  cursor: { gateway: "cursor", type: "string" },
+} as const;
+
+/**
+ * The narrower portfolio search allowlist, from `SearchPortfolioConstraints`.
+ *
+ * `SEARCH_FIELDS` minus the Project, for both reasons the two maps above give:
+ * a filter, sort or grouping supplied with a term is refused rather than
+ * dropped, and no Project identifier is admitted from the browser at all.
+ */
+export const PORTFOLIO_SEARCH_FIELDS: Readonly<Record<string, WorkField>> = {
+  q: { gateway: "query", type: "string" },
+  scope: { gateway: "scope", type: "string", values: LIST_SCOPES },
+  pageSize: { gateway: "limit", type: "integer" },
+  cursor: { gateway: "cursor", type: "string" },
+} as const;
+
 /** `ReadConstraintHistory`: a page size and an opaque cursor. */
 export const HISTORY_FIELDS: Readonly<Record<string, WorkField>> = {
   pageSize: { gateway: "page_size", type: "integer" },
@@ -131,7 +182,10 @@ export const CATEGORY_FIELDS: Readonly<Record<string, WorkField>> = {
   state: { gateway: "states", type: "string-array", values: CATEGORY_STATES, maxItems: 3 },
 } as const;
 
-/** `ReadConstraintOverview`, `ReadConstraint` and `ReadProjectControlsStatus` take no query at all. */
+/**
+ * `ReadConstraintOverview`, `ReadConstraint`, `ReadProjectControlsStatus` and
+ * `ReadPortfolioConstraintOverview` take no query at all.
+ */
 export const NO_FIELDS: Readonly<Record<string, WorkField>> = {} as const;
 
 /**

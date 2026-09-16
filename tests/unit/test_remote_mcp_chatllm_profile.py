@@ -160,12 +160,11 @@ def test_transaction_rollback_on_apply_failure() -> None:
         rows_before = list(repository.list_capability_grants(remote_client_id=CLIENT_UUID))
         assert len(rows_before) == 1
         assert rows_before[0].expires_at is not None
-        with pytest.raises((IntegrityError, Exception)):
-            with connection.begin_nested():
-                assert repository.clear_grant_expiry(grant_id=finite_id)
-                rows_mid = list(repository.list_capability_grants(remote_client_id=CLIENT_UUID))
-                assert rows_mid[0].expires_at is None
-                raise IntegrityError("simulated failure", None, None)
+        with pytest.raises((IntegrityError, Exception)), connection.begin_nested():
+            assert repository.clear_grant_expiry(grant_id=finite_id)
+            rows_mid = list(repository.list_capability_grants(remote_client_id=CLIENT_UUID))
+            assert rows_mid[0].expires_at is None
+            raise IntegrityError("simulated failure", None, None)
         rows_after = list(repository.list_capability_grants(remote_client_id=CLIENT_UUID))
         assert len(rows_after) == 1
         assert rows_after[0].id == finite_id

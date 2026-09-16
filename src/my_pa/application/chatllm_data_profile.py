@@ -212,9 +212,9 @@ def diff_chatllm_data_profile(
                 if durable:
                     outcomes[capability] = ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANTED
                 else:
-                    outcomes[
-                        capability
-                    ] = ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANT_FINITE_EXPIRY
+                    outcomes[capability] = (
+                        ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANT_FINITE_EXPIRY
+                    )
                     renew.add(capability)
             else:
                 outcomes[capability] = ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANT_MISMATCHED

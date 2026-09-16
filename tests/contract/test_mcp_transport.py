@@ -636,7 +636,24 @@ def test_a_child_with_a_managed_root_publishes_every_locally_available_capabilit
         for capability in HANDLER_CAPABILITIES
         if capability not in _AUTHENTICATED_CLIENT_CAPABILITIES
     ]
-    assert len(expected) == 165
+    # Derived rather than spelled. A literal stood here saying 165 and stayed
+    # there while three handlers were wired, because a `database`-marked case is
+    # invisible to the FAST tier and nothing recomputed the figure. The
+    # magnitude itself is still pinned, by
+    # `test_tools_list_publishes_exactly_the_local_capability_set` above, which
+    # FAST does run against the same derived list — so spelling it a second time
+    # here bought a staleness risk and no tripwire.
+    #
+    # What is bound instead is the arithmetic that makes the withholding total:
+    # every name in the withheld set must be one the handler set actually
+    # publishes, so that subtracting the set's size is the same as filtering by
+    # it. Planted and measured rather than assumed — adding a handler-unwired
+    # name to the frozenset above gives 168 on the left and 167 on the right and
+    # this line fails. It is deliberately *not* the whole claim: that the
+    # withheld names are absent and the composed ones present is the business of
+    # the three assertions below, and that the surface is the right size at all
+    # is the FAST case's.
+    assert len(expected) == len(HANDLER_CAPABILITIES) - len(_AUTHENTICATED_CLIENT_CAPABILITIES)
     assert composed == expected
     assert {capability.value for capability in _COMPOSED_CAPABILITIES} <= set(composed)
     assert not {capability.value for capability in _AUTHENTICATED_CLIENT_CAPABILITIES} & set(

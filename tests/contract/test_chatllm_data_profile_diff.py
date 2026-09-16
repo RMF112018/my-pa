@@ -497,21 +497,21 @@ def test_plan_actions_sorted_by_capability_value_stable_with_finite_renews() -> 
     composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
     desired = desired_effective_capabilities(composed)
     future_expiry = NOW + timedelta(days=30)
+    renew_caps = {
+        Capability.TASKS_LIST,
+        Capability.ENTITIES_SEARCH,
+        Capability.CAPTURE_CREATE,
+    }
+    noop_caps = {
+        Capability.TASKS_READ,
+        Capability.ENTITIES_GET,
+        Capability.CONTINUITY_PROJECTS_READ,
+    }
     grants = tuple(
         _grant(capability, expires_at=future_expiry)
-        if capability
-        in {
-            Capability.TASKS_LIST,
-            Capability.ENTITIES_SEARCH,
-            Capability.CAPTURE_CREATE,
-        }
+        if capability in renew_caps
         else _grant(capability)
-        if capability
-        in {
-            Capability.TASKS_READ,
-            Capability.ENTITIES_GET,
-            Capability.CONTINUITY_PROJECTS_READ,
-        }
+        if capability in noop_caps
         else None
         for capability in desired
     )
@@ -538,12 +538,10 @@ def test_plan_actions_sorted_by_capability_value_stable_with_finite_renews() -> 
     assert action_kinds[Capability.TASKS_READ] == "noop"
     assert action_kinds[Capability.ENTITIES_GET] == "noop"
     assert action_kinds[Capability.CONTINUITY_PROJECTS_READ] == "noop"
-    missing_cap = next(
-        cap for cap in desired if cap not in {action.capability for action in actions}
-    )
-    missing_actions = [action for action in actions if action.capability == missing_cap]
-    if missing_actions:
-        assert missing_actions[0].kind == "add"
+    add_actions = [action for action in actions if action.kind == "add"]
+    assert len(add_actions) > 0
+    for i in range(len(add_actions) - 1):
+        assert add_actions[i].capability.value <= add_actions[i + 1].capability.value
 
 
 def test_after_finite_renew_and_adds_plan_is_all_noop() -> None:

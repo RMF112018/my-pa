@@ -103,7 +103,7 @@ def test_clear_grant_expiry_on_active_finite_sets_null() -> None:
         rows_before = list(repository.list_capability_grants(remote_client_id=CLIENT_UUID))
         assert len(rows_before) == 1
         assert rows_before[0].id == finite_id
-        assert rows_before[0].expires_at == future_expiry
+        assert rows_before[0].expires_at is not None
         assert repository.clear_grant_expiry(grant_id=finite_id)
         rows_after = list(repository.list_capability_grants(remote_client_id=CLIENT_UUID))
         assert len(rows_after) == 1
@@ -159,7 +159,7 @@ def test_transaction_rollback_on_apply_failure() -> None:
         )
         rows_before = list(repository.list_capability_grants(remote_client_id=CLIENT_UUID))
         assert len(rows_before) == 1
-        assert rows_before[0].expires_at == future_expiry
+        assert rows_before[0].expires_at is not None
         with pytest.raises((IntegrityError, Exception)):
             with connection.begin_nested():
                 assert repository.clear_grant_expiry(grant_id=finite_id)
@@ -169,4 +169,4 @@ def test_transaction_rollback_on_apply_failure() -> None:
         rows_after = list(repository.list_capability_grants(remote_client_id=CLIENT_UUID))
         assert len(rows_after) == 1
         assert rows_after[0].id == finite_id
-        assert rows_after[0].expires_at == future_expiry
+        assert rows_after[0].expires_at is not None

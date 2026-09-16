@@ -171,6 +171,7 @@ from my_pa.application.commands import (
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
+    ListPortfolioConstraints,
     ListProjects,
     ListRelationshipMemories,
     ListReviewCases,
@@ -200,6 +201,7 @@ from my_pa.application.commands import (
     ReadIntelligenceArtifact,
     ReadKnowledge,
     ReadManagedDocument,
+    ReadPortfolioConstraintOverview,
     ReadProject,
     ReadProjectControlsStatus,
     ReadTask,
@@ -238,6 +240,7 @@ from my_pa.application.commands import (
     SearchGoodNotes,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
+    SearchPortfolioConstraints,
     SearchRelationshipMemories,
     SearchTasks,
     SplitEntity,
@@ -330,10 +333,10 @@ HANDLER_CAPABILITIES = tuple(capability for capability in Capability if capabili
 
 _UNIMPLEMENTED_CAPABILITIES: frozenset[Capability] = frozenset(
     {
+        # `PC-CM-RUN01-WP06` wired `constraints.portfolio_list`,
+        # `constraints.portfolio_search` and `constraints.portfolio_overview`,
+        # so the Run 01 remainder is the name below.
         Capability.CONSTRAINTS_CREATE_PUBLISHED,
-        Capability.CONSTRAINTS_PORTFOLIO_LIST,
-        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
-        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
     }
 )
 
@@ -848,6 +851,11 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.CONSTRAINTS_HISTORY: {"constraint_id": scene.constraint_id},
         Capability.CONSTRAINTS_OVERVIEW: {"project_id": scene.constraint_project_id},
         Capability.CONSTRAINT_CATEGORIES_LIST: {"project_id": scene.constraint_project_id},
+        # PC-CM-RUN01-WP06. The three cross-Project reads name no Project:
+        # their scope is the set this Principal owns, resolved server-side.
+        Capability.CONSTRAINTS_PORTFOLIO_LIST: {},
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH: {"query": "synthetic"},
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW: {},
         # PC-CM-RUN01-WP05. The status read names the configured Project; the
         # configure names the one Project of the scene that nobody has
         # configured, so it creates version 1 rather than colliding with a
@@ -1808,6 +1816,12 @@ def commands_for(
         Capability.CONSTRAINT_CATEGORIES_LIST: ListConstraintCategories(
             project_id=scene.constraint_project_id
         ),
+        # PC-CM-RUN01-WP06, the three the payload table above states as `{}`,
+        # `{"query": ...}` and `{}`: no Project reaches these commands, so the
+        # wire shape and the command shape are the same shortness.
+        Capability.CONSTRAINTS_PORTFOLIO_LIST: ListPortfolioConstraints(),
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH: SearchPortfolioConstraints(query="synthetic"),
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW: ReadPortfolioConstraintOverview(),
         # PC-CM-RUN01-WP05, the pair the payload table above states in wire shape.
         Capability.PROJECT_CONTROLS_STATUS: ReadProjectControlsStatus(
             project_id=scene.constraint_project_id
@@ -2439,7 +2453,7 @@ def test_handler_unwired_capabilities_return_the_canonical_http_problem(
     capability: Capability, scene: Scene, wire: Wire
 ) -> None:
     assert set(Capability) - set(_HANDLERS) == _UNIMPLEMENTED_CAPABILITIES
-    assert len(HANDLER_CAPABILITIES) == 168
+    assert len(HANDLER_CAPABILITIES) == 171
     reply = wire.send(capability.value, document_for(capability, scene, {}))
     problem = ProblemDetail.model_validate(reply.document())
     assert reply.status == 501

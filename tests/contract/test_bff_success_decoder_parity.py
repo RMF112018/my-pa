@@ -1771,12 +1771,13 @@ def _project_controls_configure() -> dict[str, Any]:
 
 def test_committed_python_fixtures_match_live_model_dumps() -> None:
     """A live Python dump still equals the bytes Vitest decodes, parsed as JSON."""
-    assert set(Capability) - set(_HANDLERS) == {
-        Capability.CONSTRAINTS_CREATE_PUBLISHED,
-        Capability.CONSTRAINTS_PORTFOLIO_LIST,
-        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
-        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
-    }
+    # `PC-CM-RUN01-WP06` wired `constraints.portfolio_list`,
+    # `constraints.portfolio_search` and `constraints.portfolio_overview`, so
+    # the Run 01 remainder is the name below. The BFF does not yet reach them:
+    # `web/src/contracts/gateway.json` declares them only once the BFF package
+    # lands, and this module's claim is about the Python dumps the committed
+    # fixtures were taken from rather than about what `web/` routes.
+    assert set(Capability) - set(_HANDLERS) == {Capability.CONSTRAINTS_CREATE_PUBLISHED}
     assert SUCCESS_PATH.is_file(), f"committed Python fixtures missing at {SUCCESS_PATH}"
     committed = json.loads(SUCCESS_PATH.read_text(encoding="utf-8"))
     live = python_success_payloads()

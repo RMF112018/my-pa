@@ -30,23 +30,32 @@ from __future__ import annotations
 
 import ast
 import inspect
+import json
 import re
 from datetime import UTC, date, datetime
+from types import SimpleNamespace
 from typing import Any, Final, get_args
 
 import pytest
 
+from my_pa.adapters.mcp import TOOLS
+from my_pa.adapters.mcp.tools import input_schema_for
+from my_pa.adapters.normalization import _BUILDERS, PAYLOAD_KEY, normalize
 from my_pa.application.commands import (
     Command,
     ListConstraintCategories,
     ListConstraints,
+    ListPortfolioConstraints,
     ReadConstraint,
     ReadConstraintHistory,
     ReadConstraintOverview,
+    ReadPortfolioConstraintOverview,
     SearchConstraints,
+    SearchPortfolioConstraints,
 )
+from my_pa.application.disclosure import Limitation
 from my_pa.application.errors import InvalidRequestError, SafeDetail
-from my_pa.application.service import _HANDLERS, ApplicationService
+from my_pa.application.service import _HANDLERS, MAX_PORTFOLIO_PROJECTS, ApplicationService
 from my_pa.contracts.v1.envelope import ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.common.identifiers import IdKind
@@ -58,6 +67,8 @@ from my_pa.domain.project_controls.read_models import (
     MAX_SEARCH_CHARACTERS,
     ConstraintCategoryState,
     ConstraintGrouping,
+    ConstraintLifecycleState,
+    ConstraintListQuery,
     ConstraintListScope,
     ConstraintSort,
     SortDirection,
@@ -85,6 +96,27 @@ EXPECTED: Final[dict[Capability, tuple[type, str]]] = {
     Capability.CONSTRAINTS_OVERVIEW: (ReadConstraintOverview, "read_overview"),
     Capability.CONSTRAINT_CATEGORIES_LIST: (ListConstraintCategories, "list_categories"),
 }
+
+PORTFOLIO_EXPECTED: Final[dict[Capability, tuple[type, str]]] = {
+    Capability.CONSTRAINTS_PORTFOLIO_LIST: (
+        ListPortfolioConstraints,
+        "list_portfolio_constraints",
+    ),
+    Capability.CONSTRAINTS_PORTFOLIO_SEARCH: (
+        SearchPortfolioConstraints,
+        "list_portfolio_constraints",
+    ),
+    Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW: (
+        ReadPortfolioConstraintOverview,
+        "read_portfolio_overview",
+    ),
+}
+
+
+#: Both tables at once, for the claims that are about every Constraint read
+#: rather than about one family: a handler that recomputed a derived answer is
+#: the same defect whether it names one Project or all of them.
+ALL_READS: Final[dict[Capability, tuple[type, str]]] = {**EXPECTED, **PORTFOLIO_EXPECTED}
 
 #: Names whose presence in a handler body would mean the exposure had started
 #: deciding something. Derivation vocabulary (`overdue`, `due_soon`, `my_court`,
@@ -377,7 +409,7 @@ def _handler_source(capability: Capability) -> str:
     return inspect.getsource(_HANDLERS[capability])
 
 
-@pytest.mark.parametrize("capability", sorted(EXPECTED, key=lambda c: c.value))
+@pytest.mark.parametrize("capability", sorted(ALL_READS, key=lambda c: c.value))
 @pytest.mark.parametrize("forbidden", FORBIDDEN_IN_A_HANDLER)
 def test_no_handler_body_recomputes_a_derived_answer(
     capability: Capability, forbidden: str
@@ -398,7 +430,7 @@ def test_no_handler_body_recomputes_a_derived_answer(
     )
 
 
-@pytest.mark.parametrize("capability", sorted(EXPECTED, key=lambda c: c.value))
+@pytest.mark.parametrize("capability", sorted(ALL_READS, key=lambda c: c.value))
 def test_no_handler_body_compares_two_dates_or_two_parties(capability: Capability) -> None:
     """No comparison operator at all in a handler body.
 
@@ -426,9 +458,472 @@ def test_no_handler_imports_a_date_or_a_calendar() -> None:
     own calendar; a handler that constructed a `date` would be resolving one of
     its own.
     """
-    for capability in EXPECTED:
+    for capability in ALL_READS:
         body = _handler_source(capability)
         assert "date(" not in body
         assert "datetime(" not in body
         assert str(UTC) not in body or "self._clock()" in body
     assert date is not None and datetime is not None
+
+
+# ---- the three cross-Project reads (PC-CM-RUN01-WP06) -----------------------
+#
+# Held apart from the six above rather than folded into `EXPECTED`, and the
+# separation is the claim rather than a convenience. The exact-Project six are
+# driven end to end against `tests/conftest`'s shared `_ConstraintReads` fake,
+# which carries WP03's eleven read methods and none of WP06's five set-based
+# ones; a portfolio read reaching it would raise rather than answer. So the
+# three are exercised against the spy for delegation and against a local
+# portfolio repository for behaviour, exactly as `test_constraint_portfolio_
+# reads.py` exercises the read service itself.
+#
+# The Project set is the other reason. These three name no Project at all, so
+# `_command_for` above has nothing to build them from and the scene's seeded
+# Constraint Project is not what they read: they read whatever the canonical
+# `ProjectRepository` says this Principal owns, which is the seam the fixtures
+# below stand in for.
+
+
+_ANSWERS["list_portfolio_constraints"] = _Page()
+_ANSWERS["read_portfolio_overview"] = ()
+
+
+def _portfolio_command(capability: Capability) -> object:
+    if capability is Capability.CONSTRAINTS_PORTFOLIO_LIST:
+        return ListPortfolioConstraints()
+    if capability is Capability.CONSTRAINTS_PORTFOLIO_SEARCH:
+        return SearchPortfolioConstraints(query="synthetic")
+    return ReadPortfolioConstraintOverview()
+
+
+class _OwnedProjects:
+    """The canonical Project seam, holding exactly the Projects it was handed.
+
+    Only `list_projects` is implemented, and that is the assertion rather than a
+    shortcut: a portfolio handler that reached `get_project` — one call per
+    Project — would raise here rather than pass, which is the per-Project
+    degradation this package exists to prevent.
+    """
+
+    def __init__(self, project_ids: tuple[str, ...]) -> None:
+        self.project_ids = project_ids
+        self.calls: list[int | None] = []
+
+    def list_projects(
+        self,
+        principal_id: str,
+        **keywords: Any,  # noqa: ANN401 - the port's own signature
+    ) -> tuple[Any, ...]:
+        del principal_id
+        self.calls.append(keywords.get("limit"))
+        limit = keywords.get("limit")
+        found = tuple(SimpleNamespace(project_id=identifier) for identifier in self.project_ids)
+        return found if limit is None else found[:limit]
+
+
+class _PortfolioWork:
+    """A Constraint unit of work whose Project seam is `_OwnedProjects`."""
+
+    def __init__(self, projects: _OwnedProjects, constraints: object) -> None:
+        self.projects = projects
+        self.constraints = constraints
+
+    def __enter__(self) -> _PortfolioWork:
+        return self
+
+    def __exit__(self, *_exception: object) -> None:
+        return None
+
+
+def _portfolio_service(
+    scene: Scene, owned: _OwnedProjects, recorder: _Recorder | None = None
+) -> ApplicationService:
+    scene.world.providers = scene.providers
+    service = ApplicationService(
+        unit_of_work=lambda: FakeUnitOfWork(scene.world),
+        limits=DEFAULT_LIMITS,
+        clock=lambda: WHEN,
+        constraint_management_unit_of_work=lambda: _PortfolioWork(owned, object()),  # type: ignore[arg-type]
+    )
+    service._constraint_reads = recorder if recorder is not None else _Recorder()  # type: ignore[assignment]
+    return service
+
+
+def _synthetic_projects(count: int) -> tuple[str, ...]:
+    return tuple(issue_identifier(IdKind.PROJECT) for _ in range(count))
+
+
+# ---- dispatch ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize("capability", sorted(PORTFOLIO_EXPECTED, key=lambda c: c.value))
+def test_every_portfolio_read_capability_has_a_handler(capability: Capability) -> None:
+    assert capability in _HANDLERS
+
+
+@pytest.mark.parametrize("capability", sorted(PORTFOLIO_EXPECTED, key=lambda c: c.value))
+def test_every_portfolio_read_command_declares_its_own_capability(
+    capability: Capability,
+) -> None:
+    command, _method = PORTFOLIO_EXPECTED[capability]
+    assert command.capability is capability  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("capability", sorted(PORTFOLIO_EXPECTED, key=lambda c: c.value))
+def test_every_portfolio_read_command_is_in_the_command_union(capability: Capability) -> None:
+    """Union membership is what publishes the MCP tool, for the reason above."""
+    command, _method = PORTFOLIO_EXPECTED[capability]
+    assert command in get_args(Command.__value__)
+
+
+@pytest.mark.parametrize("capability", sorted(PORTFOLIO_EXPECTED, key=lambda c: c.value))
+def test_every_portfolio_read_has_a_normalization_builder(capability: Capability) -> None:
+    """A capability with no builder normalises to nothing and is refused at the wire.
+
+    The builder table is what turns a JSON payload into the command the handler
+    takes, so a capability wired into `_HANDLERS` and left out of `_BUILDERS`
+    dispatches over no transport at all.
+    """
+    command, _method = PORTFOLIO_EXPECTED[capability]
+    assert capability in _BUILDERS
+    assert isinstance(
+        _BUILDERS[capability]({})
+        if command is not SearchPortfolioConstraints
+        else _BUILDERS[capability]({"query": "synthetic"}),
+        command,
+    )
+
+
+def test_the_portfolio_builders_convert_the_closed_vocabularies() -> None:
+    """The wire's strings become enum members, exactly as the exact-Project pair do.
+
+    Asserted on the built command rather than on the builder, because what
+    matters is that the frozen dataclass accepted it: a builder that passed the
+    raw string through would be refused by `__post_init__`, and a builder that
+    converted the wrong field would build a command whose vocabulary is
+    advisory.
+    """
+    built = _BUILDERS[Capability.CONSTRAINTS_PORTFOLIO_LIST](
+        {
+            "scope": "all",
+            "sort": "due_date",
+            "sort_order": "desc",
+            "grouping": "none",
+            "statuses": ["in_progress"],
+        }
+    )
+    assert isinstance(built, ListPortfolioConstraints)
+    assert built.scope is ConstraintListScope.ALL
+    assert built.sort is ConstraintSort.DUE_DATE
+    assert built.sort_order is SortDirection.DESC
+    assert built.grouping is ConstraintGrouping.NONE
+    assert built.statuses == (ConstraintLifecycleState.IN_PROGRESS,)
+
+
+# ---- delegation and the Project seam ----------------------------------------
+
+
+@pytest.mark.parametrize("capability", sorted(PORTFOLIO_EXPECTED, key=lambda c: c.value))
+def test_each_portfolio_handler_makes_exactly_one_canonical_read_call(
+    capability: Capability, scene: Scene
+) -> None:
+    recorder = _Recorder()
+    owned = _OwnedProjects(_synthetic_projects(3))
+    envelope = _run(
+        _portfolio_service(scene, owned, recorder), scene, _portfolio_command(capability)
+    )
+    assert envelope.error is None, envelope.error
+    _command, method = PORTFOLIO_EXPECTED[capability]
+    assert [name for name, _keywords in recorder.calls] == [method]
+
+
+@pytest.mark.parametrize("capability", sorted(PORTFOLIO_EXPECTED, key=lambda c: c.value))
+def test_each_portfolio_handler_enumerates_projects_in_exactly_one_bounded_statement(
+    capability: Capability, scene: Scene
+) -> None:
+    """The defining bound of this package, measured rather than asserted in prose.
+
+    One call to `list_projects` per request, whatever the Register does
+    afterwards, and that call states a limit. A handler that asked the Project
+    seam once per Project would show as many calls here, and a handler that
+    asked for every Project the Principal owns would show `None`.
+    """
+    owned = _OwnedProjects(_synthetic_projects(4))
+    _run(_portfolio_service(scene, owned), scene, _portfolio_command(capability))
+    assert owned.calls == [MAX_PORTFOLIO_PROJECTS + 1]
+
+
+@pytest.mark.parametrize("capability", sorted(PORTFOLIO_EXPECTED, key=lambda c: c.value))
+def test_each_portfolio_handler_passes_the_owned_set_and_never_a_payload_field(
+    capability: Capability, scene: Scene
+) -> None:
+    """The Project set reaches the read service from the repository, not the request.
+
+    Both halves again: the command carries no Project field of any spelling, and
+    what the handler passed is exactly what the canonical repository returned.
+    A caller-supplied Project set would make this surface an existence oracle,
+    so the absence of the field is asserted by name.
+    """
+    recorder = _Recorder()
+    project_ids = _synthetic_projects(3)
+    owned = _OwnedProjects(project_ids)
+    command = _portfolio_command(capability)
+    slots = vars(type(command)).get("__slots__", ())
+    assert not [field for field in slots if "project" in field or "principal" in field]
+    _run(_portfolio_service(scene, owned, recorder), scene, command)
+    (_name, keywords) = recorder.calls[0]
+    assert keywords["principal_id"] == scene.principal.principal_id
+    assert set(keywords["project_ids"]) == set(project_ids)
+
+
+# ---- the Project-set bound and its disclosure -------------------------------
+
+
+@pytest.mark.parametrize("capability", sorted(PORTFOLIO_EXPECTED, key=lambda c: c.value))
+def test_a_portfolio_within_the_cap_discloses_no_truncation(
+    capability: Capability, scene: Scene
+) -> None:
+    owned = _OwnedProjects(_synthetic_projects(MAX_PORTFOLIO_PROJECTS))
+    envelope = _run(_portfolio_service(scene, owned), scene, _portfolio_command(capability))
+    assert envelope.result is not None
+    assert envelope.disclosure is not None
+    truncation = envelope.disclosure.truncation
+    assert truncation is None or truncation.is_truncated is False
+
+
+@pytest.mark.parametrize("capability", sorted(PORTFOLIO_EXPECTED, key=lambda c: c.value))
+def test_a_portfolio_beyond_the_cap_says_so_rather_than_answering_for_a_subset(
+    capability: Capability, scene: Scene
+) -> None:
+    """A silently-truncated portfolio presented as the portfolio is a false answer.
+
+    The cap is real and a Principal can exceed it, so the only honest outcomes
+    are to refuse or to disclose. This surface discloses: the reason names the
+    Project bound rather than the page bound, and the limitation says the
+    truncation cannot be paged past, because there is no Project-set cursor.
+    """
+    owned = _OwnedProjects(_synthetic_projects(MAX_PORTFOLIO_PROJECTS + 1))
+    envelope = _run(_portfolio_service(scene, owned), scene, _portfolio_command(capability))
+    assert envelope.result is not None
+    assert envelope.disclosure is not None
+    truncation = envelope.disclosure.truncation
+    assert truncation is not None and truncation.is_truncated is True
+    assert truncation.reason == "portfolio_project_limit_reached"
+    assert Limitation.LISTING_HAS_NO_CONTINUATION.value in envelope.disclosure.limitations
+
+
+@pytest.mark.parametrize("capability", sorted(PORTFOLIO_EXPECTED, key=lambda c: c.value))
+def test_the_project_bound_never_states_a_count_of_projects(
+    capability: Capability, scene: Scene
+) -> None:
+    """The disclosure says *that* the cap was reached, never how many were owned.
+
+    A portfolio surface is an easy place to leak existence, and a truncation
+    field carrying "112 of your Projects" would be a count this Principal did
+    not ask for and a shape a probe could read. The reason is a constant string
+    and the limitation is a closed enum member; neither varies with the data.
+    """
+    owned = _OwnedProjects(_synthetic_projects(MAX_PORTFOLIO_PROJECTS + 7))
+    envelope = _run(_portfolio_service(scene, owned), scene, _portfolio_command(capability))
+    assert envelope.result is not None
+    rendered = json.dumps(envelope.model_dump(mode="json"))
+    assert str(MAX_PORTFOLIO_PROJECTS + 7) not in rendered
+    for project_id in owned.project_ids:
+        assert project_id not in rendered
+
+
+def test_a_principal_owning_no_projects_gets_an_empty_portfolio_not_a_refusal(
+    scene: Scene,
+) -> None:
+    """Nothing owned is an empty answer, because the alternative discloses something.
+
+    A refusal here would tell a caller that the emptiness was special, and an
+    error shape that differed from the populated one would be a branch a probe
+    could time. The answer is the same envelope with nothing in it.
+    """
+    owned = _OwnedProjects(())
+    envelope = _run(_portfolio_service(scene, owned), scene, ListPortfolioConstraints())
+    assert envelope.error is None, envelope.error
+    assert envelope.disclosure is not None
+    truncation = envelope.disclosure.truncation
+    assert truncation is None or truncation.is_truncated is False
+
+
+# ---- the cursor binding across a changed owned set --------------------------
+
+
+def test_a_cursor_issued_over_one_owned_set_fails_closed_over_another() -> None:
+    """The portfolio cursor binds the Project set, so a changed portfolio refuses.
+
+    Asserted at the binding rather than through a page, because the binding is
+    what the read service compares: a cursor carries the digest it was issued
+    under, and `list_portfolio_constraints` decodes against the digest of the
+    set it was *just* handed. Two different owned sets therefore produce two
+    different bindings, and a cursor from the first cannot validate against the
+    second — which is what makes a portfolio that gained or lost a Project
+    between pages a refusal rather than a silently different portfolio.
+    """
+    query = ConstraintListQuery()
+    principal_id = issue_identifier(IdKind.PRINCIPAL)
+    first = _synthetic_projects(3)
+    binding = query.portfolio_binding(principal_id=principal_id, project_ids=first)
+    assert binding == query.portfolio_binding(principal_id=principal_id, project_ids=first)
+    assert binding != query.portfolio_binding(
+        principal_id=principal_id, project_ids=(*first, issue_identifier(IdKind.PROJECT))
+    )
+    assert binding != query.portfolio_binding(principal_id=principal_id, project_ids=first[:2])
+    # And the set is the *only* thing that changed: a different Principal over
+    # the same Projects is also a different binding, so neither half is carrying
+    # the other.
+    assert binding != query.portfolio_binding(
+        principal_id=issue_identifier(IdKind.PRINCIPAL), project_ids=first
+    )
+
+
+# ---- malformed portfolio requests -------------------------------------------
+
+
+def test_a_portfolio_command_refuses_a_caller_supplied_project() -> None:
+    """The one refusal this surface exists for, stated for all three commands.
+
+    `project_id` is not a field these commands have, so it arrives as an
+    unexpected keyword and the frozen dataclass refuses it. That is the same
+    refusal any other unknown key gets, and it is deliberate: a caller must not
+    be able to tell "that is not a field here" from "that Project is not yours".
+    """
+    for command in (
+        ListPortfolioConstraints,
+        SearchPortfolioConstraints,
+        ReadPortfolioConstraintOverview,
+    ):
+        with pytest.raises(TypeError):
+            command(project_id=issue_identifier(IdKind.PROJECT))  # type: ignore[call-arg]
+
+
+def test_a_portfolio_command_refuses_a_caller_supplied_project_set() -> None:
+    """A collection of Projects is refused for the same reason a single one is.
+
+    Naming a set rather than one identifier would be the existence oracle in its
+    most direct form: a caller could vary the set and read which identifiers
+    changed the answer.
+    """
+    with pytest.raises(TypeError):
+        ListPortfolioConstraints(project_ids=_synthetic_projects(2))  # type: ignore[call-arg]
+
+
+def test_a_portfolio_command_refuses_an_unknown_field() -> None:
+    with pytest.raises(TypeError):
+        ListPortfolioConstraints(unknown_selector="anything")  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize("limit", [0, -1, MAX_LIST_LIMIT + 1, True])
+def test_a_portfolio_page_limit_outside_the_domains_bound_is_an_invalid_request(
+    limit: object,
+) -> None:
+    with pytest.raises(InvalidRequestError) as listing:
+        ListPortfolioConstraints(limit=limit)  # type: ignore[arg-type]
+    assert listing.value.safe_details == (SafeDetail.LIMIT,)
+    with pytest.raises(InvalidRequestError) as searching:
+        SearchPortfolioConstraints(query="synthetic", limit=limit)  # type: ignore[arg-type]
+    assert searching.value.safe_details == (SafeDetail.LIMIT,)
+
+
+def test_an_oversized_portfolio_cursor_is_refused_before_it_is_decoded() -> None:
+    with pytest.raises(InvalidRequestError) as refusal:
+        ListPortfolioConstraints(cursor="x" * (MAX_CURSOR_CHARACTERS + 1))
+    assert refusal.value.safe_details == (SafeDetail.CURSOR,)
+
+
+def test_an_oversized_portfolio_search_term_is_refused() -> None:
+    with pytest.raises(InvalidRequestError) as refusal:
+        SearchPortfolioConstraints(query="x" * (MAX_SEARCH_CHARACTERS + 1))
+    assert refusal.value.safe_details == (SafeDetail.QUERY,)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("scope", "open"),
+        ("sort", "code"),
+        ("sort_order", "asc"),
+        ("grouping", "category"),
+    ],
+)
+def test_a_portfolio_vocabulary_field_refuses_a_bare_string(field: str, value: str) -> None:
+    with pytest.raises(InvalidRequestError):
+        ListPortfolioConstraints(**{field: value})
+
+
+def test_a_portfolio_filter_family_refuses_a_member_of_another_vocabulary() -> None:
+    with pytest.raises(InvalidRequestError):
+        ListPortfolioConstraints(statuses=(ConstraintListScope.OPEN,))  # type: ignore[arg-type]
+
+
+def test_the_well_formed_portfolio_shapes_are_accepted() -> None:
+    """The green half, so the refusals above are not the only thing measured."""
+    ListPortfolioConstraints(
+        scope=ConstraintListScope.ALL,
+        sort=ConstraintSort.DUE_DATE,
+        sort_order=SortDirection.DESC,
+        grouping=ConstraintGrouping.NONE,
+        limit=MAX_LIST_LIMIT,
+    )
+    SearchPortfolioConstraints(query="a bounded term")
+    ReadPortfolioConstraintOverview()
+
+
+def test_the_overview_command_carries_no_field_at_all() -> None:
+    """A zero-field command is well formed here, and `GetCapabilities` is the precedent.
+
+    It matters at the wire: `adapters.mcp.tools.input_schema_for` makes
+    `payload` required only when the command has a required field, so this tool
+    publishes a payload a caller may omit entirely. A field added here later
+    would silently change that.
+    """
+    assert list(vars(ReadPortfolioConstraintOverview).get("__slots__", ())) == []
+    assert ReadPortfolioConstraintOverview() == ReadPortfolioConstraintOverview()
+
+
+def test_the_overview_tool_accepts_an_absent_payload_and_an_empty_one(scene: Scene) -> None:
+    """A command with no field must round-trip with no `payload` key at all.
+
+    Asserted in both wire spellings, because they are different documents and a
+    browser will send whichever its client library produces. `payload` is
+    *absent* in the first and an *empty object* in the second, and
+    `input_schema_for` publishes the tool with `payload` outside its top-level
+    `required` list — so a caller that omits it is sending a valid request
+    rather than one this build happens to tolerate. A field added to this
+    command later would move `payload` into `required` and silently break the
+    first form.
+    """
+    capability = Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW
+    with_payload = {
+        "request_id": "req-portfolio-overview",
+        "purpose": Purpose.CONSTRAINT_READ.value,
+        "principal_id": scene.principal.principal_id,
+        "requested_at": "2026-08-02T12:00:00Z",
+        PAYLOAD_KEY: {},
+    }
+    without_payload = {name: value for name, value in with_payload.items() if name != PAYLOAD_KEY}
+    for document in (without_payload, with_payload):
+        _metadata, command = normalize(capability.value, document)
+        assert command == ReadPortfolioConstraintOverview()
+
+    schema = input_schema_for(ReadPortfolioConstraintOverview)
+    assert PAYLOAD_KEY not in schema["required"]
+    assert schema["properties"][PAYLOAD_KEY]["required"] == []
+    assert schema["properties"][PAYLOAD_KEY]["additionalProperties"] is False
+
+
+@pytest.mark.parametrize("capability", sorted(PORTFOLIO_EXPECTED, key=lambda c: c.value))
+def test_every_portfolio_tool_is_published_and_marked_read_only(capability: Capability) -> None:
+    """The MCP tool follows from the union, and its hint follows from the command.
+
+    `read_only_hint` is derived rather than declared, so this asserts the
+    derivation landed the right way round: all three are reads, and a portfolio
+    surface advertised as a mutation would be a false statement to any client
+    that gates on the hint.
+    """
+    published = {tool.name: tool for tool in TOOLS}
+    assert capability.value in published
+    assert published[capability.value].annotations.read_only_hint is True

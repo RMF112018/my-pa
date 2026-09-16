@@ -719,6 +719,10 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         Capability.CONSTRAINTS_HISTORY: {"constraint_id": marked.constraint_id},
         Capability.CONSTRAINTS_OVERVIEW: {"project_id": marked.constraint_project_id},
         Capability.CONSTRAINT_CATEGORIES_LIST: {"project_id": marked.constraint_project_id},
+        # PC-CM-RUN01-WP06. No Project identifier, by design.
+        Capability.CONSTRAINTS_PORTFOLIO_LIST: {},
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH: {"query": "synthetic"},
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW: {},
         # PC-CM-RUN01-WP05. Well-formed, so the only thing wrong in each sweep
         # below is the authority under test.
         Capability.PROJECT_CONTROLS_STATUS: {"project_id": marked.constraint_project_id},
@@ -1854,6 +1858,12 @@ SCOPED_CAPABILITIES = [
         Capability.CONSTRAINTS_HISTORY,
         Capability.CONSTRAINTS_OVERVIEW,
         Capability.CONSTRAINT_CATEGORIES_LIST,
+        # `PC-CM-RUN01-WP06`'s three cross-Project reads on the same reading,
+        # and more plainly than the six: they name no Project at all, so there
+        # is not even an identifier for a scope to be compared against.
+        Capability.CONSTRAINTS_PORTFOLIO_LIST,
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
         Capability.CONSTRAINT_SYNC_STATE,
         Capability.CONSTRAINT_SYNC_DELTA,
         Capability.CONSTRAINT_SYNC_CONFLICTS,

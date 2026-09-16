@@ -211,6 +211,7 @@ from my_pa.application.commands import (
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListManagedDocumentsCommand,
+    ListPortfolioConstraints,
     ListProjects,
     ListRelationshipMemories,
     ListReviewCases,
@@ -241,6 +242,7 @@ from my_pa.application.commands import (
     ReadKnowledge,
     ReadManagedDocument,
     ReadManagedDocumentCommand,
+    ReadPortfolioConstraintOverview,
     ReadProject,
     ReadProjectControlsStatus,
     ReadTask,
@@ -281,6 +283,7 @@ from my_pa.application.commands import (
     SearchGoodNotes,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
+    SearchPortfolioConstraints,
     SearchRelationshipMemories,
     SearchTasks,
     SplitEntity,
@@ -576,7 +579,9 @@ from my_pa.domain.project_controls.constraint import (
 from my_pa.domain.project_controls.history import ConstraintMutationActor
 from my_pa.domain.project_controls.party import PartyKind, PartyRef, PartyRefError
 from my_pa.domain.project_controls.read_models import (
+    MAX_LIST_LIMIT,
     ConstraintCursorError,
+    ConstraintListPage,
     ConstraintListQuery,
     ConstraintQueryError,
 )
@@ -2791,6 +2796,25 @@ _COMMITMENT_TRUST_BASIS: Final = ("product_owned_commitment",)
 #: through no configured source and no enrollment, so the basis is the partition
 #: exactly as the task plane's is (PC-CM-IMP-WP04).
 _CONSTRAINT_TRUST_BASIS: Final = ("principal_partition",)
+
+#: How many Projects one cross-Project ("portfolio") Constraint read may span
+#: (PC-CM-RUN01-WP06).
+#:
+#: The number is `MAX_LIST_LIMIT` -- the Constraint read plane's own stated
+#: ceiling on how much one read returns -- rather than a round figure chosen
+#: here. A portfolio read spans Projects the way a Register page spans rows, and
+#: taking the bound the plane already declares means there is one number to
+#: move rather than two that can disagree about how large a Constraint read is
+#: allowed to get.
+#:
+#: It is a cap and not a page. `ApplicationService._portfolio_projects` fetches
+#: one Project past it, and a Principal owning more is told so through the
+#: disclosure's `portfolio_project_limit_reached` reason and
+#: `LISTING_HAS_NO_CONTINUATION`: there is no Project-set cursor, because the
+#: accepted plan asks for none. What the bound buys is that the work a portfolio
+#: read does is decided by a constant rather than by how many Projects a
+#: Principal happens to own.
+MAX_PORTFOLIO_PROJECTS: Final[int] = MAX_LIST_LIMIT
 
 
 @contextmanager
@@ -9609,6 +9633,201 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CONSTRAINT_TRUST_BASIS),
         )
 
+    def _portfolio_projects(
+        self, work: ConstraintManagementUnitOfWork, principal_id: str
+    ) -> tuple[tuple[str, ...], bool]:
+        """The Projects one portfolio read spans, and whether the cap cut them short.
+
+        PC-CM-RUN01-WP06. **This is where a portfolio's Project set is decided,
+        and it is decided by the canonical Principal-scoped `ProjectRepository`
+        on this transaction's own connection** -- the same seam
+        `_require_constraint_project` uses for an exact-Project read. Cross-Project
+        isolation is therefore a property of the canonical Project repository
+        rather than a second rule written here that could drift from it. No
+        caller names a Project on these three commands, so there is nothing to
+        compare and nothing to probe: the set is read, never supplied.
+
+        One statement, and `MAX_PORTFOLIO_PROJECTS + 1` rows of it. The extra row
+        is the same honest-bound device `_continuity_projects` uses: its presence
+        is what says the Principal owns more Projects than one portfolio read
+        will span, and the caller is told so rather than being handed a subset
+        presented as the whole portfolio. There is deliberately no Project-set
+        cursor -- the accepted plan asks for none -- so the disclosure carries
+        `LISTING_HAS_NO_CONTINUATION` and says the truncation cannot be paged
+        past.
+
+        The bound is the defining technical requirement of this package: a
+        portfolio read must not degrade into per-Project work, and its statement
+        count must be constant in the number of Projects. This method issues one
+        statement regardless of how many Projects come back, and the read service
+        below it issues a fixed number more.
+        """
+        found = work.projects.list_projects(principal_id, limit=MAX_PORTFOLIO_PROJECTS + 1)
+        truncated = len(found) > MAX_PORTFOLIO_PROJECTS
+        return (
+            tuple(project.project_id for project in found[:MAX_PORTFOLIO_PROJECTS]),
+            truncated,
+        )
+
+    @staticmethod
+    def _portfolio_truncation(
+        page: ConstraintListPage, *, projects_truncated: bool
+    ) -> tuple[Truncation, tuple[Limitation, ...]]:
+        """What a portfolio page discloses about the two bounds it is subject to.
+
+        A portfolio page can be short for two unrelated reasons, and collapsing
+        them would make one of the two unsayable. `page_size_reached` means more
+        rows exist inside the Projects that were read and the next cursor
+        continues them. `portfolio_project_limit_reached` means the Principal
+        owns more Projects than `MAX_PORTFOLIO_PROJECTS`, so rows from the
+        Projects beyond the cap are absent from every page of this result and no
+        cursor will reach them -- which is why it also carries
+        `LISTING_HAS_NO_CONTINUATION` and why it is the reason reported when both
+        hold. Silently returning a subset of the portfolio and calling it the
+        portfolio would be a false answer, which is the one outcome this method
+        exists to prevent.
+
+        Neither field says anything about *which* Projects, how many there are,
+        or whether any exist that this Principal does not own: the cap is a
+        constant, and the flag is a fact about the acting Principal's own
+        partition.
+        """
+        is_truncated = page.is_truncated or projects_truncated
+        reason: str | None = None
+        if projects_truncated:
+            reason = "portfolio_project_limit_reached"
+        elif page.is_truncated:
+            reason = "page_size_reached"
+        return (
+            Truncation(
+                is_truncated=is_truncated,
+                reason=reason,
+                next_cursor=page.next_cursor if is_truncated else None,
+            ),
+            (Limitation.LISTING_HAS_NO_CONTINUATION,) if projects_truncated else (),
+        )
+
+    def _constraints_portfolio_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListPortfolioConstraints,
+    ) -> _Result:
+        """`constraints.portfolio_list`: one bounded page across every owned Project.
+
+        The exact-Project handler's shape with `_require_constraint_project`
+        replaced by `_portfolio_projects`, because the question changed: an
+        exact-Project read asks whether the named Project is this Principal's,
+        and a portfolio read asks which Projects are. Both answers come from the
+        same canonical repository on the same connection.
+        """
+        del unit_of_work
+        with _constraint_translated():
+            query = self._constraint_query(command)
+        with _translated(), _constraint_translated(), self._constraint_work() as work:
+            project_ids, projects_truncated = self._portfolio_projects(
+                work, authorization.principal.principal_id
+            )
+            page = self._constraint_reads.list_portfolio_constraints(
+                work.constraints,
+                principal_id=authorization.principal.principal_id,
+                project_ids=project_ids,
+                query=query,
+                now=self._clock(),
+            )
+        truncation, limitations = self._portfolio_truncation(
+            page, projects_truncated=projects_truncated
+        )
+        return _Result(
+            payload={"constraints": _constraint_payload(page.entries)},
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_CONSTRAINT_TRUST_BASIS,
+                truncation=truncation,
+                extra_limitations=limitations,
+            ),
+        )
+
+    def _constraints_portfolio_search(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: SearchPortfolioConstraints,
+    ) -> _Result:
+        """`constraints.portfolio_search`: the same portfolio page, narrowed by one term.
+
+        The same read-service method the portfolio Register uses, with the term
+        set on the query, for the reason `_constraints_search` states: a search
+        *is* a Register request with a search predicate, and a second path would
+        be a second set of derived flags over the same rows.
+        """
+        del unit_of_work
+        with _constraint_translated():
+            query = self._constraint_query(command, search_text=command.query)
+        with _translated(), _constraint_translated(), self._constraint_work() as work:
+            project_ids, projects_truncated = self._portfolio_projects(
+                work, authorization.principal.principal_id
+            )
+            page = self._constraint_reads.list_portfolio_constraints(
+                work.constraints,
+                principal_id=authorization.principal.principal_id,
+                project_ids=project_ids,
+                query=query,
+                now=self._clock(),
+            )
+        truncation, limitations = self._portfolio_truncation(
+            page, projects_truncated=projects_truncated
+        )
+        return _Result(
+            payload={"constraints": _constraint_payload(page.entries)},
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_CONSTRAINT_TRUST_BASIS,
+                truncation=truncation,
+                extra_limitations=limitations,
+            ),
+        )
+
+    def _constraints_portfolio_overview(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadPortfolioConstraintOverview,
+    ) -> _Result:
+        """`constraints.portfolio_overview`: each owned Project's position, on its own calendar.
+
+        One entry per Project, never a combined figure: counts taken against
+        different Project dates are not summable and the accepted plan asks for
+        none. The Project cap applies here exactly as it does to the two paging
+        reads, and is disclosed the same way -- an overview that quietly omitted
+        Projects would misstate the position it is named for.
+        """
+        del unit_of_work
+        with _translated(), _constraint_translated(), self._constraint_work() as work:
+            project_ids, projects_truncated = self._portfolio_projects(
+                work, authorization.principal.principal_id
+            )
+            overview = self._constraint_reads.read_portfolio_overview(
+                work.constraints,
+                principal_id=authorization.principal.principal_id,
+                project_ids=project_ids,
+                now=self._clock(),
+            )
+        return _Result(
+            payload={"overview": _constraint_payload(overview)},
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_CONSTRAINT_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=projects_truncated,
+                    reason="portfolio_project_limit_reached" if projects_truncated else None,
+                ),
+                extra_limitations=(
+                    (Limitation.LISTING_HAS_NO_CONTINUATION,) if projects_truncated else ()
+                ),
+            ),
+        )
+
     def _constraint_categories_list(
         self,
         unit_of_work: UnitOfWork,
@@ -10400,7 +10619,12 @@ class ApplicationService:
 
     @staticmethod
     def _constraint_query(
-        command: ListConstraints | SearchConstraints, *, search_text: str | None = None
+        command: ListConstraints
+        | SearchConstraints
+        | ListPortfolioConstraints
+        | SearchPortfolioConstraints,
+        *,
+        search_text: str | None = None,
     ) -> ConstraintListQuery:
         """The read plane's own request object, built from the command's fields.
 
@@ -10409,6 +10633,14 @@ class ApplicationService:
         not default itself: `limit` is passed only when the caller stated one, so
         the page size stays `DEFAULT_LIST_LIMIT`'s and this layer holds no copy
         of it.
+
+        The two portfolio commands are built by this same method and not by a
+        sibling of it (PC-CM-RUN01-WP06). `ConstraintListQuery` is the object a
+        cursor binds its fingerprint to, and a second construction of it would be
+        a second definition of what "the same request" means -- the exact defect
+        the exact-Project pair sharing one builder avoids. The portfolio commands
+        differ from theirs only by not carrying a Project, and the Project was
+        never part of this object: it is the read service's separate argument.
         """
         common: dict[str, Any] = {
             "scope": command.scope,
@@ -10418,7 +10650,7 @@ class ApplicationService:
             common["limit"] = command.limit
         if search_text is not None:
             common["search_text"] = search_text
-        if isinstance(command, SearchConstraints):
+        if isinstance(command, SearchConstraints | SearchPortfolioConstraints):
             return ConstraintListQuery(**common)
         return ConstraintListQuery(
             statuses=frozenset(command.statuses),
@@ -12535,6 +12767,11 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.CONSTRAINTS_SEARCH: ApplicationService._constraints_search,
         Capability.CONSTRAINTS_HISTORY: ApplicationService._constraints_history,
         Capability.CONSTRAINTS_OVERVIEW: ApplicationService._constraints_overview,
+        Capability.CONSTRAINTS_PORTFOLIO_LIST: ApplicationService._constraints_portfolio_list,
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH: ApplicationService._constraints_portfolio_search,
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW: (
+            ApplicationService._constraints_portfolio_overview
+        ),
         Capability.CONSTRAINT_CATEGORIES_LIST: ApplicationService._constraint_categories_list,
         Capability.CONSTRAINTS_CREATE: ApplicationService._constraints_create,
         Capability.CONSTRAINTS_PUBLISH: ApplicationService._constraints_publish,
@@ -12888,6 +13125,14 @@ _CONSTRAINT_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.CONSTRAINTS_SEARCH,
         Capability.CONSTRAINTS_HISTORY,
         Capability.CONSTRAINTS_OVERVIEW,
+        # PC-CM-RUN01-WP06. The three cross-Project reads answer from the same
+        # Constraint tables through the same unit of work, so they are withheld
+        # on exactly the composition the exact-Project reads are withheld on.
+        # They additionally reach the canonical `ProjectRepository`, which this
+        # same unit of work already carries.
+        Capability.CONSTRAINTS_PORTFOLIO_LIST,
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
         Capability.CONSTRAINT_CATEGORIES_LIST,
         # PC-CM-RUN01-WP05. Whether a Project's calendar has been stated is a
         # Constraint read: it answers from the same settings row every Overdue

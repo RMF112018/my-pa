@@ -3598,6 +3598,84 @@ class _ConstraintReads:
             open_age_denominator=0,
         )
 
+    # PC-CM-RUN01-WP06: the five set-based siblings the cross-Project reads add.
+    #
+    # Each is the exact-Project method above restated over a set of Projects,
+    # with the same partition predicate written out the same way, so a portfolio
+    # read driven through `build_service` reaches the same stored rows an
+    # exact-Project read reaches.
+    #
+    # **What these prove and what they do not.** They carry the three portfolio
+    # capabilities through dispatch, the three transports, the envelope and the
+    # refusal paths, which is what the contract, policy and security tiers here
+    # are comparing. They prove *nothing* about how many statements the real
+    # adapter issues, about the set-based SQL that issues them, or about
+    # per-Project business time: those are properties of
+    # `infrastructure.persistence.constraints` and are evidenced by the
+    # isolated-database tier, never by this class.
+
+    def get_project_settings_for(
+        self, principal_id: str, project_ids: object
+    ) -> dict[str, ConstraintProjectSettings]:
+        wanted = set(project_ids)  # type: ignore[call-overload]
+        return {
+            project_id: settings
+            for (owner, project_id), settings in self._world.constraint_settings.items()
+            if owner == principal_id and project_id in wanted
+        }
+
+    def list_categories_for(
+        self,
+        principal_id: str,
+        project_ids: object,
+        *,
+        include_states: object = None,
+    ) -> tuple[ConstraintCategoryRow, ...]:
+        wanted = set(project_ids)  # type: ignore[call-overload]
+        rows = tuple(
+            row
+            for (owner, project_id), found in self._world.constraint_categories.items()
+            if owner == principal_id and project_id in wanted
+            for row in found
+        )
+        if include_states is None:
+            return rows
+        return tuple(row for row in rows if row.state in include_states)  # type: ignore[operator]
+
+    def list_portfolio_constraints(
+        self, principal_id: str, *, spec: object
+    ) -> tuple[PersistedConstraintRecord, ...]:
+        wanted = set(spec.project_ids)  # type: ignore[attr-defined]
+        found = tuple(
+            record
+            for (owner, _identifier), record in self._world.project_constraints.items()
+            if owner == principal_id and record.project_id in wanted
+        )
+        return found[: spec.fetch_limit]  # type: ignore[attr-defined]
+
+    def portfolio_sync_summary(
+        self, principal_id: str, project_ids: object, constraint_ids: object
+    ) -> dict[str, ConstraintSyncFacts]:
+        del constraint_ids
+        return {
+            project_id: self.sync_summary(principal_id, project_id, ())
+            for project_id in project_ids  # type: ignore[attr-defined]
+        }
+
+    def portfolio_overview_facts(
+        self, principal_id: str, *, as_of: datetime, calendars: object
+    ) -> dict[str, ConstraintOverviewFacts]:
+        return {
+            calendar.project_id: self.overview_facts(
+                principal_id,
+                calendar.project_id,
+                as_of=as_of,
+                project_today=calendar.project_today,
+                due_soon_through=calendar.due_soon_through,
+            )
+            for calendar in calendars  # type: ignore[attr-defined]
+        }
+
 
 class FakeConstraintManagementUnitOfWork(ConstraintManagementUnitOfWork):
     def __init__(self, world: World) -> None:
@@ -3910,6 +3988,52 @@ class _ConstraintPlaneProjects(_Projects):
     def lock_project(self, principal_id: str, project_id: str) -> Project | None:
         found = super().lock_project(principal_id, project_id)
         return found if found is not None else self._owned(principal_id, project_id)
+
+    def list_projects(
+        self,
+        principal_id: str,
+        *,
+        after: str | None = None,
+        state: ProjectState | None = None,
+        query: str | None = None,
+        exact_name: str | None = None,
+        limit: int | None = None,
+    ) -> tuple[Project, ...]:
+        """Enumeration, widened to the scene's Constraint Projects (PC-CM-RUN01-WP06).
+
+        The third read a Constraint transaction is entitled to make of a
+        Project, and it joins `get_project` and `lock_project` for the reason
+        they are overridden: the scene holds its synthetic Constraint Projects
+        apart from the Continuity list, so an inherited enumeration would report
+        that a Principal owning one of them owns no Projects at all.
+
+        **The partition predicate is applied here and not left to the base
+        class.** A portfolio read's whole isolation claim is that the set it
+        spans is this Principal's, so a fake that enumerated across Principals
+        would make every cross-Project isolation assertion pass for the wrong
+        reason. The extra rows are filtered on `principal_id` exactly as
+        `_Projects.list_projects` filters the Continuity ones, and `_owned`
+        above applies the same predicate for the single-Project reads.
+        """
+        inherited = super().list_projects(
+            principal_id,
+            after=after,
+            state=state,
+            query=query,
+            exact_name=exact_name,
+            limit=None,
+        )
+        known = {project.project_id for project in inherited}
+        extra = [
+            project
+            for project in self._world.constraint_projects
+            if project.principal_id == principal_id and project.project_id not in known
+        ]
+        if state is not None:
+            extra = [project for project in extra if project.state is state]
+        rows = [*inherited, *extra]
+        rows.sort(key=lambda row: (row.created_at, row.project_id), reverse=True)
+        return tuple(rows if limit is None else rows[:limit])
 
 
 class _ContinuityAuthoring(ContinuityAuthoringRepository):

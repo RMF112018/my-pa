@@ -64,10 +64,10 @@ HANDLER_CAPABILITIES: Final = tuple(
 )
 HANDLER_UNWIRED_CAPABILITIES: Final = frozenset(
     {
+        # `PC-CM-RUN01-WP06` wired `constraints.portfolio_list`,
+        # `constraints.portfolio_search` and `constraints.portfolio_overview`,
+        # so the Run 01 remainder is the name below.
         Capability.CONSTRAINTS_CREATE_PUBLISHED,
-        Capability.CONSTRAINTS_PORTFOLIO_LIST,
-        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
-        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
     }
 )
 
@@ -131,7 +131,7 @@ def test_tools_list_publishes_exactly_the_local_capability_set(
         for capability in HANDLER_CAPABILITIES
         if capability not in _AUTHENTICATED_CLIENT_CAPABILITIES
     ]
-    assert len(listed.tools) == 165
+    assert len(listed.tools) == 168
     assert all(tool.description for tool in listed.tools), "a tool has no description"
 
 
@@ -140,7 +140,7 @@ def test_handler_unwired_capabilities_publish_no_mcp_tools() -> None:
     assert {tool.name for tool in TOOLS} == {
         capability.value for capability in HANDLER_CAPABILITIES
     }
-    assert len(TOOLS) == 168
+    assert len(TOOLS) == 171
     assert not {capability.value for capability in HANDLER_UNWIRED_CAPABILITIES} & {
         tool.name for tool in TOOLS
     }

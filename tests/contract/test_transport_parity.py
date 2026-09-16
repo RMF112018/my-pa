@@ -173,14 +173,12 @@ NORMALIZE_SITES = (cli_module, http_module, mcp_module)
 TRANSPORT_NAMES = frozenset({"http", "mcp", "cli"})
 CORRECTED_VALUE_MARKER = "PRIVATE-CORRECTED-VALUE-MARKER"
 
-FUTURE_CAPABILITIES = frozenset(
-    {
-        Capability.CONSTRAINTS_CREATE_PUBLISHED,
-        Capability.CONSTRAINTS_PORTFOLIO_LIST,
-        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
-        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
-    }
-)
+#: PC-CM-RUN01-WP06 wired `constraints.portfolio_list`,
+#: `constraints.portfolio_search` and `constraints.portfolio_overview`, so what
+#: is left here is the name Run 01 has not reached. It stays a set rather than
+#: becoming a single member, because the next package to wire a name should have
+#: to remove it from a set rather than restructure this declaration.
+FUTURE_CAPABILITIES = frozenset({Capability.CONSTRAINTS_CREATE_PUBLISHED})
 IMPLEMENTED_CAPABILITIES = tuple(capability for capability in Capability if capability in _HANDLERS)
 
 #: Two sets of names used to stand here and neither does now.
@@ -1279,6 +1277,14 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.CONSTRAINTS_HISTORY: {"constraint_id": scene.constraint_id},
         Capability.CONSTRAINTS_OVERVIEW: {"project_id": scene.constraint_project_id},
         Capability.CONSTRAINT_CATEGORIES_LIST: {"project_id": scene.constraint_project_id},
+        # PC-CM-RUN01-WP06's three cross-Project reads. They name no Project at
+        # all -- the portfolio is the set the authenticated Principal owns,
+        # enumerated server-side -- so the list and the overview carry no payload
+        # and the search carries only its term. That is the whole point of these
+        # three rows: there is no identifier here for a caller to vary.
+        Capability.CONSTRAINTS_PORTFOLIO_LIST: {},
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH: {"query": "synthetic"},
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW: {},
         # PC-CM-RUN01-WP05. The status read names the configured Project; the
         # configure names the one Project of the scene that nobody has
         # configured, so it creates version 1 rather than colliding with a
@@ -1993,7 +1999,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 169, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 172, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -2730,7 +2736,7 @@ def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 168
+    assert len(IMPLEMENTED_CAPABILITIES) == 171
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 

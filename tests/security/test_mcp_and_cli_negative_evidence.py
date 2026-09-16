@@ -494,6 +494,12 @@ SCOPED_CAPABILITIES = [
         Capability.CONSTRAINTS_HISTORY,
         Capability.CONSTRAINTS_OVERVIEW,
         Capability.CONSTRAINT_CATEGORIES_LIST,
+        # `PC-CM-RUN01-WP06`'s three cross-Project reads on the same reading,
+        # and more plainly than the six: they name no Project at all, so there
+        # is not even an identifier for a scope to be compared against.
+        Capability.CONSTRAINTS_PORTFOLIO_LIST,
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
         Capability.CONSTRAINT_SYNC_STATE,
         Capability.CONSTRAINT_SYNC_DELTA,
         Capability.CONSTRAINT_SYNC_CONFLICTS,

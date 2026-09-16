@@ -96,6 +96,7 @@ __all__ = [
     "ConstraintPartyRow",
     "ConstraintPortfolioListSpec",
     "ConstraintPortfolioOverview",
+    "ConstraintPortfolioPage",
     "ConstraintQueryError",
     "ConstraintRecentFilter",
     "ConstraintRelationshipRow",
@@ -609,10 +610,18 @@ class ConstraintPortfolioOverview:
     A Project in scope with no Constraints appears with zeroes rather than being
     dropped, so the collection's membership is the Projects that were read and
     never a signal about which of them hold rows.
+
+    `omitted_projects` is how many Projects in scope **could not contribute** —
+    they hold no Constraint settings row, or their stored zone is one `zoneinfo`
+    cannot load, so there is no defensible Overdue boundary to count them
+    against. They are absent from `projects` rather than counted on a
+    substituted calendar, and this figure is what says so. It is a count and
+    never an identity, for the reason `ConstraintPortfolioPage` states.
     """
 
     projects: tuple[ConstraintOverview, ...]
     as_of: datetime
+    omitted_projects: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -626,6 +635,38 @@ class ConstraintListPage:
     entries: tuple[ConstraintListEntry, ...]
     is_truncated: bool
     next_cursor: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ConstraintPortfolioPage:
+    """A portfolio Register page, and how many owned Projects it could not include.
+
+    PC-CM-RUN01-WP06. A portfolio page is a `ConstraintListPage` — the rows,
+    their page bound and their cursor are the Register's own and are not a
+    second projection of it — plus one fact only a cross-Project read can have:
+    some of the Projects in scope **could not contribute**. A Project with no
+    Constraint settings row, and a Project whose stored zone `zoneinfo` cannot
+    load, both have no defensible `project_today`, so they yield no rows rather
+    than rows counted against a substituted calendar, and neither fails the
+    whole portfolio the way an exact-Project read is failed.
+
+    Omitting them silently would make the page a false answer: the caller asked
+    across every Project they own and got fewer. `omitted_projects` is what
+    makes the answer true — *this view is incomplete, by this much*.
+
+    **A count, and never an identity.** No Project identifier, name, code or
+    timezone reaches this type, because a portfolio read's scope is the acting
+    Principal's own Projects and a count over one's own partition tells nobody
+    whether anyone else's Project, Constraint, Category, Task or Capture exists
+    (`docs/specs`, section 14). It is carried separately from
+    `ConstraintListPage` rather than added to it because the exact-Project
+    Register cannot have omissions to report — it fails closed instead — and a
+    field that is always zero on one of two callers is a field a reader has to
+    ask about.
+    """
+
+    page: ConstraintListPage
+    omitted_projects: int
 
 
 @dataclass(frozen=True, slots=True)

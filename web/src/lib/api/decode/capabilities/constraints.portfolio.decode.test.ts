@@ -11,7 +11,9 @@
  * - a portfolio row is decoded by the *same* guard as a Register row, so the two
  *   capabilities cannot drift into two answers about the same records;
  * - the overview carries one entry per Project and no roll-up, so a combined
- *   figure is absent rather than computed from counts that are not summable.
+ *   figure is absent rather than computed from counts that are not summable;
+ * - every portfolio answer states how many owned Projects it could not include,
+ *   as a count and never as an identity.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -45,11 +47,37 @@ function overviewBody(): { projects: Json[]; as_of: string } {
 }
 
 describe("the portfolio page reuses the Register's own guard", () => {
-  it("is the same decoder function for the list, the search and the Register", () => {
-    // Identity rather than equivalence: a third copy could be edited into a
+  it("is the same decoder function for the portfolio list and the portfolio search", () => {
+    // Identity rather than equivalence: a second copy could be edited into a
     // second opinion about the same rows, and this is what forbids one.
-    expect(decodeConstraintsPortfolioList).toBe(decodeConstraintsList);
-    expect(decodeConstraintsPortfolioSearch).toBe(decodeConstraintsList);
+    expect(decodeConstraintsPortfolioSearch).toBe(decodeConstraintsPortfolioList);
+  });
+
+  it("decodes the rows exactly as the exact-Project Register decodes them", () => {
+    // The portfolio decoder is deliberately *not* the Register's own function
+    // any more — a portfolio answer carries `omitted_projects` and an
+    // exact-Project one cannot — so identity is replaced by the property
+    // identity was standing in for: the same bytes yield the same rows. A
+    // portfolio guard that drifted into a second projection fails here.
+    const body = payload("constraints.portfolio_list");
+    const portfolio = decodeConstraintsPortfolioList(body);
+    const register = decodeConstraintsList({ constraints: body.constraints });
+    expect(portfolio.ok).toBe(true);
+    expect(register.ok).toBe(true);
+    if (!portfolio.ok || !register.ok) return;
+    expect(portfolio.value.constraints).toEqual(register.value.constraints);
+  });
+
+  it("carries the omitted-Project count, and nothing that names a Project", () => {
+    const decoded = decodeConstraintsPortfolioList(payload("constraints.portfolio_list"));
+    expect(decoded.ok).toBe(true);
+    if (!decoded.ok) return;
+    expect(decoded.value.omittedProjects).toBe(
+      payload("constraints.portfolio_list").omitted_projects,
+    );
+    expect(decoded.value.omittedProjects).toBeGreaterThan(0);
+    // A count and nothing else: the decoded result has exactly two members.
+    expect(Object.keys(decoded.value).sort()).toEqual(["constraints", "omittedProjects"]);
   });
 
   it("decodes a page whose rows come from more than one Project", () => {
@@ -61,8 +89,9 @@ describe("the portfolio page reuses the Register's own guard", () => {
   });
 
   it("accepts an empty page, which is what a Principal with no rows has", () => {
-    expect(decodeConstraintsPortfolioList({ constraints: [] }).ok).toBe(true);
-    expect(decodeConstraintsPortfolioSearch({ constraints: [] }).ok).toBe(true);
+    const empty = { constraints: [], omitted_projects: 0 };
+    expect(decodeConstraintsPortfolioList(empty).ok).toBe(true);
+    expect(decodeConstraintsPortfolioSearch(empty).ok).toBe(true);
   });
 
   it.each<readonly [string, unknown]>([
@@ -73,6 +102,10 @@ describe("the portfolio page reuses the Register's own guard", () => {
     ["an unknown status", { constraints: [{ ...rows("constraints.portfolio_list")[0], status: "reopen" }] }],
     ["an unknown sync state", { constraints: [{ ...rows("constraints.portfolio_list")[0], sync_state: "partial" }] }],
     ["a dropped project_id", { constraints: [{ ...rows("constraints.portfolio_list")[0], project_id: undefined }] }],
+    ["a page with no omitted-Project count", { constraints: [] }],
+    ["an omitted-Project count sent as a string", { constraints: [], omitted_projects: "1" }],
+    ["a fractional omitted-Project count", { constraints: [], omitted_projects: 1.5 }],
+    ["a negative omitted-Project count", { constraints: [], omitted_projects: -1 }],
   ])("refuses %s", (_name, malformed) => {
     expect(decodeConstraintsPortfolioList(malformed).ok).toBe(false);
     expect(decodeConstraintsPortfolioSearch(malformed).ok).toBe(false);
@@ -103,16 +136,33 @@ describe("the portfolio overview is one entry per Project and nothing more", () 
     );
     expect(decoded.ok).toBe(true);
     if (!decoded.ok) return;
-    expect(Object.keys(decoded.value.overview).sort()).toEqual(["asOf", "projects"]);
+    expect(Object.keys(decoded.value.overview).sort()).toEqual([
+      "asOf",
+      "omittedProjects",
+      "projects",
+    ]);
   });
 
   it("accepts an empty Project collection, which is a Principal with no Projects", () => {
     const decoded = decodeConstraintsPortfolioOverview({
-      overview: { projects: [], as_of: "2026-08-09T12:00:00Z" },
+      overview: { projects: [], as_of: "2026-08-09T12:00:00Z", omitted_projects: 0 },
     });
     expect(decoded.ok).toBe(true);
     if (!decoded.ok) return;
     expect(decoded.value.overview.projects).toEqual([]);
+    expect(decoded.value.overview.omittedProjects).toBe(0);
+  });
+
+  it("states how many owned Projects it could not count, and never which", () => {
+    const decoded = decodeConstraintsPortfolioOverview(
+      payload("constraints.portfolio_overview"),
+    );
+    expect(decoded.ok).toBe(true);
+    if (!decoded.ok) return;
+    expect(decoded.value.overview.omittedProjects).toBeGreaterThan(0);
+    // The omitted Projects are absent from `projects` entirely: the count is
+    // larger than nothing, and no entry stands in for one.
+    expect(decoded.value.overview.projects.length).toBeGreaterThan(0);
   });
 
   it.each<readonly [string, unknown]>([
@@ -121,8 +171,13 @@ describe("the portfolio overview is one entry per Project and nothing more", () 
     ["the overview sent as an array", { overview: [] }],
     ["a missing projects array", { overview: { as_of: "2026-08-09T12:00:00Z" } }],
     ["projects sent as an object", { overview: { projects: {}, as_of: "2026-08-09T12:00:00Z" } }],
-    ["a missing as_of", { overview: { projects: [] } }],
-    ["an as_of sent as a number", { overview: { projects: [], as_of: 1 } }],
+    ["a missing as_of", { overview: { projects: [], omitted_projects: 0 } }],
+    ["an as_of sent as a number", { overview: { projects: [], as_of: 1, omitted_projects: 0 } }],
+    ["a missing omitted-Project count", { overview: { projects: [], as_of: "2026-08-09T12:00:00Z" } }],
+    [
+      "a negative omitted-Project count",
+      { overview: { projects: [], as_of: "2026-08-09T12:00:00Z", omitted_projects: -1 } },
+    ],
     ["an entry that is not an object", { overview: { projects: [1], as_of: "2026-08-09T12:00:00Z" } }],
     [
       "an entry missing a required count",

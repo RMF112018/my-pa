@@ -1713,13 +1713,18 @@ PORTFOLIO_SECOND_PROJECT_ID: Final = "prj_cccccccc33333333"
 
 
 def _constraint_portfolio_overview() -> ConstraintPortfolioOverview:
-    """Two owned Projects on two calendars, and no combined figure.
+    """Two owned Projects on two calendars, one that could not contribute, no roll-up.
 
     The second Project is deliberately the empty one: a Project in scope that
     holds no Constraints appears with zeroes and its own timezone rather than
     being dropped, so the collection's membership never signals which owned
     Projects hold rows. `average_open_age_business_days` is `None` there rather
     than `0.0`, because an average of nothing is not zero.
+
+    `omitted_projects` is non-zero for the reason
+    `PORTFOLIO_OMITTED_PROJECTS` states, and it names nothing: a third owned
+    Project had no usable Constraint calendar, so the overview says how many it
+    left out and never which.
     """
     return ConstraintPortfolioOverview(
         projects=(
@@ -1748,6 +1753,7 @@ def _constraint_portfolio_overview() -> ConstraintPortfolioOverview:
             ),
         ),
         as_of=AT,
+        omitted_projects=1,
     )
 
 
@@ -1770,12 +1776,26 @@ def _constraint_portfolio_entries() -> tuple[ConstraintListEntry, ...]:
     )
 
 
+#: How many owned Projects the fixture's portfolio could not include. Non-zero
+#: on purpose: a fixture that always said zero would decode identically whether
+#: the field was read or ignored, and would prove nothing about either side
+#: carrying it. The two Projects that *did* contribute are named in the rows; the
+#: omitted one is a count and nothing else, which is the whole property.
+PORTFOLIO_OMITTED_PROJECTS: Final = 1
+
+
 def _constraints_portfolio_list() -> dict[str, Any]:
-    return {"constraints": _constraint_dump(_constraint_portfolio_entries())}
+    return {
+        "constraints": _constraint_dump(_constraint_portfolio_entries()),
+        "omitted_projects": PORTFOLIO_OMITTED_PROJECTS,
+    }
 
 
 def _constraints_portfolio_search() -> dict[str, Any]:
-    return {"constraints": _constraint_dump(_constraint_portfolio_entries())}
+    return {
+        "constraints": _constraint_dump(_constraint_portfolio_entries()),
+        "omitted_projects": PORTFOLIO_OMITTED_PROJECTS,
+    }
 
 
 def _constraints_portfolio_overview() -> dict[str, Any]:

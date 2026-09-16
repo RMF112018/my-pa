@@ -26,11 +26,24 @@ Those are the *read service's* figures, and they are not what a caller pays.
 `ApplicationService._portfolio_projects` issues one statement more —
 `work.projects.list_projects`, the canonical Project enumeration that decides
 which Projects a portfolio spans — so the **composed** cost of one invocation is
-seven statements and five rather than six and four. Pinning only the layer below would let a
-regression that added a per-Project read *at handler level* pass every test in
-this package, so the composed figures are pinned here too, as exact equalities
-across the same Projects-by-rows arrangements: an eighth statement is a failure
-whether it was written above the read service or inside it.
+seven statements and five rather than six and four. Pinning only the layer below
+would let a regression that added a per-Project read *at handler level* pass
+every test in this package, so the composed figures are pinned here too, as
+exact equalities across the same Projects-by-rows arrangements: an eighth
+statement is a failure whether it was written above the read service or inside
+it.
+
+**What seven and five do and do not count.** They are the statements the
+*Constraint plane's own transaction* issues on the counted engine: the portfolio
+read service's work plus the one Project enumeration. They are **not** the total
+a database serves for one invocation. `_composed` deliberately gives the gateway
+unit of work and the audit sink a **second** engine over the same catalog, so
+their statements — the envelope's own transaction, the audit insert — are
+outside every figure here by construction. That separation is the claim: the
+bound this package exists to hold is a property of the portfolio read path and
+must not move when an unrelated envelope or audit change does. Read seven and
+five as "what the portfolio read costs", never as "what one invocation costs the
+database".
 
 Beyond cost, this module proves against real SQL the three things the fakes
 cannot: that each Project's own IANA calendar is applied to that Project's own
@@ -58,7 +71,8 @@ from my_pa.application.commands import (
     ReadPortfolioConstraintOverview,
 )
 from my_pa.application.constraints import ConstraintReadService
-from my_pa.application.service import ApplicationService
+from my_pa.application.disclosure import Limitation
+from my_pa.application.service import MAX_PORTFOLIO_PROJECTS, ApplicationService
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.principal import Principal, PrincipalKind
@@ -76,6 +90,7 @@ from my_pa.domain.project_controls.read_models import (
     ConstraintListQuery,
     ConstraintListScope,
     ConstraintPortfolioOverview,
+    ConstraintPortfolioPage,
     ConstraintSort,
     SortDirection,
 )
@@ -118,12 +133,17 @@ PORTFOLIO_LIST_STATEMENTS: Final = 6
 PORTFOLIO_LIST_STATEMENTS_WITH_ENTITY_LABELS: Final = 7
 PORTFOLIO_OVERVIEW_STATEMENTS: Final = 4
 
-#: What a caller actually pays: the figures above plus the one canonical
-#: `projects.list_projects` statement `ApplicationService._portfolio_projects`
-#: issues to decide which Projects the portfolio spans. Stated as separate
-#: constants rather than as `PORTFOLIO_LIST_STATEMENTS + 1` on purpose — an
-#: arithmetic definition would move silently with the figure it is derived from,
-#: and the claim here is that *both* numbers are what was measured.
+#: What a caller pays *on the Constraint plane's own transaction*: the figures
+#: above plus the one canonical `projects.list_projects` statement
+#: `ApplicationService._portfolio_projects` issues to decide which Projects the
+#: portfolio spans. Stated as separate constants rather than as
+#: `PORTFOLIO_LIST_STATEMENTS + 1` on purpose — an arithmetic definition would
+#: move silently with the figure it is derived from, and the claim here is that
+#: *both* numbers are what was measured.
+#:
+#: They exclude the gateway unit-of-work and audit-sink statements, which
+#: `_composed` routes to a second engine on purpose. Neither figure is the total
+#: number of statements one invocation sends to a database.
 COMPOSED_PORTFOLIO_LIST_STATEMENTS: Final = 7
 COMPOSED_PORTFOLIO_OVERVIEW_STATEMENTS: Final = 5
 
@@ -287,13 +307,14 @@ def _counted(engine: Engine) -> Iterator[list[str]]:
         event.remove(engine, "before_cursor_execute", _record)
 
 
-def _page(
+def _portfolio_page(
     repository: SqlConstraintManagementRepository,
     portfolio: _Portfolio,
     *,
     query: ConstraintListQuery | None = None,
     principal: str = PRINCIPAL_A,
-) -> ConstraintListPage:
+) -> ConstraintPortfolioPage:
+    """The whole portfolio answer: the page, and how many Projects were left out."""
     return SERVICE.list_portfolio_constraints(
         repository,  # type: ignore[arg-type]
         principal_id=principal,
@@ -301,6 +322,17 @@ def _page(
         query=query or ConstraintListQuery(scope=ConstraintListScope.ALL, limit=50),
         now=NOW,
     )
+
+
+def _page(
+    repository: SqlConstraintManagementRepository,
+    portfolio: _Portfolio,
+    *,
+    query: ConstraintListQuery | None = None,
+    principal: str = PRINCIPAL_A,
+) -> ConstraintListPage:
+    """Just the Register page, for the assertions that are about rows."""
+    return _portfolio_page(repository, portfolio, query=query, principal=principal).page
 
 
 def _overview(
@@ -564,6 +596,11 @@ def test_a_composed_portfolio_page_costs_exactly_seven_statements(
     re-check, a per-Project settings probe — would measure
     ``7 + projects_wanted`` and fail here at every arrangement, including the
     one-Project one.
+
+    Seven counts the Constraint plane's own transaction only. The gateway unit
+    of work and the audit sink run on `_composed`'s second engine and are not in
+    this figure — it is what the portfolio read costs, not what the invocation
+    costs the database.
     """
     _seed_committed(
         migrated_engine,
@@ -614,7 +651,11 @@ def test_the_composed_portfolio_page_cost_is_identical_across_every_project_coun
 def test_a_composed_portfolio_overview_costs_exactly_five_statements(
     migrated_engine: Engine, cloned_database_url: str, projects_wanted: int, rows_per_project: int
 ) -> None:
-    """The overview's four plus the same one Project enumeration."""
+    """The overview's four plus the same one Project enumeration.
+
+    Five on the Constraint plane's own transaction, excluding the gateway unit
+    of work and the audit sink exactly as the page's seven does.
+    """
     _seed_committed(
         migrated_engine,
         tag="cc",
@@ -655,6 +696,10 @@ def test_the_composed_cost_is_the_read_services_cost_plus_the_project_enumeratio
     migrated_engine: Engine, cloned_database_url: str
 ) -> None:
     """The two layers measured side by side, so the gap is stated rather than assumed.
+
+    Both sides are the Constraint plane's own transaction; neither includes the
+    gateway unit of work or the audit sink, so the difference is the Project
+    enumeration and nothing else.
 
     This is what makes the composed figures more than a second copy of the read
     service's: the difference between them is required to be exactly one
@@ -796,7 +841,11 @@ def test_the_overdue_quick_filter_is_applied_on_each_rows_own_project_calendar(
 def test_a_project_with_no_constraint_calendar_contributes_nothing_to_either_read(
     migrated_engine: Engine,
 ) -> None:
-    """An owned but unenrolled Project is silently absent (PC-CM-RUN01-WP06)."""
+    """An owned but unenrolled Project is omitted, and both reads say how many.
+
+    PC-CM-RUN01-WP06, as the operator's ruling settled it: omitted, not fatal,
+    and disclosed by a count.
+    """
     with migrated_engine.begin() as connection:
         repository = SqlConstraintManagementRepository(connection)
         portfolio = _seed_portfolio(
@@ -810,11 +859,77 @@ def test_a_project_with_no_constraint_calendar_contributes_nothing_to_either_rea
         unconfigured = _project_id("u", 99)
         _seed_project(connection, PRINCIPAL_A, unconfigured)
         widened = _Portfolio((*portfolio.project_ids, unconfigured))
-        page = _page(repository, widened)
+        answer = _portfolio_page(repository, widened)
         overview = _overview(repository, widened)
-        assert unconfigured not in {entry.project_id for entry in page.entries}
+        assert unconfigured not in {entry.project_id for entry in answer.page.entries}
         assert [entry.project_id for entry in overview.projects] == list(portfolio.project_ids)
-        assert len(page.entries) == 4
+        assert len(answer.page.entries) == 4
+        assert answer.omitted_projects == 1
+        assert overview.omitted_projects == 1
+
+
+def test_a_stored_zone_that_will_not_load_is_omitted_and_counted_not_fatal(
+    migrated_engine: Engine,
+) -> None:
+    """The ruling's second member, proved against a row PostgreSQL actually holds.
+
+    `Mars/Olympus_Mons` satisfies every stored CHECK on `timezone_name` — it is
+    non-blank, inside the length bound and carries no whitespace — and
+    `zoneinfo` still cannot load it. That is the reachable shape of a broken
+    calendar, and an earlier build failed the entire portfolio on it: an
+    anonymous refusal that took the healthy Projects down with it and named no
+    Project to fix. Both healthy Projects answer, and the count says one was
+    left out.
+    """
+    with migrated_engine.begin() as connection:
+        repository = SqlConstraintManagementRepository(connection)
+        portfolio = _seed_portfolio(
+            connection,
+            repository,
+            principal=PRINCIPAL_A,
+            tag="z",
+            projects_wanted=2,
+            rows_per_project=2,
+        )
+        broken = _project_id("z", 98)
+        _seed_project(connection, PRINCIPAL_A, broken)
+        repository.insert_project_settings(
+            PRINCIPAL_A, _settings(PRINCIPAL_A, broken, "Mars/Olympus_Mons")
+        )
+        widened = _Portfolio((*portfolio.project_ids, broken))
+        answer = _portfolio_page(repository, widened)
+        overview = _overview(repository, widened)
+        assert broken not in {entry.project_id for entry in answer.page.entries}
+        assert len(answer.page.entries) == 4
+        assert answer.omitted_projects == 1
+        assert [entry.project_id for entry in overview.projects] == list(portfolio.project_ids)
+        assert overview.omitted_projects == 1
+
+
+def test_both_members_of_cannot_contribute_are_counted_in_one_figure(
+    migrated_engine: Engine,
+) -> None:
+    """One class, one count. A build that counted only one member understates it."""
+    with migrated_engine.begin() as connection:
+        repository = SqlConstraintManagementRepository(connection)
+        portfolio = _seed_portfolio(
+            connection,
+            repository,
+            principal=PRINCIPAL_A,
+            tag="b",
+            projects_wanted=1,
+            rows_per_project=1,
+        )
+        unconfigured = _project_id("b", 97)
+        broken = _project_id("b", 98)
+        for project in (unconfigured, broken):
+            _seed_project(connection, PRINCIPAL_A, project)
+        repository.insert_project_settings(
+            PRINCIPAL_A, _settings(PRINCIPAL_A, broken, "Mars/Olympus_Mons")
+        )
+        widened = _Portfolio((*portfolio.project_ids, unconfigured, broken))
+        assert _portfolio_page(repository, widened).omitted_projects == 2
+        assert _overview(repository, widened).omitted_projects == 2
 
 
 def test_a_project_in_scope_with_no_constraints_is_counted_as_zero_not_dropped(
@@ -923,6 +1038,322 @@ def test_each_principal_sees_only_their_own_portfolio_counts(
         assert {entry.project_id for entry in ours.projects}.isdisjoint(
             {entry.project_id for entry in yours.projects}
         )
+
+
+# --- The omitted-Project count is a pure function of the caller's own set -----
+#
+# The count is itself a section-14 surface: a figure that moved with another
+# Principal's data would rebuild the existence oracle by a different route. What
+# the tests below prove against real SQL is that it does not, and that it *does*
+# move when the caller's own Projects change in exactly the same way — a control
+# without which "unchanged" would be consistent with the count being frozen.
+
+
+def _unreachable_projects(
+    connection: Connection,
+    repository: SqlConstraintManagementRepository,
+    *,
+    principal: str,
+    tag: str,
+    unconfigured: int,
+    broken: int,
+) -> tuple[str, ...]:
+    """Projects that cannot contribute.
+
+    `unconfigured` of them have no settings row; `broken` of them have one whose
+    stored zone `zoneinfo` cannot load.
+    """
+    created: list[str] = []
+    for index in range(unconfigured):
+        project = _project_id(tag, 900 + index)
+        _seed_project(connection, principal, project)
+        created.append(project)
+    for index in range(broken):
+        project = _project_id(tag, 950 + index)
+        _seed_project(connection, principal, project)
+        repository.insert_project_settings(
+            principal, _settings(principal, project, "Mars/Olympus_Mons")
+        )
+        created.append(project)
+    return tuple(created)
+
+
+def test_another_principals_unusable_projects_do_not_move_the_callers_count(
+    migrated_engine: Engine,
+) -> None:
+    """The oracle proof. Seeded, not argued.
+
+    Principal B is given six Projects that cannot contribute — three never
+    enrolled, three enrolled against a zone that will not load — which is the
+    exact shape that produces a count for their owner. Principal A's count is
+    measured before and after those rows exist and is required to be identical.
+
+    The settings statement is Principal-scoped in the adapter and the count is
+    accumulated from the owned set the read was handed, never by subtracting one
+    result from another, so there is no path for B's rows to reach it. This test
+    is what makes that a measured fact rather than a reading of the code.
+    """
+    with migrated_engine.begin() as connection:
+        repository = SqlConstraintManagementRepository(connection)
+        mine = _seed_portfolio(
+            connection,
+            repository,
+            principal=PRINCIPAL_A,
+            tag="o",
+            projects_wanted=2,
+            rows_per_project=2,
+        )
+        my_unusable = _unreachable_projects(
+            connection,
+            repository,
+            principal=PRINCIPAL_A,
+            tag="o",
+            unconfigured=1,
+            broken=1,
+        )
+        scope = _Portfolio((*mine.project_ids, *my_unusable))
+        before = _portfolio_page(repository, scope).omitted_projects
+        before_overview = _overview(repository, scope).omitted_projects
+        assert before == 2
+
+        _unreachable_projects(
+            connection,
+            repository,
+            principal=PRINCIPAL_B,
+            tag="q",
+            unconfigured=3,
+            broken=3,
+        )
+        assert _portfolio_page(repository, scope).omitted_projects == before
+        assert _overview(repository, scope).omitted_projects == before_overview
+
+        # The control: the caller's *own* set moving the same way does move it.
+        more_of_mine = _unreachable_projects(
+            connection,
+            repository,
+            principal=PRINCIPAL_A,
+            tag="r",
+            unconfigured=1,
+            broken=1,
+        )
+        widened = _Portfolio((*scope.project_ids, *more_of_mine))
+        assert _portfolio_page(repository, widened).omitted_projects == before + 2
+        assert _overview(repository, widened).omitted_projects == before_overview + 2
+
+
+def test_a_portfolio_command_admits_no_project_so_the_count_cannot_be_probed(
+    migrated_engine: Engine, cloned_database_url: str
+) -> None:
+    """The structural half: nothing a caller sends can reach the Project set.
+
+    A count a caller could move by *naming* something outside their partition
+    would be an oracle whatever the figure is called. The three portfolio
+    commands carry no Project field at all — they are frozen dataclasses and an
+    unknown keyword is a refusal — so the set is always whatever
+    `ApplicationService._portfolio_projects` read from the canonical
+    Principal-scoped repository, and a caller has no input to the count beyond
+    owning Projects. Asserted here rather than at the read service, because the
+    read service takes a Project set as an argument and only the composed path
+    decides where that argument comes from.
+    """
+    with migrated_engine.begin() as connection:
+        repository = SqlConstraintManagementRepository(connection)
+        _seed_portfolio(
+            connection,
+            repository,
+            principal=PRINCIPAL_A,
+            tag="pa",
+            projects_wanted=1,
+            rows_per_project=1,
+        )
+        _unreachable_projects(
+            connection, repository, principal=PRINCIPAL_A, tag="pa", unconfigured=2, broken=0
+        )
+        theirs = _unreachable_projects(
+            connection, repository, principal=PRINCIPAL_B, tag="pb", unconfigured=4, broken=2
+        )
+    for command_type in (
+        ListPortfolioConstraints,
+        ReadPortfolioConstraintOverview,
+    ):
+        with pytest.raises(TypeError):
+            command_type(project_id=theirs[0])  # type: ignore[call-arg]
+    with _composed(migrated_engine, cloned_database_url) as service:
+        envelope = _invoke(service, ListPortfolioConstraints())
+    assert _result(envelope)["omitted_projects"] == 2
+    rendered = envelope.model_dump_json()
+    for project in theirs:
+        assert project not in rendered
+
+
+# --- Walking a partial portfolio to exhaustion --------------------------------
+#
+# Nothing used to pin the end-to-end multi-page walk: "the disclosure stays
+# correct on every page" held by construction only. The ruling makes it
+# load-bearing, because a partiality that no cursor can repair must survive to
+# the terminal page or a caller who pages to the end is told they have seen the
+# whole portfolio.
+#
+# These run against **real SQL through the composed `ApplicationService`**, and
+# that is the tier rather than a preference. The unit fake models no keyset
+# cursor at all — it filters by the spec's Project set and slices at
+# `fetch_limit` — so a "walk" driven through it would return page one forever
+# and every assertion about page two would be vacuous. Here the cursor is one
+# the read service issued over stored rows and the next statement genuinely
+# continues from it.
+
+
+def _walk(service: ApplicationService, *, limit: int, pages: int = 50) -> list[ResponseEnvelope]:
+    """Every page of a portfolio listing, in order, to the terminal one."""
+    walked: list[ResponseEnvelope] = []
+    cursor: str | None = None
+    for _ in range(pages):
+        envelope = _invoke(service, ListPortfolioConstraints(limit=limit, cursor=cursor))
+        assert envelope.error is None, envelope.error
+        walked.append(envelope)
+        assert envelope.disclosure is not None
+        truncation = envelope.disclosure.truncation
+        cursor = None if truncation is None else truncation.next_cursor
+        if cursor is None:
+            return walked
+    raise AssertionError("the portfolio walk did not terminate")
+
+
+def _result(envelope: ResponseEnvelope) -> dict[str, Any]:
+    """The success payload as the wire carries it."""
+    assert envelope.error is None, envelope.error
+    assert envelope.result is not None
+    rendered = envelope.model_dump(mode="json")["result"]
+    assert isinstance(rendered, dict)
+    return rendered
+
+
+def _rows_of(envelope: ResponseEnvelope) -> list[str]:
+    rows = _result(envelope)["constraints"]
+    assert isinstance(rows, list)
+    return [str(row["constraint_id"]) for row in rows]
+
+
+def test_a_capped_portfolio_stays_disclosed_on_every_page_including_the_last(
+    migrated_engine: Engine, cloned_database_url: str
+) -> None:
+    """The exhaustion walk. Three pages, and the cap is still stated on the third.
+
+    `MAX_PORTFOLIO_PROJECTS + 1` owned Projects, so the cap is reached and rows
+    beyond it are unreachable from any page. The walk is non-vacuous: each page
+    holds different rows, the union has no gap and no repeat, and the last page
+    is the one where the rows run out rather than where a loop bound did.
+
+    On every page the truncation is stated and names the Project cap. On the
+    pages that fill, a usable cursor is issued and
+    `LISTING_HAS_NO_CONTINUATION` is absent, because it would be false. On the
+    terminal page there is no cursor, the truncation *remains*, and the
+    limitation is emitted — which is the invariant the previous cycle
+    established: it holds exactly when the emitted truncation carries no
+    continuation.
+    """
+    _seed_committed(
+        migrated_engine,
+        tag="wa",
+        projects_wanted=MAX_PORTFOLIO_PROJECTS + 1,
+        rows_per_project=1,
+    )
+    with _composed(migrated_engine, cloned_database_url) as service:
+        walked = _walk(service, limit=40)
+    assert len(walked) == 3
+    seen: list[str] = []
+    for index, envelope in enumerate(walked):
+        assert envelope.disclosure is not None
+        truncation = envelope.disclosure.truncation
+        assert truncation is not None and truncation.is_truncated is True
+        assert truncation.reason == "portfolio_project_limit_reached"
+        assert _result(envelope)["omitted_projects"] == 0
+        limitations = envelope.disclosure.limitations
+        terminal = index == len(walked) - 1
+        assert (truncation.next_cursor is None) is terminal
+        assert (Limitation.LISTING_HAS_NO_CONTINUATION.value in limitations) is terminal
+        seen.extend(_rows_of(envelope))
+    # Exactly the rows inside the cap, once each. The Project past the cap
+    # contributed none, which is what the standing truncation is about.
+    assert len(seen) == MAX_PORTFOLIO_PROJECTS
+    assert len(set(seen)) == MAX_PORTFOLIO_PROJECTS
+
+
+def test_an_omitting_portfolio_reports_the_same_count_on_every_page_of_the_walk(
+    migrated_engine: Engine, cloned_database_url: str
+) -> None:
+    """The omission does not depend on the page, so it does not fade across a walk.
+
+    Seven Projects that contribute and three that cannot — one never enrolled,
+    two enrolled against a zone that will not load. The count is three on the
+    first page, on the middle page and on the terminal page, and the reason
+    names the omission throughout because the cap is not reached here.
+
+    The middle page is what makes this more than a restatement of the
+    single-page test: a build that derived the count from the rows in hand, or
+    reset it once a cursor was taken, passes page one and fails here.
+    """
+    with migrated_engine.begin() as connection:
+        repository = SqlConstraintManagementRepository(connection)
+        _seed_portfolio(
+            connection,
+            repository,
+            principal=PRINCIPAL_A,
+            tag="wb",
+            projects_wanted=7,
+            rows_per_project=6,
+            zones=(ZONE_EAST, ZONE_TOKYO),
+        )
+        _unreachable_projects(
+            connection, repository, principal=PRINCIPAL_A, tag="wb", unconfigured=1, broken=2
+        )
+    with _composed(migrated_engine, cloned_database_url) as service:
+        walked = _walk(service, limit=20)
+    assert len(walked) == 3
+    seen: list[str] = []
+    for index, envelope in enumerate(walked):
+        assert envelope.disclosure is not None
+        truncation = envelope.disclosure.truncation
+        assert truncation is not None and truncation.is_truncated is True
+        assert truncation.reason == "portfolio_projects_omitted"
+        assert _result(envelope)["omitted_projects"] == 3
+        terminal = index == len(walked) - 1
+        assert (truncation.next_cursor is None) is terminal
+        assert (
+            Limitation.LISTING_HAS_NO_CONTINUATION.value in envelope.disclosure.limitations
+        ) is terminal
+        seen.extend(_rows_of(envelope))
+    assert len(seen) == 42
+    assert len(set(seen)) == 42
+
+
+def test_an_unpartial_portfolio_walk_ends_untruncated_rather_than_standing_open(
+    migrated_engine: Engine, cloned_database_url: str
+) -> None:
+    """The control the two walks above need.
+
+    Without it, "truncated on the last page" would be consistent with this
+    surface never reporting a complete answer at all. Nothing is capped and
+    nothing is omitted here, so the terminal page is plainly untruncated, issues
+    no cursor, emits no limitation, and still publishes the count as zero.
+    """
+    _seed_committed(migrated_engine, tag="wc", projects_wanted=4, rows_per_project=5)
+    with _composed(migrated_engine, cloned_database_url) as service:
+        walked = _walk(service, limit=8)
+    assert len(walked) == 3
+    for index, envelope in enumerate(walked):
+        assert envelope.disclosure is not None
+        truncation = envelope.disclosure.truncation
+        assert _result(envelope)["omitted_projects"] == 0
+        if index < len(walked) - 1:
+            assert truncation is not None and truncation.is_truncated is True
+            assert truncation.reason == "page_size_reached"
+            assert truncation.next_cursor is not None
+        else:
+            assert truncation is None or truncation.is_truncated is False
+            assert (
+                Limitation.LISTING_HAS_NO_CONTINUATION.value not in envelope.disclosure.limitations
+            )
 
 
 # --- Paging, sorting and searching across Projects ---------------------------

@@ -32,6 +32,7 @@ import ast
 import inspect
 import json
 import re
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from typing import Any, Final, get_args
@@ -488,8 +489,29 @@ def test_no_handler_imports_a_date_or_a_calendar() -> None:
 # below stand in for.
 
 
-_ANSWERS["list_portfolio_constraints"] = _Page()
-_ANSWERS["read_portfolio_overview"] = ()
+@dataclass(frozen=True)
+class _PortfolioPage:
+    """What the two paging portfolio handlers read off the read service's answer.
+
+    The Register page, plus the count of owned Projects that could not
+    contribute — the shape `ConstraintPortfolioPage` publishes. A handler that
+    stopped reading the count would still pass every delegation assertion, so
+    the disclosure tests below read it off the envelope rather than off this.
+    """
+
+    page: _Page = field(default_factory=_Page)
+    omitted_projects: int = 0
+
+
+@dataclass(frozen=True)
+class _PortfolioOverview:
+    """The overview's answer, reduced to the one field the handler reads."""
+
+    omitted_projects: int = 0
+
+
+_ANSWERS["list_portfolio_constraints"] = _PortfolioPage()
+_ANSWERS["read_portfolio_overview"] = _PortfolioOverview()
 
 
 def _portfolio_command(capability: Capability) -> object:
@@ -910,6 +932,279 @@ def test_a_page_that_fills_inside_the_cap_is_an_ordinary_page_size_truncation(
     assert truncation.reason == "page_size_reached"
     assert truncation.next_cursor is not None
     assert Limitation.LISTING_HAS_NO_CONTINUATION.value not in envelope.disclosure.limitations
+
+
+# ---- the Project that cannot contribute, and the precedence of three bounds --
+#
+# The operator's ruling (PC-CM-RUN01-WP06, third corrective cycle): an owned
+# Project that cannot contribute — no settings row, or a stored zone that will
+# not load — is omitted, not fatal, and **disclosed**, by a count and never by
+# an identity. Three partialities can now hold at once, so what is pinned below
+# is the precedence over the single `reason` slot *and* the fact that filling
+# that slot masks nothing: each partiality has its own channel.
+
+
+def _omitting_world(
+    scene: Scene,
+    *,
+    owned: int,
+    configured: int,
+    broken: int = 0,
+    rows: int = 0,
+) -> tuple[str, ...]:
+    """`owned` Projects, of which `configured` have a calendar and `broken` a bad one.
+
+    The remainder have no settings row at all. Both of those are the "cannot
+    contribute" class; the rows all sit in the first configured Project.
+    """
+
+    def _settings(project_id: str, zone: str) -> ConstraintProjectSettings:
+        return ConstraintProjectSettings(
+            principal_id=scene.principal.principal_id,
+            project_id=project_id,
+            timezone_name=zone,
+            version=1,
+            created_at=WHEN,
+            updated_at=WHEN,
+        )
+
+    project_ids = _synthetic_projects(owned)
+    for project_id in project_ids[:configured]:
+        scene.world.constraint_settings[(scene.principal.principal_id, project_id)] = _settings(
+            project_id, "UTC"
+        )
+    for project_id in project_ids[configured : configured + broken]:
+        scene.world.constraint_settings[(scene.principal.principal_id, project_id)] = _settings(
+            project_id, "Mars/Olympus_Mons"
+        )
+    for ordinal in range(rows):
+        constraint_id = issue_identifier(IdKind.PROJECT_CONSTRAINT)
+        scene.world.project_constraints[(scene.principal.principal_id, constraint_id)] = (
+            PersistedConstraintRecord(
+                constraint_id=constraint_id,
+                principal_id=scene.principal.principal_id,
+                lifecycle_state=ConstraintLifecycleState.IDENTIFIED,
+                record_quality=ConstraintRecordQuality.NORMAL,
+                origin=ConstraintOrigin.PRODUCT,
+                version=1,
+                created_at=WHEN,
+                updated_at=WHEN,
+                project_id=project_ids[0],
+                constraint_code=f"OMT-{ordinal:03d}",
+                description="A synthetic Project control.",
+                date_identified=WHEN.date(),
+                due_date=WHEN.date(),
+                published_at=WHEN,
+            )
+        )
+    return project_ids
+
+
+def _result(envelope: ResponseEnvelope) -> dict[str, Any]:
+    assert envelope.error is None, envelope.error
+    assert envelope.result is not None
+    return json.loads(json.dumps(envelope.model_dump(mode="json")))["result"]
+
+
+@pytest.mark.parametrize(
+    "capability",
+    [Capability.CONSTRAINTS_PORTFOLIO_LIST, Capability.CONSTRAINTS_PORTFOLIO_SEARCH],
+)
+def test_an_owned_project_that_cannot_contribute_is_omitted_and_disclosed(
+    capability: Capability, scene: Scene
+) -> None:
+    """Omitted rather than fatal, and stated rather than silent.
+
+    Three owned Projects: one with a calendar, one never enrolled, one enrolled
+    against a zone that will not load. The old build answered this three
+    different ways — the unconfigured one vanished undisclosed, the broken one
+    failed the entire read with an anonymous refusal that took the healthy
+    Project down with it. Now both are the same class, both are omitted, and the
+    answer says how many.
+    """
+    project_ids = _omitting_world(scene, owned=3, configured=1, broken=1, rows=1)
+    command = (
+        ListPortfolioConstraints()
+        if capability is Capability.CONSTRAINTS_PORTFOLIO_LIST
+        else SearchPortfolioConstraints(query="synthetic")
+    )
+    envelope = _run(_backed_portfolio_service(scene, project_ids), scene, command)
+    assert envelope.error is None, envelope.error
+    assert envelope.disclosure is not None
+    truncation = envelope.disclosure.truncation
+    assert truncation is not None and truncation.is_truncated is True
+    assert truncation.reason == "portfolio_projects_omitted"
+    assert truncation.next_cursor is None
+    assert Limitation.LISTING_HAS_NO_CONTINUATION.value in envelope.disclosure.limitations
+    assert _result(envelope)["omitted_projects"] == 2
+
+
+def test_an_overview_omitting_a_project_discloses_it_the_same_way(scene: Scene) -> None:
+    """The overview has no paging, but it has the same two omission members."""
+    project_ids = _omitting_world(scene, owned=3, configured=1, broken=1)
+    envelope = _run(
+        _backed_portfolio_service(scene, project_ids), scene, ReadPortfolioConstraintOverview()
+    )
+    assert envelope.error is None, envelope.error
+    assert envelope.disclosure is not None
+    truncation = envelope.disclosure.truncation
+    assert truncation is not None and truncation.is_truncated is True
+    assert truncation.reason == "portfolio_projects_omitted"
+    assert truncation.next_cursor is None
+    assert Limitation.LISTING_HAS_NO_CONTINUATION.value in envelope.disclosure.limitations
+    assert _result(envelope)["overview"]["omitted_projects"] == 2
+
+
+@pytest.mark.parametrize(
+    "capability",
+    [Capability.CONSTRAINTS_PORTFOLIO_LIST, Capability.CONSTRAINTS_PORTFOLIO_SEARCH],
+)
+def test_a_portfolio_that_omits_nothing_says_zero_rather_than_saying_nothing(
+    capability: Capability, scene: Scene
+) -> None:
+    """The control, and the reason the count is not optional.
+
+    A field present only when it is non-zero would make "complete" and "this
+    build does not publish the field" the same document. It is always published,
+    and an untruncated answer publishes it as zero.
+    """
+    project_ids = _omitting_world(scene, owned=2, configured=2, rows=1)
+    command = (
+        ListPortfolioConstraints()
+        if capability is Capability.CONSTRAINTS_PORTFOLIO_LIST
+        else SearchPortfolioConstraints(query="synthetic")
+    )
+    envelope = _run(_backed_portfolio_service(scene, project_ids), scene, command)
+    assert envelope.error is None, envelope.error
+    assert envelope.disclosure is not None
+    truncation = envelope.disclosure.truncation
+    assert truncation is None or truncation.is_truncated is False
+    assert _result(envelope)["omitted_projects"] == 0
+
+
+def test_an_omission_and_a_filled_page_are_both_reachable_from_one_answer(
+    scene: Scene,
+) -> None:
+    """Two partialities, one `reason` slot, and nothing masked.
+
+    The omission takes the slot, because a filled page has its own channel: the
+    cursor. A caller reads "some of your Projects could not be included" off
+    `reason` and the count, and "there are more rows" off `next_cursor`, from the
+    same answer. `LISTING_HAS_NO_CONTINUATION` is absent because a continuation
+    was genuinely issued — the invariant the previous cycle established, which a
+    new `reason` must not disturb.
+    """
+    project_ids = _omitting_world(scene, owned=3, configured=1, broken=1, rows=4)
+    envelope = _run(
+        _backed_portfolio_service(scene, project_ids), scene, ListPortfolioConstraints(limit=2)
+    )
+    assert envelope.error is None, envelope.error
+    assert envelope.disclosure is not None
+    truncation = envelope.disclosure.truncation
+    assert truncation is not None and truncation.is_truncated is True
+    assert truncation.reason == "portfolio_projects_omitted"
+    assert truncation.next_cursor is not None
+    assert Limitation.LISTING_HAS_NO_CONTINUATION.value not in envelope.disclosure.limitations
+    assert _result(envelope)["omitted_projects"] == 2
+
+
+def test_the_project_cap_outranks_an_omission_and_the_omission_is_still_readable(
+    scene: Scene,
+) -> None:
+    """The precedence, at the one arrangement where it decides something.
+
+    Cap and omission both hold. The cap takes `reason`, because `reason` is the
+    *only* channel the cap has — so `portfolio_project_limit_reached` means the
+    cap was reached, always. The omission loses the slot and loses nothing: its
+    count is published either way. A build that ordered these the other way
+    would make "the cap was reached" unsayable whenever anything was omitted.
+    """
+    project_ids = _omitting_world(
+        scene,
+        owned=MAX_PORTFOLIO_PROJECTS + 1,
+        configured=MAX_PORTFOLIO_PROJECTS - 2,
+        broken=1,
+        rows=1,
+    )
+    envelope = _run(
+        _backed_portfolio_service(scene, project_ids), scene, ListPortfolioConstraints()
+    )
+    assert envelope.error is None, envelope.error
+    assert envelope.disclosure is not None
+    truncation = envelope.disclosure.truncation
+    assert truncation is not None and truncation.is_truncated is True
+    assert truncation.reason == "portfolio_project_limit_reached"
+    # The omission is not masked: it has its own channel and still says two —
+    # the unenrolled Project inside the cap and the one with the broken zone.
+    # The Project beyond the cap is the cap's business and is not counted here.
+    assert _result(envelope)["omitted_projects"] == 2
+
+
+def test_all_three_partialities_at_once_are_each_reachable(scene: Scene) -> None:
+    """Cap, omission and a filled page together. Each has a channel; none is lost."""
+    project_ids = _omitting_world(
+        scene,
+        owned=MAX_PORTFOLIO_PROJECTS + 1,
+        configured=MAX_PORTFOLIO_PROJECTS - 2,
+        broken=1,
+        rows=4,
+    )
+    envelope = _run(
+        _backed_portfolio_service(scene, project_ids), scene, ListPortfolioConstraints(limit=2)
+    )
+    assert envelope.error is None, envelope.error
+    assert envelope.disclosure is not None
+    truncation = envelope.disclosure.truncation
+    assert truncation is not None and truncation.is_truncated is True
+    assert truncation.reason == "portfolio_project_limit_reached"  # the cap
+    assert truncation.next_cursor is not None  # the filled page
+    assert _result(envelope)["omitted_projects"] == 2  # the omission
+    assert Limitation.LISTING_HAS_NO_CONTINUATION.value not in envelope.disclosure.limitations
+
+
+def test_the_omission_disclosure_names_no_project_and_carries_no_zone(
+    scene: Scene,
+) -> None:
+    """The §14 proof: a count, and nothing an identity could be read out of.
+
+    Neither the omitted Projects' identifiers nor the stored zone that failed to
+    load appears anywhere in the rendered envelope, and the count is the only
+    number that moved. The Projects that *did* contribute are named, which is
+    what makes the absence of the others meaningful rather than vacuous.
+    """
+    project_ids = _omitting_world(scene, owned=4, configured=1, broken=2, rows=1)
+    envelope = _run(
+        _backed_portfolio_service(scene, project_ids), scene, ListPortfolioConstraints()
+    )
+    assert envelope.error is None, envelope.error
+    rendered = json.dumps(envelope.model_dump(mode="json"))
+    assert project_ids[0] in rendered
+    for project_id in project_ids[1:]:
+        assert project_id not in rendered
+    assert "Mars/Olympus_Mons" not in rendered
+    assert _result(envelope)["omitted_projects"] == 3
+
+
+def test_a_portfolio_whose_projects_all_fail_is_empty_and_disclosed_not_refused(
+    scene: Scene,
+) -> None:
+    """The whole-surface case the ruling exists for.
+
+    Every owned Project cannot contribute. The old build's unloadable zone made
+    this an anonymous 503; the old build's missing settings row made it an
+    unqualified empty page. It is now one answer: empty, truncated, and counted.
+    """
+    project_ids = _omitting_world(scene, owned=3, configured=0, broken=2)
+    envelope = _run(
+        _backed_portfolio_service(scene, project_ids), scene, ListPortfolioConstraints()
+    )
+    assert envelope.error is None, envelope.error
+    assert envelope.disclosure is not None
+    truncation = envelope.disclosure.truncation
+    assert truncation is not None and truncation.is_truncated is True
+    assert truncation.reason == "portfolio_projects_omitted"
+    assert _result(envelope)["constraints"] == []
+    assert _result(envelope)["omitted_projects"] == 3
 
 
 def test_a_principal_owning_no_projects_gets_an_empty_portfolio_not_a_refusal(

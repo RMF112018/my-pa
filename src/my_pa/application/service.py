@@ -581,7 +581,6 @@ from my_pa.domain.project_controls.party import PartyKind, PartyRef, PartyRefErr
 from my_pa.domain.project_controls.read_models import (
     MAX_LIST_LIMIT,
     ConstraintCursorError,
-    ConstraintListPage,
     ConstraintListQuery,
     ConstraintQueryError,
 )
@@ -9671,19 +9670,51 @@ class ApplicationService:
 
     @staticmethod
     def _portfolio_truncation(
-        page: ConstraintListPage, *, projects_truncated: bool
+        *,
+        page_truncated: bool,
+        next_cursor: str | None,
+        projects_truncated: bool,
+        omitted_projects: int,
     ) -> tuple[Truncation, tuple[Limitation, ...]]:
-        """What a portfolio page discloses about the two bounds it is subject to.
+        """What a portfolio read discloses about the three ways it can be partial.
 
-        A portfolio page can be short for two unrelated reasons, and collapsing
-        them would make one of the two unsayable. `page_size_reached` means more
-        rows exist inside the Projects that were read and the next cursor
-        continues them. `portfolio_project_limit_reached` means the Principal
-        owns more Projects than `MAX_PORTFOLIO_PROJECTS`, so rows from the
-        Projects beyond the cap are absent from every page of this result and no
-        cursor will reach them. Silently returning a subset of the portfolio and
-        calling it the portfolio would be a false answer, which is the one
-        outcome this method exists to prevent.
+        **Every way a portfolio result becomes partial is disclosed here**, and
+        that is the whole point of this method: a subset of the portfolio
+        presented as the portfolio is a false answer. There are three ways, they
+        are unrelated, and collapsing them would make some of them unsayable.
+
+        * `page_size_reached` — more rows exist inside the Projects that were
+          read, and the next cursor continues them.
+        * `portfolio_project_limit_reached` — the Principal owns more Projects
+          than `MAX_PORTFOLIO_PROJECTS`, so rows from the Projects beyond the
+          cap are absent from every page of this result and no cursor reaches
+          them.
+        * `portfolio_projects_omitted` — Projects in scope could not contribute
+          at all: no Constraint settings row, or a stored zone `zoneinfo` cannot
+          load, so there is no defensible Overdue boundary to render or count
+          them against (`ConstraintReadService._calendars`). They are omitted
+          rather than failing the whole read, and `omitted_projects` in the
+          payload says how many. It is a count and never an identity: these are
+          the caller's own Projects, so the figure cannot say whether any other
+          Principal's Project, Constraint, Category, Task or Capture exists.
+
+        `reason` is one slot and three partialities can hold at once, so the
+        precedence is fixed and stated: **cap, then omission, then page size.**
+        It is ordered by what else carries the fact, so that filling the slot
+        masks nothing — each partiality has its own independent channel and the
+        caller can always learn all three:
+
+        1. the cap has *only* this slot, so it takes it first and
+           `reason == "portfolio_project_limit_reached"` holds exactly when the
+           cap was reached;
+        2. the omission has `omitted_projects`, which is present in the payload
+           of every portfolio answer whatever `reason` says;
+        3. a filled page has `next_cursor`, which is issued whenever the page
+           filled, whatever `reason` says.
+
+        A caller therefore reads the cap off `reason`, the omission off the
+        count, and the filled page off the cursor, in any combination. Nothing
+        here is derived by differencing one against another.
 
         **The cursor is kept when both bounds hold, and the limitation is not.**
         An earlier form of this method emitted `LISTING_HAS_NO_CONTINUATION`
@@ -9707,19 +9738,27 @@ class ApplicationService:
         cursor is issued, and `reason` still reads
         `portfolio_project_limit_reached`. A caller that pages a capped portfolio
         to exhaustion is therefore never told it has seen the whole portfolio.
+        An omitted-Project count does the same: it does not depend on the page
+        either, so it is reported unchanged on every page of the walk.
 
-        Neither field says anything about *which* Projects, how many there are,
-        or whether any exist that this Principal does not own: the cap is a
-        constant, and the flag is a fact about the acting Principal's own
-        partition.
+        None of these fields says anything about *which* Projects, nor about any
+        Project this Principal does not own. The cap is a constant, and the flag
+        and the count are facts about the acting Principal's own partition.
+
+        The overview reaches this method too, with `page_truncated=False` and no
+        cursor: it has no paging, but it has both other partialities and they
+        are disclosed identically. One method rather than two, because a second
+        copy could disagree about the precedence.
         """
-        is_truncated = page.is_truncated or projects_truncated
+        is_truncated = page_truncated or projects_truncated or omitted_projects > 0
         reason: str | None = None
         if projects_truncated:
             reason = "portfolio_project_limit_reached"
-        elif page.is_truncated:
+        elif omitted_projects > 0:
+            reason = "portfolio_projects_omitted"
+        elif page_truncated:
             reason = "page_size_reached"
-        next_cursor = page.next_cursor if is_truncated else None
+        next_cursor = next_cursor if is_truncated else None
         return (
             Truncation(is_truncated=is_truncated, reason=reason, next_cursor=next_cursor),
             (
@@ -9742,6 +9781,13 @@ class ApplicationService:
         exact-Project read asks whether the named Project is this Principal's,
         and a portfolio read asks which Projects are. Both answers come from the
         same canonical repository on the same connection.
+
+        `omitted_projects` rides beside `constraints` rather than inside the
+        shared `Truncation`: the count is a fact about this capability family
+        and `Truncation` is the disclosure envelope every capability in the
+        repository carries, so a field there would be a contract change whose
+        blast radius is every decoder, fixture and golden in the build for a
+        need only this capability family has.
         """
         del unit_of_work
         with _constraint_translated():
@@ -9750,7 +9796,7 @@ class ApplicationService:
             project_ids, projects_truncated = self._portfolio_projects(
                 work, authorization.principal.principal_id
             )
-            page = self._constraint_reads.list_portfolio_constraints(
+            portfolio = self._constraint_reads.list_portfolio_constraints(
                 work.constraints,
                 principal_id=authorization.principal.principal_id,
                 project_ids=project_ids,
@@ -9758,10 +9804,16 @@ class ApplicationService:
                 now=self._clock(),
             )
         truncation, limitations = self._portfolio_truncation(
-            page, projects_truncated=projects_truncated
+            page_truncated=portfolio.page.is_truncated,
+            next_cursor=portfolio.page.next_cursor,
+            projects_truncated=projects_truncated,
+            omitted_projects=portfolio.omitted_projects,
         )
         return _Result(
-            payload={"constraints": _constraint_payload(page.entries)},
+            payload={
+                "constraints": _constraint_payload(portfolio.page.entries),
+                "omitted_projects": portfolio.omitted_projects,
+            },
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=_CONSTRAINT_TRUST_BASIS,
@@ -9781,7 +9833,9 @@ class ApplicationService:
         The same read-service method the portfolio Register uses, with the term
         set on the query, for the reason `_constraints_search` states: a search
         *is* a Register request with a search predicate, and a second path would
-        be a second set of derived flags over the same rows.
+        be a second set of derived flags over the same rows. The omitted-Project
+        count is disclosed here on the same terms, because a narrowed portfolio
+        is no less partial than an unnarrowed one.
         """
         del unit_of_work
         with _constraint_translated():
@@ -9790,7 +9844,7 @@ class ApplicationService:
             project_ids, projects_truncated = self._portfolio_projects(
                 work, authorization.principal.principal_id
             )
-            page = self._constraint_reads.list_portfolio_constraints(
+            portfolio = self._constraint_reads.list_portfolio_constraints(
                 work.constraints,
                 principal_id=authorization.principal.principal_id,
                 project_ids=project_ids,
@@ -9798,10 +9852,16 @@ class ApplicationService:
                 now=self._clock(),
             )
         truncation, limitations = self._portfolio_truncation(
-            page, projects_truncated=projects_truncated
+            page_truncated=portfolio.page.is_truncated,
+            next_cursor=portfolio.page.next_cursor,
+            projects_truncated=projects_truncated,
+            omitted_projects=portfolio.omitted_projects,
         )
         return _Result(
-            payload={"constraints": _constraint_payload(page.entries)},
+            payload={
+                "constraints": _constraint_payload(portfolio.page.entries),
+                "omitted_projects": portfolio.omitted_projects,
+            },
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=_CONSTRAINT_TRUST_BASIS,
@@ -9821,8 +9881,18 @@ class ApplicationService:
         One entry per Project, never a combined figure: counts taken against
         different Project dates are not summable and the accepted plan asks for
         none. The Project cap applies here exactly as it does to the two paging
-        reads, and is disclosed the same way -- an overview that quietly omitted
-        Projects would misstate the position it is named for.
+        reads, and so does the omission of a Project that cannot contribute;
+        both are disclosed the same way, through the same
+        `_portfolio_truncation` -- an overview that quietly omitted Projects
+        would misstate the position it is named for. There is no paging here, so
+        there is never a continuation and `LISTING_HAS_NO_CONTINUATION` is
+        emitted whenever this read is truncated at all.
+
+        The count is inside `overview` rather than beside it because `overview`
+        *is* this read's scope object -- it already carries the `as_of` the
+        Projects were read at -- and the field is spelled `omitted_projects`
+        there, the same name the two paging reads publish, so one client reads
+        one name.
         """
         del unit_of_work
         with _translated(), _constraint_translated(), self._constraint_work() as work:
@@ -9835,18 +9905,19 @@ class ApplicationService:
                 project_ids=project_ids,
                 now=self._clock(),
             )
+        truncation, limitations = self._portfolio_truncation(
+            page_truncated=False,
+            next_cursor=None,
+            projects_truncated=projects_truncated,
+            omitted_projects=overview.omitted_projects,
+        )
         return _Result(
             payload={"overview": _constraint_payload(overview)},
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=_CONSTRAINT_TRUST_BASIS,
-                truncation=Truncation(
-                    is_truncated=projects_truncated,
-                    reason="portfolio_project_limit_reached" if projects_truncated else None,
-                ),
-                extra_limitations=(
-                    (Limitation.LISTING_HAS_NO_CONTINUATION,) if projects_truncated else ()
-                ),
+                truncation=truncation,
+                extra_limitations=limitations,
             ),
         )
 

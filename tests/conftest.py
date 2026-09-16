@@ -3127,6 +3127,13 @@ class _ConstraintReads:
     `application.constraints` decides every flag, count, group and cursor, and
     `application.constraint_management` decides every disposition, version,
     public code, receipt and ordering.
+
+    **Read the limits of this class before asserting through it.** It applies
+    the partition predicate itself and it models almost none of a list spec, so
+    an isolation, paging, sort, grouping or search claim made through
+    `build_service` is satisfied by this class rather than by the service under
+    test. The portfolio section below states both exclusions in full, and they
+    apply to the exact-Project reads here for the same reason.
     """
 
     def __init__(self, world: World) -> None:
@@ -3613,6 +3620,28 @@ class _ConstraintReads:
     # per-Project business time: those are properties of
     # `infrastructure.persistence.constraints` and are evidenced by the
     # isolated-database tier, never by this class.
+    #
+    # **Nor do they prove isolation.** `owner == principal_id` is written out in
+    # every method above and below, so this class filters by Principal itself.
+    # Any cross-Principal assertion made through `build_service` is therefore
+    # satisfied by the fake's own predicate and would pass unchanged against a
+    # service that had stopped scoping anything: what such a test evidences is
+    # transport, dispatch and envelope plumbing, and nothing about partition
+    # isolation. Isolation is a property of the real statements' `WHERE` clauses
+    # and of the guard over them, and it is proved in
+    # `tests/database/` and `tests/architecture/`, never here. No test relies on
+    # this class for an isolation claim today; this note exists so that none
+    # starts to.
+    #
+    # **Nor do they model the spec.** `list_portfolio_constraints` reads
+    # `project_ids` and `fetch_limit` off the spec and ignores every other field
+    # on it: no filter, no scope, no sort, no direction, no grouping, no search
+    # term and no keyset cursor is applied, and the rows come back in whatever
+    # order the `World` dict holds them. A paging, ordering, grouping or search
+    # claim made through this class is therefore vacuous — a "second page"
+    # driven through it is the first page again. Those semantics belong to the
+    # set-based SQL and are proved against it in
+    # `tests/database/test_constraint_portfolio_reads.py`.
 
     def get_project_settings_for(
         self, principal_id: str, project_ids: object

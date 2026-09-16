@@ -2728,7 +2728,8 @@
           "ccat_cccccccc33333333"
         ]
       }
-    ]
+    ],
+    "omitted_projects": 1
   },
   "constraints.portfolio_search": {
     "constraints": [
@@ -2830,7 +2831,8 @@
           "ccat_cccccccc33333333"
         ]
       }
-    ]
+    ],
+    "omitted_projects": 1
   },
   "constraints.portfolio_overview": {
     "overview": {
@@ -2880,7 +2882,8 @@
           "as_of": "2026-08-09T12:00:00+00:00"
         }
       ],
-      "as_of": "2026-08-09T12:00:00+00:00"
+      "as_of": "2026-08-09T12:00:00+00:00",
+      "omitted_projects": 1
     }
   },
   "constraint_categories.list": {

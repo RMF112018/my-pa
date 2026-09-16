@@ -23,13 +23,14 @@ Every identifier, code and description below is synthetic.
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
+from dataclasses import fields
 from datetime import UTC, date, datetime
 from typing import Any
 
 import pytest
 
 from my_pa.application.constraints import ConstraintReadService
-from my_pa.application.errors import ConflictError, InvalidRequestError, UnavailableError
+from my_pa.application.errors import ConflictError, InvalidRequestError
 from my_pa.domain.project_controls.category import ConstraintCategoryState
 from my_pa.domain.project_controls.constraint import (
     ConstraintLifecycleState,
@@ -46,6 +47,7 @@ from my_pa.domain.project_controls.read_models import (
     ConstraintOverviewFacts,
     ConstraintPartyRow,
     ConstraintPortfolioListSpec,
+    ConstraintPortfolioPage,
     ConstraintQueryError,
     ConstraintSyncFacts,
     PersistedConstraintRecord,
@@ -275,13 +277,14 @@ def _both_projects(**kwargs: object) -> _PortfolioRepository:
     )
 
 
-def _page(
+def _portfolio(
     repository: _PortfolioRepository,
     *,
     project_ids: Sequence[str] = (PROJECT_EAST, PROJECT_TOKYO),
     query: ConstraintListQuery | None = None,
     principal_id: str = PRINCIPAL,
-) -> ConstraintListPage:
+) -> ConstraintPortfolioPage:
+    """The whole portfolio answer: the page, and how many Projects were left out."""
     return SERVICE.list_portfolio_constraints(
         repository,  # type: ignore[arg-type]
         principal_id=principal_id,
@@ -289,6 +292,19 @@ def _page(
         query=query or ConstraintListQuery(),
         now=NOW,
     )
+
+
+def _page(
+    repository: _PortfolioRepository,
+    *,
+    project_ids: Sequence[str] = (PROJECT_EAST, PROJECT_TOKYO),
+    query: ConstraintListQuery | None = None,
+    principal_id: str = PRINCIPAL,
+) -> ConstraintListPage:
+    """Just the Register page, for the assertions that are about rows."""
+    return _portfolio(
+        repository, project_ids=project_ids, query=query, principal_id=principal_id
+    ).page
 
 
 # --- The per-Project calendar ------------------------------------------------
@@ -511,7 +527,19 @@ def test_an_empty_portfolio_overview_is_empty_and_asks_the_repository_nothing() 
     assert repository.principals == []
 
 
-# --- The unconfigured Project ------------------------------------------------
+# --- The Project that cannot contribute --------------------------------------
+#
+# The operator's ruling (PC-CM-RUN01-WP06, third corrective cycle): a Project
+# the Principal owns that **cannot contribute** — no settings row, or a stored
+# zone that will not load — is **omitted, not fatal, and disclosed**, and the
+# disclosure carries a **count only, never identities**. The two members are
+# tested here as one class, because treating them differently is exactly the
+# contradiction the ruling settles.
+#
+# The relaxation is the *portfolio's* and nothing else's: an exact-Project read
+# still fails closed for both members, which
+# `tests/unit/test_constraint_read_derivations.py` pins for the missing settings
+# row and for the unknown IANA zone alike.
 
 
 def test_a_project_with_no_constraint_calendar_contributes_nothing_and_does_not_fail_the_read() -> (
@@ -526,7 +554,7 @@ def test_a_project_with_no_constraint_calendar_contributes_nothing_and_does_not_
     unusable for exactly the Principals it exists for — while naming no Project,
     so it would not even say which one to fix. An unconfigured Project therefore
     has no defensible Overdue boundary, yields no rows and no counts, and is
-    silently absent.
+    omitted — and the count says it was.
     """
     repository = _PortfolioRepository(
         settings={
@@ -538,36 +566,116 @@ def test_a_project_with_no_constraint_calendar_contributes_nothing_and_does_not_
             _record("cst_portfolioc3", PROJECT_UNSET),
         ),
     )
-    page = _page(repository, project_ids=(PROJECT_EAST, PROJECT_TOKYO, PROJECT_UNSET))
-    assert [entry.project_id for entry in page.entries] == [PROJECT_EAST]
+    portfolio = _portfolio(repository, project_ids=(PROJECT_EAST, PROJECT_TOKYO, PROJECT_UNSET))
+    assert [entry.project_id for entry in portfolio.page.entries] == [PROJECT_EAST]
+    assert portfolio.omitted_projects == 1
     (spec,) = repository.specs
     assert PROJECT_UNSET not in spec.project_ids
 
 
-def test_a_portfolio_of_only_unconfigured_projects_is_an_empty_page_and_not_a_refusal() -> None:
-    repository = _PortfolioRepository(settings={})
-    page = _page(repository, project_ids=(PROJECT_EAST, PROJECT_TOKYO))
-    assert page.entries == ()
-    assert page.next_cursor is None
-    assert repository.specs == []
+def test_a_configured_project_whose_stored_timezone_will_not_load_is_omitted_and_counted() -> None:
+    """The ruling's second member, answered exactly as the first.
 
+    An earlier build failed the whole portfolio here — an anonymous refusal that
+    took every healthy Project down with it, and named no Project to fix. That
+    contradicted the very argument the missing-settings case makes two
+    paragraphs above it. A stored zone `zoneinfo` cannot load leaves the read
+    with no defensible Overdue boundary for that Project and nothing more, so
+    the Project is omitted on the same terms and counted in the same figure.
 
-def test_a_configured_project_whose_stored_timezone_is_unknown_still_fails_the_read_closed() -> (
-    None
-):
-    """Unconfigured and misconfigured are different, and only one of them relaxes.
-
-    A Project with a stored zone name `zoneinfo` does not know *is* enrolled;
-    its calendar is broken rather than absent, and substituting one would count
-    Overdue against a day nobody chose. It stays the same `UnavailableError` the
-    exact-Project read gives, reachable by the same fix.
+    Substituting a calendar is still refused: the Project yields no rows, rather
+    than rows counted against a day nobody chose.
     """
     repository = _PortfolioRepository(
-        settings={(PRINCIPAL, PROJECT_EAST): _settings(PROJECT_EAST, "Mars/Olympus_Mons")}
+        settings={
+            (PRINCIPAL, PROJECT_EAST): _settings(PROJECT_EAST, ZONE_EAST),
+            (PRINCIPAL, PROJECT_TOKYO): _settings(PROJECT_TOKYO, "Mars/Olympus_Mons"),
+        },
+        records=(
+            _record("cst_portfolioa1", PROJECT_EAST),
+            _record("cst_portfoliob2", PROJECT_TOKYO),
+        ),
     )
-    with pytest.raises(UnavailableError):
-        _page(repository, project_ids=(PROJECT_EAST,))
+    portfolio = _portfolio(repository, project_ids=(PROJECT_EAST, PROJECT_TOKYO))
+    assert [entry.project_id for entry in portfolio.page.entries] == [PROJECT_EAST]
+    assert portfolio.omitted_projects == 1
+    (spec,) = repository.specs
+    assert spec.project_ids == (PROJECT_EAST,)
+
+
+def test_the_overview_omits_and_counts_a_project_whose_zone_will_not_load() -> None:
+    """The overview takes the identical treatment; it has no paging, only omission."""
+    repository = _PortfolioRepository(
+        settings={
+            (PRINCIPAL, PROJECT_EAST): _settings(PROJECT_EAST, ZONE_EAST),
+            (PRINCIPAL, PROJECT_TOKYO): _settings(PROJECT_TOKYO, "Mars/Olympus_Mons"),
+        },
+        facts={},
+    )
+    overview = SERVICE.read_portfolio_overview(
+        repository,  # type: ignore[arg-type]
+        principal_id=PRINCIPAL,
+        project_ids=(PROJECT_EAST, PROJECT_TOKYO),
+        now=NOW,
+    )
+    assert [entry.project_id for entry in overview.projects] == [PROJECT_EAST]
+    assert overview.omitted_projects == 1
+
+
+def test_both_members_of_cannot_contribute_are_counted_in_the_one_figure() -> None:
+    """One count for both, because the ruling makes them one class.
+
+    A build that counted only unconfigured Projects would pass every test above
+    and still understate the caller's incompleteness whenever both kinds were
+    present. The figure here is two, not one.
+    """
+    repository = _PortfolioRepository(
+        settings={
+            (PRINCIPAL, PROJECT_EAST): _settings(PROJECT_EAST, ZONE_EAST),
+            (PRINCIPAL, PROJECT_TOKYO): _settings(PROJECT_TOKYO, "Mars/Olympus_Mons"),
+        }
+    )
+    portfolio = _portfolio(repository, project_ids=(PROJECT_EAST, PROJECT_TOKYO, PROJECT_UNSET))
+    assert portfolio.omitted_projects == 2
+    assert [entry.project_id for entry in portfolio.page.entries] == []
+
+
+def test_a_portfolio_of_only_unconfigured_projects_is_an_empty_page_that_says_it_is_partial() -> (
+    None
+):
+    """Empty and *disclosed as incomplete* — never an unqualified empty answer."""
+    repository = _PortfolioRepository(settings={})
+    portfolio = _portfolio(repository, project_ids=(PROJECT_EAST, PROJECT_TOKYO))
+    assert portfolio.page.entries == ()
+    assert portfolio.page.next_cursor is None
+    assert portfolio.omitted_projects == 2
     assert repository.specs == []
+
+
+def test_a_portfolio_whose_projects_all_contribute_omits_nothing() -> None:
+    """The control: the count is zero when nothing was left out, not merely small."""
+    repository = _both_projects(records=(_record("cst_portfolioa1", PROJECT_EAST),))
+    assert _portfolio(repository).omitted_projects == 0
+
+
+def test_the_omitted_count_is_all_the_disclosure_carries_about_the_omission() -> None:
+    """A count, and nothing from which a Project could be named.
+
+    `ConstraintPortfolioPage` has exactly two fields and the omitted one is an
+    `int`. There is no identifier, name, code or timezone anywhere in the answer
+    that belongs to a Project that could not contribute — the rows that *are*
+    there name only Projects that did.
+    """
+    repository = _PortfolioRepository(
+        settings={(PRINCIPAL, PROJECT_EAST): _settings(PROJECT_EAST, ZONE_EAST)},
+        records=(_record("cst_portfolioa1", PROJECT_EAST),),
+    )
+    portfolio = _portfolio(repository, project_ids=(PROJECT_EAST, PROJECT_TOKYO, PROJECT_UNSET))
+    assert {field.name for field in fields(portfolio)} == {"page", "omitted_projects"}
+    assert isinstance(portfolio.omitted_projects, int)
+    named = {entry.project_id for entry in portfolio.page.entries}
+    assert named == {PROJECT_EAST}
+    assert PROJECT_TOKYO not in named and PROJECT_UNSET not in named
 
 
 # --- Paging, sorting and grouping across Projects ----------------------------

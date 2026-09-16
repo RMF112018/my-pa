@@ -89,6 +89,7 @@ from my_pa.domain.project_controls.read_models import (
     ConstraintPartyRow,
     ConstraintPortfolioListSpec,
     ConstraintPortfolioOverview,
+    ConstraintPortfolioPage,
     ConstraintRelationshipRow,
     ConstraintRelationshipView,
     ConstraintSort,
@@ -597,7 +598,7 @@ class ConstraintReadService:
         project_ids: Sequence[str],
         query: ConstraintListQuery,
         now: datetime,
-    ) -> ConstraintListPage:
+    ) -> ConstraintPortfolioPage:
         """One bounded page of the Register across several Projects at once.
 
         `constraints.portfolio_list` and `constraints.portfolio_search` — the
@@ -621,14 +622,23 @@ class ConstraintReadService:
         in bulk, then render each row against its own Project's calendar. The
         total number of statements is constant in the number of Projects and in
         the number of rows.
+
+        The page is returned inside a `ConstraintPortfolioPage`, which carries
+        the count of Projects in scope that could not contribute alongside it.
+        A portfolio whose Projects *all* fail to produce a calendar is an empty
+        page with that count set, never a refusal and never an unqualified
+        empty answer — see `_calendars`.
         """
         as_of = ensure_utc(now)
         wanted = tuple(sorted(set(project_ids)))
         binding = query.portfolio_binding(principal_id=principal_id, project_ids=wanted)
         after = _decode_cursor(query.cursor, binding)
-        calendars = self._calendars(repository, principal_id, wanted, as_of)
+        calendars, omitted = self._calendars(repository, principal_id, wanted, as_of)
         if not calendars:
-            return ConstraintListPage(entries=(), is_truncated=False, next_cursor=None)
+            return ConstraintPortfolioPage(
+                page=ConstraintListPage(entries=(), is_truncated=False, next_cursor=None),
+                omitted_projects=omitted,
+            )
         by_project = {calendar.project_id: calendar for calendar in calendars}
         spec = ConstraintPortfolioListSpec(
             query=query,
@@ -673,7 +683,10 @@ class ConstraintReadService:
                 sort_key=_sort_key(selected[-1], query, category_rows),
                 constraint_id=selected[-1].constraint_id,
             ).encode()
-        return ConstraintListPage(entries=entries, is_truncated=is_truncated, next_cursor=cursor)
+        return ConstraintPortfolioPage(
+            page=ConstraintListPage(entries=entries, is_truncated=is_truncated, next_cursor=cursor),
+            omitted_projects=omitted,
+        )
 
     def read_portfolio_overview(
         self,
@@ -695,12 +708,17 @@ class ConstraintReadService:
         `list_portfolio_constraints`, and the same nondisclosure consequences
         follow: a Project identifier that is not this Principal's yields nothing
         and is indistinguishable from an owned Project this read found empty.
+
+        A Project in scope that cannot produce a calendar is omitted here on the
+        same terms `_calendars` states, and `omitted_projects` says how many
+        were. An overview that quietly dropped them would misstate the position
+        it is named for, which is the one outcome this read exists to prevent.
         """
         as_of = ensure_utc(now)
         wanted = tuple(sorted(set(project_ids)))
-        calendars = self._calendars(repository, principal_id, wanted, as_of)
+        calendars, omitted = self._calendars(repository, principal_id, wanted, as_of)
         if not calendars:
-            return ConstraintPortfolioOverview(projects=(), as_of=as_of)
+            return ConstraintPortfolioOverview(projects=(), as_of=as_of, omitted_projects=omitted)
         facts = repository.portfolio_overview_facts(principal_id, as_of=as_of, calendars=calendars)
         sync = repository.portfolio_sync_summary(
             principal_id, [calendar.project_id for calendar in calendars], ()
@@ -716,6 +734,7 @@ class ConstraintReadService:
                 for calendar in calendars
             ),
             as_of=as_of,
+            omitted_projects=omitted,
         )
 
     # --- composition helpers ---------------------------------------------
@@ -726,41 +745,68 @@ class ConstraintReadService:
         principal_id: str,
         project_ids: Sequence[str],
         as_of: datetime,
-    ) -> tuple[ProjectCalendar, ...]:
-        """One business-time boundary per Project in scope, from one settings read.
+    ) -> tuple[tuple[ProjectCalendar, ...], int]:
+        """One business-time boundary per Project that has one, and a count of those that do not.
 
-        **A Project with no configured Constraint calendar contributes nothing
-        to a portfolio result and is silently absent** (PC-CM-RUN01-WP06). This
-        is where the portfolio reads deliberately differ from `_settings`, which
-        fails the whole read closed, and the reason is that the two are asked
-        different questions. An exact-Project read names one Project, and
-        refusing it tells the caller the one thing they can act on: configure
-        that Project. A portfolio read names every Project the Principal owns,
-        and refusing the whole surface because one of them has never been
-        enrolled in Constraint Management would make the surface unusable for
-        precisely the Principals it is for — while telling them nothing about
-        *which* Project, since the refusal may not name one. Absent is therefore
-        the honest answer: there is no defensible Overdue boundary for an
-        unconfigured Project, so it yields no rows and no counts rather than
-        rows counted against a substituted calendar.
+        **A Project in scope that cannot contribute is omitted, not fatal, and
+        disclosed** (PC-CM-RUN01-WP06). Two conditions put a Project in that
+        class and they are treated identically:
 
-        What does **not** relax is timezone validity. A Project whose stored
-        zone name `zoneinfo` does not know is configured, its calendar is
-        broken, and `_project_today` still fails the read closed — the same
-        refusal, reachable by the same fix (`project_controls.configure`), and
-        not something a portfolio should paper over.
+        * it has no Constraint settings row, so it has never been enrolled in
+          Constraint Management at all; and
+        * it has a settings row whose stored zone name `zoneinfo` cannot load,
+          so it is enrolled against a calendar that no longer resolves.
+
+        Both leave the read with no defensible `project_today`, and therefore no
+        defensible Overdue boundary, for that Project. Neither is allowed to
+        substitute a calendar, and neither is allowed to fail the portfolio.
+
+        This is where the portfolio reads deliberately differ from `_settings`
+        and `_project_today`, which fail the whole read closed, and the reason
+        is that the two are asked different questions. An exact-Project read
+        names one Project, and refusing it tells the caller the one thing they
+        can act on: configure that Project. A portfolio read names every Project
+        the Principal owns, and refusing the whole surface because one of them
+        cannot produce a calendar would make the surface unusable for precisely
+        the Principals it is for — and would tell them nothing about *which*
+        Project, because the refusal names none. An earlier form of this method
+        made exactly that argument for a missing settings row and then failed
+        the whole read for an unloadable zone two paragraphs later; the two are
+        the same situation and now have the same answer.
+
+        **Omitted is only honest when it is disclosed**, which is why this
+        method returns a count alongside the calendars rather than quietly
+        returning fewer. The count is the caller's cue that their view of their
+        own portfolio is incomplete, and `ApplicationService` turns it into a
+        stated truncation.
+
+        The count is a **count and never an identity**, and it is a pure
+        function of `project_ids`. It is accumulated as each omission is decided,
+        one increment per Project in the loop below — not derived by subtracting
+        anything from anything — so the only inputs are the already-authorized
+        owned set this method was handed and whether each of *those* Projects
+        produced a calendar. `get_project_settings_for` is Principal-scoped in
+        the adapter and its result is read only through keys drawn from
+        `project_ids`, so no other Principal's settings row, zone, Project or
+        row count can move this number by any path.
 
         One statement for the whole set, and none at all for an empty one.
         """
         if not project_ids:
-            return ()
+            return ((), 0)
         settings = repository.get_project_settings_for(principal_id, project_ids)
         calendars: list[ProjectCalendar] = []
+        omitted = 0
         for project_id in project_ids:
             configured = settings.get(project_id)
             if configured is None:
+                omitted += 1
                 continue
-            today = _project_today(as_of, configured)
+            try:
+                today = project_today(as_of, configured.timezone_name)
+            except ProjectTimezoneError:
+                omitted += 1
+                continue
             calendars.append(
                 ProjectCalendar(
                     project_id=project_id,
@@ -769,7 +815,7 @@ class ConstraintReadService:
                     due_soon_through=due_soon_through(today),
                 )
             )
-        return tuple(calendars)
+        return (tuple(calendars), omitted)
 
     def _settings(
         self, repository: ConstraintReadRepository, principal_id: str, project_id: str

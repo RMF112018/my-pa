@@ -61,6 +61,7 @@ from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.project_controls.constraint import ConstraintOrigin, ConstraintRecordQuality
 from my_pa.domain.project_controls.read_models import (
     MAX_CURSOR_CHARACTERS,
     MAX_LIST_LIMIT,
@@ -68,11 +69,14 @@ from my_pa.domain.project_controls.read_models import (
     ConstraintCategoryState,
     ConstraintGrouping,
     ConstraintLifecycleState,
+    ConstraintListCursor,
     ConstraintListQuery,
     ConstraintListScope,
     ConstraintSort,
+    PersistedConstraintRecord,
     SortDirection,
 )
+from my_pa.domain.project_controls.settings import ConstraintProjectSettings
 from my_pa.domain.source.registry import issue_identifier
 from tests.conftest import (
     DEFAULT_LIMITS,
@@ -699,8 +703,10 @@ def test_a_portfolio_beyond_the_cap_says_so_rather_than_answering_for_a_subset(
 
     The cap is real and a Principal can exceed it, so the only honest outcomes
     are to refuse or to disclose. This surface discloses: the reason names the
-    Project bound rather than the page bound, and the limitation says the
-    truncation cannot be paged past, because there is no Project-set cursor.
+    Project bound rather than the page bound, and — because this arrangement's
+    page also fits, so no cursor is issued — the limitation says the truncation
+    cannot be paged past. The both-bounds arrangement, where a cursor *is*
+    issued, is a different answer and is measured against real rows below.
     """
     owned = _OwnedProjects(_synthetic_projects(MAX_PORTFOLIO_PROJECTS + 1))
     envelope = _run(_portfolio_service(scene, owned), scene, _portfolio_command(capability))
@@ -709,6 +715,7 @@ def test_a_portfolio_beyond_the_cap_says_so_rather_than_answering_for_a_subset(
     truncation = envelope.disclosure.truncation
     assert truncation is not None and truncation.is_truncated is True
     assert truncation.reason == "portfolio_project_limit_reached"
+    assert truncation.next_cursor is None
     assert Limitation.LISTING_HAS_NO_CONTINUATION.value in envelope.disclosure.limitations
 
 
@@ -730,6 +737,179 @@ def test_the_project_bound_never_states_a_count_of_projects(
     assert str(MAX_PORTFOLIO_PROJECTS + 7) not in rendered
     for project_id in owned.project_ids:
         assert project_id not in rendered
+
+
+# ---- both bounds at once, over real rows ------------------------------------
+#
+# The arrangements below deliberately use no spy. `_Recorder` answers every
+# paging read with a page that neither truncates nor issues a cursor, so it
+# cannot express the one combination this section exists for: a Principal over
+# the Project cap *and* a page that filled. What the handler composes there is a
+# property of the backend, so the real `ConstraintReadService` runs over stored
+# rows and the cursor in the answer is one it actually issued.
+
+
+def _capped_world(scene: Scene, *, rows: int) -> tuple[str, ...]:
+    """`MAX_PORTFOLIO_PROJECTS + 1` owned Projects, `rows` of them in the first.
+
+    Settings are seeded only for the Projects inside the cap, which is the shape
+    the read is given: a Project the enumeration never reached contributes no
+    calendar and no rows either way.
+    """
+    project_ids = _synthetic_projects(MAX_PORTFOLIO_PROJECTS + 1)
+    for project_id in project_ids[:MAX_PORTFOLIO_PROJECTS]:
+        scene.world.constraint_settings[(scene.principal.principal_id, project_id)] = (
+            ConstraintProjectSettings(
+                principal_id=scene.principal.principal_id,
+                project_id=project_id,
+                timezone_name="UTC",
+                version=1,
+                created_at=WHEN,
+                updated_at=WHEN,
+            )
+        )
+    for ordinal in range(rows):
+        constraint_id = issue_identifier(IdKind.PROJECT_CONSTRAINT)
+        scene.world.project_constraints[(scene.principal.principal_id, constraint_id)] = (
+            PersistedConstraintRecord(
+                constraint_id=constraint_id,
+                principal_id=scene.principal.principal_id,
+                lifecycle_state=ConstraintLifecycleState.IDENTIFIED,
+                record_quality=ConstraintRecordQuality.NORMAL,
+                origin=ConstraintOrigin.PRODUCT,
+                version=1,
+                created_at=WHEN,
+                updated_at=WHEN,
+                project_id=project_ids[0],
+                constraint_code=f"CAP-{ordinal:03d}",
+                description="A synthetic Project control.",
+                date_identified=WHEN.date(),
+                due_date=WHEN.date(),
+                published_at=WHEN,
+            )
+        )
+    return project_ids
+
+
+def _backed_portfolio_service(scene: Scene, project_ids: tuple[str, ...]) -> ApplicationService:
+    """`_portfolio_service` with the real read service instead of the spy."""
+    scene.world.providers = scene.providers
+    return ApplicationService(
+        unit_of_work=lambda: FakeUnitOfWork(scene.world),
+        limits=DEFAULT_LIMITS,
+        clock=lambda: WHEN,
+        constraint_management_unit_of_work=lambda: _PortfolioWork(  # type: ignore[arg-type]
+            _OwnedProjects(project_ids),
+            FakeConstraintManagementUnitOfWork(scene.world).constraints,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "capability",
+    [Capability.CONSTRAINTS_PORTFOLIO_LIST, Capability.CONSTRAINTS_PORTFOLIO_SEARCH],
+)
+def test_a_page_that_fills_beyond_the_project_cap_keeps_its_cursor_and_drops_the_limitation(
+    capability: Capability, scene: Scene
+) -> None:
+    """The combination the two bounds make, and the contradiction it used to be.
+
+    More owned Projects than the cap **and** a page that filled. The answer used
+    to carry `listing_has_no_continuation_cursor` beside a real, usable cursor —
+    a response that contradicted itself, because that member is documented as
+    "a listing stopped at the page size and this build issues no cursor" and
+    every other emission site in the repository pairs it with a truncation
+    carrying none. A client that honoured it would stop paging here and silently
+    lose rows inside the Projects that *were* read.
+
+    The cursor is kept, because it reaches rows the caller is entitled to, and
+    the limitation is dropped, because with a cursor present it is simply false.
+    Nothing about the Project cap is lost: the reason still names it.
+    """
+    project_ids = _capped_world(scene, rows=4)
+    command = (
+        ListPortfolioConstraints(limit=2)
+        if capability is Capability.CONSTRAINTS_PORTFOLIO_LIST
+        else SearchPortfolioConstraints(query="synthetic", limit=2)
+    )
+    envelope = _run(_backed_portfolio_service(scene, project_ids), scene, command)
+    assert envelope.error is None, envelope.error
+    assert envelope.disclosure is not None
+    truncation = envelope.disclosure.truncation
+    assert truncation is not None and truncation.is_truncated is True
+    assert truncation.reason == "portfolio_project_limit_reached"
+    assert truncation.next_cursor is not None
+    assert Limitation.LISTING_HAS_NO_CONTINUATION.value not in envelope.disclosure.limitations
+
+
+def test_the_cursor_issued_beyond_the_project_cap_is_one_the_read_service_will_take_back(
+    scene: Scene,
+) -> None:
+    """The kept cursor is usable, which is why keeping it is the honest answer.
+
+    A cursor that could not be replayed would be as misleading as the limitation
+    was. This one is bound to the *capped* Project set the handler actually read
+    — not to the Principal's whole owned set — and the same capability accepts it
+    back rather than refusing it as a foreign scope. That the rows it continues
+    from are the right ones is a property of real SQL and is proved in
+    `tests/database/test_constraint_portfolio_reads.py`.
+    """
+    project_ids = _capped_world(scene, rows=5)
+    service = _backed_portfolio_service(scene, project_ids)
+    first = _run(service, scene, ListPortfolioConstraints(limit=2))
+    assert first.disclosure is not None and first.disclosure.truncation is not None
+    cursor = first.disclosure.truncation.next_cursor
+    assert cursor is not None
+    decoded = ConstraintListCursor.decode(cursor)
+    assert decoded.binding == ConstraintListQuery(limit=2).portfolio_binding(
+        principal_id=scene.principal.principal_id,
+        project_ids=tuple(sorted(project_ids[:MAX_PORTFOLIO_PROJECTS])),
+    )
+    replayed = _run(service, scene, ListPortfolioConstraints(limit=2, cursor=cursor))
+    assert replayed.error is None, replayed.error
+
+
+def test_the_last_page_of_a_capped_portfolio_still_says_the_cap_was_reached(
+    scene: Scene,
+) -> None:
+    """The fact the limitation used to carry survives without it, on every page.
+
+    This is what makes dropping the limitation safe rather than a second way of
+    misleading a caller. The Project cap drives `is_truncated` on its own, so a
+    capped listing stays truncated after the rows run out — and on that last
+    page there is no cursor, so `listing_has_no_continuation_cursor` is true
+    again and is emitted again. A caller that pages to exhaustion is never told
+    it has seen the whole portfolio.
+    """
+    project_ids = _capped_world(scene, rows=2)
+    envelope = _run(
+        _backed_portfolio_service(scene, project_ids), scene, ListPortfolioConstraints(limit=50)
+    )
+    assert envelope.error is None, envelope.error
+    assert envelope.disclosure is not None
+    truncation = envelope.disclosure.truncation
+    assert truncation is not None and truncation.is_truncated is True
+    assert truncation.reason == "portfolio_project_limit_reached"
+    assert truncation.next_cursor is None
+    assert Limitation.LISTING_HAS_NO_CONTINUATION.value in envelope.disclosure.limitations
+    assert envelope.disclosure.partial_result is True
+
+
+def test_a_page_that_fills_inside_the_cap_is_an_ordinary_page_size_truncation(
+    scene: Scene,
+) -> None:
+    """The control: the same filled page under the cap names the page bound."""
+    project_ids = _capped_world(scene, rows=4)[:MAX_PORTFOLIO_PROJECTS]
+    envelope = _run(
+        _backed_portfolio_service(scene, project_ids), scene, ListPortfolioConstraints(limit=2)
+    )
+    assert envelope.error is None, envelope.error
+    assert envelope.disclosure is not None
+    truncation = envelope.disclosure.truncation
+    assert truncation is not None and truncation.is_truncated is True
+    assert truncation.reason == "page_size_reached"
+    assert truncation.next_cursor is not None
+    assert Limitation.LISTING_HAS_NO_CONTINUATION.value not in envelope.disclosure.limitations
 
 
 def test_a_principal_owning_no_projects_gets_an_empty_portfolio_not_a_refusal(

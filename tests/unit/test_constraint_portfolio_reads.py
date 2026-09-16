@@ -65,6 +65,13 @@ PROJECT_EAST = "prj_portfolioa1"
 PROJECT_TOKYO = "prj_portfoliob2"
 PROJECT_UNSET = "prj_portfolioc3"
 
+#: A Project the *other* Principal owns and has configured, holding a row of its
+#: own. Nothing in this module may reach it under `PRINCIPAL`, and the fake below
+#: is built so that a service which stopped narrowing would reach it -- which is
+#: what makes "a foreign Project yields nothing" a claim about the service
+#: rather than about an arrangement that had nothing to find.
+PROJECT_OTHER = "prj_portfoliod4"
+
 ZONE_EAST = "America/New_York"
 ZONE_TOKYO = "Asia/Tokyo"
 
@@ -83,9 +90,11 @@ CATEGORY_EAST = "ccat_portfolioa1"
 CATEGORY_TOKYO = "ccat_portfoliob2"
 
 
-def _settings(project_id: str, timezone_name: str) -> ConstraintProjectSettings:
+def _settings(
+    project_id: str, timezone_name: str, *, principal_id: str = PRINCIPAL
+) -> ConstraintProjectSettings:
     return ConstraintProjectSettings(
-        principal_id=PRINCIPAL,
+        principal_id=principal_id,
         project_id=project_id,
         timezone_name=timezone_name,
         version=1,
@@ -131,18 +140,33 @@ def _category(category_id: str, project_id: str, prefix: str) -> ConstraintCateg
 class _PortfolioRepository:
     """A recording fake of the portfolio read port, and of nothing else.
 
-    It answers from the rows it was constructed with, filtered by *exactly* the
-    Projects the spec named — so a test that expects a Project to be out of
-    scope is testing the service's narrowing rather than the fake's. Every call
-    records its arguments, which is how "the Principal is threaded to every
-    statement" and "the Project set was never widened" are asserted rather than
-    assumed.
+    **Settings are keyed by `(principal_id, project_id)`**, as the shared
+    `tests/conftest.py` fake and the stored composite key both are, so this
+    module can hold a second Principal's configured Project and cross-Project
+    isolation is something the data could disprove. Keyed by `project_id` alone
+    it could not: a test named for principal isolation would have passed because
+    the Project had no settings entry, which is what an *unconfigured* Project
+    proves and not what the name claims.
+
+    Rows and Categories are filtered by **the Projects the spec named and
+    nothing else** — deliberately not by Principal. The real statements are
+    Principal-scoped too, but a fake that repeated that scoping would answer
+    emptily however wrong the service was, and the property under test is the
+    service's own narrowing: the Project set is cut to the Projects whose
+    settings this Principal owns, so a foreign Project never reaches the spec.
+    Leaving the row read wide is what makes the violation representable — a
+    service that stopped narrowing would surface `PROJECT_OTHER`'s row here and
+    fail the test rather than quietly pass it.
+
+    Every call records its arguments, which is how "the Principal is threaded to
+    every statement" and "the Project set was never widened" are asserted rather
+    than assumed.
     """
 
     def __init__(
         self,
         *,
-        settings: Mapping[str, ConstraintProjectSettings],
+        settings: Mapping[tuple[str, str], ConstraintProjectSettings],
         records: Sequence[PersistedConstraintRecord] = (),
         categories: Sequence[ConstraintCategoryRow] = (),
         facts: Mapping[str, ConstraintOverviewFacts] | None = None,
@@ -167,12 +191,10 @@ class _PortfolioRepository:
     ) -> Mapping[str, ConstraintProjectSettings]:
         self.principals.append(principal_id)
         self.settings_requests.append(tuple(project_ids))
-        if principal_id != PRINCIPAL:
-            return {}
         return {
-            project_id: self._settings[project_id]
+            project_id: self._settings[(principal_id, project_id)]
             for project_id in project_ids
-            if project_id in self._settings
+            if (principal_id, project_id) in self._settings
         }
 
     def list_portfolio_constraints(
@@ -246,8 +268,8 @@ class _PortfolioRepository:
 def _both_projects(**kwargs: object) -> _PortfolioRepository:
     return _PortfolioRepository(
         settings={
-            PROJECT_EAST: _settings(PROJECT_EAST, ZONE_EAST),
-            PROJECT_TOKYO: _settings(PROJECT_TOKYO, ZONE_TOKYO),
+            (PRINCIPAL, PROJECT_EAST): _settings(PROJECT_EAST, ZONE_EAST),
+            (PRINCIPAL, PROJECT_TOKYO): _settings(PROJECT_TOKYO, ZONE_TOKYO),
         },
         **kwargs,
     )
@@ -258,10 +280,11 @@ def _page(
     *,
     project_ids: Sequence[str] = (PROJECT_EAST, PROJECT_TOKYO),
     query: ConstraintListQuery | None = None,
+    principal_id: str = PRINCIPAL,
 ) -> ConstraintListPage:
     return SERVICE.list_portfolio_constraints(
         repository,  # type: ignore[arg-type]
-        principal_id=PRINCIPAL,
+        principal_id=principal_id,
         project_ids=project_ids,
         query=query or ConstraintListQuery(),
         now=NOW,
@@ -380,6 +403,42 @@ def test_every_statement_is_issued_under_the_authenticated_principal() -> None:
     assert set(repository.principals) == {PRINCIPAL}
 
 
+def _two_principal_world() -> _PortfolioRepository:
+    """One configured Project each, and a row in each, under two Principals.
+
+    Both Projects are configured and both hold rows, so neither answer below can
+    come from an empty arrangement. What separates them is who is asking.
+    """
+    return _PortfolioRepository(
+        settings={
+            (PRINCIPAL, PROJECT_EAST): _settings(PROJECT_EAST, ZONE_EAST),
+            (OTHER_PRINCIPAL, PROJECT_OTHER): _settings(
+                PROJECT_OTHER, ZONE_TOKYO, principal_id=OTHER_PRINCIPAL
+            ),
+        },
+        records=(
+            _record("cst_portfolioa1", PROJECT_EAST),
+            _record("cst_portfoliod4", PROJECT_OTHER, principal_id=OTHER_PRINCIPAL),
+        ),
+    )
+
+
+def test_the_other_principals_project_is_reachable_by_its_own_owner() -> None:
+    """The control that makes the next test mean what its name says.
+
+    Without this, an empty answer for `PROJECT_OTHER` would be consistent with
+    there being nothing to find. Read under the Principal that owns it, the same
+    fake returns the same Project's row — so the emptiness below is isolation
+    and not absence.
+    """
+    page = _page(
+        _two_principal_world(),
+        project_ids=(PROJECT_OTHER,),
+        principal_id=OTHER_PRINCIPAL,
+    )
+    assert [entry.project_id for entry in page.entries] == [PROJECT_OTHER]
+
+
 def test_another_principals_project_identifier_yields_nothing_rather_than_an_error() -> None:
     """A foreign Project is unconfigured *to this Principal*, so it is absent.
 
@@ -388,18 +447,29 @@ def test_another_principals_project_identifier_yields_nothing_rather_than_an_err
     answer an owned Project with no Constraint settings gives. Nothing about the
     result distinguishes the two, which is the nondisclosure posture the plane
     requires (decision PC-CM-D02).
+
+    The violation is representable: the fake's row read is scoped by the spec's
+    Project set alone, so a service that stopped narrowing the requested set to
+    the settings this Principal owns would put `PROJECT_OTHER` in the spec and
+    return its row. Both assertions would fail.
     """
-    repository = _PortfolioRepository(
-        settings={PROJECT_EAST: _settings(PROJECT_EAST, ZONE_EAST)},
-        records=(
-            _record("cst_portfolioa1", PROJECT_EAST),
-            _record("cst_portfoliob2", PROJECT_TOKYO),
-        ),
-    )
-    page = _page(repository, project_ids=(PROJECT_EAST, PROJECT_TOKYO))
+    repository = _two_principal_world()
+    page = _page(repository, project_ids=(PROJECT_EAST, PROJECT_OTHER))
     assert [entry.project_id for entry in page.entries] == [PROJECT_EAST]
     (spec,) = repository.specs
     assert spec.project_ids == (PROJECT_EAST,)
+
+
+def test_another_principals_project_is_absent_from_the_portfolio_overview_too() -> None:
+    """The same boundary on the read that reports a position rather than rows."""
+    repository = _two_principal_world()
+    overview = SERVICE.read_portfolio_overview(
+        repository,  # type: ignore[arg-type]
+        principal_id=PRINCIPAL,
+        project_ids=(PROJECT_EAST, PROJECT_OTHER),
+        now=NOW,
+    )
+    assert [entry.project_id for entry in overview.projects] == [PROJECT_EAST]
 
 
 def test_the_service_narrows_the_project_set_and_never_widens_it() -> None:
@@ -460,8 +530,8 @@ def test_a_project_with_no_constraint_calendar_contributes_nothing_and_does_not_
     """
     repository = _PortfolioRepository(
         settings={
-            PROJECT_EAST: _settings(PROJECT_EAST, ZONE_EAST),
-            PROJECT_TOKYO: _settings(PROJECT_TOKYO, ZONE_TOKYO),
+            (PRINCIPAL, PROJECT_EAST): _settings(PROJECT_EAST, ZONE_EAST),
+            (PRINCIPAL, PROJECT_TOKYO): _settings(PROJECT_TOKYO, ZONE_TOKYO),
         },
         records=(
             _record("cst_portfolioa1", PROJECT_EAST),
@@ -493,7 +563,7 @@ def test_a_configured_project_whose_stored_timezone_is_unknown_still_fails_the_r
     exact-Project read gives, reachable by the same fix.
     """
     repository = _PortfolioRepository(
-        settings={PROJECT_EAST: _settings(PROJECT_EAST, "Mars/Olympus_Mons")}
+        settings={(PRINCIPAL, PROJECT_EAST): _settings(PROJECT_EAST, "Mars/Olympus_Mons")}
     )
     with pytest.raises(UnavailableError):
         _page(repository, project_ids=(PROJECT_EAST,))

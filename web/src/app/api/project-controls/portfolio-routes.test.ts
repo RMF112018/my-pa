@@ -410,7 +410,15 @@ describe("both truncation reasons are carried, and neither is interpreted", () =
     expect(answer.disclosure.nextCursor).toBe("c2");
   });
 
-  it("carries the owned-Project cap as a truncation with no continuation at all", async () => {
+  // The two shapes below are both shapes the backend really produces, and the
+  // pair is the point. An earlier version of this file arranged only the first
+  // and asserted the route issued no cursor — which was a property of the
+  // fixture rather than of anything, since the fixture carried none to begin
+  // with. `tests/unit/test_constraint_read_commands.py` is where what the
+  // backend composes for each is measured; these two say the route carries
+  // whichever it is given without reinterpreting it.
+
+  it("carries the last page of a capped portfolio, where there is no continuation", async () => {
     const session = await cookie();
     stubGateway(() =>
       success("constraints.portfolio_list", {
@@ -425,6 +433,28 @@ describe("both truncation reasons are carried, and neither is interpreted", () =
     expect(answer.disclosure.truncated).toBe(true);
     expect(answer.disclosure).not.toHaveProperty("nextCursor");
     expect(answer.disclosure.limitations).toContain("listing_has_no_continuation_cursor");
+    expect(answer.disclosure.coverage).toBe("partial");
+  });
+
+  it("carries a capped portfolio page that also filled, cursor and all", async () => {
+    const session = await cookie();
+    stubGateway(() =>
+      success("constraints.portfolio_list", {
+        ...DISCLOSURE,
+        truncation: {
+          is_truncated: true,
+          reason: "portfolio_project_limit_reached",
+          next_cursor: "c3",
+        },
+        limitations: [],
+      }),
+    );
+    const response = await portfolioRegister(get(session, PORTFOLIO));
+    expect(response.status).toBe(200);
+    const answer = (await response.json()) as { disclosure: Record<string, unknown> };
+    expect(answer.disclosure.truncated).toBe(true);
+    expect(answer.disclosure.nextCursor).toBe("c3");
+    expect(answer.disclosure.limitations).not.toContain("listing_has_no_continuation_cursor");
     expect(answer.disclosure.coverage).toBe("partial");
   });
 

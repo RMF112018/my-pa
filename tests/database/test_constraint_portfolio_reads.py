@@ -22,6 +22,16 @@ questions in bulk rather than more questions:
 * Portfolio overview — **four**: the bulk settings read, the one grouped
   aggregate, and the two sync statements.
 
+Those are the *read service's* figures, and they are not what a caller pays.
+`ApplicationService._portfolio_projects` issues one statement more —
+`work.projects.list_projects`, the canonical Project enumeration that decides
+which Projects a portfolio spans — so the **composed** cost of one invocation is
+seven statements and five rather than six and four. Pinning only the layer below would let a
+regression that added a per-Project read *at handler level* pass every test in
+this package, so the composed figures are pinned here too, as exact equalities
+across the same Projects-by-rows arrangements: an eighth statement is a failure
+whether it was written above the read service or inside it.
+
 Beyond cost, this module proves against real SQL the three things the fakes
 cannot: that each Project's own IANA calendar is applied to that Project's own
 rows inside the single grouped statement, that a second Principal's Projects and
@@ -42,7 +52,17 @@ import pytest
 from sqlalchemy import Engine, event, insert
 from sqlalchemy.engine import Connection
 
+from my_pa.application.commands import (
+    Command,
+    ListPortfolioConstraints,
+    ReadPortfolioConstraintOverview,
+)
 from my_pa.application.constraints import ConstraintReadService
+from my_pa.application.service import ApplicationService
+from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
+from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.identity.principal import Principal, PrincipalKind
+from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.project_controls.category import ConstraintCategory, ConstraintCategoryState
 from my_pa.domain.project_controls.constraint import (
     ConstraintLifecycleState,
@@ -60,8 +80,16 @@ from my_pa.domain.project_controls.read_models import (
     SortDirection,
 )
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
-from my_pa.infrastructure.persistence.constraints import SqlConstraintManagementRepository
+from my_pa.domain.source.registry import issue_identifier
+from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
+from my_pa.infrastructure.persistence.constraints import (
+    SqlAlchemyConstraintManagementUnitOfWork,
+    SqlConstraintManagementRepository,
+)
 from my_pa.infrastructure.persistence.tables import entities, projects
+from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
+from tests.conftest import DEFAULT_LIMITS
 
 pytestmark = pytest.mark.database
 
@@ -89,6 +117,17 @@ T0: Final = datetime(2026, 9, 1, 12, 0, tzinfo=UTC)
 PORTFOLIO_LIST_STATEMENTS: Final = 6
 PORTFOLIO_LIST_STATEMENTS_WITH_ENTITY_LABELS: Final = 7
 PORTFOLIO_OVERVIEW_STATEMENTS: Final = 4
+
+#: What a caller actually pays: the figures above plus the one canonical
+#: `projects.list_projects` statement `ApplicationService._portfolio_projects`
+#: issues to decide which Projects the portfolio spans. Stated as separate
+#: constants rather than as `PORTFOLIO_LIST_STATEMENTS + 1` on purpose — an
+#: arithmetic definition would move silently with the figure it is derived from,
+#: and the claim here is that *both* numbers are what was measured.
+COMPOSED_PORTFOLIO_LIST_STATEMENTS: Final = 7
+COMPOSED_PORTFOLIO_OVERVIEW_STATEMENTS: Final = 5
+
+ACTING: Final = Principal(principal_id=PRINCIPAL_A, kind=PrincipalKind.GATEWAY, authenticated=True)
 
 ENTITY_BARE: Final = "ent_pf00000001"
 
@@ -278,6 +317,66 @@ def _overview(
     )
 
 
+@contextmanager
+def _composed(engine: Engine, url: str) -> Iterator[ApplicationService]:
+    """The real entry point, with its Constraint transaction on the counted engine.
+
+    The gateway unit of work and the audit sink are given a **second** engine
+    over the same catalog, so `_counted(engine)` measures the Constraint plane's
+    own statements and nothing else. That is deliberate and it is the claim being
+    made: the bound this package exists to hold is on the portfolio read path,
+    and an audit insert is neither on it nor a function of how many Projects the
+    Principal owns. Mixing the two onto one engine would let an unrelated
+    envelope change move a number that is supposed to be a property of the read.
+    """
+    side = create_database_engine(url)
+    try:
+        audit = SqlAlchemyAuditSink(side)
+        yield ApplicationService(
+            unit_of_work=lambda: SqlAlchemyUnitOfWork(side, audit=audit),
+            clock=lambda: NOW,
+            limits=DEFAULT_LIMITS,
+            constraint_management_unit_of_work=(
+                lambda: SqlAlchemyConstraintManagementUnitOfWork(engine)
+            ),
+        )
+    finally:
+        side.dispose()
+
+
+def _invoke(service: ApplicationService, command: Command) -> ResponseEnvelope:
+    metadata = RequestMetadata(
+        request_id=f"req-{issue_identifier(IdKind.CORRELATION)}",
+        capability=command.capability,
+        purpose=Purpose.CONSTRAINT_READ,
+        principal_id=ACTING.principal_id,
+        requested_at=NOW,
+    )
+    return service.invoke(metadata, command, principal=ACTING)
+
+
+def _seed_committed(
+    engine: Engine, *, tag: str, projects_wanted: int, rows_per_project: int, first: int = 1
+) -> None:
+    """Seed one Principal's portfolio and commit it, so the service can read it.
+
+    A composed invocation opens its own transaction, so it cannot see rows still
+    held in an uncommitted one. Every composed measurement below therefore seeds
+    through this helper rather than inside the block it measures.
+    """
+    with engine.begin() as connection:
+        _seed_portfolio(
+            connection,
+            SqlConstraintManagementRepository(connection),
+            principal=PRINCIPAL_A,
+            tag=tag,
+            projects_wanted=projects_wanted,
+            rows_per_project=rows_per_project,
+            zones=(ZONE_EAST, ZONE_TOKYO),
+            first_constraint=first,
+        )
+
+
 # --- The statement-count bound, and its invariance ----------------------------
 
 
@@ -445,6 +544,149 @@ def test_the_portfolio_overview_cost_is_identical_across_every_project_count(
             connection.rollback()
     assert measured == [PORTFOLIO_OVERVIEW_STATEMENTS] * 3
     assert len(set(measured)) == 1
+
+
+# --- The composed cost, which is the one a caller pays ------------------------
+
+
+@pytest.mark.parametrize(
+    ("projects_wanted", "rows_per_project"),
+    [(1, 1), (1, 60), (5, 1), (5, 12), (12, 1), (12, 8)],
+)
+def test_a_composed_portfolio_page_costs_exactly_seven_statements(
+    migrated_engine: Engine, cloned_database_url: str, projects_wanted: int, rows_per_project: int
+) -> None:
+    """Seven, not six, and not seven-plus-one-per-Project.
+
+    The read service's six plus the single canonical `list_projects` the handler
+    issues to decide the Project set. A handler that asked the Project
+    repository one question per Project — `get_project` in a loop, an ownership
+    re-check, a per-Project settings probe — would measure
+    ``7 + projects_wanted`` and fail here at every arrangement, including the
+    one-Project one.
+    """
+    _seed_committed(
+        migrated_engine,
+        tag="ca",
+        projects_wanted=projects_wanted,
+        rows_per_project=rows_per_project,
+    )
+    with (
+        _composed(migrated_engine, cloned_database_url) as service,
+        _counted(migrated_engine) as statements,
+    ):
+        envelope = _invoke(service, ListPortfolioConstraints())
+    assert envelope.error is None, envelope.error
+    assert len(statements) == COMPOSED_PORTFOLIO_LIST_STATEMENTS
+
+
+def test_the_composed_portfolio_page_cost_is_identical_across_every_project_count(
+    migrated_engine: Engine, cloned_database_url: str
+) -> None:
+    """The invariance, stated at the layer that is actually paid for.
+
+    A ceiling would not catch a per-Project read at handler level; an equality
+    across one, five and twelve Projects does, and it is the assertion that
+    would fail first.
+    """
+    measured: list[int] = []
+    with _composed(migrated_engine, cloned_database_url) as service:
+        for index, projects_wanted in enumerate((1, 5, 12)):
+            _seed_committed(
+                migrated_engine,
+                tag=f"cb{index}",
+                projects_wanted=projects_wanted,
+                rows_per_project=4,
+                first=1 + index * 2000,
+            )
+            with _counted(migrated_engine) as statements:
+                envelope = _invoke(service, ListPortfolioConstraints())
+            assert envelope.error is None, envelope.error
+            measured.append(len(statements))
+    assert measured == [COMPOSED_PORTFOLIO_LIST_STATEMENTS] * 3
+    assert len(set(measured)) == 1
+
+
+@pytest.mark.parametrize(
+    ("projects_wanted", "rows_per_project"),
+    [(1, 1), (1, 60), (5, 1), (5, 12), (12, 1), (12, 8)],
+)
+def test_a_composed_portfolio_overview_costs_exactly_five_statements(
+    migrated_engine: Engine, cloned_database_url: str, projects_wanted: int, rows_per_project: int
+) -> None:
+    """The overview's four plus the same one Project enumeration."""
+    _seed_committed(
+        migrated_engine,
+        tag="cc",
+        projects_wanted=projects_wanted,
+        rows_per_project=rows_per_project,
+    )
+    with (
+        _composed(migrated_engine, cloned_database_url) as service,
+        _counted(migrated_engine) as statements,
+    ):
+        envelope = _invoke(service, ReadPortfolioConstraintOverview())
+    assert envelope.error is None, envelope.error
+    assert len(statements) == COMPOSED_PORTFOLIO_OVERVIEW_STATEMENTS
+
+
+def test_the_composed_portfolio_overview_cost_is_identical_across_every_project_count(
+    migrated_engine: Engine, cloned_database_url: str
+) -> None:
+    measured: list[int] = []
+    with _composed(migrated_engine, cloned_database_url) as service:
+        for index, projects_wanted in enumerate((1, 5, 12)):
+            _seed_committed(
+                migrated_engine,
+                tag=f"cd{index}",
+                projects_wanted=projects_wanted,
+                rows_per_project=5,
+                first=1 + index * 2000,
+            )
+            with _counted(migrated_engine) as statements:
+                envelope = _invoke(service, ReadPortfolioConstraintOverview())
+            assert envelope.error is None, envelope.error
+            measured.append(len(statements))
+    assert measured == [COMPOSED_PORTFOLIO_OVERVIEW_STATEMENTS] * 3
+    assert len(set(measured)) == 1
+
+
+def test_the_composed_cost_is_the_read_services_cost_plus_the_project_enumeration(
+    migrated_engine: Engine, cloned_database_url: str
+) -> None:
+    """The two layers measured side by side, so the gap is stated rather than assumed.
+
+    This is what makes the composed figures more than a second copy of the read
+    service's: the difference between them is required to be exactly one
+    statement, and that statement is required to be the canonical Project
+    enumeration. A handler that enumerated Projects twice, or once per Project,
+    changes the difference and fails here even if somebody also updated the
+    composed constants.
+    """
+    _seed_committed(migrated_engine, tag="ce", projects_wanted=6, rows_per_project=3)
+    with _composed(migrated_engine, cloned_database_url) as service:
+        with _counted(migrated_engine) as composed_list:
+            _invoke(service, ListPortfolioConstraints())
+        with _counted(migrated_engine) as composed_overview:
+            _invoke(service, ReadPortfolioConstraintOverview())
+    with migrated_engine.begin() as connection:
+        repository = SqlConstraintManagementRepository(connection)
+        portfolio = _Portfolio(tuple(_project_id("ce", index + 1) for index in range(6)))
+        with _counted(migrated_engine) as bare_list:
+            _page(repository, portfolio)
+        with _counted(migrated_engine) as bare_overview:
+            _overview(repository, portfolio)
+    assert len(composed_list) - len(bare_list) == 1
+    assert len(composed_overview) - len(bare_overview) == 1
+    # And the extra statement is the Project enumeration itself, asked once.
+    # Counted by what it reads rather than by differencing the two lists: the
+    # composed call and the bare one build their Register statement from
+    # different defaults, so the texts differ for a reason that is not the gap
+    # being measured.
+    for composed in (composed_list, composed_overview):
+        assert sum("FROM knowledge.projects" in text for text in composed) == 1
+    for bare in (bare_list, bare_overview):
+        assert not any("FROM knowledge.projects" in text for text in bare)
 
 
 def test_no_portfolio_read_statement_takes_a_row_lock(migrated_engine: Engine) -> None:

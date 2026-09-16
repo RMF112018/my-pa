@@ -9652,9 +9652,9 @@ class ApplicationService:
         is what says the Principal owns more Projects than one portfolio read
         will span, and the caller is told so rather than being handed a subset
         presented as the whole portfolio. There is deliberately no Project-set
-        cursor -- the accepted plan asks for none -- so the disclosure carries
-        `LISTING_HAS_NO_CONTINUATION` and says the truncation cannot be paged
-        past.
+        cursor -- the accepted plan asks for none -- so the capped-out Projects
+        are unreachable from any page, which `_portfolio_truncation` below
+        discloses as a standing truncation whose reason names the Project bound.
 
         The bound is the defining technical requirement of this package: a
         portfolio read must not degrade into per-Project work, and its statement
@@ -9681,11 +9681,32 @@ class ApplicationService:
         continues them. `portfolio_project_limit_reached` means the Principal
         owns more Projects than `MAX_PORTFOLIO_PROJECTS`, so rows from the
         Projects beyond the cap are absent from every page of this result and no
-        cursor will reach them -- which is why it also carries
-        `LISTING_HAS_NO_CONTINUATION` and why it is the reason reported when both
-        hold. Silently returning a subset of the portfolio and calling it the
-        portfolio would be a false answer, which is the one outcome this method
-        exists to prevent.
+        cursor will reach them. Silently returning a subset of the portfolio and
+        calling it the portfolio would be a false answer, which is the one
+        outcome this method exists to prevent.
+
+        **The cursor is kept when both bounds hold, and the limitation is not.**
+        An earlier form of this method emitted `LISTING_HAS_NO_CONTINUATION`
+        whenever the Project cap was reached, including on a page that also
+        filled and therefore carried a real, usable cursor. That response
+        contradicted itself: the limitation is documented as "a listing stopped
+        at the page size and this build issues no cursor", every other emission
+        site in the repository pairs it with a truncation carrying no cursor, and
+        a client that honoured it would stop paging and lose the rows the cursor
+        would have reached -- rows inside the Projects that *were* read.
+        Suppressing the cursor instead would trade one misleading answer for
+        another: it would discard rows the caller is entitled to while still
+        being unable to reach the capped-out Projects. So the cursor stays, and
+        the limitation is emitted only when the truncation it describes genuinely
+        carries no continuation.
+
+        Losing the limitation loses nothing the caller needs, because the Project
+        cap reaches it by a route that does not depend on the page: the cap
+        drives `is_truncated` directly, so a capped listing stays truncated on
+        every page including the last one -- where the page itself fits, no
+        cursor is issued, and `reason` still reads
+        `portfolio_project_limit_reached`. A caller that pages a capped portfolio
+        to exhaustion is therefore never told it has seen the whole portfolio.
 
         Neither field says anything about *which* Projects, how many there are,
         or whether any exist that this Principal does not own: the cap is a
@@ -9698,13 +9719,14 @@ class ApplicationService:
             reason = "portfolio_project_limit_reached"
         elif page.is_truncated:
             reason = "page_size_reached"
+        next_cursor = page.next_cursor if is_truncated else None
         return (
-            Truncation(
-                is_truncated=is_truncated,
-                reason=reason,
-                next_cursor=page.next_cursor if is_truncated else None,
+            Truncation(is_truncated=is_truncated, reason=reason, next_cursor=next_cursor),
+            (
+                (Limitation.LISTING_HAS_NO_CONTINUATION,)
+                if is_truncated and next_cursor is None
+                else ()
             ),
-            (Limitation.LISTING_HAS_NO_CONTINUATION,) if projects_truncated else (),
         )
 
     def _constraints_portfolio_list(

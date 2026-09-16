@@ -42,6 +42,7 @@ FAILING_OUTCOMES: Final = frozenset(
         "IMPLEMENTED_COMPOSED_GRANT_EXPIRED",
         "IMPLEMENTED_COMPOSED_GRANT_REVOKED",
         "IMPLEMENTED_COMPOSED_GRANT_MISMATCHED",
+        "IMPLEMENTED_COMPOSED_GRANT_FINITE_EXPIRY",
         "UNEXPECTED_CONTROL_PLANE_GRANT",
     }
 )
@@ -54,6 +55,7 @@ class ChatLLMProfileOutcome(StrEnum):
     IMPLEMENTED_COMPOSED_GRANT_EXPIRED = "IMPLEMENTED_COMPOSED_GRANT_EXPIRED"
     IMPLEMENTED_COMPOSED_GRANT_REVOKED = "IMPLEMENTED_COMPOSED_GRANT_REVOKED"
     IMPLEMENTED_COMPOSED_GRANT_MISMATCHED = "IMPLEMENTED_COMPOSED_GRANT_MISMATCHED"
+    IMPLEMENTED_COMPOSED_GRANT_FINITE_EXPIRY = "IMPLEMENTED_COMPOSED_GRANT_FINITE_EXPIRY"
     UNEXPECTED_CONTROL_PLANE_GRANT = "UNEXPECTED_CONTROL_PLANE_GRANT"
     EXCLUDED = "EXCLUDED"
 
@@ -200,11 +202,20 @@ def diff_chatllm_data_profile(
         expected_purpose = chatllm_grant_purpose(capability)
         expected_write = is_write_capability(capability)
         if active:
-            if any(
-                record.purpose is expected_purpose and record.is_write is expected_write
+            matching_active = [
+                record
                 for record in active
-            ):
-                outcomes[capability] = ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANTED
+                if record.purpose is expected_purpose and record.is_write is expected_write
+            ]
+            if matching_active:
+                durable = [record for record in matching_active if record.expires_at is None]
+                if durable:
+                    outcomes[capability] = ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANTED
+                else:
+                    outcomes[capability] = (
+                        ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANT_FINITE_EXPIRY
+                    )
+                    renew.add(capability)
             else:
                 outcomes[capability] = ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANT_MISMATCHED
             continue
@@ -256,10 +267,20 @@ def plan_chatllm_grant_actions(
         is_write = is_write_capability(capability)
         records = _matching_records(grant_records, capability, resource=resource, scope=scope)
         active = tuple(record for record in records if _is_active(record, now))
-        if any(record.purpose is purpose and record.is_write is is_write for record in active):
-            actions.append(
-                ChatLLMGrantAction("noop", capability, purpose, is_write, active[0].grant_id)
-            )
+        matching_active = [
+            record for record in active if record.purpose is purpose and record.is_write is is_write
+        ]
+        if matching_active:
+            durable = [record for record in matching_active if record.expires_at is None]
+            if durable:
+                actions.append(
+                    ChatLLMGrantAction("noop", capability, purpose, is_write, durable[0].grant_id)
+                )
+            else:
+                finite = matching_active
+                actions.append(
+                    ChatLLMGrantAction("renew", capability, purpose, is_write, finite[0].grant_id)
+                )
             continue
         expired = tuple(
             record

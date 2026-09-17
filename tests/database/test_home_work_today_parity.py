@@ -1,453 +1,252 @@
-"""Home and Work Today Task membership parity.
+"""Home and Work consume one Today selector: `tasks.list_tasks` + TODAY.
 
-WP-POSTUX-06 establishes one canonical Today Task selector consumed by both Work
-and Home. This module verifies that Home and Work return identical Task-backed
-membership for the same Principal, work_date, and timezone.
+WP-POSTUX-06 forbids a second Today SQL path. Work already evaluates civil-day
+membership in `_extend_work_view_conditions` (TODAY). Home's `/api/pulse`
+composition must call the same `list_tasks(..., work_view=TODAY, work_start,
+work_end)` after `_work_window`. This suite writes through
+`SqlTaskManagementRepository.insert_task` and reads through `list_tasks` with
+that Work TODAY window — the selector both surfaces are required to share.
 
-**Scenarios tested:**
-
-- scheduled-only: Task scheduled for Today with no Due date appears in both.
-- due-only: Task due Today with no Scheduled date appears in both.
-- due+scheduled: Task with both fields in Today window dedupes to one Task.
-- archived: Archived Tasks are excluded from both.
-- terminal: COMPLETED and CANCELLED Tasks are excluded; non-terminal qualify.
-- overdue-only: Task due before Today is not Today in either.
-- future-due-72h: Task due tomorrow (within 72h) is not Today in either.
-- no-due-no-scheduled: Task with neither field is never Today.
-- timezone-aware: Midnight boundary varies by timezone (DST-safe).
-
-**Architecture verified:**
-
-- Both Home (/api/pulse) and Work (/api/tasks?work_view=today) call the same
-  canonical application/repository selector.
-- Principal is authorization-derived; browser cannot override it.
-- work_date and timezone are explicit; no server-local implicit day.
-- Membership dedupes by Task ID; ordering may differ (Home may rank; Work is
-  calendar→priority→ID).
+Membership (not Pulse ranking) is the subject. Ordering is calendar timestamp,
+then priority, then task_id.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from typing import Final
 
 import pytest
+from sqlalchemy import Engine
 
-from my_pa.application.authorization import Authorization
-from my_pa.application.commands import ListTasks
-from my_pa.application.service import ApplicationService
-from my_pa.contracts.v1.disclosure import Disclosure
-from my_pa.domain.task.lifecycle import TaskLifecycleState
+from my_pa.application.service import _work_window
+from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
+from my_pa.domain.source.registry import issue_identifier
+from my_pa.domain.task.lifecycle import (
+    TaskLifecycleState,
+    TaskOriginKind,
+    TaskPriority,
+    TaskWorkView,
+)
 from my_pa.domain.task.task import Task
-from my_pa.infrastructure.persistence.unit_of_work import UnitOfWork
-from my_pa.tests.fixtures import KNOWN_PRINCIPAL_ID, container, isolated_database
+from my_pa.infrastructure.persistence.task_management import SqlAlchemyTaskManagementUnitOfWork
+
+pytestmark = pytest.mark.database
+
+DISPOSABLE_DATABASE: Final = "my_pa_home_work_today_parity_test"
+PRINCIPAL: Final = "prn_todayhome001todayhome001"
+WHEN: Final = datetime(2026, 9, 1, 12, tzinfo=UTC)
+WORK_DATE: Final = date(2026, 9, 17)
+TIMEZONE: Final = "America/New_York"
 
 
-@pytest.fixture
-def app_service(container):
-    """Application service for Home and Work Today queries."""
-    return container.service_app()
+def _window() -> tuple[datetime, datetime]:
+    return _work_window(WORK_DATE, TIMEZONE)
 
 
-@pytest.fixture
-def authorization(container) -> Authorization:
-    """Authenticated authorization for test Principal."""
-    service = container.service_app()
-    principal = container.resolve("test_principal")
-    return Authorization(
-        at=datetime(2026, 9, 17, 12, 0, 0, tzinfo=UTC),
-        principal=principal,
-        correlation_id="test-correlation",
-        request_id="test-request",
-        audit_id="test-audit",
-        authenticated_client_id=None,
-    )
-
-
-def create_task(
-    db: UnitOfWork,
-    principal_id: str,
-    task_id: str,
+def _task(
     *,
-    title: str = "Test Task",
+    title: str,
     lifecycle_state: TaskLifecycleState = TaskLifecycleState.OPEN,
     due_at: datetime | None = None,
     scheduled_at: datetime | None = None,
     archived_at: datetime | None = None,
+    priority: TaskPriority | None = None,
+    closed_at: datetime | None = None,
 ) -> Task:
-    """Create a test Task with the given properties."""
-    return db.tasks.create(
-        task_id=task_id,
-        principal_id=principal_id,
+    now = WHEN
+    return Task(
+        task_id=issue_identifier(IdKind.TASK),
+        principal_id=PRINCIPAL,
         title=title,
-        version=1,
         lifecycle_state=lifecycle_state,
-        origin_kind="direct_principal",
-        created_at=datetime(2026, 9, 1, 0, 0, 0, tzinfo=UTC),
+        evidence_state=ContinuityEvidenceState.ACCEPTED,
+        origin_kind=TaskOriginKind.DIRECT_PRINCIPAL,
+        opened_at=now,
+        created_at=now,
+        updated_at=now,
         due_at=due_at,
         scheduled_at=scheduled_at,
         archived_at=archived_at,
+        priority=priority,
+        closed_at=closed_at,
+        acceptance_kind=ContinuityAcceptanceKind.DIRECT_PRINCIPAL,
     )
 
 
-@pytest.mark.integration
-def test_canonical_today_selector_scheduled_only(
-    app_service: ApplicationService,
-    authorization: Authorization,
-    isolated_database: UnitOfWork,
-) -> None:
-    """Scheduled-only Task (no Due) appears in both Home and Work Today."""
-    principal_id = authorization.principal.principal_id
-    work_date = date(2026, 9, 17)
-    timezone = "America/New_York"
-
-    # Create: Task scheduled for today, no due date.
-    create_task(
-        isolated_database,
-        principal_id,
-        "tsk_scheduled_only",
-        title="Scheduled Today Only",
-        scheduled_at=datetime(2026, 9, 17, 14, 0, 0, tzinfo=UTC),
-        due_at=None,
-    )
-    isolated_database.commit()
-
-    # Query: Work Today
-    work_result = app_service.invoke(
-        ListTasks(
-            work_view="today",
-            work_date=work_date,
-            timezone=timezone,
-        ),
-        authorization,
-    )
-
-    # Verify: Scheduled-only Task appears.
-    assert work_result.payload["tasks"], "Work Today must include scheduled-only Task"
-    task_ids = [t["task_id"] for t in work_result.payload["tasks"]]
-    assert "tsk_scheduled_only" in task_ids
-
-
-@pytest.mark.integration
-def test_canonical_today_selector_due_only(
-    app_service: ApplicationService,
-    authorization: Authorization,
-    isolated_database: UnitOfWork,
-) -> None:
-    """Due-only Task (no Scheduled) appears in both Home and Work Today."""
-    principal_id = authorization.principal.principal_id
-    work_date = date(2026, 9, 17)
-    timezone = "America/New_York"
-
-    # Create: Task due for today, no scheduled date.
-    create_task(
-        isolated_database,
-        principal_id,
-        "tsk_due_only",
-        title="Due Today Only",
-        due_at=datetime(2026, 9, 17, 17, 0, 0, tzinfo=UTC),
-        scheduled_at=None,
-    )
-    isolated_database.commit()
-
-    # Query: Work Today
-    work_result = app_service.invoke(
-        ListTasks(
-            work_view="today",
-            work_date=work_date,
-            timezone=timezone,
-        ),
-        authorization,
-    )
-
-    # Verify: Due-only Task appears.
-    assert work_result.payload["tasks"], "Work Today must include due-only Task"
-    task_ids = [t["task_id"] for t in work_result.payload["tasks"]]
-    assert "tsk_due_only" in task_ids
-
-
-@pytest.mark.integration
-def test_canonical_today_selector_archived_excluded(
-    app_service: ApplicationService,
-    authorization: Authorization,
-    isolated_database: UnitOfWork,
-) -> None:
-    """Archived Task is excluded from Today even if due/scheduled today."""
-    principal_id = authorization.principal.principal_id
-    work_date = date(2026, 9, 17)
-    timezone = "America/New_York"
-
-    # Create: Archived Task due today.
-    create_task(
-        isolated_database,
-        principal_id,
-        "tsk_archived",
-        title="Archived Due Today",
-        due_at=datetime(2026, 9, 17, 17, 0, 0, tzinfo=UTC),
-        archived_at=datetime(2026, 9, 16, 0, 0, 0, tzinfo=UTC),
-    )
-    isolated_database.commit()
-
-    # Query: Work Today
-    work_result = app_service.invoke(
-        ListTasks(
-            work_view="today",
-            work_date=work_date,
-            timezone=timezone,
-        ),
-        authorization,
-    )
-
-    # Verify: Archived Task is not included.
-    task_ids = [t["task_id"] for t in work_result.payload["tasks"]]
-    assert "tsk_archived" not in task_ids
-
-
-@pytest.mark.integration
-def test_canonical_today_selector_terminal_excluded(
-    app_service: ApplicationService,
-    authorization: Authorization,
-    isolated_database: UnitOfWork,
-) -> None:
-    """COMPLETED and CANCELLED Tasks are excluded from Today."""
-    principal_id = authorization.principal.principal_id
-    work_date = date(2026, 9, 17)
-    timezone = "America/New_York"
-
-    # Create: Completed Task due today.
-    create_task(
-        isolated_database,
-        principal_id,
-        "tsk_completed",
-        title="Completed Today",
-        lifecycle_state=TaskLifecycleState.COMPLETED,
-        due_at=datetime(2026, 9, 17, 17, 0, 0, tzinfo=UTC),
-    )
-
-    # Create: Cancelled Task due today.
-    create_task(
-        isolated_database,
-        principal_id,
-        "tsk_cancelled",
-        title="Cancelled Today",
-        lifecycle_state=TaskLifecycleState.CANCELLED,
-        due_at=datetime(2026, 9, 17, 17, 0, 0, tzinfo=UTC),
-    )
-
-    # Create: Open Task due today (control).
-    create_task(
-        isolated_database,
-        principal_id,
-        "tsk_open",
-        title="Open Today",
-        lifecycle_state=TaskLifecycleState.OPEN,
-        due_at=datetime(2026, 9, 17, 17, 0, 0, tzinfo=UTC),
-    )
-    isolated_database.commit()
-
-    # Query: Work Today
-    work_result = app_service.invoke(
-        ListTasks(
-            work_view="today",
-            work_date=work_date,
-            timezone=timezone,
-        ),
-        authorization,
-    )
-
-    # Verify: Terminal Tasks excluded, Open included.
-    task_ids = [t["task_id"] for t in work_result.payload["tasks"]]
-    assert "tsk_completed" not in task_ids, "Completed Task must not be Today"
-    assert "tsk_cancelled" not in task_ids, "Cancelled Task must not be Today"
-    assert "tsk_open" in task_ids, "Open Task must be Today"
-
-
-@pytest.mark.integration
-def test_canonical_today_selector_overdue_not_today(
-    app_service: ApplicationService,
-    authorization: Authorization,
-    isolated_database: UnitOfWork,
-) -> None:
-    """Overdue Task (due before today) is not Today."""
-    principal_id = authorization.principal.principal_id
-    work_date = date(2026, 9, 17)
-    timezone = "America/New_York"
-
-    # Create: Task due yesterday.
-    create_task(
-        isolated_database,
-        principal_id,
-        "tsk_overdue",
-        title="Overdue",
-        due_at=datetime(2026, 9, 16, 17, 0, 0, tzinfo=UTC),
-    )
-    isolated_database.commit()
-
-    # Query: Work Today
-    work_result = app_service.invoke(
-        ListTasks(
-            work_view="today",
-            work_date=work_date,
-            timezone=timezone,
-        ),
-        authorization,
-    )
-
-    # Verify: Overdue Task is not Today.
-    task_ids = [t["task_id"] for t in work_result.payload["tasks"]]
-    assert "tsk_overdue" not in task_ids
-
-
-@pytest.mark.integration
-def test_canonical_today_selector_future_due_not_today(
-    app_service: ApplicationService,
-    authorization: Authorization,
-    isolated_database: UnitOfWork,
-) -> None:
-    """Future due Task (outside Today) is not Today, even within 72h."""
-    principal_id = authorization.principal.principal_id
-    work_date = date(2026, 9, 17)
-    timezone = "America/New_York"
-
-    # Create: Task due tomorrow (not Today, even if within 72h attention window).
-    create_task(
-        isolated_database,
-        principal_id,
-        "tsk_tomorrow",
-        title="Due Tomorrow",
-        due_at=datetime(2026, 9, 18, 17, 0, 0, tzinfo=UTC),
-    )
-    isolated_database.commit()
-
-    # Query: Work Today
-    work_result = app_service.invoke(
-        ListTasks(
-            work_view="today",
-            work_date=work_date,
-            timezone=timezone,
-        ),
-        authorization,
-    )
-
-    # Verify: Future-due Task is not Today.
-    task_ids = [t["task_id"] for t in work_result.payload["tasks"]]
-    assert "tsk_tomorrow" not in task_ids
-
-
-@pytest.mark.integration
-def test_canonical_today_selector_dedup_by_task_id(
-    app_service: ApplicationService,
-    authorization: Authorization,
-    isolated_database: UnitOfWork,
-) -> None:
-    """Task with both Due and Scheduled in Today dedupes to one entry."""
-    principal_id = authorization.principal.principal_id
-    work_date = date(2026, 9, 17)
-    timezone = "America/New_York"
-
-    # Create: Task with both Due and Scheduled for Today.
-    create_task(
-        isolated_database,
-        principal_id,
-        "tsk_both",
-        title="Due and Scheduled Today",
-        due_at=datetime(2026, 9, 17, 15, 0, 0, tzinfo=UTC),
-        scheduled_at=datetime(2026, 9, 17, 14, 0, 0, tzinfo=UTC),
-    )
-    isolated_database.commit()
-
-    # Query: Work Today
-    work_result = app_service.invoke(
-        ListTasks(
-            work_view="today",
-            work_date=work_date,
-            timezone=timezone,
-        ),
-        authorization,
-    )
-
-    # Verify: Task appears exactly once.
-    task_ids = [t["task_id"] for t in work_result.payload["tasks"]]
-    assert task_ids.count("tsk_both") == 1, "Deduped Task must appear once"
-
-
-@pytest.mark.integration
-def test_canonical_today_selector_timezone_boundary(
-    app_service: ApplicationService,
-    authorization: Authorization,
-    isolated_database: UnitOfWork,
-) -> None:
-    """Today boundary varies by timezone (America/New_York vs UTC)."""
-    principal_id = authorization.principal.principal_id
-
-    # Create: Task due at 2026-09-17T04:00:00 UTC
-    # This is 2026-09-17T00:00:00 in America/New_York (EDT = UTC-4)
-    # and 2026-09-17T04:00:00 UTC (still Sept 17 in NY)
-    create_task(
-        isolated_database,
-        principal_id,
-        "tsk_tz_boundary",
-        title="Timezone Boundary Task",
-        due_at=datetime(2026, 9, 17, 4, 0, 0, tzinfo=UTC),
-    )
-    isolated_database.commit()
-
-    # Query: Work Today in America/New_York (Sept 17)
-    ny_result = app_service.invoke(
-        ListTasks(
-            work_view="today",
-            work_date=date(2026, 9, 17),
-            timezone="America/New_York",
-        ),
-        authorization,
-    )
-
-    # Verify: Task due at boundary is included.
-    task_ids = [t["task_id"] for t in ny_result.payload["tasks"]]
-    assert "tsk_tz_boundary" in task_ids
-
-
-@pytest.mark.integration
-def test_canonical_today_selector_non_terminal_states(
-    app_service: ApplicationService,
-    authorization: Authorization,
-    isolated_database: UnitOfWork,
-) -> None:
-    """All non-terminal states qualify for Today: OPEN, IN_PROGRESS, WAITING, BLOCKED."""
-    principal_id = authorization.principal.principal_id
-    work_date = date(2026, 9, 17)
-    timezone = "America/New_York"
-
-    states = [
-        TaskLifecycleState.OPEN,
-        TaskLifecycleState.IN_PROGRESS,
-        TaskLifecycleState.WAITING,
-        TaskLifecycleState.BLOCKED,
-    ]
-
-    for state in states:
-        create_task(
-            isolated_database,
-            principal_id,
-            f"tsk_{state.value}",
-            title=f"{state.value} Task Today",
-            lifecycle_state=state,
-            due_at=datetime(2026, 9, 17, 17, 0, 0, tzinfo=UTC),
+def _today_ids(engine: Engine) -> tuple[str, ...]:
+    start, end = _window()
+    with SqlAlchemyTaskManagementUnitOfWork(engine) as uow:
+        found = uow.tasks.list_tasks(
+            PRINCIPAL,
+            work_view=TaskWorkView.TODAY,
+            work_start=start,
+            work_end=end,
+            work_now=datetime(2026, 9, 17, 16, tzinfo=UTC),
+            limit=50,
         )
+        uow.commit()
+    return tuple(task.task_id for task in found)
 
-    isolated_database.commit()
 
-    # Query: Work Today
-    work_result = app_service.invoke(
-        ListTasks(
-            work_view="today",
-            work_date=work_date,
-            timezone=timezone,
-        ),
-        authorization,
+def _insert(engine: Engine, task: Task) -> str:
+    with SqlAlchemyTaskManagementUnitOfWork(engine) as uow:
+        uow.tasks.insert_task(task)
+        uow.commit()
+    return task.task_id
+
+
+def test_scheduled_only_task_is_today(migrated_engine: Engine) -> None:
+    start, end = _window()
+    scheduled = start + timedelta(hours=10)
+    task_id = _insert(
+        migrated_engine,
+        _task(title="Scheduled only", scheduled_at=scheduled),
     )
+    assert task_id in _today_ids(migrated_engine)
+    assert start <= scheduled < end
 
-    # Verify: All non-terminal states appear.
-    task_ids = [t["task_id"] for t in work_result.payload["tasks"]]
-    for state in states:
-        assert f"tsk_{state.value}" in task_ids, f"{state.value} Task must be Today"
+
+def test_due_only_task_is_today(migrated_engine: Engine) -> None:
+    start, _end = _window()
+    task_id = _insert(
+        migrated_engine,
+        _task(title="Due only", due_at=start + timedelta(hours=12)),
+    )
+    assert task_id in _today_ids(migrated_engine)
+
+
+def test_due_and_scheduled_same_task_appears_once(migrated_engine: Engine) -> None:
+    start, _end = _window()
+    task_id = _insert(
+        migrated_engine,
+        _task(
+            title="Both instants",
+            due_at=start + timedelta(hours=15),
+            scheduled_at=start + timedelta(hours=9),
+        ),
+    )
+    ids = _today_ids(migrated_engine)
+    assert ids.count(task_id) == 1
+
+
+def test_archived_task_is_excluded(migrated_engine: Engine) -> None:
+    start, _end = _window()
+    task_id = _insert(
+        migrated_engine,
+        _task(
+            title="Archived",
+            due_at=start + timedelta(hours=8),
+            archived_at=WHEN,
+        ),
+    )
+    assert task_id not in _today_ids(migrated_engine)
+
+
+def test_terminal_tasks_are_excluded(migrated_engine: Engine) -> None:
+    start, _end = _window()
+    due = start + timedelta(hours=8)
+    completed = _insert(
+        migrated_engine,
+        _task(
+            title="Completed",
+            lifecycle_state=TaskLifecycleState.COMPLETED,
+            due_at=due,
+            closed_at=WHEN,
+        ),
+    )
+    cancelled = _insert(
+        migrated_engine,
+        _task(
+            title="Cancelled",
+            lifecycle_state=TaskLifecycleState.CANCELLED,
+            due_at=due,
+            closed_at=WHEN,
+        ),
+    )
+    open_id = _insert(migrated_engine, _task(title="Open", due_at=due))
+    ids = _today_ids(migrated_engine)
+    assert completed not in ids
+    assert cancelled not in ids
+    assert open_id in ids
+
+
+def test_overdue_only_is_not_today(migrated_engine: Engine) -> None:
+    start, _end = _window()
+    task_id = _insert(
+        migrated_engine,
+        _task(title="Overdue", due_at=start - timedelta(hours=2)),
+    )
+    assert task_id not in _today_ids(migrated_engine)
+
+
+def test_due_tomorrow_within_72h_is_not_today(migrated_engine: Engine) -> None:
+    _start, end = _window()
+    task_id = _insert(
+        migrated_engine,
+        _task(title="Tomorrow", due_at=end + timedelta(hours=12)),
+    )
+    assert task_id not in _today_ids(migrated_engine)
+
+
+def test_neither_due_nor_scheduled_is_not_today(migrated_engine: Engine) -> None:
+    task_id = _insert(migrated_engine, _task(title="Unscheduled"))
+    assert task_id not in _today_ids(migrated_engine)
+
+
+def test_ordering_is_calendar_then_priority_then_id(migrated_engine: Engine) -> None:
+    start, _end = _window()
+    later = _insert(
+        migrated_engine,
+        _task(
+            title="Later p1",
+            due_at=start + timedelta(hours=14),
+            priority=TaskPriority.P1,
+        ),
+    )
+    earlier_p3 = _insert(
+        migrated_engine,
+        _task(
+            title="Earlier p3",
+            due_at=start + timedelta(hours=8),
+            priority=TaskPriority.P3,
+        ),
+    )
+    earlier_p1 = _insert(
+        migrated_engine,
+        _task(
+            title="Earlier p1",
+            due_at=start + timedelta(hours=8),
+            priority=TaskPriority.P1,
+        ),
+    )
+    ids = _today_ids(migrated_engine)
+    assert ids.index(earlier_p1) < ids.index(earlier_p3)
+    assert ids.index(earlier_p3) < ids.index(later)
+
+
+def test_dst_spring_forward_civil_day_membership(migrated_engine: Engine) -> None:
+    work_date = date(2026, 3, 8)
+    start, end = _work_window(work_date, "America/New_York")
+    inside = _insert(
+        migrated_engine,
+        _task(title="DST inside", due_at=start + timedelta(hours=1)),
+    )
+    after = _insert(
+        migrated_engine,
+        _task(title="DST after", due_at=end),
+    )
+    with SqlAlchemyTaskManagementUnitOfWork(migrated_engine) as uow:
+        found = uow.tasks.list_tasks(
+            PRINCIPAL,
+            work_view=TaskWorkView.TODAY,
+            work_start=start,
+            work_end=end,
+            limit=50,
+        )
+        uow.commit()
+    ids = tuple(task.task_id for task in found)
+    assert inside in ids
+    assert after not in ids
+    assert (end - start) == timedelta(hours=23)

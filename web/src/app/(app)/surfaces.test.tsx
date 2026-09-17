@@ -38,7 +38,7 @@
  * opaque-identifier patterns. No real capture, no real person, no real text.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { PrincipalSession } from "@/contracts/identity";
 
 const PRINCIPAL: PrincipalSession = {
@@ -137,13 +137,53 @@ function answerByCapability(map: Record<string, unknown>, disclosure: unknown = 
  * Mock /api/pulse with the BFF JSON shape, optionally including pulseItems.
  * Transforms snake_case pulse items from test fixtures into camelCase BackendPulseItem.
  */
-function answerPulseWith(pulseItems: unknown[] = [], disclosure: unknown = whole()) {
+function bffDisclosure(disclosure: unknown) {
+  const raw = (disclosure ?? {}) as {
+    coverage?: { state?: string } | string;
+    limitations?: readonly string[];
+    truncation?: { is_truncated?: boolean };
+    partial_result?: boolean;
+    freshness?: { observed_at?: string };
+  };
+  const state = typeof raw.coverage === "string" ? raw.coverage : raw.coverage?.state;
+  const truncated = raw.truncation?.is_truncated === true;
+  const coverage =
+    state === "unavailable"
+      ? "unavailable"
+      : raw.partial_result || truncated || state === "partially_processed"
+        ? "partial"
+        : "complete";
+  return {
+    scope: "continuity.pulse",
+    coverage,
+    freshnessAt: raw.freshness?.observed_at ?? "2026-01-01T00:00:00Z",
+    authority: "accepted_record",
+    limitations: raw.limitations ?? [],
+    truncated,
+  };
+}
+
+function answerPulseWith(
+  pulseItems: unknown[] | undefined,
+  disclosure: unknown = whole(),
+) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: unknown) => {
       const urlStr = String(url);
       // /api/pulse requests get the new BFF shape
       if (urlStr.includes("/api/pulse")) {
+        if (pulseItems === undefined) {
+          return new Response(
+            JSON.stringify({
+              shape: "backend",
+              canonicalTasks: [],
+              disclosure: bffDisclosure(disclosure),
+              completeness: "full",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
         const backendItems = (pulseItems as any[]).map((item) => ({
           pulseId: item.pulse_id,
           itemType: item.item_type,
@@ -157,13 +197,14 @@ function answerPulseWith(pulseItems: unknown[] = [], disclosure: unknown = whole
           generatedAt: item.generated_at,
           ...(item.subject_title !== undefined ? { subjectTitle: item.subject_title } : {}),
         }));
+        const envelope = bffDisclosure(disclosure);
         return new Response(
           JSON.stringify({
             shape: "backend",
             canonicalTasks: [],
             pulseItems: backendItems,
-            disclosure,
-            completeness: "full",
+            disclosure: envelope,
+            completeness: envelope.coverage === "complete" ? "full" : "partial",
           }),
           {
             status: 200,
@@ -224,11 +265,21 @@ async function serverTreeOf(page: () => Promise<React.ReactNode>) {
  */
 async function renderTodayPage() {
   const tree = await serverTreeOf(() => TodayPage());
-  return render(
+  const view = render(
     <TaskRuntimeProvider principalId={PRINCIPAL.principalId} sessionEpoch="surfaces-test">
       {tree}
     </TaskRuntimeProvider>,
   );
+  await waitFor(() => {
+    expect(
+      screen.queryByTestId("today-empty") ||
+        screen.queryByTestId("today-unavailable") ||
+        screen.queryByTestId("today-degraded-empty") ||
+        screen.queryByTestId("pulse-reason") ||
+        screen.queryByTestId("backend-pulse-list"),
+    ).toBeTruthy();
+  });
+  return view;
 }
 
 function socketFails() {
@@ -621,7 +672,7 @@ describe("Today distinguishes a quiet day from a failed derivation", () => {
   it("says nothing meets a condition only when the derivation ran", async () => {
     answerPulseWith([], whole());
     const { unmount } = await renderTodayPage();
-    expect(screen.getByTestId("today-empty")).toHaveAttribute("data-state", "empty");
+    await waitFor(() => expect(screen.getByTestId("today-empty")).toHaveAttribute("data-state", "empty"));
     unmount();
 
     answerPulseWith([], notSearched());
@@ -631,16 +682,18 @@ describe("Today distinguishes a quiet day from a failed derivation", () => {
   });
 
   it("does NOT treat omitted pulse_items as a quiet day", async () => {
-    answerPulseWith([], whole());
+    answerPulseWith(undefined, whole());
     await renderTodayPage();
-    expect(screen.getByTestId("today-unavailable")).toHaveAttribute("data-state", "unavailable");
+    await waitFor(() =>
+      expect(screen.getByTestId("today-unavailable")).toHaveAttribute("data-state", "unavailable"),
+    );
     expect(screen.queryByTestId("today-empty")).toBeNull();
   });
 
   it("says the quiet-day sentence in exactly those words, and only then", async () => {
     answerPulseWith([], whole());
     const { unmount } = await renderTodayPage();
-    expect(screen.getByTestId("today-empty").textContent).toContain(TODAY_EMPTY_COPY);
+    await waitFor(() => expect(screen.getByTestId("today-empty").textContent).toContain(TODAY_EMPTY_COPY));
     unmount();
 
     // The same zero rows, from a read the backend said it did not perform.

@@ -220,7 +220,7 @@ test.describe("dead gateway session-service", () => {
       extraHTTPHeaders: { cookie: `mypa_session=${cookie!.value}` },
     });
     try {
-      const response = await dead.get("/api/pulse");
+      const response = await dead.get("/api/pulse?workDate=2026-08-09&timezone=UTC");
       expect(response.status(), "gateway outage must not look like a missing login").toBe(503);
       await expect(response.json()).resolves.toMatchObject({
         error: { code: "gateway_unreachable" },

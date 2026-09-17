@@ -423,9 +423,9 @@ test.describe("axe-core, in Chromium, against the rendered page", () => {
     const title = `E2E today a11y task ${marker}`;
     const created = await seedTask(page, {
       title,
-      // Past-due, so `pulse_derivation` surfaces it as `task_overdue` and Today
-      // is genuinely populated before anything here is scanned.
-      dueAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+      // Civil-day Today membership (WP-POSTUX-06): due now in the browser zone,
+      // not overdue-only. Overdue is Pulse attention, not canonical Today.
+      dueAt: new Date().toISOString(),
       idempotencyKey: `e2e-${marker}`,
     });
     expect(created.status).toBe(200);

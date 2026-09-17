@@ -222,6 +222,7 @@ const CAPABILITY_RESULTS: Record<string, unknown> = {
   "knowledge.read": KNOWLEDGE_READ,
   "knowledge.reveal": REVEAL_UNAVAILABLE,
   "review.list": { review_cases: [] },
+  "tasks.list": { tasks: [] },
   "continuity.pulse": { pulse_items: [] },
   "continuity.situations": SITUATIONS_WITH_WORKSPACE,
   "continuity.projects": { projects: [] },
@@ -356,7 +357,7 @@ describe("a default build produces no fixture data at all", () => {
       await library(get(cookie, "/api/library")),
       await reviewList(get(cookie, "/api/review")),
       await reveal(post(cookie, "/api/reveal", { subjectId: "cap_aaaaaaaa11111111" })),
-      await pulse(get(cookie, "/api/pulse")),
+      await pulse(get(cookie, "/api/pulse?workDate=2026-08-09&timezone=UTC")),
       await situations(get(cookie, "/api/situations")),
       await projects(get(cookie, "/api/projects")),
       await timeline(get(cookie, "/api/relationships/p/timeline"), {
@@ -374,6 +375,7 @@ describe("a default build produces no fixture data at all", () => {
       "http://127.0.0.1:8000/v1/capture.list",
       "http://127.0.0.1:8000/v1/review.list",
       "http://127.0.0.1:8000/v1/knowledge.reveal",
+      "http://127.0.0.1:8000/v1/tasks.list",
       "http://127.0.0.1:8000/v1/continuity.pulse",
       "http://127.0.0.1:8000/v1/continuity.situations",
       "http://127.0.0.1:8000/v1/continuity.projects",
@@ -415,7 +417,7 @@ describe("disclosure accuracy, in both directions", () => {
     expect(body.shape).toBe("synthetic");
     expect(body.disclosure.coverage).toBe("synthetic");
     expect(body.disclosure.authority).toBe("synthetic_fixture");
-    const pulseBody = await (await pulse(get(cookie, "/api/pulse"))).json();
+    const pulseBody = await (await pulse(get(cookie, "/api/pulse?workDate=2026-08-09&timezone=UTC"))).json();
     expect(pulseBody.disclosure.coverage).toBe("synthetic");
     expect(pulseBody.disclosure.authority).toBe("synthetic_fixture");
   });
@@ -961,11 +963,14 @@ describe("Today is a derivation, not a feed", () => {
 
   it("carries a why-now reason code and an evidentiary basis on every item", async () => {
     const cookie = await signIn();
-    stubGateway({ pulse_items: DERIVED });
-    const body = await (await pulse(get(cookie, "/api/pulse"))).json();
+    stubGatewayByCapability({
+      "tasks.list": { tasks: [] },
+      "continuity.pulse": { pulse_items: DERIVED },
+    });
+    const body = await (await pulse(get(cookie, "/api/pulse?workDate=2026-08-09&timezone=UTC"))).json();
     expect(body.shape).toBe("backend");
-    expect(body.items).toHaveLength(2);
-    for (const item of body.items) {
+    expect(body.pulseItems).toHaveLength(2);
+    for (const item of body.pulseItems) {
       expect(item.reasonCode).toMatch(/^[a-z_]+$/);
       expect(item.basisRefs.length).toBeGreaterThan(0);
       expect(item.nextStep).toBeTruthy();
@@ -1011,23 +1016,26 @@ describe("Today is a derivation, not a feed", () => {
     }
 
     const cookie = await signIn();
-    stubGateway({
-      pulse_items: [
-        {
-          ...DERIVED[0],
-          subject_title: "Return the signed lease",
-          subject_state: "in_progress",
-          subject_version: 7,
-          subject_priority: "p1",
-        },
-      ],
+    stubGatewayByCapability({
+      "tasks.list": { tasks: [] },
+      "continuity.pulse": {
+        pulse_items: [
+          {
+            ...DERIVED[0],
+            subject_title: "Return the signed lease",
+            subject_state: "in_progress",
+            subject_version: 7,
+            subject_priority: "p1",
+          },
+        ],
+      },
     });
-    const response = await pulse(get(cookie, "/api/pulse"));
+    const response = await pulse(get(cookie, "/api/pulse?workDate=2026-08-09&timezone=UTC"));
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body.items).toHaveLength(1);
-    expect(body.items[0].subjectTitle).toBe("Return the signed lease");
-    expect(body.items[0].attentionRank).toBe(DERIVED[0].attention_rank);
+    expect(body.pulseItems).toHaveLength(1);
+    expect(body.pulseItems[0].subjectTitle).toBe("Return the signed lease");
+    expect(body.pulseItems[0].attentionRank).toBe(DERIVED[0].attention_rank);
   });
 
   it("preserves the gateway's ranked order and never re-sorts by time", async () => {
@@ -1035,24 +1043,32 @@ describe("Today is a derivation, not a feed", () => {
     // route that sorted by it would produce an arbitrary order. The assertion is
     // that the order out is the order in.
     const cookie = await signIn();
-    stubGateway({ pulse_items: DERIVED });
-    const body = await (await pulse(get(cookie, "/api/pulse"))).json();
-    expect(body.items.map((i: { pulseId: string }) => i.pulseId)).toEqual(
+    stubGatewayByCapability({
+      "tasks.list": { tasks: [] },
+      "continuity.pulse": { pulse_items: DERIVED },
+    });
+    const body = await (await pulse(get(cookie, "/api/pulse?workDate=2026-08-09&timezone=UTC"))).json();
+    expect(body.pulseItems.map((i: { pulseId: string }) => i.pulseId)).toEqual(
       DERIVED.map((i) => i.pulse_id),
     );
-    expect(new Set(body.items.map((i: { generatedAt: string }) => i.generatedAt)).size).toBe(1);
+    expect(new Set(body.pulseItems.map((i: { generatedAt: string }) => i.generatedAt)).size).toBe(1);
   });
 
   it("sends no principal on the wire and no payload a caller could shape", async () => {
     const cookie = await signIn();
-    stubGateway({ pulse_items: [] });
-    await pulse(get(cookie, "/api/pulse"));
-    const call = sent.at(-1)!;
-    expect(call.url).toBe("http://127.0.0.1:8000/v1/continuity.pulse");
-    expect(call.body.payload).toEqual({});
+    stubGatewayByCapability({
+      "tasks.list": { tasks: [] },
+      "continuity.pulse": { pulse_items: [] },
+    });
+    await pulse(get(cookie, "/api/pulse?workDate=2026-08-09&timezone=UTC"));
+    // The route calls tasks.list first, then continuity.pulse. Check the pulse call.
+    const pulseCall = sent.find((call) => call.url.includes("continuity.pulse"));
+    expect(pulseCall).toBeTruthy();
+    expect(pulseCall!.url).toBe("http://127.0.0.1:8000/v1/continuity.pulse");
+    expect(pulseCall!.body.payload).toEqual({});
     // The envelope carries a session-derived correlation principal and the
     // request body carries no other identity field at all.
-    expect(Object.keys(call.body).sort()).toEqual(
+    expect(Object.keys(pulseCall!.body).sort()).toEqual(
       ["contract_version", "payload", "principal_id", "purpose", "request_id", "requested_at"],
     );
   });

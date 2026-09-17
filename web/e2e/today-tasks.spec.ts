@@ -12,17 +12,15 @@
  * constructible from a browser at this head at all (AC-020, which says why).
  * Every other read and write below is the real chain.
  *
- * **How a Task reaches Today here.** `domain/situation/pulse_derivation.py`
- * puts an *open, accepted* Task on the Pulse when its due moment has passed
- * (`task_overdue`) or is within the due-soon window (`task_due_soon`), and the
- * derivation runs at read time — there is no pulse table to seed and no
- * acceptance step to drive. So a Task created through the canonical BFF with a
- * due moment in the past is on Today on the very next read, which is what
- * `seedOverdueTask` does. The synthetic Pulse fixture is deliberately *not*
- * used: `app/(app)/today/page.tsx` short-circuits to `PulseList` when
- * `MYPA_DATA_PROVIDER=synthetic`, so a synthetic build never renders
- * `TodayPulseSurface` or `TodayTaskCard` at all, and the browser suite runs a
- * default build on purpose (see `playwright.config.ts`).
+ * **How a Task reaches Today here.** WP-POSTUX-06 civil-day membership: an
+ * open, accepted Task whose `due_at` or `scheduled_at` falls in the browser's
+ * civil day. Overdue-only is Pulse attention, not canonical Today. So a Task
+ * created through the canonical BFF with `dueAt` now is on Today on the next
+ * read, which is what `seedTodayTask` does. The synthetic Pulse fixture is
+ * deliberately *not* used: `app/(app)/today/page.tsx` short-circuits to
+ * `PulseList` when `MYPA_DATA_PROVIDER=synthetic`, so a synthetic build never
+ * renders `TodayPulseSurface` or `TodayTaskCard` at all, and the browser suite
+ * runs a default build on purpose (see `playwright.config.ts`).
  *
  * **Why the network is watched rather than inferred.** Three of the criteria
  * here are claims about requests — that Reschedule writes `dueAt` and nothing
@@ -92,8 +90,8 @@ interface TaskRow {
  * days, and a boundary case would make the reason sentence depend on when the
  * suite happened to run.
  */
-async function seedOverdueTask(page: Page, title: string): Promise<string> {
-  const dueAt = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+async function seedTodayTask(page: Page, title: string): Promise<string> {
+  const dueAt = new Date().toISOString();
   const created = await api<{ task?: { task_id: string } }>(page, "/api/tasks", {
     method: "POST",
     body: { title, dueAt, idempotencyKey: key("e2e-today-seed") },
@@ -304,7 +302,7 @@ test("TUX07-AC-002/003: Reschedule and Close are on the card, and Close costs tw
 }) => {
   test.setTimeout(180_000);
   const title = `E2E today card ${marker("ac002")}`;
-  const taskId = await seedOverdueTask(page, title);
+  const taskId = await seedTodayTask(page, title);
   await openToday(page);
 
   const card = cardFor(page, title);
@@ -372,7 +370,7 @@ test("TUX07-AC-004: a Today Reschedule sends only dueAt and leaves scheduled_at 
 }) => {
   test.setTimeout(180_000);
   const title = `E2E today reschedule ${marker("ac004")}`;
-  const taskId = await seedOverdueTask(page, title);
+  const taskId = await seedTodayTask(page, title);
   const before = await readTask(page, taskId);
 
   const { events } = observeTaskRequests(page);
@@ -434,8 +432,8 @@ test("TUX07-AC-005: rendering Today reads no Task detail, and the first operatio
   test.setTimeout(180_000);
   const operatedTitle = `E2E today operated ${marker("ac005a")}`;
   const bystanderTitle = `E2E today bystander ${marker("ac005b")}`;
-  const operatedId = await seedOverdueTask(page, operatedTitle);
-  const bystanderId = await seedOverdueTask(page, bystanderTitle);
+  const operatedId = await seedTodayTask(page, operatedTitle);
+  const bystanderId = await seedTodayTask(page, bystanderTitle);
 
   const { events } = observeTaskRequests(page);
   await openToday(page);
@@ -502,7 +500,7 @@ test("TUX07-AC-005: rendering Today reads no Task detail, and the first operatio
 test("TUX07-AC-012: an authoritative Empty renders exactly the Empty copy", async ({ page }) => {
   test.setTimeout(180_000);
   const title = `E2E today emptied ${marker("ac012")}`;
-  await seedOverdueTask(page, title);
+  await seedTodayTask(page, title);
   await openToday(page);
   await expect(cardFor(page, title)).toBeVisible();
 
@@ -520,7 +518,9 @@ test("TUX07-AC-012: an authoritative Empty renders exactly the Empty copy", asyn
       contentType: "application/json",
       body: JSON.stringify({
         shape: "backend",
-        items: [],
+        canonicalTasks: [],
+        pulseItems: [],
+        completeness: "full",
         disclosure: { scope: "pulse", coverage: "complete", limitations: [], truncated: false },
       }),
     });
@@ -539,7 +539,7 @@ test("TUX07-AC-013: a failed refresh keeps the rows and marks the surface stale,
 }) => {
   test.setTimeout(180_000);
   const title = `E2E today retained ${marker("ac013")}`;
-  await seedOverdueTask(page, title);
+  await seedTodayTask(page, title);
   await openToday(page);
   const card = cardFor(page, title);
   await expect(card).toBeVisible();
@@ -613,8 +613,8 @@ test("TUX07-AC-014/017: an open Today reconciles a completed Task away and annou
   test.setTimeout(180_000);
   const closedTitle = `E2E today reconciled ${marker("ac014a")}`;
   const keptTitle = `E2E today kept ${marker("ac014b")}`;
-  await seedOverdueTask(page, closedTitle);
-  await seedOverdueTask(page, keptTitle);
+  await seedTodayTask(page, closedTitle);
+  await seedTodayTask(page, keptTitle);
 
   await openToday(page);
   const kept = cardFor(page, keptTitle);
@@ -682,8 +682,8 @@ test("TUX07-AC-018: focus lands deterministically after the card leaves Today", 
   test.setTimeout(180_000);
   const closedTitle = `E2E today focus ${marker("ac018a")}`;
   const keptTitle = `E2E today focus kept ${marker("ac018b")}`;
-  await seedOverdueTask(page, closedTitle);
-  await seedOverdueTask(page, keptTitle);
+  await seedTodayTask(page, closedTitle);
+  await seedTodayTask(page, keptTitle);
 
   await openToday(page);
   await expect(cardFor(page, closedTitle)).toBeVisible();
@@ -718,7 +718,7 @@ test("TUX07-AC-019: the Today Task card reflows at 320-430 with both operations 
 }) => {
   test.setTimeout(240_000);
   const title = `E2E today reflow ${marker("ac019")}`;
-  await seedOverdueTask(page, title);
+  await seedTodayTask(page, title);
 
   const overflow = () =>
     page.evaluate(
@@ -779,7 +779,7 @@ test("TUX07-AC-020: a non-Task Pulse item renders with no Reschedule and no Clos
 }) => {
   test.setTimeout(180_000);
   const title = `E2E today mixed task ${marker("ac020")}`;
-  await seedOverdueTask(page, title);
+  await seedTodayTask(page, title);
 
   /*
     The Task half of this list is entirely real: a Task is seeded through the
@@ -805,9 +805,14 @@ test("TUX07-AC-020: a non-Task Pulse item renders with no Reschedule and no Clos
     `itemType`, and the two items go through one render pass in one list, so the
     comparison is like-for-like rather than two separate pages.
   */
-  const served = await api<{ items: unknown[]; disclosure: unknown }>(page, "/api/pulse");
+  const served = await api<{
+    pulseItems?: { itemType: string; subjectTitle?: string }[];
+    items?: { itemType: string; subjectTitle?: string }[];
+    disclosure: unknown;
+  }>(page, "/api/pulse?workDate=2026-08-09&timezone=UTC");
   expect(served.status).toBe(200);
-  const taskItem = (served.body.items as { itemType: string; subjectTitle?: string }[]).find(
+  const pulseItems = served.body.pulseItems ?? served.body.items ?? [];
+  const taskItem = pulseItems.find(
     (item) => item.itemType === "task" && item.subjectTitle === title,
   );
   expect(taskItem, "the seeded Task must be derived onto the Pulse by the real backend").toBeTruthy();
@@ -833,7 +838,9 @@ test("TUX07-AC-020: a non-Task Pulse item renders with no Reschedule and no Clos
       contentType: "application/json",
       body: JSON.stringify({
         shape: "backend",
-        items: [commitmentItem, taskItem],
+        canonicalTasks: [],
+        pulseItems: [commitmentItem, taskItem],
+        completeness: "full",
         disclosure: { scope: "pulse", coverage: "complete", limitations: [], truncated: false },
       }),
     });

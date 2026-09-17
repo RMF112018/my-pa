@@ -67,6 +67,7 @@ import {
 } from "@/lib/task/use-foreground-revalidation";
 import type { DisclosureEnvelope } from "@/contracts/envelope";
 import type { BackendPulseItem, TodayPulseAnswer } from "@/contracts/views";
+import { browserWorkClock } from "@/lib/api/work-client";
 
 /**
  * The sentence an authoritative quiet day is allowed to say, and the only one.
@@ -126,6 +127,7 @@ const STALE_COPY =
 export interface PulseReadPayload {
   readonly items: readonly BackendPulseItem[];
   readonly disclosure: DisclosureEnvelope;
+  readonly completeness?: "full" | "partial";
 }
 
 type PulseReadOutcome = "applied" | "deduped" | "superseded" | "aborted" | "barrier_blocked" | "failed";
@@ -172,7 +174,7 @@ export function classifyPulsePayload(payload: PulseReadPayload): TodayPulseAnswe
     };
   }
 
-  if (disclosure.coverage === "partial" || disclosure.truncated) {
+  if (disclosure.coverage === "partial" || disclosure.truncated || payload.completeness === "partial") {
     return { kind: "degraded", items, limitations, truncated: disclosure.truncated === true };
   }
 
@@ -182,11 +184,34 @@ export function classifyPulsePayload(payload: PulseReadPayload): TodayPulseAnswe
 }
 
 /**
- * Read `/api/pulse`. No payload, no principal, no query — the route accepts
- * none, and the session cookie is the whole of the identity.
+ * Compute the browser's current civil date as YYYY-MM-DD in the browser's
+ * IANA timezone.
+ *
+ * This is called before every fetch so that midnight/timezone-change
+ * transitions cause a new semantic query. The server owns validating and
+ * converting these dimensions to UTC.
+ */
+/**
+ * Read `/api/pulse` with explicit work_date and timezone query parameters.
+ *
+ * **Query identity includes date/timezone.** The key passed to this fetcher
+ * includes the work_date and timezone so that a midnight transition or
+ * timezone change produces a different semantic query. The fetcher itself is
+ * stateless and does not remember the last work_date/timezone; the coordinator
+ * and component handle that through the changing query key.
+ *
+ * The session cookie provides authentication and Principal derivation. The
+ * work_date and timezone are required query parameters that the backend
+ * validates and uses to construct the canonical Today window in the browser's
+ * civil day.
  */
 const readPulse: PulseFetcher = async ({ signal }) => {
-  const response = await fetch("/api/pulse", {
+  const { workDate, timezone } = browserWorkClock();
+  const url = new URL("/api/pulse", window.location.origin);
+  url.searchParams.set("workDate", workDate);
+  url.searchParams.set("timezone", timezone);
+
+  const response = await fetch(url.toString(), {
     method: "GET",
     signal,
     cache: "no-store",
@@ -198,18 +223,26 @@ const readPulse: PulseFetcher = async ({ signal }) => {
   }
   const body: unknown = await response.json();
   if (!body || typeof body !== "object") throw new Error("pulse answer was not an object");
-  const candidate = body as { shape?: unknown; items?: unknown; disclosure?: unknown };
+  const candidate = body as {
+    shape?: unknown;
+    canonicalTasks?: unknown;
+    pulseItems?: unknown;
+    disclosure?: unknown;
+    completeness?: unknown;
+  };
   // A synthetic build never reaches this surface: the page short-circuits to the
   // fixture list. Anything but the backend shape is a payload this surface has
   // no honest reading of, so it is a failed read rather than a silent Empty.
   if (candidate.shape !== "backend") throw new Error("pulse answer was not the backend shape");
-  if (!Array.isArray(candidate.items)) throw new Error("pulse answer carried no items array");
+  if (!Array.isArray(candidate.canonicalTasks)) throw new Error("pulse answer carried no canonicalTasks array");
+  if (!Array.isArray(candidate.pulseItems)) throw new Error("pulse answer carried no pulseItems array");
   if (!candidate.disclosure || typeof candidate.disclosure !== "object") {
     throw new Error("pulse answer carried no disclosure");
   }
   return {
-    items: candidate.items as readonly BackendPulseItem[],
+    items: candidate.pulseItems as readonly BackendPulseItem[],
     disclosure: candidate.disclosure as DisclosureEnvelope,
+    completeness: candidate.completeness === "partial" ? "partial" : "full",
   };
 };
 
@@ -406,18 +439,25 @@ export class PulseReadCoordinator
 
 export interface TodayPulseSurfaceProps {
   /**
-   * The server's one authoritative classification, already made by
-   * `surfaceAnswer`. It is the surface's starting answer and is never
-   * re-derived here.
+   * Optional server classification for backward compatibility and testing.
+   * Normally not provided; the surface computes Today from the browser's
+   * work_date and timezone on first load.
    */
-  readonly initialAnswer: TodayPulseAnswer;
+  readonly initialAnswer?: TodayPulseAnswer;
 }
 
-export function TodayPulseSurface({ initialAnswer }: TodayPulseSurfaceProps): React.JSX.Element {
+export function TodayPulseSurface({ initialAnswer }: TodayPulseSurfaceProps = {}): React.JSX.Element {
   const runtime = useTaskRuntime();
   const { reconciliation, sessionKey } = runtime;
 
-  const [answer, setAnswer] = useState<TodayPulseAnswer>(initialAnswer);
+  // Compute the initial answer as unavailable, letting the client fetch with
+  // work_date/timezone override the server classification (if any). This
+  // ensures that if the server's classification is stale (e.g., the browser
+  // time differs from the server time, or it's near midnight), the client
+  // recomputation makes the right query.
+  const [answer, setAnswer] = useState<TodayPulseAnswer>(
+    initialAnswer ?? { kind: "unavailable", error: { errorClass: "unavailable", code: "initializing", message: "Loading Today..." }, limitations: [] }
+  );
   const [stale, setStale] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -491,6 +531,11 @@ export function TodayPulseSurface({ initialAnswer }: TodayPulseSurfaceProps): Re
     setStale(true);
   }, []);
 
+  // Compute a query key that includes work_date and timezone so that midnight
+  // and timezone changes produce a new semantic query.
+  const { workDate, timezone } = browserWorkClock();
+  const queryKey = `${TODAY_PULSE_QUERY_ID}:${workDate}:${timezone}`;
+
   const { revalidate } = useForegroundRevalidation<
     PulseReadPayload,
     string,
@@ -499,7 +544,7 @@ export function TodayPulseSurface({ initialAnswer }: TodayPulseSurfaceProps): Re
     PulseSnapshot
   >({
     queryId: TODAY_PULSE_QUERY_ID,
-    queryKey: TODAY_PULSE_QUERY_ID,
+    queryKey: queryKey,
     enabled: true,
     coordinator,
     fetcher: readPulse,

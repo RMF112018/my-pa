@@ -113,7 +113,7 @@ describe("omitted required arrays fail closed at the route", () => {
   it("GET pulse with a missing pulse_items array answers 503 without dumping the payload", async () => {
     const cookie = await signIn();
     stubGateway({ leaked_pulse: "must-not-dump" });
-    const response = await pulse(get(cookie, "/api/pulse"));
+    const response = await pulse(get(cookie, "/api/pulse?workDate=2026-08-09&timezone=UTC"));
     expect(response.status).toBe(503);
     const body = await response.json();
     expectContractInvalid(body, "must-not-dump");
@@ -235,18 +235,36 @@ describe("stale expectedReviewVersion does not fabricate a decision", () => {
 describe("partial disclosure is not rewritten as complete", () => {
   it("a valid empty pulse with partial_result and partially_processed is coverage partial", async () => {
     const cookie = await signIn();
-    stubGateway(
-      { pulse_items: [] },
-      {
-        ...DISCLOSURE,
-        coverage: { state: "partially_processed" },
-        partial_result: true,
-      },
+    const partialDisclosure = {
+      ...DISCLOSURE,
+      coverage: { state: "partially_processed" },
+      partial_result: true,
+    };
+    // The pulse route calls both tasks.list and continuity.pulse
+    vi.stubGlobal(
+      "fetch",
+      withSessionServiceFetch(async (url: string | URL | Request, init?: RequestInit) => {
+        const urlStr = String(url);
+        if (urlStr.includes("tasks.list")) {
+          // When pulse is partial, tasks.list also reports partial
+          return new Response(JSON.stringify({ result: { tasks: [] }, disclosure: partialDisclosure }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(
+          JSON.stringify({
+            result: { pulse_items: [] },
+            disclosure: partialDisclosure,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }),
     );
-    const response = await pulse(get(cookie, "/api/pulse"));
+    const response = await pulse(get(cookie, "/api/pulse?workDate=2026-08-09&timezone=UTC"));
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body.items).toEqual([]);
+    expect(body.pulseItems).toEqual([]);
     expect(body.disclosure.coverage).toBe("partial");
     expect(body.disclosure.coverage).not.toBe("complete");
   });

@@ -66,9 +66,16 @@ function disclosure(overrides: Partial<DisclosureEnvelope> = {}): DisclosureEnve
 function pulseResponse(
   items: readonly BackendPulseItem[],
   disclosureOverrides: Partial<DisclosureEnvelope> = {},
+  completeness: "full" | "partial" = "full",
 ): Response {
   return new Response(
-    JSON.stringify({ shape: "backend", items, disclosure: disclosure(disclosureOverrides) }),
+    JSON.stringify({
+      shape: "backend",
+      canonicalTasks: [],
+      pulseItems: items,
+      disclosure: disclosure(disclosureOverrides),
+      completeness,
+    }),
     { status: 200, headers: { "content-type": "application/json" } },
   );
 }
@@ -96,11 +103,13 @@ function requestedUrls(): readonly string[] {
 }
 
 describe("TodayPulseSurface reads /api/pulse and nothing else", () => {
-  it("asks only its own route, with no payload and no principal", async () => {
+  it("asks only its own route, with workDate and timezone in query, with no payload and no principal", async () => {
     renderSurface({ kind: "records", items: TWO_ROWS });
     await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
     for (const [url, init] of fetchSpy.mock.calls as [string, RequestInit][]) {
-      expect(String(url)).toBe("/api/pulse");
+      const urlString = String(url);
+      // Expect the path to be /api/pulse with workDate and timezone query params
+      expect(urlString).toMatch(/\/api\/pulse\?workDate=\d{4}-\d{2}-\d{2}&timezone=.+$/);
       expect(init.method).toBe("GET");
       expect(init.body).toBeUndefined();
     }

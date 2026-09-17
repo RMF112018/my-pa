@@ -8344,6 +8344,10 @@ class ApplicationService:
         Bounded by the same published page size every other listing here uses
         (`D-24`). One row past the page is read so that truncation is a fact
         rather than a guess, exactly as `_documents_list` does it.
+
+        `work_view=TODAY` uses the single Work civil-day predicate in
+        `tasks.list_tasks` (`_extend_work_view_conditions`). Home consumes that
+        same selector; there is no second Today SQL path.
         """
         page_size = self._page_size(command.page_size)
         work_start: datetime | None = None

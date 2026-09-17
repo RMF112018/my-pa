@@ -179,9 +179,29 @@ function parseField(browserName: string, value: unknown, field: WorkField, input
   };
 }
 
+function isValidIANATimezone(timezone: unknown): timezone is string {
+  if (typeof timezone !== "string") return false;
+  if (timezone.length === 0 || timezone.length > 64) return false;
+  if (!/^[A-Za-z0-9_+\/-]+$/.test(timezone)) return false;
+  try {
+    new Intl.DateTimeFormat("en-CA", { timeZone: timezone }).format(new Date());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function mapped(source: Record<string, unknown>, fields: FieldMap, input: InputKind) {
   const unknown = Object.keys(source).filter((key) => !(key in fields));
   if (unknown.length > 0) return { ok: false as const, response: invalid(`unknown fields: ${unknown.join(", ")}`) };
+  
+  // Validate timezone if present
+  if ("timezone" in source && source.timezone !== undefined) {
+    if (!isValidIANATimezone(source.timezone)) {
+      return { ok: false as const, response: invalid("timezone is not a valid IANA timezone name") };
+    }
+  }
+  
   const payload: Record<string, unknown> = {};
   for (const [browserName, field] of Object.entries(fields)) {
     const value = source[browserName];

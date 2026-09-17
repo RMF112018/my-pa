@@ -5594,6 +5594,22 @@ class ContinuityRepository(ABC):
     ) -> tuple[Task, ...]:
         """This Principal's tasks, optionally only the accepted ones."""
 
+    @abstractmethod
+    def today_tasks(
+        self, principal_id: str, work_date: date, timezone: str
+    ) -> tuple[Task, ...]:
+        """Tasks that are Today: open, not archived, with due/scheduled in the given civil date window.
+
+        Canonical Today membership contract:
+        - belongs to principal_id
+        - not archived (archived_at is NULL)
+        - lifecycle_state in (OPEN, IN_PROGRESS, WAITING, BLOCKED)
+        - due_at OR scheduled_at falls in [midnight(work_date, tz), midnight(work_date+1, tz))
+          after server-side UTC conversion
+
+        The timezone parameter must be an IANA timezone name. Invalid timezones raise ValueError.
+        """
+
 
 # --- WP-27 the managed-document plane ---------------------------------------
 #

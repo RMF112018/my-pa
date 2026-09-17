@@ -1652,62 +1652,6 @@ class SqlContinuityRepository(ContinuityRepository):
         ).all()
         return tuple(self._to_task(row) for row in rows)
 
-    def today_tasks(
-        self, principal_id: str, work_date: date, timezone: str
-    ) -> tuple[Task, ...]:
-        """Tasks that are Today for a Principal in a given timezone on a given civil date.
-
-        A Task is Today iff:
-        1. belongs to principal_id
-        2. not archived (archived_at is NULL)
-        3. lifecycle_state in (OPEN, IN_PROGRESS, WAITING, BLOCKED)
-        4. due_at OR scheduled_at falls in [midnight(work_date, tz), midnight(work_date+1, tz))
-           after server-side UTC conversion
-
-        The window is [local_start_utc, local_end_utc), which represents the
-        civil date boundaries in the given timezone. No deduplication: a Task
-        cannot have two different due moments that both fall into Today.
-        """
-        try:
-            zone = ZoneInfo(timezone)
-        except Exception as error:
-            raise ValueError(f"invalid IANA timezone: {timezone}") from error
-
-        # Convert the civil date boundaries to UTC for database comparison
-        local_start = datetime.combine(work_date, datetime.min.time(), zone)
-        local_end = datetime.combine(work_date + timedelta(days=1), datetime.min.time(), zone)
-        start_utc = local_start.astimezone(UTC)
-        end_utc = local_end.astimezone(UTC)
-
-        # Canonical predicate: belongs to P, not archived, lifecycle open, due moment in window
-        criteria = [
-            tasks.c.principal_id == principal_id,
-            tasks.c.archived_at.is_(None),
-            tasks.c.lifecycle_state.in_([
-                "open",
-                "in_progress",
-                "waiting",
-                "blocked",
-            ]),
-            or_(
-                and_(
-                    tasks.c.due_at.isnot(None),
-                    tasks.c.due_at >= start_utc,
-                    tasks.c.due_at < end_utc,
-                ),
-                and_(
-                    tasks.c.scheduled_at.isnot(None),
-                    tasks.c.scheduled_at >= start_utc,
-                    tasks.c.scheduled_at < end_utc,
-                ),
-            ),
-        ]
-
-        rows = self._connection.execute(
-            select(*tasks.c).where(and_(*criteria)).order_by(tasks.c.task_id)
-        ).all()
-        return tuple(self._to_task(row) for row in rows)
-
     # --- row mapping -------------------------------------------------------
 
     @staticmethod

@@ -86,14 +86,12 @@ def _today_ids(engine: Engine) -> tuple[str, ...]:
             work_now=datetime(2026, 9, 17, 16, tzinfo=UTC),
             limit=50,
         )
-        uow.commit()
     return tuple(task.task_id for task in found)
 
 
 def _insert(engine: Engine, task: Task) -> str:
     with SqlAlchemyTaskManagementUnitOfWork(engine) as uow:
         uow.tasks.insert_task(task)
-        uow.commit()
     return task.task_id
 
 
@@ -245,7 +243,6 @@ def test_dst_spring_forward_civil_day_membership(migrated_engine: Engine) -> Non
             work_end=end,
             limit=50,
         )
-        uow.commit()
     ids = tuple(task.task_id for task in found)
     assert inside in ids
     assert after not in ids

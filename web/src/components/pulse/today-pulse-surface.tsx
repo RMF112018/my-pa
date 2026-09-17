@@ -67,6 +67,7 @@ import {
 } from "@/lib/task/use-foreground-revalidation";
 import type { DisclosureEnvelope } from "@/contracts/envelope";
 import type { BackendPulseItem, TodayPulseAnswer } from "@/contracts/views";
+import { browserWorkClock } from "@/lib/api/work-client";
 
 /**
  * The sentence an authoritative quiet day is allowed to say, and the only one.
@@ -126,6 +127,7 @@ const STALE_COPY =
 export interface PulseReadPayload {
   readonly items: readonly BackendPulseItem[];
   readonly disclosure: DisclosureEnvelope;
+  readonly completeness?: "full" | "partial";
 }
 
 type PulseReadOutcome = "applied" | "deduped" | "superseded" | "aborted" | "barrier_blocked" | "failed";
@@ -172,7 +174,7 @@ export function classifyPulsePayload(payload: PulseReadPayload): TodayPulseAnswe
     };
   }
 
-  if (disclosure.coverage === "partial" || disclosure.truncated) {
+  if (disclosure.coverage === "partial" || disclosure.truncated || payload.completeness === "partial") {
     return { kind: "degraded", items, limitations, truncated: disclosure.truncated === true };
   }
 
@@ -189,47 +191,6 @@ export function classifyPulsePayload(payload: PulseReadPayload): TodayPulseAnswe
  * transitions cause a new semantic query. The server owns validating and
  * converting these dimensions to UTC.
  */
-function browserWorkClock(): { readonly workDate: string; readonly timezone: string } {
-  const now = new Date();
-  // Intl.DateTimeFormat with numeric parts yields year/month/day separately.
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(now);
-
-  const dateParts: Record<string, string> = {};
-  for (const part of parts) {
-    if (part.type !== "literal") {
-      dateParts[part.type] = part.value;
-    }
-  }
-  const workDate = `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
-
-  // Intl.DateTimeFormat cannot directly produce the IANA timezone name the
-  // browser is using (it can only name a zone as a localized string), so we
-  // extract it from Intl.DateTimeFormat's timeZone option in formatToParts.
-  // Since the browser doesn't offer a direct API for "what's my timezone", we
-  // use a fallback: the resolved timeZone from Intl.DateTimeFormat, which is
-  // non-standard but implemented by all major browsers. For robust support,
-  // we use the system's Intl.Locale API if available, or fall back to a UTC
-  // approximation.
-  let timezone = "UTC";
-  try {
-    // Try to get the system timezone from Intl.DateTimeFormat.
-    // This is a best-effort approach and relies on implementation details.
-    const resolved = new Intl.DateTimeFormat().resolvedOptions();
-    if (resolved.timeZone) {
-      timezone = resolved.timeZone;
-    }
-  } catch {
-    // Fallback to UTC if anything fails.
-    timezone = "UTC";
-  }
-
-  return { workDate, timezone };
-}
-
 /**
  * Read `/api/pulse` with explicit work_date and timezone query parameters.
  *
@@ -281,6 +242,7 @@ const readPulse: PulseFetcher = async ({ signal }) => {
   return {
     items: candidate.pulseItems as readonly BackendPulseItem[],
     disclosure: candidate.disclosure as DisclosureEnvelope,
+    completeness: candidate.completeness === "partial" ? "partial" : "full",
   };
 };
 

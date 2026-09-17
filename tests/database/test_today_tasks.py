@@ -59,10 +59,18 @@ ASIA_TOKYO: Final = "Asia/Tokyo"
 
 
 @pytest.fixture
-def repo_conn(migrated_engine: Engine) -> tuple[SqlContinuityRepository, Connection]:
+def repository(migrated_engine: Engine) -> tuple[SqlContinuityRepository, Connection]:
     """Create a repository and connection for testing within a transaction."""
     with migrated_engine.begin() as connection:
         yield (SqlContinuityRepository(connection), connection)
+
+
+@pytest.fixture
+def conn_and_repo(migrated_engine: Engine):
+    """Fixture that yields both connection and repository separately for clearer test code."""
+    with migrated_engine.begin() as connection:
+        repo = SqlContinuityRepository(connection)
+        yield repo, connection
 
 
 def _insert_task(
@@ -114,9 +122,9 @@ def _insert_task(
 class TestTodayTasksMembership:
     """Tests for the canonical Today Task membership contract."""
 
-    def test_due_date_in_window_utc(self, repo_conn: tuple[SqlContinuityRepository, Connection]) -> None:
+    def test_due_date_in_window_utc(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """A task with due_at in Today's window is included."""
-        repository, connection = repo_conn
+        repository, connection = conn_and_repo
         # Midnight UTC on TEST_DATE
         window_start = datetime.combine(TEST_DATE, datetime.min.time(), ZoneInfo(UTC_TZ))
         due_moment = window_start + timedelta(hours=12)
@@ -128,8 +136,9 @@ class TestTodayTasksMembership:
         assert len(result) == 1
         assert result[0].task_id == "tsk_due_in"
 
-    def test_scheduled_date_in_window_utc(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_scheduled_date_in_window_utc(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """A task with scheduled_at in Today's window is included."""
+        repository, connection = conn_and_repo
         window_start = datetime.combine(TEST_DATE, datetime.min.time(), ZoneInfo(UTC_TZ))
         scheduled_moment = window_start + timedelta(hours=14)
         
@@ -140,8 +149,9 @@ class TestTodayTasksMembership:
         assert len(result) == 1
         assert result[0].task_id == "tsk_sched_in"
 
-    def test_both_due_and_scheduled_in_window(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_both_due_and_scheduled_in_window(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """A task with both due_at and scheduled_at in window appears once (not deduped as two items)."""
+        repository, connection = conn_and_repo
         window_start = datetime.combine(TEST_DATE, datetime.min.time(), ZoneInfo(UTC_TZ))
         due_moment = window_start + timedelta(hours=8)
         scheduled_moment = window_start + timedelta(hours=16)
@@ -160,8 +170,9 @@ class TestTodayTasksMembership:
         assert len(result) == 1
         assert result[0].task_id == "tsk_both"
 
-    def test_due_date_before_today_excluded(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_due_date_before_today_excluded(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """A task with due_at before Today's window is excluded."""
+        repository, connection = conn_and_repo
         window_start = datetime.combine(TEST_DATE, datetime.min.time(), ZoneInfo(UTC_TZ))
         due_moment = window_start - timedelta(seconds=1)
         
@@ -171,8 +182,9 @@ class TestTodayTasksMembership:
         
         assert len(result) == 0
 
-    def test_due_date_after_today_excluded(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_due_date_after_today_excluded(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """A task with due_at after Today's window is excluded."""
+        repository, connection = conn_and_repo
         window_end = datetime.combine(TEST_DATE + timedelta(days=1), datetime.min.time(), ZoneInfo(UTC_TZ))
         due_moment = window_end
         
@@ -182,8 +194,9 @@ class TestTodayTasksMembership:
         
         assert len(result) == 0
 
-    def test_scheduled_date_before_today_excluded(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_scheduled_date_before_today_excluded(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """A task with scheduled_at before Today's window is excluded."""
+        repository, connection = conn_and_repo
         window_start = datetime.combine(TEST_DATE, datetime.min.time(), ZoneInfo(UTC_TZ))
         scheduled_moment = window_start - timedelta(seconds=1)
         
@@ -193,8 +206,9 @@ class TestTodayTasksMembership:
         
         assert len(result) == 0
 
-    def test_scheduled_date_after_today_excluded(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_scheduled_date_after_today_excluded(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """A task with scheduled_at after Today's window is excluded."""
+        repository, connection = conn_and_repo
         window_end = datetime.combine(TEST_DATE + timedelta(days=1), datetime.min.time(), ZoneInfo(UTC_TZ))
         scheduled_moment = window_end
         
@@ -204,16 +218,18 @@ class TestTodayTasksMembership:
         
         assert len(result) == 0
 
-    def test_no_due_or_scheduled_excluded(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_no_due_or_scheduled_excluded(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """A task with neither due_at nor scheduled_at is excluded."""
+        repository, connection = conn_and_repo
         _insert_task(connection, "tsk_no_date", PRINCIPAL_A, "Task With No Date")
         
         result = repository.today_tasks(PRINCIPAL_A, TEST_DATE, UTC_TZ)
         
         assert len(result) == 0
 
-    def test_archived_task_excluded(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_archived_task_excluded(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """A task that is archived is excluded, even if due_at is in window."""
+        repository, connection = conn_and_repo
         window_start = datetime.combine(TEST_DATE, datetime.min.time(), ZoneInfo(UTC_TZ))
         due_moment = window_start + timedelta(hours=12)
         archived_moment = datetime.now(UTC)
@@ -231,8 +247,9 @@ class TestTodayTasksMembership:
         
         assert len(result) == 0
 
-    def test_completed_lifecycle_excluded(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_completed_lifecycle_excluded(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """A task with lifecycle_state=completed is excluded."""
+        repository, connection = conn_and_repo
         window_start = datetime.combine(TEST_DATE, datetime.min.time(), ZoneInfo(UTC_TZ))
         due_moment = window_start + timedelta(hours=12)
         
@@ -249,8 +266,9 @@ class TestTodayTasksMembership:
         
         assert len(result) == 0
 
-    def test_cancelled_lifecycle_excluded(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_cancelled_lifecycle_excluded(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """A task with lifecycle_state=cancelled is excluded."""
+        repository, connection = conn_and_repo
         window_start = datetime.combine(TEST_DATE, datetime.min.time(), ZoneInfo(UTC_TZ))
         due_moment = window_start + timedelta(hours=12)
         
@@ -267,8 +285,9 @@ class TestTodayTasksMembership:
         
         assert len(result) == 0
 
-    def test_open_lifecycle_included(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_open_lifecycle_included(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """A task with lifecycle_state=open and due_at in window is included."""
+        repository, connection = conn_and_repo
         window_start = datetime.combine(TEST_DATE, datetime.min.time(), ZoneInfo(UTC_TZ))
         due_moment = window_start + timedelta(hours=12)
         
@@ -286,8 +305,9 @@ class TestTodayTasksMembership:
         assert len(result) == 1
         assert result[0].task_id == "tsk_open"
 
-    def test_in_progress_lifecycle_included(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_in_progress_lifecycle_included(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """A task with lifecycle_state=in_progress and due_at in window is included."""
+        repository, connection = conn_and_repo
         window_start = datetime.combine(TEST_DATE, datetime.min.time(), ZoneInfo(UTC_TZ))
         due_moment = window_start + timedelta(hours=12)
         
@@ -305,8 +325,9 @@ class TestTodayTasksMembership:
         assert len(result) == 1
         assert result[0].task_id == "tsk_in_progress"
 
-    def test_waiting_lifecycle_included(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_waiting_lifecycle_included(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """A task with lifecycle_state=waiting and due_at in window is included."""
+        repository, connection = conn_and_repo
         window_start = datetime.combine(TEST_DATE, datetime.min.time(), ZoneInfo(UTC_TZ))
         due_moment = window_start + timedelta(hours=12)
         
@@ -324,8 +345,9 @@ class TestTodayTasksMembership:
         assert len(result) == 1
         assert result[0].task_id == "tsk_waiting"
 
-    def test_blocked_lifecycle_included(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_blocked_lifecycle_included(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """A task with lifecycle_state=blocked and due_at in window is included."""
+        repository, connection = conn_and_repo
         window_start = datetime.combine(TEST_DATE, datetime.min.time(), ZoneInfo(UTC_TZ))
         due_moment = window_start + timedelta(hours=12)
         
@@ -343,8 +365,9 @@ class TestTodayTasksMembership:
         assert len(result) == 1
         assert result[0].task_id == "tsk_blocked"
 
-    def test_principal_isolation_other_principal_excluded(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_principal_isolation_other_principal_excluded(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """A task belonging to a different principal is excluded."""
+        repository, connection = conn_and_repo
         window_start = datetime.combine(TEST_DATE, datetime.min.time(), ZoneInfo(UTC_TZ))
         due_moment = window_start + timedelta(hours=12)
         
@@ -360,8 +383,9 @@ class TestTodayTasksMembership:
         
         assert len(result) == 0
 
-    def test_timezone_america_new_york(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_timezone_america_new_york(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """Today's window is correctly computed for America/New_York timezone."""
+        repository, connection = conn_and_repo
         # In America/New_York on Sept 17, 2026, local midnight is earlier than UTC
         zone = ZoneInfo(US_EASTERN)
         local_start = datetime.combine(TEST_DATE, datetime.min.time(), zone)
@@ -381,8 +405,9 @@ class TestTodayTasksMembership:
         assert len(result) == 1
         assert result[0].task_id == "tsk_ny_noon"
 
-    def test_timezone_europe_london(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_timezone_europe_london(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """Today's window is correctly computed for Europe/London timezone."""
+        repository, connection = conn_and_repo
         zone = ZoneInfo(EUROPE_LONDON)
         local_start = datetime.combine(TEST_DATE, datetime.min.time(), zone)
         due_moment = local_start + timedelta(hours=12)
@@ -400,8 +425,9 @@ class TestTodayTasksMembership:
         assert len(result) == 1
         assert result[0].task_id == "tsk_london_noon"
 
-    def test_timezone_asia_tokyo(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_timezone_asia_tokyo(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """Today's window is correctly computed for Asia/Tokyo timezone."""
+        repository, connection = conn_and_repo
         zone = ZoneInfo(ASIA_TOKYO)
         local_start = datetime.combine(TEST_DATE, datetime.min.time(), zone)
         due_moment = local_start + timedelta(hours=12)
@@ -419,8 +445,9 @@ class TestTodayTasksMembership:
         assert len(result) == 1
         assert result[0].task_id == "tsk_tokyo_noon"
 
-    def test_midnight_boundary_start_inclusive(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_midnight_boundary_start_inclusive(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """A task with due_at at the start of Today's window (midnight) is included."""
+        repository, connection = conn_and_repo
         zone = ZoneInfo(UTC_TZ)
         midnight = datetime.combine(TEST_DATE, datetime.min.time(), zone)
         
@@ -437,8 +464,9 @@ class TestTodayTasksMembership:
         assert len(result) == 1
         assert result[0].task_id == "tsk_midnight_start"
 
-    def test_midnight_boundary_end_exclusive(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_midnight_boundary_end_exclusive(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """A task with due_at at the end of Today's window (next midnight) is excluded."""
+        repository, connection = conn_and_repo
         zone = ZoneInfo(UTC_TZ)
         next_midnight = datetime.combine(TEST_DATE + timedelta(days=1), datetime.min.time(), zone)
         
@@ -454,19 +482,22 @@ class TestTodayTasksMembership:
         
         assert len(result) == 0
 
-    def test_invalid_timezone_raises_error(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_invalid_timezone_raises_error(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """An invalid IANA timezone raises ValueError."""
+        repository, connection = conn_and_repo
         with pytest.raises(ValueError, match="invalid IANA timezone"):
             repository.today_tasks(PRINCIPAL_A, TEST_DATE, "Invalid/Timezone")
 
-    def test_empty_result_when_no_match(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_empty_result_when_no_match(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """When no tasks match, an empty tuple is returned."""
+        repository, connection = conn_and_repo
         result = repository.today_tasks(PRINCIPAL_A, TEST_DATE, UTC_TZ)
         
         assert result == ()
 
-    def test_deferred_until_does_not_affect_today_membership(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_deferred_until_does_not_affect_today_membership(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """A task with deferred_until in the future is still included if due_at is in Today window."""
+        repository, connection = conn_and_repo
         window_start = datetime.combine(TEST_DATE, datetime.min.time(), ZoneInfo(UTC_TZ))
         due_moment = window_start + timedelta(hours=12)
         deferred_moment = datetime.now(UTC) + timedelta(days=7)
@@ -510,8 +541,9 @@ class TestTodayTasksMembership:
         assert len(result) == 1
         assert result[0].task_id == "tsk_deferred"
 
-    def test_multiple_tasks_all_included(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_multiple_tasks_all_included(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """Multiple tasks matching the criteria are all included in the result."""
+        repository, connection = conn_and_repo
         window_start = datetime.combine(TEST_DATE, datetime.min.time(), ZoneInfo(UTC_TZ))
         
         _insert_task(connection, "tsk_1", PRINCIPAL_A, "Task 1", due_at=window_start + timedelta(hours=1))
@@ -524,8 +556,9 @@ class TestTodayTasksMembership:
         task_ids = {task.task_id for task in result}
         assert task_ids == {"tsk_1", "tsk_2", "tsk_3"}
 
-    def test_results_ordered_by_task_id(self, connection: Connection, repository: SqlContinuityRepository) -> None:
+    def test_results_ordered_by_task_id(self, conn_and_repo: tuple[SqlContinuityRepository, Connection]) -> None:
         """Results are ordered by task_id for determinism."""
+        repository, connection = conn_and_repo
         window_start = datetime.combine(TEST_DATE, datetime.min.time(), ZoneInfo(UTC_TZ))
         
         _insert_task(connection, "tsk_z", PRINCIPAL_A, "Task Z", due_at=window_start + timedelta(hours=1))

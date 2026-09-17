@@ -68,10 +68,10 @@ import json
 from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Protocol
 
-from my_pa.contracts.ports import TaskManagementRepository, TaskManagementUnitOfWork
+from my_pa.contracts.ports import ContinuityRepository, TaskManagementRepository, TaskManagementUnitOfWork
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import utc_now
 from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
@@ -677,6 +677,31 @@ class TaskManagementService:
                 after=after_cursor,
                 limit=page_size,
             )
+
+    def list_today_tasks(
+        self,
+        *,
+        principal_id: str,
+        work_date: date,
+        timezone: str,
+        continuity_repo: ContinuityRepository,
+    ) -> tuple[Task, ...]:
+        """Return the canonical Today Task set for a Principal on a given civil date in a timezone.
+
+        A Task is Today iff:
+        1. belongs to principal_id
+        2. not archived (archived_at is NULL)
+        3. lifecycle_state in (OPEN, IN_PROGRESS, WAITING, BLOCKED)
+        4. due_at OR scheduled_at falls in [midnight(work_date, tz), midnight(work_date+1, tz))
+           after server-side UTC conversion
+
+        The timezone is validated before the query is issued. An invalid IANA
+        timezone raises ValueError. The result is ordered by task_id for determinism.
+
+        This method does not mutate any Task; it is a read-only query against
+        the canonical continuity repository.
+        """
+        return continuity_repo.today_tasks(principal_id, work_date, timezone)
 
     def _mutate(
         self,

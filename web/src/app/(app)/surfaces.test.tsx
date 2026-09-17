@@ -134,6 +134,53 @@ function answerByCapability(map: Record<string, unknown>, disclosure: unknown = 
 }
 
 /**
+ * Mock /api/pulse with the BFF JSON shape, optionally including pulseItems.
+ * Transforms snake_case pulse items from test fixtures into camelCase BackendPulseItem.
+ */
+function answerPulseWith(pulseItems: unknown[] = [], disclosure: unknown = whole()) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: unknown) => {
+      const urlStr = String(url);
+      // /api/pulse requests get the new BFF shape
+      if (urlStr.includes("/api/pulse")) {
+        const backendItems = (pulseItems as any[]).map((item) => ({
+          pulseId: item.pulse_id,
+          itemType: item.item_type,
+          itemRef: item.item_ref,
+          reasonCode: item.reason_code,
+          reason: item.reason,
+          basisRefs: item.basis_refs,
+          consequence: item.consequence,
+          nextStep: item.next_step,
+          attentionRank: item.attention_rank,
+          generatedAt: item.generated_at,
+          ...(item.subject_title !== undefined ? { subjectTitle: item.subject_title } : {}),
+        }));
+        return new Response(
+          JSON.stringify({
+            shape: "backend",
+            canonicalTasks: [],
+            pulseItems: backendItems,
+            disclosure,
+            completeness: "full",
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      // Other requests still get the gateway envelope shape
+      return new Response(JSON.stringify({ result: {}, disclosure }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }),
+  );
+}
+
+/**
  * Await a server component the way a server would, then render what it
  * produced.
  *
@@ -566,44 +613,44 @@ describe("Review distinguishes an empty queue from an unread one", () => {
 
 describe("Today distinguishes a quiet day from a failed derivation", () => {
   it("renders derived items when the derivation returned some", async () => {
-    answerWith({ pulse_items: [PULSE_ITEM] }, whole());
+    answerPulseWith([PULSE_ITEM], whole());
     await renderTodayPage();
     expect(screen.getByTestId("pulse-reason").textContent).toContain("two days past");
   });
 
   it("says nothing meets a condition only when the derivation ran", async () => {
-    answerWith({ pulse_items: [] }, whole());
+    answerPulseWith([], whole());
     const { unmount } = await renderTodayPage();
     expect(screen.getByTestId("today-empty")).toHaveAttribute("data-state", "empty");
     unmount();
 
-    answerWith({ pulse_items: [] }, notSearched());
+    answerPulseWith([], notSearched());
     await renderTodayPage();
     expect(screen.getByTestId("today-unavailable")).toHaveAttribute("data-state", "unavailable");
     expect(screen.queryByTestId("today-empty")).toBeNull();
   });
 
   it("does NOT treat omitted pulse_items as a quiet day", async () => {
-    answerWith({}, whole());
+    answerPulseWith([], whole());
     await renderTodayPage();
     expect(screen.getByTestId("today-unavailable")).toHaveAttribute("data-state", "unavailable");
     expect(screen.queryByTestId("today-empty")).toBeNull();
   });
 
   it("says the quiet-day sentence in exactly those words, and only then", async () => {
-    answerWith({ pulse_items: [] }, whole());
+    answerPulseWith([], whole());
     const { unmount } = await renderTodayPage();
     expect(screen.getByTestId("today-empty").textContent).toContain(TODAY_EMPTY_COPY);
     unmount();
 
     // The same zero rows, from a read the backend said it did not perform.
-    answerWith({ pulse_items: [] }, notSearched());
+    answerPulseWith([], notSearched());
     const failed = await renderTodayPage();
     expect(screen.queryByText(TODAY_EMPTY_COPY)).toBeNull();
     failed.unmount();
 
     // And the same zero rows, from an answer the backend called partial.
-    answerWith({ pulse_items: [] }, partial());
+    answerPulseWith([], partial());
     await renderTodayPage();
     expect(screen.getByTestId("today-degraded-empty")).toHaveAttribute("data-state", "degraded");
     expect(screen.queryByText(TODAY_EMPTY_COPY)).toBeNull();

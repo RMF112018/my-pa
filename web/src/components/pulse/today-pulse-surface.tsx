@@ -494,7 +494,7 @@ export function TodayPulseSurface({ initialAnswer }: TodayPulseSurfaceProps = {}
   // time differs from the server time, or it's near midnight), the client
   // recomputation makes the right query.
   const [answer, setAnswer] = useState<TodayPulseAnswer>(
-    initialAnswer ?? { kind: "unavailable", error: { errorClass: "loading", code: "initializing", message: "Loading Today..." }, limitations: [] }
+    initialAnswer ?? { kind: "unavailable", error: { errorClass: "unavailable", code: "initializing", message: "Loading Today..." }, limitations: [] }
   );
   const [stale, setStale] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);

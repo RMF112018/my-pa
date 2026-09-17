@@ -100,7 +100,7 @@ def test_canonical_today_selector_scheduled_only(
     principal_id = authorization.principal.principal_id
     work_date = date(2026, 9, 17)
     timezone = "America/New_York"
-    
+
     # Create: Task scheduled for today, no due date.
     create_task(
         isolated_database,
@@ -111,7 +111,7 @@ def test_canonical_today_selector_scheduled_only(
         due_at=None,
     )
     isolated_database.commit()
-    
+
     # Query: Work Today
     work_result = app_service.invoke(
         ListTasks(
@@ -121,7 +121,7 @@ def test_canonical_today_selector_scheduled_only(
         ),
         authorization,
     )
-    
+
     # Verify: Scheduled-only Task appears.
     assert work_result.payload["tasks"], "Work Today must include scheduled-only Task"
     task_ids = [t["task_id"] for t in work_result.payload["tasks"]]
@@ -138,7 +138,7 @@ def test_canonical_today_selector_due_only(
     principal_id = authorization.principal.principal_id
     work_date = date(2026, 9, 17)
     timezone = "America/New_York"
-    
+
     # Create: Task due for today, no scheduled date.
     create_task(
         isolated_database,
@@ -149,7 +149,7 @@ def test_canonical_today_selector_due_only(
         scheduled_at=None,
     )
     isolated_database.commit()
-    
+
     # Query: Work Today
     work_result = app_service.invoke(
         ListTasks(
@@ -159,7 +159,7 @@ def test_canonical_today_selector_due_only(
         ),
         authorization,
     )
-    
+
     # Verify: Due-only Task appears.
     assert work_result.payload["tasks"], "Work Today must include due-only Task"
     task_ids = [t["task_id"] for t in work_result.payload["tasks"]]
@@ -176,7 +176,7 @@ def test_canonical_today_selector_archived_excluded(
     principal_id = authorization.principal.principal_id
     work_date = date(2026, 9, 17)
     timezone = "America/New_York"
-    
+
     # Create: Archived Task due today.
     create_task(
         isolated_database,
@@ -187,7 +187,7 @@ def test_canonical_today_selector_archived_excluded(
         archived_at=datetime(2026, 9, 16, 0, 0, 0, tzinfo=UTC),
     )
     isolated_database.commit()
-    
+
     # Query: Work Today
     work_result = app_service.invoke(
         ListTasks(
@@ -197,7 +197,7 @@ def test_canonical_today_selector_archived_excluded(
         ),
         authorization,
     )
-    
+
     # Verify: Archived Task is not included.
     task_ids = [t["task_id"] for t in work_result.payload["tasks"]]
     assert "tsk_archived" not in task_ids
@@ -213,7 +213,7 @@ def test_canonical_today_selector_terminal_excluded(
     principal_id = authorization.principal.principal_id
     work_date = date(2026, 9, 17)
     timezone = "America/New_York"
-    
+
     # Create: Completed Task due today.
     create_task(
         isolated_database,
@@ -223,7 +223,7 @@ def test_canonical_today_selector_terminal_excluded(
         lifecycle_state=TaskLifecycleState.COMPLETED,
         due_at=datetime(2026, 9, 17, 17, 0, 0, tzinfo=UTC),
     )
-    
+
     # Create: Cancelled Task due today.
     create_task(
         isolated_database,
@@ -233,7 +233,7 @@ def test_canonical_today_selector_terminal_excluded(
         lifecycle_state=TaskLifecycleState.CANCELLED,
         due_at=datetime(2026, 9, 17, 17, 0, 0, tzinfo=UTC),
     )
-    
+
     # Create: Open Task due today (control).
     create_task(
         isolated_database,
@@ -244,7 +244,7 @@ def test_canonical_today_selector_terminal_excluded(
         due_at=datetime(2026, 9, 17, 17, 0, 0, tzinfo=UTC),
     )
     isolated_database.commit()
-    
+
     # Query: Work Today
     work_result = app_service.invoke(
         ListTasks(
@@ -254,7 +254,7 @@ def test_canonical_today_selector_terminal_excluded(
         ),
         authorization,
     )
-    
+
     # Verify: Terminal Tasks excluded, Open included.
     task_ids = [t["task_id"] for t in work_result.payload["tasks"]]
     assert "tsk_completed" not in task_ids, "Completed Task must not be Today"
@@ -272,7 +272,7 @@ def test_canonical_today_selector_overdue_not_today(
     principal_id = authorization.principal.principal_id
     work_date = date(2026, 9, 17)
     timezone = "America/New_York"
-    
+
     # Create: Task due yesterday.
     create_task(
         isolated_database,
@@ -282,7 +282,7 @@ def test_canonical_today_selector_overdue_not_today(
         due_at=datetime(2026, 9, 16, 17, 0, 0, tzinfo=UTC),
     )
     isolated_database.commit()
-    
+
     # Query: Work Today
     work_result = app_service.invoke(
         ListTasks(
@@ -292,7 +292,7 @@ def test_canonical_today_selector_overdue_not_today(
         ),
         authorization,
     )
-    
+
     # Verify: Overdue Task is not Today.
     task_ids = [t["task_id"] for t in work_result.payload["tasks"]]
     assert "tsk_overdue" not in task_ids
@@ -308,7 +308,7 @@ def test_canonical_today_selector_future_due_not_today(
     principal_id = authorization.principal.principal_id
     work_date = date(2026, 9, 17)
     timezone = "America/New_York"
-    
+
     # Create: Task due tomorrow (not Today, even if within 72h attention window).
     create_task(
         isolated_database,
@@ -318,7 +318,7 @@ def test_canonical_today_selector_future_due_not_today(
         due_at=datetime(2026, 9, 18, 17, 0, 0, tzinfo=UTC),
     )
     isolated_database.commit()
-    
+
     # Query: Work Today
     work_result = app_service.invoke(
         ListTasks(
@@ -328,7 +328,7 @@ def test_canonical_today_selector_future_due_not_today(
         ),
         authorization,
     )
-    
+
     # Verify: Future-due Task is not Today.
     task_ids = [t["task_id"] for t in work_result.payload["tasks"]]
     assert "tsk_tomorrow" not in task_ids
@@ -344,7 +344,7 @@ def test_canonical_today_selector_dedup_by_task_id(
     principal_id = authorization.principal.principal_id
     work_date = date(2026, 9, 17)
     timezone = "America/New_York"
-    
+
     # Create: Task with both Due and Scheduled for Today.
     create_task(
         isolated_database,
@@ -355,7 +355,7 @@ def test_canonical_today_selector_dedup_by_task_id(
         scheduled_at=datetime(2026, 9, 17, 14, 0, 0, tzinfo=UTC),
     )
     isolated_database.commit()
-    
+
     # Query: Work Today
     work_result = app_service.invoke(
         ListTasks(
@@ -365,7 +365,7 @@ def test_canonical_today_selector_dedup_by_task_id(
         ),
         authorization,
     )
-    
+
     # Verify: Task appears exactly once.
     task_ids = [t["task_id"] for t in work_result.payload["tasks"]]
     assert task_ids.count("tsk_both") == 1, "Deduped Task must appear once"
@@ -379,7 +379,7 @@ def test_canonical_today_selector_timezone_boundary(
 ) -> None:
     """Today boundary varies by timezone (America/New_York vs UTC)."""
     principal_id = authorization.principal.principal_id
-    
+
     # Create: Task due at 2026-09-17T04:00:00 UTC
     # This is 2026-09-17T00:00:00 in America/New_York (EDT = UTC-4)
     # and 2026-09-17T04:00:00 UTC (still Sept 17 in NY)
@@ -391,7 +391,7 @@ def test_canonical_today_selector_timezone_boundary(
         due_at=datetime(2026, 9, 17, 4, 0, 0, tzinfo=UTC),
     )
     isolated_database.commit()
-    
+
     # Query: Work Today in America/New_York (Sept 17)
     ny_result = app_service.invoke(
         ListTasks(
@@ -401,7 +401,7 @@ def test_canonical_today_selector_timezone_boundary(
         ),
         authorization,
     )
-    
+
     # Verify: Task due at boundary is included.
     task_ids = [t["task_id"] for t in ny_result.payload["tasks"]]
     assert "tsk_tz_boundary" in task_ids
@@ -417,14 +417,14 @@ def test_canonical_today_selector_non_terminal_states(
     principal_id = authorization.principal.principal_id
     work_date = date(2026, 9, 17)
     timezone = "America/New_York"
-    
+
     states = [
         TaskLifecycleState.OPEN,
         TaskLifecycleState.IN_PROGRESS,
         TaskLifecycleState.WAITING,
         TaskLifecycleState.BLOCKED,
     ]
-    
+
     for state in states:
         create_task(
             isolated_database,
@@ -434,9 +434,9 @@ def test_canonical_today_selector_non_terminal_states(
             lifecycle_state=state,
             due_at=datetime(2026, 9, 17, 17, 0, 0, tzinfo=UTC),
         )
-    
+
     isolated_database.commit()
-    
+
     # Query: Work Today
     work_result = app_service.invoke(
         ListTasks(
@@ -446,7 +446,7 @@ def test_canonical_today_selector_non_terminal_states(
         ),
         authorization,
     )
-    
+
     # Verify: All non-terminal states appear.
     task_ids = [t["task_id"] for t in work_result.payload["tasks"]]
     for state in states:

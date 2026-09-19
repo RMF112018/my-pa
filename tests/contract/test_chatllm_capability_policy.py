@@ -25,13 +25,17 @@ _RUN01 = frozenset(
         Capability.PROJECT_CONTROLS_STATUS,
     }
 )
-#: PC-CM-RUN01-WP05. The two of the six that now have handlers. Kept inside
-#: `_RUN01` rather than removed from it, because the set's other claim — that
-#: all six are `DATA_CONDITIONAL` — is unchanged and is what `_RUN01` is for.
+#: PC-CM-RUN01-WP05, extended by PC-CM-RUN01-WP06. The five of the six that now
+#: have handlers. Kept inside `_RUN01` rather than removed from it, because the
+#: set's other claim — that all six are `DATA_CONDITIONAL` — is unchanged and is
+#: what `_RUN01` is for.
 _RUN01_WIRED = frozenset(
     {
         Capability.PROJECT_CONTROLS_CONFIGURE,
         Capability.PROJECT_CONTROLS_STATUS,
+        Capability.CONSTRAINTS_PORTFOLIO_LIST,
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
     }
 )
 _ODR = frozenset(

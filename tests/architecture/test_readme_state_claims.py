@@ -225,7 +225,13 @@ def _alembic_identity() -> tuple[int, str]:
 SPELLED_COUNTS: Final[dict[int, str]] = {
     # The structurally unwired Run 01 remainder lives down here; it shrinks as
     # each of those names is wired, so the small end of the vocabulary is spelled
-    # too rather than left for a later package to discover missing.
+    # too rather than left for a later package to discover missing. It reached
+    # one at `PC-CM-RUN01-WP06`, which is why the vocabulary now starts there:
+    # the package that wires the last name should find the spelling waiting for
+    # it rather than discover this map cannot say "zero".
+    1: "One",
+    2: "Two",
+    3: "Three",
     4: "Four",
     5: "Five",
     6: "Six",
@@ -552,14 +558,9 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     }
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
-    assert implemented == 168
+    assert implemented == 171
     assert len(withheld_families) == 70
-    assert unwired == {
-        Capability.CONSTRAINTS_CREATE_PUBLISHED,
-        Capability.CONSTRAINTS_PORTFOLIO_LIST,
-        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
-        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
-    }
+    assert unwired == {Capability.CONSTRAINTS_CREATE_PUBLISHED}
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
     # composed by default, and `RI-ENT-WP-10`'s five record-family reads arrived
     # on the withheld side too, as do `RI-ENT-WP-11`'s record-family writes. The
@@ -570,8 +571,13 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # they are in none of the three withheld families -- so the default grows
     # by six while the withheld figure is unchanged. `PC-CM-IMP-WP07`'s twelve
     # Constraint mutations arrive on the served side for the same reason, and
-    # the withheld figure is again unchanged.
-    assert default == 98 and total == 172 and withheld == 74
+    # the withheld figure is again unchanged. `PC-CM-RUN01-WP06`'s three
+    # cross-Project Constraint reads arrive on the served side too, so the
+    # default grows by three and the withheld figure *falls* by three -- the
+    # first package in this campaign to move that figure, because these three
+    # were counted as withheld while they were unwired rather than as
+    # composition-gated.
+    assert default == 101 and total == 172 and withheld == 71
 
     # Exercise the same application and MCP publication composition that owns
     # the current 91-tool measurement. GoodNotes pull is part of that measured
@@ -598,7 +604,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert authenticated_mcp_capabilities == {
         capability.value for capability in application_capabilities
     }
-    assert len(local_mcp_capabilities) == default - 3 == 95
+    assert len(local_mcp_capabilities) == default - 3 == 98
     assert authenticated_mcp_capabilities - local_mcp_capabilities == {
         "goodnotes.pull",
         "goodnotes.complete",
@@ -614,8 +620,8 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     readme = README.read_text(encoding="utf-8")
     assert f"{default} of the {total} capabilities are `available`" in readme
     assert f"`{withheld} of {total} capabilities are unwired.`" in readme
-    assert "168 have application commands/handlers" in readme
-    assert "fully composed authenticated client sees all 168 implemented tools" in readme
+    assert f"{implemented} have application commands/handlers" in readme
+    assert f"fully composed authenticated client sees all {implemented} implemented tools" in readme
     entity_split = (
         f"{SPELLED_COUNTS[entity_total].lower()} `entities.*` capabilities: "
         f"{SPELLED_COUNTS[entity_reads].lower()} reads and "
@@ -633,13 +639,20 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # so the next package that moves the numbers moves these too.
     unwired_count = len(unwired)
     assert withheld == len(withheld_families) + unwired_count
+    # The remainder reached one at `PC-CM-RUN01-WP06`, so these sentences are
+    # grammatically singular now and will be plural again only if a later
+    # package declares a name it does not wire. The number and the grammar are
+    # derived together rather than spelled, because a guard that asserted the
+    # plural wording while the prose had gone singular would be checking a
+    # sentence the document no longer contains.
+    names = "name" if unwired_count == 1 else "names"
     readme_breakdown = (
-        f"and the {SPELLED_COUNTS[unwired_count].lower()} remaining Run 01 names — are\n"
+        f"and the {SPELLED_COUNTS[unwired_count].lower()} remaining Run 01 {names} — are\n"
         "`not_implemented`"
     )
     assert readme_breakdown in readme, (
         "The README's breakdown of the withheld capabilities no longer names the "
-        f"{unwired_count} structurally unwired Run 01 names. It is the sentence "
+        f"{unwired_count} structurally unwired Run 01 {names}. It is the sentence "
         f"that accounts for all {withheld} of them."
     )
 
@@ -658,16 +671,16 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert "one hundred and seventy-two capabilities" in architecture_index
     assert f"**{default} application-available capabilities**" in runbook
     assert f"publishes **{default - 3} tools**" in runbook
-    assert "unconfigured local stdio: 95" in runbook
-    assert "fully feature-composed local stdio: 165" in runbook
-    assert "168 have application commands/handlers" in runbook
-    assert "all 168 implemented tools" in runbook
+    assert f"unconfigured local stdio: {default - 3}" in runbook
+    assert f"fully feature-composed local stdio: {implemented - 3}" in runbook
+    assert f"{implemented} have application commands/handlers" in runbook
+    assert f"all {implemented} implemented tools" in runbook
     normalized_runbook = " ".join(runbook.split()).lower()
     assert (
         f"the {SPELLED_COUNTS[implemented].lower()} command-backed names" in normalized_runbook
     ), "the MCP/CLI runbook's command-backed figure no longer matches the dispatch table"
     assert (
-        f"the exact {SPELLED_COUNTS[unwired_count].lower()} remaining run 01 names "
+        f"the exact {SPELLED_COUNTS[unwired_count].lower()} remaining run 01 {names} "
         "as `not_implemented`" in normalized_runbook
     ), "the MCP/CLI runbook's unwired Run 01 figure no longer matches the dispatch table"
     assert f"A default process serves\n{SPELLED_COUNTS[default].lower()}" in gateway_runbook
@@ -675,7 +688,10 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
         f"{SPELLED_COUNTS[len(withheld_families)].lower()} handler-implemented capabilities "
         "are composition-withheld"
     ) in gateway_runbook
-    assert "four\nare structurally unwired" in gateway_runbook
+    assert (
+        f"{SPELLED_COUNTS[unwired_count].lower()}\n"
+        f"{'is' if unwired_count == 1 else 'are'} structurally unwired"
+    ) in gateway_runbook
     assert (
         f"`{withheld} of {total} total capabilities are unavailable or unwired.`" in gateway_runbook
     )
@@ -686,7 +702,10 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     normalized_completion_state = " ".join(completion_state.split()).lower()
     assert f"all {SPELLED_COUNTS[total].lower()} capability names" in normalized_completion_state
     assert f"names, {implemented} have application commands/handlers" in normalized_completion_state
-    assert "four remaining run 01 names remain structurally unwired" in normalized_completion_state
+    assert (
+        f"{SPELLED_COUNTS[unwired_count].lower()} remaining run 01 {names} "
+        f"{'remains' if unwired_count == 1 else 'remain'} structurally unwired"
+    ) in normalized_completion_state
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
     assert "one hundred and seventy-two capabilities" in module_boundaries

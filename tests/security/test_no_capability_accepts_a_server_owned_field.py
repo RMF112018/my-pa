@@ -53,10 +53,10 @@ FROZEN: Final = datetime(2026, 8, 15, 9, 30, tzinfo=UTC)
 PUBLISHED_REMOTE_CAPABILITIES: Final = frozenset(_HANDLERS)
 HANDLER_UNWIRED_CAPABILITIES: Final = frozenset(
     {
+        # `PC-CM-RUN01-WP06` wired `constraints.portfolio_list`,
+        # `constraints.portfolio_search` and `constraints.portfolio_overview`,
+        # so the Run 01 remainder is the name below.
         Capability.CONSTRAINTS_CREATE_PUBLISHED,
-        Capability.CONSTRAINTS_PORTFOLIO_LIST,
-        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
-        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
     }
 )
 
@@ -107,7 +107,7 @@ def test_the_population_is_the_handler_backed_remote_tool_set() -> None:
     assert population, "there are no capabilities, so nothing below proves anything"
     assert population >= PHASE_B_CAPABILITIES
     assert population == command_backed
-    assert len(population) == 168
+    assert len(population) == 171
     assert set(Capability) - population == HANDLER_UNWIRED_CAPABILITIES
     assert not population & HANDLER_UNWIRED_CAPABILITIES
     assert population | HANDLER_UNWIRED_CAPABILITIES == set(Capability)

@@ -497,6 +497,39 @@
       "payloadFields": ["project_id"],
       "probe": { "project_id": "prj_aaaaaaaa11111111" }
     },
+    "constraints.portfolio_list": {
+      "purpose": "constraint_read",
+      "payloadFields": [
+        "scope",
+        "statuses",
+        "category_ids",
+        "bic_party_refs",
+        "responsible_party_refs",
+        "sync_states",
+        "record_qualities",
+        "overdue",
+        "due_soon",
+        "my_court",
+        "needs_attention",
+        "recent",
+        "sort",
+        "sort_order",
+        "grouping",
+        "limit",
+        "cursor"
+      ],
+      "probe": {}
+    },
+    "constraints.portfolio_search": {
+      "purpose": "constraint_read",
+      "payloadFields": ["query", "scope", "limit", "cursor"],
+      "probe": { "query": "steel delivery" }
+    },
+    "constraints.portfolio_overview": {
+      "purpose": "constraint_read",
+      "payloadFields": [],
+      "probe": {}
+    },
     "constraint_categories.list": {
       "purpose": "constraint_read",
       "payloadFields": ["project_id", "states"],

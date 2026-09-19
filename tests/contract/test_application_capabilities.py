@@ -617,10 +617,10 @@ _GOODNOTES_PULL_CAPABILITIES = frozenset(
 )
 _RUN01_UNWIRED_CAPABILITIES = frozenset(
     {
+        # `PC-CM-RUN01-WP06` wired `constraints.portfolio_list`,
+        # `constraints.portfolio_search` and `constraints.portfolio_overview`,
+        # so the Run 01 remainder is the name below.
         Capability.CONSTRAINTS_CREATE_PUBLISHED,
-        Capability.CONSTRAINTS_PORTFOLIO_LIST,
-        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
-        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
     }
 )
 
@@ -674,7 +674,7 @@ def test_readiness_stops_reporting_contracts_only_because_the_manifest_is_derive
     assert isinstance(readiness, dict)
     assert readiness["state"] == ReadinessState.DEGRADED.value
     expected_available = set(_HANDLERS) - _GOODNOTES_PULL_CAPABILITIES
-    assert len(expected_available) == 165
+    assert len(expected_available) == 168
     assert readiness["implemented_capabilities"] == len(expected_available)
     assert readiness["limitations"]
     assert "Worker-plane health" in readiness["limitations"][-1]

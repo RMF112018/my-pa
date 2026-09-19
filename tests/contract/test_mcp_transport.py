@@ -64,10 +64,10 @@ HANDLER_CAPABILITIES: Final = tuple(
 )
 HANDLER_UNWIRED_CAPABILITIES: Final = frozenset(
     {
+        # `PC-CM-RUN01-WP06` wired `constraints.portfolio_list`,
+        # `constraints.portfolio_search` and `constraints.portfolio_overview`,
+        # so the Run 01 remainder is the name below.
         Capability.CONSTRAINTS_CREATE_PUBLISHED,
-        Capability.CONSTRAINTS_PORTFOLIO_LIST,
-        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
-        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
     }
 )
 
@@ -131,7 +131,7 @@ def test_tools_list_publishes_exactly_the_local_capability_set(
         for capability in HANDLER_CAPABILITIES
         if capability not in _AUTHENTICATED_CLIENT_CAPABILITIES
     ]
-    assert len(listed.tools) == 165
+    assert len(listed.tools) == 168
     assert all(tool.description for tool in listed.tools), "a tool has no description"
 
 
@@ -140,7 +140,7 @@ def test_handler_unwired_capabilities_publish_no_mcp_tools() -> None:
     assert {tool.name for tool in TOOLS} == {
         capability.value for capability in HANDLER_CAPABILITIES
     }
-    assert len(TOOLS) == 168
+    assert len(TOOLS) == 171
     assert not {capability.value for capability in HANDLER_UNWIRED_CAPABILITIES} & {
         tool.name for tool in TOOLS
     }
@@ -636,7 +636,24 @@ def test_a_child_with_a_managed_root_publishes_every_locally_available_capabilit
         for capability in HANDLER_CAPABILITIES
         if capability not in _AUTHENTICATED_CLIENT_CAPABILITIES
     ]
-    assert len(expected) == 165
+    # Derived rather than spelled. A literal stood here saying 165 and stayed
+    # there while three handlers were wired, because a `database`-marked case is
+    # invisible to the FAST tier and nothing recomputed the figure. The
+    # magnitude itself is still pinned, by
+    # `test_tools_list_publishes_exactly_the_local_capability_set` above, which
+    # FAST does run against the same derived list — so spelling it a second time
+    # here bought a staleness risk and no tripwire.
+    #
+    # What is bound instead is the arithmetic that makes the withholding total:
+    # every name in the withheld set must be one the handler set actually
+    # publishes, so that subtracting the set's size is the same as filtering by
+    # it. Planted and measured rather than assumed — adding a handler-unwired
+    # name to the frozenset above gives 168 on the left and 167 on the right and
+    # this line fails. It is deliberately *not* the whole claim: that the
+    # withheld names are absent and the composed ones present is the business of
+    # the three assertions below, and that the surface is the right size at all
+    # is the FAST case's.
+    assert len(expected) == len(HANDLER_CAPABILITIES) - len(_AUTHENTICATED_CLIENT_CAPABILITIES)
     assert composed == expected
     assert {capability.value for capability in _COMPOSED_CAPABILITIES} <= set(composed)
     assert not {capability.value for capability in _AUTHENTICATED_CLIENT_CAPABILITIES} & set(

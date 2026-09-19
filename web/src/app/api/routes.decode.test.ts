@@ -118,6 +118,7 @@ describe("omitted required arrays fail closed at the route", () => {
     const body = await response.json();
     expectContractInvalid(body, "must-not-dump");
     expect(JSON.stringify(body)).not.toContain("leaked_pulse");
+    expect(body).not.toHaveProperty("todayRows");
     expect(body).not.toHaveProperty("items");
     expect(body).not.toHaveProperty("pulse_items");
   });
@@ -264,7 +265,7 @@ describe("partial disclosure is not rewritten as complete", () => {
     const response = await pulse(get(cookie, "/api/pulse?workDate=2026-08-09&timezone=UTC"));
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(body.pulseItems).toEqual([]);
+    expect(body.todayRows).toEqual([]);
     expect(body.disclosure.coverage).toBe("partial");
     expect(body.disclosure.coverage).not.toBe("complete");
   });

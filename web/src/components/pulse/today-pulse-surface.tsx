@@ -21,6 +21,12 @@
  * `work_view=today`, which is the *same* server predicate Work uses; there is no
  * second Today query and no client-side membership rule in this file.
  *
+ * What comes back is `todayRows`: one row per canonical Today Task, each
+ * carrying the derivation's own row under `attention` when the derivation
+ * produced one, followed by the non-Task rows the derivation raised. This file
+ * renders those rows in the order the route composed them and does not filter,
+ * re-key or re-order them.
+ *
  * `initialAnswer` remains an accepted prop and is still honoured when supplied,
  * because it is what lets a caller seed a confirmed answer in a test. Nothing in
  * the application passes it any more.
@@ -84,7 +90,7 @@ import {
   type ForegroundRevalidationNotice,
 } from "@/lib/task/use-foreground-revalidation";
 import type { DisclosureEnvelope, ErrorEnvelope } from "@/contracts/envelope";
-import type { BackendPulseItem, TodayPulseAnswer } from "@/contracts/views";
+import type { TodayPulseAnswer, TodayRow } from "@/contracts/views";
 import { browserWorkClock } from "@/lib/api/work-client";
 
 /**
@@ -98,7 +104,7 @@ export const TODAY_EMPTY_COPY = "Nothing needs your attention right now.";
 export const TODAY_PULSE_QUERY_ID = "today:pulse";
 
 /**
- * The Task cards currently on screen, in the order the Pulse returned them.
+ * The Task cards currently on screen, in the order the route composed them.
  *
  * Scoped to the region this surface renders rather than to the document, so a
  * card belonging to some other list — the Intelligence Pulse below Today, a
@@ -143,7 +149,7 @@ const STALE_COPY =
 
 /** What one `/api/pulse` answer carries. */
 export interface PulseReadPayload {
-  readonly items: readonly BackendPulseItem[];
+  readonly items: readonly TodayRow[];
   readonly disclosure: DisclosureEnvelope;
   readonly completeness?: "full" | "partial";
 }
@@ -362,8 +368,7 @@ const readPulse: PulseFetcher = async ({ signal }) => {
   if (!body || typeof body !== "object") throw new Error("pulse answer was not an object");
   const candidate = body as {
     shape?: unknown;
-    canonicalTasks?: unknown;
-    pulseItems?: unknown;
+    todayRows?: unknown;
     disclosure?: unknown;
     completeness?: unknown;
   };
@@ -371,13 +376,13 @@ const readPulse: PulseFetcher = async ({ signal }) => {
   // fixture list. Anything but the backend shape is a payload this surface has
   // no honest reading of, so it is a failed read rather than a silent Empty.
   if (candidate.shape !== "backend") throw new Error("pulse answer was not the backend shape");
-  if (!Array.isArray(candidate.canonicalTasks)) throw new Error("pulse answer carried no canonicalTasks array");
-  if (!Array.isArray(candidate.pulseItems)) throw new Error("pulse answer carried no pulseItems array");
+  // A missing row array is a read that did not happen, never a quiet day.
+  if (!Array.isArray(candidate.todayRows)) throw new Error("pulse answer carried no todayRows array");
   if (!candidate.disclosure || typeof candidate.disclosure !== "object") {
     throw new Error("pulse answer carried no disclosure");
   }
   return {
-    items: candidate.pulseItems as readonly BackendPulseItem[],
+    items: candidate.todayRows as readonly TodayRow[],
     disclosure: candidate.disclosure as DisclosureEnvelope,
     completeness: candidate.completeness === "partial" ? "partial" : "full",
   };
@@ -910,8 +915,8 @@ export function TodayPulseSurface({ initialAnswer }: TodayPulseSurfaceProps = {}
           kind="empty"
           title={TODAY_EMPTY_COPY}
           diagnostic={
-            "The derivation ran and found no accepted commitment, decision, task or situation that " +
-            "a named condition holds about right now."
+            "Today's Task read ran and returned no Task for this day, and the derivation ran and " +
+            "raised no commitment, decision, observation or situation either."
           }
           testId="today-empty"
         />
@@ -928,8 +933,8 @@ export function TodayPulseSurface({ initialAnswer }: TodayPulseSurfaceProps = {}
               title="Today is incomplete"
               detail="A quiet day is not established. Something may still need you."
               diagnostic={
-                "The derivation was incomplete and surfaced nothing. A partial read does not " +
-                "establish that nothing needs attention."
+                "The read was incomplete and carried no Task and no other row. A partial read " +
+                "does not establish that nothing needs attention."
               }
               testId="today-degraded-empty"
             />

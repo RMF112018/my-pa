@@ -38,7 +38,7 @@
  * opaque-identifier patterns. No real capture, no real person, no real text.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import type { PrincipalSession } from "@/contracts/identity";
 import type { PulseItem } from "@/lib/api/decode/capabilities/continuity.pulse";
 
@@ -135,16 +135,22 @@ function answerByCapability(map: Record<string, unknown>, disclosure: unknown = 
 }
 
 /**
- * Mock /api/pulse with the BFF JSON shape, optionally including pulseItems.
- * Transforms snake_case pulse items from test fixtures into camelCase BackendPulseItem.
+ * Mock /api/pulse with the BFF JSON shape.
+ *
+ * The route answers `todayRows`: one row per canonical Today Task, carrying the
+ * derivation's own row under `attention` where there is one, then the non-Task
+ * rows the derivation raised. This helper composes the same thing from a Task
+ * list and a Pulse list so a test can state both halves separately. The route's
+ * own composition is proven against the route in `routes.test.ts`; what is
+ * proven here is what the page then says about it.
  */
 function bffDisclosure(disclosure: unknown) {
   const raw = (disclosure ?? {}) as {
     coverage?: { state?: string } | string;
+    freshness?: { observed_at?: string };
     limitations?: readonly string[];
     truncation?: { is_truncated?: boolean };
     partial_result?: boolean;
-    freshness?: { observed_at?: string };
   };
   const state = typeof raw.coverage === "string" ? raw.coverage : raw.coverage?.state;
   const truncated = raw.truncation?.is_truncated === true;
@@ -164,9 +170,32 @@ function bffDisclosure(disclosure: unknown) {
   };
 }
 
+/** A canonical Today Task as `tasks.list?work_view=today` names one here. */
+interface CanonicalTask {
+  readonly taskId: string;
+  readonly title: string;
+}
+
+function toBackendItem(item: PulseItem) {
+  return {
+    pulseId: item.pulse_id,
+    itemType: item.item_type,
+    itemRef: item.item_ref,
+    reasonCode: item.reason_code,
+    reason: item.reason,
+    basisRefs: item.basis_refs,
+    consequence: item.consequence,
+    nextStep: item.next_step,
+    attentionRank: item.attention_rank,
+    generatedAt: item.generated_at,
+    ...(item.subject_title !== undefined ? { subjectTitle: item.subject_title } : {}),
+  };
+}
+
 function answerPulseWith(
   pulseItems: readonly PulseItem[] | undefined,
   disclosure: unknown = whole(),
+  canonicalTasks: readonly CanonicalTask[] = [],
 ) {
   vi.stubGlobal(
     "fetch",
@@ -175,35 +204,39 @@ function answerPulseWith(
       // /api/pulse requests get the new BFF shape
       if (urlStr.includes("/api/pulse")) {
         if (pulseItems === undefined) {
+          // No `todayRows` at all: a read that did not happen, not a quiet day.
           return new Response(
             JSON.stringify({
               shape: "backend",
-              canonicalTasks: [],
               disclosure: bffDisclosure(disclosure),
               completeness: "full",
             }),
             { status: 200, headers: { "content-type": "application/json" } },
           );
         }
-        const backendItems = pulseItems.map((item) => ({
-          pulseId: item.pulse_id,
-          itemType: item.item_type,
-          itemRef: item.item_ref,
-          reasonCode: item.reason_code,
-          reason: item.reason,
-          basisRefs: item.basis_refs,
-          consequence: item.consequence,
-          nextStep: item.next_step,
-          attentionRank: item.attention_rank,
-          generatedAt: item.generated_at,
-          ...(item.subject_title !== undefined ? { subjectTitle: item.subject_title } : {}),
-        }));
+        const backendItems = pulseItems.map(toBackendItem);
+        const attentionByTaskId = new Map(
+          backendItems.filter((item) => item.itemType === "task").map((item) => [item.itemRef, item]),
+        );
+        const todayRows = [
+          ...canonicalTasks.map((task) => {
+            const attention = attentionByTaskId.get(task.taskId);
+            return {
+              kind: "task",
+              taskId: task.taskId,
+              title: task.title,
+              ...(attention ? { attention } : {}),
+            };
+          }),
+          ...backendItems
+            .filter((item) => item.itemType !== "task")
+            .map((item) => ({ kind: "attention", item })),
+        ];
         const envelope = bffDisclosure(disclosure);
         return new Response(
           JSON.stringify({
             shape: "backend",
-            canonicalTasks: [],
-            pulseItems: backendItems,
+            todayRows,
             disclosure: envelope,
             completeness: envelope.coverage === "complete" ? "full" : "partial",
           }),
@@ -277,6 +310,7 @@ async function renderTodayPage() {
         screen.queryByTestId("today-unavailable") ||
         screen.queryByTestId("today-degraded-empty") ||
         screen.queryByTestId("pulse-reason") ||
+        screen.queryByTestId("today-task-card") ||
         screen.queryByTestId("backend-pulse-list"),
     ).toBeTruthy();
   });
@@ -663,26 +697,87 @@ describe("Review distinguishes an empty queue from an unread one", () => {
   });
 });
 
+/**
+ * Today's content is the canonical Today Task set (`tasks.list?work_view=today`),
+ * and the derived Pulse annotates it and adds the non-Task material it raised.
+ *
+ * That is what re-keys the quiet-day sentence. It used to mean "the derivation
+ * returned no rows"; it now means the canonical Task set was empty and the
+ * derivation raised nothing else. The tests below assert that meaning, which is
+ * why several of them now name a Task list as well as a Pulse list.
+ */
 describe("Today distinguishes a quiet day from a failed derivation", () => {
+  /** A canonical Today Task the derivation also flagged. */
+  const FLAGGED_TASK_ITEM = {
+    pulse_id: "pls_bbbb0001bbbb0001bbbb0001",
+    item_type: "task",
+    item_ref: "tsk_flagged0001",
+    reason_code: "task_overdue",
+    reason: "past its date by two days",
+    basis_refs: ["asr_bbbb0001bbbb0001bbbb0001"],
+    consequence: null,
+    next_step: null,
+    attention_rank: 2,
+    generated_at: "2026-01-01T00:00:00Z",
+  } satisfies PulseItem;
+
   it("renders derived items when the derivation returned some", async () => {
     answerPulseWith([PULSE_ITEM], whole());
     await renderTodayPage();
     expect(screen.getByTestId("pulse-reason").textContent).toContain("two days past");
   });
 
-  it("says nothing meets a condition only when the derivation ran", async () => {
+  it("renders a canonical Today Task the derivation never flagged", async () => {
+    /*
+      The whole point of the composition. Pulse raised nothing at all, and this
+      Task is still Today's content because the canonical predicate returned it.
+      A surface that rendered only what Pulse flagged would call this a quiet day.
+    */
+    answerPulseWith([], whole(), [{ taskId: "tsk_unflagged0001", title: "Unflagged but scheduled" }]);
+    await renderTodayPage();
+    const card = screen.getByTestId("today-task-card");
+    expect(within(card).getByTestId("today-task-card-title").textContent).toBe(
+      "Unflagged but scheduled",
+    );
+    expect(within(card).getByTestId("today-task-card-reason").textContent).toBe("Needs you today");
+    expect(screen.queryByTestId("today-empty")).toBeNull();
+    expect(screen.queryByText(TODAY_EMPTY_COPY)).toBeNull();
+  });
+
+  it("annotates a canonical Task the derivation did flag, and keeps one row for it", async () => {
+    answerPulseWith([FLAGGED_TASK_ITEM], whole(), [
+      { taskId: "tsk_flagged0001", title: "Flagged and scheduled" },
+    ]);
+    await renderTodayPage();
+    const cards = screen.getAllByTestId("today-task-card");
+    expect(cards).toHaveLength(1);
+    expect(within(cards[0]!).getByTestId("today-task-card-title").textContent).toBe(
+      "Flagged and scheduled",
+    );
+    // The flag is the difference, and it is the concise reason and nothing else.
+    expect(within(cards[0]!).getByTestId("today-task-card-reason").textContent).toBe("Overdue");
+  });
+
+  it("says nothing meets a condition only when the canonical set is empty and the read ran", async () => {
     answerPulseWith([], whole());
     const { unmount } = await renderTodayPage();
     await waitFor(() => expect(screen.getByTestId("today-empty")).toHaveAttribute("data-state", "empty"));
     unmount();
 
     answerPulseWith([], notSearched());
-    await renderTodayPage();
+    const failed = await renderTodayPage();
     expect(screen.getByTestId("today-unavailable")).toHaveAttribute("data-state", "unavailable");
     expect(screen.queryByTestId("today-empty")).toBeNull();
+    failed.unmount();
+
+    // And a canonical Task standing is never a quiet day, whatever Pulse said.
+    answerPulseWith([], whole(), [{ taskId: "tsk_standing0001", title: "A Task for today" }]);
+    await renderTodayPage();
+    expect(screen.queryByTestId("today-empty")).toBeNull();
+    expect(screen.getByTestId("today-task-card")).toBeTruthy();
   });
 
-  it("does NOT treat omitted pulse_items as a quiet day", async () => {
+  it("does NOT treat omitted todayRows as a quiet day", async () => {
     answerPulseWith(undefined, whole());
     await renderTodayPage();
     await waitFor(() =>
@@ -705,10 +800,20 @@ describe("Today distinguishes a quiet day from a failed derivation", () => {
 
     // And the same zero rows, from an answer the backend called partial.
     answerPulseWith([], partial());
-    await renderTodayPage();
+    const degraded = await renderTodayPage();
     expect(screen.getByTestId("today-degraded-empty")).toHaveAttribute("data-state", "degraded");
     expect(screen.queryByText(TODAY_EMPTY_COPY)).toBeNull();
     expect(screen.queryByTestId("today-empty")).toBeNull();
+    degraded.unmount();
+
+    // A partial answer that still carried canonical Tasks says neither sentence:
+    // the Tasks are the content, and the banner says the read was incomplete.
+    answerPulseWith([], partial(), [{ taskId: "tsk_partial0001", title: "Still scheduled" }]);
+    await renderTodayPage();
+    expect(screen.queryByTestId("today-degraded-empty")).toBeNull();
+    expect(screen.queryByTestId("today-empty")).toBeNull();
+    expect(screen.getByTestId("today-task-card-title").textContent).toBe("Still scheduled");
+    expect(screen.getByTestId("degraded-banner")).toBeTruthy();
   });
 });
 

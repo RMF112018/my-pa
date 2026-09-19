@@ -550,8 +550,7 @@ test("TUX07-AC-012: an authoritative Empty renders exactly the Empty copy", asyn
       contentType: "application/json",
       body: JSON.stringify({
         shape: "backend",
-        canonicalTasks: [],
-        pulseItems: [],
+        todayRows: [],
         completeness: "full",
         disclosure: { scope: "pulse", coverage: "complete", limitations: [], truncated: false },
       }),
@@ -834,24 +833,25 @@ test("TUX07-AC-020: a non-Task Pulse item renders with no Reschedule and no Clos
     product renders from it.
 
     What is under test is exactly that rendering: `BackendPulseList` branches on
-    `itemType`, and the two items go through one render pass in one list, so the
-    comparison is like-for-like rather than two separate pages.
+    the row's `kind`, and the canonical Task row and the derived non-Task row go
+    through one render pass in one list, so the comparison is like-for-like
+    rather than two separate pages.
   */
   const clock = await todayClock(page);
   const served = await api<{
-    pulseItems?: { itemType: string; subjectTitle?: string }[];
-    items?: { itemType: string; subjectTitle?: string }[];
+    todayRows?: { kind: string; title?: string }[];
     disclosure: unknown;
   }>(
     page,
     `/api/pulse?workDate=${clock.workDate}&timezone=${encodeURIComponent(clock.timezone)}`,
   );
   expect(served.status).toBe(200);
-  const pulseItems = served.body.pulseItems ?? served.body.items ?? [];
-  const taskItem = pulseItems.find(
-    (item) => item.itemType === "task" && item.subjectTitle === title,
-  );
-  expect(taskItem, "the seeded Task must be derived onto the Pulse by the real backend").toBeTruthy();
+  const todayRows = served.body.todayRows ?? [];
+  const taskRow = todayRows.find((row) => row.kind === "task" && row.title === title);
+  expect(
+    taskRow,
+    "the seeded Task must be in the canonical Today set the real backend answered",
+  ).toBeTruthy();
 
   const commitmentRef = "cmt_e2e00000000000000000000000ac020";
   const commitmentItem = {
@@ -874,8 +874,8 @@ test("TUX07-AC-020: a non-Task Pulse item renders with no Reschedule and no Clos
       contentType: "application/json",
       body: JSON.stringify({
         shape: "backend",
-        canonicalTasks: [],
-        pulseItems: [commitmentItem, taskItem],
+        // The route's own order: canonical Task rows, then the derived rows.
+        todayRows: [taskRow, { kind: "attention", item: commitmentItem }],
         completeness: "full",
         disclosure: { scope: "pulse", coverage: "complete", limitations: [], truncated: false },
       }),

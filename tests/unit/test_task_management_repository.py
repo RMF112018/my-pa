@@ -263,10 +263,18 @@ def test_work_window_uses_independent_local_midnights(
 
 
 def test_work_window_today_membership_boundaries_and_earlier_today_overdue_display() -> None:
-    """Exact day start ∈ Today; instant before next midnight ∈ Today; next midnight ∉ Today.
+    """`_work_window`'s bounds place the instants this test names where Today needs them.
 
-    Earlier-today remains a Today member while still being visually overdue vs
-    `work_now` — bucket membership and display state stay separate.
+    Earlier-today remains inside the window while still being visually overdue
+    vs `work_now` — bucket membership and display state stay separate.
+
+    This is arithmetic over the window `_work_window` returns, and nothing
+    here executes the membership predicate: `start <= start < end` is true of
+    any half-open interval and would hold even if the SQL used `>`. The
+    inclusive lower bound and exclusive upper bound of the real predicate are
+    proved against PostgreSQL in
+    `tests/database/test_home_work_today_parity.py`
+    (`test_exact_local_midnight_is_today`, the DST case's `end` row).
     """
     work_date = date(2026, 3, 8)
     start, end = _work_window(work_date, "America/New_York")
@@ -278,10 +286,7 @@ def test_work_window_today_membership_boundaries_and_earlier_today_overdue_displ
     assert start <= earlier_today < end  # Today member
     assert earlier_today < work_now  # may still display overdue
     assert prior_day < start  # Overdue bucket
-    assert start <= start < end  # exact local midnight ∈ Today
     assert start <= instant_before_end < end  # last instant of civil day ∈ Today
-    assert not (start <= end < end)  # exact next local midnight ∉ Today
-    assert end >= end  # Upcoming threshold
 
 
 def test_work_window_refuses_unknown_timezone() -> None:

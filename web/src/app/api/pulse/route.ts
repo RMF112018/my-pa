@@ -37,6 +37,7 @@ import { backendDisclosure, invokeGateway, transportLimitations } from "@/lib/ap
 import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
 import { syntheticPulse, syntheticDisclosure } from "@/lib/fixtures/pulse";
 import type { PulseItem } from "@/lib/api/decode/capabilities/continuity.pulse";
+import type { TaskListEntry } from "@/lib/api/decode/capabilities/tasks.list";
 import type { BackendPulseItem } from "@/contracts/views";
 
 const SCOPE = "pulse";
@@ -144,11 +145,11 @@ export async function GET(request: NextRequest) {
     return noStore(gatewayRefusal(SCOPE, tasksOutcome.status, tasksOutcome.error));
   }
 
-  // Extract canonical Today Task IDs for membership tracking.
-  const canonicalTasks = Array.isArray(tasksOutcome.result.tasks)
-    ? tasksOutcome.result.tasks
-    : [];
-  const canonicalTaskIds = new Set(canonicalTasks.map((t: any) => t.task_id));
+  // Extract canonical Today Task IDs for membership tracking. `tasks.list` is
+  // decoded by `decodeTasksList`, so `tasks` is already a `TaskListEntry[]`:
+  // a shape guard here would only re-check what the decoder refused to admit.
+  const canonicalTasks: readonly TaskListEntry[] = tasksOutcome.result.tasks;
+  const canonicalTaskIds = new Set(canonicalTasks.map((task) => task.task_id));
 
   // Separately invoke Pulse for auxiliary attention enrichment (optional).
   let pulseItems: BackendPulseItem[] = [];

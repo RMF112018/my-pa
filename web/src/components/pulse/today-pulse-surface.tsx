@@ -1,24 +1,42 @@
 "use client";
 
 /**
- * Today's client half: the surface that keeps the Pulse fresh after the server
- * has answered once (WP-TUX-07).
+ * Today's client half: the surface that reads and keeps Today fresh
+ * (WP-TUX-07, amended by WP-POSTUX-06).
  *
  * ## Why this exists, and where the boundary is
  *
- * `today/page.tsx` stays a server component and keeps everything only a server
- * can honestly do: authenticate, short-circuit the synthetic build, read
- * `continuity.pulse` through the server-only transport, and classify that one
- * outcome with `surfaceAnswer`. It deliberately does **not** call its own
- * `/api/pulse` route — the file comment there records the reason, and it has not
- * changed: a server component calling its own API route is a second copy of the
- * same decision.
+ * **This changed at WP-POSTUX-06 and the old description is kept nowhere.**
+ * `today/page.tsx` no longer performs a server-side `continuity.pulse` read and
+ * no longer hands this component a pre-classified `initialAnswer`. It could not:
+ * Today membership is now defined against a *civil date in the viewer's own
+ * timezone*, and a server component rendering before any client code has run
+ * does not know that timezone. So the read moved here in full.
  *
- * What the server cannot do is notice that the day moved on. So the classified
- * answer crosses the boundary once, as a `TodayPulseAnswer`, and from then on
- * this component owns the reading: `/api/pulse`, which already exists, is
- * `requirePrincipal`-guarded, accepts no payload, and derives the Principal from
- * the session cookie alone.
+ * Every read this component issues goes to `/api/pulse?workDate=…&timezone=…`,
+ * with both values derived by `browserWorkClock` from the browser's own clock
+ * and IANA zone. That route is `requirePrincipal`-guarded and derives the
+ * Principal from the session cookie alone — the query carries a civil day and a
+ * zone, never an identity. The route then calls `tasks.list` with
+ * `work_view=today`, which is the *same* server predicate Work uses; there is no
+ * second Today query and no client-side membership rule in this file.
+ *
+ * `initialAnswer` remains an accepted prop and is still honoured when supplied,
+ * because it is what lets a caller seed a confirmed answer in a test. Nothing in
+ * the application passes it any more.
+ *
+ * ## A first read that fails is not a quiet day
+ *
+ * Because there is no server-rendered answer to fall back on, the first read is
+ * the only thing standing between the viewer and an empty screen. While it is in
+ * flight the surface renders a distinct `loading` state — not an `unavailable`
+ * card wearing a placeholder message. If it *fails*, the surface adopts the
+ * gateway's own refusal envelope, so the diagnostic the reader sees is the one
+ * the transport actually produced rather than a sentence this file invented.
+ *
+ * Once any answer has been confirmed the older rule takes over unchanged: a
+ * failed, partial or `coverage: "unavailable"` refresh keeps the confirmed rows
+ * and marks the surface stale. It never empties and never overwrites them.
  *
  * ## One cadence, not a second one
  *

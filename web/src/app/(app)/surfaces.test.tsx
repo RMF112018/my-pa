@@ -40,6 +40,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { PrincipalSession } from "@/contracts/identity";
+import type { PulseItem } from "@/lib/api/decode/capabilities/continuity.pulse";
 
 const PRINCIPAL: PrincipalSession = {
   principalId: "aaaa0001-0000-0000-0000-000000000001",
@@ -164,7 +165,7 @@ function bffDisclosure(disclosure: unknown) {
 }
 
 function answerPulseWith(
-  pulseItems: unknown[] | undefined,
+  pulseItems: readonly PulseItem[] | undefined,
   disclosure: unknown = whole(),
 ) {
   vi.stubGlobal(
@@ -184,7 +185,7 @@ function answerPulseWith(
             { status: 200, headers: { "content-type": "application/json" } },
           );
         }
-        const backendItems = (pulseItems as any[]).map((item) => ({
+        const backendItems = pulseItems.map((item) => ({
           pulseId: item.pulse_id,
           itemType: item.item_type,
           itemRef: item.item_ref,
@@ -366,7 +367,7 @@ const PULSE_ITEM = {
   next_step: null,
   attention_rank: 1,
   generated_at: "2026-01-01T00:00:00Z",
-};
+} satisfies PulseItem;
 
 const PROJECT = {
   project_id: "prj_aaaa0001aaaa0001aaaa0001",

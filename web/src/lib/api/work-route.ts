@@ -194,14 +194,14 @@ function isValidIANATimezone(timezone: unknown): timezone is string {
 function mapped(source: Record<string, unknown>, fields: FieldMap, input: InputKind) {
   const unknown = Object.keys(source).filter((key) => !(key in fields));
   if (unknown.length > 0) return { ok: false as const, response: invalid(`unknown fields: ${unknown.join(", ")}`) };
-  
+
   // Validate timezone if present
   if ("timezone" in source && source.timezone !== undefined) {
     if (!isValidIANATimezone(source.timezone)) {
       return { ok: false as const, response: invalid("timezone is not a valid IANA timezone name") };
     }
   }
-  
+
   const payload: Record<string, unknown> = {};
   for (const [browserName, field] of Object.entries(fields)) {
     const value = source[browserName];

@@ -37,7 +37,7 @@ import binascii
 import hashlib
 import json
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import StrEnum
@@ -94,6 +94,9 @@ __all__ = [
     "ConstraintOverview",
     "ConstraintOverviewFacts",
     "ConstraintPartyRow",
+    "ConstraintPortfolioListSpec",
+    "ConstraintPortfolioOverview",
+    "ConstraintPortfolioPage",
     "ConstraintQueryError",
     "ConstraintRecentFilter",
     "ConstraintRelationshipRow",
@@ -107,12 +110,14 @@ __all__ = [
     "ConstraintVoidView",
     "PartyRefView",
     "PersistedConstraintRecord",
+    "ProjectCalendar",
     "RelationshipDirection",
     "SortDirection",
     "attention_for",
     "legacy_missing_fields",
     "list_binding_digest",
     "party_refs_of",
+    "portfolio_list_binding_digest",
 ]
 
 #: Page sizes. 50 is the accepted Register figure; 100 is the ceiling every
@@ -564,6 +569,62 @@ class ConstraintOverview:
 
 
 @dataclass(frozen=True, slots=True)
+class ProjectCalendar:
+    """One Project's business-time boundary, resolved from that Project's own zone.
+
+    PC-CM-RUN01-WP06. The portfolio reads span several Projects at once and each
+    of them keeps its own IANA timezone, so there is no such thing as "today"
+    for a portfolio — there are as many Project dates as there are Projects, and
+    a read that collapsed them would classify a row Overdue on a calendar that
+    is not its Project's. This type is what makes that impossible to do by
+    accident: the two dates travel together, named by the Project they were
+    derived for, from the moment the calendar is resolved to the moment the SQL
+    applies them to that Project's own rows.
+
+    `due_soon_through` is always `business_time.due_soon_through(project_today)`.
+    It is carried rather than recomputed downstream so the aggregate statement
+    and the rendered row use the one value the service derived, and
+    `timezone_name` is the stored zone both were derived *from*, carried for the
+    same reason: an overview names the calendar it counted on, and re-reading
+    the settings row to say which one would be a second statement asking a
+    question this value already answers.
+    """
+
+    project_id: str
+    timezone_name: str
+    project_today: date
+    due_soon_through: date
+
+
+@dataclass(frozen=True, slots=True)
+class ConstraintPortfolioOverview:
+    """The Principal's Constraint position across the Projects in scope.
+
+    A tuple of the exact same per-Project `ConstraintOverview` the single-Project
+    overview returns, in `project_id` order, and nothing else. There is
+    deliberately no portfolio-wide roll-up here: the accepted plan asks for a
+    cross-Project read and says nothing about a combined figure, and the counts
+    are not summable anyway — each is computed against its own Project's
+    calendar, so a total would be an addition across different days.
+
+    A Project in scope with no Constraints appears with zeroes rather than being
+    dropped, so the collection's membership is the Projects that were read and
+    never a signal about which of them hold rows.
+
+    `omitted_projects` is how many Projects in scope **could not contribute** —
+    they hold no Constraint settings row, or their stored zone is one `zoneinfo`
+    cannot load, so there is no defensible Overdue boundary to count them
+    against. They are absent from `projects` rather than counted on a
+    substituted calendar, and this figure is what says so. It is a count and
+    never an identity, for the reason `ConstraintPortfolioPage` states.
+    """
+
+    projects: tuple[ConstraintOverview, ...]
+    as_of: datetime
+    omitted_projects: int
+
+
+@dataclass(frozen=True, slots=True)
 class ConstraintListPage:
     """One bounded page of Register rows.
 
@@ -574,6 +635,38 @@ class ConstraintListPage:
     entries: tuple[ConstraintListEntry, ...]
     is_truncated: bool
     next_cursor: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ConstraintPortfolioPage:
+    """A portfolio Register page, and how many owned Projects it could not include.
+
+    PC-CM-RUN01-WP06. A portfolio page is a `ConstraintListPage` — the rows,
+    their page bound and their cursor are the Register's own and are not a
+    second projection of it — plus one fact only a cross-Project read can have:
+    some of the Projects in scope **could not contribute**. A Project with no
+    Constraint settings row, and a Project whose stored zone `zoneinfo` cannot
+    load, both have no defensible `project_today`, so they yield no rows rather
+    than rows counted against a substituted calendar, and neither fails the
+    whole portfolio the way an exact-Project read is failed.
+
+    Omitting them silently would make the page a false answer: the caller asked
+    across every Project they own and got fewer. `omitted_projects` is what
+    makes the answer true — *this view is incomplete, by this much*.
+
+    **A count, and never an identity.** No Project identifier, name, code or
+    timezone reaches this type, because a portfolio read's scope is the acting
+    Principal's own Projects and a count over one's own partition tells nobody
+    whether anyone else's Project, Constraint, Category, Task or Capture exists
+    (`docs/specs`, section 14). It is carried separately from
+    `ConstraintListPage` rather than added to it because the exact-Project
+    Register cannot have omissions to report — it fails closed instead — and a
+    field that is always zero on one of two callers is a field a reader has to
+    ask about.
+    """
+
+    page: ConstraintListPage
+    omitted_projects: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -852,6 +945,12 @@ class ConstraintListQuery:
         """The digest a cursor issued for this request must carry."""
         return list_binding_digest(principal_id=principal_id, project_id=project_id, query=self)
 
+    def portfolio_binding(self, *, principal_id: str, project_ids: Collection[str]) -> str:
+        """The digest a cursor issued for this cross-Project request must carry."""
+        return portfolio_list_binding_digest(
+            principal_id=principal_id, project_ids=project_ids, query=self
+        )
+
 
 def list_binding_digest(*, principal_id: str, project_id: str, query: ConstraintListQuery) -> str:
     """Everything a Register page's meaning depends on, as one sha-256 digest.
@@ -864,6 +963,50 @@ def list_binding_digest(*, principal_id: str, project_id: str, query: Constraint
     fails to validate, rather than being caught by a later check that could be
     forgotten.
     """
+    return _binding_digest({"principal_id": principal_id, "project_id": project_id}, query=query)
+
+
+def portfolio_list_binding_digest(
+    *, principal_id: str, project_ids: Collection[str], query: ConstraintListQuery
+) -> str:
+    """The same digest for a cross-Project page, over the whole Project set.
+
+    PC-CM-RUN01-WP06. A portfolio page's meaning depends on one more thing than
+    an exact-Project page's does — *which* Projects it spans — so the set enters
+    the digest, sorted and de-duplicated, under a key of its own. Three replays
+    are refused by construction rather than by a later check: a cursor issued
+    for a single Project cannot validate against a portfolio request, because
+    the two payloads carry different keys (`project_id` against
+    `project_ids`/`portfolio`) and therefore different digests; a portfolio
+    cursor cannot validate against a *different* Project set, because the set is
+    inside the digest; and neither can cross a Principal, filter, sort or limit
+    change, for the reasons the single-Project digest already gives.
+
+    The set is hashed and never carried. A cursor therefore discloses nothing
+    about which Projects were in scope — not their number, not their
+    identifiers — beyond what the caller already sent in the request it is
+    replaying.
+    """
+    return _binding_digest(
+        {
+            "portfolio": True,
+            "principal_id": principal_id,
+            "project_ids": sorted(set(project_ids)),
+        },
+        query=query,
+    )
+
+
+def _binding_digest(scope: Mapping[str, Any], *, query: ConstraintListQuery) -> str:
+    """One canonical digest over a request's scope and its filter set.
+
+    Canonical JSON — sorted keys, sorted filter members, no incidental
+    whitespace — so the digest is a function of the values rather than of how a
+    set happened to iterate. The filter half is written once here, so a filter
+    added to `ConstraintListQuery` binds both the exact-Project and the
+    portfolio cursor or neither, and the two cannot drift into disagreeing about
+    what "the same request" means.
+    """
     canonical = json.dumps(
         {
             "bic": sorted(query.bic_party_refs),
@@ -875,8 +1018,6 @@ def list_binding_digest(*, principal_id: str, project_id: str, query: Constraint
             "my_court": query.my_court,
             "needs_attention": query.needs_attention,
             "overdue": query.overdue,
-            "principal_id": principal_id,
-            "project_id": project_id,
             "qualities": sorted(quality.value for quality in query.record_qualities),
             "recent": None if query.recent is None else query.recent.value,
             "responsible": sorted(query.responsible_party_refs),
@@ -886,6 +1027,7 @@ def list_binding_digest(*, principal_id: str, project_id: str, query: Constraint
             "statuses": sorted(status.value for status in query.statuses),
             "sync_states": sorted(state.value for state in query.sync_states),
             "v": LIST_CURSOR_VERSION,
+            **scope,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -1009,6 +1151,38 @@ class ConstraintListSpec:
     due_soon_through: date
     fetch_limit: int
     after: ConstraintListCursor | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ConstraintPortfolioListSpec:
+    """One resolved cross-Project list request, as the persistence adapter receives it.
+
+    PC-CM-RUN01-WP06, and deliberately the same shape as `ConstraintListSpec`
+    with one substitution: the two dates become `calendars`, one
+    `ProjectCalendar` per Project in scope. That substitution is the whole
+    design. The calendar collection is simultaneously the set-membership
+    predicate — a row is in the portfolio because its Project is in this
+    collection — and the source of the business-time boundary applied to that
+    row, so there is no arrangement in which a Project's rows are selected
+    without its own dates coming with them, and no place a single "today" could
+    be substituted for all of them.
+
+    `calendars` holds only Projects whose Constraint calendar the service could
+    resolve; a Project with none is absent, and an absent Project contributes no
+    rows. `fetch_limit` is already `limit + 1` and bounds the whole
+    cross-Project page, not one Project's share of it.
+    """
+
+    query: ConstraintListQuery
+    as_of: datetime
+    calendars: tuple[ProjectCalendar, ...]
+    fetch_limit: int
+    after: ConstraintListCursor | None = None
+
+    @property
+    def project_ids(self) -> tuple[str, ...]:
+        """The Projects in scope, in the order their calendars were resolved."""
+        return tuple(calendar.project_id for calendar in self.calendars)
 
 
 # --- Pure derivations ---------------------------------------------------------

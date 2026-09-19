@@ -144,6 +144,7 @@ from my_pa.application.commands import (
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
+    ListPortfolioConstraints,
     ListProjects,
     ListRelationshipMemories,
     ListReviewCases,
@@ -173,6 +174,7 @@ from my_pa.application.commands import (
     ReadIntelligenceArtifact,
     ReadKnowledge,
     ReadManagedDocument,
+    ReadPortfolioConstraintOverview,
     ReadProject,
     ReadProjectControlsStatus,
     ReadTask,
@@ -211,6 +213,7 @@ from my_pa.application.commands import (
     SearchGoodNotes,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
+    SearchPortfolioConstraints,
     SearchRelationshipMemories,
     SearchTasks,
     SplitEntity,
@@ -2000,6 +2003,27 @@ def _read_constraint_overview(payload: Mapping[str, Any]) -> Command:
     return ReadConstraintOverview(**payload)
 
 
+# The three cross-Project reads (PC-CM-RUN01-WP06). The paging pair reuse
+# `_constraint_vocabulary` exactly as the exact-Project pair do -- they carry the
+# same closed vocabularies and the same arrays, minus a Project -- and the
+# overview takes no conversion because it takes no field. An unknown key,
+# including a `project_id` a caller tried to supply, reaches the frozen
+# dataclass as an unexpected keyword and is refused there, which is the same
+# refusal every other command on this table gets.
+
+
+def _list_portfolio_constraints(payload: Mapping[str, Any]) -> Command:
+    return ListPortfolioConstraints(**_constraint_vocabulary(payload))
+
+
+def _search_portfolio_constraints(payload: Mapping[str, Any]) -> Command:
+    return SearchPortfolioConstraints(**_constraint_vocabulary(payload))
+
+
+def _read_portfolio_constraint_overview(payload: Mapping[str, Any]) -> Command:
+    return ReadPortfolioConstraintOverview(**payload)
+
+
 def _list_constraint_categories(payload: Mapping[str, Any]) -> Command:
     return ListConstraintCategories(**_constraint_vocabulary(payload))
 
@@ -2310,6 +2334,9 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.CONSTRAINTS_SEARCH: _search_constraints,
         Capability.CONSTRAINTS_HISTORY: _read_constraint_history,
         Capability.CONSTRAINTS_OVERVIEW: _read_constraint_overview,
+        Capability.CONSTRAINTS_PORTFOLIO_LIST: _list_portfolio_constraints,
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH: _search_portfolio_constraints,
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW: _read_portfolio_constraint_overview,
         Capability.CONSTRAINT_CATEGORIES_LIST: _list_constraint_categories,
         Capability.CONSTRAINTS_CREATE: _create_constraint_draft,
         Capability.CONSTRAINTS_PUBLISH: _publish_constraint,

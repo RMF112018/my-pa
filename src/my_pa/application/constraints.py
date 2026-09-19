@@ -37,7 +37,7 @@ import base64
 import binascii
 import hashlib
 import json
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Protocol
@@ -87,6 +87,9 @@ from my_pa.domain.project_controls.read_models import (
     ConstraintOverview,
     ConstraintOverviewFacts,
     ConstraintPartyRow,
+    ConstraintPortfolioListSpec,
+    ConstraintPortfolioOverview,
+    ConstraintPortfolioPage,
     ConstraintRelationshipRow,
     ConstraintRelationshipView,
     ConstraintSort,
@@ -98,12 +101,17 @@ from my_pa.domain.project_controls.read_models import (
     ConstraintVoidView,
     PartyRefView,
     PersistedConstraintRecord,
+    ProjectCalendar,
     attention_for,
     party_refs_of,
 )
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
 
-__all__ = ["ConstraintReadRepository", "ConstraintReadService"]
+__all__ = [
+    "ConstraintPortfolioReadRepository",
+    "ConstraintReadRepository",
+    "ConstraintReadService",
+]
 
 _BIC_ROLE = "bic"
 _RESPONSIBLE_ROLE = "responsible"
@@ -202,6 +210,66 @@ class ConstraintReadRepository(Protocol):
         due_soon_through: date,
     ) -> ConstraintOverviewFacts:
         """Every overview count for one Project, from one aggregate statement."""
+
+
+class ConstraintPortfolioReadRepository(ConstraintReadRepository, Protocol):
+    """The read port the cross-Project ("portfolio") Constraint reads add.
+
+    PC-CM-RUN01-WP06. An extension of `ConstraintReadRepository` rather than a
+    replacement for it: every exact-Project read still goes through the port
+    WP03 defined, unchanged, and what is added here is the set-based sibling of
+    each read a portfolio needs — one statement for N Projects where the
+    exact-Project read issues one for one.
+
+    **It still declares no Project read.** The port's WP03 promise holds: the
+    Projects a portfolio spans are enumerated by the canonical, Principal-scoped
+    `ProjectRepository` above this layer and handed in as an already-authorized
+    tuple, so nothing here decides ownership and nothing here can be asked which
+    Projects exist. Every method is Principal-scoped in the adapter exactly as
+    its exact-Project sibling is, so a Project identifier that is not this
+    Principal's simply contributes nothing — it is not an error, and it is not
+    distinguishable from an owned Project with no rows.
+    """
+
+    def get_project_settings_for(
+        self, principal_id: str, project_ids: Collection[str]
+    ) -> Mapping[str, ConstraintProjectSettings]:
+        """This Principal's Constraint settings for many Projects, keyed by Project.
+
+        A Project with no configured Constraint calendar has no key. One
+        statement for the whole set.
+        """
+
+    def list_categories_for(
+        self,
+        principal_id: str,
+        project_ids: Collection[str],
+        *,
+        include_states: frozenset[ConstraintCategoryState] | None = None,
+    ) -> tuple[ConstraintCategoryRow, ...]:
+        """This Principal's Categories across many Projects. One statement."""
+
+    def list_portfolio_constraints(
+        self, principal_id: str, *, spec: ConstraintPortfolioListSpec
+    ) -> tuple[PersistedConstraintRecord, ...]:
+        """One cross-Project page of Register rows, filters and keyset applied in SQL."""
+
+    def portfolio_sync_summary(
+        self,
+        principal_id: str,
+        project_ids: Collection[str],
+        constraint_ids: Collection[str],
+    ) -> Mapping[str, ConstraintSyncFacts]:
+        """The stored sync facts for many Projects, keyed by Project. Two statements."""
+
+    def portfolio_overview_facts(
+        self,
+        principal_id: str,
+        *,
+        as_of: datetime,
+        calendars: Collection[ProjectCalendar],
+    ) -> Mapping[str, ConstraintOverviewFacts]:
+        """Every overview count for many Projects, from one aggregate statement."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -508,40 +576,246 @@ class ConstraintReadService:
             due_soon_through=through,
         )
         sync = repository.sync_summary(principal_id, project_id, ())
-        open_conflicts = sum(sync.open_conflict_counts.values())
-        average: float | None = None
-        if facts.open_age_denominator > 0:
-            average = facts.open_age_business_day_sum / facts.open_age_denominator
-        if open_conflicts > 0:
-            health_state = ConstraintSyncStateView.CONFLICT
-        elif not sync.has_target:
-            health_state = ConstraintSyncStateView.NEVER_SYNCED
-        else:
-            health_state = ConstraintSyncStateView.IN_SYNC
-        return ConstraintOverview(
-            project_id=project_id,
-            project_today=today,
-            project_timezone=settings.timezone_name,
-            total_open=facts.total_open,
-            overdue=facts.overdue,
-            due_soon=facts.due_soon,
-            due_soon_through=through,
-            average_open_age_business_days=average,
-            in_my_court=facts.in_my_court,
-            on_hold=facts.on_hold,
-            recently_changed=facts.recently_changed,
-            recently_closed=facts.recently_closed,
-            draft=facts.draft,
-            needs_attention=facts.needs_attention,
-            sync_health=ConstraintSyncHealthView(
-                state=health_state,
-                open_conflict_count=open_conflicts,
-                last_verified_at=sync.last_verified_at,
+        return _overview_of(
+            ProjectCalendar(
+                project_id=project_id,
+                timezone_name=settings.timezone_name,
+                project_today=today,
+                due_soon_through=through,
             ),
+            facts=facts,
+            sync=sync,
             as_of=as_of,
         )
 
+    # --- the portfolio reads (PC-CM-RUN01-WP06) ---------------------------
+
+    def list_portfolio_constraints(
+        self,
+        repository: ConstraintPortfolioReadRepository,
+        *,
+        principal_id: str,
+        project_ids: Sequence[str],
+        query: ConstraintListQuery,
+        now: datetime,
+    ) -> ConstraintPortfolioPage:
+        """One bounded page of the Register across several Projects at once.
+
+        `constraints.portfolio_list` and `constraints.portfolio_search` — the
+        second being the first with a search term set, exactly as the
+        exact-Project pair are one method.
+
+        **`project_ids` is an already-authorized set and this method does not
+        widen it.** The Projects a portfolio spans are the Projects the
+        authenticated Principal owns, enumerated above this layer by the
+        canonical Principal-scoped `ProjectRepository`; this service performs no
+        Project read, and its port declares none. Every statement it does issue
+        is Principal-scoped in the adapter as well, so a Project identifier that
+        is not this Principal's contributes nothing rather than erroring — which
+        is what an owned Project with no Constraints also contributes, and the
+        two are not distinguishable from any answer this method returns.
+
+        The order of work is the exact-Project order with one substitution:
+        resolve **a calendar per Project**, bind the cursor to the Principal *and
+        the Project set*, fetch `limit + 1` rows across all of them in one
+        statement, read the page's parties, sync facts and Categories once each
+        in bulk, then render each row against its own Project's calendar. The
+        total number of statements is constant in the number of Projects and in
+        the number of rows.
+
+        The page is returned inside a `ConstraintPortfolioPage`, which carries
+        the count of Projects in scope that could not contribute alongside it.
+        A portfolio whose Projects *all* fail to produce a calendar is an empty
+        page with that count set, never a refusal and never an unqualified
+        empty answer — see `_calendars`.
+        """
+        as_of = ensure_utc(now)
+        wanted = tuple(sorted(set(project_ids)))
+        binding = query.portfolio_binding(principal_id=principal_id, project_ids=wanted)
+        after = _decode_cursor(query.cursor, binding)
+        calendars, omitted = self._calendars(repository, principal_id, wanted, as_of)
+        if not calendars:
+            return ConstraintPortfolioPage(
+                page=ConstraintListPage(entries=(), is_truncated=False, next_cursor=None),
+                omitted_projects=omitted,
+            )
+        by_project = {calendar.project_id: calendar for calendar in calendars}
+        spec = ConstraintPortfolioListSpec(
+            query=query,
+            as_of=as_of,
+            calendars=calendars,
+            fetch_limit=query.limit + 1,
+            after=after,
+        )
+        found = repository.list_portfolio_constraints(principal_id, spec=spec)
+        is_truncated = len(found) > query.limit
+        selected = found[: query.limit]
+        constraint_ids = tuple(record.constraint_id for record in selected)
+        parties = self._parties_by_constraint(repository, principal_id, constraint_ids)
+        labels = self._entity_labels(repository, principal_id, parties)
+        sync = repository.portfolio_sync_summary(principal_id, spec.project_ids, constraint_ids)
+        category_rows = {
+            row.category_id: row
+            for row in repository.list_categories_for(
+                principal_id, spec.project_ids, include_states=None
+            )
+        }
+        categories = {
+            category_id: ConstraintCategoryRef(row.category_id, row.prefix, row.title)
+            for category_id, row in category_rows.items()
+        }
+        entries = tuple(
+            self._list_entry(
+                record,
+                party_rows=parties.get(record.constraint_id, ()),
+                entity_labels=labels,
+                categories=categories,
+                sync=sync.get(record.project_id or "", _NO_SYNC_FACTS),
+                today=by_project[record.project_id or ""].project_today,
+                grouping=query.grouping,
+            )
+            for record in selected
+        )
+        cursor: str | None = None
+        if is_truncated and entries:
+            cursor = ConstraintListCursor(
+                binding=binding,
+                sort_key=_sort_key(selected[-1], query, category_rows),
+                constraint_id=selected[-1].constraint_id,
+            ).encode()
+        return ConstraintPortfolioPage(
+            page=ConstraintListPage(entries=entries, is_truncated=is_truncated, next_cursor=cursor),
+            omitted_projects=omitted,
+        )
+
+    def read_portfolio_overview(
+        self,
+        repository: ConstraintPortfolioReadRepository,
+        *,
+        principal_id: str,
+        project_ids: Sequence[str],
+        now: datetime,
+    ) -> ConstraintPortfolioOverview:
+        """`constraints.portfolio_overview`: each Project's position, on its own calendar.
+
+        One `ConstraintOverview` per Project in scope, in `project_id` order,
+        counted by one aggregate statement whose per-Project boundaries are
+        joined to each Project's own rows. There is no combined figure, because
+        counts taken against different Project dates are not summable and the
+        accepted plan asks for none.
+
+        `project_ids` is the already-authorized owned set, as in
+        `list_portfolio_constraints`, and the same nondisclosure consequences
+        follow: a Project identifier that is not this Principal's yields nothing
+        and is indistinguishable from an owned Project this read found empty.
+
+        A Project in scope that cannot produce a calendar is omitted here on the
+        same terms `_calendars` states, and `omitted_projects` says how many
+        were. An overview that quietly dropped them would misstate the position
+        it is named for, which is the one outcome this read exists to prevent.
+        """
+        as_of = ensure_utc(now)
+        wanted = tuple(sorted(set(project_ids)))
+        calendars, omitted = self._calendars(repository, principal_id, wanted, as_of)
+        if not calendars:
+            return ConstraintPortfolioOverview(projects=(), as_of=as_of, omitted_projects=omitted)
+        facts = repository.portfolio_overview_facts(principal_id, as_of=as_of, calendars=calendars)
+        sync = repository.portfolio_sync_summary(
+            principal_id, [calendar.project_id for calendar in calendars], ()
+        )
+        return ConstraintPortfolioOverview(
+            projects=tuple(
+                _overview_of(
+                    calendar,
+                    facts=facts.get(calendar.project_id, _NO_OVERVIEW_FACTS),
+                    sync=sync.get(calendar.project_id, _NO_SYNC_FACTS),
+                    as_of=as_of,
+                )
+                for calendar in calendars
+            ),
+            as_of=as_of,
+            omitted_projects=omitted,
+        )
+
     # --- composition helpers ---------------------------------------------
+
+    def _calendars(
+        self,
+        repository: ConstraintPortfolioReadRepository,
+        principal_id: str,
+        project_ids: Sequence[str],
+        as_of: datetime,
+    ) -> tuple[tuple[ProjectCalendar, ...], int]:
+        """One business-time boundary per Project that has one, and a count of those that do not.
+
+        **A Project in scope that cannot contribute is omitted, not fatal, and
+        disclosed** (PC-CM-RUN01-WP06). Two conditions put a Project in that
+        class and they are treated identically:
+
+        * it has no Constraint settings row, so it has never been enrolled in
+          Constraint Management at all; and
+        * it has a settings row whose stored zone name `zoneinfo` cannot load,
+          so it is enrolled against a calendar that no longer resolves.
+
+        Both leave the read with no defensible `project_today`, and therefore no
+        defensible Overdue boundary, for that Project. Neither is allowed to
+        substitute a calendar, and neither is allowed to fail the portfolio.
+
+        This is where the portfolio reads deliberately differ from `_settings`
+        and `_project_today`, which fail the whole read closed, and the reason
+        is that the two are asked different questions. An exact-Project read
+        names one Project, and refusing it tells the caller the one thing they
+        can act on: configure that Project. A portfolio read names every Project
+        the Principal owns, and refusing the whole surface because one of them
+        cannot produce a calendar would make the surface unusable for precisely
+        the Principals it is for — and would tell them nothing about *which*
+        Project, because the refusal names none. An earlier form of this method
+        made exactly that argument for a missing settings row and then failed
+        the whole read for an unloadable zone two paragraphs later; the two are
+        the same situation and now have the same answer.
+
+        **Omitted is only honest when it is disclosed**, which is why this
+        method returns a count alongside the calendars rather than quietly
+        returning fewer. The count is the caller's cue that their view of their
+        own portfolio is incomplete, and `ApplicationService` turns it into a
+        stated truncation.
+
+        The count is a **count and never an identity**, and it is a pure
+        function of `project_ids`. It is accumulated as each omission is decided,
+        one increment per Project in the loop below — not derived by subtracting
+        anything from anything — so the only inputs are the already-authorized
+        owned set this method was handed and whether each of *those* Projects
+        produced a calendar. `get_project_settings_for` is Principal-scoped in
+        the adapter and its result is read only through keys drawn from
+        `project_ids`, so no other Principal's settings row, zone, Project or
+        row count can move this number by any path.
+
+        One statement for the whole set, and none at all for an empty one.
+        """
+        if not project_ids:
+            return ((), 0)
+        settings = repository.get_project_settings_for(principal_id, project_ids)
+        calendars: list[ProjectCalendar] = []
+        omitted = 0
+        for project_id in project_ids:
+            configured = settings.get(project_id)
+            if configured is None:
+                omitted += 1
+                continue
+            try:
+                today = project_today(as_of, configured.timezone_name)
+            except ProjectTimezoneError:
+                omitted += 1
+                continue
+            calendars.append(
+                ProjectCalendar(
+                    project_id=project_id,
+                    timezone_name=configured.timezone_name,
+                    project_today=today,
+                    due_soon_through=due_soon_through(today),
+                )
+            )
+        return (tuple(calendars), omitted)
 
     def _settings(
         self, repository: ConstraintReadRepository, principal_id: str, project_id: str
@@ -649,6 +923,80 @@ class ConstraintReadService:
 
 
 # --- pure projection helpers ------------------------------------------------
+
+#: What a Project with no sync target reports. Named once so a portfolio row
+#: whose Project the sync read returned nothing for renders "never synced"
+#: rather than raising — the same answer an unsynced Project already gives.
+_NO_SYNC_FACTS = ConstraintSyncFacts(
+    has_target=False,
+    last_verified_at=None,
+    baseline_versions={},
+    open_conflict_counts={},
+)
+
+#: What a Project in scope with no Constraints counts as. Zeroes, stated, for
+#: the reason `ConstraintPortfolioOverview` gives: "none" and "not read" are
+#: different answers and the membership of the result must not say which.
+_NO_OVERVIEW_FACTS = ConstraintOverviewFacts(
+    total_open=0,
+    overdue=0,
+    due_soon=0,
+    in_my_court=0,
+    on_hold=0,
+    recently_changed=0,
+    recently_closed=0,
+    draft=0,
+    needs_attention=0,
+    open_age_business_day_sum=0,
+    open_age_denominator=0,
+)
+
+
+def _overview_of(
+    calendar: ProjectCalendar,
+    *,
+    facts: ConstraintOverviewFacts,
+    sync: ConstraintSyncFacts,
+    as_of: datetime,
+) -> ConstraintOverview:
+    """One Project's overview from its counted facts, its calendar and its sync facts.
+
+    Extracted so the single-Project and portfolio overviews project the same
+    fields the same way (PC-CM-RUN01-WP06): a portfolio entry is the exact
+    `ConstraintOverview` the single-Project read returns, not a lookalike.
+    """
+    open_conflicts = sum(sync.open_conflict_counts.values())
+    average: float | None = None
+    if facts.open_age_denominator > 0:
+        average = facts.open_age_business_day_sum / facts.open_age_denominator
+    if open_conflicts > 0:
+        health_state = ConstraintSyncStateView.CONFLICT
+    elif not sync.has_target:
+        health_state = ConstraintSyncStateView.NEVER_SYNCED
+    else:
+        health_state = ConstraintSyncStateView.IN_SYNC
+    return ConstraintOverview(
+        project_id=calendar.project_id,
+        project_today=calendar.project_today,
+        project_timezone=calendar.timezone_name,
+        total_open=facts.total_open,
+        overdue=facts.overdue,
+        due_soon=facts.due_soon,
+        due_soon_through=calendar.due_soon_through,
+        average_open_age_business_days=average,
+        in_my_court=facts.in_my_court,
+        on_hold=facts.on_hold,
+        recently_changed=facts.recently_changed,
+        recently_closed=facts.recently_closed,
+        draft=facts.draft,
+        needs_attention=facts.needs_attention,
+        sync_health=ConstraintSyncHealthView(
+            state=health_state,
+            open_conflict_count=open_conflicts,
+            last_verified_at=sync.last_verified_at,
+        ),
+        as_of=as_of,
+    )
 
 
 def _category_view(row: ConstraintCategoryRow) -> ConstraintCategoryView:

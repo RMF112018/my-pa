@@ -134,6 +134,7 @@ from my_pa.application.commands import (
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
+    ListPortfolioConstraints,
     ListProjects,
     ListRelationshipMemories,
     ListReviewCases,
@@ -163,6 +164,7 @@ from my_pa.application.commands import (
     ReadIntelligenceArtifact,
     ReadKnowledge,
     ReadManagedDocument,
+    ReadPortfolioConstraintOverview,
     ReadProject,
     ReadProjectControlsStatus,
     ReadTask,
@@ -200,6 +202,7 @@ from my_pa.application.commands import (
     SearchGoodNotes,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
+    SearchPortfolioConstraints,
     SearchRelationshipMemories,
     SearchTasks,
     SplitEntity,
@@ -410,6 +413,14 @@ def _requested_scope(
             | SearchConstraints()
             | ReadConstraintHistory()
             | ReadConstraintOverview()
+            # The three cross-Project reads (PC-CM-RUN01-WP06) name no Project
+            # at all — their scope is the set the acting Principal owns,
+            # enumerated server-side — so there is even less for a source scope
+            # to be compared against than the six above have. The empty set is
+            # the same measurement here.
+            | ListPortfolioConstraints()
+            | SearchPortfolioConstraints()
+            | ReadPortfolioConstraintOverview()
             | ListConstraintCategories()
             # The twelve Constraint mutations name a Project or a record in the
             # Principal's own partition and never a configured source, exactly

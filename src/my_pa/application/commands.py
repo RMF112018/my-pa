@@ -8467,6 +8467,121 @@ class ReadConstraintOverview:
 
 
 @dataclass(frozen=True, slots=True)
+class ListPortfolioConstraints:
+    """`constraints.portfolio_list`: one bounded page across every Project owned.
+
+    `ListConstraints` minus its Project, and the subtraction is the whole
+    design. **This command admits no Project identifier and no collection of
+    them.** The portfolio is *the Projects the authenticated Principal owns*,
+    enumerated server-side by the canonical Project repository; a caller-supplied
+    set would let a caller probe which identifiers change the answer, which is an
+    existence oracle over another Principal's Projects and is exactly what the
+    accepted plan's nondisclosure rule refuses (PC-CM-RUN01-WP06).
+
+    Every other field is `ListConstraints`'s, unchanged and meaning the same
+    thing, because a portfolio page is the same Register page over a wider row
+    set. Nothing here decides what Overdue, Due Soon, In My Court or a group
+    means, and nothing here decides which Projects are in scope.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINTS_PORTFOLIO_LIST
+
+    scope: ConstraintListScope = ConstraintListScope.OPEN
+    statuses: tuple[ConstraintLifecycleState, ...] = ()
+    category_ids: tuple[str, ...] = ()
+    bic_party_refs: tuple[str, ...] = ()
+    responsible_party_refs: tuple[str, ...] = ()
+    sync_states: tuple[ConstraintSyncStateView, ...] = ()
+    record_qualities: tuple[ConstraintRecordQuality, ...] = ()
+    overdue: bool = False
+    due_soon: bool = False
+    my_court: bool = False
+    needs_attention: bool = False
+    recent: ConstraintRecentFilter | None = None
+    sort: ConstraintSort = ConstraintSort.CODE
+    #: `sort_order` rather than `direction`, for the reason `ListConstraints`
+    #: states at the same field: the published MCP property sweep reads
+    #: `direction` as location vocabulary. The handler passes it straight
+    #: through to `ConstraintListQuery.direction`.
+    sort_order: SortDirection = SortDirection.ASC
+    grouping: ConstraintGrouping = ConstraintGrouping.CATEGORY
+    limit: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _constraint_enum(self.scope, ConstraintListScope, SafeDetail.SELECTOR)
+        _constraint_enum_tuple(self.statuses, ConstraintLifecycleState, SafeDetail.LIFECYCLE_STATE)
+        _constraint_enum_tuple(self.sync_states, ConstraintSyncStateView, SafeDetail.SELECTOR)
+        _constraint_enum_tuple(self.record_qualities, ConstraintRecordQuality, SafeDetail.SELECTOR)
+        _constraint_enum(self.recent, ConstraintRecentFilter, SafeDetail.SELECTOR, optional=True)
+        _constraint_enum(self.sort, ConstraintSort, SafeDetail.SELECTOR)
+        _constraint_enum(self.sort_order, SortDirection, SafeDetail.SELECTOR)
+        _constraint_enum(self.grouping, ConstraintGrouping, SafeDetail.SELECTOR)
+        for name in ("category_ids", "bic_party_refs", "responsible_party_refs"):
+            if not isinstance(getattr(self, name), tuple):
+                raise InvalidRequestError(SafeDetail.SELECTOR)
+        for category_id in self.category_ids:
+            _identifier(category_id, IdKind.CONSTRAINT_CATEGORY, SafeDetail.SELECTOR)
+        for flag in (self.overdue, self.due_soon, self.my_court, self.needs_attention):
+            if not isinstance(flag, bool):
+                raise InvalidRequestError(SafeDetail.SELECTOR)
+        for ref in (*self.bic_party_refs, *self.responsible_party_refs):
+            _text(ref, SafeDetail.SELECTOR)
+        _constraint_limit(self.limit, SafeDetail.LIMIT)
+        _constraint_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class SearchPortfolioConstraints:
+    """`constraints.portfolio_search`: lexical search across every Project owned.
+
+    `SearchConstraints` minus its Project, on the same terms
+    `ListPortfolioConstraints` states: the Project set is the owned set, resolved
+    server-side, and is not something a caller may name. The narrow field set is
+    the exact-Project search's own — a term, a scope, a page — because a search
+    that carried the Register's whole filter vocabulary would be the Register
+    again rather than a search.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINTS_PORTFOLIO_SEARCH
+
+    query: str = field(repr=False)
+    scope: ConstraintListScope = ConstraintListScope.OPEN
+    limit: int | None = None
+    cursor: str | None = None
+
+    def __post_init__(self) -> None:
+        _text(self.query, SafeDetail.QUERY)
+        # Length only, for the reason `SearchConstraints` states: normalisation,
+        # the minimum term and the forbidden character classes belong to
+        # `ConstraintListQuery`, which is what the cursor binds to.
+        if len(self.query) > MAX_SEARCH_CHARACTERS:
+            raise InvalidRequestError(SafeDetail.QUERY)
+        _constraint_enum(self.scope, ConstraintListScope, SafeDetail.SELECTOR)
+        _constraint_limit(self.limit, SafeDetail.LIMIT)
+        _constraint_cursor(self.cursor)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadPortfolioConstraintOverview:
+    """`constraints.portfolio_overview`: each owned Project's position, counted once.
+
+    No fields at all, and that is the complete request. `ReadConstraintOverview`
+    carries a Project because it names one; this command's scope is the owned
+    set, which the caller does not choose and therefore cannot state. There is
+    no filter for the reason the exact-Project overview has none — a filter here
+    would be a second definition of the set being counted — and no page, because
+    the answer is one row per Project and the Project set is already bounded
+    where it is enumerated.
+
+    A command with no required field makes `payload` itself optional in the
+    published MCP input schema, exactly as `GetCapabilities` does.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW
+
+
+@dataclass(frozen=True, slots=True)
 class ListConstraintCategories:
     """`constraint_categories.list`: one Project's Category scheme, in display order.
 
@@ -9733,6 +9848,9 @@ type Command = (
     | SearchConstraints
     | ReadConstraintHistory
     | ReadConstraintOverview
+    | ListPortfolioConstraints
+    | SearchPortfolioConstraints
+    | ReadPortfolioConstraintOverview
     | ListConstraintCategories
     | ReadConstraintSyncState
     | ReadConstraintSyncDelta

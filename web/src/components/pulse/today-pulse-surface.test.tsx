@@ -224,6 +224,94 @@ describe("answers replace one another atomically, in the backend's order", () =>
   });
 });
 
+describe("a first read that fails states the failure rather than a placeholder", () => {
+  function Harness({ onRuntime }: { onRuntime: (runtime: ReturnType<typeof useTaskRuntime>) => void }) {
+    onRuntime(useTaskRuntime());
+    return null;
+  }
+
+  /** The surface as the page mounts it: no server classification behind it. */
+  function renderFresh() {
+    return render(
+      <TaskRuntimeProvider principalId="prin_test" sessionEpoch="epoch-test">
+        <TodayPulseSurface />
+      </TaskRuntimeProvider>,
+    );
+  }
+
+  /** What `gatewayRefusal()` puts on the wire for an unreachable gateway. */
+  function refusedResponse(): Response {
+    return new Response(
+      JSON.stringify({
+        state: "unavailable",
+        error: {
+          errorClass: "unavailable",
+          code: "gateway_unreachable",
+          message: "the application gateway did not answer",
+        },
+        disclosure: {
+          scope: "pulse",
+          coverage: "unavailable",
+          freshnessAt: null,
+          authority: "derived",
+          limitations: ["the application gateway did not answer"],
+          truncated: false,
+        },
+      }),
+      { status: 503, headers: { "content-type": "application/json" } },
+    );
+  }
+
+  it("carries the route's own diagnostic into the unavailable region", async () => {
+    fetchSpy.mockImplementation(async () => refusedResponse());
+    renderFresh();
+    const region = await screen.findByTestId("today-unavailable");
+    expect(region).toHaveAttribute("data-state", "unavailable");
+    // The sentence is the gateway's, reached through the envelope rather than
+    // written here: a status code alone could not have produced it.
+    expect(region.textContent).toContain("the application gateway did not answer");
+    expect(screen.queryByTestId("today-empty")).toBeNull();
+    expect(screen.queryByText(TODAY_EMPTY_COPY)).toBeNull();
+    // Nothing was ever confirmed, so there is no "last confirmed read" to claim.
+    expect(screen.queryByTestId("today-stale")).toBeNull();
+  });
+
+  it("says only what a failure with no envelope establishes", async () => {
+    fetchSpy.mockImplementation(async () => new Response("", { status: 502 }));
+    renderFresh();
+    const region = await screen.findByTestId("today-unavailable");
+    expect(region.textContent).toContain("502");
+    expect(screen.queryByTestId("today-empty")).toBeNull();
+  });
+
+  /**
+   * The other half of the same decision, and the one `today-tasks.spec.ts`
+   * AC-013 proves against the real stack: once an answer has stood, a failed
+   * read retains it and says the surface is stale. The second read is driven
+   * through the reconciliation seam rather than the 5s cadence so the test
+   * measures the decision and not the clock.
+   */
+  it("retains a confirmed answer when a later read fails, and does not go unavailable", async () => {
+    let runtime: ReturnType<typeof useTaskRuntime> | undefined;
+    fetchSpy.mockImplementation(async () => pulseResponse(TWO_ROWS));
+    render(
+      <TaskRuntimeProvider principalId="prin_test" sessionEpoch="epoch-test">
+        <Harness onRuntime={(value) => (runtime = value)} />
+        <TodayPulseSurface />
+      </TaskRuntimeProvider>,
+    );
+    await waitFor(() => expect(renderedTitles()).toEqual(["First by rank", "Second by rank"]));
+
+    fetchSpy.mockImplementation(async () => refusedResponse());
+    runtime?.reconciliation.notifyTaskMutationConfirmed({ kind: "close", taskId: "tsk_elsewhere" });
+
+    await waitFor(() => expect(screen.getByTestId("today-stale")).toBeTruthy());
+    expect(renderedTitles()).toEqual(["First by rank", "Second by rank"]);
+    expect(screen.queryByTestId("today-unavailable")).toBeNull();
+    expect(screen.queryByTestId("today-empty")).toBeNull();
+  });
+});
+
 describe("a Task confirmed anywhere in the session refreshes Today", () => {
   function Harness({ onRuntime }: { onRuntime: (runtime: ReturnType<typeof useTaskRuntime>) => void }) {
     onRuntime(useTaskRuntime());

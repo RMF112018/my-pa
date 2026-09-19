@@ -54,7 +54,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { BackendPulseList } from "@/components/pulse/backend-pulse-list";
-import { DegradedBanner, SurfaceState } from "@/components/ui/surface-state";
+import { DegradedBanner, LoadingStatus, SurfaceState } from "@/components/ui/surface-state";
 import { useTaskRuntime } from "@/components/work/task-runtime-provider";
 import {
   ForegroundRevalidationHttpError,
@@ -65,7 +65,7 @@ import {
   type ForegroundReadResult,
   type ForegroundRevalidationNotice,
 } from "@/lib/task/use-foreground-revalidation";
-import type { DisclosureEnvelope } from "@/contracts/envelope";
+import type { DisclosureEnvelope, ErrorEnvelope } from "@/contracts/envelope";
 import type { BackendPulseItem, TodayPulseAnswer } from "@/contracts/views";
 import { browserWorkClock } from "@/lib/api/work-client";
 
@@ -205,6 +205,125 @@ export function classifyPulsePayload(payload: PulseReadPayload): TodayPulseAnswe
  * validates and uses to construct the canonical Today window in the browser's
  * civil day.
  */
+/** The classes `ErrorEnvelope` admits, kept as a value so a body can be checked. */
+const ERROR_CLASSES = [
+  "validation",
+  "authentication",
+  "authorization",
+  "not_found",
+  "conflict",
+  "policy_denied",
+  "unavailable",
+  "internal",
+] as const;
+
+function toErrorClass(value: string): ErrorEnvelope["errorClass"] | null {
+  return ERROR_CLASSES.find((candidate) => candidate === value) ?? null;
+}
+
+function readStrings(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === "string");
+}
+
+/**
+ * What a refused `/api/pulse` answer actually said, rather than its status code.
+ *
+ * The route answers a refused gateway with `gatewayRefusal()`, whose `error`
+ * carries the transport's own diagnostic — "the application gateway did not
+ * answer" and the like — and whose `disclosure.limitations` repeats it in the
+ * caller's terms. Throwing on the status alone discards both and leaves the
+ * surface with nothing to say beyond a number, which is how a genuinely refused
+ * read ends up indistinguishable from a surface that never read at all. So the
+ * body is read here and travels with the error.
+ *
+ * Nothing is invented: if the body is not a readable envelope, the fallback says
+ * only what is actually known — that this read did not complete, and at what
+ * status — and never names a cause.
+ */
+interface PulseReadRefusal {
+  readonly error: ErrorEnvelope;
+  readonly limitations: readonly string[];
+}
+
+async function readRefusal(response: Response): Promise<PulseReadRefusal> {
+  const fallback: PulseReadRefusal = {
+    error: {
+      errorClass: "unavailable",
+      code: "pulse_read_failed",
+      message: `The Today read did not complete (HTTP ${response.status}).`,
+    },
+    limitations: [],
+  };
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return fallback;
+  }
+  if (!body || typeof body !== "object") return fallback;
+  const envelope = "error" in body ? (body as { error?: unknown }).error : undefined;
+  const disclosure = "disclosure" in body ? (body as { disclosure?: unknown }).disclosure : undefined;
+  const limitations =
+    disclosure && typeof disclosure === "object"
+      ? readStrings((disclosure as { limitations?: unknown }).limitations)
+      : [];
+  if (!envelope || typeof envelope !== "object") return { ...fallback, limitations };
+  const fields = envelope as { errorClass?: unknown; code?: unknown; message?: unknown };
+  const errorClass = typeof fields.errorClass === "string" ? toErrorClass(fields.errorClass) : null;
+  const message =
+    typeof fields.message === "string" && fields.message.trim().length > 0
+      ? fields.message
+      : fallback.error.message;
+  return {
+    error: {
+      errorClass: errorClass ?? fallback.error.errorClass,
+      code: typeof fields.code === "string" && fields.code.length > 0 ? fields.code : fallback.error.code,
+      message,
+    },
+    limitations,
+  };
+}
+
+/**
+ * A refused read, carrying what the route said about it.
+ *
+ * Subclasses the controller's own HTTP error so the one foreground policy still
+ * reads the status off it (401 suspends, 403 fail-closed, 503 backs off); the
+ * envelope is additional, never a replacement.
+ */
+export class PulseReadHttpError extends ForegroundRevalidationHttpError {
+  readonly envelope: ErrorEnvelope;
+  readonly limitations: readonly string[];
+
+  constructor(status: number, refusal: PulseReadRefusal) {
+    super(status, refusal.error.message);
+    this.name = "PulseReadHttpError";
+    this.envelope = refusal.error;
+    this.limitations = refusal.limitations;
+  }
+}
+
+/**
+ * The `unavailable` answer a failed read becomes when nothing has ever been
+ * confirmed — the route's own words where there are any, and otherwise only
+ * what the failure itself establishes.
+ */
+export function unavailableFromReadError(error: unknown): TodayPulseAnswer {
+  if (error instanceof PulseReadHttpError) {
+    return { kind: "unavailable", error: error.envelope, limitations: error.limitations };
+  }
+  const message =
+    error instanceof Error && error.message.trim().length > 0
+      ? error.message
+      : "The Today read did not complete.";
+  return {
+    kind: "unavailable",
+    error: { errorClass: "unavailable", code: "pulse_read_failed", message },
+    limitations: [],
+  };
+}
+
 const readPulse: PulseFetcher = async ({ signal }) => {
   const { workDate, timezone } = browserWorkClock();
   const url = new URL("/api/pulse", window.location.origin);
@@ -219,7 +338,7 @@ const readPulse: PulseFetcher = async ({ signal }) => {
     headers: { accept: "application/json" },
   });
   if (!response.ok) {
-    throw new ForegroundRevalidationHttpError(response.status, `pulse read failed (${response.status})`);
+    throw new PulseReadHttpError(response.status, await readRefusal(response));
   }
   const body: unknown = await response.json();
   if (!body || typeof body !== "object") throw new Error("pulse answer was not an object");
@@ -450,16 +569,36 @@ export function TodayPulseSurface({ initialAnswer }: TodayPulseSurfaceProps = {}
   const runtime = useTaskRuntime();
   const { reconciliation, sessionKey } = runtime;
 
-  // Compute the initial answer as unavailable, letting the client fetch with
-  // work_date/timezone override the server classification (if any). This
-  // ensures that if the server's classification is stale (e.g., the browser
-  // time differs from the server time, or it's near midnight), the client
-  // recomputation makes the right query.
-  const [answer, setAnswer] = useState<TodayPulseAnswer>(
-    initialAnswer ?? { kind: "unavailable", error: { errorClass: "unavailable", code: "initializing", message: "Loading Today..." }, limitations: [] }
+  /*
+    Before the first read lands there is no answer at all, and `loading` is that
+    and nothing else. It is deliberately not one of the five: rendering the
+    unavailable card while a read is still in flight states a failure that has
+    not happened, and rendering it with placeholder copy — the shape this
+    surface previously carried — put "Loading Today..." where the diagnostic of
+    a genuinely refused read belongs, which is precisely how a real refusal
+    became unreadable.
+  */
+  const [answer, setAnswer] = useState<TodayPulseAnswer | { readonly kind: "loading" }>(
+    initialAnswer ?? { kind: "loading" },
   );
   const [stale, setStale] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+
+  /*
+    Whether any answer has ever stood on this surface.
+
+    This is what separates the two halves of a failed read. With an answer
+    standing, a failure retains it and marks the surface stale — the rows are
+    still the last thing the backend confirmed, and "the refresh did not happen"
+    says nothing against them. With nothing standing, retaining nothing is not
+    an option and the honest thing is the failure itself, stated in the route's
+    own words.
+
+    A ref rather than state: it is read inside the read callback and never
+    rendered, and it must be true for the render that sets the answer rather
+    than one render later.
+  */
+  const settled = useRef(initialAnswer !== undefined);
 
   /**
    * The card that currently holds focus, and where it sits in the visible list.
@@ -509,24 +648,44 @@ export function TodayPulseSurface({ initialAnswer }: TodayPulseSurfaceProps = {}
       const payload = result.data ?? snapshot.lastConfirmed;
       if (!payload) return;
       const next = classifyPulsePayload(payload);
-      if (next.kind === "unavailable") {
+      if (next.kind === "unavailable" && settled.current) {
         // The backend answered that it did not search. That is not a new answer
         // about the record, so the confirmed one stands and the surface says so.
         setStale(true);
         return;
       }
       // One assignment: no render falls between the old answer and the new one.
+      settled.current = true;
       setAnswer(next);
       setStale(false);
       setNotice(null);
       return;
     }
     if (result.outcome === "failed" && !result.silent) {
+      if (!settled.current && snapshot.lastConfirmed === undefined) {
+        /*
+          The first read failed and there is nothing to retain. Saying so is the
+          whole point: an unread Today rendered as a quiet one is the single
+          claim this surface may never make, and a placeholder left in place
+          would have said neither.
+        */
+        setAnswer(unavailableFromReadError(result.error));
+        setStale(false);
+        setNotice(null);
+        return;
+      }
       setStale(true);
     }
   }, []);
 
   const onNotice = useCallback((next: ForegroundRevalidationNotice) => {
+    /*
+      The degraded notice is a sentence about the last confirmed read. With no
+      confirmed read behind it there is no such thing to describe, and the
+      answer itself already states the failure. The auth and forbidden notices
+      are actionable whatever has been read, so they are always shown.
+    */
+    if (next.kind === "degraded" && !settled.current) return;
     setNotice(next.message);
     setStale(true);
   }, []);
@@ -718,7 +877,9 @@ export function TodayPulseSurface({ initialAnswer }: TodayPulseSurfaceProps = {}
           {STALE_COPY}
         </p>
       ) : null}
-      {answer.kind === "unavailable" ? (
+      {answer.kind === "loading" ? (
+        <LoadingStatus label="Reading Today…" testId="today-loading" />
+      ) : answer.kind === "unavailable" ? (
         <SurfaceState
           kind="unavailable"
           title="Today could not be derived"

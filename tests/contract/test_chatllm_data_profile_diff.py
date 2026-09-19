@@ -459,3 +459,141 @@ def test_revoked_desired_grant_is_added() -> None:
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
     revoked = [action for action in actions if action.capability is Capability.TASKS_LIST]
     assert [action.kind for action in revoked] == ["add"]
+
+
+def test_active_finite_expiry_matching_desired_is_renewed_not_noop() -> None:
+    """Finite-expiry grants matching purpose/write must be renewed, not noop."""
+    from datetime import timedelta
+
+    composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
+    desired = desired_effective_capabilities(composed)
+    future_expiry = NOW + timedelta(days=30)
+    grants = tuple(
+        _grant(capability, expires_at=future_expiry)
+        if capability is Capability.TASKS_LIST
+        else _grant(capability)
+        for capability in desired
+    )
+    diff = diff_chatllm_data_profile(
+        implemented=IMPLEMENTED,
+        composed=composed,
+        grants=grants,
+        now=NOW,
+        resource=RESOURCE,
+        scope=SCOPE,
+    )
+    assert not diff.is_healthy()
+    assert (
+        diff.outcomes[Capability.TASKS_LIST]
+        is ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANT_FINITE_EXPIRY
+    )
+    assert Capability.TASKS_LIST in diff.renew
+    assert Capability.TASKS_LIST not in diff.add
+    actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
+    finite_actions = [action for action in actions if action.capability is Capability.TASKS_LIST]
+    assert len(finite_actions) == 1
+    assert finite_actions[0].kind == "renew"
+
+
+def test_plan_actions_sorted_by_capability_value_stable_with_finite_renews() -> None:
+    """Plan actions are deterministically ordered by capability.value, including renewals."""
+    from datetime import timedelta
+
+    composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
+    desired = desired_effective_capabilities(composed)
+    future_expiry = NOW + timedelta(days=30)
+    renew_caps = {
+        Capability.TASKS_LIST,
+        Capability.ENTITIES_SEARCH,
+        Capability.CAPTURE_CREATE,
+    }
+    noop_caps = {
+        Capability.TASKS_READ,
+        Capability.ENTITIES_GET,
+        Capability.CONTINUITY_PROJECTS_READ,
+    }
+    grants = tuple(
+        _grant(capability, expires_at=future_expiry)
+        if capability in renew_caps
+        else _grant(capability)
+        if capability in noop_caps
+        else None
+        for capability in desired
+    )
+    grants_present = tuple(g for g in grants if g is not None)
+    actions = plan_chatllm_grant_actions(
+        diff_chatllm_data_profile(
+            implemented=IMPLEMENTED,
+            composed=composed,
+            grants=grants_present,
+            now=NOW,
+            resource=RESOURCE,
+            scope=SCOPE,
+        ),
+        grants_present,
+        now=NOW,
+        resource=RESOURCE,
+        scope=SCOPE,
+    )
+    assert actions == tuple(sorted(actions, key=lambda a: a.capability.value))
+    action_kinds = {action.capability: action.kind for action in actions}
+    assert action_kinds[Capability.TASKS_LIST] == "renew"
+    assert action_kinds[Capability.ENTITIES_SEARCH] == "renew"
+    assert action_kinds[Capability.CAPTURE_CREATE] == "renew"
+    assert action_kinds[Capability.TASKS_READ] == "noop"
+    assert action_kinds[Capability.ENTITIES_GET] == "noop"
+    assert action_kinds[Capability.CONTINUITY_PROJECTS_READ] == "noop"
+    add_actions = [action for action in actions if action.kind == "add"]
+    assert len(add_actions) > 0
+    for i in range(len(add_actions) - 1):
+        assert add_actions[i].capability.value <= add_actions[i + 1].capability.value
+
+
+def test_after_finite_renew_and_adds_plan_is_all_noop() -> None:
+    """After applying renew/add to clear expires_at, second plan has only noop actions."""
+    composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
+    desired = desired_effective_capabilities(composed)
+    durable_grants = tuple(_grant(capability) for capability in desired)
+    diff = diff_chatllm_data_profile(
+        implemented=IMPLEMENTED,
+        composed=composed,
+        grants=durable_grants,
+        now=NOW,
+        resource=RESOURCE,
+        scope=SCOPE,
+    )
+    assert diff.is_healthy()
+    assert len(diff.renew) == 0
+    assert len(diff.add) == 0
+    actions = plan_chatllm_grant_actions(
+        diff, durable_grants, now=NOW, resource=RESOURCE, scope=SCOPE
+    )
+    assert {action.kind for action in actions} == {"noop"}
+
+
+def test_no_revoke_when_normalizing_finite_expiry() -> None:
+    """Finite-expiry active grants never produce revoke actions."""
+    from datetime import timedelta
+
+    composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
+    desired = desired_effective_capabilities(composed)
+    future_expiry = NOW + timedelta(days=30)
+    grants = tuple(_grant(capability, expires_at=future_expiry) for capability in desired)
+    diff = diff_chatllm_data_profile(
+        implemented=IMPLEMENTED,
+        composed=composed,
+        grants=grants,
+        now=NOW,
+        resource=RESOURCE,
+        scope=SCOPE,
+    )
+    assert not diff.is_healthy()
+    assert all(
+        outcome is ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANT_FINITE_EXPIRY
+        for capability, outcome in diff.outcomes.items()
+        if capability in desired
+    )
+    actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
+    action_kinds = {action.kind for action in actions}
+    assert "revoke" not in action_kinds
+    assert action_kinds == {"renew"}

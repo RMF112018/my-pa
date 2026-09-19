@@ -35,12 +35,26 @@
  */
 import { expect, test, type Page, type Request } from "@playwright/test";
 import { signIn } from "./fixtures";
+import { browserWorkClock, type BrowserWorkClock } from "../src/lib/api/work-client";
 
 /** The exact Empty copy the surface owns. See `TODAY_EMPTY_COPY`. */
 const TODAY_EMPTY_COPY = "Nothing needs your attention right now.";
 
 /** The concise attention reason `BackendPulseList` derives for `task_overdue`. */
 const OVERDUE_REASON = "Overdue";
+
+/**
+ * Every `/api/pulse` read, whatever it carries in its query string.
+ *
+ * A glob is anchored to the end of the whole URL — Playwright's
+ * `globToRegexPattern` appends `$` and `urlMatches` tests the full URL, query
+ * string included — so `"**\/api\/pulse"` stopped matching the moment the
+ * surface began sending `?workDate=&timezone=`, and every stub written with it
+ * silently never fired. A regex is used rather than a wider glob because a
+ * glob's single `*` does not cross `/`, and a timezone is exactly the kind of
+ * value that carries one.
+ */
+const PULSE_ROUTE = /\/api\/pulse(\?|$)/;
 
 type ApiAnswer<T> = { status: number; body: T };
 
@@ -183,6 +197,24 @@ async function readTask(page: Page, taskId: string): Promise<TaskRow> {
 /** The card for one Task, located by the title the Pulse projection carried. */
 function cardFor(page: Page, title: string) {
   return page.getByTestId("today-task-card").filter({ hasText: title });
+}
+
+/**
+ * The civil day and zone the Today surface will itself ask `/api/pulse` for.
+ *
+ * `browserWorkClock` is the product's one clock — the surface derives its query
+ * from exactly this function — so the probe below asks about the same civil day
+ * the derivation is being asked about. Only the zone is read out of the page;
+ * the date is derived by the shared helper rather than computed a second time
+ * here, because two derivations of "today" are two things that can disagree.
+ *
+ * A literal date cannot stand in for it: a Task seeded with `dueAt` of now is
+ * correctly not a member of some other civil day, so a fixed date turns a right
+ * answer from the backend into a failing assertion.
+ */
+async function todayClock(page: Page): Promise<BrowserWorkClock> {
+  const timezone = await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+  return browserWorkClock(new Date(), timezone);
 }
 
 async function openToday(page: Page): Promise<void> {
@@ -512,7 +544,7 @@ test("TUX07-AC-012: an authoritative Empty renders exactly the Empty copy", asyn
     quiet day — the backend shape, complete coverage, no limitation, zero items
     — and the surface's own classification is what is under test.
   */
-  await page.route("**/api/pulse", async (route) => {
+  await page.route(PULSE_ROUTE, async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -547,7 +579,7 @@ test("TUX07-AC-013: a failed refresh keeps the rows and marks the surface stale,
   // A real refused response on the client read path. The first render came from
   // the server, so what is being tested is what a *refresh* failure does to an
   // answer that already stands.
-  await page.route("**/api/pulse", async (route) => {
+  await page.route(PULSE_ROUTE, async (route) => {
     await route.fulfill({
       status: 503,
       contentType: "application/json",
@@ -805,11 +837,15 @@ test("TUX07-AC-020: a non-Task Pulse item renders with no Reschedule and no Clos
     `itemType`, and the two items go through one render pass in one list, so the
     comparison is like-for-like rather than two separate pages.
   */
+  const clock = await todayClock(page);
   const served = await api<{
     pulseItems?: { itemType: string; subjectTitle?: string }[];
     items?: { itemType: string; subjectTitle?: string }[];
     disclosure: unknown;
-  }>(page, "/api/pulse?workDate=2026-08-09&timezone=UTC");
+  }>(
+    page,
+    `/api/pulse?workDate=${clock.workDate}&timezone=${encodeURIComponent(clock.timezone)}`,
+  );
   expect(served.status).toBe(200);
   const pulseItems = served.body.pulseItems ?? served.body.items ?? [];
   const taskItem = pulseItems.find(
@@ -832,7 +868,7 @@ test("TUX07-AC-020: a non-Task Pulse item renders with no Reschedule and no Clos
     generatedAt: new Date().toISOString(),
   };
 
-  await page.route("**/api/pulse", async (route) => {
+  await page.route(PULSE_ROUTE, async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",

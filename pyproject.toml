@@ -271,7 +271,6 @@ pythonpath = ["src", ".", "tests"]
 addopts = "--strict-markers --strict-config"
 markers = [
   "slow: excluded from the FAST tier",
-  "unit: synthetic unit test without external dependencies",
   "database: requires a reachable PostgreSQL server",
   "network: requires network access; not part of Phase 01",
   "connector: requires a personal-data connector; not part of Phase 01",

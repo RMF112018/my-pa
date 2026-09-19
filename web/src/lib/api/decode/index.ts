@@ -77,6 +77,9 @@ import { decodeConstraintsList } from "./capabilities/constraints.list";
 import { decodeConstraintsSearch } from "./capabilities/constraints.search";
 import { decodeConstraintsHistory } from "./capabilities/constraints.history";
 import { decodeConstraintsOverview } from "./capabilities/constraints.overview";
+import { decodeConstraintsPortfolioList } from "./capabilities/constraints.portfolio_list";
+import { decodeConstraintsPortfolioSearch } from "./capabilities/constraints.portfolio_search";
+import { decodeConstraintsPortfolioOverview } from "./capabilities/constraints.portfolio_overview";
 import { decodeConstraintCategoriesList } from "./capabilities/constraint_categories.list";
 import { decodeProjectControlsStatus } from "./capabilities/project_controls.status";
 import { decodeProjectControlsConfigure } from "./capabilities/project_controls.configure";
@@ -162,6 +165,9 @@ export const DECODERS = {
   "constraints.search": decodeConstraintsSearch,
   "constraints.history": decodeConstraintsHistory,
   "constraints.overview": decodeConstraintsOverview,
+  "constraints.portfolio_list": decodeConstraintsPortfolioList,
+  "constraints.portfolio_search": decodeConstraintsPortfolioSearch,
+  "constraints.portfolio_overview": decodeConstraintsPortfolioOverview,
   "constraint_categories.list": decodeConstraintCategoriesList,
   "project_controls.status": decodeProjectControlsStatus,
   "project_controls.configure": decodeProjectControlsConfigure,

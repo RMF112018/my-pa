@@ -137,6 +137,7 @@ from my_pa.application.commands import (
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
+    ListPortfolioConstraints,
     ListProjects,
     ListRelationshipMemories,
     ListReviewCases,
@@ -166,6 +167,7 @@ from my_pa.application.commands import (
     ReadIntelligenceArtifact,
     ReadKnowledge,
     ReadManagedDocument,
+    ReadPortfolioConstraintOverview,
     ReadProject,
     ReadProjectControlsStatus,
     ReadTask,
@@ -203,6 +205,7 @@ from my_pa.application.commands import (
     SearchGoodNotes,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
+    SearchPortfolioConstraints,
     SearchRelationshipMemories,
     SearchTasks,
     SplitEntity,
@@ -710,6 +713,12 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.CONSTRAINT_CATEGORIES_LIST: ListConstraintCategories(
             project_id=issue_identifier(IdKind.PROJECT)
         ),
+        # PC-CM-RUN01-WP06. Three commands with no Project to name: the
+        # portfolio is the set the authenticated Principal owns, which is
+        # exactly why these rows are the shortest in this table.
+        Capability.CONSTRAINTS_PORTFOLIO_LIST: ListPortfolioConstraints(),
+        Capability.CONSTRAINTS_PORTFOLIO_SEARCH: SearchPortfolioConstraints(query="synthetic"),
+        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW: ReadPortfolioConstraintOverview(),
         # PC-CM-RUN01-WP05. Well-formed and naming nothing the scene owns, on
         # the same terms as every row here: the only thing wrong in a denial
         # test must be the authority.
@@ -1137,10 +1146,10 @@ def invoke(
 # policy pair matrix still exercises every one directly.
 HANDLER_UNWIRED_CAPABILITIES: Final = frozenset(
     {
+        # `PC-CM-RUN01-WP06` wired `constraints.portfolio_list`,
+        # `constraints.portfolio_search` and `constraints.portfolio_overview`,
+        # so the Run 01 remainder is the name below.
         Capability.CONSTRAINTS_CREATE_PUBLISHED,
-        Capability.CONSTRAINTS_PORTFOLIO_LIST,
-        Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
-        Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
     }
 )
 CONTRACT_ONLY_CAPABILITIES: Final = frozenset(

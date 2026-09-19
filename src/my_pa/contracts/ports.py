@@ -110,9 +110,11 @@ from my_pa.domain.project_controls.read_models import (
     ConstraintListSpec,
     ConstraintOverviewFacts,
     ConstraintPartyRow,
+    ConstraintPortfolioListSpec,
     ConstraintRelationshipRow,
     ConstraintSyncFacts,
     PersistedConstraintRecord,
+    ProjectCalendar,
 )
 from my_pa.domain.project_controls.relationship import ConstraintRelationship
 from my_pa.domain.project_controls.revision import ConstraintRevision
@@ -7025,6 +7027,85 @@ class ConstraintManagementRepository(ABC):
         The open-age numerator and denominator are returned separately so that
         "nothing qualifies" stays a zero denominator rather than becoming an
         average of zero.
+        """
+
+    # PC-CM-RUN01-WP06: the set-based siblings the cross-Project ("portfolio")
+    # reads add. Each is the exact-Project read above restated over a set of
+    # Projects, and the rule that makes them worth having is that the statement
+    # count stays constant in the number of Projects: one statement for N
+    # Projects where the sibling issues one for one. The Principal partition
+    # guard composes in every one of them exactly as it does above, so a
+    # Project identifier that is not this Principal's contributes nothing
+    # rather than erroring — indistinguishable from an owned Project with no
+    # rows. None of them reads a Project: the set arrives already authorized,
+    # enumerated by `ProjectRepository` above this port.
+
+    @abstractmethod
+    def get_project_settings_for(
+        self, principal_id: str, project_ids: Collection[str]
+    ) -> Mapping[str, ConstraintProjectSettings]:
+        """This Principal's Constraint settings for many Projects, keyed by Project.
+
+        A Project with no configured Constraint calendar has no key, which is
+        how the read plane learns there is no defensible Overdue boundary for it
+        without asking a second question.
+        """
+
+    @abstractmethod
+    def list_categories_for(
+        self,
+        principal_id: str,
+        project_ids: Collection[str],
+        *,
+        include_states: frozenset[ConstraintCategoryState] | None = None,
+    ) -> tuple[ConstraintCategoryRow, ...]:
+        """This Principal's Categories across many Projects, in display order.
+
+        The set-based `list_categories`. `include_states` of `None` means every
+        state, for the reason stated there: an `INACTIVE` Category still names
+        the codes it issued.
+        """
+
+    @abstractmethod
+    def list_portfolio_constraints(
+        self, principal_id: str, *, spec: ConstraintPortfolioListSpec
+    ) -> tuple[PersistedConstraintRecord, ...]:
+        """One cross-Project page of Register rows, filters and keyset applied in SQL.
+
+        Returns up to `spec.fetch_limit` records across every Project the spec
+        carries a calendar for, in one statement. The per-Project business-time
+        boundaries ride in on `spec.calendars` rather than being computed here,
+        so a row's Overdue answer is its own Project's and not the portfolio's.
+        """
+
+    @abstractmethod
+    def portfolio_sync_summary(
+        self,
+        principal_id: str,
+        project_ids: Collection[str],
+        constraint_ids: Collection[str],
+    ) -> Mapping[str, ConstraintSyncFacts]:
+        """The stored sync facts for many Projects, keyed by Project.
+
+        The set-based `sync_summary`, and read-only on the same terms: it starts
+        no run, takes no lease and compares nothing against a provider. A
+        Project with no sync target is absent from the mapping.
+        """
+
+    @abstractmethod
+    def portfolio_overview_facts(
+        self,
+        principal_id: str,
+        *,
+        as_of: datetime,
+        calendars: Collection[ProjectCalendar],
+    ) -> Mapping[str, ConstraintOverviewFacts]:
+        """Every overview count for many Projects, from one aggregate statement.
+
+        Each Project's counts are taken against its own `ProjectCalendar`, which
+        is why the calendars are the argument rather than a single pair of
+        dates: counts taken against different Project dates are not summable,
+        and this method returns them unsummed, keyed by Project.
         """
 
 

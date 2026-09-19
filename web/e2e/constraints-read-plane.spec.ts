@@ -190,3 +190,104 @@ test("search canonicalizes incompatible list controls and remains responsive", a
   );
   expect(overflow).toBeLessThanOrEqual(1);
 });
+
+/**
+ * The portfolio reads over the same real stack.
+ *
+ * `stack.sh` seeds this Principal two Projects: `prj_e2ecst0000000001`, which is
+ * configured and carries the Constraints, and `prj_e2ecst0000000002`, which is
+ * deliberately never enrolled in Constraint Management. That pair is the fixture
+ * these tests want, because the decision it exercises is the one a unit test
+ * cannot reach: an owned Project with no Constraint calendar contributes nothing
+ * to a portfolio result and is absent rather than counted against a substituted
+ * calendar.
+ */
+const PORTFOLIO = `/api/project-controls/portfolio/constraints`;
+const UNCONFIGURED_PROJECT = "prj_e2ecst0000000002";
+
+test("the portfolio reads answer across owned Projects in one call each", async ({ page }) => {
+  test.setTimeout(180_000);
+
+  const calls: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/api/project-controls/")) calls.push(request.url());
+  });
+
+  const register = await read(page, `${PORTFOLIO}?scope=all&sort=code&dir=asc`);
+  expect(register.status).toBe(200);
+  expect(register.cacheControl).toBe("private, no-store");
+  const rows = register.body.constraints as Record<string, unknown>[];
+  expect(rows.map((row) => row.constraintCode)).toEqual(["1.01", "1.02"]);
+  // Every row names the Project it is on; the unconfigured Project has no
+  // calendar, so it contributes no row rather than rows counted on a borrowed one.
+  expect(new Set(rows.map((row) => row.projectId))).toEqual(new Set([PROJECT]));
+  // And it is not omitted in silence. The seeded world owns exactly one Project
+  // that cannot contribute, so the count is the one number that tells the caller
+  // this answer is partial. It names no Project, which is what keeps it from
+  // being an existence oracle.
+  expect(register.body.omittedProjects).toBe(1);
+
+  const search = await read(page, `${PORTFOLIO}?q=Crane&scope=all`);
+  expect(search.status).toBe(200);
+  const hits = search.body.constraints as Record<string, unknown>[];
+  expect(hits).toHaveLength(1);
+  expect(hits[0].constraintId).toBe(SECOND);
+  expect(search.body.omittedProjects).toBe(1);
+
+  const overview = await read(page, `${PORTFOLIO}/overview`);
+  expect(overview.status).toBe(200);
+  const portfolio = overview.body.overview as {
+    projects: Record<string, unknown>[];
+    asOf: string;
+    omittedProjects: number;
+  };
+  // One entry per Project that has a Constraint calendar, each on its own.
+  expect(portfolio.projects.map((entry) => entry.projectId)).toEqual([PROJECT]);
+  expect(portfolio.projects[0].projectTimezone).toBe("America/New_York");
+  expect(portfolio.projects[0].totalOpen).toBe(2);
+  expect(portfolio.projects[0]).toHaveProperty("averageOpenAgeBusinessDays");
+  expect(portfolio.projects[0]).toHaveProperty("syncHealth");
+  expect(typeof portfolio.asOf).toBe("string");
+  // The same partiality the Register disclosed, disclosed here too: one owned
+  // Project has no calendar, and the overview says so with a count rather than
+  // dropping it without a word.
+  expect(portfolio.omittedProjects).toBe(1);
+  // No portfolio-wide roll-up: counts on different Project calendars do not add.
+  // The key set is exact, so a roll-up appearing later fails here rather than
+  // being quietly tolerated -- and so does any field naming an omitted Project.
+  expect(Object.keys(portfolio).sort()).toEqual(["asOf", "omittedProjects", "projects"]);
+  expect(portfolio).not.toHaveProperty("totalOpen");
+  // The count is the whole disclosure. Nothing here may name what was omitted.
+  expect(JSON.stringify(portfolio)).not.toContain(UNCONFIGURED_PROJECT);
+
+  // Three requests, three answers. The browser made no per-Project call of its
+  // own, which is the client fanout plan section 15 prohibits.
+  expect(calls.filter((url) => url.includes("/portfolio/"))).toHaveLength(3);
+  expect(calls.some((url) => url.includes(`/projects/${PROJECT}/`))).toBe(false);
+  expect(calls.some((url) => url.includes(UNCONFIGURED_PROJECT))).toBe(false);
+});
+
+test("the portfolio routes admit no Project identifier at all", async ({ page }) => {
+  for (const query of [
+    `project_id=${PROJECT}`,
+    `projectId=${PROJECT}`,
+    `project=${UNCONFIGURED_PROJECT}`,
+    `project_id=${FOREIGN_PROJECT}`,
+    "direction=desc",
+    "scope=everything",
+  ]) {
+    const answer = await read(page, `${PORTFOLIO}?${query}`);
+    expect(answer.status, query).toBe(400);
+    expect((answer.body.error as Record<string, unknown>).code).toBe("invalid_request");
+    expect(answer.cacheControl).toBe("private, no-store");
+    // The refusal is the same whether the named Project is owned, unconfigured
+    // or foreign, so it cannot be used to learn which of those it is.
+    const serialized = JSON.stringify(answer.body);
+    expect(serialized).not.toContain(PROJECT);
+    expect(serialized).not.toContain(FOREIGN_PROJECT);
+  }
+
+  const overviewQuery = await read(page, `${PORTFOLIO}/overview?project_id=${PROJECT}`);
+  expect(overviewQuery.status).toBe(400);
+  expect((overviewQuery.body.error as Record<string, unknown>).code).toBe("invalid_request");
+});

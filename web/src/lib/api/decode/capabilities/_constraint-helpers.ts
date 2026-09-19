@@ -950,3 +950,47 @@ export function decodeConstraintPage(
   if (!constraints.ok) return constraints;
   return ok({ constraints: constraints.value });
 }
+
+/**
+ * How many owned Projects a portfolio answer could not include.
+ *
+ * A Project with no Constraint settings row, or one whose stored zone the
+ * backend cannot load, has no defensible project date, so it contributes no
+ * rows and no counts rather than being rendered against a substituted
+ * calendar. The backend omits it instead of failing the whole portfolio, and
+ * this figure is what keeps that honest: the view is incomplete, by this much.
+ *
+ * **A count, and never an identity.** The payload carries no identifier, name
+ * or timezone for an omitted Project and none is reconstructed here. A
+ * negative value is malformed rather than clamped — a count below zero is not
+ * a number this surface has any reading for.
+ */
+export function decodeOmittedProjects(value: unknown): DecodeResult<number> {
+  const count = requiredInt(value);
+  if (!count.ok) return count;
+  if (count.value < 0) return fail("a required field was not the expected type");
+  return ok(count.value);
+}
+
+/**
+ * One portfolio Register page as both portfolio list capabilities return it.
+ *
+ * The rows are the exact `constraints.list` shape and are decoded by the
+ * Register's own guard, so this is not a second projection of them. What a
+ * portfolio adds is `omitted_projects`: truncation and the next cursor stay
+ * the gateway *disclosure*'s and nothing here reconstructs them, but the count
+ * of Projects that could not contribute is the result's own and is required.
+ */
+export function decodeConstraintPortfolioPage(input: unknown): DecodeResult<{
+  readonly constraints: readonly ConstraintListEntry[];
+  readonly omittedProjects: number;
+}> {
+  const known = pick(input, ["constraints", "omitted_projects"]);
+  if (!known.ok) return known;
+  if (known.value.constraints === undefined) return fail("a required array was omitted");
+  const constraints = decodeItems(known.value.constraints, decodeConstraintListEntry);
+  if (!constraints.ok) return constraints;
+  const omittedProjects = decodeOmittedProjects(known.value.omitted_projects);
+  if (!omittedProjects.ok) return omittedProjects;
+  return ok({ constraints: constraints.value, omittedProjects: omittedProjects.value });
+}

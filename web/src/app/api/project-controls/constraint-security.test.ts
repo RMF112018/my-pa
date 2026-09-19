@@ -69,9 +69,15 @@ function code(path: string): string {
 const SETTINGS_ROUTE = "projects/[projectId]/settings/route.ts";
 
 describe("the Constraint BFF surface mutates only Project Controls settings", () => {
-  it("ships six routes and no more", () => {
+  it("ships exactly this set of routes and no more", () => {
     const routes = PROJECT_CONTROL_SOURCES.filter((path) => path.endsWith("route.ts"));
+    // R01-WP06 adds the two portfolio reads. They live outside the
+    // `projects/[projectId]/` tree deliberately: a portfolio read takes no
+    // Project identifier, so there is no segment for one and no path that could
+    // be used to ask whether a named Project answers for this Principal.
     expect(routes.map((path) => path.slice(PROJECT_CONTROLS.length + 1)).sort()).toEqual([
+      "portfolio/constraints/overview/route.ts",
+      "portfolio/constraints/route.ts",
       "projects/[projectId]/constraint-categories/route.ts",
       "projects/[projectId]/constraints/[constraintId]/history/route.ts",
       "projects/[projectId]/constraints/[constraintId]/route.ts",
@@ -79,6 +85,42 @@ describe("the Constraint BFF surface mutates only Project Controls settings", ()
       "projects/[projectId]/constraints/route.ts",
       SETTINGS_ROUTE,
     ]);
+  });
+
+  it("puts no Project segment on either portfolio route", () => {
+    const portfolio = PROJECT_CONTROL_SOURCES.filter(
+      (path) => path.endsWith("route.ts") && path.includes("/portfolio/"),
+    );
+    expect(portfolio).toHaveLength(2);
+    for (const path of portfolio) {
+      expect(path, path).not.toMatch(/\[projectId\]/);
+      const source = code(path);
+      // No path parameter is read, and no Project allowlist is imported: the
+      // Project set is the server's answer about the Principal, never a request
+      // field the browser could vary to probe ownership.
+      expect(source, path).not.toMatch(/\bcontext\b/);
+      expect(source, path).not.toMatch(/\bprojectId\b/);
+      expect(source, path).not.toMatch(/\bproject_id\b/);
+      expect(source, path).not.toMatch(/\bisProjectId\b/);
+      expect(source, path).not.toMatch(/\bREGISTER_FIELDS\b/);
+      expect(source, path).not.toMatch(/\bSEARCH_FIELDS\b/);
+    }
+  });
+
+  it("gives each portfolio route a single gateway dispatch", () => {
+    // Plan section 15: a portfolio BFF route calls the server portfolio
+    // capability once per request and client fanout is prohibited. Behaviour is
+    // counted in `portfolio-routes.test.ts`; what a source sweep adds is that
+    // there is only one call site to count, so no loop over Projects can be
+    // hiding behind a passing behavioural case.
+    for (const path of PROJECT_CONTROL_SOURCES.filter(
+      (candidate) => candidate.endsWith("route.ts") && candidate.includes("/portfolio/"),
+    )) {
+      const source = code(path);
+      expect(source.match(/\bworkGet\(/g)?.length ?? 0, path).toBeLessThanOrEqual(2);
+      expect(source, path).not.toMatch(/\bfor\b|\bwhile\b|\.map\(|Promise\.all/);
+      expect(source, path).not.toMatch(/"constraints\.(list|search|overview)"/);
+    }
   });
 
   it("exports no Constraint record or category mutation handler and reaches no mutation helper", () => {
@@ -109,18 +151,23 @@ describe("the Constraint BFF surface mutates only Project Controls settings", ()
     expect(settings).not.toMatch(/export\s+(async\s+)?function\s+(PATCH|PUT|DELETE)\b/);
   });
 
-  it("addresses only the six admitted read capabilities and no mutation or sync name", () => {
+  it("addresses only the admitted read capabilities and no mutation or sync name", () => {
     const addressed = new Set<string>();
     for (const path of PROJECT_CONTROL_SOURCES) {
       for (const match of text(path).matchAll(/"(constraints?[_.][a-z_.]+)"/g)) {
         addressed.add(match[1]);
       }
     }
+    // R01-WP06 adds the portfolio reads, which are reads. Nothing authoring and
+    // nothing from the sync family is reachable from this surface.
     expect([...addressed].sort()).toEqual([
       "constraint_categories.list",
       "constraints.history",
       "constraints.list",
       "constraints.overview",
+      "constraints.portfolio_list",
+      "constraints.portfolio_overview",
+      "constraints.portfolio_search",
       "constraints.read",
       "constraints.search",
     ]);

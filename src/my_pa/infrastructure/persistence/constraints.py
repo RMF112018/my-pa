@@ -59,6 +59,7 @@ import hashlib
 import json
 from collections.abc import Collection, Mapping, Sequence
 from contextlib import AbstractContextManager
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from types import TracebackType
 from typing import Any, Final, cast
@@ -69,9 +70,11 @@ from sqlalchemy import (
     Engine,
     Integer,
     Table,
+    Text,
     and_,
     asc,
     case,
+    column,
     delete,
     desc,
     func,
@@ -82,9 +85,11 @@ from sqlalchemy import (
     select,
     type_coerce,
     update,
+    values,
 )
-from sqlalchemy.engine import Connection, Row
+from sqlalchemy.engine import Connection, Row, RowMapping
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.sql.expression import Subquery, Values
 
 from my_pa.contracts.ports import (
     ConstraintManagementRepository,
@@ -121,16 +126,19 @@ from my_pa.domain.project_controls.read_models import (
     ConstraintHistoryPosition,
     ConstraintHistoryRow,
     ConstraintListCursor,
+    ConstraintListQuery,
     ConstraintListScope,
     ConstraintListSpec,
     ConstraintOverviewFacts,
     ConstraintPartyRow,
+    ConstraintPortfolioListSpec,
     ConstraintRecentFilter,
     ConstraintRelationshipRow,
     ConstraintSort,
     ConstraintSyncFacts,
     ConstraintSyncStateView,
     PersistedConstraintRecord,
+    ProjectCalendar,
     RelationshipDirection,
     SortDirection,
 )
@@ -771,7 +779,9 @@ def _open_conflict_exists(principal_id: str) -> ColumnElement[bool]:
     )
 
 
-def _sync_state_expression(principal_id: str, project_id: str) -> ColumnElement[str]:
+def _sync_state_expression(
+    principal_id: str, project_id: str | ColumnElement[Any]
+) -> ColumnElement[str]:
     """The one sync state persisted rows prove, as a column the filter can compare.
 
     The same order of reasoning `application.constraints._sync_state` applies,
@@ -780,6 +790,11 @@ def _sync_state_expression(principal_id: str, project_id: str) -> ColumnElement[
     never-synced, then the baseline version either lags the Constraint's or
     matches it. The six frontend names that need a connector, a workbook or a
     live run are not producible by this expression at all.
+
+    `project_id` is a literal for an exact-Project page and
+    `project_constraints.c.project_id` for a portfolio one, which makes the
+    target lookup correlate to each row's own Project instead of to a single
+    named one (PC-CM-RUN01-WP06). Nothing else about the expression changes.
     """
     has_target = (
         select(literal(1, Integer))
@@ -850,7 +865,83 @@ def _search_predicate(term: str) -> ColumnElement[bool]:
     )
 
 
-def _list_predicates(principal_id: str, spec: ConstraintListSpec) -> list[ColumnElement[bool]]:
+@dataclass(frozen=True, slots=True)
+class _Calendar:
+    """One Project's business-time boundary as SQL expressions rather than dates.
+
+    PC-CM-RUN01-WP06. Every date-dependent predicate in this module reads its
+    boundary from here, and there are exactly two ways one is built: `_fixed`,
+    from the dates an exact-Project request already resolved in Python, and
+    `_joined`, from the columns of a `(project_id, project_today,
+    due_soon_through)` relation joined to the rows. The predicates themselves
+    cannot tell the two apart, which is what lets a cross-Project statement
+    apply each Project's own calendar to that Project's own rows without a
+    second, divergent set of filters being written for it.
+
+    `recently_closed_from` is the trailing end of the Recently Closed window,
+    carried rather than derived at each use so the subtraction happens once.
+    """
+
+    today: ColumnElement[Any]
+    due_soon_through: ColumnElement[Any]
+    recently_closed_from: ColumnElement[Any]
+
+    @classmethod
+    def fixed(cls, project_today: date, through: date) -> _Calendar:
+        """The boundary of one Project, from dates the service already resolved."""
+        return cls(
+            today=literal(project_today, Date),
+            due_soon_through=literal(through, Date),
+            recently_closed_from=literal(
+                project_today - timedelta(days=RECENT_WINDOW_DAYS - 1), Date
+            ),
+        )
+
+    @classmethod
+    def joined(cls, relation: Values) -> _Calendar:
+        """The boundary of whichever Project the row being tested belongs to."""
+        today = relation.c.project_today
+        return cls(
+            today=today,
+            due_soon_through=relation.c.due_soon_through,
+            recently_closed_from=type_coerce(
+                today - literal(RECENT_WINDOW_DAYS - 1, Integer), Date
+            ),
+        )
+
+
+#: The relation a cross-Project statement joins to: one row per Project in
+#: scope, carrying that Project's own two dates. Named columns rather than
+#: positional ones so the join condition and the predicates read as what they
+#: are.
+def _calendar_relation(calendars: Sequence[ProjectCalendar]) -> Values:
+    """`(project_id, project_today, due_soon_through)` for every Project in scope.
+
+    A `VALUES` relation rather than a loop, and the reason the portfolio reads
+    are set-based at all: joining it to `project_constraints` is simultaneously
+    the `IN (…)` set-membership predicate that bounds the read to the Principal's
+    in-scope Projects and the source of the per-Project business-time boundary
+    applied to those rows — one statement, whatever the number of Projects.
+    """
+    return values(
+        column("project_id", Text),
+        column("project_today", Date),
+        column("due_soon_through", Date),
+        name="constraint_calendars",
+    ).data(
+        [
+            (calendar.project_id, calendar.project_today, calendar.due_soon_through)
+            for calendar in calendars
+        ]
+    )
+
+
+def _list_predicates(
+    principal_id: str,
+    query: ConstraintListQuery,
+    as_of: datetime,
+    calendar: _Calendar,
+) -> list[ColumnElement[bool]]:
     """Every filter one Register request means, as `AND`-ed clauses.
 
     OR within a family, AND across families, and AND with the scope, the quick
@@ -858,9 +949,12 @@ def _list_predicates(principal_id: str, spec: ConstraintListSpec) -> list[Column
     list rather than by a comment. The quick filters use the same derivations the
     overview counts with, which is what makes list/overview coherence a property
     of one definition rather than of two that happen to agree today.
+
+    The date-dependent filters read `calendar`, which is one Project's resolved
+    dates for an exact-Project page and the joined per-Project relation for a
+    portfolio page. There is one composition either way (PC-CM-RUN01-WP06).
     """
-    query = spec.query
-    today = spec.project_today
+    today = calendar.today
     predicates: list[ColumnElement[bool]] = []
     scope = _scope_predicate(query.scope)
     if scope is not None:
@@ -893,7 +987,7 @@ def _list_predicates(principal_id: str, spec: ConstraintListSpec) -> list[Column
                 _active(),
                 project_constraints.c.due_date.is_not(None),
                 project_constraints.c.due_date >= today,
-                project_constraints.c.due_date <= spec.due_soon_through,
+                project_constraints.c.due_date <= calendar.due_soon_through,
             )
         )
     if query.my_court:
@@ -913,29 +1007,33 @@ def _list_predicates(principal_id: str, spec: ConstraintListSpec) -> list[Column
             _party_exists(principal_id, _RESPONSIBLE_ROLE, query.responsible_party_refs)
         )
     if query.recent is not None:
-        predicates.append(_recent_predicate(spec))
+        predicates.append(_recent_predicate(query.recent, as_of, calendar))
     if query.search_text is not None:
         predicates.append(_search_predicate(query.search_text))
     return predicates
 
 
-def _recent_predicate(spec: ConstraintListSpec) -> ColumnElement[bool]:
+def _recent_predicate(
+    recent: ConstraintRecentFilter, as_of: datetime, calendar: _Calendar
+) -> ColumnElement[bool]:
     """One of the two "recently" windows, each measured on its own clock.
 
     `RECENTLY_CHANGED` compares a `timestamptz` against the request's UTC
     instant, so no local-date conversion enters it. `RECENTLY_CLOSED` compares a
     Project date against the trailing seven Project dates, because a completion
-    date is a date on the Project's calendar and nothing else. `VOID` is excluded
-    by the `closed` predicate itself rather than by a second clause.
+    date is a date on the Project's calendar and nothing else — and on a
+    portfolio page that is each row's *own* Project's calendar, because the
+    boundary arrives joined to the row rather than fixed for the statement.
+    `VOID` is excluded by the `closed` predicate itself rather than by a second
+    clause.
     """
-    if spec.query.recent is ConstraintRecentFilter.RECENTLY_CHANGED:
-        return project_constraints.c.updated_at >= spec.as_of - timedelta(days=RECENT_WINDOW_DAYS)
+    if recent is ConstraintRecentFilter.RECENTLY_CHANGED:
+        return project_constraints.c.updated_at >= as_of - timedelta(days=RECENT_WINDOW_DAYS)
     return and_(
         project_constraints.c.lifecycle_state == ConstraintLifecycleState.CLOSED.value,
         project_constraints.c.completion_date.is_not(None),
-        project_constraints.c.completion_date
-        >= spec.project_today - timedelta(days=RECENT_WINDOW_DAYS - 1),
-        project_constraints.c.completion_date <= spec.project_today,
+        project_constraints.c.completion_date >= calendar.recently_closed_from,
+        project_constraints.c.completion_date <= calendar.today,
     )
 
 
@@ -945,7 +1043,7 @@ def _discriminator(present: ColumnElement[bool]) -> ColumnElement[int]:
 
 
 def _order_components(
-    spec: ConstraintListSpec,
+    query: ConstraintListQuery,
 ) -> list[tuple[ColumnElement[Any], bool]]:
     """The active sort's full ordering key, component by component, with directions.
 
@@ -960,9 +1058,12 @@ def _order_components(
 
     `DAYS_ELAPSED` is a monotonically decreasing function of `date_identified`
     for a fixed Project date, so it orders on that column with the direction
-    inverted. Nothing is computed in Python and then sliced.
+    inverted. Nothing is computed in Python and then sliced — and because the
+    ordering never reads a Project date, the same components order a
+    cross-Project page as order a single Project's, with `constraint_id` (the
+    table's global primary key) still closing the tuple into a total order
+    across Projects.
     """
-    query = spec.query
     ascending = query.direction is SortDirection.ASC
     if query.sort is ConstraintSort.DAYS_ELAPSED:
         ascending = not ascending
@@ -1006,7 +1107,7 @@ def _order_components(
     return components
 
 
-def _anchor_values(spec: ConstraintListSpec, cursor: ConstraintListCursor) -> list[Any]:
+def _anchor_values(query: ConstraintListQuery, cursor: ConstraintListCursor) -> list[Any]:
     """The cursor's position as values comparable against `_order_components`.
 
     Each absent component becomes the same stand-in the ordering coalesces to,
@@ -1016,7 +1117,7 @@ def _anchor_values(spec: ConstraintListSpec, cursor: ConstraintListCursor) -> li
     makes every sort a total order and paging unable to duplicate or skip a
     stable row.
     """
-    sort = spec.query.sort
+    sort = query.sort
     key = cursor.sort_key
     values: list[Any] = [_KEY_ABSENT if key and key[0] == _KEY_ABSENT else _KEY_PRESENT]
     if sort is ConstraintSort.CODE:
@@ -1069,6 +1170,138 @@ def _after_predicate(
     return or_(*clauses)
 
 
+#: What an overview reports for a Project in scope that holds no Constraints at
+#: all. Stated rather than absent, because "no rows" and "not read" are
+#: different answers and only one of them is a count.
+_EMPTY_OVERVIEW_FACTS: Final = ConstraintOverviewFacts(
+    total_open=0,
+    overdue=0,
+    due_soon=0,
+    in_my_court=0,
+    on_hold=0,
+    recently_changed=0,
+    recently_closed=0,
+    draft=0,
+    needs_attention=0,
+    open_age_business_day_sum=0,
+    open_age_denominator=0,
+)
+
+
+def _overview_inner_columns(principal_id: str, calendar: _Calendar) -> list[ColumnElement[Any]]:
+    """The per-row facts an overview count needs, and the calendar it counts against.
+
+    One definition for both the exact-Project and the cross-Project aggregate
+    (PC-CM-RUN01-WP06). The three calendar columns travel with the row so the
+    outer select never has to know which kind of request produced them: for one
+    Project they are that Project's resolved dates, and for a portfolio they are
+    whatever the joined relation supplied for *this* row's Project.
+    """
+    active = project_constraints.c.lifecycle_state.in_(_ACTIVE_STATE_VALUES)
+    return [
+        project_constraints.c.lifecycle_state.label("lifecycle_state"),
+        project_constraints.c.record_quality.label("record_quality"),
+        project_constraints.c.due_date.label("due_date"),
+        project_constraints.c.completion_date.label("completion_date"),
+        project_constraints.c.updated_at.label("updated_at"),
+        project_constraints.c.date_identified.label("date_identified"),
+        calendar.today.label("project_today"),
+        calendar.due_soon_through.label("due_soon_through"),
+        calendar.recently_closed_from.label("recently_closed_from"),
+        active.label("is_active"),
+        _principal_bic_exists(principal_id).label("has_principal_bic"),
+        _open_conflict_exists(principal_id).label("has_open_conflict"),
+        _business_days_elapsed(project_constraints.c.date_identified, calendar.today).label(
+            "open_age"
+        ),
+    ]
+
+
+def _overview_aggregates(inner: Subquery, as_of: datetime) -> list[ColumnElement[Any]]:
+    """Every overview count, as `count(*) FILTER (…)` over one inner relation.
+
+    Written once and used by both overview reads, so a portfolio count and a
+    single-Project count of the same thing cannot become two definitions that
+    happen to agree today. Each date comparison reads the calendar columns the
+    inner select carried, which is what makes the per-Project boundary apply to
+    each Project's own rows when the inner relation spans several.
+    """
+    dated_and_active = and_(inner.c.is_active, inner.c.date_identified.is_not(None))
+    return [
+        func.count().filter(inner.c.is_active).label("total_open"),
+        func.count()
+        .filter(
+            and_(
+                inner.c.is_active,
+                inner.c.due_date.is_not(None),
+                inner.c.due_date < inner.c.project_today,
+            )
+        )
+        .label("overdue"),
+        func.count()
+        .filter(
+            and_(
+                inner.c.is_active,
+                inner.c.due_date.is_not(None),
+                inner.c.due_date >= inner.c.project_today,
+                inner.c.due_date <= inner.c.due_soon_through,
+            )
+        )
+        .label("due_soon"),
+        func.count()
+        .filter(and_(inner.c.is_active, inner.c.has_principal_bic))
+        .label("in_my_court"),
+        func.count()
+        .filter(inner.c.lifecycle_state == ConstraintLifecycleState.ON_HOLD.value)
+        .label("on_hold"),
+        func.count()
+        .filter(inner.c.updated_at >= as_of - timedelta(days=RECENT_WINDOW_DAYS))
+        .label("recently_changed"),
+        func.count()
+        .filter(
+            and_(
+                inner.c.lifecycle_state == ConstraintLifecycleState.CLOSED.value,
+                inner.c.completion_date.is_not(None),
+                inner.c.completion_date >= inner.c.recently_closed_from,
+                inner.c.completion_date <= inner.c.project_today,
+            )
+        )
+        .label("recently_closed"),
+        func.count()
+        .filter(inner.c.lifecycle_state == ConstraintLifecycleState.DRAFT.value)
+        .label("draft"),
+        func.count()
+        .filter(
+            or_(
+                inner.c.record_quality == ConstraintRecordQuality.LEGACY_INCOMPLETE.value,
+                inner.c.has_open_conflict,
+            )
+        )
+        .label("needs_attention"),
+        func.coalesce(
+            func.sum(inner.c.open_age).filter(dated_and_active), literal(0, Integer)
+        ).label("open_age_sum"),
+        func.count().filter(dated_and_active).label("open_age_denominator"),
+    ]
+
+
+def _to_overview_facts(mapping: RowMapping) -> ConstraintOverviewFacts:
+    """One aggregate row as the facts type, with nothing recomputed."""
+    return ConstraintOverviewFacts(
+        total_open=mapping["total_open"],
+        overdue=mapping["overdue"],
+        due_soon=mapping["due_soon"],
+        in_my_court=mapping["in_my_court"],
+        on_hold=mapping["on_hold"],
+        recently_changed=mapping["recently_changed"],
+        recently_closed=mapping["recently_closed"],
+        draft=mapping["draft"],
+        needs_attention=mapping["needs_attention"],
+        open_age_business_day_sum=int(mapping["open_age_sum"]),
+        open_age_denominator=mapping["open_age_denominator"],
+    )
+
+
 class SqlConstraintManagementRepository(ConstraintManagementRepository):
     """`ConstraintManagementRepository`, over a plain SQLAlchemy Core `Connection`.
 
@@ -1093,6 +1326,36 @@ class SqlConstraintManagementRepository(ConstraintManagementRepository):
             ).where(constraint_project_settings.c.project_id == project_id)
         ).one_or_none()
         return None if row is None else _to_settings(row)
+
+    def get_project_settings_for(
+        self, principal_id: str, project_ids: Collection[str]
+    ) -> Mapping[str, ConstraintProjectSettings]:
+        """This Principal's Constraint settings for many Projects, in one statement.
+
+        PC-CM-RUN01-WP06. The set-based sibling of `get_project_settings`, and
+        the reason a portfolio read can resolve N Project calendars without
+        issuing N statements. `IN (…)` over the requested identifiers, scoped to
+        the Principal's partition exactly as the single read is, so a Project
+        belonging to another Principal is simply absent from the mapping — it is
+        never distinguished from one this Principal owns but has not configured,
+        and neither is reported as an error here.
+
+        A Project with no settings row has no key in the result rather than a
+        `None` value: the mapping's membership is "Projects with a configured
+        Constraint calendar", which is what the caller then reads it as. An
+        empty request issues no statement.
+        """
+        wanted = sorted(set(project_ids))
+        if not wanted:
+            return {}
+        rows = self._connection.execute(
+            principal_scoped(
+                select(*constraint_project_settings.c),
+                constraint_project_settings,
+                capture_context(principal_id),
+            ).where(constraint_project_settings.c.project_id.in_(wanted))
+        ).all()
+        return {row._mapping["project_id"]: _to_settings(row) for row in rows}
 
     def insert_project_settings(
         self, principal_id: str, settings: ConstraintProjectSettings
@@ -1646,6 +1909,44 @@ class SqlConstraintManagementRepository(ConstraintManagementRepository):
         ).all()
         return tuple(_to_category_row(row) for row in rows)
 
+    def list_categories_for(
+        self,
+        principal_id: str,
+        project_ids: Collection[str],
+        *,
+        include_states: frozenset[ConstraintCategoryState] | None = None,
+    ) -> tuple[ConstraintCategoryRow, ...]:
+        """P12. The Categories of many Projects, in one statement.
+
+        PC-CM-RUN01-WP06. The set-based sibling of `list_categories`, with the
+        same ordering rule and the same "every state on purpose" default. The
+        order leads with `project_id` so a caller can group without sorting, and
+        `(display_order, category_id)` closes it for the same reason it does for
+        one Project: `display_order` alone is not a total order, and two
+        Projects may well allocate the same one. An empty request issues no
+        statement.
+        """
+        wanted = sorted(set(project_ids))
+        if not wanted:
+            return ()
+        statement = principal_scoped(
+            select(*constraint_categories.c),
+            constraint_categories,
+            capture_context(principal_id),
+        ).where(constraint_categories.c.project_id.in_(wanted))
+        if include_states is not None:
+            statement = statement.where(
+                constraint_categories.c.state.in_(sorted(state.value for state in include_states))
+            )
+        rows = self._connection.execute(
+            statement.order_by(
+                asc(constraint_categories.c.project_id),
+                asc(constraint_categories.c.display_order),
+                asc(constraint_categories.c.category_id),
+            )
+        ).all()
+        return tuple(_to_category_row(row) for row in rows)
+
     def read_constraint(
         self, principal_id: str, constraint_id: str
     ) -> PersistedConstraintRecord | None:
@@ -1725,7 +2026,7 @@ class SqlConstraintManagementRepository(ConstraintManagementRepository):
         read (`parties_for`), which is the difference between a page whose cost
         is bounded and one whose cost the data decides.
         """
-        components = _order_components(spec)
+        components = _order_components(spec.query)
         statement = principal_scoped(
             select(*project_constraints.c).select_from(
                 project_constraints.outerjoin(
@@ -1740,7 +2041,12 @@ class SqlConstraintManagementRepository(ConstraintManagementRepository):
             capture_context(principal_id),
         ).where(
             project_constraints.c.project_id == project_id,
-            *_list_predicates(principal_id, spec),
+            *_list_predicates(
+                principal_id,
+                spec.query,
+                spec.as_of,
+                _Calendar.fixed(spec.project_today, spec.due_soon_through),
+            ),
         )
         if spec.query.sync_states:
             statement = statement.where(
@@ -1750,7 +2056,69 @@ class SqlConstraintManagementRepository(ConstraintManagementRepository):
             )
         if spec.after is not None:
             statement = statement.where(
-                _after_predicate(components, _anchor_values(spec, spec.after))
+                _after_predicate(components, _anchor_values(spec.query, spec.after))
+            )
+        ordered = statement.order_by(
+            *(
+                asc(expression) if ascending else desc(expression)
+                for expression, ascending in components
+            )
+        ).limit(spec.fetch_limit)
+        return tuple(_to_read_record(row) for row in self._connection.execute(ordered).all())
+
+    def list_portfolio_constraints(
+        self, principal_id: str, *, spec: ConstraintPortfolioListSpec
+    ) -> tuple[PersistedConstraintRecord, ...]:
+        """P11. One page of the Register across several Projects, in one statement.
+
+        PC-CM-RUN01-WP06, and the same statement `list_constraints` issues with
+        two differences and no third. The Project predicate is an inner join to
+        the calendar relation instead of an equality, so set membership costs
+        nothing extra and cannot be written as a loop; and every date-dependent
+        filter reads that relation's columns, so a row is tested against its own
+        Project's `project_today` and `due_soon_through` rather than against one
+        Project's dates standing in for all of them.
+
+        **The cost is constant in the number of Projects.** The Projects enter
+        as rows of a `VALUES` relation, not as statements, so a portfolio
+        spanning twelve Projects issues exactly what one spanning a single
+        Project issues. `fetch_limit` bounds the whole page across all of them,
+        applied by the database.
+
+        A Project whose calendar the service could not resolve is simply not in
+        the relation and contributes no rows; a Constraint with no Project at
+        all — a Draft saved before one was chosen — is excluded by the inner
+        join, because a portfolio is a set of Projects.
+        """
+        if not spec.calendars:
+            return ()
+        relation = _calendar_relation(spec.calendars)
+        calendar = _Calendar.joined(relation)
+        components = _order_components(spec.query)
+        statement = principal_scoped(
+            select(*project_constraints.c).select_from(
+                project_constraints.join(
+                    relation, relation.c.project_id == project_constraints.c.project_id
+                ).outerjoin(
+                    constraint_categories,
+                    and_(
+                        matching_partition_criterion(project_constraints, constraint_categories),
+                        constraint_categories.c.category_id == project_constraints.c.category_id,
+                    ),
+                )
+            ),
+            project_constraints,
+            capture_context(principal_id),
+        ).where(*_list_predicates(principal_id, spec.query, spec.as_of, calendar))
+        if spec.query.sync_states:
+            statement = statement.where(
+                _sync_state_expression(principal_id, project_constraints.c.project_id).in_(
+                    sorted(state.value for state in spec.query.sync_states)
+                )
+            )
+        if spec.after is not None:
+            statement = statement.where(
+                _after_predicate(components, _anchor_values(spec.query, spec.after))
             )
         ordered = statement.order_by(
             *(
@@ -2075,6 +2443,120 @@ class SqlConstraintManagementRepository(ConstraintManagementRepository):
             },
         )
 
+    def portfolio_sync_summary(
+        self,
+        principal_id: str,
+        project_ids: Collection[str],
+        constraint_ids: Collection[str],
+    ) -> Mapping[str, ConstraintSyncFacts]:
+        """P13. The same sync facts for many Projects at once. Two statements.
+
+        PC-CM-RUN01-WP06. The set-based sibling of `sync_summary`, and two
+        statements whatever the number of Projects: the targets (joined to the
+        baselines only when a bounded set of Constraints named them, exactly as
+        the single-Project read decides it) and the open conflicts, both
+        grouped by Project rather than fetched per Project.
+
+        Every requested Project appears in the result, including one with no
+        sync target at all — it gets the facts that mean "never synced" rather
+        than being absent, so a caller never has to distinguish a Project that
+        was not read from one that has nothing to report. The facts are kept
+        per Project because `has_target` and `last_verified_at` are properties of
+        a Project's target and would be wrong if merged across Projects.
+
+        **Read-only in the strict sense**, on the same terms as `sync_summary`:
+        no run, lease, workbook, connector or three-way comparison is reachable
+        from here.
+        """
+        projects = sorted(set(project_ids))
+        if not projects:
+            return {}
+        wanted = sorted(set(constraint_ids))
+        target_statement = principal_scoped(
+            select(
+                constraint_sync_targets.c.project_id,
+                constraint_sync_targets.c.last_verified_at,
+            ),
+            constraint_sync_targets,
+            capture_context(principal_id),
+        ).where(constraint_sync_targets.c.project_id.in_(projects))
+        if wanted:
+            target_statement = principal_scoped(
+                select(
+                    constraint_sync_targets.c.project_id,
+                    constraint_sync_targets.c.last_verified_at,
+                    constraint_sync_baselines.c.constraint_id.label("baseline_constraint_id"),
+                    constraint_sync_baselines.c.baseline_constraint_version,
+                ).select_from(
+                    constraint_sync_targets.outerjoin(
+                        constraint_sync_baselines,
+                        and_(
+                            matching_partition_criterion(
+                                constraint_sync_targets, constraint_sync_baselines
+                            ),
+                            constraint_sync_baselines.c.sync_target_id
+                            == constraint_sync_targets.c.sync_target_id,
+                            constraint_sync_baselines.c.constraint_id.in_(wanted),
+                        ),
+                    )
+                ),
+                constraint_sync_targets,
+                capture_context(principal_id),
+            ).where(constraint_sync_targets.c.project_id.in_(projects))
+        has_target: dict[str, bool] = dict.fromkeys(projects, False)
+        verified: dict[str, datetime] = {}
+        baselines: dict[str, dict[str, int]] = {project: {} for project in projects}
+        for row in self._connection.execute(target_statement).all():
+            mapping = row._mapping
+            project = mapping["project_id"]
+            has_target[project] = True
+            moment = mapping["last_verified_at"]
+            if moment is not None:
+                verified[project] = max(moment, verified.get(project, moment))
+            if not wanted:
+                continue
+            baseline_id = mapping["baseline_constraint_id"]
+            if baseline_id is not None:
+                version = mapping["baseline_constraint_version"]
+                known = baselines[project]
+                known[baseline_id] = max(version, known.get(baseline_id, version))
+        conflict_statement = principal_scoped(
+            select(
+                constraint_sync_conflicts.c.project_id,
+                constraint_sync_conflicts.c.constraint_id,
+                func.count().label("open_conflicts"),
+            ),
+            constraint_sync_conflicts,
+            capture_context(principal_id),
+        ).where(
+            constraint_sync_conflicts.c.project_id.in_(projects),
+            constraint_sync_conflicts.c.state == _OPEN_CONFLICT,
+            constraint_sync_conflicts.c.constraint_id.is_not(None),
+        )
+        if wanted:
+            conflict_statement = conflict_statement.where(
+                constraint_sync_conflicts.c.constraint_id.in_(wanted)
+            )
+        conflicts: dict[str, dict[str, int]] = {project: {} for project in projects}
+        conflict_rows = self._connection.execute(
+            conflict_statement.group_by(
+                constraint_sync_conflicts.c.project_id,
+                constraint_sync_conflicts.c.constraint_id,
+            )
+        ).all()
+        for row in conflict_rows:
+            mapping = row._mapping
+            conflicts[mapping["project_id"]][mapping["constraint_id"]] = mapping["open_conflicts"]
+        return {
+            project: ConstraintSyncFacts(
+                has_target=has_target[project],
+                last_verified_at=verified.get(project),
+                baseline_versions=baselines[project],
+                open_conflict_counts=conflicts[project],
+            )
+            for project in projects
+        }
+
     def overview_facts(
         self,
         principal_id: str,
@@ -2089,9 +2571,10 @@ class SqlConstraintManagementRepository(ConstraintManagementRepository):
         The inner select narrows to the Principal's rows in this Project and
         decides, per row, the three things a count needs that a column does not
         already say: whether BIC names the Principal, whether a sync conflict is
-        open, and how many working days the record has been open. The outer
-        select is then nothing but `count(*) FILTER (…)` over those columns, so
-        every metric is computed from the same rows in the same pass.
+        open, and how many working days the record has been open. It also
+        carries the Project's own calendar dates down as columns, so the outer
+        select is nothing but `count(*) FILTER (…)` over those columns and every
+        metric is computed from the same rows in the same pass.
 
         Overdue and Due Soon are disjoint by construction — one is strictly
         before the Project date and the other begins at it — and a row with no
@@ -2100,103 +2583,74 @@ class SqlConstraintManagementRepository(ConstraintManagementRepository):
         no `date_identified`, which is how an undated legacy import stays out of
         the average instead of dragging it to zero.
         """
-        active = project_constraints.c.lifecycle_state.in_(_ACTIVE_STATE_VALUES)
+        calendar = _Calendar.fixed(project_today, due_soon_through)
         inner = (
             principal_scoped(
-                select(
-                    project_constraints.c.lifecycle_state.label("lifecycle_state"),
-                    project_constraints.c.record_quality.label("record_quality"),
-                    project_constraints.c.due_date.label("due_date"),
-                    project_constraints.c.completion_date.label("completion_date"),
-                    project_constraints.c.updated_at.label("updated_at"),
-                    project_constraints.c.date_identified.label("date_identified"),
-                    active.label("is_active"),
-                    _principal_bic_exists(principal_id).label("has_principal_bic"),
-                    _open_conflict_exists(principal_id).label("has_open_conflict"),
-                    _business_days_elapsed(
-                        project_constraints.c.date_identified, literal(project_today, Date)
-                    ).label("open_age"),
-                ),
+                select(*_overview_inner_columns(principal_id, calendar)),
                 project_constraints,
                 capture_context(principal_id),
             )
             .where(project_constraints.c.project_id == project_id)
             .subquery()
         )
-        dated_and_active = and_(inner.c.is_active, inner.c.date_identified.is_not(None))
-        row = self._connection.execute(
+        row = self._connection.execute(select(*_overview_aggregates(inner, as_of))).one()
+        return _to_overview_facts(row._mapping)
+
+    def portfolio_overview_facts(
+        self,
+        principal_id: str,
+        *,
+        as_of: datetime,
+        calendars: Collection[ProjectCalendar],
+    ) -> Mapping[str, ConstraintOverviewFacts]:
+        """P14. Every overview count for many Projects, from one aggregate statement.
+
+        PC-CM-RUN01-WP06, and the extension of `overview_facts` rather than a
+        second aggregate beside it: the inner select and the `count(*) FILTER
+        (…)` list are literally the same two builders, with the Project
+        predicate becoming an inner join to the calendar relation and the outer
+        select gaining `project_id` and a `GROUP BY`. Because each Project's
+        `project_today` and `due_soon_through` arrive joined to its own rows,
+        every Project's business-time boundary is applied to that Project's rows
+        in the one pass — there is no arrangement in which one Project's
+        calendar could classify another's Constraints.
+
+        **The cost is constant in the number of Projects**: they are rows of a
+        `VALUES` relation, not statements.
+
+        A Project in scope with no Constraints produces no group, so it is
+        filled in here with zeroes. That keeps the result's membership exactly
+        the Projects that were asked for — a caller cannot infer from the shape
+        of this mapping which Projects hold rows, and a zero count is stated as
+        a zero rather than as an absence.
+        """
+        wanted = tuple(calendars)
+        if not wanted:
+            return {}
+        relation = _calendar_relation(wanted)
+        calendar = _Calendar.joined(relation)
+        inner = principal_scoped(
             select(
-                func.count().filter(inner.c.is_active).label("total_open"),
-                func.count()
-                .filter(
-                    and_(
-                        inner.c.is_active,
-                        inner.c.due_date.is_not(None),
-                        inner.c.due_date < project_today,
-                    )
+                project_constraints.c.project_id.label("project_id"),
+                *_overview_inner_columns(principal_id, calendar),
+            ).select_from(
+                project_constraints.join(
+                    relation, relation.c.project_id == project_constraints.c.project_id
                 )
-                .label("overdue"),
-                func.count()
-                .filter(
-                    and_(
-                        inner.c.is_active,
-                        inner.c.due_date.is_not(None),
-                        inner.c.due_date >= project_today,
-                        inner.c.due_date <= due_soon_through,
-                    )
-                )
-                .label("due_soon"),
-                func.count()
-                .filter(and_(inner.c.is_active, inner.c.has_principal_bic))
-                .label("in_my_court"),
-                func.count()
-                .filter(inner.c.lifecycle_state == ConstraintLifecycleState.ON_HOLD.value)
-                .label("on_hold"),
-                func.count()
-                .filter(inner.c.updated_at >= as_of - timedelta(days=RECENT_WINDOW_DAYS))
-                .label("recently_changed"),
-                func.count()
-                .filter(
-                    and_(
-                        inner.c.lifecycle_state == ConstraintLifecycleState.CLOSED.value,
-                        inner.c.completion_date.is_not(None),
-                        inner.c.completion_date
-                        >= project_today - timedelta(days=RECENT_WINDOW_DAYS - 1),
-                        inner.c.completion_date <= project_today,
-                    )
-                )
-                .label("recently_closed"),
-                func.count()
-                .filter(inner.c.lifecycle_state == ConstraintLifecycleState.DRAFT.value)
-                .label("draft"),
-                func.count()
-                .filter(
-                    or_(
-                        inner.c.record_quality == ConstraintRecordQuality.LEGACY_INCOMPLETE.value,
-                        inner.c.has_open_conflict,
-                    )
-                )
-                .label("needs_attention"),
-                func.coalesce(
-                    func.sum(inner.c.open_age).filter(dated_and_active), literal(0, Integer)
-                ).label("open_age_sum"),
-                func.count().filter(dated_and_active).label("open_age_denominator"),
+            ),
+            project_constraints,
+            capture_context(principal_id),
+        ).subquery()
+        rows = self._connection.execute(
+            select(inner.c.project_id, *_overview_aggregates(inner, as_of)).group_by(
+                inner.c.project_id
             )
-        ).one()
-        mapping = row._mapping
-        return ConstraintOverviewFacts(
-            total_open=mapping["total_open"],
-            overdue=mapping["overdue"],
-            due_soon=mapping["due_soon"],
-            in_my_court=mapping["in_my_court"],
-            on_hold=mapping["on_hold"],
-            recently_changed=mapping["recently_changed"],
-            recently_closed=mapping["recently_closed"],
-            draft=mapping["draft"],
-            needs_attention=mapping["needs_attention"],
-            open_age_business_day_sum=int(mapping["open_age_sum"]),
-            open_age_denominator=mapping["open_age_denominator"],
-        )
+        ).all()
+        counted = {row._mapping["project_id"]: _to_overview_facts(row._mapping) for row in rows}
+        return {
+            entry.project_id: counted.get(entry.project_id, _EMPTY_OVERVIEW_FACTS)
+            for entry in wanted
+        }
 
     # --- Constraint synchronization (PC-CM-IMP-WP11) -------------------
 

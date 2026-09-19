@@ -313,26 +313,52 @@ jobs:
           PY
 
           # Derive the pins from the declaration rather than restating them, and
-          # require a floor for every runtime dependency. Parsing with
-          # `packaging` rather than a regex matters: a hand-rolled pattern
-          # silently drops `pkg[extra]>=1.2`, `pkg<3,>=2.7`, and `pkg~=1.2`,
-          # which would leave a dependency untested with the job still green.
+          # require a floor for every runtime dependency.
+          #
+          # What the code below does. It parses each dependency with
+          # `packaging` rather than a regex, so the whole specifier set is
+          # available rather than whichever clause a pattern matched first.
+          # Among the clauses that name an exact lower point (`>=`, `==`, `~=`)
+          # it takes the greatest, comparing `Version` objects rather than
+          # text. It then asks the specifier set whether that candidate
+          # satisfies it, and reports the dependency instead of pinning it when
+          # the answer is no -- the case for `pkg>=2.7,>3.0`, `pkg>=1.0,!=1.0`
+          # and `pkg>=1.0,==1.2.*`. Finally it re-emits any extras alongside
+          # the name. A reported dependency fails the job.
+          #
+          # Why re-emitting the extras is here at all. `Requirement.name` drops
+          # them, so from the day this job was written until 2026-09-19 it
+          # turned `psycopg[binary]>=3.2` into `psycopg==3.2`. `psycopg-binary`
+          # is a separate distribution, and the pin never named it, so nothing
+          # downgraded it. `pip check` reported nothing either, because
+          # `psycopg-binary` declares no dependency on `psycopg` for it to
+          # contradict. The pin now names the extra, so pip resolves it; what
+          # a given extra then constrains is that extra's own business, and
+          # differs between `psycopg[binary]` and `PyJWT[crypto]`.
           PINS="$(python -c '
           import sys, tomllib
           from packaging.requirements import Requirement
+          from packaging.version import InvalidVersion, Version
 
           specs = tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"]
           pins, undetermined = [], []
           for spec in specs:
               requirement = Requirement(spec)
-              lower = next(
-                  (c.version for c in requirement.specifier if c.operator in (">=", "==", "~=")),
-                  None,
-              )
-              if lower is None:
+              lowers = []
+              for clause in requirement.specifier:
+                  if clause.operator not in (">=", "==", "~="):
+                      continue
+                  try:
+                      lowers.append((Version(clause.version), clause.version))
+                  except InvalidVersion:
+                      continue
+              lower = max(lowers)[1] if lowers else None
+              if lower is None or not requirement.specifier.contains(lower, prereleases=True):
                   undetermined.append(spec)
               else:
-                  pins.append(f"{requirement.name}=={lower}")
+                  extras = ",".join(sorted(requirement.extras))
+                  name = requirement.name + (f"[{extras}]" if extras else "")
+                  pins.append(f"{name}=={lower}")
 
           if undetermined:
               print(
@@ -349,8 +375,16 @@ jobs:
           fi
 
           echo "declared floor: $PINS"
+          # `$PINS` stays unquoted so the shell splits it into one argument per
+          # pin. Unquoted expansion also globs, and a pin carrying extras
+          # contains `[...]`, which is glob syntax -- `[binary]` is a character
+          # class. The pattern is the whole word. `set -f` disables pathname
+          # expansion for the install and `set +f` restores it; word splitting
+          # is unaffected by either.
+          set -f
           # shellcheck disable=SC2086
           python -m pip install $PINS
+          set +f
 
           # pip exits 0 after a forced downgrade even when it prints a conflict,
           # so ask explicitly. Without this a dev dependency that outgrew the

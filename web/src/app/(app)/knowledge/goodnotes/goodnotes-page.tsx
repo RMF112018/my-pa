@@ -27,6 +27,11 @@ import { InterpretationPanel } from "@/components/goodnotes/interpretation-panel
 import { MissingRaster, SourceRaster } from "@/components/goodnotes/source-raster";
 import type { GoodNotesPage } from "@/lib/api/decode/capabilities/goodnotes.pages.list";
 import type { GoodNotesRun } from "@/lib/api/decode/capabilities/goodnotes.runs.list";
+import {
+  diagnosticError,
+  diagnosticLimitations,
+} from "@/lib/diagnostics/presentation";
+import { serverDiagnosticsEnabled } from "@/lib/diagnostics/server";
 
 const SCOPE = "goodnotes";
 
@@ -69,6 +74,10 @@ export async function GoodNotesPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  // WP07: resolved once per request (memoised) so the diagnostic-bearing
+  // props below are never built, and therefore never serialized into the
+  // RSC payload, while diagnostics are off.
+  const diagnosticsEnabled = await serverDiagnosticsEnabled();
   const cookieStore = await cookies();
   const principal = await resolveSessionPrincipal(cookieStore.get(SESSION_COOKIE_NAME)?.value);
   if (!principal) redirect("/sign-in");
@@ -147,8 +156,8 @@ export async function GoodNotesPage({
         <SurfaceState
           kind="unavailable"
           title="This GoodNotes page could not be read"
-          error={answer.error}
-          limitations={answer.disclosure.limitations}
+          error={diagnosticError(diagnosticsEnabled, answer.error)}
+          limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
           testId="goodnotes-item-unavailable"
         />,
       );
@@ -184,7 +193,7 @@ export async function GoodNotesPage({
         <>
           <DegradedBanner
             scope="this GoodNotes page"
-            limitations={answer.disclosure.limitations}
+            limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
             truncated={answer.disclosure.truncated}
           />
           {evidence}
@@ -228,8 +237,8 @@ export async function GoodNotesPage({
         <SurfaceState
           kind="unavailable"
           title="GoodNotes notebooks could not be read"
-          error={notebooksAnswer.error}
-          limitations={notebooksAnswer.disclosure.limitations}
+          error={diagnosticError(diagnosticsEnabled, notebooksAnswer.error)}
+          limitations={diagnosticLimitations(diagnosticsEnabled, notebooksAnswer.disclosure.limitations)}
           testId="goodnotes-notebooks-unavailable"
         />
       ) : notebooksAnswer.kind === "empty" ? (
@@ -240,14 +249,14 @@ export async function GoodNotesPage({
             "The notebook catalog was read and it holds nothing. That is not a claim that a " +
             "notebook store is unavailable."
           }
-          limitations={notebooksAnswer.disclosure.limitations}
+          limitations={diagnosticLimitations(diagnosticsEnabled, notebooksAnswer.disclosure.limitations)}
           testId="goodnotes-notebooks-empty"
         />
       ) : notebooksAnswer.kind === "degraded" ? (
         <>
           <DegradedBanner
             scope="this notebook listing"
-            limitations={notebooksAnswer.disclosure.limitations}
+            limitations={diagnosticLimitations(diagnosticsEnabled, notebooksAnswer.disclosure.limitations)}
             truncated={notebooksAnswer.disclosure.truncated}
           />
           {notebooksAnswer.rowCount === 0 ? (
@@ -280,8 +289,8 @@ export async function GoodNotesPage({
             <SurfaceState
               kind="unavailable"
               title="Pages for this notebook could not be read"
-              error={pagesAnswer.error}
-              limitations={pagesAnswer.disclosure.limitations}
+              error={diagnosticError(diagnosticsEnabled, pagesAnswer.error)}
+              limitations={diagnosticLimitations(diagnosticsEnabled, pagesAnswer.disclosure.limitations)}
               testId="goodnotes-pages-unavailable"
             />
           ) : pagesAnswer.kind === "empty" ? (
@@ -289,14 +298,14 @@ export async function GoodNotesPage({
               kind="empty"
               title="This notebook has no pages"
               detail="The page listing was read and it holds nothing."
-              limitations={pagesAnswer.disclosure.limitations}
+              limitations={diagnosticLimitations(diagnosticsEnabled, pagesAnswer.disclosure.limitations)}
               testId="goodnotes-pages-empty"
             />
           ) : pagesAnswer.kind === "degraded" ? (
             <>
               <DegradedBanner
                 scope="this page listing"
-                limitations={pagesAnswer.disclosure.limitations}
+                limitations={diagnosticLimitations(diagnosticsEnabled, pagesAnswer.disclosure.limitations)}
                 truncated={pagesAnswer.disclosure.truncated}
               />
               {pagesAnswer.rowCount === 0 ? (
@@ -330,8 +339,8 @@ export async function GoodNotesPage({
             <SurfaceState
               kind="unavailable"
               title="Runs for this notebook could not be read"
-              error={runsAnswer.error}
-              limitations={runsAnswer.disclosure.limitations}
+              error={diagnosticError(diagnosticsEnabled, runsAnswer.error)}
+              limitations={diagnosticLimitations(diagnosticsEnabled, runsAnswer.disclosure.limitations)}
               testId="goodnotes-runs-unavailable"
             />
           ) : runsAnswer.kind === "empty" ? (
@@ -339,14 +348,14 @@ export async function GoodNotesPage({
               kind="empty"
               title="This notebook has no runs"
               detail="The run listing was read and it holds nothing."
-              limitations={runsAnswer.disclosure.limitations}
+              limitations={diagnosticLimitations(diagnosticsEnabled, runsAnswer.disclosure.limitations)}
               testId="goodnotes-runs-empty"
             />
           ) : runsAnswer.kind === "degraded" ? (
             <>
               <DegradedBanner
                 scope="this run listing"
-                limitations={runsAnswer.disclosure.limitations}
+                limitations={diagnosticLimitations(diagnosticsEnabled, runsAnswer.disclosure.limitations)}
                 truncated={runsAnswer.disclosure.truncated}
               />
               {runsAnswer.rowCount === 0 ? (

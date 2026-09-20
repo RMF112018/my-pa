@@ -485,7 +485,13 @@ describe("Library reaches the record instead of asserting about it", () => {
     await renderServerPage(() => LibraryPage({ searchParams: NO_PARAMS }));
     expect(screen.getByTestId("degraded-banner")).toBeTruthy();
     expect(screen.getByTestId("library-listing")).toBeTruthy();
-    expect(screen.getByTestId("degraded-banner").textContent).toContain("one scope was skipped");
+    // The partial-answer consequence is product truth and is stated in both
+    // modes; the backend's own limitation strings are policy-governed, and this
+    // page is rendered with diagnostics off.
+    const banner = screen.getByTestId("degraded-banner").textContent ?? "";
+    expect(banner).toMatch(/records below are real/i);
+    expect(banner).toMatch(/not all of them/i);
+    expect(banner).not.toContain("one scope was skipped");
   });
 
   it("separates 'nothing matched' from 'the search did not run'", async () => {

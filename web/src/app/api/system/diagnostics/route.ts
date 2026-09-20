@@ -37,7 +37,10 @@ import { NextResponse, type NextRequest } from "next/server";
 import { requirePrincipal, readCleanBody } from "@/lib/api/guard";
 import { admitBrowserMutation } from "@/lib/http/mutation-admission";
 import {
+  DIAGNOSTICS_COOKIE,
   diagnosticsPrincipalBinding,
+  nextDiagnosticsGeneration,
+  parseDiagnosticsPreference,
   serializeDiagnosticsPreference,
 } from "@/lib/diagnostics/preference";
 
@@ -63,9 +66,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const unknown = Object.keys(body).filter((key) => !ALLOWED_FIELDS.has(key));
   if (unknown.length > 0) {
-    // The rejected names are ours, not the caller's values, so naming them
-    // discloses nothing while still telling an honest client what was wrong.
-    return refuse("unsupported_field", `unsupported field: ${unknown.sort().join(", ")}`, 400);
+    // The message names *our* vocabulary, never the caller's keys. Echoing the
+    // rejected names would make an authenticated endpoint an unbounded
+    // reflection channel for caller-controlled text, which buys nothing: a
+    // client that sent the wrong field can read the contract.
+    return refuse("unsupported_field", "only 'enabled' is accepted", 400);
   }
 
   const enabled = body["enabled"];
@@ -80,12 +85,22 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return refuse("authority_unavailable", "preference authority unavailable", 503);
   }
 
-  const response = NextResponse.json({ enabled });
+  // Every accepted write advances the generation, so a client can order this
+  // answer against a cached payload it may still be holding and refuse to be
+  // moved backwards by one.
+  const current = parseDiagnosticsPreference(
+    request.cookies.get(DIAGNOSTICS_COOKIE)?.value,
+    binding,
+  );
+  const generation = nextDiagnosticsGeneration(current.generation);
+
+  const response = NextResponse.json({ enabled, generation });
   response.headers.set("cache-control", "private, no-store");
   response.headers.append(
     "set-cookie",
     serializeDiagnosticsPreference(enabled, binding, {
       secure: process.env.NODE_ENV === "production",
+      generation,
     }),
   );
   return response;

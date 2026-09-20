@@ -17,6 +17,23 @@
  * rather than the fixture package. Every value is synthetic.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * WP07 — the fields and identifier trails asserted here are diagnostic
+ * presentation, which is globally off by default. This file's subject is that
+ * presentation, so it runs in the mode that renders it.
+ */
+const { diagnostics } = vi.hoisted(() => ({ diagnostics: { enabled: true } }));
+vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/diagnostics/diagnostics-provider")>();
+  return {
+    ...actual,
+    useDiagnosticsEnabled: () => diagnostics.enabled,
+    WhenDiagnostics: ({ children }: { children: React.ReactNode }) =>
+      diagnostics.enabled ? children : null,
+  };
+});
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RevealDialog } from "@/components/shell/reveal-dialog";
@@ -221,6 +238,23 @@ describe("proposed and accepted are structurally distinct", () => {
     });
     await openAndReveal();
 
+    await waitFor(() => expect(screen.getByTestId("reveal-evidence")).toBeTruthy());
+
+    // WP07: with diagnostics off the identifier trails and the span locators —
+    // version ids, code-point offsets and a content digest — are absent, while
+    // the evidence itself and the fact that it was disclosed remain.
+    cleanup();
+    diagnostics.enabled = false;
+    await openAndReveal();
+    await waitFor(() => expect(screen.getByTestId("reveal-evidence")).toBeTruthy());
+    expect(screen.queryByTestId("reveal-spans")).toBeNull();
+    expect(screen.queryByTestId("reveal-accepted")).toBeNull();
+    expect(screen.queryByTestId("reveal-proposed")).toBeNull();
+    expect(document.body.textContent ?? "").not.toContain("prop_aaaa0001aaaa0001");
+    diagnostics.enabled = true;
+
+    cleanup();
+    await openAndReveal();
     await waitFor(() => expect(screen.getByTestId("reveal-evidence")).toBeTruthy());
     const proposed = screen.getByTestId("reveal-proposed");
     const accepted = screen.getByTestId("reveal-accepted");

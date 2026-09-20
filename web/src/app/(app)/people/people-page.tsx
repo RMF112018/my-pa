@@ -27,6 +27,11 @@ import { ResolvePanel } from "@/components/people/resolve-panel";
 import { UnresolvedMentionsPanel } from "@/components/people/unresolved-mentions";
 import { peopleEntity } from "@/lib/routes/people";
 import type { PrincipalSession } from "@/contracts/identity";
+import {
+  diagnosticError,
+  diagnosticLimitations,
+} from "@/lib/diagnostics/presentation";
+import { serverDiagnosticsEnabled } from "@/lib/diagnostics/server";
 
 const SCOPE = "people";
 
@@ -52,6 +57,7 @@ function oneParam(
 }
 
 async function unresolvedPanel(principal: PrincipalSession, after: string) {
+  const diagnosticsEnabled = await serverDiagnosticsEnabled();
   const outcome = await invokeGateway(principal, "entities.unresolved_mentions", {
     ...(after ? { after } : {}),
   });
@@ -60,7 +66,7 @@ async function unresolvedPanel(principal: PrincipalSession, after: string) {
   );
   if (answer.kind === "unavailable" || answer.kind === "empty") return null;
   return (
-    <UnresolvedMentionsPanel mentions={answer.result.mentions} disclosure={answer.disclosure} />
+    <UnresolvedMentionsPanel diagnosticsEnabled={diagnosticsEnabled} mentions={answer.result.mentions} disclosure={answer.disclosure} />
   );
 }
 
@@ -69,6 +75,10 @@ export async function PeoplePage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  // WP07: resolved once per request (memoised) so the diagnostic-bearing
+  // props below are never built, and therefore never serialized into the
+  // RSC payload, while diagnostics are off.
+  const diagnosticsEnabled = await serverDiagnosticsEnabled();
   const cookieStore = await cookies();
   const principal = await resolveSessionPrincipal(cookieStore.get(SESSION_COOKIE_NAME)?.value);
   if (!principal) redirect("/sign-in");
@@ -107,7 +117,7 @@ export async function PeoplePage({
           <SurfaceState
             kind="unavailable"
             title="That reference was not a valid resolve query"
-            error={outcome.error}
+            error={diagnosticError(diagnosticsEnabled, outcome.error)}
             testId="people-resolve-invalid"
           />
         </>,
@@ -121,8 +131,8 @@ export async function PeoplePage({
           <SurfaceState
             kind="unavailable"
             title="That reference could not be resolved"
-            error={answer.error}
-            limitations={answer.disclosure.limitations}
+            error={diagnosticError(diagnosticsEnabled, answer.error)}
+            limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
             testId="people-resolve-unavailable"
           />
         ) : answer.kind === "empty" ? (
@@ -137,7 +147,7 @@ export async function PeoplePage({
             {answer.kind === "degraded" ? (
               <DegradedBanner
                 scope="this resolution"
-                limitations={answer.disclosure.limitations}
+                limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
                 truncated={answer.disclosure.truncated}
               />
             ) : null}
@@ -159,7 +169,7 @@ export async function PeoplePage({
           <SurfaceState
             kind="unavailable"
             title="That search was not a valid query"
-            error={outcome.error}
+            error={diagnosticError(diagnosticsEnabled, outcome.error)}
             testId="people-search-invalid"
           />
         </>,
@@ -177,8 +187,8 @@ export async function PeoplePage({
           <SurfaceState
             kind="unavailable"
             title="Your people could not be searched"
-            error={answer.error}
-            limitations={answer.disclosure.limitations}
+            error={diagnosticError(diagnosticsEnabled, answer.error)}
+            limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
             testId="people-search-unavailable"
           />
         ) : answer.kind === "empty" ? (
@@ -186,14 +196,14 @@ export async function PeoplePage({
             kind="empty"
             title="No entity of yours matched those words"
             detail={`The search ran over your own entities and matched none of them for “${query}”.`}
-            limitations={answer.disclosure.limitations}
+            limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
             testId="people-search-empty"
           />
         ) : answer.kind === "degraded" ? (
           <>
             <DegradedBanner
               scope="this search"
-              limitations={answer.disclosure.limitations}
+              limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
               truncated={answer.disclosure.truncated}
             />
             {answer.rowCount === 0 ? (

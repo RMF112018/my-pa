@@ -26,6 +26,11 @@ import type { EntitiesAssignmentsListResult } from "@/lib/api/decode/capabilitie
 import type { EntitiesRelationshipsResult } from "@/lib/api/decode/capabilities/entities.relationships";
 import type { EntitiesIdentityHistoryResult } from "@/lib/api/decode/capabilities/entities.identity_history";
 import type { DisclosureEnvelope } from "@/contracts/envelope";
+import {
+  diagnosticError,
+  diagnosticLimitations,
+} from "@/lib/diagnostics/presentation";
+import { serverDiagnosticsEnabled } from "@/lib/diagnostics/server";
 
 const SCOPE = "people";
 
@@ -49,6 +54,10 @@ export async function PeopleEntityPage({
   params: Promise<{ entityId: string }>;
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  // WP07: resolved once per request (memoised) so the diagnostic-bearing
+  // props below are never built, and therefore never serialized into the
+  // RSC payload, while diagnostics are off.
+  const diagnosticsEnabled = await serverDiagnosticsEnabled();
   const cookieStore = await cookies();
   const principal = await resolveSessionPrincipal(cookieStore.get(SESSION_COOKIE_NAME)?.value);
   if (!principal) redirect("/sign-in");
@@ -96,13 +105,13 @@ export async function PeopleEntityPage({
         <SurfaceState
           kind="unavailable"
           title={notFound ? "That entity was not found" : "That profile could not be read"}
-          error={profileAnswer.kind === "unavailable" ? profileAnswer.error : undefined}
+          error={diagnosticError(diagnosticsEnabled, profileAnswer.kind === "unavailable" ? profileAnswer.error : undefined)}
           detail={
             profileAnswer.kind === "unavailable"
               ? undefined
               : "The read succeeded without a profile, which is not a complete answer."
           }
-          limitations={profileAnswer.disclosure.limitations}
+          limitations={diagnosticLimitations(diagnosticsEnabled, profileAnswer.disclosure.limitations)}
           testId="people-profile-unavailable"
         />
       </section>
@@ -180,30 +189,30 @@ export async function PeopleEntityPage({
       {companionFailed ? (
         <DegradedBanner
           scope="this person"
-          limitations={[
+          limitations={diagnosticLimitations(diagnosticsEnabled, [
             assignmentAnswer.kind === "unavailable" ? "Assignments could not be read." : "",
             relationshipAnswer.kind === "unavailable" ? "Relationships could not be read." : "",
             historyAnswer.kind === "unavailable" ? "Identity history could not be read." : "",
-          ].filter(Boolean)}
+          ].filter(Boolean))}
         />
       ) : null}
-      <EntityProfilePanel
+      <EntityProfilePanel diagnosticsEnabled={diagnosticsEnabled}
         profile={profile}
         headingLevel={1}
         headingId="people-entity-heading"
       />
-      <AssignmentsPanel
+      <AssignmentsPanel diagnosticsEnabled={diagnosticsEnabled}
         assignments={assignments}
         disclosure={assignmentDisclosure}
         unavailable={failedMessage(assignmentsOutcome)}
       />
-      <RelationshipsPanel
+      <RelationshipsPanel diagnosticsEnabled={diagnosticsEnabled}
         relationships={relationships}
         subjectId={profile.entity.entity_id}
         disclosure={relationshipDisclosure}
         unavailable={failedMessage(relationshipsOutcome)}
       />
-      <IdentityHistoryPanel
+      <IdentityHistoryPanel diagnosticsEnabled={diagnosticsEnabled}
         entries={historyEntries}
         truncated={historyTruncated}
         nextCursor={historyCursor}

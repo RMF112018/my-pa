@@ -50,7 +50,10 @@ import type { ReactNode } from "react";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { mapUserError, type UserErrorInput } from "@/lib/ui/user-error";
-import { DiagnosticsDetails } from "@/components/ui/diagnostics-details";
+import {
+  DiagnosticsDetails,
+  DiagnosticsLimitations,
+} from "@/components/ui/diagnostics-details";
 
 // Re-exported so the ~40 existing callsites keep one import path. The gate
 // itself lives in that module, because it must be a client-side mount decision.
@@ -140,16 +143,7 @@ function StateDetails({
       <p className="mt-2 text-sm" data-testid="surface-state-clarification">
         {clarification}
       </p>
-      {limitations.length > 0 ? (
-        <>
-          <p className="mt-2 font-medium text-text-primary">What is missing from this answer:</p>
-          <ul className="mt-1 list-inside list-disc" data-testid="surface-state-limitations">
-            {limitations.map((limitation) => (
-              <li key={limitation}>{limitation}</li>
-            ))}
-          </ul>
-        </>
-      ) : null}
+      <DiagnosticsLimitations limitations={limitations} />
       <DiagnosticsDetails diagnostic={diagnostic} />
     </details>
   );
@@ -250,13 +244,7 @@ export function DegradedBanner({
           token to ask for the rest.
         </p>
       ) : null}
-      {limitations.length > 0 ? (
-        <ul className="mt-1 list-inside list-disc text-muted">
-          {limitations.map((limitation) => (
-            <li key={limitation}>{limitation}</li>
-          ))}
-        </ul>
-      ) : null}
+      <DiagnosticsLimitations limitations={limitations} heading="What the backend said is missing:" />
       <details className="mt-2" data-testid="surface-state-details">
         <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
         <p className="mt-2 text-muted">

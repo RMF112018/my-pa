@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, Ref } from "react";
 import { useDiagnosticsEnabled } from "@/components/diagnostics/diagnostics-provider";
 import { peopleEntity } from "@/lib/routes/people";
@@ -115,8 +116,14 @@ export function GraphMap({
 }) {
   const diagnosticsEnabled = useDiagnosticsEnabled();
   const positions = overlayLayout(nodes, focusEntityId, savedPositions);
+  // Indexed once rather than a linear scan per edge endpoint, which was
+  // O(nodes x edges) on every render.
+  const labelIndex = useMemo(
+    () => new Map(nodes.map((node) => [node.entity_id, node.display_label])),
+    [nodes],
+  );
   const labelOf = (entityId: string | null): string | undefined =>
-    entityId === null ? undefined : nodes.find((node) => node.entity_id === entityId)?.display_label;
+    entityId === null ? undefined : labelIndex.get(entityId);
   const drag = arrange && !relationshipEdit;
   const pickNodes = arrange || relationshipEdit;
   const inspectNodes = Boolean(onInspectNode);

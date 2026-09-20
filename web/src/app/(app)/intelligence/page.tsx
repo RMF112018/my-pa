@@ -27,6 +27,11 @@ import {
 } from "@/components/intelligence/cycle-selection";
 import { intelligenceHistory } from "@/lib/routes/intelligence";
 import type { PrincipalSession } from "@/contracts/identity";
+import {
+  diagnosticError,
+  diagnosticLimitations,
+} from "@/lib/diagnostics/presentation";
+import { serverDiagnosticsEnabled } from "@/lib/diagnostics/server";
 
 export const metadata = { title: "Intelligence — my-pa" };
 export const dynamic = "force-dynamic";
@@ -40,6 +45,10 @@ async function loadReadiness(
   principal: PrincipalSession,
   cycleRunId: string,
 ): Promise<ReadinessAnswer> {
+  // WP07: resolved once per request (memoised) so the diagnostic-bearing
+  // props below are never built, and therefore never serialized into the
+  // RSC payload, while diagnostics are off.
+  const diagnosticsEnabled = await serverDiagnosticsEnabled();
   return readinessAnswerFromOutcome(
     `${SCOPE}:reports.resolve_set`,
     await invokeGateway(principal, "reports.resolve_set", resolveSetPayload(cycleRunId)),
@@ -47,6 +56,10 @@ async function loadReadiness(
 }
 
 export default async function IntelligencePage() {
+  // WP07: resolved once per request (memoised) so the diagnostic-bearing
+  // props below are never built, and therefore never serialized into the
+  // RSC payload, while diagnostics are off.
+  const diagnosticsEnabled = await serverDiagnosticsEnabled();
   const cookieStore = await cookies();
   const principal = await resolveSessionPrincipal(cookieStore.get(SESSION_COOKIE_NAME)?.value);
   if (!principal) redirect("/sign-in");
@@ -96,8 +109,8 @@ export default async function IntelligencePage() {
       <SurfaceState
         kind="unavailable"
         title="Reports could not be read"
-        error={answer.error}
-        limitations={answer.disclosure.limitations}
+        error={diagnosticError(diagnosticsEnabled, answer.error)}
+        limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
         testId="intelligence-unavailable"
       />,
     );
@@ -123,7 +136,7 @@ export default async function IntelligencePage() {
   const body = (
     <>
       {readiness && cycleRunId ? (
-        <ReadinessPanel answer={readiness} cycleRunId={cycleRunId} />
+        <ReadinessPanel diagnosticsEnabled={diagnosticsEnabled} answer={readiness} cycleRunId={cycleRunId} />
       ) : null}
       <h2 className="mb-2 text-base font-semibold text-text-primary">Reports</h2>
       <p className="mb-3 text-sm text-muted">
@@ -139,7 +152,7 @@ export default async function IntelligencePage() {
       <>
         <DegradedBanner
           scope="these reports"
-          limitations={answer.disclosure.limitations}
+          limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
           truncated={answer.disclosure.truncated}
         />
         {answer.rowCount === 0 ? (

@@ -162,7 +162,30 @@ describe("the four non-record answers are four different answers", () => {
     }
   });
 
+  it("withholds the backend's own limitation strings while diagnostics are off", () => {
+    // These read as product truth, and often are — but they are backend-authored
+    // strings and the backend puts raw transport text in them (an unreachable
+    // gateway yields the limitation "the application gateway did not answer").
+    // Nothing about a string distinguishes the two, so the list is governed as
+    // a whole and the partial-answer *consequence* is stated separately.
+    render(
+      <SurfaceState
+        kind="degraded"
+        title="Partial"
+        limitations={["capture search does not stem words"]}
+      />,
+    );
+    expect(screen.queryByTestId("surface-state-limitations")).toBeNull();
+    expect(document.body.textContent ?? "").not.toMatch(/does not stem words/);
+    // The state itself, and what it means, are unchanged.
+    expect(screen.getByTestId("state-degraded")).toHaveAttribute("data-state", "degraded");
+    expect(screen.getByTestId("surface-state-clarification").textContent).toMatch(
+      /its own answer is incomplete/i,
+    );
+  });
+
   it("renders the backend's own limitations rather than a generic sentence", () => {
+    diagnosticsEnabled = true;
     render(
       <SurfaceState
         kind="degraded"
@@ -203,9 +226,15 @@ describe("the degraded banner sits above real records", () => {
     render(<DegradedBanner scope="this listing" limitations={["one scope was skipped"]} />);
     const banner = screen.getByTestId("degraded-banner");
     expect(banner).toHaveAttribute("data-state", "degraded");
+    // The consequence is product truth and is stated in both modes.
     expect(banner.textContent).toMatch(/records below are real/i);
     expect(banner.textContent).toMatch(/not all of them/i);
-    expect(banner.textContent).toContain("one scope was skipped");
+    // The backend's own strings are not, and are absent by default.
+    expect(banner.textContent).not.toContain("one scope was skipped");
+    diagnosticsEnabled = true;
+    cleanup();
+    render(<DegradedBanner scope="this listing" limitations={["one scope was skipped"]} />);
+    expect(screen.getByTestId("degraded-banner").textContent).toContain("one scope was skipped");
     expect(within(banner).getByTestId("surface-state-details")).toHaveTextContent(
       /this page guessing it/i,
     );

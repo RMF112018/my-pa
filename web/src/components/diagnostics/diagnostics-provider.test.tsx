@@ -40,16 +40,16 @@ function Probe() {
   );
 }
 
-function renderProvider({ initialEnabled = false, epoch = "epoch-1" } = {}) {
+function renderProvider({ initialEnabled = false, epoch = "epoch-1", generation = 1 } = {}) {
   return render(
-    <DiagnosticsProvider initialEnabled={initialEnabled} epoch={epoch}>
+    <DiagnosticsProvider initialEnabled={initialEnabled} generation={generation} epoch={epoch}>
       <Probe />
     </DiagnosticsProvider>,
   );
 }
 
-function accepts(enabled: boolean) {
-  return new Response(JSON.stringify({ enabled }), {
+function accepts(enabled: boolean, generation = 2) {
+  return new Response(JSON.stringify({ enabled, generation }), {
     status: 200,
     headers: { "content-type": "application/json" },
   });
@@ -205,7 +205,7 @@ describe("fencing", () => {
 
   it("re-seeds from the server when the session epoch changes", async () => {
     const { rerender } = render(
-      <DiagnosticsProvider initialEnabled epoch="epoch-1">
+      <DiagnosticsProvider initialEnabled generation={1} epoch="epoch-1">
         <Probe />
       </DiagnosticsProvider>,
     );
@@ -213,7 +213,7 @@ describe("fencing", () => {
 
     // A different Principal on the same browser: new epoch, server says off.
     rerender(
-      <DiagnosticsProvider initialEnabled={false} epoch="epoch-2">
+      <DiagnosticsProvider initialEnabled={false} generation={1} epoch="epoch-2">
         <Probe />
       </DiagnosticsProvider>,
     );
@@ -230,14 +230,14 @@ describe("fencing", () => {
     );
     const user = userEvent.setup();
     const { rerender } = render(
-      <DiagnosticsProvider initialEnabled={false} epoch="epoch-1">
+      <DiagnosticsProvider initialEnabled={false} generation={1} epoch="epoch-1">
         <Probe />
       </DiagnosticsProvider>,
     );
     await user.click(screen.getByRole("button", { name: "turn on" }));
 
     rerender(
-      <DiagnosticsProvider initialEnabled={false} epoch="epoch-2">
+      <DiagnosticsProvider initialEnabled={false} generation={1} epoch="epoch-2">
         <Probe />
       </DiagnosticsProvider>,
     );
@@ -250,15 +250,80 @@ describe("fencing", () => {
     expect(screen.queryByTestId("diagnostic-child")).toBeNull();
   });
 
+  it("ignores a server payload older than the write this browser applied", async () => {
+    // The case the contract names first: a cached RSC payload rendered while
+    // diagnostics were on, arriving after an accepted off. Obeying it would
+    // restore an older ON, so the generation is what makes the two answers
+    // orderable at all.
+    vi.stubGlobal("fetch", vi.fn(async () => accepts(false, 9)));
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <DiagnosticsProvider initialEnabled generation={8} epoch="epoch-1">
+        <Probe />
+      </DiagnosticsProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "turn off" }));
+    expect(screen.getByTestId("enabled").textContent).toBe("false");
+
+    // A stale payload, rendered before that write.
+    rerender(
+      <DiagnosticsProvider initialEnabled generation={8} epoch="epoch-1">
+        <Probe />
+      </DiagnosticsProvider>,
+    );
+
+    expect(screen.getByTestId("enabled").textContent).toBe("false");
+    expect(screen.queryByTestId("diagnostic-child")).toBeNull();
+  });
+
+  it("accepts a server payload newer than the write this browser applied", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => accepts(false, 9)));
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <DiagnosticsProvider initialEnabled generation={8} epoch="epoch-1">
+        <Probe />
+      </DiagnosticsProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "turn off" }));
+
+    // Another tab turned them back on; that write is newer than ours.
+    rerender(
+      <DiagnosticsProvider initialEnabled generation={10} epoch="epoch-1">
+        <Probe />
+      </DiagnosticsProvider>,
+    );
+
+    expect(screen.getByTestId("enabled").textContent).toBe("true");
+  });
+
+  it("lets a Principal change override the ordering entirely", async () => {
+    // A new session is a different world; its preference is not "older".
+    vi.stubGlobal("fetch", vi.fn(async () => accepts(false, 9)));
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <DiagnosticsProvider initialEnabled generation={8} epoch="epoch-1">
+        <Probe />
+      </DiagnosticsProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "turn off" }));
+
+    rerender(
+      <DiagnosticsProvider initialEnabled generation={1} epoch="epoch-2">
+        <Probe />
+      </DiagnosticsProvider>,
+    );
+    expect(screen.getByTestId("enabled").textContent).toBe("true");
+  });
+
   it("follows the server when a navigation re-resolves the preference", () => {
     const { rerender } = render(
-      <DiagnosticsProvider initialEnabled epoch="epoch-1">
+      <DiagnosticsProvider initialEnabled generation={1} epoch="epoch-1">
         <Probe />
       </DiagnosticsProvider>,
     );
     expect(screen.getByTestId("diagnostic-child")).toBeTruthy();
     rerender(
-      <DiagnosticsProvider initialEnabled={false} epoch="epoch-1">
+      <DiagnosticsProvider initialEnabled={false} generation={2} epoch="epoch-1">
         <Probe />
       </DiagnosticsProvider>,
     );

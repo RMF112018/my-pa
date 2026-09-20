@@ -23,6 +23,10 @@ import {
 } from "@/components/intelligence/cycle-selection";
 import { readinessAnswerFromOutcome } from "@/lib/api/intelligence-readiness";
 import { intelligenceHome } from "@/lib/routes/intelligence";
+import {
+  diagnosticError,
+} from "@/lib/diagnostics/presentation";
+import { serverDiagnosticsEnabled } from "@/lib/diagnostics/server";
 
 const AGGREGATE_TONE: Record<string, "green" | "gold" | "coral" | "neutral"> = {
   READY: "green",
@@ -46,6 +50,10 @@ export async function IntelligencePulse({
 }: {
   readonly principal: PrincipalSession;
 }) {
+  // WP07: resolved once per request (memoised) so the diagnostic-bearing
+  // props below are never built, and therefore never serialized into the
+  // RSC payload, while diagnostics are off.
+  const diagnosticsEnabled = await serverDiagnosticsEnabled();
   const listAnswer = surfaceAnswer(
     "today:intelligence:reports.list",
     await invokeGateway(principal, "reports.list"),
@@ -59,7 +67,7 @@ export async function IntelligencePulse({
           kind="unavailable"
           title="Morning Intelligence could not be read"
           detail="That is not all-clear."
-          error={listAnswer.error}
+          error={diagnosticError(diagnosticsEnabled, listAnswer.error)}
           testId="intelligence-pulse"
         >
           <LiveAnnouncement tone="alert" testId="intelligence-pulse-unavailable">
@@ -146,7 +154,7 @@ export async function IntelligencePulse({
           kind="unavailable"
           title="Specialist readiness could not be read"
           detail="Listed reports are not all-clear."
-          error={readinessAnswer.error}
+          error={diagnosticError(diagnosticsEnabled, readinessAnswer.error)}
           testId="intelligence-pulse"
         >
           <LiveAnnouncement tone="alert" testId="intelligence-pulse-unavailable">

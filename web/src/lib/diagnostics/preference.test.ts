@@ -2,10 +2,15 @@
  * T01 / AC-42 / WP07-AC-056 — the preference parser fails closed.
  *
  * Every one of these cases is a way the stored value can be wrong, and every
- * one of them must resolve OFF. The assertions are written as `toBe(false)`
- * rather than a truthiness check on purpose: a parser that returned `undefined`
- * for a malformed value would pass a falsy assertion while handing callers a
- * third state the contract does not have.
+ * one of them must resolve OFF. `enabled` is asserted with `toBe(false)` rather
+ * than a truthiness check on purpose: a parser that returned `undefined` for a
+ * malformed value would pass a falsy assertion while handing callers a third
+ * state the contract does not have.
+ *
+ * The value also carries a monotonic generation, so that a client can order one
+ * server answer against another and refuse to be moved backwards by a stale
+ * payload. An untrusted value resolves to generation `0`, which is older than
+ * anything this application ever wrote.
  */
 import { describe, expect, it } from "vitest";
 
@@ -15,6 +20,7 @@ import {
   clearDiagnosticsPreference,
   diagnosticsPreferenceValue,
   diagnosticsPrincipalBinding,
+  nextDiagnosticsGeneration,
   parseDiagnosticsPreference,
   serializeDiagnosticsPreference,
 } from "./preference";
@@ -45,19 +51,19 @@ describe("diagnosticsPrincipalBinding", () => {
 
 describe("parseDiagnosticsPreference — the only value that resolves ON", () => {
   it("resolves ON for the exact value this application writes", () => {
-    expect(parseDiagnosticsPreference(`v1.${BINDING_A}.on`, BINDING_A)).toBe(true);
+    expect(parseDiagnosticsPreference(`v1.${BINDING_A}.on.1`, BINDING_A).enabled).toBe(true);
   });
 
   it("resolves OFF for the explicit off value", () => {
-    expect(parseDiagnosticsPreference(`v1.${BINDING_A}.off`, BINDING_A)).toBe(false);
+    expect(parseDiagnosticsPreference(`v1.${BINDING_A}.off.1`, BINDING_A).enabled).toBe(false);
   });
 
   it("round-trips its own serialized value", () => {
-    expect(parseDiagnosticsPreference(diagnosticsPreferenceValue(true, BINDING_A), BINDING_A)).toBe(
-      true,
-    );
     expect(
-      parseDiagnosticsPreference(diagnosticsPreferenceValue(false, BINDING_A), BINDING_A),
+      parseDiagnosticsPreference(diagnosticsPreferenceValue(true, BINDING_A), BINDING_A).enabled,
+    ).toBe(true);
+    expect(
+      parseDiagnosticsPreference(diagnosticsPreferenceValue(false, BINDING_A), BINDING_A).enabled,
     ).toBe(false);
   });
 });
@@ -69,42 +75,83 @@ describe("parseDiagnosticsPreference — every untrusted state resolves OFF", ()
     ["empty", ""],
     ["a bare boolean", "true"],
     ["a bare on", "on"],
-    ["the wrong version", `v2.${BINDING_A}.on`],
-    ["no version", `${BINDING_A}.on`],
-    ["too few segments", `v1.${BINDING_A}`],
-    ["too many segments", `v1.${BINDING_A}.on.on`],
-    ["an unrecognised state token", `v1.${BINDING_A}.enabled`],
-    ["an uppercase state token", `v1.${BINDING_A}.ON`],
-    ["an uppercase version token", `V1.${BINDING_A}.on`],
-    ["surrounding whitespace", ` v1.${BINDING_A}.on `],
-    ["a URI-encoded value", `v1.${BINDING_A}%2Eon`],
-    ["a short binding", `v1.${"a".repeat(32)}.on`],
-    ["a non-hex binding", `v1.${"g".repeat(64)}.on`],
-    ["an uppercase binding", `v1.${"A".repeat(64)}.on`],
+    ["the wrong version", `v2.${BINDING_A}.on.1`],
+    ["no version", `${BINDING_A}.on.1`],
+    ["too few segments", `v1.${BINDING_A}.on`],
+    ["too many segments", `v1.${BINDING_A}.on.1.1`],
+    ["an unrecognised state token", `v1.${BINDING_A}.enabled.1`],
+    ["an uppercase state token", `v1.${BINDING_A}.ON.1`],
+    ["an uppercase version token", `V1.${BINDING_A}.on.1`],
+    ["surrounding whitespace", ` v1.${BINDING_A}.on.1 `],
+    ["a URI-encoded value", `v1.${BINDING_A}%2Eon.1`],
+    ["a short binding", `v1.${"a".repeat(32)}.on.1`],
+    ["a non-hex binding", `v1.${"g".repeat(64)}.on.1`],
+    ["an uppercase binding", `v1.${"A".repeat(64)}.on.1`],
   ];
 
   for (const [name, value] of cases) {
     it(`resolves OFF for ${name}`, () => {
-      expect(parseDiagnosticsPreference(value, BINDING_A)).toBe(false);
+      expect(parseDiagnosticsPreference(value, BINDING_A).enabled).toBe(false);
     });
   }
 
   it("resolves OFF for an oversized value even if it starts correctly", () => {
-    const oversized = `v1.${BINDING_A}.on${"x".repeat(512)}`;
-    expect(parseDiagnosticsPreference(oversized, BINDING_A)).toBe(false);
+    const oversized = `v1.${BINDING_A}.on.1${"x".repeat(512)}`;
+    expect(parseDiagnosticsPreference(oversized, BINDING_A).enabled).toBe(false);
   });
 
   it("resolves OFF when the value was written for a different principal", () => {
     // The cross-Principal leak the contract forbids: a well-formed ON that
     // belongs to somebody else must not be honoured here.
-    expect(parseDiagnosticsPreference(`v1.${BINDING_B}.on`, BINDING_A)).toBe(false);
+    expect(parseDiagnosticsPreference(`v1.${BINDING_B}.on.1`, BINDING_A).enabled).toBe(false);
   });
 
   it("resolves OFF when the expected binding is itself not a valid binding", () => {
     // A caller that could not establish a Principal must never get ON, even if
     // it passes the stored value straight back in as the expectation.
-    expect(parseDiagnosticsPreference(`v1..on`, "")).toBe(false);
-    expect(parseDiagnosticsPreference(`v1.undefined.on`, "undefined")).toBe(false);
+    expect(parseDiagnosticsPreference(`v1..on.1`, "").enabled).toBe(false);
+    expect(parseDiagnosticsPreference(`v1.undefined.on.1`, "undefined").enabled).toBe(false);
+  });
+});
+
+describe("the generation orders one stored value against another", () => {
+  it("is parsed back from the value", () => {
+    const resolved = parseDiagnosticsPreference(
+      diagnosticsPreferenceValue(true, BINDING_A, 7),
+      BINDING_A,
+    );
+    expect(resolved).toEqual({ enabled: true, generation: 7 });
+  });
+
+  it("carries a generation on an explicit OFF too, because ordering an OFF matters", () => {
+    expect(
+      parseDiagnosticsPreference(diagnosticsPreferenceValue(false, BINDING_A, 9), BINDING_A),
+    ).toEqual({ enabled: false, generation: 9 });
+  });
+
+  it("resolves OFF with generation 0 for every untrusted value", () => {
+    expect(parseDiagnosticsPreference(undefined, BINDING_A)).toEqual({
+      enabled: false,
+      generation: 0,
+    });
+    expect(parseDiagnosticsPreference(`v1.${BINDING_A}.on.0`, BINDING_A)).toEqual({
+      enabled: false,
+      generation: 0,
+    });
+    expect(parseDiagnosticsPreference(`v1.${BINDING_A}.on.-1`, BINDING_A)).toEqual({
+      enabled: false,
+      generation: 0,
+    });
+    expect(parseDiagnosticsPreference(`v1.${BINDING_A}.on.zzzzzzzzzzzz`, BINDING_A)).toEqual({
+      enabled: false,
+      generation: 0,
+    });
+  });
+
+  it("advances, and saturates rather than overflowing", () => {
+    expect(nextDiagnosticsGeneration(0)).toBe(1);
+    expect(nextDiagnosticsGeneration(41)).toBe(42);
+    expect(nextDiagnosticsGeneration(Number.MAX_SAFE_INTEGER)).toBe(Number.MAX_SAFE_INTEGER);
   });
 });
 

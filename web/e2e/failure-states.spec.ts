@@ -29,6 +29,29 @@ test.beforeEach(async ({ page }) => {
   await signIn(page);
 });
 
+/**
+ * Turn diagnostics on for this browser, through the one route that can.
+ *
+ * WP07 made raw transport text — including the gateway's own "did not answer"
+ * — diagnostic presentation, governed globally and off by default. The
+ * *operational* half of this file's claim is unaffected and is still asserted
+ * in the default mode: the state is `unavailable`, it is an `alert`, it says
+ * nothing was retrieved, it offers Retry, and it never claims emptiness. What
+ * moves behind the policy is the sentence that names the gateway, so the
+ * assertions about that sentence move with it rather than being deleted.
+ *
+ * The session-service is live on this server even though the capability
+ * gateway is not, so this write succeeds while every capability read fails —
+ * which is exactly the situation the file exists to exercise.
+ */
+async function enableDiagnostics(page: import("@playwright/test").Page): Promise<void> {
+  const response = await page.request.post("/api/system/diagnostics", {
+    headers: { origin: DEAD_GATEWAY_URL, "content-type": "application/json" },
+    data: { enabled: true },
+  });
+  expect(response.status()).toBe(200);
+}
+
 const SURFACES = [
   { path: "/knowledge", testId: "library-unavailable", heading: "Knowledge" },
   { path: "/today", testId: "today-unavailable", heading: "Today" },
@@ -69,8 +92,12 @@ for (const surface of SURFACES) {
       // coverage when the gateway is down. The panel must not call that empty.
       await expect(region).toContainText(/could not be searched|could not be read/i);
     } else {
-      await expect(region).toContainText(/did not answer/i);
+      // Diagnostics are off by default, so the gateway is not named. What must
+      // survive is the operational truth: a failed read, stated as one, and no
+      // claim about what the person holds. The clarification is the sentence
+      // every unavailable state shares, whatever its per-surface heading.
       await expect(region).toContainText(/nothing was retrieved/i);
+      await expect(region).not.toContainText(/did not answer/i);
     }
 
     const text = (await region.textContent()) ?? "";
@@ -83,7 +110,72 @@ for (const surface of SURFACES) {
   });
 }
 
+test("no raw transport text reaches the browser while diagnostics are off", async ({
+  page,
+}) => {
+  // WP07 / F-01. Rendering the diagnostic and hiding it on the client is the
+  // "server-render then strip" pattern the contract rejects, and a DOM
+  // assertion cannot see it: a client component's props are serialized into
+  // the RSC Flight payload that ships inside the HTML, before any client gate
+  // runs. So this reads the server's own bytes.
+  //
+  // `view-source` on a failed read used to disclose the gateway's raw message
+  // on every one of these surfaces. It must disclose none of it.
+  const cookies = await page.context().cookies();
+  const header = cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
+
+  for (const path of [
+    "/work",
+    "/today",
+    "/knowledge",
+    "/review",
+    "/intelligence",
+    "/people?q=synthetic-dead-gateway",
+    "/knowledge/goodnotes",
+  ]) {
+    const response = await page.request.get(path, { headers: { cookie: header } });
+    expect(response.status(), path).toBe(200);
+    const body = await response.text();
+    expect(body, `${path} served raw transport text while diagnostics were off`).not.toMatch(
+      /did not answer/i,
+    );
+    expect(body, `${path} served a raw transport status while diagnostics were off`).not.toMatch(
+      /request failed with status/i,
+    );
+  }
+});
+
+test("Work names the unreachable gateway once diagnostics are on", async ({ page }) => {
+  await enableDiagnostics(page);
+  await page.goto("/work");
+  const region = page.getByTestId("state-unavailable");
+  await expect(region).toBeVisible();
+  await expect(region).toContainText(/did not answer/i);
+  // Turning diagnostics on adds the transport detail; it must not change what
+  // the state *means*, so the operational assertions are repeated here.
+  await expect(region).toContainText(/nothing was retrieved/i);
+  const text = (await region.textContent()) ?? "";
+  for (const claim of EMPTINESS_CLAIMS) {
+    expect(text, "an unavailable read claimed emptiness with diagnostics on").not.toMatch(claim);
+  }
+});
+
+test("root System asks the gateway nothing while diagnostics are off", async ({ page }) => {
+  await page.goto("/system");
+  // The page's only gateway reads exist to render diagnostics, so with
+  // diagnostics off there is no read to fail and nothing to report as
+  // unavailable. Reporting one would be inventing a failure that never
+  // happened.
+  await expect(page.getByTestId("show-diagnostics-toggle")).toHaveAttribute(
+    "aria-checked",
+    "false",
+  );
+  await expect(page.getByTestId("system-unavailable")).toHaveCount(0);
+  await expect(page.locator('[data-state="empty"]')).toHaveCount(0);
+});
+
 test("System says the build could not describe itself", async ({ page }) => {
+  await enableDiagnostics(page);
   await page.goto("/system");
   await expectState(page, "system-unavailable", "unavailable");
   // Identity is still shown, because it does not come from the gateway.

@@ -25,7 +25,7 @@ import { useId } from "react";
 import { useDiagnosticsPolicy } from "@/components/diagnostics/diagnostics-provider";
 
 export function ShowDiagnosticsToggle() {
-  const { enabled, saveState, setEnabled } = useDiagnosticsPolicy();
+  const { enabled, saveState, failedAttempt, setEnabled } = useDiagnosticsPolicy();
   const labelId = useId();
   const pending = saveState === "pending";
 
@@ -40,12 +40,19 @@ export function ShowDiagnosticsToggle() {
           role="switch"
           aria-checked={enabled}
           aria-labelledby={labelId}
-          disabled={pending}
+          aria-disabled={pending}
+          aria-busy={pending}
           data-testid="show-diagnostics-toggle"
-          onClick={() => void setEnabled(!enabled)}
+          onClick={() => {
+            // `aria-disabled` rather than `disabled`: a disabled button leaves
+            // the tab order mid-interaction and drops focus in some browsers,
+            // which is a worse outcome than ignoring a second click.
+            if (pending) return;
+            void setEnabled(!enabled);
+          }}
           className={`inline-flex min-h-11 min-w-11 items-center gap-2 rounded-[var(--radius-md)] border border-border px-3 py-1.5 text-sm ${
             enabled ? "bg-interactive-subtle text-interactive" : "text-text-secondary"
-          } disabled:opacity-60`}
+          } aria-disabled:opacity-60`}
         >
           {enabled ? "On" : "Off"}
         </button>
@@ -61,7 +68,10 @@ export function ShowDiagnosticsToggle() {
       */}
       {saveState === "failed" ? (
         <p role="alert" className="text-xs text-coral" data-testid="show-diagnostics-save-failed">
-          That change could not be saved, so diagnostics are still off. Try again.
+          {failedAttempt === false
+            ? "That change could not be saved. Diagnostics are hidden here for now, but " +
+              "they are still switched on and will come back when you reload."
+            : "That change could not be saved, so diagnostics are still off. Try again."}
         </p>
       ) : null}
     </div>

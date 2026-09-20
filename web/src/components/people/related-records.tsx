@@ -9,6 +9,10 @@ import type { IdentityHistoryEntry } from "@/lib/api/decode/capabilities/entitie
 import { peopleEntity } from "@/lib/routes/people";
 import { directedIsCurrent, partitionByCurrency } from "./currency";
 import { codeLabel, effectiveWindow, moment } from "./format";
+import {
+  diagnosticError,
+  diagnosticLimitations,
+} from "@/lib/diagnostics/presentation";
 
 function currentBadge(current: boolean) {
   return <Badge tone={current ? "green" : "gold"}>{current ? "Current" : "Historical"}</Badge>;
@@ -18,7 +22,16 @@ export function AssignmentsPanel({
   assignments,
   disclosure,
   unavailable,
+  diagnosticsEnabled = false,
 }: {
+  /**
+   * WP07. Resolved by the owning page and passed down explicitly rather than
+   * read here, so this component stays synchronous and directly renderable in
+   * tests. The page must not build the diagnostic-bearing props at all while
+   * diagnostics are off — stripping them after the fact would still leave them
+   * in the RSC payload.
+   */
+  readonly diagnosticsEnabled?: boolean;
   assignments: readonly AssignmentView[] | null;
   disclosure: DisclosureEnvelope | null;
   unavailable: string | null;
@@ -33,7 +46,7 @@ export function AssignmentsPanel({
           <SurfaceState
             kind="unavailable"
             title="Assignments could not be read"
-            error={unavailable}
+            error={diagnosticError(diagnosticsEnabled, unavailable)}
             testId="people-assignments-unavailable"
           />
         </div>
@@ -50,7 +63,7 @@ export function AssignmentsPanel({
       {disclosure?.coverage === "partial" ? (
         <DegradedBanner
           scope="assignments"
-          limitations={disclosure.limitations}
+          limitations={diagnosticLimitations(diagnosticsEnabled, disclosure.limitations)}
           truncated={disclosure.truncated}
         />
       ) : null}
@@ -121,7 +134,16 @@ export function RelationshipsPanel({
   subjectId,
   disclosure,
   unavailable,
+  diagnosticsEnabled = false,
 }: {
+  /**
+   * WP07. Resolved by the owning page and passed down explicitly rather than
+   * read here, so this component stays synchronous and directly renderable in
+   * tests. The page must not build the diagnostic-bearing props at all while
+   * diagnostics are off — stripping them after the fact would still leave them
+   * in the RSC payload.
+   */
+  readonly diagnosticsEnabled?: boolean;
   relationships: readonly RelationshipView[] | null;
   subjectId: string;
   disclosure: DisclosureEnvelope | null;
@@ -137,7 +159,7 @@ export function RelationshipsPanel({
           <SurfaceState
             kind="unavailable"
             title="Relationships could not be read"
-            error={unavailable}
+            error={diagnosticError(diagnosticsEnabled, unavailable)}
             testId="people-relationships-unavailable"
           />
         </div>
@@ -154,7 +176,7 @@ export function RelationshipsPanel({
       {disclosure?.coverage === "partial" ? (
         <DegradedBanner
           scope="relationships"
-          limitations={disclosure.limitations}
+          limitations={diagnosticLimitations(diagnosticsEnabled, disclosure.limitations)}
           truncated={disclosure.truncated}
         />
       ) : null}
@@ -229,7 +251,16 @@ export function IdentityHistoryPanel({
   nextCursor,
   entityId,
   unavailable,
+  diagnosticsEnabled = false,
 }: {
+  /**
+   * WP07. Resolved by the owning page and passed down explicitly rather than
+   * read here, so this component stays synchronous and directly renderable in
+   * tests. The page must not build the diagnostic-bearing props at all while
+   * diagnostics are off — stripping them after the fact would still leave them
+   * in the RSC payload.
+   */
+  readonly diagnosticsEnabled?: boolean;
   entries: readonly IdentityHistoryEntry[] | null;
   truncated: boolean;
   nextCursor: string | null;
@@ -246,7 +277,7 @@ export function IdentityHistoryPanel({
           <SurfaceState
             kind="unavailable"
             title="Identity history could not be read"
-            error={unavailable}
+            error={diagnosticError(diagnosticsEnabled, unavailable)}
             testId="people-history-unavailable"
           />
         </div>
@@ -262,7 +293,7 @@ export function IdentityHistoryPanel({
       {truncated ? (
         <DegradedBanner
           scope="identity history"
-          limitations={["This page of the ledger is not the whole history."]}
+          limitations={diagnosticLimitations(diagnosticsEnabled, ["This page of the ledger is not the whole history."])}
           truncated
         />
       ) : null}

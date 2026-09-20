@@ -54,3 +54,36 @@ export function DiagnosticsDetails({
     </div>
   );
 }
+
+/**
+ * The backend's own "what is missing from this answer" list, under the policy.
+ *
+ * These read as product truth and often are, but they are backend-authored
+ * strings and the backend puts raw transport text in them — a dead gateway
+ * yields the limitation `the application gateway did not answer`. Nothing about
+ * the string distinguishes a genuine limitation from a transport message, so
+ * the list is governed as a whole. The *consequence* — that the answer is
+ * partial, or that the read did not happen — is stated separately and is not
+ * gated, so a reader with diagnostics off still knows not to trust the answer
+ * as complete.
+ */
+export function DiagnosticsLimitations({
+  limitations,
+  heading = "What is missing from this answer:",
+}: {
+  limitations: readonly string[];
+  heading?: string;
+}) {
+  const enabled = useDiagnosticsEnabled();
+  if (!enabled || limitations.length === 0) return null;
+  return (
+    <>
+      <p className="mt-2 font-medium text-text-primary">{heading}</p>
+      <ul className="mt-1 list-inside list-disc" data-testid="surface-state-limitations">
+        {limitations.map((limitation) => (
+          <li key={limitation}>{limitation}</li>
+        ))}
+      </ul>
+    </>
+  );
+}

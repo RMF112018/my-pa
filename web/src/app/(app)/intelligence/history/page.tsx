@@ -26,6 +26,11 @@ import {
 } from "@/components/intelligence/cycle-selection";
 import { intelligenceHome, intelligenceHistory } from "@/lib/routes/intelligence";
 import type { PrincipalSession } from "@/contracts/identity";
+import {
+  diagnosticError,
+  diagnosticLimitations,
+} from "@/lib/diagnostics/presentation";
+import { serverDiagnosticsEnabled } from "@/lib/diagnostics/server";
 
 export const metadata = { title: "Intelligence history — my-pa" };
 export const dynamic = "force-dynamic";
@@ -38,6 +43,10 @@ async function datesForCycles(
   principal: PrincipalSession,
   cycleRunIds: readonly string[],
 ): Promise<readonly CycleDate[]> {
+  // WP07: resolved once per request (memoised) so the diagnostic-bearing
+  // props below are never built, and therefore never serialized into the
+  // RSC payload, while diagnostics are off.
+  const diagnosticsEnabled = await serverDiagnosticsEnabled();
   const unique = [...new Set(cycleRunIds)];
   const rows = await Promise.all(
     unique.map(async (cycle_run_id) => {
@@ -61,6 +70,10 @@ export default async function IntelligenceHistoryPage({
 }: {
   searchParams: Promise<{ cycleRunId?: string }>;
 }) {
+  // WP07: resolved once per request (memoised) so the diagnostic-bearing
+  // props below are never built, and therefore never serialized into the
+  // RSC payload, while diagnostics are off.
+  const diagnosticsEnabled = await serverDiagnosticsEnabled();
   const cookieStore = await cookies();
   const principal = await resolveSessionPrincipal(cookieStore.get(SESSION_COOKIE_NAME)?.value);
   if (!principal) redirect("/sign-in");
@@ -116,8 +129,8 @@ export default async function IntelligenceHistoryPage({
       <SurfaceState
         kind="unavailable"
         title="Report history could not be read"
-        error={answer.error}
-        limitations={answer.disclosure.limitations}
+        error={diagnosticError(diagnosticsEnabled, answer.error)}
+        limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
         testId="intelligence-history-unavailable"
       />,
     );
@@ -196,7 +209,7 @@ export default async function IntelligenceHistoryPage({
       <>
         <DegradedBanner
           scope="report history"
-          limitations={answer.disclosure.limitations}
+          limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
           truncated={answer.disclosure.truncated}
         />
         {answer.rowCount === 0 ? (

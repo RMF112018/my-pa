@@ -362,7 +362,7 @@ export function ConstraintInspector({
           {/* F. History — a timeline, not audit JSON. */}
           <Section title="History" testId="inspector-history">
             {historyFailure ? (
-              <SurfaceState kind="unavailable" title="Constraint history could not be read" detail={historyFailure} testId="inspector-history-unavailable" />
+              <SurfaceState kind="unavailable" title="Constraint history could not be read" error={{ message: historyFailure }} testId="inspector-history-unavailable" />
             ) : historyLoading && (history === undefined || history.length === 0) ? (
               <p role="status" className="text-muted" data-testid="inspector-history-loading">Reading history…</p>
             ) : history === undefined || history.length === 0 ? (

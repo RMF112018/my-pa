@@ -14,6 +14,9 @@ import type {
 } from "@/lib/api/decode/capabilities/_entity-read-helpers";
 import { lifecycleIsCurrent, participationIsCurrent, partitionByCurrency } from "./currency";
 import { codeLabel, effectiveWindow, moment } from "./format";
+import {
+  diagnosticLimitations,
+} from "@/lib/diagnostics/presentation";
 
 const STATUS_TONE: Record<EntityProfileView["entity"]["status"], "green" | "gold" | "coral" | "neutral"> = {
   active: "green",
@@ -235,7 +238,16 @@ export function EntityProfilePanel({
   profile,
   headingLevel = 2,
   headingId,
+  diagnosticsEnabled = false,
 }: {
+  /**
+   * WP07. Resolved by the owning page and passed down explicitly rather than
+   * read here, so this component stays synchronous and directly renderable in
+   * tests. The page must not build the diagnostic-bearing props at all while
+   * diagnostics are off — stripping them after the fact would still leave them
+   * in the RSC payload.
+   */
+  readonly diagnosticsEnabled?: boolean;
   profile: EntityProfileView;
   headingLevel?: 1 | 2;
   headingId?: string;
@@ -312,7 +324,7 @@ export function EntityProfilePanel({
       </Card>
 
       {profile.limitations.length > 0 || !profile.is_complete ? (
-        <DegradedBanner scope="this profile" limitations={profile.limitations} />
+        <DegradedBanner scope="this profile" limitations={diagnosticLimitations(diagnosticsEnabled, profile.limitations)} />
       ) : null}
 
       {profile.organization_profile ? (

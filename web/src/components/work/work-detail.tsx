@@ -1069,7 +1069,38 @@ export function CommitmentDetailView({ commitmentId, embedded = false }: { commi
   const [counterparties, setCounterparties] = useState<readonly CounterpartyOption[]>([]); const [counterpartiesTruncated, setCounterpartiesTruncated] = useState(false);
   const [status, setStatus] = useState("Loading commitment…"); const [failure, setFailure] = useState<UserErrorPresentation>(); const [conflict, setConflict] = useState(false); const [proposal, setProposal] = useState<Record<string, unknown>>(); const [closureNote, setClosureNote] = useState("");
   const updateAttempt = useRef(createAttemptKey("commitment-update")); const closeAttempt = useRef(createAttemptKey("commitment-close")); const closureCaptureAttempt = useRef(createAttemptKey("commitment-closure"));
-  const load = useCallback(async () => { try { const [detail, trail] = await Promise.all([workRequest<{ commitment: CommitmentDetail; follow_up_task?: unknown; counterparty_options?: readonly CounterpartyOption[]; counterparty_options_truncated?: boolean }>(`/api/commitments/${encodeURIComponent(commitmentId)}`), (diagnosticsEnabled ? workRequest<{ history: readonly WorkHistoryRow[]; disclosure?: DisclosureEnvelope }>(`/api/commitments/${encodeURIComponent(commitmentId)}/history?pageSize=50`) : Promise.resolve(undefined))]); const options = requiredCollection(detail.counterparty_options, "counterparty_options"); setCounterparties(detail.commitment.counterparty && !options.some((item) => item.person_id === detail.commitment.counterparty?.person_id) ? [...options, detail.commitment.counterparty] : options); setCounterpartiesTruncated(Boolean(detail.counterparty_options_truncated)); setRecord(detail.commitment); setDraft(commitmentDraft(detail.commitment)); setFollowUp(followUpProjection(detail)); setHistory(trail ? requiredCollection(trail.history, "history") : []); setHistoryDisclosure(trail?.disclosure); setStatus(""); setFailure(undefined); } catch (error) { setFailure(mapUserError(error)); } }, [commitmentId, diagnosticsEnabled]); useEffect(() => { void Promise.resolve().then(load); }, [load]);
+  const load = useCallback(async () => { try { const [detail] = await Promise.all([workRequest<{ commitment: CommitmentDetail; follow_up_task?: unknown; counterparty_options?: readonly CounterpartyOption[]; counterparty_options_truncated?: boolean }>(`/api/commitments/${encodeURIComponent(commitmentId)}`), ]); const options = requiredCollection(detail.counterparty_options, "counterparty_options"); setCounterparties(detail.commitment.counterparty && !options.some((item) => item.person_id === detail.commitment.counterparty?.person_id) ? [...options, detail.commitment.counterparty] : options); setCounterpartiesTruncated(Boolean(detail.counterparty_options_truncated)); setRecord(detail.commitment); setDraft(commitmentDraft(detail.commitment)); setFollowUp(followUpProjection(detail)); setStatus(""); setFailure(undefined); } catch (error) { setFailure(mapUserError(error)); } }, [commitmentId]); useEffect(() => { void Promise.resolve().then(load); }, [load]);
+  /*
+   * The Commitment history read lives in its own effect, keyed on the
+   * diagnostics boolean, and deliberately *not* in `load`.
+   *
+   * `load` also calls `setDraft`, so keying it on the boolean meant that a
+   * cross-tab invalidation — which flips the boolean in a tab nobody touched —
+   * re-ran `load` and overwrote an in-progress edit. A presentation preference
+   * must never destroy real user work; that is the same defect as remounting
+   * the shell, arriving by a different route.
+   */
+  useEffect(() => {
+    // Nothing is cleared on the way out: the History panel is unmounted while
+    // diagnostics are off, so the rows are not rendered, and clearing state
+    // synchronously inside an effect only triggers a cascading render. Turning
+    // diagnostics back on re-reads before anything is shown.
+    if (!diagnosticsEnabled) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const trail = await workRequest<{ history: readonly WorkHistoryRow[]; disclosure?: DisclosureEnvelope }>(`/api/commitments/${encodeURIComponent(commitmentId)}/history?pageSize=50`);
+        if (cancelled) return;
+        setHistory(requiredCollection(trail.history, "history"));
+        setHistoryDisclosure(trail.disclosure);
+      } catch {
+        // History is diagnostics. A failure to read it must not be reported as
+        // a failure of the Commitment, which loaded fine.
+        if (!cancelled) setHistoryDisclosure(undefined);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [commitmentId, diagnosticsEnabled]);
   async function loadMoreHistory() { const after = historyDisclosure?.nextCursor; if (!after) return; setStatus("Reading more Commitment history…"); try { const trail = await workRequest<{ history: readonly WorkHistoryRow[]; disclosure?: DisclosureEnvelope }>(`/api/commitments/${encodeURIComponent(commitmentId)}/history?pageSize=50&after=${encodeURIComponent(after)}`); setHistory((current) => [...current, ...requiredCollection(trail.history, "history").filter((row) => !current.some((existing) => existing.history_id === row.history_id))]); setHistoryDisclosure(trail.disclosure); setStatus(""); } catch (error) { setStatus(mapUserError(error).message); } }
   async function applyProposal(values: Record<string, unknown>) { if (!record) return; const material = { ...values, expectedVersion: record.version }; setStatus("Saving commitment…"); setConflict(false); try { await workRequest(`/api/commitments/${encodeURIComponent(commitmentId)}`, { method: "PATCH", body: JSON.stringify({ ...material, idempotencyKey: updateAttempt.current.forPayload(material) }) }); updateAttempt.current.succeeded(); setProposal(undefined); setStatus("Commitment update persisted."); await load(); } catch (error) { const problem = error as ApiFailure; const isConflict = problem.status === 409; setConflict(isConflict); setProposal(isConflict ? values : undefined); if (isConflict && problem.current) setRecord(problem.current as CommitmentDetail); setStatus(isConflict ? "Conflict: compare every canonical field with the retained proposal, then reapply deliberately." : mapUserError(problem).message); if (isDefinitiveAttemptFailure(error)) updateAttempt.current.succeeded(); } }
   async function update(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!draft) return; await applyProposal({ summary: draft.summary, counterpartyPersonId: draft.counterparty, dueAt: draft.dueAt ? new Date(draft.dueAt).toISOString() : undefined, clearDueAt: !draft.dueAt }); }

@@ -224,3 +224,27 @@ export const EMPTINESS_CLAIMS = [
   /no results/i,
   /nothing found/i,
 ];
+
+/**
+ * Turn diagnostics on for this browser, through the one route that can.
+ *
+ * WP07 made diagnostics globally off by default and changeable from exactly one
+ * control. Specs whose subject *is* diagnostic presentation — the System page's
+ * capability readiness, worker planes, this-browser PWA observations, Task
+ * technical details — therefore have to ask for that mode explicitly. This is
+ * the only way to ask: there is no query parameter, no storage key and no
+ * shortcut, and adding one for the tests would have defeated the contract the
+ * tests exist to protect.
+ *
+ * The write is the real authenticated, same-origin mutation, so the `Origin`
+ * header is required rather than incidental — without it `admitBrowserMutation`
+ * refuses the request and the caller silently keeps testing the OFF page.
+ */
+export async function enableDiagnostics(page: Page): Promise<void> {
+  const origin = new URL(page.url()).origin;
+  const response = await page.request.post("/api/system/diagnostics", {
+    headers: { origin, "content-type": "application/json" },
+    data: { enabled: true },
+  });
+  expect(response.status()).toBe(200);
+}

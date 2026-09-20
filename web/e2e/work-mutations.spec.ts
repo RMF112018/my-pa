@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { signIn } from "./fixtures";
+import { enableDiagnostics, signIn } from "./fixtures";
 
 type ApiAnswer<T> = { status: number; body: T };
 
@@ -38,6 +38,11 @@ function feedback(page: Page) {
 
 test("real stack preserves deliberate Task and Commitment mutation semantics", async ({ page }) => {
   test.setTimeout(180_000);
+  // This journey ends by checking that provenance and closure-evidence metadata
+  // survived the mutations, and that metadata lives behind Technical details —
+  // diagnostics, and therefore off unless asked for. The mutation semantics the
+  // test is really about are unaffected by the mode.
+  await enableDiagnostics(page);
   const marker = `${test.info().project.name}-${Date.now()}`;
   const commitmentTitle = `E2E obligation ${marker}`;
   const taskTitle = `E2E follow-up ${marker}`;

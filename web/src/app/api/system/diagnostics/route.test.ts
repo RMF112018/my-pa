@@ -19,6 +19,7 @@ import { resetSessionRegistry } from "@/lib/auth/session-registry";
 import { withSessionServiceFetch } from "@/lib/auth/session-service-fetch-stub";
 import {
   DIAGNOSTICS_COOKIE,
+  diagnosticsPreferenceValue,
   diagnosticsPrincipalBinding,
   parseDiagnosticsPreference,
 } from "@/lib/diagnostics/preference";
@@ -174,22 +175,22 @@ describe("POST /api/system/diagnostics — accepted writes", () => {
     const cookie = await signIn();
     const response = await setDiagnostics(post({ enabled: true }, { cookie }));
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ enabled: true });
+    expect(await response.json()).toEqual({ enabled: true, generation: 1 });
 
     const value = diagnosticsCookie(response);
     expect(value).not.toBeNull();
     const binding = await diagnosticsPrincipalBinding(SYNTHETIC_A_PRINCIPAL);
-    expect(parseDiagnosticsPreference(value, binding)).toBe(true);
+    expect(parseDiagnosticsPreference(value, binding).enabled).toBe(true);
   });
 
   it("writes an OFF value that parses as OFF", async () => {
     const cookie = await signIn();
     const response = await setDiagnostics(post({ enabled: false }, { cookie }));
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ enabled: false });
+    expect(await response.json()).toEqual({ enabled: false, generation: 1 });
 
     const binding = await diagnosticsPrincipalBinding(SYNTHETIC_A_PRINCIPAL);
-    expect(parseDiagnosticsPreference(diagnosticsCookie(response), binding)).toBe(false);
+    expect(parseDiagnosticsPreference(diagnosticsCookie(response), binding).enabled).toBe(false);
   });
 
   it("writes an HttpOnly, SameSite=Lax, Path=/ cookie", async () => {
@@ -201,6 +202,32 @@ describe("POST /api/system/diagnostics — accepted writes", () => {
     expect(header).toContain("HttpOnly");
     expect(header).toContain("SameSite=Lax");
     expect(header).toContain("Path=/");
+  });
+
+  it("advances the generation past the value already stored", async () => {
+    // Ordering is what lets a client refuse a stale RSC payload, so a write
+    // that reused the previous number would silently defeat the fencing.
+    const cookie = await signIn();
+    const binding = await diagnosticsPrincipalBinding(SYNTHETIC_A_PRINCIPAL);
+
+    const request = post({ enabled: true }, { cookie });
+    request.cookies.set(DIAGNOSTICS_COOKIE, diagnosticsPreferenceValue(false, binding, 41));
+    const response = await setDiagnostics(request);
+
+    expect(await response.json()).toEqual({ enabled: true, generation: 42 });
+    expect(parseDiagnosticsPreference(diagnosticsCookie(response), binding)).toEqual({
+      enabled: true,
+      generation: 42,
+    });
+  });
+
+  it("starts at 1 when nothing trustworthy was stored", async () => {
+    const cookie = await signIn();
+    const binding = await diagnosticsPrincipalBinding(SYNTHETIC_A_PRINCIPAL);
+    const request = post({ enabled: true }, { cookie });
+    request.cookies.set(DIAGNOSTICS_COOKIE, "not-a-value-we-wrote");
+    const response = await setDiagnostics(request);
+    expect(parseDiagnosticsPreference(diagnosticsCookie(response), binding).generation).toBe(1);
   });
 
   it("is private and never cached", async () => {

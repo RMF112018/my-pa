@@ -51,6 +51,7 @@ import { SurfaceState } from "@/components/ui/surface-state";
 import type { ReportsResolveSetResult } from "@/lib/api/decode/capabilities/reports.resolve_set";
 import type { PrincipalSession } from "@/contracts/identity";
 import { DIAGNOSTICS_COOKIE } from "@/lib/diagnostics/preference";
+import { diagnosticError } from "@/lib/diagnostics/presentation";
 import { resolveDiagnosticsPreference } from "@/lib/diagnostics/server";
 import { SystemRefresh } from "./system-refresh";
 import { ShowDiagnosticsToggle } from "./show-diagnostics-toggle";
@@ -131,10 +132,12 @@ export default async function SystemPage() {
   // Resolved before anything else this page might do, because almost everything
   // below is diagnostics and the contract says diagnostic work must be gated
   // *before invocation*, not rendered and then hidden.
-  const diagnosticsEnabled = await resolveDiagnosticsPreference({
-    principal,
-    cookieValue: cookieStore.get(DIAGNOSTICS_COOKIE)?.value,
-  });
+  const diagnosticsEnabled = (
+    await resolveDiagnosticsPreference({
+      principal,
+      cookieValue: cookieStore.get(DIAGNOSTICS_COOKIE)?.value,
+    })
+  ).enabled;
 
   // The acting gateway mode is a configuration read, not a capability call, and
   // what it can tell the user — that this deployment may not partition data by
@@ -353,7 +356,7 @@ export default async function SystemPage() {
         <SurfaceState
           kind="unavailable"
           title="The build could not describe itself"
-          error={outcome.error}
+          error={diagnosticError(diagnosticsEnabled, outcome.error)}
           testId="system-unavailable"
         />
       ) : (
@@ -509,7 +512,7 @@ export default async function SystemPage() {
                 <SurfaceState
                   kind="unavailable"
                   title="Morning Intelligence readiness could not be resolved"
-                  error={intelligence.error}
+                  error={diagnosticError(diagnosticsEnabled, intelligence.error)}
                   testId="system-intelligence-unavailable"
                 />
               </div>

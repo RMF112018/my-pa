@@ -57,6 +57,8 @@ const COOKIE_NAME_OWNERS = [
   "lib/diagnostics/server.ts",
   "app/(app)/layout.tsx",
   "app/(app)/system/page.tsx",
+  // Reads the stored value to advance its generation before writing the next.
+  "app/api/system/diagnostics/route.ts",
 ];
 
 /** The one module allowed to produce a `Set-Cookie` for the preference. */
@@ -94,9 +96,12 @@ describe("exactly one diagnostics visibility control", () => {
 
 describe("no bypass", () => {
   it("never reads the preference from a query parameter", () => {
-    const offenders = PRODUCTION_FILES.filter((file) =>
-      /(searchParams|URLSearchParams|useSearchParams)[\s\S]{0,200}?diagnostic/i.test(file.source),
-    );
+    // Matched on the parameter *key*, not on co-occurrence. Pages legitimately
+    // read `searchParams` and also hold a `diagnosticsEnabled` boolean resolved
+    // from the cookie; a proximity match flagged six of them and would have
+    // trained the next reader to ignore this guard.
+    const QUERY_KEY = /(?:get|has)\(\s*["'`][^"'`]*(?:diagnostic|debug)|searchParams\s*\.\s*(?:diagnostics|debug)\b|\[\s*["'`](?:diagnostics|debug)["'`]\s*\]|[?&](?:diagnostics|debug)=/i;
+    const offenders = PRODUCTION_FILES.filter((file) => QUERY_KEY.test(file.source));
     expect(offenders.map((file) => file.path)).toEqual([]);
   });
 
@@ -161,6 +166,67 @@ describe("one authority", () => {
       if (!usesGate) return false;
       return !file.source.includes("@/components/diagnostics/diagnostics-provider");
     });
+    expect(offenders.map((file) => file.path)).toEqual([]);
+  });
+});
+
+describe("the server never builds diagnostic props while diagnostics are off", () => {
+  /**
+   * F-01. `SurfaceState` renders client components, so a *server* component
+   * that passes `error`, `diagnostic` or `limitations` has those values
+   * serialized into the RSC Flight payload — which ships inside the HTML,
+   * before any client gate runs. Hiding them on the client is the
+   * "server-render then strip" pattern the contract rejects, and no DOM test
+   * can see it. Server callsites must therefore wrap every one of those props
+   * in its `diagnostic*` helper, which yields nothing while diagnostics are off.
+   *
+   * This guard exists because the leak is invisible: the page looks correct,
+   * the DOM is clean, and only `view-source` shows the problem.
+   */
+  const SERVER_FILES = ALL_FILES.filter(
+    (file) =>
+      !/\.(test|stories|story\.test)\./.test(file.path) &&
+      /\.tsx$/.test(file.path) &&
+      !file.source.trimStart().startsWith('"use client"'),
+  );
+
+  const GUARDED: ReadonlyArray<readonly [string, string]> = [
+    ["error", "diagnosticError"],
+    ["diagnostic", "diagnosticText"],
+    ["limitations", "diagnosticLimitations"],
+  ];
+
+  for (const [prop, helper] of GUARDED) {
+    it(`wraps every server-side \`${prop}\` in ${helper}`, () => {
+      const pattern = new RegExp(`\\b${prop}=\\{(?!${helper}\\()`);
+      const offenders = SERVER_FILES.filter((file) => {
+        // The component that defines the props is where they are consumed.
+        if (file.path === "components/ui/surface-state.tsx") return false;
+        return pattern.test(file.source);
+      });
+      expect(offenders.map((file) => file.path)).toEqual([]);
+    });
+  }
+});
+
+describe("raw transport text never reaches the ungated product-language prop", () => {
+  /**
+   * F-02. `detail` is the one `SurfaceState` prop deliberately left ungated,
+   * because it is meant to be product language. Feeding it a backend
+   * `error.message` or an HTTP status template routes raw transport text
+   * straight around the policy — the gate is not "one policy" if a caller can
+   * walk around it by choosing a different prop name.
+   */
+  it("never feeds `detail` from a raw message or status template", () => {
+    // `mapUserError` returns product language by construction, so a `detail`
+    // taken from its result (conventionally `failure`/`presented`) is correct.
+    // What is forbidden is a `detail` taken straight off a transport or
+    // capability answer, or built from an HTTP status.
+    const RAW_DETAIL =
+      /\bdetail=\{[^}]*(?:\b(?:error|err|answer|response|result)\.message\b|\.error\.message\b|failed with status|`[^`]*\$\{[^}]*status)/;
+    const offenders = ALL_FILES.filter(
+      (file) => !/\.(test|stories|story\.test)\./.test(file.path) && RAW_DETAIL.test(file.source),
+    );
     expect(offenders.map((file) => file.path)).toEqual([]);
   });
 });

@@ -8,7 +8,7 @@
  * only way that can happen is if it was committed.
  */
 import { test, expect, type Page } from "@playwright/test";
-import { signIn, syntheticNote, expectState, visibleCaptureButton, openCaptureNote, pinInspector } from "./fixtures";
+import { enableDiagnostics, expectState, openCaptureNote, pinInspector, signIn, syntheticNote, visibleCaptureButton } from "./fixtures";
 
 /** Chrome below the `lg` (1024) split: rail hidden, Knowledge lives in More. */
 function belowLgChrome(projectName: string): boolean {
@@ -263,6 +263,10 @@ test.describe("the signed-in surfaces", () => {
   });
 
   test("System reports the build it is talking to, not a constant", async ({ page }) => {
+    // WP07: this page is diagnostics. Diagnostics are globally off by
+    // default, so the mode under test has to be asked for explicitly —
+    // there is no query parameter or storage key that could do it.
+    await enableDiagnostics(page);
     await page.goto("/system");
     await expect(page.getByRole("heading", { name: "System", level: 1 })).toBeVisible();
     // Derived from `capabilities.get`, so it must name a real count. The total

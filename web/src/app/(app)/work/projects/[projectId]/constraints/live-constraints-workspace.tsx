@@ -450,7 +450,7 @@ function LiveConstraintsWorkspaceInner({ projectId, initialState }: Props) {
         </TabsList>
         <TabsContent value="overview" className="mt-4">
           {visibleOverviewFailure ? (
-            <SurfaceState kind="unavailable" title="Constraint Overview could not be read" detail={visibleOverviewFailure.message} testId="overview-unavailable">
+            <SurfaceState kind="unavailable" title="Constraint Overview could not be read" error={visibleOverviewFailure} testId="overview-unavailable">
               <Button size="sm" variant="secondary" onClick={() => setRetry((value) => value + 1)}>Retry</Button>
             </SurfaceState>
           ) : visibleOverview === null ? (
@@ -470,7 +470,7 @@ function LiveConstraintsWorkspaceInner({ projectId, initialState }: Props) {
             />
             </>
           )}
-          {visibleCategoriesFailure ? <p role="alert" className="mt-2 text-sm text-moss-coral-strong">Categories could not be read: {visibleCategoriesFailure.message}</p> : null}
+          {visibleCategoriesFailure ? <p role="alert" className="mt-2 text-sm text-moss-coral-strong">Categories could not be read.</p> : null}
         </TabsContent>
         <TabsContent value="register" className="mt-4">
           <h2 ref={attachRegisterHeading} tabIndex={-1} className="sr-only" data-testid="register-heading">Register</h2>

@@ -47,6 +47,20 @@ const OFF = "off";
 const SEPARATOR = ".";
 
 /**
+ * The value carries a monotonic generation as its fourth segment.
+ *
+ * Without one, "the server says ON" and "the server said ON a while ago" are
+ * the same statement to the client, and a cached RSC payload rendered before an
+ * accepted OFF could put diagnostics back. The counter is incremented by the
+ * one route on every accepted write, so a payload can be *ordered* against what
+ * this browser has already applied and a superseded one is ignored rather than
+ * obeyed. It is a sequence number, not a clock: it reveals nothing and is
+ * meaningless outside this cookie.
+ */
+const MAX_GENERATION = Number.MAX_SAFE_INTEGER;
+const GENERATION_PATTERN = /^[0-9a-z]{1,11}$/;
+
+/**
  * Hard ceiling on the value we will even look at.
  *
  * `v1` + `.` + 64 hex + `.` + `off` is 71 characters. 96 leaves room for the
@@ -82,30 +96,58 @@ export async function diagnosticsPrincipalBinding(principalId: string): Promise<
  * partial matches — a value that is not exactly what this module writes carries
  * no authority, and carrying no authority means OFF.
  */
+export interface ResolvedDiagnosticsPreference {
+  readonly enabled: boolean;
+  /** Ordering only. `0` means "nothing trustworthy was stored". */
+  readonly generation: number;
+}
+
+/** What every untrusted state resolves to. */
+export const DIAGNOSTICS_OFF: ResolvedDiagnosticsPreference = { enabled: false, generation: 0 };
+
 export function parseDiagnosticsPreference(
   value: string | undefined | null,
   expectedBinding: string,
-): boolean {
-  if (typeof value !== "string") return false;
-  if (value.length === 0 || value.length > MAX_VALUE_LENGTH) return false;
-  if (!BINDING_PATTERN.test(expectedBinding)) return false;
+): ResolvedDiagnosticsPreference {
+  if (typeof value !== "string") return DIAGNOSTICS_OFF;
+  if (value.length === 0 || value.length > MAX_VALUE_LENGTH) return DIAGNOSTICS_OFF;
+  if (!BINDING_PATTERN.test(expectedBinding)) return DIAGNOSTICS_OFF;
 
   const segments = value.split(SEPARATOR);
-  if (segments.length !== 3) return false;
+  if (segments.length !== 4) return DIAGNOSTICS_OFF;
 
-  const [version, binding, state] = segments;
-  if (version !== DIAGNOSTICS_PREFERENCE_VERSION) return false;
-  if (!BINDING_PATTERN.test(binding)) return false;
-  if (binding !== expectedBinding) return false;
+  const [version, binding, state, rawGeneration] = segments;
+  if (version !== DIAGNOSTICS_PREFERENCE_VERSION) return DIAGNOSTICS_OFF;
+  if (!BINDING_PATTERN.test(binding)) return DIAGNOSTICS_OFF;
+  if (binding !== expectedBinding) return DIAGNOSTICS_OFF;
+  if (!GENERATION_PATTERN.test(rawGeneration)) return DIAGNOSTICS_OFF;
+
+  const generation = Number.parseInt(rawGeneration, 36);
+  if (!Number.isSafeInteger(generation) || generation < 1) return DIAGNOSTICS_OFF;
 
   // Only `on` turns diagnostics on. `off` and every unrecognised token are OFF,
-  // so a future or corrupted state token can never fail open.
-  return state === ON;
+  // so a future or corrupted state token can never fail open. A well-formed
+  // OFF still carries its generation, because ordering an OFF matters too.
+  return { enabled: state === ON, generation };
+}
+
+/** The next generation after whatever is currently stored. */
+export function nextDiagnosticsGeneration(current: number): number {
+  return current >= MAX_GENERATION ? MAX_GENERATION : current + 1;
 }
 
 /** The exact value this application writes. */
-export function diagnosticsPreferenceValue(enabled: boolean, binding: string): string {
-  return [DIAGNOSTICS_PREFERENCE_VERSION, binding, enabled ? ON : OFF].join(SEPARATOR);
+export function diagnosticsPreferenceValue(
+  enabled: boolean,
+  binding: string,
+  generation = 1,
+): string {
+  return [
+    DIAGNOSTICS_PREFERENCE_VERSION,
+    binding,
+    enabled ? ON : OFF,
+    generation.toString(36),
+  ].join(SEPARATOR);
 }
 
 /**
@@ -117,10 +159,10 @@ export function diagnosticsPreferenceValue(enabled: boolean, binding: string): s
 export function serializeDiagnosticsPreference(
   enabled: boolean,
   binding: string,
-  { secure = true }: { secure?: boolean } = {},
+  { secure = true, generation = 1 }: { secure?: boolean; generation?: number } = {},
 ): string {
   return [
-    `${DIAGNOSTICS_COOKIE}=${diagnosticsPreferenceValue(enabled, binding)}`,
+    `${DIAGNOSTICS_COOKIE}=${diagnosticsPreferenceValue(enabled, binding, generation)}`,
     "Path=/",
     `Max-Age=${YEAR_IN_SECONDS}`,
     "HttpOnly",

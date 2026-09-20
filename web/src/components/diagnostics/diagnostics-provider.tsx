@@ -43,6 +43,18 @@ export type DiagnosticsPolicy = {
   /** The only question surfaces may ask. */
   readonly enabled: boolean;
   readonly saveState: DiagnosticsSaveState;
+  /**
+   * Which change was being attempted when `saveState` became `failed`.
+   *
+   * The two failures are not the same fact and must not share a sentence. A
+   * failed *on* leaves the durable preference off, so "diagnostics are still
+   * off" is true. A failed *off* leaves the durable preference **on**: this
+   * document suppresses them, but a reload or a second tab brings them back.
+   * Telling the reader "diagnostics are still off" there would assert a state
+   * the mechanism did not establish, which is the one thing this contract is
+   * most concerned to prevent.
+   */
+  readonly failedAttempt: boolean | null;
   /** Request a change. Resolves when the attempt has settled. */
   readonly setEnabled: (next: boolean) => Promise<void>;
 };
@@ -50,6 +62,7 @@ export type DiagnosticsPolicy = {
 const OFF_POLICY: DiagnosticsPolicy = {
   enabled: false,
   saveState: "idle",
+  failedAttempt: null,
   setEnabled: async () => {},
 };
 
@@ -73,22 +86,35 @@ const INVALIDATE = "invalidate";
 
 export function DiagnosticsProvider({
   initialEnabled,
+  generation: serverGeneration = 0,
   epoch,
   children,
 }: {
   readonly initialEnabled: boolean;
+  /**
+   * The stored preference's monotonic generation.
+   *
+   * This is what makes "the server says ON" distinguishable from "the server
+   * said ON before you turned it off". A server payload older than the last one
+   * this browser applied is a payload about a world that has moved on, and is
+   * ignored rather than obeyed.
+   */
+  readonly generation?: number;
   readonly epoch: string;
   readonly children: React.ReactNode;
 }) {
   const router = useRouter();
   const [enabled, setEnabledState] = useState(initialEnabled);
   const [saveState, setSaveState] = useState<DiagnosticsSaveState>("idle");
+  const [failedAttempt, setFailedAttempt] = useState<boolean | null>(null);
 
   // Bumped on every save and on every epoch change. A result that does not
   // carry the current value is a result about a world that no longer exists.
   const generation = useRef(0);
   const lastEpoch = useRef(epoch);
   const lastServerValue = useRef(initialEnabled);
+  // The highest server generation this browser has applied.
+  const appliedGeneration = useRef(serverGeneration);
 
   // The server re-resolves on every navigation and refresh. When its answer
   // changes, or when the session epoch changes, the server wins and any save in
@@ -97,23 +123,38 @@ export function DiagnosticsProvider({
     const epochChanged = lastEpoch.current !== epoch;
     const serverChanged = lastServerValue.current !== initialEnabled;
     if (!epochChanged && !serverChanged) return;
+
+    // A different Principal is a different world: its preference replaces ours
+    // outright, whatever the counters say.
+    if (!epochChanged && serverGeneration < appliedGeneration.current) {
+      // A stale RSC payload — rendered before a write this browser has already
+      // applied. Obeying it would restore an older ON after an accepted OFF.
+      return;
+    }
+
     lastEpoch.current = epoch;
     lastServerValue.current = initialEnabled;
+    appliedGeneration.current = epochChanged
+      ? serverGeneration
+      : Math.max(appliedGeneration.current, serverGeneration);
     generation.current += 1;
     setEnabledState(initialEnabled);
     setSaveState("idle");
-  }, [epoch, initialEnabled]);
+    setFailedAttempt(null);
+  }, [epoch, initialEnabled, serverGeneration]);
 
   const setEnabled = useCallback(
     async (next: boolean) => {
       const ticket = (generation.current += 1);
       setSaveState("pending");
+      setFailedAttempt(null);
 
       // OFF -> ON stays OFF until the write is accepted. ON -> OFF suppresses
       // immediately: withdrawing detail early is safe, showing it early is not.
       if (!next) setEnabledState(false);
 
       let accepted = false;
+      let acceptedGeneration: number | null = null;
       try {
         const response = await fetch("/api/system/diagnostics", {
           method: "POST",
@@ -123,8 +164,14 @@ export function DiagnosticsProvider({
           credentials: "same-origin",
         });
         if (response.ok) {
-          const payload = (await response.json()) as { enabled?: unknown };
+          const payload = (await response.json()) as {
+            enabled?: unknown;
+            generation?: unknown;
+          };
           accepted = payload.enabled === next;
+          if (accepted && typeof payload.generation === "number") {
+            acceptedGeneration = payload.generation;
+          }
         }
       } catch {
         accepted = false;
@@ -140,16 +187,42 @@ export function DiagnosticsProvider({
         // failure is stated rather than swallowed.
         setEnabledState(false);
         setSaveState("failed");
+        setFailedAttempt(next);
         return;
       }
 
       lastServerValue.current = next;
+      if (acceptedGeneration !== null) {
+        appliedGeneration.current = Math.max(appliedGeneration.current, acceptedGeneration);
+      }
       setEnabledState(next);
       setSaveState("idle");
+      setFailedAttempt(null);
       announceChange();
+      // Replace this tab's own cached payloads, which were rendered under the
+      // previous value; the generation check above is the backstop for any that
+      // still arrive.
+      router.refresh();
     },
-    [],
+    [router],
   );
+
+  /*
+   * A document restored from the back/forward cache keeps its React heap and
+   * never re-renders the layout, so the re-seed effect above cannot fire — and
+   * `BroadcastChannel` messages posted while the page was frozen are never
+   * delivered. Without this, a tab that was on when it was frozen shows
+   * diagnostics again after a peer accepted off. `pageshow` with `persisted`
+   * is the one signal that distinguishes a restore from an ordinary load.
+   */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) router.refresh();
+    };
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, [router]);
 
   // Peer tabs re-resolve from the server; they are never told what to believe.
   useEffect(() => {
@@ -162,8 +235,8 @@ export function DiagnosticsProvider({
   }, [router]);
 
   const value = useMemo<DiagnosticsPolicy>(
-    () => ({ enabled, saveState, setEnabled }),
-    [enabled, saveState, setEnabled],
+    () => ({ enabled, saveState, failedAttempt, setEnabled }),
+    [enabled, saveState, failedAttempt, setEnabled],
   );
 
   return <DiagnosticsContext.Provider value={value}>{children}</DiagnosticsContext.Provider>;

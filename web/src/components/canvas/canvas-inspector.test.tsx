@@ -1,4 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * WP07 — the fields and identifier trails asserted here are diagnostic
+ * presentation, which is globally off by default. This file's subject is that
+ * presentation, so it runs in the mode that renders it.
+ */
+const { diagnostics } = vi.hoisted(() => ({ diagnostics: { enabled: true } }));
+vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/diagnostics/diagnostics-provider")>();
+  return {
+    ...actual,
+    useDiagnosticsEnabled: () => diagnostics.enabled,
+    WhenDiagnostics: ({ children }: { children: React.ReactNode }) =>
+      diagnostics.enabled ? children : null,
+  };
+});
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import type { ReactNode } from "react";
@@ -143,6 +160,8 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  // Back to this file's mode, so the one diagnostics-off case cannot leak.
+  diagnostics.enabled = true;
 });
 
 describe("CanvasInspector", () => {
@@ -154,6 +173,29 @@ describe("CanvasInspector", () => {
     expect(screen.getByTestId("inspector-empty")).toHaveTextContent(
       /Nothing sensitive is persisted here/,
     );
+  });
+
+  it("renders no backend field names or raw ids while diagnostics are off", async () => {
+    // The inspector's labels *are* backend field names and its values are raw
+    // identifiers, so the whole field list is diagnostics. What survives is the
+    // record's name and the link to it.
+    diagnostics.enabled = false;
+    const fetchSpy = vi.fn(async () => {
+      throw new Error("no identity-history read belongs to the diagnostics-off inspector");
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    renderInspector(<PublishNode node={NODE} />);
+    fireEvent.click(screen.getByRole("button", { name: "publish-node" }));
+    const panel = await screen.findByTestId("inspector-node");
+
+    expect(panel.textContent ?? "").not.toContain(FOCUS);
+    expect(panel.textContent ?? "").not.toContain("entity_type");
+    expect(panel.textContent ?? "").not.toContain("superseded_by_entity_id");
+    expect(screen.queryByTestId("inspector-changes")).toBeNull();
+    // The diagnostics-only identity-history read was never issued.
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // Product truth: which record this is, and how to open it.
+    expect(screen.getByRole("link", { name: "Pat Synthetic" })).toBeTruthy();
   });
 
   it("renders product-owned node fields and a People link", async () => {

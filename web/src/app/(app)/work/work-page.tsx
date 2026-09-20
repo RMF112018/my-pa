@@ -35,6 +35,11 @@ import type {
   ProjectState,
   SituationState,
 } from "@/contracts/views";
+import {
+  diagnosticError,
+  diagnosticLimitations,
+} from "@/lib/diagnostics/presentation";
+import { serverDiagnosticsEnabled } from "@/lib/diagnostics/server";
 
 const BLURB =
   "Situations gather what matters about a project, relationship, or topic into one purposeful " +
@@ -94,6 +99,10 @@ function toProject(row: ProjectRow): BackendProject {
 }
 
 export async function WorkPage() {
+  // WP07: resolved once per request (memoised) so the diagnostic-bearing
+  // props below are never built, and therefore never serialized into the
+  // RSC payload, while diagnostics are off.
+  const diagnosticsEnabled = await serverDiagnosticsEnabled();
   const cookieStore = await cookies();
   const principal = await resolveSessionPrincipal(cookieStore.get(SESSION_COOKIE_NAME)?.value);
   if (!principal) redirect("/sign-in");
@@ -153,8 +162,8 @@ export async function WorkPage() {
         <SurfaceState
           kind="unavailable"
           title="Situations could not be read"
-          error={failure.kind === "unavailable" ? failure.error : undefined}
-          limitations={failure.disclosure.limitations}
+          error={diagnosticError(diagnosticsEnabled, failure.kind === "unavailable" ? failure.error : undefined)}
+          limitations={diagnosticLimitations(diagnosticsEnabled, failure.disclosure.limitations)}
           testId="situations-unavailable"
         />
       </section>
@@ -173,10 +182,10 @@ export async function WorkPage() {
       {degraded ? (
         <DegradedBanner
           scope="this board"
-          limitations={[
+          limitations={diagnosticLimitations(diagnosticsEnabled, [
             ...situationsAnswer.disclosure.limitations,
             ...projectsAnswer.disclosure.limitations,
-          ]}
+          ])}
           truncated={
             situationsAnswer.disclosure.truncated || projectsAnswer.disclosure.truncated
           }

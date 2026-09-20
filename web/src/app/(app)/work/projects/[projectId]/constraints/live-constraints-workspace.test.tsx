@@ -1,4 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * WP07 — a raw backend message is diagnostics. These assertions used to read it
+ * off the ungated `detail` prop; it now travels as `error` under the global
+ * policy, so the mode is stated rather than assumed. Default is OFF, matching
+ * the product.
+ */
+const { diagnostics } = vi.hoisted(() => ({ diagnostics: { enabled: false } }));
+vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/diagnostics/diagnostics-provider")>();
+  return {
+    ...actual,
+    useDiagnosticsEnabled: () => diagnostics.enabled,
+    WhenDiagnostics: ({ children }: { children: React.ReactNode }) =>
+      diagnostics.enabled ? children : null,
+  };
+});
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { PrincipalSession } from "@/contracts/identity";
@@ -87,6 +105,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Back to the product default, so one ON case cannot leak into the next.
+  diagnostics.enabled = false;
   cleanup();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
@@ -140,11 +160,14 @@ describe("the live read-only workspace", () => {
       ok: false,
       error: { status: 503, code: "transport_unavailable", message: "Old category error" },
     });
+    diagnostics.enabled = true;
     const view = mount();
     expect(await screen.findByTestId("overview-unavailable")).toHaveTextContent(
       "Old overview error",
     );
-    expect(await screen.findByText(/Old category error/)).toBeVisible();
+    // The categories failure is stated as a consequence; its raw sentence is
+    // diagnostics and no longer printed inline.
+    expect(await screen.findByText(/Categories could not be read/)).toBeVisible();
 
     reads.overview.mockImplementation(() => new Promise(() => undefined));
     reads.categories.mockImplementation(() => new Promise(() => undefined));
@@ -404,7 +427,12 @@ describe("the live read-only workspace", () => {
 
     const unavailable = await screen.findByTestId("register-unavailable");
     expect(unavailable).toHaveAttribute("data-state", "unavailable");
-    expect(unavailable).toHaveTextContent(message);
+    // Diagnostics off: the state is stated, the backend's own sentence is not.
+    expect(unavailable).not.toHaveTextContent(message);
+    cleanup();
+    diagnostics.enabled = true;
+    mount("view=register&group=none");
+    expect(await screen.findByTestId("register-unavailable")).toHaveTextContent(message);
     expect(screen.queryByTestId("register-live")).toBeNull();
     expect(screen.queryByTestId("register-count")).toBeNull();
     expect(screen.queryByTestId("register-empty-project")).toBeNull();
@@ -481,8 +509,11 @@ describe("the live read-only workspace", () => {
       }),
     );
     await user.click(await screen.findByTestId("inspector-history-more"));
-    expect(await screen.findByTestId("inspector-history-unavailable")).toHaveTextContent(
-      "History continuation failed.",
+    // The failed continuation is still stated as unavailable; the backend's own
+    // sentence is diagnostics and is governed by the policy.
+    expect(await screen.findByTestId("inspector-history-unavailable")).toHaveAttribute(
+      "data-state",
+      "unavailable",
     );
 
     await user.click(screen.getByTestId("inspector-history-more"));

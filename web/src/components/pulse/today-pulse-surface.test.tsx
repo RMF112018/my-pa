@@ -296,17 +296,31 @@ describe("a first read that fails states the failure rather than a placeholder",
   }
 
   it("carries the route's own diagnostic into the unavailable region", async () => {
+    // The sentence names the gateway, so it is diagnostics under WP07 and is
+    // asserted in the mode that renders it. That it is the *gateway's own*
+    // sentence, reached through the envelope rather than written here, is still
+    // the point: a status code alone could not have produced it.
+    diagnostics.enabled = true;
     fetchSpy.mockImplementation(async () => refusedResponse());
     renderFresh();
     const region = await screen.findByTestId("today-unavailable");
     expect(region).toHaveAttribute("data-state", "unavailable");
-    // The sentence is the gateway's, reached through the envelope rather than
-    // written here: a status code alone could not have produced it.
     expect(region.textContent).toContain("the application gateway did not answer");
     expect(screen.queryByTestId("today-empty")).toBeNull();
     expect(screen.queryByText(TODAY_EMPTY_COPY)).toBeNull();
     // Nothing was ever confirmed, so there is no "last confirmed read" to claim.
     expect(screen.queryByTestId("today-stale")).toBeNull();
+  });
+
+  it("withholds the gateway's own sentence while diagnostics are off", async () => {
+    fetchSpy.mockImplementation(async () => refusedResponse());
+    renderFresh();
+    const region = await screen.findByTestId("today-unavailable");
+    // Still a failed read, still not an empty day — only the machinery is quiet.
+    expect(region).toHaveAttribute("data-state", "unavailable");
+    expect(region.textContent).not.toContain("the application gateway did not answer");
+    expect(screen.queryByTestId("today-empty")).toBeNull();
+    expect(screen.queryByText(TODAY_EMPTY_COPY)).toBeNull();
   });
 
   it("says only what a failure with no envelope establishes", async () => {

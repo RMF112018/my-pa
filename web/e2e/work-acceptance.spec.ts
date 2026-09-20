@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import { signIn } from "./fixtures";
+import { enableDiagnostics, signIn } from "./fixtures";
 
 async function horizontalOverflow(page: Page): Promise<number> {
   return page.evaluate(
@@ -215,9 +215,11 @@ test.describe("compact Task detail", () => {
       await expect(sheet.getByTestId("task-comments-add")).toBeVisible();
       await expect(sheet.getByRole("textbox", { name: "Add comment" })).toHaveCount(0);
 
-      // Terminal action stays reachable in the primary surface: Technical
-      // details must still be collapsed when Close Task is available.
-      await expect(sheet.getByTestId("task-technical-details")).not.toHaveAttribute("open", "");
+      // Terminal action stays reachable in the primary surface. Under WP07
+      // Technical details is not merely collapsed while diagnostics are off —
+      // it is not mounted at all, which is a stronger form of the same claim
+      // and is asserted as such rather than as an absent `open` attribute.
+      await expect(sheet.getByTestId("task-technical-details")).toHaveCount(0);
       const close = sheet.getByTestId("task-close-control").getByRole("button", { name: "Close Task", exact: true });
       await expect(close).toBeVisible();
       await close.scrollIntoViewIfNeeded();
@@ -245,6 +247,9 @@ test.describe("compact Task detail", () => {
   });
 
   test("TASK-AC-042/043 the primary Task surface states no backend token or opaque identifier, and diagnostics keep them", async ({ page }) => {
+    // The second half of this test's claim — that diagnostics *keep* the
+    // identifiers — only exists in the diagnostics-on mode.
+    await enableDiagnostics(page);
     const sheet = await openTask(page);
     const technical = sheet.getByTestId("task-technical-details");
     await expect(technical).not.toHaveAttribute("open", "");

@@ -40,12 +40,16 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // Resolved here, after the Principal, so that nothing diagnostic is ever
   // server-rendered while the preference is OFF. There is consequently no
   // diagnostic markup to strip at hydration and no OFF flash to suppress.
-  const diagnosticsEnabled = await resolveDiagnosticsPreference({
+  const diagnostics = await resolveDiagnosticsPreference({
     principal,
     cookieValue: cookieStore.get(DIAGNOSTICS_COOKIE)?.value,
   });
   return (
-    <DiagnosticsProvider initialEnabled={diagnosticsEnabled} epoch={sessionEpoch}>
+    <DiagnosticsProvider
+      initialEnabled={diagnostics.enabled}
+      generation={diagnostics.generation}
+      epoch={sessionEpoch}
+    >
       <AppShell
         principal={principal}
         sessionEpoch={sessionEpoch}

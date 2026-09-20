@@ -10,7 +10,7 @@
  * aggregate is not READY.
  */
 import { expect, test, type Page } from "@playwright/test";
-import { signIn } from "./fixtures";
+import { enableDiagnostics, signIn } from "./fixtures";
 
 type ApiAnswer<T> = { status: number; body: T };
 
@@ -54,6 +54,10 @@ test.beforeEach(async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "System live-gateway protection is measured on desktop");
   await page.emulateMedia({ reducedMotion: "reduce" });
   await signIn(page);
+  // WP07: every assertion in this file is about diagnostic presentation, which
+  // is globally off by default. The mode is asked for through the one control's
+  // own route; there is no bypass to use instead.
+  await enableDiagnostics(page);
 });
 
 test("System shows capability readiness against live health without inventing sources or a git SHA", async ({

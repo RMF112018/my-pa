@@ -316,6 +316,15 @@ export type TodayPulseAnswer =
   | {
       readonly kind: "unavailable";
       readonly error: ErrorEnvelope;
+      /**
+       * The HTTP status the read failed with, when one was reached.
+       *
+       * Carried as a field rather than left inside `error.message`, because
+       * WP08-RT-F010 drops upstream free text from the rendered diagnostic and
+       * the status is the one part of that sentence which is genuinely safe and
+       * genuinely useful. `null` when no response arrived at all.
+       */
+      readonly status: number | null;
       readonly limitations: readonly string[];
     };
 

@@ -16,6 +16,7 @@ import { TextField } from "@/components/ui/field";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { safeLimitations } from "@/lib/diagnostics/safe-detail";
 
 const meta = {
   title: "Foundation/Component gallery",
@@ -173,7 +174,7 @@ export const ShellStates: Story = {
         kind="degraded"
         title="Knowledge is partial"
         detail="The backend disclosed incomplete coverage."
-        limitations={["One synthetic source is unavailable"]}
+        limitations={safeLimitations(["One synthetic source is unavailable"])}
       />
       <SurfaceState
         kind="unavailable"

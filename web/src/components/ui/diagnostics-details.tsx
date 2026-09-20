@@ -31,12 +31,27 @@
 import type { ReactNode } from "react";
 
 import { useDiagnosticsEnabled } from "@/components/diagnostics/diagnostics-provider";
+import {
+  describeSafeDiagnostic,
+  type SafeDiagnostic,
+  type SafeLimitations,
+} from "@/lib/diagnostics/safe-detail";
 
+/**
+ * **WP08-RT-F010: the prop type is the control.** This took a `string | null`
+ * and rendered it verbatim, so the policy above it decided only *whether* an
+ * arbitrary backend string reached the DOM. It now takes a `SafeDiagnostic`,
+ * which is branded and can only be obtained from a constructor in
+ * `lib/diagnostics/safe-detail.ts`, and renders it through
+ * `describeSafeDiagnostic` — so the display text is produced here from a closed
+ * vocabulary and a caller cannot supply prose at all. Passing a raw string is a
+ * type error, not a review finding.
+ */
 export function DiagnosticsDetails({
   diagnostic,
   children,
 }: {
-  diagnostic?: string | null;
+  diagnostic?: SafeDiagnostic | null;
   children?: ReactNode;
 }) {
   const enabled = useDiagnosticsEnabled();
@@ -47,7 +62,7 @@ export function DiagnosticsDetails({
       <p className="font-medium text-text-primary">Diagnostics</p>
       {diagnostic ? (
         <p className="mt-1 font-mono text-xs text-text-muted" data-testid="surface-state-diagnostic">
-          {diagnostic}
+          {describeSafeDiagnostic(diagnostic)}
         </p>
       ) : null}
       {children}
@@ -62,7 +77,15 @@ export function DiagnosticsDetails({
  * strings and the backend puts raw transport text in them — a dead gateway
  * yields the limitation `the application gateway did not answer`. Nothing about
  * the string distinguishes a genuine limitation from a transport message, so
- * the list is governed as a whole. The *consequence* — that the answer is
+ * the list is governed as a whole.
+ *
+ * WP08-RT-F010 added the second half of that: the list is now a
+ * `SafeLimitations`, every entry of which has passed a positive prose-shape
+ * check, and an entry that did not is replaced by a sentence saying a
+ * limitation was withheld. `lib/diagnostics/safe-detail.ts` records why the
+ * list is shape-checked rather than folded into the closed diagnostic
+ * vocabulary — an answer's gaps are open by nature and a closed vocabulary
+ * would destroy the truth-telling this block exists for. The *consequence* — that the answer is
  * partial, or that the read did not happen — is stated separately and is not
  * gated, so a reader with diagnostics off still knows not to trust the answer
  * as complete.
@@ -71,16 +94,16 @@ export function DiagnosticsLimitations({
   limitations,
   heading = "What is missing from this answer:",
 }: {
-  limitations: readonly string[];
+  limitations: SafeLimitations;
   heading?: string;
 }) {
   const enabled = useDiagnosticsEnabled();
-  if (!enabled || limitations.length === 0) return null;
+  if (!enabled || limitations.items.length === 0) return null;
   return (
     <>
       <p className="mt-2 font-medium text-text-primary">{heading}</p>
       <ul className="mt-1 list-inside list-disc" data-testid="surface-state-limitations">
-        {limitations.map((limitation) => (
+        {limitations.items.map((limitation) => (
           <li key={limitation}>{limitation}</li>
         ))}
       </ul>

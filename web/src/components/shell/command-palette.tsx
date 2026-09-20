@@ -35,6 +35,7 @@ import {
   type SearchCoverage,
 } from "@/lib/search/presentation";
 import type { ApiFailure } from "@/lib/api/work-client";
+import { safeDiagnostic } from "@/lib/diagnostics/safe-detail";
 
 type SearchAnswer =
   | { readonly kind: "idle" }
@@ -352,7 +353,9 @@ export function SearchCommandPanel({
             // WP07 F-02: the backend's own sentence is raw text and belongs on
             // the governed prop, not on `detail`, which is ungated product
             // language. The title already states the product consequence.
-            error={{ message: answer.message }}
+            // WP08-RT-F010: and the sentence itself is not rendered at all now,
+            // so the condition is named rather than quoted.
+            error={safeDiagnostic({ errorClass: "unavailable", code: "not_implemented" })}
             testId="search-not-implemented"
           />
         ) : null}
@@ -362,7 +365,11 @@ export function SearchCommandPanel({
           <SurfaceState
             kind="unavailable"
             title="Search could not be read"
-            error={answer.kind === "unavailable" ? answer.message : undefined}
+            error={
+              answer.kind === "unavailable"
+                ? safeDiagnostic({ errorClass: "unavailable", code: "coverage_unavailable" })
+                : undefined
+            }
             detail={
               answer.kind === "unavailable"
                 ? undefined

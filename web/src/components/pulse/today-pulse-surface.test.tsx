@@ -206,6 +206,7 @@ describe("the exact Empty sentence is reserved for an authoritative quiet day", 
     renderSurface({
       kind: "unavailable",
       error: { errorClass: "unavailable", code: "gateway_unreachable", message: "no answer" },
+      status: 503,
       limitations: ["the gateway did not answer"],
     });
     await waitFor(() => expect(screen.getByTestId("today-stale")).toBeTruthy());

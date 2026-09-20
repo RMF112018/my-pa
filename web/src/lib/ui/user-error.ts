@@ -1,22 +1,25 @@
 /**
  * Typed Level-1 presentation for BFF/client failures.
  *
- * Raw transport strings stay in `diagnostic` so a surface can keep them in
- * Details without putting gateway vocabulary in the first sentence. Mapping
- * never produces an empty-record claim: a failed read is still a failed read.
+ * **WP08-RT-F010.** `diagnostic` used to be a raw transport string — this
+ * docstring used to say so — and it was rendered verbatim into the DOM. It is
+ * now a `SafeDiagnostic`: a closed record built by
+ * `lib/diagnostics/safe-detail.ts`, which is also where the classification that
+ * picks the sentence below now lives. The product language is unchanged; only
+ * the diagnostic leg changed. Mapping still never produces an empty-record
+ * claim: a failed read is still a failed read.
  */
-import type { ErrorEnvelope } from "@/contracts/envelope";
+import {
+  classifyFailure,
+  safeDiagnostic,
+  type FailureFields,
+  type FailureInput,
+  type SafeDiagnostic,
+  type SafeDiagnosticKind,
+} from "@/lib/diagnostics/safe-detail";
 
-export type UserErrorKind =
-  | "session_ended"
-  | "session_unverified"
-  | "forbidden"
-  | "not_found"
-  | "conflict"
-  | "offline"
-  | "unavailable"
-  | "validation"
-  | "internal";
+/** The nine answers. Owned by `safe-detail.ts`, which decides which one applies. */
+export type UserErrorKind = SafeDiagnosticKind;
 
 export type UserErrorAction = "sign_in" | "retry" | "none";
 
@@ -25,47 +28,76 @@ export interface UserErrorPresentation {
   readonly title: string;
   readonly message: string;
   readonly action: UserErrorAction;
-  readonly diagnostic: string;
+  /** The closed vocabulary. Never a string, and never upstream prose. */
+  readonly diagnostic: SafeDiagnostic;
 }
 
-export interface UserErrorFields {
-  readonly status?: number | null;
-  readonly errorClass?: string | null;
-  readonly code?: string | null;
-  readonly message?: string | null;
-  readonly offline?: boolean | null;
+export type UserErrorFields = FailureFields;
+export type UserErrorInput = FailureInput;
+
+/** The Level-1 copy for each of the nine. This is product truth, not diagnostics. */
+interface UserErrorCopy {
+  readonly title: string;
+  readonly message: string;
+  readonly action: UserErrorAction;
 }
 
-export type UserErrorInput = UserErrorFields | ErrorEnvelope | Error | string | null | undefined | unknown;
+const COPY: Record<UserErrorKind, UserErrorCopy> = {
+  offline: {
+    title: "You appear to be offline",
+    message: "You appear to be offline.",
+    action: "retry",
+  },
+  session_ended: {
+    title: "Your session has ended",
+    message: "Your session has ended. Sign in again.",
+    action: "sign_in",
+  },
+  session_unverified: {
+    title: "We couldn't verify your session",
+    message: "We couldn't verify your session.",
+    action: "retry",
+  },
+  forbidden: {
+    title: "You don't have access",
+    message: "You don't have access to this item.",
+    action: "none",
+  },
+  not_found: {
+    title: "This item could not be found",
+    message: "This item could not be found.",
+    action: "none",
+  },
+  conflict: {
+    title: "This was changed elsewhere",
+    message: "This was changed elsewhere. Refresh and try again.",
+    action: "retry",
+  },
+  validation: {
+    title: "That request was not valid",
+    message: "That request was not valid.",
+    action: "none",
+  },
+  internal: {
+    title: "This could not be completed",
+    message: "This could not be completed. Try again.",
+    action: "retry",
+  },
+  unavailable: {
+    title: "This could not be read",
+    message: "This could not be read. Try again.",
+    action: "retry",
+  },
+};
 
-const SESSION_AUTHORITY = /session authority unavailable/i;
-const OFFLINE_TEXT = /failed to fetch|networkerror|load failed|you appear to be offline|the network is unavailable/i;
-
-function fieldsFrom(input: UserErrorInput): UserErrorFields {
-  if (input == null) return {};
-  if (typeof input === "string") return { message: input };
-  if (typeof input !== "object") return { message: String(input) };
-  if (input instanceof Error) {
-    const failure = input as Error & UserErrorFields;
-    return {
-      status: typeof failure.status === "number" ? failure.status : null,
-      errorClass: typeof failure.errorClass === "string" ? failure.errorClass : null,
-      code: typeof failure.code === "string" ? failure.code : null,
-      message: input.message,
-      offline: failure.offline ?? null,
-    };
-  }
-  return input;
-}
-
-function present(
-  kind: UserErrorKind,
-  title: string,
-  message: string,
-  action: UserErrorAction,
-  diagnostic: string,
-): UserErrorPresentation {
-  return { kind, title, message, action, diagnostic };
+/**
+ * The sentence, the heading and the affordance for one of the nine.
+ *
+ * Exported so `SurfaceState` can render Level-1 copy from a `SafeDiagnostic`
+ * without being handed the raw failure a second time.
+ */
+export function userErrorCopy(kind: UserErrorKind): UserErrorCopy {
+  return COPY[kind];
 }
 
 /**
@@ -73,105 +105,9 @@ function present(
  *
  * Status and `errorClass` win over a generic message. A 403/authorization
  * sentence is used only when those establish a refusal. Offline is never
- * reported as an empty record.
+ * reported as an empty record. The ordering lives in `classifyFailure`.
  */
 export function mapUserError(input: UserErrorInput): UserErrorPresentation {
-  const fields = fieldsFrom(input);
-  const diagnostic =
-    (typeof fields.message === "string" && fields.message.trim()) ||
-    (fields.code ? fields.code : "") ||
-    (fields.errorClass ? fields.errorClass : "") ||
-    (typeof fields.status === "number" ? `request failed with status ${fields.status}` : "unavailable");
-  const status = fields.status ?? null;
-  const errorClass = fields.errorClass ?? "";
-  const code = fields.code ?? "";
-  const message = fields.message ?? "";
-
-  if (fields.offline === true || OFFLINE_TEXT.test(message)) {
-    return present(
-      "offline",
-      "You appear to be offline",
-      "You appear to be offline.",
-      "retry",
-      diagnostic,
-    );
-  }
-
-  if (status === 401 || errorClass === "authentication") {
-    return present(
-      "session_ended",
-      "Your session has ended",
-      "Your session has ended. Sign in again.",
-      "sign_in",
-      diagnostic,
-    );
-  }
-
-  if (SESSION_AUTHORITY.test(message) || code === "authority_unavailable") {
-    return present(
-      "session_unverified",
-      "We couldn't verify your session",
-      "We couldn't verify your session.",
-      "retry",
-      diagnostic,
-    );
-  }
-
-  if (status === 403 || errorClass === "authorization" || errorClass === "policy_denied") {
-    return present(
-      "forbidden",
-      "You don't have access",
-      "You don't have access to this item.",
-      "none",
-      diagnostic,
-    );
-  }
-
-  if (status === 404 || errorClass === "not_found") {
-    return present(
-      "not_found",
-      "This item could not be found",
-      "This item could not be found.",
-      "none",
-      diagnostic,
-    );
-  }
-
-  if (status === 409 || errorClass === "conflict") {
-    return present(
-      "conflict",
-      "This was changed elsewhere",
-      "This was changed elsewhere. Refresh and try again.",
-      "retry",
-      diagnostic,
-    );
-  }
-
-  if (status === 400 || status === 422 || errorClass === "validation") {
-    return present(
-      "validation",
-      "That request was not valid",
-      "That request was not valid.",
-      "none",
-      diagnostic,
-    );
-  }
-
-  if (errorClass === "internal" || status === 500) {
-    return present(
-      "internal",
-      "This could not be completed",
-      "This could not be completed. Try again.",
-      "retry",
-      diagnostic,
-    );
-  }
-
-  return present(
-    "unavailable",
-    "This could not be read",
-    "This could not be read. Try again.",
-    "retry",
-    diagnostic,
-  );
+  const kind = classifyFailure(input);
+  return { kind, ...COPY[kind], diagnostic: safeDiagnostic(input) };
 }

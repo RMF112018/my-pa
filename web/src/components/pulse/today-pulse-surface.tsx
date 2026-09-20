@@ -92,6 +92,11 @@ import {
 import type { DisclosureEnvelope, ErrorEnvelope } from "@/contracts/envelope";
 import type { TodayPulseAnswer, TodayRow } from "@/contracts/views";
 import { browserWorkClock } from "@/lib/api/work-client";
+import {
+  safeDiagnostic,
+  safeDiagnosticNote,
+  safeLimitations,
+} from "@/lib/diagnostics/safe-detail";
 
 /**
  * The sentence an authoritative quiet day is allowed to say, and the only one.
@@ -187,6 +192,7 @@ export function classifyPulsePayload(payload: PulseReadPayload): TodayPulseAnswe
   if (disclosure.coverage === "unavailable") {
     return {
       kind: "unavailable",
+      status: null,
       error: {
         errorClass: "unavailable",
         code: "coverage_unavailable",
@@ -335,7 +341,12 @@ export class PulseReadHttpError extends ForegroundRevalidationHttpError {
  */
 export function unavailableFromReadError(error: unknown): TodayPulseAnswer {
   if (error instanceof PulseReadHttpError) {
-    return { kind: "unavailable", error: error.envelope, limitations: error.limitations };
+    return {
+      kind: "unavailable",
+      error: error.envelope,
+      status: error.status,
+      limitations: error.limitations,
+    };
   }
   const message =
     error instanceof Error && error.message.trim().length > 0
@@ -344,6 +355,7 @@ export function unavailableFromReadError(error: unknown): TodayPulseAnswer {
   return {
     kind: "unavailable",
     error: { errorClass: "unavailable", code: "pulse_read_failed", message },
+    status: null,
     limitations: [],
   };
 }
@@ -906,25 +918,22 @@ export function TodayPulseSurface({ initialAnswer }: TodayPulseSurfaceProps = {}
         <SurfaceState
           kind="unavailable"
           title="Today could not be derived"
-          error={answer.error}
-          limitations={answer.limitations}
+          error={safeDiagnostic({ ...answer.error, status: answer.status })}
+          limitations={safeLimitations(answer.limitations)}
           testId="today-unavailable"
         />
       ) : answer.kind === "empty" ? (
         <SurfaceState
           kind="empty"
           title={TODAY_EMPTY_COPY}
-          diagnostic={
-            "Today's Task read ran and returned no Task for this day, and the derivation ran and " +
-            "raised no commitment, decision, observation or situation either."
-          }
+          diagnostic={safeDiagnosticNote("today_read_raised_nothing")}
           testId="today-empty"
         />
       ) : answer.kind === "degraded" ? (
         <>
           <DegradedBanner
             scope="today's derivation"
-            limitations={answer.limitations}
+            limitations={safeLimitations(answer.limitations)}
             truncated={answer.truncated}
           />
           {answer.items.length === 0 ? (
@@ -932,10 +941,7 @@ export function TodayPulseSurface({ initialAnswer }: TodayPulseSurfaceProps = {}
               kind="degraded"
               title="Today is incomplete"
               detail="A quiet day is not established. Something may still need you."
-              diagnostic={
-                "The read was incomplete and carried no Task and no other row. A partial read " +
-                "does not establish that nothing needs attention."
-              }
+              diagnostic={safeDiagnosticNote("today_read_incomplete")}
               testId="today-degraded-empty"
             />
           ) : (

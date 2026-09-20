@@ -162,8 +162,10 @@ describe("the live read-only workspace", () => {
     });
     diagnostics.enabled = true;
     const view = mount();
+    // WP08-RT-F010: the failure is stated with the allowlisted code, not with
+    // the backend's own sentence.
     expect(await screen.findByTestId("overview-unavailable")).toHaveTextContent(
-      "Old overview error",
+      "transport_unavailable",
     );
     // The categories failure is stated as a consequence; its raw sentence is
     // diagnostics and no longer printed inline.
@@ -432,7 +434,11 @@ describe("the live read-only workspace", () => {
     cleanup();
     diagnostics.enabled = true;
     mount("view=register&group=none");
-    expect(await screen.findByTestId("register-unavailable")).toHaveTextContent(message);
+    // WP08-RT-F010: the allowlisted code survives; the raw `message` does not
+    // reach the DOM in either mode.
+    const shown = await screen.findByTestId("register-unavailable");
+    expect(shown).toHaveTextContent(code);
+    expect(shown).not.toHaveTextContent(message);
     expect(screen.queryByTestId("register-live")).toBeNull();
     expect(screen.queryByTestId("register-count")).toBeNull();
     expect(screen.queryByTestId("register-empty-project")).toBeNull();

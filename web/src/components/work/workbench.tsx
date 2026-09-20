@@ -8,6 +8,7 @@ import { MutationFeedbackEvent } from "@/components/ui/mutation-feedback";
 import { Select } from "@/components/ui/select";
 import { Sheet } from "@/components/ui/sheet";
 import { LoadingStatus, SurfaceState } from "@/components/ui/surface-state";
+import { WhenDiagnostics } from "@/components/diagnostics/diagnostics-provider";
 import { Textarea } from "@/components/ui/textarea";
 import { CommitmentDetailView } from "@/components/work/work-detail";
 import { TaskCompactSheet } from "@/components/tasks/task-compact-sheet";
@@ -771,7 +772,15 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
           </div>
         ) : null}
       </div>
-      {disclosure && state !== "failed" ? <Disclosure details={disclosure} /> : null}
+      {disclosure && state !== "failed" ? (
+          /* WP07 §8.5: authority/coverage/truncation/freshness narration is the
+             diagnostic projection of the answer. The records themselves, the
+             partial-answer consequence and the pagination controls are product
+             truth and stay outside this gate. */
+          <WhenDiagnostics>
+            <Disclosure details={disclosure} />
+          </WhenDiagnostics>
+        ) : null}
       {partial ? <SurfaceState kind="degraded" title="More Work is available" detail="There are more results. Continue to the next page." /> : null}
       {nextCursor ? (
         <Button

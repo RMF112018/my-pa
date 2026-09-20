@@ -50,6 +50,11 @@ import type { ReactNode } from "react";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { mapUserError, type UserErrorInput } from "@/lib/ui/user-error";
+import { DiagnosticsDetails } from "@/components/ui/diagnostics-details";
+
+// Re-exported so the ~40 existing callsites keep one import path. The gate
+// itself lives in that module, because it must be a client-side mount decision.
+export { DiagnosticsDetails };
 
 /** The four answers. There is deliberately no fifth and no default. */
 export type SurfaceStateKind = "empty" | "unavailable" | "degraded" | "not_implemented";
@@ -118,28 +123,6 @@ export interface SurfaceStateProps {
 
 function compactKind(kind: SurfaceStateKind): boolean {
   return kind === "empty" || kind === "not_implemented";
-}
-
-/** Raw/transport copy, always behind a native Details disclosure. */
-export function DiagnosticsDetails({
-  diagnostic,
-  children,
-}: {
-  diagnostic?: string | null;
-  children?: ReactNode;
-}) {
-  if (!diagnostic && !children) return null;
-  return (
-    <div className="mt-2" data-testid="surface-state-diagnostics">
-      <p className="font-medium text-text-primary">Diagnostics</p>
-      {diagnostic ? (
-        <p className="mt-1 font-mono text-xs text-text-muted" data-testid="surface-state-diagnostic">
-          {diagnostic}
-        </p>
-      ) : null}
-      {children}
-    </div>
-  );
 }
 
 function StateDetails({

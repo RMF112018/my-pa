@@ -50,7 +50,10 @@ import { PageHeader } from "@/components/shell/page-header";
 import { SurfaceState } from "@/components/ui/surface-state";
 import type { ReportsResolveSetResult } from "@/lib/api/decode/capabilities/reports.resolve_set";
 import type { PrincipalSession } from "@/contracts/identity";
+import { DIAGNOSTICS_COOKIE } from "@/lib/diagnostics/preference";
+import { resolveDiagnosticsPreference } from "@/lib/diagnostics/server";
 import { SystemRefresh } from "./system-refresh";
+import { ShowDiagnosticsToggle } from "./show-diagnostics-toggle";
 import { ThisBrowserPwaStatus } from "./this-browser-pwa";
 
 export const metadata = { title: "System — my-pa" };
@@ -125,14 +128,19 @@ export default async function SystemPage() {
   const principal = await resolveSessionPrincipal(cookieStore.get(SESSION_COOKIE_NAME)?.value);
   if (!principal) redirect("/sign-in");
 
-  const source = runtimeIdentity();
-  const synthetic = syntheticDataEnabled();
-  // **A gateway auth mode this build cannot read is a misconfiguration, and it
-  // is shown as one.** The previous default of `"not configured"` fell through
-  // every branch below, which meant a build that had not said how its gateway
-  // establishes an acting Principal simply stopped disclosing the
-  // `local_operator` limit — the page grew quieter exactly as it became less
-  // trustworthy. The refusal `gatewayAuthMode` raises is surfaced instead.
+  // Resolved before anything else this page might do, because almost everything
+  // below is diagnostics and the contract says diagnostic work must be gated
+  // *before invocation*, not rendered and then hidden.
+  const diagnosticsEnabled = await resolveDiagnosticsPreference({
+    principal,
+    cookieValue: cookieStore.get(DIAGNOSTICS_COOKIE)?.value,
+  });
+
+  // The acting gateway mode is a configuration read, not a capability call, and
+  // what it can tell the user — that this deployment may not partition data by
+  // who is signed in — is ordinary product truth rather than engineering
+  // detail. It is therefore resolved and shown in both modes. Only the raw
+  // refusal text is diagnostic, and only that is gated.
   let authMode: string | null = null;
   let authModeRefusal: string | null = null;
   try {
@@ -141,6 +149,57 @@ export default async function SystemPage() {
     authModeRefusal = error instanceof Error ? error.message : String(error);
   }
 
+  const partitioningNotice =
+    authModeRefusal !== null ? (
+      <Card>
+        <CardBody>
+          <p role="alert" data-testid="system-auth-mode-misconfigured">
+            <strong>This build is misconfigured, and that is worse than either mode.</strong> It
+            cannot say how the gateway it talks to establishes an acting principal, so it cannot
+            tell you whether what you are shown is partitioned by who is signed in to this
+            browser. Nothing here is claimed to be yours alone until an operator fixes it.
+            {diagnosticsEnabled ? ` ${authModeRefusal}` : ""}
+          </p>
+        </CardBody>
+      </Card>
+    ) : authMode === "local_operator" ? (
+      <Card>
+        <CardBody>
+          <p data-testid="system-local-operator">
+            <strong>And here is the limit of that.</strong> The application gateway this build
+            talks to runs in <code>local_operator</code> mode: it serves one fixed principal for
+            the life of its process, so what you are shown is that deployment&rsquo;s data and is
+            not partitioned by who is signed in to this browser.
+          </p>
+        </CardBody>
+      </Card>
+    ) : null;
+
+  /**
+   * The sole diagnostic visibility control, and the whole page while OFF.
+   *
+   * No "Diagnostics are hidden" placeholder, no empty cards, no reserved
+   * space, and no Refresh button — there is nothing here to refresh when the
+   * page is not reading anything. Apart from this control and the partitioning
+   * notice above, root System while OFF is an application in which the
+   * diagnostics were never written.
+   */
+  if (!diagnosticsEnabled) {
+    return (
+      <section aria-labelledby="system-heading" className="mx-auto flex max-w-2xl flex-col gap-3">
+        <PageHeader headingId="system-heading" title="System" />
+        <Card>
+          <CardBody>
+            <ShowDiagnosticsToggle />
+          </CardBody>
+        </Card>
+        {partitioningNotice}
+      </section>
+    );
+  }
+
+  const source = runtimeIdentity();
+  const synthetic = syntheticDataEnabled();
   const outcome = synthetic
     ? null
     : await invokeGateway(principal, "capabilities.get");
@@ -160,6 +219,13 @@ export default async function SystemPage() {
   return (
     <section aria-labelledby="system-heading" className="mx-auto flex max-w-2xl flex-col gap-3">
       <PageHeader headingId="system-heading" title="System" actions={<SystemRefresh />} />
+
+      {/* The sole control stays at the top of the page in both modes. */}
+      <Card>
+        <CardBody>
+          <ShowDiagnosticsToggle />
+        </CardBody>
+      </Card>
 
       <Card>
         <CardTitle>Who you are to this system</CardTitle>

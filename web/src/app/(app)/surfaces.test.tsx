@@ -37,7 +37,7 @@
  * Every identifier below is synthetic and well-formed under the domain's own
  * opaque-identifier patterns. No real capture, no real person, no real text.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import type { PrincipalSession } from "@/contracts/identity";
 import type { PulseItem } from "@/lib/api/decode/capabilities/continuity.pulse";
@@ -58,8 +58,29 @@ const PRINCIPAL: PrincipalSession = {
 // stand in for the cookie jar and the signature check *only*; nothing here
 // supplies an identity to the page through a payload, and the pages under test
 // have no parameter one could arrive through.
+/**
+ * The diagnostics preference cookie, as this browser would carry it.
+ *
+ * `undefined` is a browser that has never turned diagnostics on, which is the
+ * product default and therefore the default here. Tests that exercise the ON
+ * presentation set a real serialized value, bound to `PRINCIPAL`, so the page
+ * is gated by the genuine parser rather than by a stubbed boolean.
+ */
+const { diagnosticsCookie } = vi.hoisted(() => ({
+  diagnosticsCookie: { value: undefined as string | undefined },
+}));
+
 vi.mock("next/headers", () => ({
-  cookies: async () => ({ get: () => ({ name: "mypa_session", value: "stub" }) }),
+  cookies: async () => ({
+    get: (name: string) => {
+      if (name === "my-pa-diagnostics") {
+        return diagnosticsCookie.value === undefined
+          ? undefined
+          : { name, value: diagnosticsCookie.value };
+      }
+      return { name: "mypa_session", value: "stub" };
+    },
+  }),
 }));
 vi.mock("@/lib/auth/principal", () => ({
   resolveSessionPrincipal: async () => PRINCIPAL,
@@ -82,6 +103,10 @@ import SituationsPage from "@/app/(app)/situations/page";
 import { TaskRuntimeProvider } from "@/components/work/task-runtime-provider";
 import { TODAY_EMPTY_COPY } from "@/components/pulse/today-pulse-surface";
 import SystemPage from "@/app/(app)/system/page";
+import {
+  diagnosticsPreferenceValue,
+  diagnosticsPrincipalBinding,
+} from "@/lib/diagnostics/preference";
 import RelationshipPage from "@/app/(app)/relationships/[personId]/page";
 
 /** A disclosure whose coverage says the answer is whole. */
@@ -879,6 +904,24 @@ describe("Situations never calls a partial answer an empty board", () => {
 });
 
 describe("System reports what it was told, and says so when it was told nothing", () => {
+  /**
+   * Root System is almost entirely diagnostics, so these assertions are about
+   * the ON presentation and the suite turns diagnostics on for them. The
+   * cookie is the real serialized value bound to `PRINCIPAL`, so the page is
+   * gated by the shipped parser; a binding regression would turn this whole
+   * block red rather than quietly leaving it asserting the OFF page.
+   */
+  beforeAll(async () => {
+    diagnosticsCookie.value = diagnosticsPreferenceValue(
+      true,
+      await diagnosticsPrincipalBinding(PRINCIPAL.principalId),
+    );
+  });
+
+  afterAll(() => {
+    diagnosticsCookie.value = undefined;
+  });
+
   const CAPABILITIES_GET = {
     manifest: {
       contract_version: "v1",
@@ -1287,5 +1330,109 @@ describe("Knowledge offers a GoodNotes entry without claiming notebooks exist", 
     await renderServerPage(() => KnowledgePage({ searchParams: NO_PARAMS }));
     expect(screen.getByTestId("knowledge-goodnotes-entry")).toBeTruthy();
     expect(screen.getByTestId("library-synthetic")).toHaveAttribute("data-state", "not_implemented");
+  });
+});
+
+/**
+ * WP07 AC-43 / AC-44 / AC-48 — root System while diagnostics are OFF.
+ *
+ * This is the load-bearing half of the contract, and it is asserted three
+ * different ways because "OFF" has three different meanings that can regress
+ * independently: nothing diagnostic is in the **DOM**, nothing diagnostic is in
+ * the **accessibility tree**, and no diagnostic-only **work is performed**.
+ *
+ * The third is the one a rendering test alone would miss. Root System's two
+ * gateway reads — `capabilities.get` and the `reports.list` /
+ * `reports.resolve_set` pair behind Morning Intelligence readiness — exist only
+ * to produce diagnostic content at this callsite, so while OFF they must not be
+ * invoked at all. Asserting `fetch` was never called is what distinguishes
+ * gating *before* invocation from rendering and then hiding.
+ */
+describe("root System while diagnostics are off", () => {
+  beforeEach(() => {
+    diagnosticsCookie.value = undefined;
+  });
+
+  /** Every diagnostic hook the ON page renders. None may survive OFF. */
+  const DIAGNOSTIC_TEST_IDS = [
+    "system-principal-id",
+    "system-identity-provider",
+    "system-identity-subject",
+    "system-tid",
+    "system-oid",
+    "system-readiness",
+    "system-readiness-unknown",
+    "system-available",
+    "system-unavailable-caps",
+    "system-worker-planes",
+    "system-worker-planes-unknown",
+    "system-worker-heartbeat",
+    "system-worker-heartbeat-unknown",
+    "system-intelligence-aggregate",
+    "system-intelligence-members",
+    "system-intelligence-member",
+    "system-graph",
+    "system-sources-unknown",
+    "system-pwa-client-side",
+    "system-pwa-this-browser",
+    "system-source-commit",
+    "system-refresh",
+  ];
+
+  it("renders the sole control and no diagnostic content", async () => {
+    const fetchSpy = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await renderServerPage(() => SystemPage());
+
+    // Exactly one visibility control, and it is a real accessible switch.
+    const toggle = screen.getByTestId("show-diagnostics-toggle");
+    expect(toggle).toHaveAttribute("role", "switch");
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(screen.getAllByRole("switch")).toHaveLength(1);
+    expect(screen.getByRole("switch", { name: /show diagnostics/i })).toBe(toggle);
+
+    for (const testId of DIAGNOSTIC_TEST_IDS) {
+      expect(screen.queryByTestId(testId)).toBeNull();
+    }
+
+    // No diagnostic-only server work was performed to build this page.
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("leaves no diagnostic text, placeholder or reserved chrome behind", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
+    await renderServerPage(() => SystemPage());
+    const text = document.body.textContent ?? "";
+
+    // No "diagnostics are hidden" placeholder, and none of the vocabulary the
+    // ON page uses. The toggle's own label and helper copy are the exception
+    // and are matched exactly rather than by the word "diagnostics".
+    expect(text).not.toMatch(/hidden|unavailable in this view|turn on diagnostics to/i);
+    for (const vocabulary of [
+      /contracted capabilities/i,
+      /worker plane/i,
+      /last heartbeat/i,
+      /source commit/i,
+      /morning intelligence readiness/i,
+      /capability manifest/i,
+      /Microsoft Graph/i,
+    ]) {
+      expect(text).not.toMatch(vocabulary);
+    }
+
+    // The raw identity dump is diagnostics and is gone. The *sentence* about
+    // `local_operator` partitioning is not: it tells the reader their data may
+    // not be partitioned by who is signed in, which is product truth and stays
+    // true in both modes. So the identifiers are asserted absent by value, not
+    // by banning the word "principal" — which would have deleted the warning.
+    expect(text).not.toMatch(/aaaa0001-0000-0000-0000-000000000001/);
+    expect(text).not.toMatch(/11111111-2222-3333-4444-555555555555/);
+    expect(text).not.toMatch(/synthetic\.a@moss\.example/);
+    expect(screen.getByTestId("system-local-operator")).toBeTruthy();
+
+    // No empty card or reserved wrapper left standing where content used to be.
+    expect(document.querySelectorAll("dl")).toHaveLength(0);
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
   });
 });

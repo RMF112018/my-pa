@@ -2,6 +2,25 @@
  * GoodNotes Knowledge page answers, rendered against a stubbed gateway socket.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * WP07 — diagnostic presentation follows the global policy. The product default
+ * is OFF; this file sets the mode each test actually means.
+ */
+const { diagnostics } = vi.hoisted(() => ({ diagnostics: { enabled: false } }));
+vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/diagnostics/diagnostics-provider")>();
+  return {
+    ...actual,
+    // Both must be replaced: `WhenDiagnostics` closes over the real hook in its
+    // own module scope, so overriding only the exported hook would leave the
+    // guard reading the unmocked policy.
+    useDiagnosticsEnabled: () => diagnostics.enabled,
+    WhenDiagnostics: ({ children }: { children: React.ReactNode }) =>
+      diagnostics.enabled ? children : null,
+  };
+});
 import { cleanup, render, screen } from "@testing-library/react";
 import type { PrincipalSession } from "@/contracts/identity";
 
@@ -260,8 +279,14 @@ describe("GoodNotes evidence deep-links", () => {
     expect(img.getAttribute("src")).toBe(
       `/api/goodnotes/raster?runId=${RUN_ID}&pageVersionId=${PAGE_VERSION_ID}&contentSha256=${DIGEST}`,
     );
-    expect(img.getAttribute("alt")).toMatch(/source raster/i);
+    // WP07 §8.7: alternative text still says what the image is, but no longer
+    // leaks renderer name/version, page version id or run id to screen-reader
+    // users while diagnostics are off.
+    expect(img.getAttribute("alt")).toMatch(/GoodNotes page/i);
     expect(img.getAttribute("alt")).not.toMatch(/synthetic note/i);
+    expect(img.getAttribute("alt")).not.toMatch(/renderer/i);
+    expect(img.getAttribute("alt")).not.toContain(RUN_ID);
+    expect(img.getAttribute("alt")).not.toContain(PAGE_VERSION_ID);
     expect(screen.getByTestId("goodnotes-transcription").textContent).toBe("synthetic note");
     expect(screen.getByTestId("goodnotes-evidence-tablist")).toHaveAttribute("role", "tablist");
     expect(screen.getByTestId("goodnotes-evidence-split").className).toContain("md:grid-cols-2");

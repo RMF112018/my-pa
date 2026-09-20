@@ -1,4 +1,7 @@
+"use client";
+
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, Ref } from "react";
+import { useDiagnosticsEnabled } from "@/components/diagnostics/diagnostics-provider";
 import { peopleEntity } from "@/lib/routes/people";
 import type { GraphEdge, GraphNode } from "@/lib/api/decode/capabilities/entities.graph";
 import {
@@ -15,6 +18,35 @@ const OPERABLE_EDGE_FOCUS = "outline-none focus-visible:[&>line:last-of-type]:st
 
 function shortLabel(label: string): string {
   return label.length > 22 ? `${label.slice(0, 21)}…` : label;
+}
+
+/**
+ * The accessible name for one relationship edge.
+ *
+ * **Raw entity identifiers were never the right accessible name here.** An edge
+ * previously announced as "knows from ent_aaaaaaaa11111111 to
+ * ent_bbbbbbbb22222222", which is unusable to the person relying on it and is
+ * also precisely the leak WP07 §8.7 names: an internal identifier reaching the
+ * accessibility tree through accessible-name construction, where a visual
+ * reader never saw it. So the endpoints resolve to the same display labels the
+ * nodes already carry, and a sighted and a screen-reader user are told the same
+ * thing.
+ *
+ * An endpoint the graph did not return a node for is "an unnamed record"
+ * rather than its id: an unresolved label is not a licence to print the key.
+ * The identifiers are additive and come back with diagnostics.
+ */
+function edgeAccessibleName(
+  edge: GraphEdge,
+  labelOf: (entityId: string | null) => string | undefined,
+  diagnosticsEnabled: boolean,
+): string {
+  const from = labelOf(edge.from_entity_id) ?? "an unnamed record";
+  const to = labelOf(edge.to_entity_id) ?? "an unnamed record";
+  const name = `${edge.type} ${edge.edge_kind} from ${from} to ${to}`;
+  return diagnosticsEnabled
+    ? `${name} (${edge.from_entity_id ?? "unset"} to ${edge.to_entity_id ?? "unset"})`
+    : name;
 }
 
 function activateKey(event: ReactKeyboardEvent<SVGElement>): boolean {
@@ -81,7 +113,10 @@ export function GraphMap({
   onInspectNode?: (entityId: string) => void;
   onInspectEdge?: (edgeId: string) => void;
 }) {
+  const diagnosticsEnabled = useDiagnosticsEnabled();
   const positions = overlayLayout(nodes, focusEntityId, savedPositions);
+  const labelOf = (entityId: string | null): string | undefined =>
+    entityId === null ? undefined : nodes.find((node) => node.entity_id === entityId)?.display_label;
   const drag = arrange && !relationshipEdit;
   const pickNodes = arrange || relationshipEdit;
   const inspectNodes = Boolean(onInspectNode);
@@ -118,7 +153,7 @@ export function GraphMap({
               className={interactive ? OPERABLE_EDGE_FOCUS : undefined}
               aria-label={
                 interactive
-                  ? `${edge.type} ${edge.edge_kind} from ${edge.from_entity_id} to ${edge.to_entity_id}`
+                  ? edgeAccessibleName(edge, labelOf, diagnosticsEnabled)
                   : undefined
               }
               aria-pressed={interactive ? selected : undefined}

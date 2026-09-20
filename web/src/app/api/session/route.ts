@@ -52,6 +52,7 @@ import {
 } from "@/lib/auth/session-service";
 import { requirePrincipal } from "@/lib/api/guard";
 import { admitBrowserMutation } from "@/lib/http/mutation-admission";
+import { clearDiagnosticsPreference } from "@/lib/diagnostics/preference";
 
 function refuse(code: string, message: string, status: number): NextResponse {
   return NextResponse.json({ error: { code, message } }, { status });
@@ -217,5 +218,13 @@ export async function DELETE(request: NextRequest) {
 
   const response = NextResponse.json({ signedOut: true });
   clearSessionCookie(response);
+  // The diagnostics preference is bound to a Principal, so the next person to
+  // sign in on this browser could not have inherited ON in any case. Clearing
+  // it here is the second half of that: browser state we have no further reason
+  // to keep does not outlive the session that created it.
+  response.headers.append(
+    "set-cookie",
+    clearDiagnosticsPreference({ secure: process.env.NODE_ENV === "production" }),
+  );
   return response;
 }

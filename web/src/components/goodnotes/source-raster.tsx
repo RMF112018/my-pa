@@ -1,5 +1,11 @@
+"use client";
+
 import type { GoodNotesReadResult } from "@/lib/api/decode/capabilities/goodnotes.read";
 import { Card, CardBody } from "@/components/ui/card";
+import {
+  WhenDiagnostics,
+  useDiagnosticsEnabled,
+} from "@/components/diagnostics/diagnostics-provider";
 
 export function goodnotesRasterSrc(
   runId: string,
@@ -25,28 +31,42 @@ export function SourceRaster({
   record: GoodNotesReadResult;
   contentSha256: string;
 }) {
+  const diagnosticsEnabled = useDiagnosticsEnabled();
   const src = goodnotesRasterSrc(record.run_id, record.page_version_id, contentSha256);
-  const alt =
-    `GoodNotes source raster (${record.media_type}); renderer ${record.renderer_name} ` +
-    `${record.renderer_version}; page version ${record.page_version_id}; run ${record.run_id}`;
+  /*
+   * WP07 §8.7. Alternative text is accessibility output, and the contract
+   * names it explicitly: a screen-reader user must not be the only person in
+   * the product who is still told the renderer name, the renderer version, the
+   * page version id and the run id while diagnostics are off. Gating the
+   * `<figcaption>` alone would have done exactly that.
+   *
+   * What survives is the part that is actually *alternative text*: what this
+   * image is. The identifiers are additive and return with diagnostics.
+   */
+  const alt = diagnosticsEnabled
+    ? `GoodNotes source raster (${record.media_type}); renderer ${record.renderer_name} ` +
+      `${record.renderer_version}; page version ${record.page_version_id}; run ${record.run_id}`
+    : "Scanned GoodNotes page";
 
   return (
     <figure data-testid="goodnotes-source-raster">
       {/* Bytes are served by the BFF with no-store; Next Image would invent a cache. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={src} alt={alt} className="max-w-full rounded border border-border" />
-      <figcaption className="mt-2 text-xs text-muted">
-        <dl className="grid grid-cols-[9rem_1fr] gap-x-2 gap-y-1">
-          <dt>media type</dt>
-          <dd>{record.media_type}</dd>
-          <dt>renderer</dt>
-          <dd>
-            {record.renderer_name} {record.renderer_version}
-          </dd>
-          <dt>content sha256</dt>
-          <dd className="font-mono break-all">{contentSha256}</dd>
-        </dl>
-      </figcaption>
+      <WhenDiagnostics>
+        <figcaption className="mt-2 text-xs text-muted">
+          <dl className="grid grid-cols-[9rem_1fr] gap-x-2 gap-y-1">
+            <dt>media type</dt>
+            <dd>{record.media_type}</dd>
+            <dt>renderer</dt>
+            <dd>
+              {record.renderer_name} {record.renderer_version}
+            </dd>
+            <dt>content sha256</dt>
+            <dd className="font-mono break-all">{contentSha256}</dd>
+          </dl>
+        </figcaption>
+      </WhenDiagnostics>
     </figure>
   );
 }

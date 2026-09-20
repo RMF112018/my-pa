@@ -38,6 +38,10 @@ import { TaskDueControl } from "@/components/tasks/task-due-control";
 import { TaskStatusControl } from "@/components/tasks/task-status-control";
 import { TaskTechnicalDetails } from "@/components/tasks/task-technical-details";
 import {
+  WhenDiagnostics,
+  useDiagnosticsEnabled,
+} from "@/components/diagnostics/diagnostics-provider";
+import {
   TASK_OPERATION_AMBIGUOUS_MESSAGE,
   TASK_OPERATION_CONFLICT_MESSAGE,
   TASK_OPERATION_FAILURE_MESSAGE,
@@ -689,17 +693,30 @@ function TaskDetailViewInner({
         onLoadMoreComments={() => void loadMoreComments()}
         onRetryLoadComments={() => void loadComments()}
         renderTechnicalDetails={(current) => (
-          <TaskTechnicalDetails
-            task={current}
-            clock={clock}
-            history={history}
-            historyDisclosure={historyDisclosure}
-            historyLoaded={historyLoaded}
-            historyLoading={historyLoading}
-            onExpand={() => void loadHistory()}
-            onContinueHistory={() => void loadMoreHistory()}
-            onRevealEvidence={(ref) => setRevealSubject(ref)}
-          />
+          /*
+           * WP07 §8.5. While diagnostics are off this never mounts, and that is
+           * what also stops the work: `loadHistory` is driven by the
+           * disclosure's `onExpand`, so an unmounted panel never issues
+           * `GET /api/tasks/{id}/history`. The fetch is gated by not existing
+           * rather than by being cancelled after the fact.
+           *
+           * Ordinary Task behaviour is untouched by this boundary — comments,
+           * context, business history, status/due/close/more and the separately
+           * authorized evidence reveal all live outside it.
+           */
+          <WhenDiagnostics>
+            <TaskTechnicalDetails
+              task={current}
+              clock={clock}
+              history={history}
+              historyDisclosure={historyDisclosure}
+              historyLoaded={historyLoaded}
+              historyLoading={historyLoading}
+              onExpand={() => void loadHistory()}
+              onContinueHistory={() => void loadMoreHistory()}
+              onRevealEvidence={(ref) => setRevealSubject(ref)}
+            />
+          </WhenDiagnostics>
         )}
       />
 
@@ -1039,19 +1056,27 @@ function followUpProjection(source: { follow_up_task?: unknown }): CommitmentFol
 }
 
 export function CommitmentDetailView({ commitmentId, embedded = false }: { commitmentId: string; embedded?: boolean }) {
+  /*
+   * WP07 §8.5 / AC-48. The Commitment history read feeds only the History panel
+   * and its disclosure aside, both of which are diagnostics. It is therefore
+   * not issued at all while diagnostics are off — the request is skipped before
+   * invocation rather than made and discarded. The Commitment record itself is
+   * ordinary product data and is always read.
+   */
+  const diagnosticsEnabled = useDiagnosticsEnabled();
   const [record, setRecord] = useState<CommitmentDetail>(); const [draft, setDraft] = useState<CommitmentDraft>(); const [history, setHistory] = useState<readonly WorkHistoryRow[]>([]); const [historyDisclosure, setHistoryDisclosure] = useState<DisclosureEnvelope>();
   const [followUp, setFollowUp] = useState<CommitmentFollowUp>({ state: "unavailable", reason: "Follow-up Task context has not been read." });
   const [counterparties, setCounterparties] = useState<readonly CounterpartyOption[]>([]); const [counterpartiesTruncated, setCounterpartiesTruncated] = useState(false);
   const [status, setStatus] = useState("Loading commitment…"); const [failure, setFailure] = useState<UserErrorPresentation>(); const [conflict, setConflict] = useState(false); const [proposal, setProposal] = useState<Record<string, unknown>>(); const [closureNote, setClosureNote] = useState("");
   const updateAttempt = useRef(createAttemptKey("commitment-update")); const closeAttempt = useRef(createAttemptKey("commitment-close")); const closureCaptureAttempt = useRef(createAttemptKey("commitment-closure"));
-  const load = useCallback(async () => { try { const [detail, trail] = await Promise.all([workRequest<{ commitment: CommitmentDetail; follow_up_task?: unknown; counterparty_options?: readonly CounterpartyOption[]; counterparty_options_truncated?: boolean }>(`/api/commitments/${encodeURIComponent(commitmentId)}`), workRequest<{ history: readonly WorkHistoryRow[]; disclosure?: DisclosureEnvelope }>(`/api/commitments/${encodeURIComponent(commitmentId)}/history?pageSize=50`)]); const options = requiredCollection(detail.counterparty_options, "counterparty_options"); setCounterparties(detail.commitment.counterparty && !options.some((item) => item.person_id === detail.commitment.counterparty?.person_id) ? [...options, detail.commitment.counterparty] : options); setCounterpartiesTruncated(Boolean(detail.counterparty_options_truncated)); setRecord(detail.commitment); setDraft(commitmentDraft(detail.commitment)); setFollowUp(followUpProjection(detail)); setHistory(requiredCollection(trail.history, "history")); setHistoryDisclosure(trail.disclosure); setStatus(""); setFailure(undefined); } catch (error) { setFailure(mapUserError(error)); } }, [commitmentId]); useEffect(() => { void Promise.resolve().then(load); }, [load]);
+  const load = useCallback(async () => { try { const [detail, trail] = await Promise.all([workRequest<{ commitment: CommitmentDetail; follow_up_task?: unknown; counterparty_options?: readonly CounterpartyOption[]; counterparty_options_truncated?: boolean }>(`/api/commitments/${encodeURIComponent(commitmentId)}`), (diagnosticsEnabled ? workRequest<{ history: readonly WorkHistoryRow[]; disclosure?: DisclosureEnvelope }>(`/api/commitments/${encodeURIComponent(commitmentId)}/history?pageSize=50`) : Promise.resolve(undefined))]); const options = requiredCollection(detail.counterparty_options, "counterparty_options"); setCounterparties(detail.commitment.counterparty && !options.some((item) => item.person_id === detail.commitment.counterparty?.person_id) ? [...options, detail.commitment.counterparty] : options); setCounterpartiesTruncated(Boolean(detail.counterparty_options_truncated)); setRecord(detail.commitment); setDraft(commitmentDraft(detail.commitment)); setFollowUp(followUpProjection(detail)); setHistory(trail ? requiredCollection(trail.history, "history") : []); setHistoryDisclosure(trail?.disclosure); setStatus(""); setFailure(undefined); } catch (error) { setFailure(mapUserError(error)); } }, [commitmentId, diagnosticsEnabled]); useEffect(() => { void Promise.resolve().then(load); }, [load]);
   async function loadMoreHistory() { const after = historyDisclosure?.nextCursor; if (!after) return; setStatus("Reading more Commitment history…"); try { const trail = await workRequest<{ history: readonly WorkHistoryRow[]; disclosure?: DisclosureEnvelope }>(`/api/commitments/${encodeURIComponent(commitmentId)}/history?pageSize=50&after=${encodeURIComponent(after)}`); setHistory((current) => [...current, ...requiredCollection(trail.history, "history").filter((row) => !current.some((existing) => existing.history_id === row.history_id))]); setHistoryDisclosure(trail.disclosure); setStatus(""); } catch (error) { setStatus(mapUserError(error).message); } }
   async function applyProposal(values: Record<string, unknown>) { if (!record) return; const material = { ...values, expectedVersion: record.version }; setStatus("Saving commitment…"); setConflict(false); try { await workRequest(`/api/commitments/${encodeURIComponent(commitmentId)}`, { method: "PATCH", body: JSON.stringify({ ...material, idempotencyKey: updateAttempt.current.forPayload(material) }) }); updateAttempt.current.succeeded(); setProposal(undefined); setStatus("Commitment update persisted."); await load(); } catch (error) { const problem = error as ApiFailure; const isConflict = problem.status === 409; setConflict(isConflict); setProposal(isConflict ? values : undefined); if (isConflict && problem.current) setRecord(problem.current as CommitmentDetail); setStatus(isConflict ? "Conflict: compare every canonical field with the retained proposal, then reapply deliberately." : mapUserError(problem).message); if (isDefinitiveAttemptFailure(error)) updateAttempt.current.succeeded(); } }
   async function update(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!draft) return; await applyProposal({ summary: draft.summary, counterpartyPersonId: draft.counterparty, dueAt: draft.dueAt ? new Date(draft.dueAt).toISOString() : undefined, clearDueAt: !draft.dueAt }); }
   async function close(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!record) return; setStatus("Saving closure evidence…"); try { const evidence = await captureEvidence(closureNote, "commitment-closure", closureCaptureAttempt.current.forPayload({ note: closureNote })); const material = { expectedVersion: record.version, closureEvidenceRef: evidence }; await workRequest(`/api/commitments/${encodeURIComponent(commitmentId)}/close`, { method: "POST", body: JSON.stringify({ ...material, idempotencyKey: closeAttempt.current.forPayload(material) }) }); closureCaptureAttempt.current.succeeded(); closeAttempt.current.succeeded(); setClosureNote(""); await load(); setStatus("Commitment explicitly closed."); } catch (error) { const problem = error as ApiFailure; if (problem.status === 409 && problem.current) { setRecord(problem.current as CommitmentDetail); setDraft(commitmentDraft(problem.current as CommitmentDetail)); } if (isDefinitiveAttemptFailure(error)) closeAttempt.current.succeeded(); setStatus(mapUserError(problem).message); } }
   if (failure) return <SurfaceState kind="unavailable" title={failure.title} detail={failure.message} diagnostic={failure.diagnostic}><Button className="mt-3" variant="secondary" onClick={() => void load()}>Retry Commitment read</Button></SurfaceState>;
   if (!record || !draft) return <LoadingStatus label={status} />;
-  return <article className="mx-auto max-w-4xl">{embedded ? null : <Link href="/work?view=commitments" className="text-sm text-moss-green underline">← Commitments</Link>}<header className={embedded ? "" : "mt-4"}><h1 className="text-2xl font-semibold text-moss-slate">{record.title}</h1><p className="mt-1 text-sm text-muted">{record.counterparty?.display_name ?? "Counterparty not resolved"} · {display(record.direction)} · {record.state} · version {record.version}</p></header>{conflict && proposal ? <Conflict title="Canonical versus proposed"><dl><dt>Summary</dt><dd>Canonical: {record.title} · Proposed: {String(proposal.summary ?? "")}</dd><dt>Counterparty</dt><dd>Canonical: {counterpartyLabel(record.counterparty_person_id, counterparties)} · Proposed: {counterpartyLabel(proposal.counterpartyPersonId, counterparties)}</dd><dt>Due</dt><dd>Canonical: {record.due_date ?? "Not set"} · Proposed: {String(proposal.dueAt ?? "Clear")}</dd></dl><Button type="button" variant="secondary" onClick={() => void applyProposal(proposal)}>Reapply proposed update to version {record.version}</Button></Conflict> : null}<p role="status" className="mt-4 text-sm text-muted">{status}</p><div className="mt-6 grid gap-6 lg:grid-cols-2"><form onSubmit={update} className="grid gap-4 rounded-xl border border-moss-slate/15 bg-surface p-4"><h2 className="font-semibold">Edit commitment</h2><Labeled label="Summary"><Input value={draft.summary} onChange={(event) => setDraft({ ...draft, summary: event.target.value })} required /></Labeled><Labeled label="Counterparty"><select value={draft.counterparty} onChange={(event) => setDraft({ ...draft, counterparty: event.target.value })} required className="h-10 rounded-md border bg-surface px-3">{counterparties.map((item) => <option key={item.person_id} value={item.person_id}>{item.display_name}</option>)}</select></Labeled>{counterpartiesTruncated ? <p className="text-xs text-muted">Showing the first 100 verified people, plus this Commitment&rsquo;s current counterparty.</p> : null}<Labeled label="Due"><Input type="datetime-local" value={draft.dueAt} onChange={(event) => setDraft({ ...draft, dueAt: event.target.value })} /></Labeled><Button type="submit" disabled={counterparties.length === 0}>Save commitment</Button></form><form onSubmit={close} className="grid content-start gap-4 rounded-xl border border-moss-slate/15 bg-surface p-4"><h2 className="font-semibold">Close explicitly</h2><Labeled label="Closure note"><Textarea value={closureNote} onChange={(event) => setClosureNote(event.target.value)} required /></Labeled><Button type="submit" variant="danger" disabled={record.state === "closed"}>{record.state === "closed" ? "Already closed" : "Close commitment"}</Button></form></div><CommitmentFollowUpPanel projection={followUp} /><Evidence subject="Commitment" state={record.evidence_state} origin={record.origin_evidence_ref} closure={record.closure_evidence_ref} closedAt={record.closed_at} reviewDecisionId={record.accepted_by_review_decision_id} /><History subject="Commitment" rows={history} disclosure={historyDisclosure} onContinue={() => void loadMoreHistory()} /></article>;
+  return <article className="mx-auto max-w-4xl">{embedded ? null : <Link href="/work?view=commitments" className="text-sm text-moss-green underline">← Commitments</Link>}<header className={embedded ? "" : "mt-4"}><h1 className="text-2xl font-semibold text-moss-slate">{record.title}</h1><p className="mt-1 text-sm text-muted">{record.counterparty?.display_name ?? "Counterparty not resolved"} · {display(record.direction)} · {record.state} · version {record.version}</p></header>{conflict && proposal ? <Conflict title="Canonical versus proposed"><dl><dt>Summary</dt><dd>Canonical: {record.title} · Proposed: {String(proposal.summary ?? "")}</dd><dt>Counterparty</dt><dd>Canonical: {counterpartyLabel(record.counterparty_person_id, counterparties)} · Proposed: {counterpartyLabel(proposal.counterpartyPersonId, counterparties)}</dd><dt>Due</dt><dd>Canonical: {record.due_date ?? "Not set"} · Proposed: {String(proposal.dueAt ?? "Clear")}</dd></dl><Button type="button" variant="secondary" onClick={() => void applyProposal(proposal)}>Reapply proposed update to version {record.version}</Button></Conflict> : null}<p role="status" className="mt-4 text-sm text-muted">{status}</p><div className="mt-6 grid gap-6 lg:grid-cols-2"><form onSubmit={update} className="grid gap-4 rounded-xl border border-moss-slate/15 bg-surface p-4"><h2 className="font-semibold">Edit commitment</h2><Labeled label="Summary"><Input value={draft.summary} onChange={(event) => setDraft({ ...draft, summary: event.target.value })} required /></Labeled><Labeled label="Counterparty"><select value={draft.counterparty} onChange={(event) => setDraft({ ...draft, counterparty: event.target.value })} required className="h-10 rounded-md border bg-surface px-3">{counterparties.map((item) => <option key={item.person_id} value={item.person_id}>{item.display_name}</option>)}</select></Labeled>{counterpartiesTruncated ? <p className="text-xs text-muted">Showing the first 100 verified people, plus this Commitment&rsquo;s current counterparty.</p> : null}<Labeled label="Due"><Input type="datetime-local" value={draft.dueAt} onChange={(event) => setDraft({ ...draft, dueAt: event.target.value })} /></Labeled><Button type="submit" disabled={counterparties.length === 0}>Save commitment</Button></form><form onSubmit={close} className="grid content-start gap-4 rounded-xl border border-moss-slate/15 bg-surface p-4"><h2 className="font-semibold">Close explicitly</h2><Labeled label="Closure note"><Textarea value={closureNote} onChange={(event) => setClosureNote(event.target.value)} required /></Labeled><Button type="submit" variant="danger" disabled={record.state === "closed"}>{record.state === "closed" ? "Already closed" : "Close commitment"}</Button></form></div><CommitmentFollowUpPanel projection={followUp} /><Evidence subject="Commitment" state={record.evidence_state} origin={record.origin_evidence_ref} closure={record.closure_evidence_ref} closedAt={record.closed_at} reviewDecisionId={record.accepted_by_review_decision_id} /><WhenDiagnostics><History subject="Commitment" rows={history} disclosure={historyDisclosure} onContinue={() => void loadMoreHistory()} /></WhenDiagnostics></article>;
 }
 
 function Conflict({ title, children }: { title: string; children: ReactNode }) { return <section role="alert" className="mt-4 rounded-lg border border-moss-coral-strong p-3 text-sm"><h2 className="font-semibold">{title}</h2>{children}</section>; }
@@ -1082,7 +1107,7 @@ function Evidence({ subject, state, originKind, origin, closure, closedAt, accep
           {hasOriginEvidence ? (
             <>
               <dd>Recorded origin evidence</dd>
-              <dd className="break-all font-mono text-xs text-muted">Reference {origin}</dd>
+              <WhenDiagnostics><dd className="break-all font-mono text-xs text-muted">Reference {origin}</dd></WhenDiagnostics>
               <Button className="mt-2" type="button" variant="secondary" onClick={() => setRevealSubject(origin)}>View origin evidence</Button>
             </>
           ) : (
@@ -1092,8 +1117,8 @@ function Evidence({ subject, state, originKind, origin, closure, closedAt, accep
             </>
           )}
         </div>
-        <div><dt className="text-muted">Acceptance</dt><dd>{acceptanceKind ? display(acceptanceKind) : reviewDecisionId ? "Accepted through review" : "No review acceptance was returned"}</dd>{reviewDecisionId ? <dd className="break-all font-mono text-xs text-muted">Review decision {reviewDecisionId}</dd> : null}</div>
-        <div><dt className="text-muted">Closure</dt>{closure ? <><dd>Closure evidence recorded{closedAt ? <> at <time dateTime={closedAt}>{new Date(closedAt).toLocaleString()}</time></> : ""}</dd><dd className="break-all font-mono text-xs text-muted">Reference {closure}</dd>{closureHistoryId ? <dd className="break-all font-mono text-xs text-muted">History receipt {closureHistoryId}</dd> : null}<Button className="mt-2" type="button" variant="secondary" onClick={() => setRevealSubject(closure)}>View closure evidence</Button></> : <dd>{closedAt ? `${subject} is terminal, but closure evidence metadata was unavailable.` : `${subject} is not closed.`}</dd>}</div>
+        <div><dt className="text-muted">Acceptance</dt><dd>{acceptanceKind ? display(acceptanceKind) : reviewDecisionId ? "Accepted through review" : "No review acceptance was returned"}</dd>{reviewDecisionId ? <WhenDiagnostics><dd className="break-all font-mono text-xs text-muted">Review decision {reviewDecisionId}</dd></WhenDiagnostics> : null}</div>
+        <div><dt className="text-muted">Closure</dt>{closure ? <><dd>Closure evidence recorded{closedAt ? <> at <time dateTime={closedAt}>{new Date(closedAt).toLocaleString()}</time></> : ""}</dd><WhenDiagnostics><dd className="break-all font-mono text-xs text-muted">Reference {closure}</dd></WhenDiagnostics>{closureHistoryId ? <WhenDiagnostics><dd className="break-all font-mono text-xs text-muted">History receipt {closureHistoryId}</dd></WhenDiagnostics> : null}<Button className="mt-2" type="button" variant="secondary" onClick={() => setRevealSubject(closure)}>View closure evidence</Button></> : <dd>{closedAt ? `${subject} is terminal, but closure evidence metadata was unavailable.` : `${subject} is not closed.`}</dd>}</div>
       </dl>
     </section>
     {revealSubject ? <RevealDialog open onClose={() => setRevealSubject(null)} subjectId={revealSubject} /> : null}

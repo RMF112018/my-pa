@@ -80,12 +80,15 @@ export function DiagnosticsDetails({
  * the list is governed as a whole.
  *
  * WP08-RT-F010 added the second half of that: the list is now a
- * `SafeLimitations`, every entry of which has passed a positive prose-shape
- * check, and an entry that did not is replaced by a sentence saying a
- * limitation was withheld. `lib/diagnostics/safe-detail.ts` records why the
- * list is shape-checked rather than folded into the closed diagnostic
- * vocabulary — an answer's gaps are open by nature and a closed vocabulary
- * would destroy the truth-telling this block exists for. The *consequence* — that the answer is
+ * `SafeLimitations`, every entry of which has been checked against an
+ * allowlist of the values `application/disclosure.py`'s `Limitation` vocabulary
+ * can actually produce, and an entry that is not in the set is replaced by a
+ * sentence saying a limitation was withheld. `BACKEND_LIMITATIONS` in
+ * `lib/diagnostics/safe-detail.ts` records why the instrument is an allowlist
+ * rather than the prose-shape check that governed this first — the shape
+ * check's run-length rule withheld eight of the thirteen real tokens — and why
+ * the list keeps its own whole-list gate instead of being folded into the
+ * closed diagnostic vocabulary. The *consequence* — that the answer is
  * partial, or that the read did not happen — is stated separately and is not
  * gated, so a reader with diagnostics off still knows not to trust the answer
  * as complete.

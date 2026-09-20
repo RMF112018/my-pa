@@ -284,11 +284,36 @@ describe("a diagnostic is a closed record, and nothing else can become one", () 
     // here for the opposite reason — `DisclosureEnvelope.limitations` is the
     // contract's own `readonly string[]` and must stay one; what may not be a
     // string list is the *prop*, and the assertion below holds that.
+    //
+    // `receipt` is not in this alternation, and the test that follows says why:
+    // it is deliberately still a `string`, because what it carries is text this
+    // tier formatted itself, so its guarantee is a feed rule rather than a type.
     const WIDENED = /\b(?:diagnostic|unavailableDiagnostic)\??:\s*(?:readonly\s+)?string\b/;
     const offenders = PRODUCTION_FILES.filter(
       (file) => file.path !== VOCABULARY_OWNER && WIDENED.test(file.source),
     );
     expect(offenders.map((file) => file.path)).toEqual([]);
+  });
+
+  it("feeds the one remaining free-string receipt channel only from its own writers", () => {
+    // NB-03. WP08-RT-F010 renamed `StatusNote`'s diagnostic prop from
+    // `diagnostic` to `receipt`, which moved the tree's last free-string
+    // diagnostic-bearing prop outside the `WIDENED` rule above. Adding
+    // `receipt` to that alternation would fail immediately and for the wrong
+    // reason: the prop is *meant* to be a string, because what it carries is
+    // receipt text this tier formatted itself — a bulk-operation id and an ISO
+    // expiry — which no closed vocabulary can express. So the rule is stated
+    // over the feed instead: the channel exists in exactly one place, and
+    // everything that reaches it is either described from the closed
+    // vocabulary or built from this tier's own template. An upstream
+    // `message` never is.
+    const callsites = PRODUCTION_FILES.filter((file) => /\breceipt=\{/.test(file.source));
+    expect(callsites.map((file) => file.path)).toEqual(["components/work/workbench.tsx"]);
+    const workbench = callsites[0]!.source;
+    expect(workbench).toContain("describeSafeDiagnostic(safeDiagnostic(error))");
+    expect(workbench).not.toMatch(/setStatusReceipt\([^)]*\.message\b/);
+    expect(workbench).not.toMatch(/\breceipt\s*=\s*[^;\n]*\.message\b/);
+    expect(workbench).not.toMatch(/\breceipt=\{[^}]*\.message\b/);
   });
 
   it("keeps the rendering props declared as the safe types", () => {

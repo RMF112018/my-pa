@@ -23,10 +23,12 @@
  * reached the DOM verbatim. They now return values from
  * `lib/diagnostics/safe-detail.ts`: a `SafeDiagnostic` whose every field is a
  * closed union, a constrained integer or an allowlisted code, and a
- * `SafeLimitations` whose entries have each passed a positive prose-shape
- * check. Those types are branded, so the components below them accept nothing
- * else and a raw string at the prop is a compile error rather than something a
- * reviewer has to notice.
+ * `SafeLimitations` whose entries have each been checked against an allowlist
+ * of the backend's own `Limitation` vocabulary — see `BACKEND_LIMITATIONS` in
+ * `lib/diagnostics/safe-detail.ts` for why an allowlist replaced the
+ * prose-shape check that governed this first. Those types are branded, so the
+ * components below them accept nothing else and a raw string at the prop is a
+ * compile error rather than something a reviewer has to notice.
  *
  * **Three props carry engineering detail, not one.**
  *
@@ -41,9 +43,11 @@
  *   which rendered under "What is missing from this answer" on every failed
  *   read. Nothing about the string distinguishes a genuine limitation from a
  *   transport message, so the list is still governed as a whole — and each
- *   entry must now also *look* like a limitation, or it is replaced by a
- *   sentence saying one was withheld. `safe-detail.ts` records why they are not
- *   folded into the closed vocabulary instead.
+ *   entry must now also *be* one of the values the backend's own
+ *   `Limitation` vocabulary can produce, or it is replaced by a sentence saying
+ *   one was withheld. `safe-detail.ts` records why the instrument is an
+ *   allowlist rather than a shape check, and why limitations are not folded
+ *   into the closed diagnostic vocabulary instead.
  *
  * Everything that makes the state truthful survives: the title, the badge, the
  * `role`, the `data-state`, the product-language `detail`, the children

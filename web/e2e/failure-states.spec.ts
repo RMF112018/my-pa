@@ -107,6 +107,12 @@ for (const surface of SURFACES) {
       // the diagnostics-on test below requires — so this discriminates between
       // the two modes rather than naming a string neither mode renders.
       await expect(region).not.toContainText(/gateway_unreachable/i);
+      // And the upstream `ErrorEnvelope.message` itself. This is the pattern
+      // the raw gateway sentence carried before the closed vocabulary dropped
+      // it; it is kept alongside the code above because the two assert
+      // different things — the code says the diagnostics gate is closed, this
+      // says upstream free text has no route to the page in either mode.
+      await expect(region).not.toContainText(/did not answer/i);
     }
 
     const text = (await region.textContent()) ?? "";
@@ -154,6 +160,11 @@ test("no raw transport text reaches the browser while diagnostics are off", asyn
     expect(body, `${path} served a transport status while diagnostics were off`).not.toMatch(
       /HTTP 503/i,
     );
+    // And the raw upstream sentence, which is what actually shipped in these
+    // bytes before WP08-RT-F010 dropped `message` from the vocabulary. The two
+    // patterns above prove the gate is closed; this one proves there is no
+    // longer a free-text carrier for the gate to close over.
+    expect(body, `${path} served the upstream gateway message`).not.toMatch(/did not answer/i);
   }
 });
 

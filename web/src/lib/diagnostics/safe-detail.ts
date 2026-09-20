@@ -370,7 +370,12 @@ export function isSafeDiagnostic(value: unknown): value is SafeDiagnostic {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
   if (candidate.marker !== SAFE_MARKER) return false;
-  if (typeof candidate.kind !== "string" || !(candidate.kind in KIND_TEXT)) return false;
+  // `Object.hasOwn`, not `in`: `in` walks the prototype chain, so `kind:
+  // "constructor"` or `note: "toString"` would pass the membership test and
+  // then make `describeSafeDiagnostic` render a function's source text.
+  if (typeof candidate.kind !== "string" || !Object.hasOwn(KIND_TEXT, candidate.kind)) {
+    return false;
+  }
   if (candidate.errorClass !== null && safeErrorClass(candidate.errorClass as string) === null) {
     return false;
   }
@@ -384,13 +389,14 @@ export function isSafeDiagnostic(value: unknown): value is SafeDiagnostic {
   if (candidate.status !== null && safeStatus(candidate.status as number) === null) return false;
   if (
     candidate.reason !== null &&
-    !(typeof candidate.reason === "string" && candidate.reason in REASON_TEXT)
+    !(typeof candidate.reason === "string" && Object.hasOwn(REASON_TEXT, candidate.reason))
   ) {
     return false;
   }
   if (typeof candidate.correlated !== "boolean") return false;
   return (
-    candidate.note === null || (typeof candidate.note === "string" && candidate.note in NOTE_TEXT)
+    candidate.note === null ||
+    (typeof candidate.note === "string" && Object.hasOwn(NOTE_TEXT, candidate.note))
   );
 }
 
@@ -404,7 +410,24 @@ export function safeDiagnostic(input: FailureInput): SafeDiagnostic {
   // Idempotent: a value the owning page already governed is handed on by the
   // panels below it, and re-deriving it would read its own closed fields back
   // as if they were an upstream envelope.
-  if (isSafeDiagnostic(input)) return input;
+  //
+  // Rebuilt rather than returned verbatim. `isSafeDiagnostic` validates the
+  // eight known fields and says nothing about a ninth, so returning `input`
+  // would let an extra property ride into the prop and from there into the RSC
+  // payload — invisible in the DOM, visible in `view-source`. Rebuilding from
+  // the fields the predicate just validated makes the output a function of the
+  // vocabulary alone.
+  if (isSafeDiagnostic(input)) {
+    return build({
+      kind: input.kind,
+      errorClass: input.errorClass,
+      code: input.code,
+      status: input.status,
+      reason: input.reason,
+      correlated: input.correlated,
+      note: input.note,
+    });
+  }
   const fields = failureFields(input);
   const kind = classifyFailure(input);
   return build({

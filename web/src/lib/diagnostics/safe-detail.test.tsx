@@ -37,7 +37,12 @@ import {
   diagnosticLimitations,
   diagnosticText,
 } from "@/lib/diagnostics/presentation";
-import { BACKEND_LIMITATIONS } from "@/lib/diagnostics/safe-detail";
+import {
+  BACKEND_LIMITATIONS,
+  describeSafeDiagnostic,
+  isSafeDiagnostic,
+  safeDiagnostic,
+} from "@/lib/diagnostics/safe-detail";
 
 afterEach(() => {
   cleanup();
@@ -366,5 +371,68 @@ describe("what survives is still worth reading", () => {
     });
     render(<SurfaceState kind="unavailable" title="This could not be read" error={governed} />);
     expect(renderedBytes()).toContain("server log");
+  });
+});
+
+/**
+ * The two ways a record that *looks* governed could still carry something.
+ *
+ * NB-01. Neither is reachable from the gateway today — `decodeProblem` drops
+ * unknown keys and builds a fresh object — so these are hardening rather than
+ * live defects. They are worth holding because both failures are invisible in
+ * the DOM: the first lands in the RSC payload, the second turns the module's
+ * own writer into a renderer of a function's source text.
+ */
+describe("a record that is merely shaped like the vocabulary", () => {
+  beforeEach(() => {
+    diagnosticsEnabled = true;
+  });
+
+  it("loses an extra property rather than carrying it into the payload", () => {
+    // `isSafeDiagnostic` validates the eight known fields and says nothing
+    // about a ninth, so returning the input verbatim would hand a ninth key to
+    // the prop and from there into the Flight payload — invisible on the page,
+    // visible in `view-source`. The constructor rebuilds from the validated
+    // fields instead.
+    const smuggled = {
+      ...safeDiagnostic({ errorClass: "unavailable", code: "upstream_error", status: 503 }),
+      note_detail: SENTINELS.connection,
+    };
+    const governed = safeDiagnostic(smuggled);
+    expect(Object.hasOwn(governed, "note_detail")).toBe(false);
+    expectNoSentinel("the RSC payload", payloadBytes(governed));
+    // And what it should still say, it still says.
+    expect(describeSafeDiagnostic(governed)).toContain("code upstream_error");
+    expect(describeSafeDiagnostic(governed)).toContain("HTTP 503");
+    render(<SurfaceState kind="unavailable" title="This could not be read" error={governed} />);
+    expectNoSentinel("the DOM", renderedBytes());
+  });
+
+  it("rejects a field borrowed from Object.prototype", () => {
+    // `in` walks the prototype chain, so `kind: "constructor"` and `note:
+    // "toString"` passed the membership tests and then made
+    // `describeSafeDiagnostic` index a function off the record map.
+    const real = safeDiagnostic({ errorClass: "unavailable", code: "upstream_error" });
+    for (const forged of [
+      { ...real, kind: "constructor" },
+      { ...real, kind: "toString" },
+      { ...real, reason: "valueOf" },
+      { ...real, note: "toString" },
+      { ...real, note: "hasOwnProperty" },
+    ]) {
+      expect(isSafeDiagnostic(forged), JSON.stringify(forged)).toBe(false);
+    }
+  });
+
+  it("never renders a function's source text for one", () => {
+    const real = safeDiagnostic({ errorClass: "unavailable", code: "upstream_error" });
+    for (const forged of [{ ...real, kind: "constructor" }, { ...real, note: "toString" }]) {
+      cleanup();
+      const governed = safeDiagnostic(forged);
+      render(<SurfaceState kind="unavailable" title="This could not be read" error={governed} />);
+      const bytes = renderedBytes();
+      expect(bytes).not.toContain("native code");
+      expect(bytes).not.toContain("function");
+    }
   });
 });

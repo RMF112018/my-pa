@@ -13,7 +13,7 @@ import {
   diagnosticError,
   diagnosticLimitations,
 } from "@/lib/diagnostics/presentation";
-import type { SafeDiagnostic } from "@/lib/diagnostics/safe-detail";
+import { WEB_LIMITATIONS, type SafeDiagnostic } from "@/lib/diagnostics/safe-detail";
 
 function currentBadge(current: boolean) {
   return <Badge tone={current ? "green" : "gold"}>{current ? "Current" : "Historical"}</Badge>;
@@ -364,7 +364,7 @@ export function IdentityHistoryPanel({
       {truncated ? (
         <DegradedBanner
           scope="identity history"
-          limitations={diagnosticLimitations(diagnosticsEnabled, ["This page of the ledger is not the whole history."])}
+          limitations={diagnosticLimitations(diagnosticsEnabled, [WEB_LIMITATIONS.ledgerPageIsNotWholeHistory])}
           truncated
         />
       ) : null}

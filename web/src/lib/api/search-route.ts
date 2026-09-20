@@ -18,6 +18,7 @@ import type { GoodNotesSearchHit } from "@/lib/api/decode/capabilities/goodnotes
 import type { KnowledgeSearchMatch } from "@/lib/api/decode/capabilities/knowledge.search";
 import type { ReportSearchMatch } from "@/lib/api/decode/capabilities/reports.search";
 import type { TaskListEntry } from "@/lib/api/decode/capabilities/tasks.search";
+import { WEB_LIMITATIONS } from "@/lib/diagnostics/safe-detail";
 
 const SCOPE = "search";
 const PAGE_SIZE = 10;
@@ -241,7 +242,7 @@ export async function searchGet(request: NextRequest): Promise<NextResponse> {
     return noStore(
       notImplemented(
         SCOPE,
-        "The synthetic provider has no federated search fixture. Federated search requires the executable Python search capabilities.",
+        WEB_LIMITATIONS.syntheticNoSearch,
       ),
     );
   }

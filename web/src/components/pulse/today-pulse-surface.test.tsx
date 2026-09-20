@@ -297,16 +297,22 @@ describe("a first read that fails states the failure rather than a placeholder",
   }
 
   it("carries the route's own diagnostic into the unavailable region", async () => {
-    // The sentence names the gateway, so it is diagnostics under WP07 and is
-    // asserted in the mode that renders it. That it is the *gateway's own*
-    // sentence, reached through the envelope rather than written here, is still
-    // the point: a status code alone could not have produced it.
+    // The classification, the code and the status reach the region; the raw
+    // `message` does not, in either of the two channels it travels on. It is
+    // dropped from the diagnostic vocabulary outright, and the copy of it that
+    // `gatewayRefusal` puts in `disclosure.limitations` is not in the limitation
+    // allowlist, so it is replaced by the withheld notice rather than rendered.
+    // That is the same rule in both places: `message` has no schema and no
+    // upstream guarantee, so it is not something this tier prints.
     diagnostics.enabled = true;
     fetchSpy.mockImplementation(async () => refusedResponse());
     renderFresh();
     const region = await screen.findByTestId("today-unavailable");
     expect(region).toHaveAttribute("data-state", "unavailable");
-    expect(region.textContent).toContain("the application gateway did not answer");
+    expect(region.textContent).toContain("code gateway_unreachable");
+    expect(region.textContent).toContain("HTTP 503");
+    expect(region.textContent).not.toContain("the application gateway did not answer");
+    expect(region.textContent).toContain("did not match the safe-disclosure shape");
     expect(screen.queryByTestId("today-empty")).toBeNull();
     expect(screen.queryByText(TODAY_EMPTY_COPY)).toBeNull();
     // Nothing was ever confirmed, so there is no "last confirmed read" to claim.

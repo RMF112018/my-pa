@@ -53,34 +53,60 @@
  * was considered and rejected: it would admit the well-formed case, which is
  * exactly the case that identifies the principal.
  *
- * **Limitations are governed as a whole and stay out of the vocabulary.** The
- * backend's "what is missing from this answer" list is product truth — the
- * reason `SurfaceState` and `DegradedBanner` exist is to say what an answer did
- * not cover, and the set of things an answer can fail to cover is open by
- * nature. A closed vocabulary cannot express it without destroying it, so
- * folding limitations into `SafeDiagnostic` was rejected. They instead keep
- * their existing whole-list policy gate and gain a *positive shape* check:
- * a limitation must look like a short prose sentence, or it is withheld and
- * said to have been withheld. Distinguishing front-end literals (safe by
- * authorship) from backend free text was considered and rejected too — it would
- * rest the guarantee on a callsite's claim about itself rather than on the
- * value, and the front-end literals pass the shape check anyway, so the
- * distinction would buy nothing and cost a bypass.
+ * **Limitations are allowlisted, like `code`.** The backend's "what is missing
+ * from this answer" list is product truth, and it stays out of `SafeDiagnostic`
+ * for the reason it always did: it is a list, not a field, and it keeps its own
+ * whole-list policy gate. What changed is the instrument. It was governed by a
+ * prose-shape check, on the stated premise that "the set of things an answer
+ * can fail to cover is open by nature". That premise was false:
+ * `application/disclosure.py` publishes `class Limitation(StrEnum)`, a closed
+ * vocabulary of unbroken snake_case tokens rendered verbatim here, and the
+ * shape check's run-length rule withheld eight of its thirteen tokens because
+ * each token is one long "word". The field is now governed by an allowlist of
+ * the values that can actually reach it — see {@link BACKEND_LIMITATIONS} — which
+ * restores the disclosure and is genuinely closed, which the shape check never
+ * was. This is not the rejected "trust the callsite" design: it checks the
+ * value that arrived against a set of values, and asserts nothing about who
+ * sent it.
  */
 import type { ErrorEnvelope } from "@/contracts/envelope";
 import { ERROR_CODES } from "@/lib/api/decode/problem";
 
 /**
- * Real symbols, not `declare const` phantoms.
+ * Phantom brands: `declare const`, with no runtime footprint.
  *
- * A type-only brand is erased, so nothing at runtime could answer "has this
- * already been through a constructor?" — and `diagnosticError` would then
- * re-derive a value that was already safe. A symbol key is skipped by
- * `JSON.stringify` and by React's Flight serialiser, so it costs nothing in the
- * payload and buys idempotence and a runtime check.
+ * These were real `Symbol()` values until the RSC boundary disproved the premise
+ * they rested on. The claim was that React's Flight serialiser skips symbol keys
+ * the way `JSON.stringify` does. It does not: Flight *rejects* them, and every
+ * server-rendered surface that passed a branded record to a client component
+ * logged `Objects with symbol properties like SafeLimitations are not
+ * supported`. The brand has to be erased to cross that boundary.
+ *
+ * Erasing it costs nothing the type system was providing. A `declare const`
+ * phantom is still a `unique symbol` at compile time, so a plain `string` is
+ * still not assignable (`TS2322`) and a structural object literal is still
+ * missing a property it cannot name (`TS2741`) — the two edits the brand exists
+ * to make impossible. What is lost is the *runtime* answer to "has this been
+ * through a constructor?", which {@link isSafeDiagnostic} needs for idempotence.
+ * That is replaced by {@link SAFE_MARKER} plus full re-validation of every
+ * field, which is strictly stronger than the symbol test was: the symbol test
+ * asked only whether a key was present and trusted whatever was under it,
+ * whereas a value that survives the new guard is inside the closed vocabulary
+ * whatever minted it.
  */
-const SAFE_DIAGNOSTIC: unique symbol = Symbol("SafeDiagnostic");
-const SAFE_LIMITATIONS: unique symbol = Symbol("SafeLimitations");
+declare const SAFE_DIAGNOSTIC: unique symbol;
+declare const SAFE_LIMITATIONS: unique symbol;
+
+/**
+ * The plain, serialisable answer to "has this been through a constructor?".
+ *
+ * A string, so it crosses RSC. It is forgeable in a way a symbol was not, which
+ * is why {@link isSafeDiagnostic} does not stop at it: it re-checks every field
+ * against the same allowlists the constructors apply. A forged record therefore
+ * either fails the guard and is re-derived, or is already indistinguishable from
+ * one this module built — which is the guarantee, not a hole in it.
+ */
+const SAFE_MARKER = "safe_diagnostic";
 
 /** The eight `ErrorEnvelope` classes. A closed union in the contract already. */
 export type SafeErrorClass = ErrorEnvelope["errorClass"];
@@ -206,6 +232,8 @@ const NOTE_TEXT: Record<SafeDiagnosticNote, string> = {
  */
 export interface SafeDiagnostic {
   readonly [SAFE_DIAGNOSTIC]: true;
+  /** The runtime constructor mark. Plain, so it crosses the RSC boundary. */
+  readonly marker: typeof SAFE_MARKER;
   /** The classification, always present. One of nine. */
   readonly kind: SafeDiagnosticKind;
   /** One of the eight contract classes, or nothing. */
@@ -325,13 +353,45 @@ function safeReason(fields: FailureFields, kind: SafeDiagnosticKind): SafeDiagno
   return message ? "client_exception" : "unclassified";
 }
 
-function build(parts: Omit<SafeDiagnostic, typeof SAFE_DIAGNOSTIC>): SafeDiagnostic {
-  return { ...parts, [SAFE_DIAGNOSTIC]: true } as SafeDiagnostic;
+function build(parts: Omit<SafeDiagnostic, typeof SAFE_DIAGNOSTIC | "marker">): SafeDiagnostic {
+  return { ...parts, marker: SAFE_MARKER } as unknown as SafeDiagnostic;
 }
 
-/** Whether a value has already been through a constructor in this module. */
+/**
+ * Whether a value is already a member of the closed vocabulary.
+ *
+ * Not "does it carry the mark" but "is every field one this module would have
+ * produced". The mark is the cheap first test; the field checks are what make
+ * the predicate true rather than merely trusted, now that the mark is a string
+ * a payload could in principle carry. Anything that fails falls through to
+ * {@link safeDiagnostic}, which derives a safe record from it.
+ */
 export function isSafeDiagnostic(value: unknown): value is SafeDiagnostic {
-  return typeof value === "object" && value !== null && SAFE_DIAGNOSTIC in value;
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.marker !== SAFE_MARKER) return false;
+  if (typeof candidate.kind !== "string" || !(candidate.kind in KIND_TEXT)) return false;
+  if (candidate.errorClass !== null && safeErrorClass(candidate.errorClass as string) === null) {
+    return false;
+  }
+  if (
+    candidate.code !== null &&
+    candidate.code !== UNRECOGNISED_CODE &&
+    !(typeof candidate.code === "string" && CODE_ALLOWLIST.has(candidate.code))
+  ) {
+    return false;
+  }
+  if (candidate.status !== null && safeStatus(candidate.status as number) === null) return false;
+  if (
+    candidate.reason !== null &&
+    !(typeof candidate.reason === "string" && candidate.reason in REASON_TEXT)
+  ) {
+    return false;
+  }
+  if (typeof candidate.correlated !== "boolean") return false;
+  return (
+    candidate.note === null || (typeof candidate.note === "string" && candidate.note in NOTE_TEXT)
+  );
 }
 
 /**
@@ -415,10 +475,11 @@ export function describeSafeDiagnostic(diagnostic: SafeDiagnostic): string {
 }
 
 /**
- * The backend's own "what is missing" list, after the shape check.
+ * The backend's own "what is missing" list, after the allowlist.
  *
  * Branded for the same reason `SafeDiagnostic` is: a bare `readonly string[]`
- * at the prop must not compile.
+ * at the prop must not compile. The brand is a phantom, so the record that
+ * crosses the RSC boundary is `{ items }` and nothing else.
  */
 export interface SafeLimitations {
   readonly [SAFE_LIMITATIONS]: true;
@@ -426,48 +487,179 @@ export interface SafeLimitations {
 }
 
 /**
- * What a limitation is allowed to look like.
+ * Which limitations may render, by allowlist — the same instrument as `code`.
  *
- * A positive shape, not a deny-list: short, single-line, ordinary prose
- * punctuation, and no space-delimited run longer than `LONGEST_WORD`. A
- * connection string fails on `@` and `//`; a stack trace fails on the newline
- * and on `<`.
+ * **What was here before, and why it was wrong.** This field was governed by a
+ * prose-shape check: an ordinary-punctuation character class, a 280-character
+ * ceiling, and no space-delimited run longer than 32. That rule was designed on
+ * the premise that a backend limitation is free prose, and the premise is
+ * false. `application/disclosure.py` defines `class Limitation(StrEnum)` — a
+ * closed vocabulary of unbroken snake_case tokens rendered verbatim by this
+ * tier, with no token-to-prose translation anywhere in between. Each token is
+ * therefore one "word", and the run-length rule withheld every token longer
+ * than 32 characters: eight of the thirteen, including
+ * `corpus_totals_are_sums_of_per_enrollment_statements` (51) and
+ * `evidence_spans_carry_offsets_and_digests_only` (45). With diagnostics on,
+ * "what is missing from this answer" said a limitation had been withheld
+ * instead of saying what was missing — a product-truth regression, on the
+ * majority of the vocabulary.
  *
- * **What the run-length rule does and does not catch, stated exactly.** It
- * admits any space-delimited run of `LONGEST_WORD` characters or fewer, so it
- * withholds a long bearer token or base64 key body but it *admits* a
- * 32-character hex session id, a 32-character base64url token, and every
- * shorter credential-shaped run — `AKIAIOSFODNN7EXAMPLE` (20),
- * `sk_live_4eC39HqLyjWDarjt` (24), `/var/lib/mypa/secrets/app.key` (29),
- * `db-prod-01.internal.example.com` (31). It is a crude bound on run length,
- * not a secret detector, and the surrounding design does not rely on it being
- * one: `message` — the field with no schema, where a raw exception or a
- * connection string actually arrives — is dropped entirely, and this list is
- * additionally gated behind the global diagnostics preference.
+ * **Why an allowlist is the better instrument, not merely a wider one.** The
+ * shape check was never closed: it was a statement about punctuation, so its
+ * admitted set was unbounded and every value in it was a value nobody had
+ * reviewed. It also could not be tuned out of its own problem — lowering the
+ * run-length bound withheld more real tokens, and raising it admitted longer
+ * unreviewed runs. An allowlist is closed by construction, so it removes the
+ * regression and closes the residual-leak question at once: a 32-character hex
+ * session id, `AKIAIOSFODNN7EXAMPLE`, `sk_live_4eC39HqLyjWDarjt`,
+ * `db-prod-01.internal.example.com` and `/var/lib/mypa/secrets/app.key` are not
+ * withheld because of a threshold, they are withheld because they are not in
+ * the set. No threshold is left to tune.
  *
- * **Why the bound is not tightened.** `LONGEST_WORD` cannot be lowered without
- * withholding real product truth, because the backend's limitations are not
- * prose: `application/disclosure.py`'s `Limitation` is a closed vocabulary of
- * unbroken snake_case tokens, and eight of them are already longer than 32
- * characters (`corpus_totals_are_sums_of_per_enrollment_statements` is 51), as
- * is every `AggregateLimitation.disclosure` value. A run-length rule is
- * therefore the wrong instrument for this field and is already withholding
- * legitimate limitations at this threshold; lowering it would withhold nearly
- * all of them. Recorded for the owning work package rather than papered over
- * here — narrowing it is a change to what the product discloses, not a
- * threshold tweak. `LOCAL_OPERATOR_LIMITATION` (longest run 14) and every
- * front-end literal in the tree pass.
+ * **Why this is not the callsite-trust bypass that was rejected.** The earlier
+ * design rejected "distinguish front-end literals from backend free text",
+ * because that rests the guarantee on a callsite's claim about itself. This
+ * does not: it is a set of *values*, checked against the value that arrived. A
+ * callsite gains nothing by asserting anything.
+ *
+ * The three admitted families:
+ *
+ * 1. {@link BACKEND_LIMITATIONS} — the Python `Limitation` StrEnum, verbatim.
+ * 2. {@link AGGREGATE_LIMITATION_REASONS} joined to an integer count, the shape
+ *    `AggregateLimitation.disclosure` builds in
+ *    `domain/extraction/coverage.py`. An allowlisted reason, one colon, digits.
+ * 3. {@link WEB_LIMITATIONS} plus the two closed token vocabularies this tier
+ *    decodes for itself — sentences and tokens authored *in this repository*,
+ *    defined here so that the allowlist is their definition site and cannot
+ *    drift from their callsites.
+ *
+ * Drift against the Python enum is the one risk an allowlist carries that a
+ * shape check did not: a token added upstream and not added here is withheld.
+ * `limitation-allowlist.test.ts` parses `application/disclosure.py` and
+ * `domain/extraction/coverage.py` and fails the suite on any divergence, so the
+ * risk is a red test rather than a silently degraded disclosure.
  */
-const LIMITATION_SHAPE = /^[A-Za-z0-9 ,.'’:;()/_-]{1,280}$/;
-const LONGEST_WORD = 32;
+export const BACKEND_LIMITATIONS = [
+  "listing_has_no_continuation_cursor",
+  "text_truncated_to_requested_maximum",
+  "content_truncated_at_fetch_limit",
+  "no_extracted_text_in_scope",
+  "scope_not_fully_extracted",
+  "result_label_is_media_type_only",
+  "capture_search_matches_words_as_written",
+  "capture_search_covers_current_versions_only",
+  "evidence_spans_carry_offsets_and_digests_only",
+  "corpus_totals_are_sums_of_per_enrollment_statements",
+  "corpus_covers_only_sources_this_principal_enrolled",
+  "search_does_not_span_this_principals_corpus",
+  "evidence_scope_was_not_searched",
+] as const;
 
-/** What a limitation becomes when it does not look like one. */
+/** `LimitationReason` in `domain/extraction/coverage.py`. */
+export const AGGREGATE_LIMITATION_REASONS = ["objects_omitted_containment_unproven"] as const;
+
+/**
+ * The closed token vocabularies this tier decodes for itself.
+ *
+ * `CONTEXT_CARD_LIMITATIONS` and `PROFILE_LIMITATIONS` in
+ * `lib/api/decode/capabilities/_entity-read-helpers.ts` are already closed —
+ * `decodeClosedStringArray` refuses anything outside them — and the People
+ * surfaces render them through this gate. Repeated here rather than imported so
+ * that a client component does not pull the entity decoder into its bundle;
+ * `limitation-allowlist.test.ts` pins the two lists against each other.
+ */
+const WEB_DECODED_LIMITATIONS = [
+  "more_aliases_than_this_card_carries",
+  "more_identifiers_than_this_card_carries",
+  "more_assignments_than_this_card_carries",
+  "more_relationships_than_this_card_carries",
+  "more_observations_than_this_card_carries",
+  "no_source_has_been_observed",
+  "coverage_counted_a_bounded_sample",
+  "more_memories_than_this_card_carries",
+  "memories_were_withheld_by_classification",
+  "no_memory_has_been_recorded",
+  "the_memory_plane_is_unavailable",
+  "more_names_than_this_profile_carries",
+  "more_addresses_than_this_profile_carries",
+  "more_communication_methods_than_this_profile_carries",
+  "more_participations_as_project_than_this_profile_carries",
+  "more_participations_as_participant_than_this_profile_carries",
+  "more_affiliations_as_person_than_this_profile_carries",
+  "more_affiliations_as_organization_than_this_profile_carries",
+] as const;
+
+/**
+ * Limitation sentences this tier authored, defined where they are allowlisted.
+ *
+ * Every one of these was previously written out at its callsite and admitted by
+ * the shape check. They are defined here instead, and the callsites import
+ * them, so the allowlist cannot fall out of step with the strings that reach
+ * it — the failure mode the shape check made invisible and an allowlist would
+ * otherwise make loud.
+ *
+ * `LOCAL_OPERATOR_LIMITATION` is re-exported by `lib/api/gateway.ts` under its
+ * established name; it is defined here because `gateway.ts` is server-only and
+ * this module is not, so the dependency can only run in this direction.
+ */
+export const WEB_LIMITATIONS = {
+  /** `lib/api/gateway.ts` — the local_operator mode disclosure. */
+  localOperator:
+    "The gateway runs in local_operator mode: results belong to the deployment's single " +
+    "local-operator principal and are not partitioned by browser session.",
+  /** `components/people/related-records.tsx` — a truncated identity ledger page. */
+  ledgerPageIsNotWholeHistory: "This page of the ledger is not the whole history.",
+  /** `app/(app)/people/[entityId]` — the three companion reads that can fail alone. */
+  assignmentsUnreadable: "Assignments could not be read.",
+  relationshipsUnreadable: "Relationships could not be read.",
+  identityHistoryUnreadable: "Identity history could not be read.",
+  /** `lib/fixtures/*` — the synthetic provider labelling itself. */
+  syntheticFixtureData: "Synthetic fixture data. No live sources are connected.",
+  /** The synthetic provider's "this build has no capability here" reasons. */
+  syntheticNoCanvasArrange: "Map arrange is not available on the synthetic provider.",
+  syntheticNoRelationshipEditing:
+    "Relationship editing is not available on the synthetic provider.",
+  syntheticNoLibrary:
+    "The synthetic provider has no Library fixture. Library reads the Python knowledge " +
+    "and capture planes; run against the gateway to see it.",
+  syntheticNoGoodnotes:
+    "The synthetic provider has no GoodNotes fixture. GoodNotes reads the Python GoodNotes " +
+    "plane; run against the gateway to see it.",
+  syntheticNoReport:
+    "The synthetic provider has no report fixture. Report reads require the executable Python Intelligence plane.",
+  syntheticNoSearch:
+    "The synthetic provider has no federated search fixture. Federated search requires the executable Python search capabilities.",
+  syntheticNoPeople:
+    "People reads the Python entity plane; synthetic fixtures are not canonical entity state.",
+  syntheticNoWork:
+    "Work mutations and reads require the executable Python Work plane; synthetic fixtures are not canonical Task or Commitment state.",
+} as const;
+
+const LIMITATION_ALLOWLIST: ReadonlySet<string> = new Set<string>([
+  ...BACKEND_LIMITATIONS,
+  ...WEB_DECODED_LIMITATIONS,
+  ...Object.values(WEB_LIMITATIONS),
+]);
+
+/**
+ * The one parameterised family: an allowlisted reason, a colon, a count.
+ *
+ * Built from the reason list rather than written as a free pattern, so adding a
+ * reason is the same reviewable act as adding a token. `\d+` and nothing else
+ * after the colon: the count is an integer in the backend dataclass, and a
+ * looser tail would make this the free-text channel the rest of the module
+ * exists to close.
+ */
+const AGGREGATE_LIMITATION = new RegExp(
+  `^(?:${AGGREGATE_LIMITATION_REASONS.join("|")}):\\d+$`,
+);
+
+/** What a limitation becomes when it is not one this build recognises. */
 export const WITHHELD_LIMITATION =
   "A limitation was withheld because its text did not match the safe-disclosure shape.";
 
 function limitationIsSafe(limitation: string): boolean {
-  if (!LIMITATION_SHAPE.test(limitation)) return false;
-  return !limitation.split(" ").some((word) => word.length > LONGEST_WORD);
+  return LIMITATION_ALLOWLIST.has(limitation) || AGGREGATE_LIMITATION.test(limitation);
 }
 
 /**
@@ -481,7 +673,7 @@ export function safeLimitations(limitations: readonly string[] | undefined): Saf
   const items = (limitations ?? []).map((limitation) =>
     limitationIsSafe(limitation) ? limitation : WITHHELD_LIMITATION,
   );
-  return { items, [SAFE_LIMITATIONS]: true } as SafeLimitations;
+  return { items } as unknown as SafeLimitations;
 }
 
 /** The empty list, for the gate's off branch and for callers with nothing. */

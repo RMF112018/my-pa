@@ -3,6 +3,7 @@ import { backendDisclosure, invokeGateway, transportLimitations, type GatewayCap
 import { requirePrincipal } from "@/lib/api/guard";
 import { gatewayRefusal, notImplemented, resolveServing } from "@/lib/api/serving";
 import type { PrincipalSession } from "@/contracts/identity";
+import { WEB_LIMITATIONS } from "@/lib/diagnostics/safe-detail";
 
 export type PeopleField = {
   readonly gateway: string;
@@ -102,7 +103,7 @@ async function dispatch(
   if (serving.kind === "synthetic") {
     return notImplemented(
       scope,
-      "People reads the Python entity plane; synthetic fixtures are not canonical entity state.",
+      WEB_LIMITATIONS.syntheticNoPeople,
     );
   }
   const outcome = await invokeGateway(principal, capability, payload);

@@ -174,7 +174,7 @@ export const ShellStates: Story = {
         kind="degraded"
         title="Knowledge is partial"
         detail="The backend disclosed incomplete coverage."
-        limitations={safeLimitations(["One synthetic source is unavailable"])}
+        limitations={safeLimitations(["no_extracted_text_in_scope"])}
       />
       <SurfaceState
         kind="unavailable"

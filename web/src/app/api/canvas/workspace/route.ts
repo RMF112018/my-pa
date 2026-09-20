@@ -11,6 +11,7 @@ import { admitBrowserMutation } from "@/lib/http/mutation-admission";
 import { invokeGateway } from "@/lib/api/gateway";
 import { gatewayRefusal, notImplemented, resolveServing } from "@/lib/api/serving";
 import { isFiniteInteger, isRecord } from "@/lib/api/decode/primitives";
+import { WEB_LIMITATIONS } from "@/lib/diagnostics/safe-detail";
 
 const SCOPE = "canvas.workspace";
 
@@ -70,7 +71,7 @@ export async function POST(request: NextRequest) {
   const serving = resolveServing();
   if (serving.kind === "refused") return serving.response;
   if (serving.kind === "synthetic") {
-    return notImplemented(SCOPE, "Map arrange is not available on the synthetic provider.");
+    return notImplemented(SCOPE, WEB_LIMITATIONS.syntheticNoCanvasArrange);
   }
 
   const payload: Record<string, unknown> = {

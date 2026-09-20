@@ -173,11 +173,11 @@ describe("the four non-record answers are four different answers", () => {
       <SurfaceState
         kind="degraded"
         title="Partial"
-        limitations={safeLimitations(["capture search does not stem words"])}
+        limitations={safeLimitations(["capture_search_matches_words_as_written"])}
       />,
     );
     expect(screen.queryByTestId("surface-state-limitations")).toBeNull();
-    expect(document.body.textContent ?? "").not.toMatch(/does not stem words/);
+    expect(document.body.textContent ?? "").not.toMatch(/matches_words_as_written/);
     // The state itself, and what it means, are unchanged.
     expect(screen.getByTestId("state-degraded")).toHaveAttribute("data-state", "degraded");
     expect(screen.getByTestId("surface-state-clarification").textContent).toMatch(
@@ -191,12 +191,12 @@ describe("the four non-record answers are four different answers", () => {
       <SurfaceState
         kind="degraded"
         title="Partial"
-        limitations={safeLimitations(["capture search does not stem words", "the listing has no continuation"])}
+        limitations={safeLimitations(["capture_search_matches_words_as_written", "listing_has_no_continuation_cursor"])}
       />,
     );
     const list = screen.getByTestId("surface-state-limitations");
-    expect(list.textContent).toContain("does not stem words");
-    expect(list.textContent).toContain("no continuation");
+    expect(list.textContent).toContain("capture_search_matches_words_as_written");
+    expect(list.textContent).toContain("listing_has_no_continuation_cursor");
   });
 
   it("never uses empty-kind vocabulary for a failed read", () => {
@@ -224,18 +224,18 @@ describe("the four non-record answers are four different answers", () => {
 
 describe("the degraded banner sits above real records", () => {
   it("says the rows are real and not all of them", () => {
-    render(<DegradedBanner scope="this listing" limitations={safeLimitations(["one scope was skipped"])} />);
+    render(<DegradedBanner scope="this listing" limitations={safeLimitations(["scope_not_fully_extracted"])} />);
     const banner = screen.getByTestId("degraded-banner");
     expect(banner).toHaveAttribute("data-state", "degraded");
     // The consequence is product truth and is stated in both modes.
     expect(banner.textContent).toMatch(/records below are real/i);
     expect(banner.textContent).toMatch(/not all of them/i);
     // The backend's own strings are not, and are absent by default.
-    expect(banner.textContent).not.toContain("one scope was skipped");
+    expect(banner.textContent).not.toContain("scope_not_fully_extracted");
     diagnosticsEnabled = true;
     cleanup();
-    render(<DegradedBanner scope="this listing" limitations={safeLimitations(["one scope was skipped"])} />);
-    expect(screen.getByTestId("degraded-banner").textContent).toContain("one scope was skipped");
+    render(<DegradedBanner scope="this listing" limitations={safeLimitations(["scope_not_fully_extracted"])} />);
+    expect(screen.getByTestId("degraded-banner").textContent).toContain("scope_not_fully_extracted");
     expect(within(banner).getByTestId("surface-state-details")).toHaveTextContent(
       /this page guessing it/i,
     );

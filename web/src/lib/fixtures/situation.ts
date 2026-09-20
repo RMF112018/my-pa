@@ -28,6 +28,7 @@ import type {
 } from "@/contracts/views";
 import type { DisclosureEnvelope } from "@/contracts/envelope";
 import { requireSyntheticProvider } from "@/lib/fixtures/gate";
+import { WEB_LIMITATIONS } from "@/lib/diagnostics/safe-detail";
 
 function disclosure(scope: string): DisclosureEnvelope {
   requireSyntheticProvider();
@@ -36,7 +37,7 @@ function disclosure(scope: string): DisclosureEnvelope {
     coverage: "synthetic",
     freshnessAt: null,
     authority: "synthetic_fixture",
-    limitations: ["Synthetic fixture data. No live sources are connected."],
+    limitations: [WEB_LIMITATIONS.syntheticFixtureData],
     truncated: false,
   };
 }

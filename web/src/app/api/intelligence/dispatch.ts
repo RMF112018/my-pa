@@ -11,6 +11,7 @@ import {
 } from "@/lib/api/gateway";
 import { requirePrincipal } from "@/lib/api/guard";
 import { gatewayRefusal, notImplemented, resolveServing } from "@/lib/api/serving";
+import { WEB_LIMITATIONS } from "@/lib/diagnostics/safe-detail";
 
 export const INTELLIGENCE_SCOPE = "intelligence";
 
@@ -103,7 +104,7 @@ export async function intelligenceGet(
   if (serving.kind === "synthetic") {
     return notImplemented(
       INTELLIGENCE_SCOPE,
-      "The synthetic provider has no report fixture. Report reads require the executable Python Intelligence plane.",
+      WEB_LIMITATIONS.syntheticNoReport,
     );
   }
 

@@ -32,6 +32,7 @@ import {
   diagnosticText,
 } from "@/lib/diagnostics/presentation";
 import { serverDiagnosticsEnabled } from "@/lib/diagnostics/server";
+import { WEB_LIMITATIONS } from "@/lib/diagnostics/safe-detail";
 import type { ErrorEnvelope } from "@/contracts/envelope";
 
 const SCOPE = "people";
@@ -214,9 +215,9 @@ export async function PeopleEntityPage({
         <DegradedBanner
           scope="this person"
           limitations={diagnosticLimitations(diagnosticsEnabled, [
-            assignmentAnswer.kind === "unavailable" ? "Assignments could not be read." : "",
-            relationshipAnswer.kind === "unavailable" ? "Relationships could not be read." : "",
-            historyAnswer.kind === "unavailable" ? "Identity history could not be read." : "",
+            assignmentAnswer.kind === "unavailable" ? WEB_LIMITATIONS.assignmentsUnreadable : "",
+            relationshipAnswer.kind === "unavailable" ? WEB_LIMITATIONS.relationshipsUnreadable : "",
+            historyAnswer.kind === "unavailable" ? WEB_LIMITATIONS.identityHistoryUnreadable : "",
           ].filter(Boolean))}
         />
       ) : null}

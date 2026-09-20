@@ -41,14 +41,18 @@ const BLURB = "Evidence-grounded reports and briefs.";
 const SYNTHETIC_DETAIL =
   "The synthetic provider has no report fixture. Report reads are not available in this build.";
 
+/**
+ * WP07-DIAG-011 / R031. Specialist readiness is classified diagnostic, and
+ * `reports.resolve_set` is read for nothing else on this page — its answer
+ * reaches `ReadinessPanel` and no other consumer. AC-48 therefore requires the
+ * gate to sit *before* the invocation: the caller must not reach this function
+ * at all while diagnostics are off, which is why the decision is made there and
+ * not here.
+ */
 async function loadReadiness(
   principal: PrincipalSession,
   cycleRunId: string,
 ): Promise<ReadinessAnswer> {
-  // WP07: resolved once per request (memoised) so the diagnostic-bearing
-  // props below are never built, and therefore never serialized into the
-  // RSC payload, while diagnostics are off.
-  const diagnosticsEnabled = await serverDiagnosticsEnabled();
   return readinessAnswerFromOutcome(
     `${SCOPE}:reports.resolve_set`,
     await invokeGateway(principal, "reports.resolve_set", resolveSetPayload(cycleRunId)),
@@ -129,8 +133,16 @@ export default async function IntelligencePage() {
 
   const items = answer.result.items;
   const cycleRunId = currentCycleRunId(items);
+  // The readiness panel is diagnostic in full, so while diagnostics are off the
+  // diagnostic-only read is skipped and no readiness surface is rendered — no
+  // placeholder, no empty wrapper, no reserved spacing. Silence does not
+  // mislead here: nothing on this page claims the report set is complete, and
+  // `ReportListing` below still renders every report that exists regardless of
+  // specialist coverage.
   const readiness =
-    cycleRunId === null ? null : await loadReadiness(principal, cycleRunId);
+    diagnosticsEnabled && cycleRunId !== null
+      ? await loadReadiness(principal, cycleRunId)
+      : null;
   const listing = <ReportListing items={items} currentCycle={cycleRunId} diagnosticsEnabled={diagnosticsEnabled} />;
 
   const body = (

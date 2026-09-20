@@ -117,6 +117,7 @@ import SituationsPage from "@/app/(app)/situations/page";
 import { TaskRuntimeProvider } from "@/components/work/task-runtime-provider";
 import { TODAY_EMPTY_COPY } from "@/components/pulse/today-pulse-surface";
 import SystemPage from "@/app/(app)/system/page";
+import IntelligencePage from "@/app/(app)/intelligence/page";
 import {
   diagnosticsPreferenceValue,
   diagnosticsPrincipalBinding,
@@ -1478,5 +1479,210 @@ describe("root System while diagnostics are off", () => {
     // No empty card or reserved wrapper left standing where content used to be.
     expect(document.querySelectorAll("dl")).toHaveLength(0);
     expect(screen.queryAllByRole("alert")).toHaveLength(0);
+  });
+});
+
+
+/**
+ * WP07-DIAG-011 / R031 / AC-48 — Intelligence readiness is diagnostic in full.
+ *
+ * `ReadinessPanel` is classified `diagnostic`, and `reports.resolve_set` is
+ * read at this callsite for nothing else: its answer reaches the panel and no
+ * other consumer. `ReportListing` is driven by `reports.list`. So while
+ * diagnostics are off the resolve-set read is diagnostic-only and separable,
+ * and AC-48 requires it not to happen at all — gating the panel's props while
+ * the owner still makes the call is rendering-then-hiding at the transport
+ * layer, and no DOM assertion can see it.
+ *
+ * The two halves are therefore asserted together: no readiness surface in the
+ * DOM, **and** `reports.resolve_set` never requested. The ON half is asserted
+ * in the same file so a regression that silently disables the panel in both
+ * modes cannot pass either.
+ */
+describe("Intelligence readiness is diagnostic, and OFF never reaches for it", () => {
+  const REPORTS_LIST = {
+    items: [
+      {
+        report_id: "rpt_bbbbbbbb22222222",
+        cycle_run_id: "micr_bbbbbbbb22222222",
+        stage: "collector",
+        artifact_kind: "collector_candidates",
+        focus_area_id: "communications",
+        source_lane: null,
+        title: "Synthetic morning brief collector",
+        content_sha256: "b".repeat(64),
+        artifact_state: "final",
+      },
+    ],
+    next_cursor: null,
+  };
+
+  const RESOLVE_SET = {
+    cycle_run_id: "micr_bbbbbbbb22222222",
+    cycle_id: "morning_intelligence",
+    business_date: "2026-08-20",
+    set_id: "morning_brief_inputs",
+    aggregate: "BLOCKED",
+    members: [
+      {
+        member_id: "communications",
+        focus_area_id: "communications",
+        source_lane: null,
+        readiness: "STALE",
+        required: true,
+        artifact_id: "rpt_bbbbbbbb22222222",
+        producer_run_id: "prun_bbbbbbbb22222222",
+        content_sha256: "b".repeat(64),
+        committed_at: "2026-08-20T12:00:00Z",
+        readiness_reason: "superseded by a later commit",
+      },
+      {
+        member_id: "people",
+        focus_area_id: "people",
+        source_lane: null,
+        readiness: "MISSING",
+        required: true,
+        artifact_id: null,
+        producer_run_id: null,
+        content_sha256: null,
+        committed_at: null,
+        readiness_reason: "missing",
+      },
+    ],
+  };
+
+  /** Records the capability of every gateway call the page actually makes. */
+  function answerIntelligence(): string[] {
+    const called: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown) => {
+        const capability = String(url).match(/\/v1\/([^/?#]+)/)?.[1] ?? "";
+        called.push(capability);
+        const result =
+          capability === "reports.list"
+            ? REPORTS_LIST
+            : capability === "reports.resolve_set"
+              ? RESOLVE_SET
+              : {};
+        return new Response(JSON.stringify({ result, disclosure: whole() }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    );
+    return called;
+  }
+
+  /** Every hook the ON panel renders. None may survive OFF. */
+  const READINESS_TEST_IDS = [
+    "intelligence-readiness",
+    "intelligence-readiness-unavailable",
+    "intelligence-readiness-aggregate",
+    "intelligence-readiness-not-health",
+    "intelligence-readiness-partial",
+    "intelligence-readiness-ready",
+    "intelligence-business-date",
+    "intelligence-cycle-run-id",
+    "intelligence-freshness",
+    "intelligence-readiness-members",
+    "intelligence-readiness-members-none",
+    "intelligence-readiness-member",
+    "intelligence-readiness-member-state",
+  ];
+
+  describe("off", () => {
+    beforeEach(() => {
+      diagnosticsCookie.value = undefined;
+      diagnostics.enabled = false;
+    });
+
+    it("renders no readiness surface and never calls reports.resolve_set", async () => {
+      const called = answerIntelligence();
+
+      await renderServerPage(() => IntelligencePage());
+
+      // The reports themselves are product content and still arrive.
+      expect(screen.getByTestId("intelligence-listing")).toBeTruthy();
+      expect(called).toContain("reports.list");
+
+      // The diagnostic-only read did not happen. This is the assertion that
+      // distinguishes gating before invocation from gating the props.
+      expect(called).not.toContain("reports.resolve_set");
+
+      for (const testId of READINESS_TEST_IDS) {
+        expect(screen.queryByTestId(testId)).toBeNull();
+      }
+    });
+
+    it("leaves no readiness placeholder, wrapper or residue behind", async () => {
+      answerIntelligence();
+      await renderServerPage(() => IntelligencePage());
+      const text = document.body.textContent ?? "";
+
+      // No "readiness hidden" note and none of the panel's vocabulary.
+      expect(text).not.toMatch(/hidden|turn on diagnostics to|readiness/i);
+      expect(text).not.toMatch(/morning intelligence readiness/i);
+      expect(text).not.toMatch(/coverage is partial/i);
+      expect(text).not.toMatch(/freshness/i);
+
+      // Class-4 residue: the backend enums, the set id, and the member ids.
+      for (const raw of ["READY", "PARTIAL", "STALE", "SUPERSEDED", "BLOCKED"]) {
+        expect(text).not.toContain(raw);
+      }
+      expect(text).not.toContain("morning_brief_inputs");
+      expect(text).not.toContain("committed_at");
+      expect(text).not.toContain("2026-08-20T12:00:00Z");
+      expect(document.querySelector("[data-member-id]")).toBeNull();
+      expect(document.querySelector("[data-readiness]")).toBeNull();
+
+      // No empty card or reserved spacing standing where the panel used to be.
+      // The report card's own Stage/Kind/State list is product content and
+      // stays, so the check is that no term list on the page is the readiness
+      // panel's rather than that no term list exists at all.
+      const terms = [...document.querySelectorAll("dt")].map((el) => el.textContent);
+      expect(terms).toEqual(["Stage", "Kind", "State"]);
+      expect(screen.queryByTestId("intelligence-readiness")).toBeNull();
+
+      // The sentence that carries the operational truth is unchanged, so
+      // silence about specialist coverage cannot be read as a completeness
+      // claim: every report that exists is still listed.
+      expect(text).toMatch(/Missing specialists do not hide available reports/i);
+    });
+  });
+
+  describe("on", () => {
+    beforeEach(async () => {
+      diagnosticsCookie.value = diagnosticsPreferenceValue(
+        true,
+        await diagnosticsPrincipalBinding(PRINCIPAL.principalId),
+      );
+      diagnostics.enabled = true;
+    });
+
+    afterEach(() => {
+      diagnosticsCookie.value = undefined;
+      diagnostics.enabled = false;
+    });
+
+    it("calls reports.resolve_set and renders the panel unchanged", async () => {
+      const called = answerIntelligence();
+
+      await renderServerPage(() => IntelligencePage());
+
+      expect(called).toContain("reports.resolve_set");
+      expect(screen.getByTestId("intelligence-readiness")).toBeTruthy();
+      expect(screen.getByTestId("intelligence-readiness-aggregate").textContent).toBe("BLOCKED");
+      expect(screen.getByTestId("intelligence-readiness-not-health").textContent).toMatch(
+        /not a claim that the system is healthy/i,
+      );
+      // Members stay listed when the aggregate is not READY, and are not
+      // flattened to the aggregate.
+      const states = screen
+        .getAllByTestId("intelligence-readiness-member-state")
+        .map((el) => el.textContent);
+      expect(states).toEqual(["STALE", "MISSING"]);
+      expect(screen.getByTestId("intelligence-listing")).toBeTruthy();
+    });
   });
 });

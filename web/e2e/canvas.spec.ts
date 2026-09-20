@@ -120,14 +120,18 @@ test("unseeded /canvas is instructional seed-required, not empty-success and not
   await expect(page.getByTestId("canvas-empty")).toHaveCount(0);
 });
 
-test("invalid asOf fail-closes without treating it as an empty graph", async ({ page }) => {
+test("invalid asOf fail-closes without treating it as an empty graph, and names no internal field while diagnostics are off", async ({ page }) => {
   await page.goto(`/canvas?focusEntityId=${UNKNOWN_FOCUS}&asOf=yesterday`);
   await expect(page.getByRole("heading", { name: "Map", level: 1 })).toBeVisible();
   await expectState(page, "canvas-unavailable", "unavailable");
   await expect(page.getByText("That map query was not valid")).toBeVisible();
+  // WP07: the refusal and the recovery are product truth in both modes. `asOf`
+  // and "RFC 3339" are this application's own query-parameter and wire-format
+  // names, so their absence here is the claim rather than an omission.
   await expect(page.getByTestId("surface-state-detail")).toHaveText(
-    "asOf must be an RFC 3339 timestamp with an explicit timezone.",
+    "Some of the values in this link are not in a form the map accepts. Open the map without them to start again.",
   );
+  await expect(page.getByTestId("surface-state-detail")).not.toContainText(/asOf|RFC 3339/);
   await expect(page.getByTestId("canvas-seed-required")).toHaveCount(0);
   await expect(page.getByTestId("canvas-not-found")).toHaveCount(0);
   await expect(page.getByTestId("canvas-as-of")).toHaveCount(0);

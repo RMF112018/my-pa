@@ -313,6 +313,13 @@ test.describe("the signed-in surfaces", () => {
   });
 
   test("a capture is persisted, and the Library proves it", async ({ page }) => {
+    // WP07: this test proves persistence *by identifier* twice — the write's own
+    // receipt id, and the capture id read back through a different capability.
+    // Both are technical receipts governed by the global policy, so the mode is
+    // asked for through the one route that can and every assertion below is
+    // unchanged. That the note says "Saved" at all is product truth and is
+    // asserted in both modes in `capture.test.tsx`.
+    await enableDiagnostics(page);
     const marker = `${Date.now()}`;
     await openCaptureNote(page);
     const field = page.getByTestId("capture-field");
@@ -332,10 +339,6 @@ test.describe("the signed-in surfaces", () => {
 
     // And the row is readable back through a different capability, which is the
     // part a receipt alone cannot prove.
-    // WP07: the capture identifier is a technical receipt, so proving the row is
-    // readable back *by that identifier* needs the mode that renders it. The
-    // claim is unchanged; only the mode it is made in is now explicit.
-    await enableDiagnostics(page);
     await page.goto("/knowledge");
     await expect(page.getByTestId("library-listing")).toBeVisible();
     await expect(page.getByTestId("library-capture").first()).toContainText(/cap_[A-Za-z0-9]+/);

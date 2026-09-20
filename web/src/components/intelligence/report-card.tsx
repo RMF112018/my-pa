@@ -15,9 +15,12 @@ const STATE_TONE: Record<string, "green" | "gold" | "coral" | "neutral"> = {
 export function ReportCard({
   row,
   currentCycle,
+  diagnosticsEnabled = false,
 }: {
   readonly row: ReportListEntry;
   readonly currentCycle?: string | null;
+  /** Resolved by the owning page; fail-closed when a caller forgets. */
+  readonly diagnosticsEnabled?: boolean;
 }) {
   const isBrief = row.artifact_kind === "morning_brief";
   const inCurrent = currentCycle != null && row.cycle_run_id === currentCycle;
@@ -59,6 +62,10 @@ export function ReportCard({
             <Badge tone={STATE_TONE[row.artifact_state] ?? "neutral"}>{row.artifact_state}</Badge>
           </dd>
         </dl>
+        {/* WP07 §8.6: run and cycle identifiers are policy-governed technical
+            fields. The report's title, date, stage and state above are product
+            truth and stay. */}
+        {diagnosticsEnabled ? (
         <details className="mt-2" data-testid="intelligence-report-details">
           <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
           <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 break-words text-xs">
@@ -70,6 +77,7 @@ export function ReportCard({
             </dd>
           </dl>
         </details>
+        ) : null}
       </CardBody>
     </Card>
   );
@@ -78,15 +86,18 @@ export function ReportCard({
 export function ReportListing({
   items,
   currentCycle,
+  diagnosticsEnabled = false,
 }: {
   readonly items: readonly ReportListEntry[];
   readonly currentCycle?: string | null;
+  /** Resolved by the owning page; fail-closed when a caller forgets. */
+  readonly diagnosticsEnabled?: boolean;
 }) {
   return (
     <ul className="flex flex-col gap-3" data-testid="intelligence-listing">
       {items.map((row) => (
         <li key={row.report_id}>
-          <ReportCard row={row} currentCycle={currentCycle} />
+          <ReportCard row={row} currentCycle={currentCycle} diagnosticsEnabled={diagnosticsEnabled} />
         </li>
       ))}
     </ul>

@@ -32,6 +32,7 @@ import { useState } from "react";
 import Link from "next/link";
 import type { BackendReviewCase } from "@/contracts/views";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
+import { WhenDiagnostics } from "@/components/diagnostics/diagnostics-provider";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TextField } from "@/components/ui/field";
@@ -274,16 +275,16 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
                   </span>
                 </div>
                 <CardBody>
+                  {/*
+                    WP07 §8.7: these are technical receipts — case, run and
+                    page-version identifiers, raw state codes and a review
+                    version counter. The risk class, proposal type, the decision
+                    controls and the outcome copy are review truth and are
+                    rendered outside this gate in both modes.
+                  */}
                   <dl className="grid grid-cols-[9rem_1fr] gap-x-2 gap-y-1">
-                    <dt className="text-muted">case</dt>
-                    <dd className="font-mono text-xs break-all">{row.reviewCaseId}</dd>
-                    <IdentityFields row={row} />
-                    <dt className="text-muted">proposal state</dt>
-                    <dd>{row.proposalState}</dd>
                     <dt className="text-muted">opened</dt>
                     <dd>{moment(row.openedAt)}</dd>
-                    <dt className="text-muted">review version</dt>
-                    <dd data-testid="review-version">{row.reviewVersion}</dd>
                     {row.latestDisposition ? (
                       <>
                         <dt className="text-muted">last disposition</dt>
@@ -291,6 +292,17 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
                       </>
                     ) : null}
                   </dl>
+                  <WhenDiagnostics>
+                    <dl className="grid grid-cols-[9rem_1fr] gap-x-2 gap-y-1">
+                      <dt className="text-muted">case</dt>
+                      <dd className="font-mono text-xs break-all">{row.reviewCaseId}</dd>
+                      <IdentityFields row={row} />
+                      <dt className="text-muted">proposal state</dt>
+                      <dd>{row.proposalState}</dd>
+                      <dt className="text-muted">review version</dt>
+                      <dd data-testid="review-version">{row.reviewVersion}</dd>
+                    </dl>
+                  </WhenDiagnostics>
 
                   {state.phase === "decided" ? (
                     <p

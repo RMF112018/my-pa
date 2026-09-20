@@ -151,7 +151,7 @@ export async function PeoplePage({
                 truncated={answer.disclosure.truncated}
               />
             ) : null}
-            <ResolvePanel resolution={answer.result.resolution} />
+            <ResolvePanel resolution={answer.result.resolution} diagnosticsEnabled={diagnosticsEnabled} />
           </>
         )}
       </>,
@@ -214,11 +214,11 @@ export async function PeoplePage({
                 testId="people-search-degraded-empty"
               />
             ) : (
-              <SearchHits entities={answer.result.entities} />
+              <SearchHits entities={answer.result.entities} diagnosticsEnabled={diagnosticsEnabled} />
             )}
           </>
         ) : (
-          <SearchHits entities={answer.result.entities} />
+          <SearchHits entities={answer.result.entities} diagnosticsEnabled={diagnosticsEnabled} />
         )}
       </>,
     );

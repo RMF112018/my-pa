@@ -23,11 +23,67 @@ import userEvent from "@testing-library/user-event";
 import { TaskDetailView } from "@/components/work/work-detail";
 
 afterEach(() => {
+  diagnostics.enabled = true;
   cleanup();
   vi.unstubAllGlobals();
 });
 
 describe("Work evidence", () => {
+  it("withholds evidence reference identifiers while diagnostics are off", async () => {
+    // WP07 §8.5. The evidence *state* and the separately authorized reveal
+    // control are product truth; the mono reference identifiers beside them are
+    // technical receipts, and the Technical details panel is not mounted at all.
+    diagnostics.enabled = false;
+    const origin = "cap_origin0001origin0001";
+    const closure = "cap_closure001closure001";
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      const path = String(input);
+      if (path === "/api/tasks/tsk_aaaaaaaa11111111") {
+        return Response.json({
+          task: {
+            task_id: "tsk_aaaaaaaa11111111",
+            title: "Close the permit review",
+            description: null,
+            lifecycle_state: "completed",
+            evidence_state: "accepted",
+            origin_kind: "evidence",
+            origin_evidence_ref: origin,
+            closure_evidence_ref: closure,
+            accepted_by_review_decision_id: "rdec_aaaaaaaa11111111",
+            acceptance_kind: "review",
+            closure_history_id: "tsh_closure001closure001",
+            version: 3,
+            priority: null,
+            due_at: null,
+            scheduled_at: null,
+            deferred_until: null,
+            archived_at: null,
+            commitment_id: null,
+            role: null,
+            project_id: null,
+            situation_id: null,
+            opened_at: "2026-08-20T12:00:00Z",
+            closed_at: "2026-08-22T12:00:00Z",
+            created_at: "2026-08-20T12:00:00Z",
+            updated_at: "2026-08-22T12:00:00Z",
+          },
+        });
+      }
+      if (path.includes("/comments")) return Response.json({ comments: [] });
+      if (path === "/api/commitments?pageSize=100") return Response.json({ commitments: [] });
+      return Response.json({ history: [] });
+    }));
+
+    render(<TaskDetailView taskId="tsk_aaaaaaaa11111111" />);
+    await screen.findByTestId("task-detail-sections");
+
+    expect(screen.queryByTestId("task-technical-details")).toBeNull();
+    const body = document.body.textContent ?? "";
+    expect(body).not.toContain(origin);
+    expect(body).not.toContain(closure);
+    expect(body).not.toContain("rdec_aaaaaaaa11111111");
+  });
+
   it("shows server metadata and reveals closure evidence only after explicit action", async () => {
     const origin = "cap_origin0001origin0001";
     const closure = "cap_closure001closure001";

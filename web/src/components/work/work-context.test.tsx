@@ -23,6 +23,8 @@ import userEvent from "@testing-library/user-event";
 import { CommitmentDetailView, TaskDetailView } from "@/components/work/work-detail";
 
 afterEach(() => {
+  // Back to this file's default, so the one OFF case cannot leak.
+  diagnostics.enabled = true;
   cleanup();
   vi.unstubAllGlobals();
 });
@@ -68,6 +70,32 @@ describe("Work detail context", () => {
     expect(screen.queryByText(/prj_aaaaaaaa11111111/)).toBeNull();
     expect(screen.queryByText(/sit_aaaaaaaa11111111/)).toBeNull();
     expect(screen.queryByText(/rdec_aaaaaaaa11111111/)).toBeNull();
+  });
+
+  it("mounts no Technical details and fetches no history while diagnostics are off", async () => {
+    // WP07 §8.5 / AC-48. The panel is not merely collapsed — it is not mounted,
+    // which is also what stops the history read: that request is driven by the
+    // disclosure's own expansion.
+    diagnostics.enabled = false;
+    const fetchSpy = vi.fn<typeof fetch>(async (input) => {
+      const path = String(input);
+      if (path.includes("/comments")) return Response.json({ comments: [] });
+      if (path === "/api/commitments?pageSize=100") return Response.json({ commitments: [] });
+      return Response.json({ task: TASK });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(<TaskDetailView taskId={TASK.task_id} />);
+    await screen.findByTestId("task-detail-sections");
+
+    expect(screen.queryByTestId("task-technical-details")).toBeNull();
+    expect(screen.queryByText("Technical details")).toBeNull();
+    expect(document.body.textContent ?? "").not.toContain("prj_aaaaaaaa11111111");
+    expect(document.body.textContent ?? "").not.toContain("rdec_aaaaaaaa11111111");
+    expect(
+      fetchSpy.mock.calls.some(([input]) => String(input).includes("/history")),
+      "a diagnostics-only history read was issued while diagnostics were off",
+    ).toBe(false);
   });
 
   it("keeps raw context references and review metadata reachable under Technical details", async () => {

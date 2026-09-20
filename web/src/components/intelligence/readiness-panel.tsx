@@ -127,10 +127,14 @@ export function ReadinessPanel({
         <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 break-words text-xs">
           <dt>Business date</dt>
           <dd data-testid="intelligence-business-date">{result.business_date}</dd>
-          <dt>Cycle</dt>
-          <dd data-testid="intelligence-cycle-run-id" className="break-all">
-            {result.cycle_run_id || cycleRunId}
-          </dd>
+          {diagnosticsEnabled ? (
+            <>
+              <dt>Cycle</dt>
+              <dd data-testid="intelligence-cycle-run-id" className="break-all">
+                {result.cycle_run_id || cycleRunId}
+              </dd>
+            </>
+          ) : null}
           <dt>Freshness</dt>
           <dd data-testid="intelligence-freshness">{freshnessCopy(result)}</dd>
         </dl>

@@ -60,8 +60,20 @@ describe("CaptureListing cards", () => {
     );
   });
 
-  it("keeps the captureId in Details so the card still contains the identifier", () => {
+  it("renders no capture, version or owner identifier while diagnostics are off", () => {
+    // WP07 §8.7: these are technical receipts. The card's title, dates and
+    // length are the product truth a reader uses, and the Open link still
+    // reaches the record.
     render(<CaptureListing entries={[ENTRY]} />);
+    const off = screen.getByTestId("library-capture");
+    expect(within(off).queryByText("Details")).toBeNull();
+    expect(off.textContent ?? "").not.toContain(ENTRY.captureId);
+    expect(off.textContent ?? "").not.toContain(ENTRY.ownerPrincipalId);
+    expect(within(off).getByRole("link")).toBeTruthy();
+  });
+
+  it("keeps the captureId in Details so the card still contains the identifier", () => {
+    render(<CaptureListing entries={[ENTRY]} diagnosticsEnabled />);
     const card = screen.getByTestId("library-capture");
     const details = within(card).getByText("Details").closest("details");
     expect(details).toBeTruthy();
@@ -103,7 +115,7 @@ describe("CaptureMatches cards", () => {
   });
 
   it("keeps capture and version identifiers in Details", () => {
-    render(<CaptureMatches matches={[MATCH]} />);
+    render(<CaptureMatches matches={[MATCH]} diagnosticsEnabled />);
     const card = screen.getByTestId("library-match");
     const details = within(card).getByText("Details").closest("details");
     expect(details?.textContent).toContain(MATCH.captureId);

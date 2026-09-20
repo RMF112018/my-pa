@@ -86,12 +86,14 @@ export async function IntelligencePulse({
           <p data-testid="intelligence-pulse-none" role="status">
             No briefings yet. That is not all-clear and not a Pulse error.
           </p>
+          {diagnosticsEnabled ? (
           <details className="mt-2" data-testid="intelligence-pulse-details">
             <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
             <p className="mt-2 text-xs text-muted">
               The report list was read and holds no briefing for your account.
             </p>
           </details>
+          ) : null}
           <OpenIntelligenceLink />
         </SurfaceState>
       </div>
@@ -109,6 +111,7 @@ export async function IntelligencePulse({
           <LiveAnnouncement tone="status" testId="intelligence-pulse-degraded">
             This briefing could not be read completely and returned nothing. That is not all-clear.
           </LiveAnnouncement>
+          {diagnosticsEnabled ? (
           <details className="mt-2" data-testid="intelligence-pulse-details">
             <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
             <p className="mt-2 text-xs text-muted">
@@ -116,6 +119,7 @@ export async function IntelligencePulse({
               incomplete read.
             </p>
           </details>
+          ) : null}
           <OpenIntelligenceLink />
         </SurfaceState>
       </div>
@@ -131,12 +135,14 @@ export async function IntelligencePulse({
           <p data-testid="intelligence-pulse-none" role="status">
             No briefings yet. That is not all-clear and not a Pulse error.
           </p>
+          {diagnosticsEnabled ? (
           <details className="mt-2" data-testid="intelligence-pulse-details">
             <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
             <p className="mt-2 text-xs text-muted">
               Listed reports have no cycle, so no briefing set can be selected.
             </p>
           </details>
+          ) : null}
         </SurfaceState>
       </div>
     );
@@ -160,10 +166,12 @@ export async function IntelligencePulse({
           <LiveAnnouncement tone="alert" testId="intelligence-pulse-unavailable">
             Specialist readiness could not be read. Listed reports are not all-clear.
           </LiveAnnouncement>
+          {diagnosticsEnabled ? (
           <details className="mt-2" data-testid="intelligence-pulse-details">
             <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
             <p className="mt-2 text-xs text-muted">cycle {cycleRunId}</p>
           </details>
+          ) : null}
           <OpenIntelligenceLink />
         </SurfaceState>
       </div>

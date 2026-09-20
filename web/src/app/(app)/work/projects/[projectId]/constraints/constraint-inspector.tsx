@@ -31,6 +31,7 @@ import type {
 } from "@/contracts/constraints";
 import { safeHref } from "@/lib/http/safe-href";
 import { Badge } from "@/components/ui/badge";
+import { WhenDiagnostics } from "@/components/diagnostics/diagnostics-provider";
 import { Button } from "@/components/ui/button";
 import { SurfaceState } from "@/components/ui/surface-state";
 import {
@@ -279,7 +280,11 @@ export function ConstraintInspector({
               <Detail label="Reference" value={detail.reference ?? "Not recorded"} />
               <Detail label="Current update" value={detail.currentUpdate ?? "Not recorded"} />
               <Detail label="Record quality" value={legacy ? LEGACY_CALLOUT_TITLE : "Current record"} />
-              <Detail label="Version" value={String(detail.version)} />
+              {/* WP07: a record version counter is engineering detail. What
+                  the record says, and its lifecycle dates, are not. */}
+              <WhenDiagnostics>
+                <Detail label="Version" value={String(detail.version)} />
+              </WhenDiagnostics>
               {detail.completion ? (
                 <>
                   <Detail label="Completion date" value={dateLabel(detail.completion.completionDate)} />
@@ -378,14 +383,19 @@ export function ConstraintInspector({
                         {item.outcome.toLowerCase()}
                       </span>
                     </p>
-                    <p className="text-muted">
-                      Version {item.beforeVersion} → {item.afterVersion}
-                    </p>
-                    {item.provenance ? (
-                      <p className="text-muted" data-testid={`inspector-provenance-${item.historyId}`}>
-                        {item.provenance}
+                    {/* The timeline entry — who did what, when, and how it
+                        ended — is product truth. The version delta and the raw
+                        provenance string are the audit receipts. */}
+                    <WhenDiagnostics>
+                      <p className="text-muted">
+                        Version {item.beforeVersion} → {item.afterVersion}
                       </p>
-                    ) : null}
+                      {item.provenance ? (
+                        <p className="text-muted" data-testid={`inspector-provenance-${item.historyId}`}>
+                          {item.provenance}
+                        </p>
+                      ) : null}
+                    </WhenDiagnostics>
                     {item.safeFailureReason ? (
                       <p className="text-moss-coral-strong">{item.safeFailureReason}</p>
                     ) : null}

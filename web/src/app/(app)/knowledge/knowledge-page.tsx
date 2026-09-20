@@ -240,10 +240,10 @@ export async function KnowledgePage({
             limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
             truncated={answer.disclosure.truncated}
           />
-          <CaptureItem version={answer.result} />
+          <CaptureItem version={answer.result} diagnosticsEnabled={diagnosticsEnabled} />
         </>
       ) : answer.kind === "records" ? (
-        <CaptureItem version={answer.result} />
+        <CaptureItem version={answer.result} diagnosticsEnabled={diagnosticsEnabled} />
       ) : (
         <SurfaceState
           kind="unavailable"
@@ -295,10 +295,10 @@ export async function KnowledgePage({
             limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
             truncated={answer.disclosure.truncated}
           />
-          <KnowledgeItem record={answer.result} />
+          <KnowledgeItem record={answer.result} diagnosticsEnabled={diagnosticsEnabled} />
         </>
       ) : answer.kind === "records" ? (
-        <KnowledgeItem record={answer.result} />
+        <KnowledgeItem record={answer.result} diagnosticsEnabled={diagnosticsEnabled} />
       ) : (
         <SurfaceState
           kind="unavailable"
@@ -356,11 +356,11 @@ export async function KnowledgePage({
                 testId="library-search-degraded-empty"
               />
             ) : (
-              <CaptureMatches matches={answer.result.matches.map(toMatch)} />
+              <CaptureMatches matches={answer.result.matches.map(toMatch)} diagnosticsEnabled={diagnosticsEnabled} />
             )}
           </>
         ) : (
-          <CaptureMatches matches={answer.result.matches.map(toMatch)} />
+          <CaptureMatches matches={answer.result.matches.map(toMatch)} diagnosticsEnabled={diagnosticsEnabled} />
         )}
       </>,
     );
@@ -412,11 +412,11 @@ export async function KnowledgePage({
               testId="library-degraded-empty"
             />
           ) : (
-            <CaptureListing entries={answer.result.captures.map(toEntry)} />
+            <CaptureListing entries={answer.result.captures.map(toEntry)} diagnosticsEnabled={diagnosticsEnabled} />
           )}
         </>
       ) : (
-        <CaptureListing entries={answer.result.captures.map(toEntry)} />
+        <CaptureListing entries={answer.result.captures.map(toEntry)} diagnosticsEnabled={diagnosticsEnabled} />
       )}
     </>,
   );

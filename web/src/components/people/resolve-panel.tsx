@@ -60,7 +60,13 @@ function outcomeCopy(outcome: ResolutionOutcome): { title: string; detail: strin
   }
 }
 
-function CandidateList({ candidates }: { candidates: readonly ResolutionCandidate[] }) {
+function CandidateList({
+  candidates,
+  diagnosticsEnabled,
+}: {
+  candidates: readonly ResolutionCandidate[];
+  diagnosticsEnabled: boolean;
+}) {
   return (
     <ul data-testid="people-resolve-candidates" className="mt-3 space-y-2">
       {candidates.map((candidate) => (
@@ -71,7 +77,9 @@ function CandidateList({ candidates }: { candidates: readonly ResolutionCandidat
           >
             {candidate.display_name}
           </Link>
-          <p className="mt-1 font-mono text-xs break-all text-muted">{candidate.entity_id}</p>
+          {diagnosticsEnabled ? (
+            <p className="mt-1 font-mono text-xs break-all text-muted">{candidate.entity_id}</p>
+          ) : null}
           <p className="mt-1 text-xs text-muted">
             {codeLabel(candidate.entity_type)} · {codeLabel(candidate.status)}
             {candidate.matched_on.length > 0 ? ` · matched on ${candidate.matched_on.map(codeLabel).join(", ")}` : ""}
@@ -82,7 +90,14 @@ function CandidateList({ candidates }: { candidates: readonly ResolutionCandidat
   );
 }
 
-export function ResolvePanel({ resolution }: { resolution: EntityResolutionView }) {
+export function ResolvePanel({
+  resolution,
+  diagnosticsEnabled = false,
+}: {
+  resolution: EntityResolutionView;
+  /** Resolved by the owning page; fail-closed when a caller forgets. */
+  diagnosticsEnabled?: boolean;
+}) {
   const meta = OUTCOME_ROLE[resolution.outcome];
   const copy = outcomeCopy(resolution.outcome);
   const alert = resolution.outcome === "ambiguous" || resolution.outcome === "conflicted_identifier";
@@ -122,7 +137,7 @@ export function ResolvePanel({ resolution }: { resolution: EntityResolutionView 
             </Link>
           </p>
         ) : null}
-        {resolution.candidates.length > 0 ? <CandidateList candidates={resolution.candidates} /> : null}
+        {resolution.candidates.length > 0 ? <CandidateList candidates={resolution.candidates} diagnosticsEnabled={diagnosticsEnabled} /> : null}
         {resolution.candidates_were_truncated ? (
           <p className="mt-2 text-xs text-muted">
             More candidates exist than this answer carries. Nothing here picked the rest for you.

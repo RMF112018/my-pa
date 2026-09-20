@@ -27,7 +27,14 @@ export function structuredContentKeys(
   return Object.keys(content);
 }
 
-export function ReportDetailView({ report }: { readonly report: ReportsReadResult }) {
+export function ReportDetailView({
+  report,
+  diagnosticsEnabled = false,
+}: {
+  readonly report: ReportsReadResult;
+  /** Resolved by the owning page; fail-closed when a caller forgets. */
+  readonly diagnosticsEnabled?: boolean;
+}) {
   const bodyNodes =
     report.body_markdown !== undefined ? markdownToRich(report.body_markdown) : [];
   const structuredKeys = structuredContentKeys(report.structured_content);
@@ -79,10 +86,14 @@ export function ReportDetailView({ report }: { readonly report: ReportsReadResul
             <dd data-testid="intelligence-artifact-state">{report.artifact_state}</dd>
             <dt>Source lane</dt>
             <dd>{report.source_lane ?? "none"}</dd>
-            <dt>Cycle</dt>
-            <dd className="break-all">{report.cycle_run_id}</dd>
-            <dt>Run</dt>
-            <dd className="break-all">{report.report_run_id}</dd>
+            {diagnosticsEnabled ? (
+              <>
+                <dt>Cycle</dt>
+                <dd className="break-all">{report.cycle_run_id}</dd>
+                <dt>Run</dt>
+                <dd className="break-all">{report.report_run_id}</dd>
+              </>
+            ) : null}
             <dt>Committed</dt>
             <dd data-testid="intelligence-committed-at">{report.committed_at}</dd>
             <dt>Supersedes</dt>

@@ -113,7 +113,10 @@ describe("People entity page", () => {
       PeopleEntityPage({ params: Promise.resolve({ entityId: ENTITY_ID }) }),
     );
     expect(screen.getByTestId("people-profile")).toBeTruthy();
-    expect(screen.getByTestId("people-entity-id").textContent).toBe(ENTITY_ID);
+    // WP07 §8.7: the stable entity id is an internal identifier and is not
+    // rendered while diagnostics are off. The entity itself — the point of this
+    // test — is still there, named and linked.
+    expect(screen.queryByTestId("people-entity-id")).toBeNull();
     expect(screen.getByTestId("people-assignments-unavailable")).toHaveAttribute("data-state", "unavailable");
     expect(screen.getByTestId("degraded-banner")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /merge/i })).toBeNull();

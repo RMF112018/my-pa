@@ -15,6 +15,23 @@
  * about the address bar rather than about component state.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * WP07 — the version delta and the raw provenance string in the history
+ * timeline are audit receipts and follow the global policy. Who did what, when,
+ * and how it ended is product truth and renders in both modes.
+ */
+const { diagnostics } = vi.hoisted(() => ({ diagnostics: { enabled: false } }));
+vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/diagnostics/diagnostics-provider")>();
+  return {
+    ...actual,
+    useDiagnosticsEnabled: () => diagnostics.enabled,
+    WhenDiagnostics: ({ children }: { children: React.ReactNode }) =>
+      diagnostics.enabled ? children : null,
+  };
+});
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { PrincipalSession } from "@/contracts/identity";
@@ -92,6 +109,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  diagnostics.enabled = false;
   cleanup();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
@@ -447,10 +465,24 @@ describe("the shared Inspector", () => {
     mount("view=register&group=none&scope=all&q=drainage invert");
     await user.click(within(screen.getByTestId("register-row-cst_syn_0052")).getByRole("button"));
     const history = await screen.findByTestId("inspector-history");
+    // Product truth in both modes: what happened, and by whom.
     expect(history).toHaveTextContent("Created");
-    expect(history).toHaveTextContent("Version 0 → 1");
-    expect(history).toHaveTextContent("Imported from the legacy Constraints Log workbook.");
+    // Receipts, off by default.
+    expect(history).not.toHaveTextContent("Version 0 → 1");
+    expect(history).not.toHaveTextContent("Imported from the legacy Constraints Log workbook.");
     expect(history).not.toHaveTextContent("request_digest");
+
+    diagnostics.enabled = true;
+    cleanup();
+    mount("view=register&group=none&scope=all&q=drainage invert");
+    await user.click(within(screen.getByTestId("register-row-cst_syn_0052")).getByRole("button"));
+    const withDiagnostics = await screen.findByTestId("inspector-history");
+    expect(withDiagnostics).toHaveTextContent("Created");
+    expect(withDiagnostics).toHaveTextContent("Version 0 → 1");
+    expect(withDiagnostics).toHaveTextContent(
+      "Imported from the legacy Constraints Log workbook.",
+    );
+    expect(withDiagnostics).not.toHaveTextContent("request_digest");
   });
 
   it("links validated evidence and leaves unvalidated reference text unlinked", async () => {

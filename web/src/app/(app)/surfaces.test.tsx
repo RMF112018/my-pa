@@ -66,9 +66,23 @@ const PRINCIPAL: PrincipalSession = {
  * presentation set a real serialized value, bound to `PRINCIPAL`, so the page
  * is gated by the genuine parser rather than by a stubbed boolean.
  */
-const { diagnosticsCookie } = vi.hoisted(() => ({
+const { diagnosticsCookie, diagnostics } = vi.hoisted(() => ({
   diagnosticsCookie: { value: undefined as string | undefined },
+  // Client components inside these server pages read the policy from React
+  // context, not from the cookie, so the two halves are set together.
+  diagnostics: { enabled: false },
 }));
+
+vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/diagnostics/diagnostics-provider")>();
+  return {
+    ...actual,
+    useDiagnosticsEnabled: () => diagnostics.enabled,
+    WhenDiagnostics: ({ children }: { children: React.ReactNode }) =>
+      diagnostics.enabled ? children : null,
+  };
+});
 
 vi.mock("next/headers", () => ({
   cookies: async () => ({
@@ -449,7 +463,11 @@ describe("Library reaches the record instead of asserting about it", () => {
     answerWith({ captures: [CAPTURE] }, whole());
     await renderServerPage(() => LibraryPage({ searchParams: NO_PARAMS }));
     expect(screen.getByTestId("library-listing")).toBeTruthy();
-    expect(screen.getByText(CAPTURE.capture_id)).toBeTruthy();
+    // WP07 §8.7: the capture identifier is a technical receipt and is not
+    // rendered while diagnostics are off. The listing itself — the subject of
+    // this test — is reached and rendered.
+    expect(screen.queryByText(CAPTURE.capture_id)).toBeNull();
+    expect(screen.getAllByTestId("library-capture").length).toBeGreaterThan(0);
     // A listing carries no content, so none may appear.
     expect(screen.queryByTestId("state-empty")).toBeNull();
   });
@@ -662,6 +680,24 @@ describe("Library identity projections invoke the matching capability", () => {
 });
 
 describe("Review distinguishes an empty queue from an unread one", () => {
+  /**
+   * The case, run, page-version and review-version identifiers asserted below
+   * are technical receipts under WP07 §8.7, so this block runs with diagnostics
+   * on. The OFF side is asserted separately at the end of the block.
+   */
+  beforeAll(async () => {
+    diagnosticsCookie.value = diagnosticsPreferenceValue(
+      true,
+      await diagnosticsPrincipalBinding(PRINCIPAL.principalId),
+    );
+    diagnostics.enabled = true;
+  });
+
+  afterAll(() => {
+    diagnosticsCookie.value = undefined;
+    diagnostics.enabled = false;
+  });
+
   it("renders the backend's cases and states that they carry no text", async () => {
     answerWith({ review_cases: [REVIEW_CASE] }, whole());
     await renderServerPage(() => ReviewPage());
@@ -922,10 +958,12 @@ describe("System reports what it was told, and says so when it was told nothing"
       true,
       await diagnosticsPrincipalBinding(PRINCIPAL.principalId),
     );
+    diagnostics.enabled = true;
   });
 
   afterAll(() => {
     diagnosticsCookie.value = undefined;
+    diagnostics.enabled = false;
   });
 
   const CAPABILITIES_GET = {

@@ -82,5 +82,5 @@ export default async function IntelligenceReportPage({
     );
   }
 
-  return <ReportDetailView report={outcome.result} />;
+  return <ReportDetailView report={outcome.result} diagnosticsEnabled={diagnosticsEnabled} />;
 }

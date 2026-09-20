@@ -197,6 +197,7 @@ export default async function IntelligenceHistoryPage({
             <ReportListing
               items={group.items}
               currentCycle={group.current ? group.cycle_run_id : null}
+              diagnosticsEnabled={diagnosticsEnabled}
             />
           </section>
         ))

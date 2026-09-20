@@ -280,9 +280,11 @@ export function EntityProfilePanel({
               >
                 Open surviving entity
               </Link>
-              <span className="ml-2 font-mono text-xs break-all text-muted">
-                {entity.superseded_by_entity_id}
-              </span>
+              {diagnosticsEnabled ? (
+                <span className="ml-2 font-mono text-xs break-all text-muted">
+                  {entity.superseded_by_entity_id}
+                </span>
+              ) : null}
             </p>
           ) : (
             <p className="mt-2 text-muted" data-testid="people-survivor-missing">
@@ -313,10 +315,14 @@ export function EntityProfilePanel({
           <dl className="grid grid-cols-[minmax(6rem,9rem)_1fr] gap-x-2 gap-y-1">
             <dt className="text-muted">Type</dt>
             <dd>{codeLabel(entity.entity_type)}</dd>
-            <dt className="text-muted">Stable ID</dt>
-            <dd className="font-mono text-xs break-all" data-testid="people-entity-id">
-              {entity.entity_id}
-            </dd>
+            {diagnosticsEnabled ? (
+              <>
+                <dt className="text-muted">Stable ID</dt>
+                <dd className="font-mono text-xs break-all" data-testid="people-entity-id">
+                  {entity.entity_id}
+                </dd>
+              </>
+            ) : null}
             <dt className="text-muted">Canonical name</dt>
             <dd>{entity.canonical_name}</dd>
           </dl>

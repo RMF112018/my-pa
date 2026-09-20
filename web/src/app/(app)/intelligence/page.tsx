@@ -131,7 +131,7 @@ export default async function IntelligencePage() {
   const cycleRunId = currentCycleRunId(items);
   const readiness =
     cycleRunId === null ? null : await loadReadiness(principal, cycleRunId);
-  const listing = <ReportListing items={items} currentCycle={cycleRunId} />;
+  const listing = <ReportListing items={items} currentCycle={cycleRunId} diagnosticsEnabled={diagnosticsEnabled} />;
 
   const body = (
     <>

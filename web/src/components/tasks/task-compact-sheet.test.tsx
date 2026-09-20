@@ -26,6 +26,7 @@ import { TaskRuntimeProvider } from "@/components/work/task-runtime-provider";
 import type { TaskDetail, TaskRow } from "@/contracts/work";
 
 afterEach(() => {
+  diagnostics.enabled = true;
   cleanup();
   vi.unstubAllGlobals();
 });
@@ -224,6 +225,26 @@ describe("TaskCompactSheet", () => {
 
     await user.keyboard("{Escape}");
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+  });
+
+  it("offers no Technical details at all while diagnostics are off", async () => {
+    // The ON case below proves the identifiers are reachable *behind* the
+    // disclosure. This proves the disclosure itself is absent by default, which
+    // is the product state and the one the ON case cannot speak to.
+    diagnostics.enabled = false;
+    const { fetcher, release } = gatedFetch();
+    vi.stubGlobal("fetch", fetcher);
+
+    renderSheet(SEED);
+    release();
+    await screen.findByTestId("task-status-control");
+    const sheet = screen.getByTestId("task-compact-sheet");
+
+    expect(within(sheet).queryByText("Technical details")).toBeNull();
+    expect(screen.queryByTestId("task-technical-details")).toBeNull();
+    expect(sheet.textContent).not.toContain(TASK_ID);
+    // Product truth: the Task's status still reads in product language.
+    expect(sheet.textContent).toContain("In progress");
   });
 
   it("keeps raw identifiers out of the compact Task view until diagnostics are opened", async () => {

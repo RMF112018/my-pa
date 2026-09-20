@@ -152,15 +152,31 @@ describe("the Search palette's failed read, with diagnostics on", () => {
     expect(diagnostic).not.toContain("upstream blew up");
   });
 
-  it("names the condition of a not-built route without inventing a class", async () => {
+  it("names the condition of a not-built route without inventing a class or a code", async () => {
     search.fetch.mockRejectedValue(apiFailure("no such route", { status: 501 }));
+    render(<SearchCommandPanel onCapture={() => {}} initialQuery="anything" />);
+    await vi.advanceTimersByTimeAsync(250);
+    await waitFor(() => expect(screen.getByTestId("search-not-implemented")).toBeTruthy());
+    const diagnostic = screen.getByTestId("surface-state-diagnostic").textContent ?? "";
+    // The status is the whole of what arrived, and it is enough: a derived
+    // `code not_implemented` would render in the same form as a code the
+    // backend actually sent, with nothing to tell the two apart.
+    expect(diagnostic).toContain("HTTP 501");
+    expect(diagnostic).not.toContain("code ");
+    expect(diagnostic).not.toContain("class unavailable");
+    expect(diagnostic).not.toContain("no such route");
+  });
+
+  it("names the backend's own not_implemented code when it sent one", async () => {
+    search.fetch.mockRejectedValue(
+      apiFailure("no such route", { status: 501, code: "not_implemented" }),
+    );
     render(<SearchCommandPanel onCapture={() => {}} initialQuery="anything" />);
     await vi.advanceTimersByTimeAsync(250);
     await waitFor(() => expect(screen.getByTestId("search-not-implemented")).toBeTruthy());
     const diagnostic = screen.getByTestId("surface-state-diagnostic").textContent ?? "";
     expect(diagnostic).toContain("code not_implemented");
     expect(diagnostic).toContain("HTTP 501");
-    expect(diagnostic).not.toContain("class unavailable");
     expect(diagnostic).not.toContain("no such route");
   });
 });

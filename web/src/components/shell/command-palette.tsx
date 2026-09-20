@@ -83,14 +83,15 @@ function isAbort(error: unknown): boolean {
 function classifyFailure(error: unknown): SearchAnswer {
   const fields = failureFields(error as ApiFailure);
   if (fields.status === 501 || fields.code === "not_implemented") {
-    // `not_implemented` is not asserted over the top of what arrived: the
-    // backend's own code is preferred, and the literal is used only in the
-    // branch's other case, where a 501 status is itself the statement that the
-    // route is not built. No `errorClass` is invented — the eight are the
-    // backend's to send, and this failure sent none.
+    // `not_implemented` is not asserted over the top of what arrived: only the
+    // backend's own code is carried, and on a 501 that sent none, the `HTTP 501`
+    // rendered on the same line is already the statement that the route is not
+    // built — a derived code would only present itself as a received one. No
+    // `errorClass` is invented — the eight are the backend's to send, and this
+    // failure sent none.
     return {
       kind: "not_implemented",
-      diagnostic: safeDiagnostic({ ...fields, code: fields.code || "not_implemented" }),
+      diagnostic: safeDiagnostic(fields),
     };
   }
   return { kind: "unavailable", diagnostic: safeDiagnostic(fields) };

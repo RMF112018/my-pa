@@ -311,6 +311,21 @@ describe("a diagnostic is a closed record, and nothing else can become one", () 
     expect(callsites.map((file) => file.path)).toEqual(["components/work/workbench.tsx"]);
     const workbench = callsites[0]!.source;
     expect(workbench).toContain("describeSafeDiagnostic(safeDiagnostic(error))");
+    // The three assertions below this one are stated over the *syntax* of the
+    // assignment, and the carrier does not have to look like any of them: the
+    // channel is fed through one local `note(headline, details, receipt)`
+    // helper, so `note("…", "", failure.message)` reaches `setStatusReceipt`
+    // and the `receipt={…}` prop without the substring `receipt` appearing
+    // anywhere near `.message`. All three stayed false against exactly that
+    // edit while the positive above still passed, because a second callsite
+    // supplies the anchor — so what they asserted was "one callsite exists and
+    // one safe expression appears somewhere in the file", not a feed rule.
+    // The rule is therefore stated over what is fed: the caught failure's
+    // `message` is the one field with no shape and no upstream guarantee, and
+    // it may not be read anywhere in this module, by any route into the
+    // channel. Comments are stripped before scanning, so the two that discuss
+    // `error.message` by name do not trip it.
+    expect(workbench).not.toMatch(/\b(?:failure|error)\s*\.\s*message\b/);
     expect(workbench).not.toMatch(/setStatusReceipt\([^)]*\.message\b/);
     expect(workbench).not.toMatch(/\breceipt\s*=\s*[^;\n]*\.message\b/);
     expect(workbench).not.toMatch(/\breceipt=\{[^}]*\.message\b/);

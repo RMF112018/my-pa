@@ -703,7 +703,7 @@ const AGGREGATE_LIMITATION = new RegExp(
 
 /** What a limitation becomes when it is not one this build recognises. */
 export const WITHHELD_LIMITATION =
-  "A limitation was withheld because its text did not match the safe-disclosure shape.";
+  "A limitation was withheld because it is not one this build recognises.";
 
 function limitationIsSafe(limitation: string): boolean {
   return LIMITATION_ALLOWLIST.has(limitation) || AGGREGATE_LIMITATION.test(limitation);

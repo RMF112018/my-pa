@@ -79,7 +79,10 @@ export function diagnosticText(
   return enabled && diagnostic != null ? safeDiagnostic(diagnostic) : null;
 }
 
-/** The backend's own limitation strings, shape-checked — or an empty list. */
+/**
+ * The backend's own limitation strings, each allowlisted against its
+ * `Limitation` vocabulary — or an empty list.
+ */
 export function diagnosticLimitations(
   enabled: boolean,
   limitations: readonly string[] | undefined,

@@ -131,7 +131,10 @@ export interface SurfaceStateProps {
    * `diagnosticError`, so nothing raw crosses into the RSC payload.
    */
   readonly error?: SafeDiagnostic;
-  /** Limitations the backend disclosed, shape-checked. Shown for `degraded` above all. */
+  /**
+   * Limitations the backend disclosed, each allowlisted against its
+   * `Limitation` vocabulary. Shown for `degraded` above all.
+   */
   readonly limitations?: SafeLimitations;
   /** Extra content — a retry affordance, a link — placed after the sentences. */
   readonly children?: ReactNode;

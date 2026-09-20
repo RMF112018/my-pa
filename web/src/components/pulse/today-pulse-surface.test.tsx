@@ -315,7 +315,7 @@ describe("a first read that fails states the failure rather than a placeholder",
     expect(region.textContent).toContain("HTTP 503");
     expect(region.textContent).not.toContain("the application gateway did not answer");
     expect(region.textContent).toContain(WEB_LIMITATIONS.nothingInScopeWasRead);
-    expect(region.textContent).not.toContain("did not match the safe-disclosure shape");
+    expect(region.textContent).not.toContain("it is not one this build recognises");
     expect(screen.queryByTestId("today-empty")).toBeNull();
     expect(screen.queryByText(TODAY_EMPTY_COPY)).toBeNull();
     // Nothing was ever confirmed, so there is no "last confirmed read" to claim.

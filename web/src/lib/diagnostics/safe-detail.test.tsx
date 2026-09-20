@@ -303,7 +303,7 @@ describe("what survives is still worth reading", () => {
   it("says a limitation was withheld rather than dropping it silently", () => {
     const governed = diagnosticLimitations(true, [SENTINELS.connection]);
     render(<SurfaceState kind="degraded" title="This answer is partial" limitations={governed} />);
-    expect(renderedBytes()).toContain("did not match the safe-disclosure shape");
+    expect(renderedBytes()).toContain("it is not one this build recognises");
   });
 
   it("keeps a genuine backend limitation exactly as the backend wrote it", () => {
@@ -330,7 +330,7 @@ describe("what survives is still worth reading", () => {
     const admit = (limitation: string) => {
       const governed = diagnosticLimitations(true, [limitation]);
       render(<SurfaceState kind="degraded" title="This answer is partial" limitations={governed} />);
-      return !renderedBytes().includes("did not match the safe-disclosure shape");
+      return !renderedBytes().includes("it is not one this build recognises");
     };
 
     it("keeps every token the backend vocabulary can emit, long ones included", () => {

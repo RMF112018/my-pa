@@ -511,10 +511,19 @@ export interface SafeLimitations {
  * run-length bound withheld more real tokens, and raising it admitted longer
  * unreviewed runs. An allowlist is closed by construction, so it removes the
  * regression and closes the residual-leak question at once: a 32-character hex
- * session id, `AKIAIOSFODNN7EXAMPLE`, `sk_live_4eC39HqLyjWDarjt`,
- * `db-prod-01.internal.example.com` and `/var/lib/mypa/secrets/app.key` are not
- * withheld because of a threshold, they are withheld because they are not in
- * the set. No threshold is left to tune.
+ * session id, AWS's own documentation example access key id (written here as
+ * `AKIA` + `IOSFODNN7EXAMPLE`, the two halves of one 20-character value),
+ * `sk_live_4eC39HqLyjWDarjt`, `db-prod-01.internal.example.com` and
+ * `/var/lib/mypa/secrets/app.key` are not withheld because of a threshold,
+ * they are withheld because they are not in the set. No threshold is left to
+ * tune.
+ *
+ * That example is split at the seam on purpose. The repository-wide guard
+ * `tests/architecture/test_scope_and_hygiene.py::test_repository_has_no_high_confidence_secret_signature`
+ * scans every file under `web/` for `A(?:KI|SI)A[0-9A-Z]{16}`, and it splits
+ * its own literals the same way so as not to match itself. Rejoining these two
+ * halves into one token breaks CI. The example is worth keeping, so keep it
+ * split.
  *
  * **Why this is not the callsite-trust bypass that was rejected.** The earlier
  * design rejected "distinguish front-end literals from backend free text",

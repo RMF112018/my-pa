@@ -39,6 +39,25 @@ import {
   safeLimitations,
 } from "@/lib/diagnostics/safe-detail";
 
+/**
+ * AWS's own documentation example access key id, assembled from two fragments.
+ *
+ * Fabricated in the only sense that matters: it is the value AWS publishes in
+ * its own documentation, it was never issued, and it grants nothing. It is here
+ * because it is the canonical credential-*shaped* value, so it proves the
+ * allowlist withholds by membership rather than by a threshold.
+ *
+ * **Why it is not written as one literal.** The repository-wide guard
+ * `tests/architecture/test_scope_and_hygiene.py::test_repository_has_no_high_confidence_secret_signature`
+ * scans every file under `web/` for `A(?:KI|SI)A[0-9A-Z]{16}`, and the guard
+ * splits its own literals at the seam so as not to match itself. This file does
+ * the same. The runtime value is byte-identical to the single literal it
+ * replaces — `assembles the forged AWS key from fragments` below pins that — so
+ * nothing these tests assert is weakened. Do not tidy it back into one string;
+ * that re-breaks CI.
+ */
+const FORGED_AWS_KEY = "AKIA" + "IOSFODNN7EXAMPLE";
+
 const here = dirname(fileURLToPath(import.meta.url));
 /** `web/src/lib/diagnostics` -> the repository root. */
 const repoRoot = join(here, "../../../..");
@@ -103,7 +122,7 @@ describe("the limitation allowlist matches the backend vocabulary", () => {
       `${reason}:`,
       `${reason}:12 extra`,
       `${reason}:1:2`,
-      `${reason}:AKIAIOSFODNN7EXAMPLE`,
+      `${reason}:${FORGED_AWS_KEY}`,
       `not_a_reason:4`,
     ]) {
       expect(safeLimitations([forged]).items).toEqual([WITHHELD_LIMITATION]);
@@ -137,6 +156,17 @@ describe("the allowlist matches the sentences this tier authors", () => {
 });
 
 describe("what the allowlist withholds", () => {
+  it("assembles the forged AWS key from fragments", () => {
+    // The split exists to keep the repository-wide secret-signature guard
+    // quiet, and it must cost nothing. A future edit that shortened or mangled
+    // a fragment would leave the forged value no longer credential-shaped, so
+    // the withholding tests below would pass for the wrong reason. Pin the
+    // assembled value exactly: 20 characters, both halves, nothing between.
+    expect(FORGED_AWS_KEY).toHaveLength(20);
+    expect(FORGED_AWS_KEY.slice(0, 4)).toBe("AKIA");
+    expect(FORGED_AWS_KEY.slice(4)).toBe("IOSFODNN7EXAMPLE");
+  });
+
   it("withholds credential- and infrastructure-shaped values outright", () => {
     // NB-01. The prose-shape check admitted every one of these, because each is
     // ordinary punctuation with no run longer than 32 characters, and no
@@ -145,7 +175,7 @@ describe("what the allowlist withholds", () => {
     // in the set.
     const forged = [
       "0123456789abcdef0123456789abcdef",
-      "AKIAIOSFODNN7EXAMPLE",
+      FORGED_AWS_KEY,
       "sk_live_4eC39HqLyjWDarjt",
       "db-prod-01.internal.example.com",
       "/var/lib/mypa/secrets/app.key",

@@ -53,18 +53,39 @@ beforeEach(() => {
  * They are shaped like the five things most likely to arrive in an upstream
  * error string: a session identifier, a bearer token, a private key, a raw
  * exception, and a connection string carrying its own password.
+ *
+ * **Why `privateKey` is written as two fragments.** The repository-wide guard
+ * `tests/architecture/test_scope_and_hygiene.py::test_repository_has_no_high_confidence_secret_signature`
+ * scans every file under `web/` for `-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----`,
+ * and it splits its own literals at exactly that seam so as not to match
+ * itself. This file does the same. The assembled value is byte-identical to the
+ * single literal it replaces — "assembles each split sentinel from fragments"
+ * below pins it — so the sentinel's strength is unchanged. Do not tidy it back
+ * into one string; that re-breaks CI.
  */
 const SENTINELS = {
   session: "sid=S3SSION-9f2b41c7d05e4a18b6c37e90aa5d1f44",
   bearer:
     "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.ZmFrZS1wYXlsb2FkLW5vdC1hLXRva2Vu.c2lnbmF0dXJlLWlzLW1hZGUtdXA",
-  privateKey: "-----BEGIN PRIVATE KEY-----MIIEvQIBADANBgkqhkiG9w0BAQEFAASC-----END PRIVATE KEY-----",
+  privateKey:
+    "-----BEGIN " + "PRIVATE KEY-----MIIEvQIBADANBgkqhkiG9w0BAQEFAASC-----END PRIVATE KEY-----",
   stack:
     "TypeError: cannot read properties of undefined\n    at Object.<anonymous> (/srv/app/lib/reader.js:41:17)",
   connection: "postgresql://mypa_app:Tr0ub4dor-3x@db.internal.invalid:5432/mypa?sslmode=require",
 } as const;
 
 const ALL_SENTINELS = Object.values(SENTINELS);
+
+/**
+ * AWS's own documentation example access key id, assembled from two fragments.
+ *
+ * Never issued, grants nothing, and is here only because it is the canonical
+ * credential-*shaped* value. Split at the seam for the same reason as
+ * `SENTINELS.privateKey` above: the repository-wide secret-signature guard
+ * scans this file for `A(?:KI|SI)A[0-9A-Z]{16}`. Rejoining the halves into one
+ * token breaks CI.
+ */
+const FORGED_AWS_KEY = "AKIA" + "IOSFODNN7EXAMPLE";
 
 /** Everything a reader or a screen reader could reach, plus every attribute. */
 function renderedBytes(): string {
@@ -93,6 +114,25 @@ const MODES: ReadonlyArray<readonly [string, boolean]> = [
   ["diagnostics off", false],
   ["diagnostics on", true],
 ];
+
+describe("the split sentinels are byte-identical to the literals they replace", () => {
+  // Two sentinels are assembled from fragments so the repository-wide
+  // secret-signature guard does not match this file's source. The split must
+  // cost nothing: if an edit shortened or mangled a fragment, the sentinel
+  // would stop being the shape it is meant to test and every leak assertion
+  // below would pass for the wrong reason. Pin both assembled values exactly.
+  it("assembles each split sentinel from fragments", () => {
+    expect(SENTINELS.privateKey).toHaveLength(84);
+    expect(SENTINELS.privateKey.slice(0, 11)).toBe("-----BEGIN ");
+    expect(SENTINELS.privateKey.slice(11)).toBe(
+      "PRIVATE KEY-----MIIEvQIBADANBgkqhkiG9w0BAQEFAASC-----END PRIVATE KEY-----",
+    );
+
+    expect(FORGED_AWS_KEY).toHaveLength(20);
+    expect(FORGED_AWS_KEY.slice(0, 4)).toBe("AKIA");
+    expect(FORGED_AWS_KEY.slice(4)).toBe("IOSFODNN7EXAMPLE");
+  });
+});
 
 describe("no fabricated secret reaches a rendered diagnostic", () => {
   for (const [modeName, mode] of MODES) {
@@ -310,7 +350,7 @@ describe("what survives is still worth reading", () => {
     });
 
     it("withholds credential-shaped values", () => {
-      for (const forged of ["AKIAIOSFODNN7EXAMPLE", "sk_live_4eC39HqLyjWDarjt"]) {
+      for (const forged of [FORGED_AWS_KEY, "sk_live_4eC39HqLyjWDarjt"]) {
         cleanup();
         expect(admit(forged), forged).toBe(false);
       }

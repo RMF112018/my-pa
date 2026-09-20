@@ -39,6 +39,7 @@ import {
   classifyPulsePayload,
 } from "@/components/pulse/today-pulse-surface";
 import { TaskRuntimeProvider, useTaskRuntime } from "@/components/work/task-runtime-provider";
+import { WEB_LIMITATIONS } from "@/lib/diagnostics/safe-detail";
 import type { DisclosureEnvelope } from "@/contracts/envelope";
 import type { BackendPulseItem, TodayPulseAnswer, TodayRow } from "@/contracts/views";
 
@@ -288,7 +289,7 @@ describe("a first read that fails states the failure rather than a placeholder",
           coverage: "unavailable",
           freshnessAt: null,
           authority: "derived",
-          limitations: ["the application gateway did not answer"],
+          limitations: [WEB_LIMITATIONS.nothingInScopeWasRead],
           truncated: false,
         },
       }),
@@ -299,11 +300,12 @@ describe("a first read that fails states the failure rather than a placeholder",
   it("carries the route's own diagnostic into the unavailable region", async () => {
     // The classification, the code and the status reach the region; the raw
     // `message` does not, in either of the two channels it travels on. It is
-    // dropped from the diagnostic vocabulary outright, and the copy of it that
-    // `gatewayRefusal` puts in `disclosure.limitations` is not in the limitation
-    // allowlist, so it is replaced by the withheld notice rather than rendered.
-    // That is the same rule in both places: `message` has no schema and no
-    // upstream guarantee, so it is not something this tier prints.
+    // dropped from the diagnostic vocabulary outright, and `gatewayRefusal` no
+    // longer copies it onto `disclosure.limitations` at all — that channel
+    // answers "what is missing from this answer" with a sentence this tier
+    // authored, which on a failed read is the whole of the scope. `message` has
+    // no schema and no upstream guarantee, so it is not something this tier
+    // prints, and it is not something a reader has to see censored either.
     diagnostics.enabled = true;
     fetchSpy.mockImplementation(async () => refusedResponse());
     renderFresh();
@@ -312,7 +314,8 @@ describe("a first read that fails states the failure rather than a placeholder",
     expect(region.textContent).toContain("code gateway_unreachable");
     expect(region.textContent).toContain("HTTP 503");
     expect(region.textContent).not.toContain("the application gateway did not answer");
-    expect(region.textContent).toContain("did not match the safe-disclosure shape");
+    expect(region.textContent).toContain(WEB_LIMITATIONS.nothingInScopeWasRead);
+    expect(region.textContent).not.toContain("did not match the safe-disclosure shape");
     expect(screen.queryByTestId("today-empty")).toBeNull();
     expect(screen.queryByText(TODAY_EMPTY_COPY)).toBeNull();
     // Nothing was ever confirmed, so there is no "last confirmed read" to claim.

@@ -22,6 +22,7 @@
 import { NextResponse } from "next/server";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { statusForErrorClass } from "@/lib/api/gateway";
+import { WEB_LIMITATIONS } from "@/lib/diagnostics/safe-detail";
 import type { DisclosureEnvelope, ErrorEnvelope } from "@/contracts/envelope";
 
 export type Serving =
@@ -88,7 +89,16 @@ export function notImplemented(scope: string, reason: string): NextResponse {
   );
 }
 
-/** The typed refusal a gateway error becomes, with a disclosure that says so. */
+/**
+ * The typed refusal a gateway error becomes, with a disclosure that says so.
+ *
+ * The disclosure's limitation is authored here, not copied from `error.message`.
+ * `error` still travels in its own field and is still read down to the closed
+ * diagnostic vocabulary before anything is rendered from it; putting its raw
+ * message on the limitations channel as well made an upstream string the page's
+ * answer to "what is missing from this answer" — the same defect, and the same
+ * fix, as `failureDisclosure` in `lib/api/surface-answer.ts`.
+ */
 export function gatewayRefusal(
   scope: string,
   status: number,
@@ -98,7 +108,9 @@ export function gatewayRefusal(
     {
       state: error.errorClass === "unavailable" ? "unavailable" : "denied",
       error,
-      disclosure: statedDisclosure(scope, "unavailable", [error.message]),
+      disclosure: statedDisclosure(scope, "unavailable", [
+        WEB_LIMITATIONS.nothingInScopeWasRead,
+      ]),
     },
     { status: status || statusForErrorClass(error.errorClass) },
   );

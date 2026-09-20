@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 import { surfaceAnswer } from "./surface-answer";
 import type { GatewayOutcome, PythonDisclosure } from "@/lib/api/gateway";
+import { WEB_LIMITATIONS } from "@/lib/diagnostics/safe-detail";
 
 type Rows = { readonly rows: readonly string[] };
 
@@ -57,6 +58,18 @@ describe("surfaceAnswer", () => {
       expect(answer.error.code).toBe("gateway_unreachable");
       expect(answer.disclosure.coverage).toBe("unavailable");
       expect(answer.disclosure.freshnessAt).toBeNull();
+      // The failure's own `message` is not what the disclosure says is missing.
+      // `failureDisclosure` takes no message at all: the honest answer to "what
+      // is missing from this answer" on a read that did not happen is all of
+      // it, and that sentence is authored here rather than copied from
+      // upstream. The error itself still travels in `answer.error`, where the
+      // closed diagnostic vocabulary governs what may be rendered from it.
+      expect(answer.disclosure.limitations).toContain(
+        WEB_LIMITATIONS.nothingInScopeWasRead,
+      );
+      expect(answer.disclosure.limitations).not.toContain(
+        "the application gateway did not answer",
+      );
     }
   });
 

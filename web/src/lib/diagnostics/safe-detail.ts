@@ -609,6 +609,21 @@ export const WEB_LIMITATIONS = {
     "local-operator principal and are not partitioned by browser session.",
   /** `components/people/related-records.tsx` — a truncated identity ledger page. */
   ledgerPageIsNotWholeHistory: "This page of the ledger is not the whole history.",
+  /**
+   * `lib/api/surface-answer.ts` and `lib/api/serving.ts` — a read that failed.
+   *
+   * The honest answer to "what is missing from this answer" when the read did
+   * not succeed is *all of it*, and that is a sentence this tier can author
+   * from what it knows. Both callsites previously put the upstream
+   * `ErrorEnvelope.message` here instead — the same string the diagnostic
+   * vocabulary drops, arriving on a second channel — which named a cause this
+   * tier cannot establish and, once the allowlist governed the channel, turned
+   * the commonest failure into the withheld notice. Neither restates the error
+   * nor names a gateway: the diagnostic leg still does that, precisely, in the
+   * closed vocabulary.
+   */
+  nothingInScopeWasRead:
+    "Everything this scope would have carried. No part of it was read, so nothing here is covered.",
   /** `app/(app)/people/[entityId]` — the three companion reads that can fail alone. */
   assignmentsUnreadable: "Assignments could not be read.",
   relationshipsUnreadable: "Relationships could not be read.",

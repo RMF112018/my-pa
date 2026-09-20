@@ -1267,6 +1267,44 @@ describe("Today is a derivation, not a feed", () => {
       ["contract_version", "payload", "principal_id", "purpose", "request_id", "requested_at"],
     );
   });
+
+  it("asks the canonical Today selector for today, on the caller's own date and zone", async () => {
+    /*
+      Clause 8: Home and Work reach Today through ONE predicate, and Home's end
+      of it is this payload. The whole payload is asserted, not one key of it,
+      so dropping `work_date` or `timezone` fails here rather than passing on a
+      surviving `work_view`. The date and the zone are deliberately not the ones
+      every other test in this file uses: a route that hardcoded a day or a zone
+      — or read them from anywhere but the caller's own query — would answer the
+      old constants and fail. Two different callers are asked in the same test
+      so a single memoised payload cannot satisfy both.
+    */
+    const cookie = await signIn();
+    stubGatewayByCapability({
+      "tasks.list": { tasks: [] },
+      "continuity.pulse": { pulse_items: [] },
+    });
+
+    await pulse(get(cookie, "/api/pulse?workDate=2026-03-14&timezone=America/Chicago"));
+    const first = sent.find((call) => call.url.includes("tasks.list"));
+    expect(first).toBeTruthy();
+    expect(first!.url).toBe("http://127.0.0.1:8000/v1/tasks.list");
+    expect(first!.body.payload).toEqual({
+      work_view: "today",
+      work_date: "2026-03-14",
+      timezone: "America/Chicago",
+    });
+
+    sent = [];
+    await pulse(get(cookie, "/api/pulse?workDate=2026-11-01&timezone=Pacific/Auckland"));
+    const second = sent.find((call) => call.url.includes("tasks.list"));
+    expect(second).toBeTruthy();
+    expect(second!.body.payload).toEqual({
+      work_view: "today",
+      work_date: "2026-11-01",
+      timezone: "Pacific/Auckland",
+    });
+  });
 });
 
 describe("an unauthenticated caller reaches nothing", () => {

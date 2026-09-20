@@ -40,6 +40,7 @@
  * already publishes, and `unavailable`, `not_found`, `conflict` and
  * `policy_denied` stay distinguishable rather than collapsing into "no data".
  */
+import { WEB_LIMITATIONS } from "@/lib/diagnostics/safe-detail";
 import contract from "@/contracts/gateway.json";
 import { canonicalPrincipalUuid, rejectCallerSuppliedPrincipal } from "@/lib/auth/claims";
 import { decodeCapability } from "@/lib/api/decode";
@@ -83,9 +84,7 @@ export const GATEWAY_TIMEOUT_MS = 10_000;
  * tier cannot support, and the acceptance criterion for this work package is
  * that disclosures remain accurate rather than that they remain reassuring.
  */
-export const LOCAL_OPERATOR_LIMITATION =
-  "The gateway runs in local_operator mode: results belong to the deployment's single " +
-  "local-operator principal and are not partitioned by browser session.";
+export const LOCAL_OPERATOR_LIMITATION = WEB_LIMITATIONS.localOperator;
 
 /** Raised when this module is reached from anywhere but a Node server context. */
 export class GatewayIsServerOnlyError extends Error {

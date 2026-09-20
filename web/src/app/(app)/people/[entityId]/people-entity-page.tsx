@@ -32,6 +32,8 @@ import {
   diagnosticText,
 } from "@/lib/diagnostics/presentation";
 import { serverDiagnosticsEnabled } from "@/lib/diagnostics/server";
+import { WEB_LIMITATIONS } from "@/lib/diagnostics/safe-detail";
+import type { ErrorEnvelope } from "@/contracts/envelope";
 
 const SCOPE = "people";
 
@@ -57,9 +59,17 @@ function readFailed(outcome: GatewayOutcome<unknown>): boolean {
  * with it — and the static guard that enforces that reads the callsite, so
  * burying the helper call in here would have hidden these three from it.
  */
-function failedMessage(outcome: GatewayOutcome<unknown>): string | null {
+/**
+ * The failure envelope of a read that did not succeed, or nothing.
+ *
+ * WP08-RT-F010: this used to return `outcome.error.message`, which handed the
+ * gateway's own sentence down to the panels as display text. The envelope goes
+ * down instead and `diagnosticText` reads it into the closed vocabulary, so the
+ * message never becomes prose on a page.
+ */
+function failedError(outcome: GatewayOutcome<unknown>): ErrorEnvelope | null {
   if (outcome.ok) return null;
-  return outcome.error.message;
+  return outcome.error;
 }
 
 export async function PeopleEntityPage({
@@ -205,9 +215,9 @@ export async function PeopleEntityPage({
         <DegradedBanner
           scope="this person"
           limitations={diagnosticLimitations(diagnosticsEnabled, [
-            assignmentAnswer.kind === "unavailable" ? "Assignments could not be read." : "",
-            relationshipAnswer.kind === "unavailable" ? "Relationships could not be read." : "",
-            historyAnswer.kind === "unavailable" ? "Identity history could not be read." : "",
+            assignmentAnswer.kind === "unavailable" ? WEB_LIMITATIONS.assignmentsUnreadable : "",
+            relationshipAnswer.kind === "unavailable" ? WEB_LIMITATIONS.relationshipsUnreadable : "",
+            historyAnswer.kind === "unavailable" ? WEB_LIMITATIONS.identityHistoryUnreadable : "",
           ].filter(Boolean))}
         />
       ) : null}
@@ -220,14 +230,14 @@ export async function PeopleEntityPage({
         assignments={assignments}
         disclosure={assignmentDisclosure}
         unavailable={readFailed(assignmentsOutcome)}
-        unavailableDiagnostic={diagnosticText(diagnosticsEnabled, failedMessage(assignmentsOutcome))}
+        unavailableDiagnostic={diagnosticText(diagnosticsEnabled, failedError(assignmentsOutcome))}
       />
       <RelationshipsPanel diagnosticsEnabled={diagnosticsEnabled}
         relationships={relationships}
         subjectId={profile.entity.entity_id}
         disclosure={relationshipDisclosure}
         unavailable={readFailed(relationshipsOutcome)}
-        unavailableDiagnostic={diagnosticText(diagnosticsEnabled, failedMessage(relationshipsOutcome))}
+        unavailableDiagnostic={diagnosticText(diagnosticsEnabled, failedError(relationshipsOutcome))}
       />
       <IdentityHistoryPanel diagnosticsEnabled={diagnosticsEnabled}
         entries={historyEntries}
@@ -235,7 +245,7 @@ export async function PeopleEntityPage({
         nextCursor={historyCursor}
         entityId={profile.entity.entity_id}
         unavailable={readFailed(historyOutcome)}
-        unavailableDiagnostic={diagnosticText(diagnosticsEnabled, failedMessage(historyOutcome))}
+        unavailableDiagnostic={diagnosticText(diagnosticsEnabled, failedError(historyOutcome))}
       />
     </section>
   );

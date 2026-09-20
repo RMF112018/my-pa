@@ -33,6 +33,7 @@ import type {
   TaskRow,
   WaitingOnRow,
 } from "@/contracts/work";
+import { describeSafeDiagnostic, safeDiagnostic } from "@/lib/diagnostics/safe-detail";
 
 function Labeled({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
   return <label className="grid gap-1 text-sm font-medium text-text-primary"><span>{label}</span>{children}{hint ? <span className="text-xs font-normal text-muted">{hint}</span> : null}</label>;
@@ -44,11 +45,20 @@ function Labeled({ label, children, hint }: { label: string; children: ReactNode
  * `message` is the product-language outcome. `details` is *also* product truth —
  * how many rows a bulk action affected is a fact about the user's own work, and
  * gating it would hide the result of a mutation they just performed. Only
- * `diagnostic` carries the receipts: a bulk-operation id, an ISO expiry, history
- * ids, a raw backend message. Gating the whole disclosure swept up the counts,
- * which is the mistake this split exists to prevent.
+ * `receipt` carries the engineering detail: a bulk-operation id, an ISO expiry,
+ * history ids. Gating the whole disclosure swept up the counts, which is the
+ * mistake this split exists to prevent.
+ *
+ * **WP08-RT-F010.** This prop was called `diagnostic` and was a free string
+ * that a backend `error.message` was joined into — the same defect the
+ * governed `SurfaceState` boundary had, in a channel of its own. The upstream
+ * message no longer reaches it: a failure is rendered through
+ * `describeSafeDiagnostic`, so what remains is this tier's own receipt text
+ * (ids and timestamps it formatted itself) and the closed vocabulary. The prop
+ * is named `receipt` because that is what it is, and because the name
+ * `diagnostic` now means the closed type everywhere else in the tree.
  */
-function StatusNote({ message, details, diagnostic, className = "mt-4 rounded-lg border border-border bg-surface p-3" }: { message: string; details?: string; diagnostic?: string; className?: string }) {
+function StatusNote({ message, details, receipt, className = "mt-4 rounded-lg border border-border bg-surface p-3" }: { message: string; details?: string; receipt?: string; className?: string }) {
   if (!message) return null;
   return (
     <div className={className}>
@@ -57,10 +67,10 @@ function StatusNote({ message, details, diagnostic, className = "mt-4 rounded-lg
         <p className="mt-2 text-xs text-muted whitespace-pre-wrap">{details}</p>
       ) : null}
       <WhenDiagnostics>
-        {diagnostic ? (
+        {receipt ? (
           <details className="mt-2 text-xs text-muted">
             <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
-            <p className="mt-2 whitespace-pre-wrap">{diagnostic}</p>
+            <p className="mt-2 whitespace-pre-wrap">{receipt}</p>
           </details>
         ) : null}
       </WhenDiagnostics>
@@ -750,7 +760,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
       <div className="mt-5" aria-live="polite">
         {state === "loading" ? <LoadingStatus label="Loading work…" testId="work-loading" /> : null}
         {state === "failed" ? (
-          <SurfaceState kind="unavailable" title={mapUserError(readError).title} error={readError}>
+          <SurfaceState kind="unavailable" title={mapUserError(readError).title} error={safeDiagnostic(readError)}>
             <Button className="mt-3" variant="secondary" onClick={() => reloadActiveSurface()}>
               Try again
             </Button>
@@ -915,17 +925,17 @@ function BulkTaskEditor({ taskIds, onConfirmed }: { taskIds: readonly string[]; 
   const [value, setValue] = useState("p1");
   const [status, setStatus] = useState("Ready to preview. Nothing has changed yet.");
   const [statusDetails, setStatusDetails] = useState("");
-  const [statusDiagnostic, setStatusDiagnostic] = useState("");
+  const [statusReceipt, setStatusReceipt] = useState("");
   const [preview, setPreview] = useState<TaskBulkPreviewReceipt>();
   const [mutations, setMutations] = useState<readonly TaskBulkMutation[]>();
   const [busy, setBusy] = useState(false);
   const previewAttempt = useRef(createAttemptKey("task-bulk-preview"));
   const confirmAttempt = useRef(createAttemptKey("task-bulk-confirm"));
 
-  function note(headline: string, details = "", diagnostic = "") {
+  function note(headline: string, details = "", receipt = "") {
     setStatus(headline);
     setStatusDetails(details);
-    setStatusDiagnostic(diagnostic);
+    setStatusReceipt(receipt);
   }
 
   function failureNote(error: unknown, phase: "preview" | "confirm", retainedPreview?: TaskBulkPreviewReceipt) {
@@ -943,7 +953,7 @@ function BulkTaskEditor({ taskIds, onConfirmed }: { taskIds: readonly string[]; 
         : note(
             "Preview conflicted. Nothing was applied; the selection and action are retained.",
             "",
-            failure.message ?? "409 conflict",
+            describeSafeDiagnostic(safeDiagnostic(error)),
           );
     }
     if (failure.status === 503) {
@@ -955,7 +965,11 @@ function BulkTaskEditor({ taskIds, onConfirmed }: { taskIds: readonly string[]; 
     }
     // The headline and the consequence are product language; a raw backend
     // message is unbounded and belongs in the governed disclosure only.
-    note(`Bulk ${phase} failed. Nothing was applied.`, "", [failure.message, retained].filter(Boolean).join(" ").trim());
+    note(
+      `Bulk ${phase} failed. Nothing was applied.`,
+      "",
+      [describeSafeDiagnostic(safeDiagnostic(error)), retained].filter(Boolean).join(" ").trim(),
+    );
   }
 
   async function previewChanges() {
@@ -1124,7 +1138,7 @@ function BulkTaskEditor({ taskIds, onConfirmed }: { taskIds: readonly string[]; 
           {busy && preview ? "Confirming…" : "Confirm exact preview"}
         </Button>
       </div>
-      <StatusNote message={status} details={statusDetails} diagnostic={statusDiagnostic} className="mt-3" />
+      <StatusNote message={status} details={statusDetails} receipt={statusReceipt} className="mt-3" />
     </section>
   );
 }

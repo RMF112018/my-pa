@@ -13,6 +13,7 @@ import {
   diagnosticError,
   diagnosticLimitations,
 } from "@/lib/diagnostics/presentation";
+import { WEB_LIMITATIONS, type SafeDiagnostic } from "@/lib/diagnostics/safe-detail";
 
 function currentBadge(current: boolean) {
   return <Badge tone={current ? "green" : "gold"}>{current ? "Current" : "Historical"}</Badge>;
@@ -40,11 +41,12 @@ export function AssignmentsPanel({
    * needs the *fact* in both modes, and the sentence only when diagnostics are
    * on. Carrying one string for both meant a raw gateway message crossed this
    * boundary, which is safe only while both sides happen to be server
-   * components — a property of the files, not of the contract.
+   * components — a property of the files, not of the contract. WP08-RT-F010
+   * closed the remainder: the companion prop is no longer a string at all.
    */
   unavailable: boolean;
   /** Already governed by the owning page. Never built while off. */
-  unavailableDiagnostic?: string | null;
+  unavailableDiagnostic?: SafeDiagnostic | null;
 }) {
   if (unavailable) {
     return (
@@ -174,11 +176,12 @@ export function RelationshipsPanel({
    * needs the *fact* in both modes, and the sentence only when diagnostics are
    * on. Carrying one string for both meant a raw gateway message crossed this
    * boundary, which is safe only while both sides happen to be server
-   * components — a property of the files, not of the contract.
+   * components — a property of the files, not of the contract. WP08-RT-F010
+   * closed the remainder: the companion prop is no longer a string at all.
    */
   unavailable: boolean;
   /** Already governed by the owning page. Never built while off. */
-  unavailableDiagnostic?: string | null;
+  unavailableDiagnostic?: SafeDiagnostic | null;
 }) {
   if (unavailable) {
     return (
@@ -328,11 +331,12 @@ export function IdentityHistoryPanel({
    * needs the *fact* in both modes, and the sentence only when diagnostics are
    * on. Carrying one string for both meant a raw gateway message crossed this
    * boundary, which is safe only while both sides happen to be server
-   * components — a property of the files, not of the contract.
+   * components — a property of the files, not of the contract. WP08-RT-F010
+   * closed the remainder: the companion prop is no longer a string at all.
    */
   unavailable: boolean;
   /** Already governed by the owning page. Never built while off. */
-  unavailableDiagnostic?: string | null;
+  unavailableDiagnostic?: SafeDiagnostic | null;
 }) {
   if (unavailable) {
     return (
@@ -360,7 +364,7 @@ export function IdentityHistoryPanel({
       {truncated ? (
         <DegradedBanner
           scope="identity history"
-          limitations={diagnosticLimitations(diagnosticsEnabled, ["This page of the ledger is not the whole history."])}
+          limitations={diagnosticLimitations(diagnosticsEnabled, [WEB_LIMITATIONS.ledgerPageIsNotWholeHistory])}
           truncated
         />
       ) : null}

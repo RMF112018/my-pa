@@ -13,11 +13,11 @@ import { isFiniteInteger } from "@/lib/api/decode/primitives";
 import type { DirectedRelationshipWriteResult } from "@/lib/api/decode/capabilities/entities.relationships.write";
 import type { PrincipalSession } from "@/contracts/identity";
 import type { ErrorEnvelope } from "@/contracts/envelope";
+import { WEB_LIMITATIONS } from "@/lib/diagnostics/safe-detail";
 
 export const SCOPE = "canvas.relationships";
 
-export const SYNTHETIC_UNAVAILABLE =
-  "Relationship editing is not available on the synthetic provider.";
+export const SYNTHETIC_UNAVAILABLE = WEB_LIMITATIONS.syntheticNoRelationshipEditing;
 
 export type AdmittedWrite = {
   readonly principal: PrincipalSession;

@@ -29,6 +29,7 @@
  * the same reason there is no second copy of the decision below.
  */
 import { backendDisclosure, transportLimitations, type GatewayOutcome } from "@/lib/api/gateway";
+import { WEB_LIMITATIONS } from "@/lib/diagnostics/safe-detail";
 import type { DisclosureEnvelope, ErrorEnvelope } from "@/contracts/envelope";
 
 /** What a surface is holding, once the gateway has answered. */
@@ -57,18 +58,26 @@ export type SurfaceAnswer<T> =
 /**
  * The disclosure a failed read carries.
  *
- * `coverage: "unavailable"` and the failure's own message as the limitation, so
+ * `coverage: "unavailable"` and a web-authored statement of what is missing, so
  * that a reader of the disclosure alone reaches the same conclusion as a reader
  * of the rendered page. Never `complete`, and never carrying a freshness moment,
  * because nothing was observed.
+ *
+ * **It takes no message, by signature.** This used to carry the failure's own
+ * `ErrorEnvelope.message` as the first limitation, which made an upstream string
+ * the page's answer to "what is missing from this answer" on every failed read.
+ * That is the same string `lib/diagnostics/safe-detail.ts` drops from the
+ * diagnostic vocabulary, reaching the reader on a second channel that bypassed
+ * the drop. The parameter is removed rather than ignored so that passing one is
+ * a compile error instead of a silent no-op.
  */
-function failureDisclosure(scope: string, message: string): DisclosureEnvelope {
+function failureDisclosure(scope: string): DisclosureEnvelope {
   return {
     scope,
     coverage: "unavailable",
     freshnessAt: null,
     authority: "derived",
-    limitations: [message, ...transportLimitations()],
+    limitations: [WEB_LIMITATIONS.nothingInScopeWasRead, ...transportLimitations()],
     truncated: false,
   };
 }
@@ -90,7 +99,7 @@ export function surfaceAnswer<T>(
     return {
       kind: "unavailable",
       error: outcome.error,
-      disclosure: failureDisclosure(scope, outcome.error.message),
+      disclosure: failureDisclosure(scope),
     };
   }
 

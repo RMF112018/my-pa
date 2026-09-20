@@ -15,6 +15,7 @@ import type { PulseItem } from "@/contracts/views";
 import type { PrincipalSession } from "@/contracts/identity";
 import type { DisclosureEnvelope } from "@/contracts/envelope";
 import { requireSyntheticProvider } from "@/lib/fixtures/gate";
+import { WEB_LIMITATIONS } from "@/lib/diagnostics/safe-detail";
 
 export function syntheticDisclosure(scope: string): DisclosureEnvelope {
   requireSyntheticProvider();
@@ -23,7 +24,7 @@ export function syntheticDisclosure(scope: string): DisclosureEnvelope {
     coverage: "synthetic",
     freshnessAt: null,
     authority: "synthetic_fixture",
-    limitations: ["Synthetic fixture data. No live sources are connected."],
+    limitations: [WEB_LIMITATIONS.syntheticFixtureData],
     truncated: false,
   };
 }

@@ -49,7 +49,12 @@
 import type { ReactNode } from "react";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { mapUserError, type UserErrorInput } from "@/lib/ui/user-error";
+import { userErrorCopy } from "@/lib/ui/user-error";
+import {
+  NO_LIMITATIONS,
+  type SafeDiagnostic,
+  type SafeLimitations,
+} from "@/lib/diagnostics/safe-detail";
 import {
   DiagnosticsDetails,
   DiagnosticsLimitations,
@@ -112,12 +117,25 @@ export interface SurfaceStateProps {
   readonly title: string;
   /** User-facing one sentence. Not raw transport. */
   readonly detail?: string | null;
-  /** Raw/transport string. Details only. */
-  readonly diagnostic?: string | null;
-  /** BFF/client failure. Mapped to Level-1 copy; raw message stays in Details. */
-  readonly error?: UserErrorInput;
-  /** Limitations the backend disclosed. Shown for `degraded` above all. */
-  readonly limitations?: readonly string[];
+  /**
+   * Engineering detail, in the closed vocabulary. Details only.
+   *
+   * WP08-RT-F010: a `SafeDiagnostic`, not a string. It can only come from
+   * `lib/diagnostics/safe-detail.ts`, which is what stops an arbitrary backend
+   * string reaching the DOM here.
+   */
+  readonly diagnostic?: SafeDiagnostic | null;
+  /**
+   * The governed failure. Its `kind` selects the Level-1 sentence; the record
+   * itself is the Details text. Already read down to the closed vocabulary by
+   * `diagnosticError`, so nothing raw crosses into the RSC payload.
+   */
+  readonly error?: SafeDiagnostic;
+  /**
+   * Limitations the backend disclosed, each allowlisted against its
+   * `Limitation` vocabulary. Shown for `degraded` above all.
+   */
+  readonly limitations?: SafeLimitations;
   /** Extra content — a retry affordance, a link — placed after the sentences. */
   readonly children?: ReactNode;
   /** Distinguishes two states of the same kind on one page. */
@@ -134,8 +152,8 @@ function StateDetails({
   diagnostic,
 }: {
   clarification: string;
-  limitations: readonly string[];
-  diagnostic?: string | null;
+  limitations: SafeLimitations;
+  diagnostic?: SafeDiagnostic | null;
 }) {
   return (
     <details className="mt-2" data-testid="surface-state-details">
@@ -161,15 +179,18 @@ export function SurfaceState({
   detail,
   diagnostic,
   error,
-  limitations = [],
+  limitations = NO_LIMITATIONS,
   children,
   testId,
 }: SurfaceStateProps) {
   const presentation = PRESENTATION[kind];
   const headingId = `surface-state-${testId ?? kind}`;
-  const presented = error !== undefined ? mapUserError(error) : null;
+  // Level-1 copy comes from the classification the safe record already carries,
+  // so the product sentence survives without the raw failure being handed over
+  // a second time.
+  const presented = error !== undefined ? userErrorCopy(error.kind) : null;
   const level1 = detail ?? presented?.message ?? null;
-  const diagnosticText = diagnostic ?? presented?.diagnostic ?? null;
+  const diagnosticDetail = diagnostic ?? error ?? null;
   const compact = compactKind(kind);
   const frameClass = compact
     ? "py-3"
@@ -190,7 +211,7 @@ export function SurfaceState({
         <StateDetails
           clarification={presentation.clarification}
           limitations={limitations}
-          diagnostic={diagnosticText}
+          diagnostic={diagnosticDetail}
         />
       </CardBody>
     </>
@@ -224,7 +245,7 @@ export function DegradedBanner({
   truncated = false,
 }: {
   scope: string;
-  limitations: readonly string[];
+  limitations: SafeLimitations;
   truncated?: boolean;
 }) {
   return (

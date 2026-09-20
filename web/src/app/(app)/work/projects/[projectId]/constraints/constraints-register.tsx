@@ -47,6 +47,7 @@ import { groupRegisterEntries, queryRegisterPage, REGISTER_PAGE_SIZE } from "./r
 import { RegisterCardList, RegisterTable } from "./register-table";
 import type { ConstraintViewport } from "./use-viewport";
 import { lifecycleLabel, syncLabel } from "./presentation";
+import { safeDiagnostic, safeLimitations } from "@/lib/diagnostics/safe-detail";
 
 const SCOPES: readonly { readonly value: ConstraintListScope; readonly label: string }[] = [
   { value: "open", label: "Open" },
@@ -425,7 +426,7 @@ export function ConstraintsRegister({
       ) : null}
 
       {disclosure?.coverage === "partial" ? (
-        <DegradedBanner scope="Constraint Register" limitations={disclosure.limitations} truncated={disclosure.truncated && !disclosure.nextCursor} />
+        <DegradedBanner scope="Constraint Register" limitations={safeLimitations(disclosure.limitations)} truncated={disclosure.truncated && !disclosure.nextCursor} />
       ) : null}
 
       {failure ? (
@@ -437,7 +438,7 @@ export function ConstraintsRegister({
           // straight around the policy, so the failure goes through the shared
           // mapper instead and the raw string travels as `error`, where the
           // diagnostics gate governs it.
-          error={failure}
+          error={safeDiagnostic(failure)}
           testId="register-unavailable"
         >
           {onRetry ? <Button size="sm" variant="secondary" onClick={onRetry}>Retry</Button> : null}

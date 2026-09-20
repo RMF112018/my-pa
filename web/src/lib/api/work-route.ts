@@ -4,6 +4,7 @@ import { requirePrincipal, readCleanBody } from "@/lib/api/guard";
 import { gatewayRefusal, notImplemented, resolveServing } from "@/lib/api/serving";
 import type { PrincipalSession } from "@/contracts/identity";
 import { admitBrowserMutation } from "@/lib/http/mutation-admission";
+import { WEB_LIMITATIONS } from "@/lib/diagnostics/safe-detail";
 
 export type WorkField = {
   readonly gateway: string;
@@ -250,7 +251,7 @@ async function dispatch(
   const serving = resolveServing();
   if (serving.kind === "refused") return serving.response;
   if (serving.kind === "synthetic") {
-    return notImplemented(scope, "Work mutations and reads require the executable Python Work plane; synthetic fixtures are not canonical Task or Commitment state.");
+    return notImplemented(scope, WEB_LIMITATIONS.syntheticNoWork);
   }
   const outcome = await invokeGateway(principal, capability, payload);
   if (!outcome.ok) {

@@ -44,6 +44,7 @@ import { ConstraintsOverview } from "./constraints-overview";
 import { ConstraintsRegister } from "./constraints-register";
 import { ConstraintInspector, inspectorTitle } from "./constraint-inspector";
 import { useConstraintViewport } from "./use-viewport";
+import { safeDiagnostic, safeLimitations } from "@/lib/diagnostics/safe-detail";
 
 interface Props {
   readonly projectId: string;
@@ -450,14 +451,14 @@ function LiveConstraintsWorkspaceInner({ projectId, initialState }: Props) {
         </TabsList>
         <TabsContent value="overview" className="mt-4">
           {visibleOverviewFailure ? (
-            <SurfaceState kind="unavailable" title="Constraint Overview could not be read" error={visibleOverviewFailure} testId="overview-unavailable">
+            <SurfaceState kind="unavailable" title="Constraint Overview could not be read" error={safeDiagnostic(visibleOverviewFailure)} testId="overview-unavailable">
               <Button size="sm" variant="secondary" onClick={() => setRetry((value) => value + 1)}>Retry</Button>
             </SurfaceState>
           ) : visibleOverview === null ? (
             <p role="status" className="text-sm text-muted" data-testid="overview-loading">Reading the Constraint Overview…</p>
           ) : (
             <>
-            {visibleOverviewDisclosure?.coverage === "partial" ? <DegradedBanner scope="Constraint Overview" limitations={visibleOverviewDisclosure.limitations} truncated={visibleOverviewDisclosure.truncated} /> : null}
+            {visibleOverviewDisclosure?.coverage === "partial" ? <DegradedBanner scope="Constraint Overview" limitations={safeLimitations(visibleOverviewDisclosure.limitations)} truncated={visibleOverviewDisclosure.truncated} /> : null}
             <ConstraintsOverview
               overview={visibleOverview}
               categoryOpenCounts={[]}

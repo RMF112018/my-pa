@@ -39,6 +39,7 @@ beforeEach(() => {
   diagnosticsEnabled = false;
 });
 import { SurfaceState, DegradedBanner, LoadingStatus } from "@/components/ui/surface-state";
+import { safeDiagnostic, safeLimitations } from "@/lib/diagnostics/safe-detail";
 
 afterEach(() => {
   cleanup();
@@ -79,7 +80,7 @@ describe("the four non-record answers are four different answers", () => {
         kind="unavailable"
         title="Your library could not be read"
         detail="This could not be read. Try again."
-        diagnostic="boom"
+        diagnostic={safeDiagnostic({ code: "upstream_error" })}
       />,
     );
     const unavailable = screen.getByTestId("state-unavailable");
@@ -172,11 +173,11 @@ describe("the four non-record answers are four different answers", () => {
       <SurfaceState
         kind="degraded"
         title="Partial"
-        limitations={["capture search does not stem words"]}
+        limitations={safeLimitations(["capture_search_matches_words_as_written"])}
       />,
     );
     expect(screen.queryByTestId("surface-state-limitations")).toBeNull();
-    expect(document.body.textContent ?? "").not.toMatch(/does not stem words/);
+    expect(document.body.textContent ?? "").not.toMatch(/matches_words_as_written/);
     // The state itself, and what it means, are unchanged.
     expect(screen.getByTestId("state-degraded")).toHaveAttribute("data-state", "degraded");
     expect(screen.getByTestId("surface-state-clarification").textContent).toMatch(
@@ -190,12 +191,12 @@ describe("the four non-record answers are four different answers", () => {
       <SurfaceState
         kind="degraded"
         title="Partial"
-        limitations={["capture search does not stem words", "the listing has no continuation"]}
+        limitations={safeLimitations(["capture_search_matches_words_as_written", "listing_has_no_continuation_cursor"])}
       />,
     );
     const list = screen.getByTestId("surface-state-limitations");
-    expect(list.textContent).toContain("does not stem words");
-    expect(list.textContent).toContain("no continuation");
+    expect(list.textContent).toContain("capture_search_matches_words_as_written");
+    expect(list.textContent).toContain("listing_has_no_continuation_cursor");
   });
 
   it("never uses empty-kind vocabulary for a failed read", () => {
@@ -223,28 +224,28 @@ describe("the four non-record answers are four different answers", () => {
 
 describe("the degraded banner sits above real records", () => {
   it("says the rows are real and not all of them", () => {
-    render(<DegradedBanner scope="this listing" limitations={["one scope was skipped"]} />);
+    render(<DegradedBanner scope="this listing" limitations={safeLimitations(["scope_not_fully_extracted"])} />);
     const banner = screen.getByTestId("degraded-banner");
     expect(banner).toHaveAttribute("data-state", "degraded");
     // The consequence is product truth and is stated in both modes.
     expect(banner.textContent).toMatch(/records below are real/i);
     expect(banner.textContent).toMatch(/not all of them/i);
     // The backend's own strings are not, and are absent by default.
-    expect(banner.textContent).not.toContain("one scope was skipped");
+    expect(banner.textContent).not.toContain("scope_not_fully_extracted");
     diagnosticsEnabled = true;
     cleanup();
-    render(<DegradedBanner scope="this listing" limitations={["one scope was skipped"]} />);
-    expect(screen.getByTestId("degraded-banner").textContent).toContain("one scope was skipped");
+    render(<DegradedBanner scope="this listing" limitations={safeLimitations(["scope_not_fully_extracted"])} />);
+    expect(screen.getByTestId("degraded-banner").textContent).toContain("scope_not_fully_extracted");
     expect(within(banner).getByTestId("surface-state-details")).toHaveTextContent(
       /this page guessing it/i,
     );
   });
 
   it("states truncation separately, because it is a different fact", () => {
-    const { unmount } = render(<DegradedBanner scope="s" limitations={[]} />);
+    const { unmount } = render(<DegradedBanner scope="s" limitations={safeLimitations([])} />);
     expect(screen.queryByTestId("degraded-truncated")).toBeNull();
     unmount();
-    render(<DegradedBanner scope="s" limitations={[]} truncated />);
+    render(<DegradedBanner scope="s" limitations={safeLimitations([])} truncated />);
     expect(screen.getByTestId("degraded-truncated").textContent).toMatch(/no continuation token/i);
   });
 });
@@ -268,7 +269,7 @@ describe("compact empty is not an alert card", () => {
       <SurfaceState
         kind="unavailable"
         title="Today could not be derived"
-        error={{ message: "session authority unavailable", code: "authority_unavailable" }}
+        error={safeDiagnostic({ message: "session authority unavailable", code: "authority_unavailable" })}
       />,
     );
     const root = screen.getByTestId("state-unavailable");
@@ -287,16 +288,20 @@ describe("compact empty is not an alert card", () => {
       <SurfaceState
         kind="unavailable"
         title="Today could not be derived"
-        error={{ message: "session authority unavailable", code: "authority_unavailable" }}
+        error={safeDiagnostic({ message: "session authority unavailable", code: "authority_unavailable" })}
       />,
     );
     const root = screen.getByTestId("state-unavailable");
     // ON is presentation authority only: Level 1 still says the same thing, and
     // the raw string is additive rather than a replacement for product language.
     expect(firstParagraphOutsideDetails(root)).toHaveTextContent(/couldn't verify your session/i);
-    expect(within(root).getByTestId("surface-state-diagnostic")).toHaveTextContent(
-      "session authority unavailable",
-    );
+    // WP08-RT-F010: what Diagnostics carries is the closed vocabulary, not the
+    // backend's own sentence. The classification and the allowlisted code
+    // survive; the free-text `message` does not reach the DOM in either mode.
+    const shown = within(root).getByTestId("surface-state-diagnostic");
+    expect(shown).toHaveTextContent("authority_unavailable");
+    expect(shown).toHaveTextContent(/session could not be verified/i);
+    expect(root.textContent ?? "").not.toMatch(/session authority unavailable/);
     const details = within(root).getByTestId("surface-state-details");
     expect(details.contains(within(root).getByTestId("surface-state-diagnostic"))).toBe(true);
   });

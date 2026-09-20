@@ -246,6 +246,130 @@ describe("raw transport text never reaches the ungated product-language prop", (
   });
 });
 
+describe("a diagnostic is a closed record, and nothing else can become one", () => {
+  /**
+   * WP08-RT-F010. The WP07 guards above are about *whether* engineering detail
+   * is built. This one is about *what* it may be. The three helpers were
+   * pass-through filters, `mapUserError` deliberately put raw transport text in
+   * its `diagnostic`, and `DiagnosticsDetails` rendered that string verbatim —
+   * so with diagnostics on, an arbitrary backend string reached the DOM. The
+   * fix is a type: `SafeDiagnostic` and `SafeLimitations` in
+   * `lib/diagnostics/safe-detail.ts`, which the props now demand.
+   *
+   * The compiler holds most of that line on its own. What it cannot hold is the
+   * three edits that would quietly take it back — widening a prop declaration
+   * to `string`, casting into the branded type from outside its module, or
+   * routing an upstream `message` into something diagnostic-shaped. Those are
+   * whole-tree statements, so they are asserted here, in the same
+   * offender-list style as the rules above.
+   */
+
+  /** Where the vocabulary is defined, and the only place it may be minted. */
+  const VOCABULARY_OWNER = "lib/diagnostics/safe-detail.ts";
+
+  it("mints the safe types only inside their own module", () => {
+    // A cast is the one way to conjure a branded value without a constructor.
+    const MINT = /\bas\s+(?:unknown\s+as\s+)?Safe(?:Diagnostic|Limitations)\b|\bsatisfies\s+Safe(?:Diagnostic|Limitations)\b/;
+    const offenders = ALL_FILES.filter(
+      (file) => file.path !== VOCABULARY_OWNER && MINT.test(file.source),
+    );
+    expect(offenders.map((file) => file.path)).toEqual([]);
+  });
+
+  it("declares no diagnostic-bearing prop as a raw string again", () => {
+    // The reintroduction edit, named directly: a prop or field called
+    // `diagnostic` or `unavailableDiagnostic` typed back to free text. Those
+    // two names exist in this tree only as rendering props, so the rule can be
+    // whole-tree without catching the data model. `limitations` is not included
+    // here for the opposite reason — `DisclosureEnvelope.limitations` is the
+    // contract's own `readonly string[]` and must stay one; what may not be a
+    // string list is the *prop*, and the assertion below holds that.
+    //
+    // `receipt` is not in this alternation, and the test that follows says why:
+    // it is deliberately still a `string`, because what it carries is text this
+    // tier formatted itself, so its guarantee is a feed rule rather than a type.
+    const WIDENED = /\b(?:diagnostic|unavailableDiagnostic)\??:\s*(?:readonly\s+)?string\b/;
+    const offenders = PRODUCTION_FILES.filter(
+      (file) => file.path !== VOCABULARY_OWNER && WIDENED.test(file.source),
+    );
+    expect(offenders.map((file) => file.path)).toEqual([]);
+  });
+
+  it("feeds the one remaining free-string receipt channel only from its own writers", () => {
+    // NB-03. WP08-RT-F010 renamed `StatusNote`'s diagnostic prop from
+    // `diagnostic` to `receipt`, which moved the tree's last free-string
+    // diagnostic-bearing prop outside the `WIDENED` rule above. Adding
+    // `receipt` to that alternation would fail immediately and for the wrong
+    // reason: the prop is *meant* to be a string, because what it carries is
+    // receipt text this tier formatted itself — a bulk-operation id and an ISO
+    // expiry — which no closed vocabulary can express. So the rule is stated
+    // over the feed instead: the channel exists in exactly one place, and
+    // everything that reaches it is either described from the closed
+    // vocabulary or built from this tier's own template. An upstream
+    // `message` never is.
+    const callsites = PRODUCTION_FILES.filter((file) => /\breceipt=\{/.test(file.source));
+    expect(callsites.map((file) => file.path)).toEqual(["components/work/workbench.tsx"]);
+    const workbench = callsites[0]!.source;
+    expect(workbench).toContain("describeSafeDiagnostic(safeDiagnostic(error))");
+    // The three assertions below this one are stated over the *syntax* of the
+    // assignment, and the carrier does not have to look like any of them: the
+    // channel is fed through one local `note(headline, details, receipt)`
+    // helper, so `note("…", "", failure.message)` reaches `setStatusReceipt`
+    // and the `receipt={…}` prop without the substring `receipt` appearing
+    // anywhere near `.message`. All three stayed false against exactly that
+    // edit while the positive above still passed, because a second callsite
+    // supplies the anchor — so what they asserted was "one callsite exists and
+    // one safe expression appears somewhere in the file", not a feed rule.
+    // The rule is therefore stated over what is fed: the caught failure's
+    // `message` is the one field with no shape and no upstream guarantee, and
+    // it may not be read anywhere in this module, by any route into the
+    // channel. Comments are stripped before scanning, so the two that discuss
+    // `error.message` by name do not trip it.
+    expect(workbench).not.toMatch(/\b(?:failure|error)\s*\.\s*message\b/);
+    expect(workbench).not.toMatch(/setStatusReceipt\([^)]*\.message\b/);
+    expect(workbench).not.toMatch(/\breceipt\s*=\s*[^;\n]*\.message\b/);
+    expect(workbench).not.toMatch(/\breceipt=\{[^}]*\.message\b/);
+  });
+
+  it("keeps the rendering props declared as the safe types", () => {
+    // The two components that consume the vocabulary. A widening edit lands
+    // here first, and the compiler only helps once these say what they say.
+    const details = PRODUCTION_FILES.find(
+      (file) => file.path === "components/ui/diagnostics-details.tsx",
+    );
+    const surface = PRODUCTION_FILES.find(
+      (file) => file.path === "components/ui/surface-state.tsx",
+    );
+    expect(details?.source).toContain("diagnostic?: SafeDiagnostic | null");
+    expect(details?.source).toContain("limitations: SafeLimitations");
+    expect(surface?.source).toContain("readonly diagnostic?: SafeDiagnostic | null");
+    expect(surface?.source).toContain("readonly error?: SafeDiagnostic");
+    expect(surface?.source).toContain("readonly limitations?: SafeLimitations");
+  });
+
+  it("never routes an upstream message into anything diagnostic-shaped", () => {
+    // `error.message` is the field with no shape and no upstream guarantee, and
+    // it is where a raw exception or a connection string arrives when one does.
+    // It may not be assigned to a diagnostic-named binding, nor handed to one
+    // of the diagnostic-bearing props.
+    const RAW_INTO_DIAGNOSTIC =
+      /\b\w*[Dd]iagnostic\w*\s*[=:]\s*[^;,\n]*\b\w+\.message\b|\b(?:diagnostic|error|unavailableDiagnostic)=\{[^}]*\b\w+\.message\b/;
+    const offenders = PRODUCTION_FILES.filter((file) => RAW_INTO_DIAGNOSTIC.test(file.source));
+    expect(offenders.map((file) => file.path)).toEqual([]);
+  });
+
+  it("renders the diagnostic through the module's own writer", () => {
+    // Interpolating the record itself, or any field of it, would put text on
+    // the page that this module did not author.
+    const owner = PRODUCTION_FILES.find(
+      (file) => file.path === "components/ui/diagnostics-details.tsx",
+    );
+    expect(owner).toBeDefined();
+    expect(owner?.source).toContain("describeSafeDiagnostic(diagnostic)");
+    expect(owner?.source).not.toMatch(/\{\s*diagnostic\s*\}/);
+  });
+});
+
 describe("the scan itself is wired to real files", () => {
   it("found the modules it is guarding", () => {
     // A walker pointed at the wrong directory would make every assertion above
@@ -254,6 +378,7 @@ describe("the scan itself is wired to real files", () => {
     expect(paths.has("lib/diagnostics/preference.ts")).toBe(true);
     expect(paths.has("app/(app)/system/show-diagnostics-toggle.tsx")).toBe(true);
     expect(paths.has("components/diagnostics/diagnostics-provider.tsx")).toBe(true);
+    expect(paths.has("lib/diagnostics/safe-detail.ts")).toBe(true);
     expect(ALL_FILES.length).toBeGreaterThan(300);
   });
 });

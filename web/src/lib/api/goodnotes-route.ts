@@ -8,10 +8,9 @@ import {
 import { requirePrincipal, readCleanBody } from "@/lib/api/guard";
 import { gatewayRefusal, notImplemented, resolveServing } from "@/lib/api/serving";
 import { admitBrowserMutation } from "@/lib/http/mutation-admission";
+import { WEB_LIMITATIONS } from "@/lib/diagnostics/safe-detail";
 
-const SYNTHETIC_REASON =
-  "The synthetic provider has no GoodNotes fixture. GoodNotes reads the Python GoodNotes " +
-  "plane; run against the gateway to see it.";
+const SYNTHETIC_REASON = WEB_LIMITATIONS.syntheticNoGoodnotes;
 
 export function noStore(response: NextResponse) {
   response.headers.set("cache-control", "private, no-store");

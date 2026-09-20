@@ -35,13 +35,43 @@ import {
   type SearchCoverage,
 } from "@/lib/search/presentation";
 import type { ApiFailure } from "@/lib/api/work-client";
+import {
+  failureFields,
+  safeDiagnostic,
+  type SafeDiagnostic,
+} from "@/lib/diagnostics/safe-detail";
 
+/**
+ * What a failed Search read is, once it has been read down to the closed
+ * vocabulary.
+ *
+ * **Why the record and not the raw fields (WP08-RT-F010, B-01).** The variant
+ * used to carry `message: string`, and the callsite compensated by handing
+ * `SurfaceState` a hardcoded `{ errorClass: "unavailable", code:
+ * "coverage_unavailable" }`. That asserted a class and a code the backend never
+ * sent — a manufactured value in the one channel this work package exists to
+ * make trustworthy — and, because the constant classified as `unavailable`, it
+ * also collapsed "You appear to be offline." and "We couldn't verify your
+ * session." into the generic "This could not be read. Try again.".
+ *
+ * Two of the nine classifications — `offline` and `session_unverified` — are
+ * reached by matching a pattern against the failure's `message`, and the
+ * message is precisely what must not survive into the rendered output. The
+ * resolution is to classify *once*, here, at the moment the `ApiFailure` is
+ * caught and its message is still in hand, and to carry the result. A
+ * `SafeDiagnostic` is the closed record: `kind`, an allowlisted `code`, one of
+ * the eight `errorClass` values, a constrained `status`, a `reason` that is a
+ * conclusion drawn from a pattern rather than the text that matched, and the
+ * correlation *fact*. No upstream prose is in it, so nothing is carried that
+ * could be rendered. `safeDiagnostic` is still the only constructor, and the
+ * callsite passes the record back through it, which re-validates every field.
+ */
 type SearchAnswer =
   | { readonly kind: "idle" }
   | { readonly kind: "loading" }
+  | { readonly kind: "not_implemented"; readonly diagnostic: SafeDiagnostic }
   | { readonly kind: "ready"; readonly result: FederatedSearchResponse }
-  | { readonly kind: "not_implemented"; readonly message: string }
-  | { readonly kind: "unavailable"; readonly message: string };
+  | { readonly kind: "unavailable"; readonly diagnostic: SafeDiagnostic };
 
 function isAbort(error: unknown): boolean {
   return (
@@ -51,19 +81,20 @@ function isAbort(error: unknown): boolean {
 }
 
 function classifyFailure(error: unknown): SearchAnswer {
-  const failure = error as ApiFailure;
-  if (failure.status === 501 || failure.code === "not_implemented") {
+  const fields = failureFields(error as ApiFailure);
+  if (fields.status === 501 || fields.code === "not_implemented") {
+    // `not_implemented` is not asserted over the top of what arrived: only the
+    // backend's own code is carried, and on a 501 that sent none, the `HTTP 501`
+    // rendered on the same line is already the statement that the route is not
+    // built — a derived code would only present itself as a received one. No
+    // `errorClass` is invented — the eight are the backend's to send, and this
+    // failure sent none.
     return {
       kind: "not_implemented",
-      message:
-        failure.message ||
-        "Search is not available in this build.",
+      diagnostic: safeDiagnostic(fields),
     };
   }
-  return {
-    kind: "unavailable",
-    message: failure.message || "Search could not be read.",
-  };
+  return { kind: "unavailable", diagnostic: safeDiagnostic(fields) };
 }
 
 function heldEnrollment(explicit?: string): string | undefined {
@@ -352,7 +383,10 @@ export function SearchCommandPanel({
             // WP07 F-02: the backend's own sentence is raw text and belongs on
             // the governed prop, not on `detail`, which is ungated product
             // language. The title already states the product consequence.
-            error={{ message: answer.message }}
+            // WP08-RT-F010: and the sentence itself is not rendered at all now,
+            // so the condition is named rather than quoted — from what the
+            // failure actually carried, not from a constant.
+            error={safeDiagnostic(answer.diagnostic)}
             testId="search-not-implemented"
           />
         ) : null}
@@ -362,7 +396,13 @@ export function SearchCommandPanel({
           <SurfaceState
             kind="unavailable"
             title="Search could not be read"
-            error={answer.kind === "unavailable" ? answer.message : undefined}
+            // The transport facts the read actually observed, classified once
+            // where the failure was caught. `SurfaceState` derives Level-1 copy
+            // from `kind`, so an offline read still says "You appear to be
+            // offline." with diagnostics off.
+            error={
+              answer.kind === "unavailable" ? safeDiagnostic(answer.diagnostic) : undefined
+            }
             detail={
               answer.kind === "unavailable"
                 ? undefined

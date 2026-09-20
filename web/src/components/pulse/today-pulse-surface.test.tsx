@@ -39,6 +39,7 @@ import {
   classifyPulsePayload,
 } from "@/components/pulse/today-pulse-surface";
 import { TaskRuntimeProvider, useTaskRuntime } from "@/components/work/task-runtime-provider";
+import { WEB_LIMITATIONS } from "@/lib/diagnostics/safe-detail";
 import type { DisclosureEnvelope } from "@/contracts/envelope";
 import type { BackendPulseItem, TodayPulseAnswer, TodayRow } from "@/contracts/views";
 
@@ -206,6 +207,7 @@ describe("the exact Empty sentence is reserved for an authoritative quiet day", 
     renderSurface({
       kind: "unavailable",
       error: { errorClass: "unavailable", code: "gateway_unreachable", message: "no answer" },
+      status: 503,
       limitations: ["the gateway did not answer"],
     });
     await waitFor(() => expect(screen.getByTestId("today-stale")).toBeTruthy());
@@ -287,7 +289,7 @@ describe("a first read that fails states the failure rather than a placeholder",
           coverage: "unavailable",
           freshnessAt: null,
           authority: "derived",
-          limitations: ["the application gateway did not answer"],
+          limitations: [WEB_LIMITATIONS.nothingInScopeWasRead],
           truncated: false,
         },
       }),
@@ -296,16 +298,24 @@ describe("a first read that fails states the failure rather than a placeholder",
   }
 
   it("carries the route's own diagnostic into the unavailable region", async () => {
-    // The sentence names the gateway, so it is diagnostics under WP07 and is
-    // asserted in the mode that renders it. That it is the *gateway's own*
-    // sentence, reached through the envelope rather than written here, is still
-    // the point: a status code alone could not have produced it.
+    // The classification, the code and the status reach the region; the raw
+    // `message` does not, in either of the two channels it travels on. It is
+    // dropped from the diagnostic vocabulary outright, and `gatewayRefusal` no
+    // longer copies it onto `disclosure.limitations` at all — that channel
+    // answers "what is missing from this answer" with a sentence this tier
+    // authored, which on a failed read is the whole of the scope. `message` has
+    // no schema and no upstream guarantee, so it is not something this tier
+    // prints, and it is not something a reader has to see censored either.
     diagnostics.enabled = true;
     fetchSpy.mockImplementation(async () => refusedResponse());
     renderFresh();
     const region = await screen.findByTestId("today-unavailable");
     expect(region).toHaveAttribute("data-state", "unavailable");
-    expect(region.textContent).toContain("the application gateway did not answer");
+    expect(region.textContent).toContain("code gateway_unreachable");
+    expect(region.textContent).toContain("HTTP 503");
+    expect(region.textContent).not.toContain("the application gateway did not answer");
+    expect(region.textContent).toContain(WEB_LIMITATIONS.nothingInScopeWasRead);
+    expect(region.textContent).not.toContain("it is not one this build recognises");
     expect(screen.queryByTestId("today-empty")).toBeNull();
     expect(screen.queryByText(TODAY_EMPTY_COPY)).toBeNull();
     // Nothing was ever confirmed, so there is no "last confirmed read" to claim.

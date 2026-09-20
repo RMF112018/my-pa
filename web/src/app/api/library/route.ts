@@ -40,6 +40,7 @@ import {
   type GatewayCapability,
 } from "@/lib/api/gateway";
 import { gatewayRefusal, notImplemented, resolveServing } from "@/lib/api/serving";
+import { WEB_LIMITATIONS } from "@/lib/diagnostics/safe-detail";
 
 const SCOPE = "library";
 
@@ -68,8 +69,7 @@ export async function GET(request: NextRequest) {
   if (serving.kind === "synthetic") {
     return notImplemented(
       SCOPE,
-      "The synthetic provider has no Library fixture. Library reads the Python knowledge " +
-        "and capture planes; run against the gateway to see it.",
+      WEB_LIMITATIONS.syntheticNoLibrary,
     );
   }
 

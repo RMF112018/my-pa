@@ -20,6 +20,7 @@ import { AssignmentsPanel } from "./related-records";
 import { UnresolvedMentionsPanel } from "./unresolved-mentions";
 import { PeopleLookupForms, PeopleSearchForm, PeopleResolveForm } from "./people-forms";
 import { SurfaceState } from "@/components/ui/surface-state";
+import { safeDiagnostic } from "@/lib/diagnostics/safe-detail";
 
 afterEach(cleanup);
 
@@ -262,7 +263,7 @@ describe("unavailable companion plane", () => {
         assignments={null}
         disclosure={null}
         unavailable
-        unavailableDiagnostic="the application gateway did not answer"
+        unavailableDiagnostic={safeDiagnostic({ code: "gateway_unreachable", message: "the application gateway did not answer" })}
       />,
     );
     expect(screen.getByTestId("people-assignments-unavailable")).toHaveAttribute("data-state", "unavailable");

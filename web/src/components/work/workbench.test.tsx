@@ -1710,7 +1710,7 @@ describe("Work surface", () => {
     expect(screen.queryByText("No today tasks")).toBeNull();
   });
 
-  it("carries the raw gateway message once diagnostics are on", async () => {
+  it("carries the closed diagnostic vocabulary once diagnostics are on", async () => {
     diagnostics.enabled = true;
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { code: "unavailable", message: "gateway down" } }), { status: 503, headers: { "content-type": "application/json" } })));
     history.replaceState(null, "", "/work?view=today");
@@ -1718,7 +1718,12 @@ describe("Work surface", () => {
     expect(await screen.findByText("This could not be read")).toBeTruthy();
     // ON is additive: the product-language sentence is unchanged.
     expect(screen.getByTestId("surface-state-detail").textContent).toBe("This could not be read. Try again.");
-    expect(screen.getByTestId("surface-state-diagnostic").textContent).toBe("gateway down");
+    // WP08-RT-F010: the backend's own sentence is no longer rendered. The
+    // allowlisted code and the classification are, which is what an engineer
+    // acts on; the raw message stays in the server log.
+    const shown = screen.getByTestId("surface-state-diagnostic").textContent ?? "";
+    expect(shown).toContain("unavailable");
+    expect(shown).not.toContain("gateway down");
     expect(screen.queryByText("No today tasks")).toBeNull();
   });
 

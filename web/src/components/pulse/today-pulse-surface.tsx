@@ -1,24 +1,48 @@
 "use client";
 
 /**
- * Today's client half: the surface that keeps the Pulse fresh after the server
- * has answered once (WP-TUX-07).
+ * Today's client half: the surface that reads and keeps Today fresh
+ * (WP-TUX-07, amended by WP-POSTUX-06).
  *
  * ## Why this exists, and where the boundary is
  *
- * `today/page.tsx` stays a server component and keeps everything only a server
- * can honestly do: authenticate, short-circuit the synthetic build, read
- * `continuity.pulse` through the server-only transport, and classify that one
- * outcome with `surfaceAnswer`. It deliberately does **not** call its own
- * `/api/pulse` route — the file comment there records the reason, and it has not
- * changed: a server component calling its own API route is a second copy of the
- * same decision.
+ * **This changed at WP-POSTUX-06 and the old description is kept nowhere.**
+ * `today/page.tsx` no longer performs a server-side `continuity.pulse` read and
+ * no longer hands this component a pre-classified `initialAnswer`. It could not:
+ * Today membership is now defined against a *civil date in the viewer's own
+ * timezone*, and a server component rendering before any client code has run
+ * does not know that timezone. So the read moved here in full.
  *
- * What the server cannot do is notice that the day moved on. So the classified
- * answer crosses the boundary once, as a `TodayPulseAnswer`, and from then on
- * this component owns the reading: `/api/pulse`, which already exists, is
- * `requirePrincipal`-guarded, accepts no payload, and derives the Principal from
- * the session cookie alone.
+ * Every read this component issues goes to `/api/pulse?workDate=…&timezone=…`,
+ * with both values derived by `browserWorkClock` from the browser's own clock
+ * and IANA zone. That route is `requirePrincipal`-guarded and derives the
+ * Principal from the session cookie alone — the query carries a civil day and a
+ * zone, never an identity. The route then calls `tasks.list` with
+ * `work_view=today`, which is the *same* server predicate Work uses; there is no
+ * second Today query and no client-side membership rule in this file.
+ *
+ * What comes back is `todayRows`: one row per canonical Today Task, each
+ * carrying the derivation's own row under `attention` when the derivation
+ * produced one, followed by the non-Task rows the derivation raised. This file
+ * renders those rows in the order the route composed them and does not filter,
+ * re-key or re-order them.
+ *
+ * `initialAnswer` remains an accepted prop and is still honoured when supplied,
+ * because it is what lets a caller seed a confirmed answer in a test. Nothing in
+ * the application passes it any more.
+ *
+ * ## A first read that fails is not a quiet day
+ *
+ * Because there is no server-rendered answer to fall back on, the first read is
+ * the only thing standing between the viewer and an empty screen. While it is in
+ * flight the surface renders a distinct `loading` state — not an `unavailable`
+ * card wearing a placeholder message. If it *fails*, the surface adopts the
+ * gateway's own refusal envelope, so the diagnostic the reader sees is the one
+ * the transport actually produced rather than a sentence this file invented.
+ *
+ * Once any answer has been confirmed the older rule takes over unchanged: a
+ * failed, partial or `coverage: "unavailable"` refresh keeps the confirmed rows
+ * and marks the surface stale. It never empties and never overwrites them.
  *
  * ## One cadence, not a second one
  *
@@ -54,7 +78,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { BackendPulseList } from "@/components/pulse/backend-pulse-list";
-import { DegradedBanner, SurfaceState } from "@/components/ui/surface-state";
+import { DegradedBanner, LoadingStatus, SurfaceState } from "@/components/ui/surface-state";
 import { useTaskRuntime } from "@/components/work/task-runtime-provider";
 import {
   ForegroundRevalidationHttpError,
@@ -65,8 +89,9 @@ import {
   type ForegroundReadResult,
   type ForegroundRevalidationNotice,
 } from "@/lib/task/use-foreground-revalidation";
-import type { DisclosureEnvelope } from "@/contracts/envelope";
-import type { BackendPulseItem, TodayPulseAnswer } from "@/contracts/views";
+import type { DisclosureEnvelope, ErrorEnvelope } from "@/contracts/envelope";
+import type { TodayPulseAnswer, TodayRow } from "@/contracts/views";
+import { browserWorkClock } from "@/lib/api/work-client";
 
 /**
  * The sentence an authoritative quiet day is allowed to say, and the only one.
@@ -79,7 +104,7 @@ export const TODAY_EMPTY_COPY = "Nothing needs your attention right now.";
 export const TODAY_PULSE_QUERY_ID = "today:pulse";
 
 /**
- * The Task cards currently on screen, in the order the Pulse returned them.
+ * The Task cards currently on screen, in the order the route composed them.
  *
  * Scoped to the region this surface renders rather than to the document, so a
  * card belonging to some other list — the Intelligence Pulse below Today, a
@@ -124,8 +149,9 @@ const STALE_COPY =
 
 /** What one `/api/pulse` answer carries. */
 export interface PulseReadPayload {
-  readonly items: readonly BackendPulseItem[];
+  readonly items: readonly TodayRow[];
   readonly disclosure: DisclosureEnvelope;
+  readonly completeness?: "full" | "partial";
 }
 
 type PulseReadOutcome = "applied" | "deduped" | "superseded" | "aborted" | "barrier_blocked" | "failed";
@@ -172,7 +198,7 @@ export function classifyPulsePayload(payload: PulseReadPayload): TodayPulseAnswe
     };
   }
 
-  if (disclosure.coverage === "partial" || disclosure.truncated) {
+  if (disclosure.coverage === "partial" || disclosure.truncated || payload.completeness === "partial") {
     return { kind: "degraded", items, limitations, truncated: disclosure.truncated === true };
   }
 
@@ -182,11 +208,153 @@ export function classifyPulsePayload(payload: PulseReadPayload): TodayPulseAnswe
 }
 
 /**
- * Read `/api/pulse`. No payload, no principal, no query — the route accepts
- * none, and the session cookie is the whole of the identity.
+ * Compute the browser's current civil date as YYYY-MM-DD in the browser's
+ * IANA timezone.
+ *
+ * This is called before every fetch so that midnight/timezone-change
+ * transitions cause a new semantic query. The server owns validating and
+ * converting these dimensions to UTC.
  */
+/**
+ * Read `/api/pulse` with explicit work_date and timezone query parameters.
+ *
+ * **Query identity includes date/timezone.** The key passed to this fetcher
+ * includes the work_date and timezone so that a midnight transition or
+ * timezone change produces a different semantic query. The fetcher itself is
+ * stateless and does not remember the last work_date/timezone; the coordinator
+ * and component handle that through the changing query key.
+ *
+ * The session cookie provides authentication and Principal derivation. The
+ * work_date and timezone are required query parameters that the backend
+ * validates and uses to construct the canonical Today window in the browser's
+ * civil day.
+ */
+/** The classes `ErrorEnvelope` admits, kept as a value so a body can be checked. */
+const ERROR_CLASSES = [
+  "validation",
+  "authentication",
+  "authorization",
+  "not_found",
+  "conflict",
+  "policy_denied",
+  "unavailable",
+  "internal",
+] as const;
+
+function toErrorClass(value: string): ErrorEnvelope["errorClass"] | null {
+  return ERROR_CLASSES.find((candidate) => candidate === value) ?? null;
+}
+
+function readStrings(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === "string");
+}
+
+/**
+ * What a refused `/api/pulse` answer actually said, rather than its status code.
+ *
+ * The route answers a refused gateway with `gatewayRefusal()`, whose `error`
+ * carries the transport's own diagnostic — "the application gateway did not
+ * answer" and the like — and whose `disclosure.limitations` repeats it in the
+ * caller's terms. Throwing on the status alone discards both and leaves the
+ * surface with nothing to say beyond a number, which is how a genuinely refused
+ * read ends up indistinguishable from a surface that never read at all. So the
+ * body is read here and travels with the error.
+ *
+ * Nothing is invented: if the body is not a readable envelope, the fallback says
+ * only what is actually known — that this read did not complete, and at what
+ * status — and never names a cause.
+ */
+interface PulseReadRefusal {
+  readonly error: ErrorEnvelope;
+  readonly limitations: readonly string[];
+}
+
+async function readRefusal(response: Response): Promise<PulseReadRefusal> {
+  const fallback: PulseReadRefusal = {
+    error: {
+      errorClass: "unavailable",
+      code: "pulse_read_failed",
+      message: `The Today read did not complete (HTTP ${response.status}).`,
+    },
+    limitations: [],
+  };
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    return fallback;
+  }
+  if (!body || typeof body !== "object") return fallback;
+  const envelope = "error" in body ? (body as { error?: unknown }).error : undefined;
+  const disclosure = "disclosure" in body ? (body as { disclosure?: unknown }).disclosure : undefined;
+  const limitations =
+    disclosure && typeof disclosure === "object"
+      ? readStrings((disclosure as { limitations?: unknown }).limitations)
+      : [];
+  if (!envelope || typeof envelope !== "object") return { ...fallback, limitations };
+  const fields = envelope as { errorClass?: unknown; code?: unknown; message?: unknown };
+  const errorClass = typeof fields.errorClass === "string" ? toErrorClass(fields.errorClass) : null;
+  const message =
+    typeof fields.message === "string" && fields.message.trim().length > 0
+      ? fields.message
+      : fallback.error.message;
+  return {
+    error: {
+      errorClass: errorClass ?? fallback.error.errorClass,
+      code: typeof fields.code === "string" && fields.code.length > 0 ? fields.code : fallback.error.code,
+      message,
+    },
+    limitations,
+  };
+}
+
+/**
+ * A refused read, carrying what the route said about it.
+ *
+ * Subclasses the controller's own HTTP error so the one foreground policy still
+ * reads the status off it (401 suspends, 403 fail-closed, 503 backs off); the
+ * envelope is additional, never a replacement.
+ */
+export class PulseReadHttpError extends ForegroundRevalidationHttpError {
+  readonly envelope: ErrorEnvelope;
+  readonly limitations: readonly string[];
+
+  constructor(status: number, refusal: PulseReadRefusal) {
+    super(status, refusal.error.message);
+    this.name = "PulseReadHttpError";
+    this.envelope = refusal.error;
+    this.limitations = refusal.limitations;
+  }
+}
+
+/**
+ * The `unavailable` answer a failed read becomes when nothing has ever been
+ * confirmed — the route's own words where there are any, and otherwise only
+ * what the failure itself establishes.
+ */
+export function unavailableFromReadError(error: unknown): TodayPulseAnswer {
+  if (error instanceof PulseReadHttpError) {
+    return { kind: "unavailable", error: error.envelope, limitations: error.limitations };
+  }
+  const message =
+    error instanceof Error && error.message.trim().length > 0
+      ? error.message
+      : "The Today read did not complete.";
+  return {
+    kind: "unavailable",
+    error: { errorClass: "unavailable", code: "pulse_read_failed", message },
+    limitations: [],
+  };
+}
+
 const readPulse: PulseFetcher = async ({ signal }) => {
-  const response = await fetch("/api/pulse", {
+  const { workDate, timezone } = browserWorkClock();
+  const url = new URL("/api/pulse", window.location.origin);
+  url.searchParams.set("workDate", workDate);
+  url.searchParams.set("timezone", timezone);
+
+  const response = await fetch(url.toString(), {
     method: "GET",
     signal,
     cache: "no-store",
@@ -194,22 +362,29 @@ const readPulse: PulseFetcher = async ({ signal }) => {
     headers: { accept: "application/json" },
   });
   if (!response.ok) {
-    throw new ForegroundRevalidationHttpError(response.status, `pulse read failed (${response.status})`);
+    throw new PulseReadHttpError(response.status, await readRefusal(response));
   }
   const body: unknown = await response.json();
   if (!body || typeof body !== "object") throw new Error("pulse answer was not an object");
-  const candidate = body as { shape?: unknown; items?: unknown; disclosure?: unknown };
+  const candidate = body as {
+    shape?: unknown;
+    todayRows?: unknown;
+    disclosure?: unknown;
+    completeness?: unknown;
+  };
   // A synthetic build never reaches this surface: the page short-circuits to the
   // fixture list. Anything but the backend shape is a payload this surface has
   // no honest reading of, so it is a failed read rather than a silent Empty.
   if (candidate.shape !== "backend") throw new Error("pulse answer was not the backend shape");
-  if (!Array.isArray(candidate.items)) throw new Error("pulse answer carried no items array");
+  // A missing row array is a read that did not happen, never a quiet day.
+  if (!Array.isArray(candidate.todayRows)) throw new Error("pulse answer carried no todayRows array");
   if (!candidate.disclosure || typeof candidate.disclosure !== "object") {
     throw new Error("pulse answer carried no disclosure");
   }
   return {
-    items: candidate.items as readonly BackendPulseItem[],
+    items: candidate.todayRows as readonly TodayRow[],
     disclosure: candidate.disclosure as DisclosureEnvelope,
+    completeness: candidate.completeness === "partial" ? "partial" : "full",
   };
 };
 
@@ -406,20 +581,47 @@ export class PulseReadCoordinator
 
 export interface TodayPulseSurfaceProps {
   /**
-   * The server's one authoritative classification, already made by
-   * `surfaceAnswer`. It is the surface's starting answer and is never
-   * re-derived here.
+   * Optional server classification for backward compatibility and testing.
+   * Normally not provided; the surface computes Today from the browser's
+   * work_date and timezone on first load.
    */
-  readonly initialAnswer: TodayPulseAnswer;
+  readonly initialAnswer?: TodayPulseAnswer;
 }
 
-export function TodayPulseSurface({ initialAnswer }: TodayPulseSurfaceProps): React.JSX.Element {
+export function TodayPulseSurface({ initialAnswer }: TodayPulseSurfaceProps = {}): React.JSX.Element {
   const runtime = useTaskRuntime();
   const { reconciliation, sessionKey } = runtime;
 
-  const [answer, setAnswer] = useState<TodayPulseAnswer>(initialAnswer);
+  /*
+    Before the first read lands there is no answer at all, and `loading` is that
+    and nothing else. It is deliberately not one of the five: rendering the
+    unavailable card while a read is still in flight states a failure that has
+    not happened, and rendering it with placeholder copy — the shape this
+    surface previously carried — put "Loading Today..." where the diagnostic of
+    a genuinely refused read belongs, which is precisely how a real refusal
+    became unreadable.
+  */
+  const [answer, setAnswer] = useState<TodayPulseAnswer | { readonly kind: "loading" }>(
+    initialAnswer ?? { kind: "loading" },
+  );
   const [stale, setStale] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+
+  /*
+    Whether any answer has ever stood on this surface.
+
+    This is what separates the two halves of a failed read. With an answer
+    standing, a failure retains it and marks the surface stale — the rows are
+    still the last thing the backend confirmed, and "the refresh did not happen"
+    says nothing against them. With nothing standing, retaining nothing is not
+    an option and the honest thing is the failure itself, stated in the route's
+    own words.
+
+    A ref rather than state: it is read inside the read callback and never
+    rendered, and it must be true for the render that sets the answer rather
+    than one render later.
+  */
+  const settled = useRef(initialAnswer !== undefined);
 
   /**
    * The card that currently holds focus, and where it sits in the visible list.
@@ -469,27 +671,52 @@ export function TodayPulseSurface({ initialAnswer }: TodayPulseSurfaceProps): Re
       const payload = result.data ?? snapshot.lastConfirmed;
       if (!payload) return;
       const next = classifyPulsePayload(payload);
-      if (next.kind === "unavailable") {
+      if (next.kind === "unavailable" && settled.current) {
         // The backend answered that it did not search. That is not a new answer
         // about the record, so the confirmed one stands and the surface says so.
         setStale(true);
         return;
       }
       // One assignment: no render falls between the old answer and the new one.
+      settled.current = true;
       setAnswer(next);
       setStale(false);
       setNotice(null);
       return;
     }
     if (result.outcome === "failed" && !result.silent) {
+      if (!settled.current && snapshot.lastConfirmed === undefined) {
+        /*
+          The first read failed and there is nothing to retain. Saying so is the
+          whole point: an unread Today rendered as a quiet one is the single
+          claim this surface may never make, and a placeholder left in place
+          would have said neither.
+        */
+        setAnswer(unavailableFromReadError(result.error));
+        setStale(false);
+        setNotice(null);
+        return;
+      }
       setStale(true);
     }
   }, []);
 
   const onNotice = useCallback((next: ForegroundRevalidationNotice) => {
+    /*
+      The degraded notice is a sentence about the last confirmed read. With no
+      confirmed read behind it there is no such thing to describe, and the
+      answer itself already states the failure. The auth and forbidden notices
+      are actionable whatever has been read, so they are always shown.
+    */
+    if (next.kind === "degraded" && !settled.current) return;
     setNotice(next.message);
     setStale(true);
   }, []);
+
+  // Compute a query key that includes work_date and timezone so that midnight
+  // and timezone changes produce a new semantic query.
+  const { workDate, timezone } = browserWorkClock();
+  const queryKey = `${TODAY_PULSE_QUERY_ID}:${workDate}:${timezone}`;
 
   const { revalidate } = useForegroundRevalidation<
     PulseReadPayload,
@@ -499,7 +726,7 @@ export function TodayPulseSurface({ initialAnswer }: TodayPulseSurfaceProps): Re
     PulseSnapshot
   >({
     queryId: TODAY_PULSE_QUERY_ID,
-    queryKey: TODAY_PULSE_QUERY_ID,
+    queryKey: queryKey,
     enabled: true,
     coordinator,
     fetcher: readPulse,
@@ -673,7 +900,9 @@ export function TodayPulseSurface({ initialAnswer }: TodayPulseSurfaceProps): Re
           {STALE_COPY}
         </p>
       ) : null}
-      {answer.kind === "unavailable" ? (
+      {answer.kind === "loading" ? (
+        <LoadingStatus label="Reading Today…" testId="today-loading" />
+      ) : answer.kind === "unavailable" ? (
         <SurfaceState
           kind="unavailable"
           title="Today could not be derived"
@@ -686,8 +915,8 @@ export function TodayPulseSurface({ initialAnswer }: TodayPulseSurfaceProps): Re
           kind="empty"
           title={TODAY_EMPTY_COPY}
           diagnostic={
-            "The derivation ran and found no accepted commitment, decision, task or situation that " +
-            "a named condition holds about right now."
+            "Today's Task read ran and returned no Task for this day, and the derivation ran and " +
+            "raised no commitment, decision, observation or situation either."
           }
           testId="today-empty"
         />
@@ -704,8 +933,8 @@ export function TodayPulseSurface({ initialAnswer }: TodayPulseSurfaceProps): Re
               title="Today is incomplete"
               detail="A quiet day is not established. Something may still need you."
               diagnostic={
-                "The derivation was incomplete and surfaced nothing. A partial read does not " +
-                "establish that nothing needs attention."
+                "The read was incomplete and carried no Task and no other row. A partial read " +
+                "does not establish that nothing needs attention."
               }
               testId="today-degraded-empty"
             />

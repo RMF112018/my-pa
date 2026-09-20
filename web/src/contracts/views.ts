@@ -239,6 +239,52 @@ export interface BackendPulseItem {
 }
 
 /**
+ * One row of Home's Today list.
+ *
+ * Home's content is the canonical Today Task set — what `tasks.list` answers for
+ * `work_view=today` in the viewer's civil day — and the derived Pulse is an
+ * annotation over it. Those are two different kinds of thing and this union
+ * keeps them two different types rather than flattening both into
+ * `BackendPulseItem`.
+ *
+ * The flattening is what this shape exists to prevent. A canonical Task the
+ * derivation never flagged has no Pulse row at all, so it has no `pulseId`, no
+ * `reasonCode`, no `basisRefs`, no `attentionRank` and no `generatedAt`; giving
+ * it one would mean inventing an identifier for a record that does not exist and
+ * a rank no derivation produced. So a Task row carries Task data — the id and
+ * title `tasks.list` returned — and carries the derivation's own row *only when
+ * there is one*, under `attention`. Absent `attention` means exactly one thing:
+ * the derivation did not flag this Task. It never means the flag was lost.
+ */
+export interface TodayTaskRow {
+  readonly kind: "task";
+  /** From `tasks.list`. The Task this row is about. */
+  readonly taskId: OpaqueId;
+  /** From `tasks.list`. The canonical Task title, never an identifier. */
+  readonly title: string;
+  /**
+   * The derivation's own row for this Task, when it produced one. Every field on
+   * it is the derivation's; nothing here is synthesised. Absent means unflagged.
+   */
+  readonly attention?: BackendPulseItem;
+}
+
+/**
+ * A derived Pulse item about something that is not a Task — a commitment, a
+ * decision, an observation, a relationship event, a situation.
+ *
+ * The canonical Today Task predicate says nothing about these, so they are
+ * neither added to nor subtracted from by it; they stand as separate attention
+ * material alongside the Task rows.
+ */
+export interface TodayAttentionRow {
+  readonly kind: "attention";
+  readonly item: BackendPulseItem;
+}
+
+export type TodayRow = TodayTaskRow | TodayAttentionRow;
+
+/**
  * One classified Today answer, in the exact five-way shape Today's client
  * surface must keep apart (WP-TUX-07).
  *
@@ -252,13 +298,18 @@ export interface BackendPulseItem {
  * it is reachable only from a whole, successful answer that carried no rows. A
  * refresh that failed, or that came back partial, can never produce it — see
  * `today-pulse-surface.tsx`, which retains the last confirmed answer instead.
+ *
+ * The rows are `TodayRow`s — canonical Today Tasks, plus the non-Task material
+ * the derivation raised. `empty` therefore says that the canonical Today set was
+ * empty and the derivation raised nothing else, not that the derivation returned
+ * no rows.
  */
 export type TodayPulseAnswer =
-  | { readonly kind: "records"; readonly items: readonly BackendPulseItem[] }
+  | { readonly kind: "records"; readonly items: readonly TodayRow[] }
   | { readonly kind: "empty" }
   | {
       readonly kind: "degraded";
-      readonly items: readonly BackendPulseItem[];
+      readonly items: readonly TodayRow[];
       readonly limitations: readonly string[];
       readonly truncated: boolean;
     }

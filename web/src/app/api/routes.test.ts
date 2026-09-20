@@ -222,6 +222,7 @@ const CAPABILITY_RESULTS: Record<string, unknown> = {
   "knowledge.read": KNOWLEDGE_READ,
   "knowledge.reveal": REVEAL_UNAVAILABLE,
   "review.list": { review_cases: [] },
+  "tasks.list": { tasks: [] },
   "continuity.pulse": { pulse_items: [] },
   "continuity.situations": SITUATIONS_WITH_WORKSPACE,
   "continuity.projects": { projects: [] },
@@ -356,7 +357,7 @@ describe("a default build produces no fixture data at all", () => {
       await library(get(cookie, "/api/library")),
       await reviewList(get(cookie, "/api/review")),
       await reveal(post(cookie, "/api/reveal", { subjectId: "cap_aaaaaaaa11111111" })),
-      await pulse(get(cookie, "/api/pulse")),
+      await pulse(get(cookie, "/api/pulse?workDate=2026-08-09&timezone=UTC")),
       await situations(get(cookie, "/api/situations")),
       await projects(get(cookie, "/api/projects")),
       await timeline(get(cookie, "/api/relationships/p/timeline"), {
@@ -374,6 +375,7 @@ describe("a default build produces no fixture data at all", () => {
       "http://127.0.0.1:8000/v1/capture.list",
       "http://127.0.0.1:8000/v1/review.list",
       "http://127.0.0.1:8000/v1/knowledge.reveal",
+      "http://127.0.0.1:8000/v1/tasks.list",
       "http://127.0.0.1:8000/v1/continuity.pulse",
       "http://127.0.0.1:8000/v1/continuity.situations",
       "http://127.0.0.1:8000/v1/continuity.projects",
@@ -415,7 +417,7 @@ describe("disclosure accuracy, in both directions", () => {
     expect(body.shape).toBe("synthetic");
     expect(body.disclosure.coverage).toBe("synthetic");
     expect(body.disclosure.authority).toBe("synthetic_fixture");
-    const pulseBody = await (await pulse(get(cookie, "/api/pulse"))).json();
+    const pulseBody = await (await pulse(get(cookie, "/api/pulse?workDate=2026-08-09&timezone=UTC"))).json();
     expect(pulseBody.disclosure.coverage).toBe("synthetic");
     expect(pulseBody.disclosure.authority).toBe("synthetic_fixture");
   });
@@ -959,13 +961,118 @@ describe("Today is a derivation, not a feed", () => {
     },
   ];
 
-  it("carries a why-now reason code and an evidentiary basis on every item", async () => {
+  /** One canonical Today Task as `tasks.list?work_view=today` returns it. */
+  function task(taskId: string, title: string) {
+    return {
+      task_id: taskId,
+      title,
+      lifecycle_state: "open",
+      priority: "p2",
+      due_at: "2026-08-09T17:00:00Z",
+      scheduled_at: null,
+      deferred_until: null,
+      archived_at: null,
+      created_at: "2026-08-01T12:00:00Z",
+      updated_at: "2026-08-01T12:00:00Z",
+      version: 1,
+    };
+  }
+
+  /** A derived row about a Task, which annotates rather than selects. */
+  function taskItem(taskId: string, overrides: Record<string, unknown> = {}) {
+    return {
+      pulse_id: `puls_${taskId}`,
+      item_type: "task",
+      item_ref: taskId,
+      reason_code: "task_overdue",
+      reason: "The date passed 2 day(s) ago.",
+      basis_refs: [taskId],
+      consequence: null,
+      next_step: null,
+      attention_rank: 7,
+      generated_at: "2026-08-10T12:00:00Z",
+      ...overrides,
+    };
+  }
+
+  interface TaskRowBody {
+    kind: "task";
+    taskId: string;
+    title: string;
+    attention?: { pulseId: string; reasonCode: string; attentionRank: number };
+  }
+  interface AttentionRowBody {
+    kind: "attention";
+    item: {
+      pulseId: string;
+      itemType: string;
+      itemRef: string;
+      reasonCode: string;
+      basisRefs: string[];
+      nextStep: string | null;
+      attentionRank: number;
+      generatedAt: string;
+      subjectTitle?: string;
+    };
+  }
+  type RowBody = TaskRowBody | AttentionRowBody;
+
+  const taskRows = (rows: RowBody[]): TaskRowBody[] =>
+    rows.filter((row): row is TaskRowBody => row.kind === "task");
+  const attentionRows = (rows: RowBody[]): AttentionRowBody[] =>
+    rows.filter((row): row is AttentionRowBody => row.kind === "attention");
+
+  /** Answer `tasks.list` and `continuity.pulse` separately, each with its own outcome. */
+  function stubTodayHalves(options: {
+    readonly tasks?: unknown;
+    readonly tasksStatus?: number;
+    readonly pulse?: unknown;
+    readonly pulseStatus?: number;
+  }) {
+    vi.stubGlobal(
+      "fetch",
+      withSessionServiceFetch(async (url: string | URL | Request, init?: RequestInit) => {
+        const urlStr = String(url);
+        sent.push({ url: urlStr, body: JSON.parse(String(init?.body ?? "{}")) });
+        if (urlStr.includes("tasks.list")) {
+          if (options.tasksStatus && options.tasksStatus !== 200) {
+            return new Response(JSON.stringify({ error: { code: "upstream_error" } }), {
+              status: options.tasksStatus,
+              headers: { "content-type": "application/json" },
+            });
+          }
+          return gatewayResponse(options.tasks ?? { tasks: [] });
+        }
+        if (options.pulseStatus && options.pulseStatus !== 200) {
+          return new Response(JSON.stringify({ error: { code: "upstream_error" } }), {
+            status: options.pulseStatus,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return gatewayResponse(options.pulse ?? { pulse_items: [] });
+      }),
+    );
+  }
+
+  async function todayRowsFor(cookie: string): Promise<RowBody[]> {
+    const response = await pulse(get(cookie, "/api/pulse?workDate=2026-08-09&timezone=UTC"));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    return body.todayRows as RowBody[];
+  }
+
+  it("carries a why-now reason code and an evidentiary basis on every derived item", async () => {
     const cookie = await signIn();
-    stubGateway({ pulse_items: DERIVED });
-    const body = await (await pulse(get(cookie, "/api/pulse"))).json();
+    stubGatewayByCapability({
+      "tasks.list": { tasks: [] },
+      "continuity.pulse": { pulse_items: DERIVED },
+    });
+    const response = await pulse(get(cookie, "/api/pulse?workDate=2026-08-09&timezone=UTC"));
+    const body = await response.json();
     expect(body.shape).toBe("backend");
-    expect(body.items).toHaveLength(2);
-    for (const item of body.items) {
+    const items = attentionRows(body.todayRows).map((row) => row.item);
+    expect(items).toHaveLength(2);
+    for (const item of items) {
       expect(item.reasonCode).toMatch(/^[a-z_]+$/);
       expect(item.basisRefs.length).toBeGreaterThan(0);
       expect(item.nextStep).toBeTruthy();
@@ -976,6 +1083,91 @@ describe("Today is a derivation, not a feed", () => {
       expect(item.attentionRank).toBeGreaterThan(0);
       expect(item).not.toHaveProperty("priority");
     }
+  });
+
+  it("answers every canonical Today Task, including ones the derivation never flagged", async () => {
+    /*
+      The canonical `tasks.list?work_view=today` set is Home's content. The
+      derivation flagged exactly one of these three Tasks; all three are answered,
+      and the two it did not flag carry no `attention` at all rather than an
+      invented one.
+    */
+    const cookie = await signIn();
+    stubTodayHalves({
+      tasks: {
+        tasks: [
+          task("tsk_first0001", "First by calendar"),
+          task("tsk_second001", "Second by calendar"),
+          task("tsk_third0001", "Third by calendar"),
+        ],
+      },
+      pulse: { pulse_items: [taskItem("tsk_second001")] },
+    });
+    const rows = taskRows(await todayRowsFor(cookie));
+    expect(rows.map((row) => row.taskId)).toEqual([
+      "tsk_first0001",
+      "tsk_second001",
+      "tsk_third0001",
+    ]);
+    expect(rows.map((row) => row.title)).toEqual([
+      "First by calendar",
+      "Second by calendar",
+      "Third by calendar",
+    ]);
+    expect(rows[0]!.attention).toBeUndefined();
+    expect(rows[2]!.attention).toBeUndefined();
+    expect(rows[1]!.attention?.pulseId).toBe("puls_tsk_second001");
+    expect(rows[1]!.attention?.reasonCode).toBe("task_overdue");
+    // Nothing was invented for the unflagged rows, in particular no pulse id.
+    expect(JSON.stringify(rows[0])).not.toMatch(/puls/);
+  });
+
+  it("drops a derived Task row the canonical predicate did not return", async () => {
+    // Pulse annotates the canonical set; it cannot add a Task to Today.
+    const cookie = await signIn();
+    stubTodayHalves({
+      tasks: { tasks: [task("tsk_canonical1", "In today")] },
+      pulse: { pulse_items: [taskItem("tsk_not_today1"), taskItem("tsk_canonical1")] },
+    });
+    const rows = await todayRowsFor(cookie);
+    expect(taskRows(rows).map((row) => row.taskId)).toEqual(["tsk_canonical1"]);
+    expect(JSON.stringify(rows)).not.toContain("tsk_not_today1");
+    expect(attentionRows(rows)).toEqual([]);
+  });
+
+  it("keeps the canonical Tasks and marks the answer partial when Pulse fails", async () => {
+    /*
+      Pulse is demoted to ranking and annotation, so its failure costs those and
+      not the content. The route must not answer an empty Today here.
+    */
+    const cookie = await signIn();
+    stubTodayHalves({
+      tasks: { tasks: [task("tsk_stands001", "Still needs you")] },
+      pulseStatus: 503,
+    });
+    const response = await pulse(get(cookie, "/api/pulse?workDate=2026-08-09&timezone=UTC"));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.completeness).toBe("partial");
+    const rows = taskRows(body.todayRows as RowBody[]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.title).toBe("Still needs you");
+    expect(rows[0]!.attention).toBeUndefined();
+  });
+
+  it("refuses when the canonical Today read fails, rather than answering 200 with no rows", async () => {
+    // Component-level coverage proved the surface does not call that a quiet
+    // day; this proves the route never puts it on the wire in the first place.
+    const cookie = await signIn();
+    stubTodayHalves({ tasksStatus: 503, pulse: { pulse_items: DERIVED } });
+    const response = await pulse(get(cookie, "/api/pulse?workDate=2026-08-09&timezone=UTC"));
+    expect(response.status).toBeGreaterThanOrEqual(400);
+    const body = await response.json();
+    expect(body.error).toBeTruthy();
+    expect(body).not.toHaveProperty("todayRows");
+    expect(body.completeness).toBeUndefined();
+    // And it did not answer out of Pulse: no derived row reached the caller.
+    expect(JSON.stringify(body)).not.toContain("puls_overdue0001overdue0001");
   });
 
   it("still decodes the subject fields the backend may attach to an item", async () => {
@@ -1011,50 +1203,107 @@ describe("Today is a derivation, not a feed", () => {
     }
 
     const cookie = await signIn();
-    stubGateway({
-      pulse_items: [
-        {
-          ...DERIVED[0],
-          subject_title: "Return the signed lease",
-          subject_state: "in_progress",
-          subject_version: 7,
-          subject_priority: "p1",
-        },
-      ],
+    stubGatewayByCapability({
+      "tasks.list": { tasks: [] },
+      "continuity.pulse": {
+        pulse_items: [
+          {
+            ...DERIVED[0],
+            subject_title: "Return the signed lease",
+            subject_state: "in_progress",
+            subject_version: 7,
+            subject_priority: "p1",
+          },
+        ],
+      },
     });
-    const response = await pulse(get(cookie, "/api/pulse"));
-    expect(response.status).toBe(200);
-    const body = await response.json();
-    expect(body.items).toHaveLength(1);
-    expect(body.items[0].subjectTitle).toBe("Return the signed lease");
-    expect(body.items[0].attentionRank).toBe(DERIVED[0].attention_rank);
+    const rows = attentionRows(await todayRowsFor(cookie));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.item.subjectTitle).toBe("Return the signed lease");
+    expect(rows[0]!.item.attentionRank).toBe(DERIVED[0].attention_rank);
   });
 
-  it("preserves the gateway's ranked order and never re-sorts by time", async () => {
-    // Every item shares one `generatedAt` — it is the moment of the read — so a
-    // route that sorted by it would produce an arbitrary order. The assertion is
-    // that the order out is the order in.
+  it("composes one deterministic order: canonical Task order, then the derivation's", async () => {
+    /*
+      Every row's position comes from a server order. The Task rows keep
+      `tasks.list`'s order even though the flagged one carries the highest rank
+      in the answer — a flag must not move a Task — and the derived rows keep the
+      derivation's own order. Every item shares one `generatedAt`, so a route
+      that sorted by it would produce an arbitrary order.
+    */
     const cookie = await signIn();
-    stubGateway({ pulse_items: DERIVED });
-    const body = await (await pulse(get(cookie, "/api/pulse"))).json();
-    expect(body.items.map((i: { pulseId: string }) => i.pulseId)).toEqual(
-      DERIVED.map((i) => i.pulse_id),
+    stubTodayHalves({
+      tasks: { tasks: [task("tsk_first0001", "First"), task("tsk_second001", "Second")] },
+      pulse: {
+        pulse_items: [taskItem("tsk_second001", { attention_rank: 99 }), ...DERIVED],
+      },
+    });
+    const rows = await todayRowsFor(cookie);
+    expect(rows.map((row) => row.kind)).toEqual(["task", "task", "attention", "attention"]);
+    expect(taskRows(rows).map((row) => row.taskId)).toEqual(["tsk_first0001", "tsk_second001"]);
+    expect(attentionRows(rows).map((row) => row.item.pulseId)).toEqual(
+      DERIVED.map((item) => item.pulse_id),
     );
-    expect(new Set(body.items.map((i: { generatedAt: string }) => i.generatedAt)).size).toBe(1);
+    expect(
+      new Set(attentionRows(rows).map((row) => row.item.generatedAt)).size,
+    ).toBe(1);
   });
 
   it("sends no principal on the wire and no payload a caller could shape", async () => {
     const cookie = await signIn();
-    stubGateway({ pulse_items: [] });
-    await pulse(get(cookie, "/api/pulse"));
-    const call = sent.at(-1)!;
-    expect(call.url).toBe("http://127.0.0.1:8000/v1/continuity.pulse");
-    expect(call.body.payload).toEqual({});
+    stubGatewayByCapability({
+      "tasks.list": { tasks: [] },
+      "continuity.pulse": { pulse_items: [] },
+    });
+    await pulse(get(cookie, "/api/pulse?workDate=2026-08-09&timezone=UTC"));
+    // The route calls tasks.list first, then continuity.pulse. Check the pulse call.
+    const pulseCall = sent.find((call) => call.url.includes("continuity.pulse"));
+    expect(pulseCall).toBeTruthy();
+    expect(pulseCall!.url).toBe("http://127.0.0.1:8000/v1/continuity.pulse");
+    expect(pulseCall!.body.payload).toEqual({});
     // The envelope carries a session-derived correlation principal and the
     // request body carries no other identity field at all.
-    expect(Object.keys(call.body).sort()).toEqual(
+    expect(Object.keys(pulseCall!.body).sort()).toEqual(
       ["contract_version", "payload", "principal_id", "purpose", "request_id", "requested_at"],
     );
+  });
+
+  it("asks the canonical Today selector for today, on the caller's own date and zone", async () => {
+    /*
+      Clause 8: Home and Work reach Today through ONE predicate, and Home's end
+      of it is this payload. The whole payload is asserted, not one key of it,
+      so dropping `work_date` or `timezone` fails here rather than passing on a
+      surviving `work_view`. The date and the zone are deliberately not the ones
+      every other test in this file uses: a route that hardcoded a day or a zone
+      — or read them from anywhere but the caller's own query — would answer the
+      old constants and fail. Two different callers are asked in the same test
+      so a single memoised payload cannot satisfy both.
+    */
+    const cookie = await signIn();
+    stubGatewayByCapability({
+      "tasks.list": { tasks: [] },
+      "continuity.pulse": { pulse_items: [] },
+    });
+
+    await pulse(get(cookie, "/api/pulse?workDate=2026-03-14&timezone=America/Chicago"));
+    const first = sent.find((call) => call.url.includes("tasks.list"));
+    expect(first).toBeTruthy();
+    expect(first!.url).toBe("http://127.0.0.1:8000/v1/tasks.list");
+    expect(first!.body.payload).toEqual({
+      work_view: "today",
+      work_date: "2026-03-14",
+      timezone: "America/Chicago",
+    });
+
+    sent = [];
+    await pulse(get(cookie, "/api/pulse?workDate=2026-11-01&timezone=Pacific/Auckland"));
+    const second = sent.find((call) => call.url.includes("tasks.list"));
+    expect(second).toBeTruthy();
+    expect(second!.body.payload).toEqual({
+      work_view: "today",
+      work_date: "2026-11-01",
+      timezone: "Pacific/Auckland",
+    });
   });
 });
 

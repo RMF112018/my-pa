@@ -1,35 +1,44 @@
 /**
- * The derived Pulse, rendered so a human can see *why now* rather than *what
- * happened*.
+ * Today's one list: the canonical Today Tasks, and the other material the
+ * derivation raised.
  *
- * **Two presentations, decided by `itemType`.**
+ * **Two presentations, decided by the row's `kind`.**
  *
- * A Task is the one item type this surface can *answer* rather than merely
- * route to, so since WP-TUX-07 a Task row renders `TodayTaskCard`: a title, one
- * concise attention reason, and the two operations that dispose of it
- * (Reschedule, Close). It carries none of the evidentiary chrome below — no
- * "Why now:" / "If ignored:" labels, no "Rank N", no basis refs, no pulse or
- * item identifiers, no lifecycle token. That chrome describes the derivation,
- * and a card whose point is *act on this now* is not the place to publish the
- * derivation's own bookkeeping. The concise reason is derived from the closed
- * `reasonCode`, not from any Task state — this list has read no Task.
+ * A `task` row is a canonical Today Task — it is in this list because
+ * `tasks.list?work_view=today` returned it, not because the derivation flagged
+ * it. It renders `TodayTaskCard`: the Task's own title, one concise attention
+ * reason, and the two operations that dispose of it (Reschedule, Close). It
+ * carries none of the evidentiary chrome below — no "Why now:" / "If ignored:"
+ * labels, no "Rank N", no basis refs, no pulse or item identifiers, no lifecycle
+ * token. That chrome describes the derivation, and a card whose point is *act on
+ * this now* is not the place to publish the derivation's own bookkeeping.
  *
- * Every other item type keeps exactly the presentation and the next-step routing
- * it already had, and gains no Reschedule or Close: nothing here can write a
- * commitment, a decision, an observation or a situation, so offering the
- * controls would be offering an action this surface cannot perform.
+ * A Task the derivation *did* flag carries its Pulse row under `attention`, and
+ * the one thing that changes is the concise reason: it is derived from the
+ * closed `reasonCode` — not from backend prose and not from any Task state, as
+ * this list has read no Task. A Task with no `attention` is a Task the
+ * derivation did not flag, and it says `TASK_ATTENTION_FALLBACK`, which is true
+ * of every row here and claims nothing the derivation did not say.
  *
- * **The order is the backend's and this component does not touch it.** No
- * `sort`, no `reverse`, no grouping by date. The rank is by evidentiary urgency
- * and it is the answer; re-ordering here — by `generatedAt`, say, which is
- * identical on every item — would discard it. The rank itself is not the
- * primary visual; it stays behind Details.
+ * An `attention` row is a derived item about something that is not a Task, and
+ * keeps exactly the presentation and the next-step routing it already had. It
+ * gains no Reschedule or Close: nothing here can write a commitment, a decision,
+ * an observation or a situation, so offering the controls would be offering an
+ * action this surface cannot perform.
  *
- * Titles come from `subjectTitle` when the backend named the subject. Identifiers
- * and basis refs are never used as a title. `nextStep` is the one primary action.
+ * **The order is the route's and this component does not touch it.** No `sort`,
+ * no `reverse`, no grouping by date. `/api/pulse` composes Task rows in
+ * `tasks.list`'s server order, then the non-Task rows in the derivation's own
+ * attention order; re-ordering here — by `attentionRank`, which most rows do not
+ * have, or by `generatedAt`, which is identical on every item — would discard
+ * both. The rank itself is not the primary visual; it stays behind Details.
+ *
+ * Task titles come from the canonical Task. An attention row's title comes from
+ * `subjectTitle` when the backend named the subject. Identifiers and basis refs
+ * are never used as a title. `nextStep` is the one primary action.
  */
 import Link from "next/link";
-import type { BackendPulseItem } from "@/contracts/views";
+import type { BackendPulseItem, TodayRow } from "@/contracts/views";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
 import { TodayTaskCard } from "@/components/pulse/today-task-card";
 import { safeHref } from "@/lib/http/safe-href";
@@ -53,10 +62,17 @@ const TASK_ATTENTION_REASON: Record<string, string> = {
   task_due_soon: "Due soon",
 };
 
+/**
+ * What a Task row says when the derivation named no reason for it — either
+ * because it produced no row for this Task at all, or because it used a code
+ * this build does not know. It states only what the canonical predicate already
+ * established: this Task is in today.
+ */
 const TASK_ATTENTION_FALLBACK = "Needs you today";
 
-function taskAttentionReason(item: BackendPulseItem): string {
-  return TASK_ATTENTION_REASON[item.reasonCode] ?? TASK_ATTENTION_FALLBACK;
+function taskAttentionReason(attention: BackendPulseItem | undefined): string {
+  if (!attention) return TASK_ATTENTION_FALLBACK;
+  return TASK_ATTENTION_REASON[attention.reasonCode] ?? TASK_ATTENTION_FALLBACK;
 }
 
 const NEXT_STEP_LINK_CLASS =
@@ -88,7 +104,7 @@ function nextStepHref(item: BackendPulseItem): string | null {
   }
 }
 
-export function BackendPulseList({ items }: { items: readonly BackendPulseItem[] }) {
+export function BackendPulseList({ items }: { items: readonly TodayRow[] }) {
   if (items.length === 0) {
     return (
       <p className="text-sm text-muted" data-testid="pulse-empty">
@@ -99,23 +115,29 @@ export function BackendPulseList({ items }: { items: readonly BackendPulseItem[]
 
   return (
     <ul className="flex flex-col gap-3">
-      {items.map((item) => {
-        if (item.itemType === "task") {
+      {items.map((row) => {
+        if (row.kind === "task") {
           return (
-            <li key={item.pulseId}>
+            /*
+              Keyed by the Task, which is what the row is. A canonical Task the
+              derivation never flagged has no `pulseId` to key by, and inventing
+              one would be inventing a record.
+            */
+            <li key={`task:${row.taskId}`}>
               {/*
-                The card is given a Task id, a display title and one concise
+                The card is given a Task id, the canonical title and one concise
                 reason, and nothing else — it holds no Task state it has not
                 read, and prints no identifier it was handed.
               */}
               <TodayTaskCard
-                taskId={item.itemRef}
-                title={pulseTitle(item)}
-                reason={taskAttentionReason(item)}
+                taskId={row.taskId}
+                title={row.title}
+                reason={taskAttentionReason(row.attention)}
               />
             </li>
           );
         }
+        const item = row.item;
         const rawHref = item.nextStep ? nextStepHref(item) : null;
         const href = rawHref ? safeHref(rawHref) : null;
         return (

@@ -102,7 +102,7 @@ function signOutRequest(cookie?: string, origin: string | null = ORIGIN): NextRe
 }
 
 function protectedRequest(cookie: string): NextRequest {
-  const request = new NextRequest(`${ORIGIN}/api/pulse`);
+  const request = new NextRequest(`${ORIGIN}/api/pulse?workDate=2026-08-09&timezone=UTC`);
   request.cookies.set(SESSION_COOKIE_NAME, cookie);
   return request;
 }
@@ -248,9 +248,9 @@ describe("sign-in", () => {
     const second = await (await pulse(protectedRequest(b))).json();
     const owners = (items: { principalId?: string }[]) =>
       new Set(items.map((item) => item.principalId));
-    expect(owners(first.items)).not.toEqual(owners(second.items));
-    for (const owner of owners(first.items)) {
-      expect(owners(second.items).has(owner)).toBe(false);
+    expect(owners(first.pulseItems)).not.toEqual(owners(second.pulseItems));
+    for (const owner of owners(first.pulseItems)) {
+      expect(owners(second.pulseItems).has(owner)).toBe(false);
     }
   });
 

@@ -12,17 +12,15 @@
  * constructible from a browser at this head at all (AC-020, which says why).
  * Every other read and write below is the real chain.
  *
- * **How a Task reaches Today here.** `domain/situation/pulse_derivation.py`
- * puts an *open, accepted* Task on the Pulse when its due moment has passed
- * (`task_overdue`) or is within the due-soon window (`task_due_soon`), and the
- * derivation runs at read time — there is no pulse table to seed and no
- * acceptance step to drive. So a Task created through the canonical BFF with a
- * due moment in the past is on Today on the very next read, which is what
- * `seedOverdueTask` does. The synthetic Pulse fixture is deliberately *not*
- * used: `app/(app)/today/page.tsx` short-circuits to `PulseList` when
- * `MYPA_DATA_PROVIDER=synthetic`, so a synthetic build never renders
- * `TodayPulseSurface` or `TodayTaskCard` at all, and the browser suite runs a
- * default build on purpose (see `playwright.config.ts`).
+ * **How a Task reaches Today here.** WP-POSTUX-06 civil-day membership: an
+ * open, accepted Task whose `due_at` or `scheduled_at` falls in the browser's
+ * civil day. Overdue-only is Pulse attention, not canonical Today. So a Task
+ * created through the canonical BFF with `dueAt` now is on Today on the next
+ * read, which is what `seedTodayTask` does. The synthetic Pulse fixture is
+ * deliberately *not* used: `app/(app)/today/page.tsx` short-circuits to
+ * `PulseList` when `MYPA_DATA_PROVIDER=synthetic`, so a synthetic build never
+ * renders `TodayPulseSurface` or `TodayTaskCard` at all, and the browser suite
+ * runs a default build on purpose (see `playwright.config.ts`).
  *
  * **Why the network is watched rather than inferred.** Three of the criteria
  * here are claims about requests — that Reschedule writes `dueAt` and nothing
@@ -37,12 +35,26 @@
  */
 import { expect, test, type Page, type Request } from "@playwright/test";
 import { signIn } from "./fixtures";
+import { browserWorkClock, type BrowserWorkClock } from "../src/lib/api/work-client";
 
 /** The exact Empty copy the surface owns. See `TODAY_EMPTY_COPY`. */
 const TODAY_EMPTY_COPY = "Nothing needs your attention right now.";
 
 /** The concise attention reason `BackendPulseList` derives for `task_overdue`. */
 const OVERDUE_REASON = "Overdue";
+
+/**
+ * Every `/api/pulse` read, whatever it carries in its query string.
+ *
+ * A glob is anchored to the end of the whole URL — Playwright's
+ * `globToRegexPattern` appends `$` and `urlMatches` tests the full URL, query
+ * string included — so `"**\/api\/pulse"` stopped matching the moment the
+ * surface began sending `?workDate=&timezone=`, and every stub written with it
+ * silently never fired. A regex is used rather than a wider glob because a
+ * glob's single `*` does not cross `/`, and a timezone is exactly the kind of
+ * value that carries one.
+ */
+const PULSE_ROUTE = /\/api\/pulse(\?|$)/;
 
 type ApiAnswer<T> = { status: number; body: T };
 
@@ -92,8 +104,8 @@ interface TaskRow {
  * days, and a boundary case would make the reason sentence depend on when the
  * suite happened to run.
  */
-async function seedOverdueTask(page: Page, title: string): Promise<string> {
-  const dueAt = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+async function seedTodayTask(page: Page, title: string): Promise<string> {
+  const dueAt = new Date().toISOString();
   const created = await api<{ task?: { task_id: string } }>(page, "/api/tasks", {
     method: "POST",
     body: { title, dueAt, idempotencyKey: key("e2e-today-seed") },
@@ -185,6 +197,24 @@ async function readTask(page: Page, taskId: string): Promise<TaskRow> {
 /** The card for one Task, located by the title the Pulse projection carried. */
 function cardFor(page: Page, title: string) {
   return page.getByTestId("today-task-card").filter({ hasText: title });
+}
+
+/**
+ * The civil day and zone the Today surface will itself ask `/api/pulse` for.
+ *
+ * `browserWorkClock` is the product's one clock — the surface derives its query
+ * from exactly this function — so the probe below asks about the same civil day
+ * the derivation is being asked about. Only the zone is read out of the page;
+ * the date is derived by the shared helper rather than computed a second time
+ * here, because two derivations of "today" are two things that can disagree.
+ *
+ * A literal date cannot stand in for it: a Task seeded with `dueAt` of now is
+ * correctly not a member of some other civil day, so a fixed date turns a right
+ * answer from the backend into a failing assertion.
+ */
+async function todayClock(page: Page): Promise<BrowserWorkClock> {
+  const timezone = await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+  return browserWorkClock(new Date(), timezone);
 }
 
 async function openToday(page: Page): Promise<void> {
@@ -304,7 +334,7 @@ test("TUX07-AC-002/003: Reschedule and Close are on the card, and Close costs tw
 }) => {
   test.setTimeout(180_000);
   const title = `E2E today card ${marker("ac002")}`;
-  const taskId = await seedOverdueTask(page, title);
+  const taskId = await seedTodayTask(page, title);
   await openToday(page);
 
   const card = cardFor(page, title);
@@ -372,7 +402,7 @@ test("TUX07-AC-004: a Today Reschedule sends only dueAt and leaves scheduled_at 
 }) => {
   test.setTimeout(180_000);
   const title = `E2E today reschedule ${marker("ac004")}`;
-  const taskId = await seedOverdueTask(page, title);
+  const taskId = await seedTodayTask(page, title);
   const before = await readTask(page, taskId);
 
   const { events } = observeTaskRequests(page);
@@ -434,8 +464,8 @@ test("TUX07-AC-005: rendering Today reads no Task detail, and the first operatio
   test.setTimeout(180_000);
   const operatedTitle = `E2E today operated ${marker("ac005a")}`;
   const bystanderTitle = `E2E today bystander ${marker("ac005b")}`;
-  const operatedId = await seedOverdueTask(page, operatedTitle);
-  const bystanderId = await seedOverdueTask(page, bystanderTitle);
+  const operatedId = await seedTodayTask(page, operatedTitle);
+  const bystanderId = await seedTodayTask(page, bystanderTitle);
 
   const { events } = observeTaskRequests(page);
   await openToday(page);
@@ -502,7 +532,7 @@ test("TUX07-AC-005: rendering Today reads no Task detail, and the first operatio
 test("TUX07-AC-012: an authoritative Empty renders exactly the Empty copy", async ({ page }) => {
   test.setTimeout(180_000);
   const title = `E2E today emptied ${marker("ac012")}`;
-  await seedOverdueTask(page, title);
+  await seedTodayTask(page, title);
   await openToday(page);
   await expect(cardFor(page, title)).toBeVisible();
 
@@ -514,13 +544,14 @@ test("TUX07-AC-012: an authoritative Empty renders exactly the Empty copy", asyn
     quiet day — the backend shape, complete coverage, no limitation, zero items
     — and the surface's own classification is what is under test.
   */
-  await page.route("**/api/pulse", async (route) => {
+  await page.route(PULSE_ROUTE, async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
         shape: "backend",
-        items: [],
+        todayRows: [],
+        completeness: "full",
         disclosure: { scope: "pulse", coverage: "complete", limitations: [], truncated: false },
       }),
     });
@@ -539,7 +570,7 @@ test("TUX07-AC-013: a failed refresh keeps the rows and marks the surface stale,
 }) => {
   test.setTimeout(180_000);
   const title = `E2E today retained ${marker("ac013")}`;
-  await seedOverdueTask(page, title);
+  await seedTodayTask(page, title);
   await openToday(page);
   const card = cardFor(page, title);
   await expect(card).toBeVisible();
@@ -547,7 +578,7 @@ test("TUX07-AC-013: a failed refresh keeps the rows and marks the surface stale,
   // A real refused response on the client read path. The first render came from
   // the server, so what is being tested is what a *refresh* failure does to an
   // answer that already stands.
-  await page.route("**/api/pulse", async (route) => {
+  await page.route(PULSE_ROUTE, async (route) => {
     await route.fulfill({
       status: 503,
       contentType: "application/json",
@@ -613,8 +644,8 @@ test("TUX07-AC-014/017: an open Today reconciles a completed Task away and annou
   test.setTimeout(180_000);
   const closedTitle = `E2E today reconciled ${marker("ac014a")}`;
   const keptTitle = `E2E today kept ${marker("ac014b")}`;
-  await seedOverdueTask(page, closedTitle);
-  await seedOverdueTask(page, keptTitle);
+  await seedTodayTask(page, closedTitle);
+  await seedTodayTask(page, keptTitle);
 
   await openToday(page);
   const kept = cardFor(page, keptTitle);
@@ -682,8 +713,8 @@ test("TUX07-AC-018: focus lands deterministically after the card leaves Today", 
   test.setTimeout(180_000);
   const closedTitle = `E2E today focus ${marker("ac018a")}`;
   const keptTitle = `E2E today focus kept ${marker("ac018b")}`;
-  await seedOverdueTask(page, closedTitle);
-  await seedOverdueTask(page, keptTitle);
+  await seedTodayTask(page, closedTitle);
+  await seedTodayTask(page, keptTitle);
 
   await openToday(page);
   await expect(cardFor(page, closedTitle)).toBeVisible();
@@ -718,7 +749,7 @@ test("TUX07-AC-019: the Today Task card reflows at 320-430 with both operations 
 }) => {
   test.setTimeout(240_000);
   const title = `E2E today reflow ${marker("ac019")}`;
-  await seedOverdueTask(page, title);
+  await seedTodayTask(page, title);
 
   const overflow = () =>
     page.evaluate(
@@ -779,7 +810,7 @@ test("TUX07-AC-020: a non-Task Pulse item renders with no Reschedule and no Clos
 }) => {
   test.setTimeout(180_000);
   const title = `E2E today mixed task ${marker("ac020")}`;
-  await seedOverdueTask(page, title);
+  await seedTodayTask(page, title);
 
   /*
     The Task half of this list is entirely real: a Task is seeded through the
@@ -802,15 +833,25 @@ test("TUX07-AC-020: a non-Task Pulse item renders with no Reschedule and no Clos
     product renders from it.
 
     What is under test is exactly that rendering: `BackendPulseList` branches on
-    `itemType`, and the two items go through one render pass in one list, so the
-    comparison is like-for-like rather than two separate pages.
+    the row's `kind`, and the canonical Task row and the derived non-Task row go
+    through one render pass in one list, so the comparison is like-for-like
+    rather than two separate pages.
   */
-  const served = await api<{ items: unknown[]; disclosure: unknown }>(page, "/api/pulse");
-  expect(served.status).toBe(200);
-  const taskItem = (served.body.items as { itemType: string; subjectTitle?: string }[]).find(
-    (item) => item.itemType === "task" && item.subjectTitle === title,
+  const clock = await todayClock(page);
+  const served = await api<{
+    todayRows?: { kind: string; title?: string }[];
+    disclosure: unknown;
+  }>(
+    page,
+    `/api/pulse?workDate=${clock.workDate}&timezone=${encodeURIComponent(clock.timezone)}`,
   );
-  expect(taskItem, "the seeded Task must be derived onto the Pulse by the real backend").toBeTruthy();
+  expect(served.status).toBe(200);
+  const todayRows = served.body.todayRows ?? [];
+  const taskRow = todayRows.find((row) => row.kind === "task" && row.title === title);
+  expect(
+    taskRow,
+    "the seeded Task must be in the canonical Today set the real backend answered",
+  ).toBeTruthy();
 
   const commitmentRef = "cmt_e2e00000000000000000000000ac020";
   const commitmentItem = {
@@ -827,13 +868,15 @@ test("TUX07-AC-020: a non-Task Pulse item renders with no Reschedule and no Clos
     generatedAt: new Date().toISOString(),
   };
 
-  await page.route("**/api/pulse", async (route) => {
+  await page.route(PULSE_ROUTE, async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify({
         shape: "backend",
-        items: [commitmentItem, taskItem],
+        // The route's own order: canonical Task rows, then the derived rows.
+        todayRows: [taskRow, { kind: "attention", item: commitmentItem }],
+        completeness: "full",
         disclosure: { scope: "pulse", coverage: "complete", limitations: [], truncated: false },
       }),
     });

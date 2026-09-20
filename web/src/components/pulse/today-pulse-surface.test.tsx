@@ -21,7 +21,7 @@ import {
 } from "@/components/pulse/today-pulse-surface";
 import { TaskRuntimeProvider, useTaskRuntime } from "@/components/work/task-runtime-provider";
 import type { DisclosureEnvelope } from "@/contracts/envelope";
-import type { BackendPulseItem, TodayPulseAnswer } from "@/contracts/views";
+import type { BackendPulseItem, TodayPulseAnswer, TodayRow } from "@/contracts/views";
 
 let fetchSpy: ReturnType<typeof vi.fn>;
 
@@ -51,6 +51,20 @@ function item(overrides: Partial<BackendPulseItem> = {}): BackendPulseItem {
   };
 }
 
+/** A derived row about something that is not a Task. */
+function attentionRow(overrides: Partial<BackendPulseItem> = {}): TodayRow {
+  return { kind: "attention", item: item(overrides) };
+}
+
+/**
+ * A canonical Today Task row. `attention` is passed only when the derivation
+ * flagged the Task; a row without it is a Task the derivation never flagged,
+ * which is exactly what this surface must still render.
+ */
+function taskRow(taskId: string, title: string, attention?: BackendPulseItem): TodayRow {
+  return { kind: "task", taskId, title, ...(attention ? { attention } : {}) };
+}
+
 function disclosure(overrides: Partial<DisclosureEnvelope> = {}): DisclosureEnvelope {
   return {
     scope: "pulse",
@@ -64,11 +78,17 @@ function disclosure(overrides: Partial<DisclosureEnvelope> = {}): DisclosureEnve
 }
 
 function pulseResponse(
-  items: readonly BackendPulseItem[],
+  items: readonly TodayRow[],
   disclosureOverrides: Partial<DisclosureEnvelope> = {},
+  completeness: "full" | "partial" = "full",
 ): Response {
   return new Response(
-    JSON.stringify({ shape: "backend", items, disclosure: disclosure(disclosureOverrides) }),
+    JSON.stringify({
+      shape: "backend",
+      todayRows: items,
+      disclosure: disclosure(disclosureOverrides),
+      completeness,
+    }),
     { status: 200, headers: { "content-type": "application/json" } },
   );
 }
@@ -81,9 +101,9 @@ function renderSurface(initialAnswer: TodayPulseAnswer) {
   );
 }
 
-const TWO_ROWS: readonly BackendPulseItem[] = [
-  item({ pulseId: "puls_one", subjectTitle: "First by rank", attentionRank: 9 }),
-  item({ pulseId: "puls_two", subjectTitle: "Second by rank", attentionRank: 1 }),
+const TWO_ROWS: readonly TodayRow[] = [
+  attentionRow({ pulseId: "puls_one", subjectTitle: "First by rank", attentionRank: 9 }),
+  attentionRow({ pulseId: "puls_two", subjectTitle: "Second by rank", attentionRank: 1 }),
 ];
 
 function renderedTitles(): readonly (string | null)[] {
@@ -96,11 +116,13 @@ function requestedUrls(): readonly string[] {
 }
 
 describe("TodayPulseSurface reads /api/pulse and nothing else", () => {
-  it("asks only its own route, with no payload and no principal", async () => {
+  it("asks only its own route, with workDate and timezone in query, with no payload and no principal", async () => {
     renderSurface({ kind: "records", items: TWO_ROWS });
     await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
     for (const [url, init] of fetchSpy.mock.calls as [string, RequestInit][]) {
-      expect(String(url)).toBe("/api/pulse");
+      const urlString = String(url);
+      // Expect the path to be /api/pulse with workDate and timezone query params
+      expect(urlString).toMatch(/\/api\/pulse\?workDate=\d{4}-\d{2}-\d{2}&timezone=.+$/);
       expect(init.method).toBe("GET");
       expect(init.body).toBeUndefined();
     }
@@ -108,8 +130,8 @@ describe("TodayPulseSurface reads /api/pulse and nothing else", () => {
 
   it("reads no Task detail merely because Today is populated", async () => {
     const tasks = [
-      item({ pulseId: "puls_t1", itemType: "task", itemRef: "tsk_one", subjectTitle: "One" }),
-      item({ pulseId: "puls_t2", itemType: "task", itemRef: "tsk_two", subjectTitle: "Two" }),
+      taskRow("tsk_one", "One", item({ pulseId: "puls_t1", itemType: "task", itemRef: "tsk_one" })),
+      taskRow("tsk_two", "Two"),
     ];
     fetchSpy.mockImplementation(async () => pulseResponse(tasks));
     renderSurface({ kind: "records", items: tasks });
@@ -186,9 +208,9 @@ describe("the exact Empty sentence is reserved for an authoritative quiet day", 
 describe("answers replace one another atomically, in the backend's order", () => {
   it("keeps the new answer in the order the backend returned it", async () => {
     const reordered = [
-      item({ pulseId: "puls_two", subjectTitle: "Second by rank", attentionRank: 1 }),
-      item({ pulseId: "puls_one", subjectTitle: "First by rank", attentionRank: 9 }),
-      item({ pulseId: "puls_three", subjectTitle: "Third", attentionRank: 4 }),
+      attentionRow({ pulseId: "puls_two", subjectTitle: "Second by rank", attentionRank: 1 }),
+      attentionRow({ pulseId: "puls_one", subjectTitle: "First by rank", attentionRank: 9 }),
+      attentionRow({ pulseId: "puls_three", subjectTitle: "Third", attentionRank: 4 }),
     ];
     fetchSpy.mockImplementation(async () => pulseResponse(reordered));
     renderSurface({ kind: "records", items: TWO_ROWS });
@@ -203,7 +225,7 @@ describe("answers replace one another atomically, in the backend's order", () =>
     });
     fetchSpy.mockImplementation(async () => {
       await gate;
-      return pulseResponse([item({ pulseId: "puls_new", subjectTitle: "Replacement" })]);
+      return pulseResponse([attentionRow({ pulseId: "puls_new", subjectTitle: "Replacement" })]);
     });
     renderSurface({ kind: "records", items: TWO_ROWS });
     // While the read is in flight the confirmed answer is still the whole answer.
@@ -211,6 +233,94 @@ describe("answers replace one another atomically, in the backend's order", () =>
     expect(renderedTitles()).toEqual(["First by rank", "Second by rank"]);
     release?.();
     await waitFor(() => expect(renderedTitles()).toEqual(["Replacement"]));
+    expect(screen.queryByTestId("today-empty")).toBeNull();
+  });
+});
+
+describe("a first read that fails states the failure rather than a placeholder", () => {
+  function Harness({ onRuntime }: { onRuntime: (runtime: ReturnType<typeof useTaskRuntime>) => void }) {
+    onRuntime(useTaskRuntime());
+    return null;
+  }
+
+  /** The surface as the page mounts it: no server classification behind it. */
+  function renderFresh() {
+    return render(
+      <TaskRuntimeProvider principalId="prin_test" sessionEpoch="epoch-test">
+        <TodayPulseSurface />
+      </TaskRuntimeProvider>,
+    );
+  }
+
+  /** What `gatewayRefusal()` puts on the wire for an unreachable gateway. */
+  function refusedResponse(): Response {
+    return new Response(
+      JSON.stringify({
+        state: "unavailable",
+        error: {
+          errorClass: "unavailable",
+          code: "gateway_unreachable",
+          message: "the application gateway did not answer",
+        },
+        disclosure: {
+          scope: "pulse",
+          coverage: "unavailable",
+          freshnessAt: null,
+          authority: "derived",
+          limitations: ["the application gateway did not answer"],
+          truncated: false,
+        },
+      }),
+      { status: 503, headers: { "content-type": "application/json" } },
+    );
+  }
+
+  it("carries the route's own diagnostic into the unavailable region", async () => {
+    fetchSpy.mockImplementation(async () => refusedResponse());
+    renderFresh();
+    const region = await screen.findByTestId("today-unavailable");
+    expect(region).toHaveAttribute("data-state", "unavailable");
+    // The sentence is the gateway's, reached through the envelope rather than
+    // written here: a status code alone could not have produced it.
+    expect(region.textContent).toContain("the application gateway did not answer");
+    expect(screen.queryByTestId("today-empty")).toBeNull();
+    expect(screen.queryByText(TODAY_EMPTY_COPY)).toBeNull();
+    // Nothing was ever confirmed, so there is no "last confirmed read" to claim.
+    expect(screen.queryByTestId("today-stale")).toBeNull();
+  });
+
+  it("says only what a failure with no envelope establishes", async () => {
+    fetchSpy.mockImplementation(async () => new Response("", { status: 502 }));
+    renderFresh();
+    const region = await screen.findByTestId("today-unavailable");
+    expect(region.textContent).toContain("502");
+    expect(screen.queryByTestId("today-empty")).toBeNull();
+  });
+
+  /**
+   * The other half of the same decision, and the one `today-tasks.spec.ts`
+   * AC-013 proves against the real stack: once an answer has stood, a failed
+   * read retains it and says the surface is stale. The second read is driven
+   * through the reconciliation seam rather than the 5s cadence so the test
+   * measures the decision and not the clock.
+   */
+  it("retains a confirmed answer when a later read fails, and does not go unavailable", async () => {
+    let runtime: ReturnType<typeof useTaskRuntime> | undefined;
+    fetchSpy.mockImplementation(async () => pulseResponse(TWO_ROWS));
+    render(
+      <TaskRuntimeProvider principalId="prin_test" sessionEpoch="epoch-test">
+        <Harness onRuntime={(value) => (runtime = value)} />
+        <TodayPulseSurface />
+      </TaskRuntimeProvider>,
+    );
+    await waitFor(() => expect(renderedTitles()).toEqual(["First by rank", "Second by rank"]));
+
+    fetchSpy.mockImplementation(async () => refusedResponse());
+    runtime?.reconciliation.notifyTaskMutationConfirmed({ kind: "close", taskId: "tsk_elsewhere" });
+
+    await waitFor(() => expect(screen.getByTestId("today-stale")).toBeTruthy());
+    expect(renderedTitles()).toEqual(["First by rank", "Second by rank"]);
+    expect(screen.queryByTestId("today-unavailable")).toBeNull();
     expect(screen.queryByTestId("today-empty")).toBeNull();
   });
 });
@@ -234,7 +344,7 @@ describe("a Task confirmed anywhere in the session refreshes Today", () => {
 
     const before = fetchSpy.mock.calls.length;
     fetchSpy.mockImplementation(async () =>
-      pulseResponse([item({ pulseId: "puls_after", subjectTitle: "After the write" })]),
+      pulseResponse([attentionRow({ pulseId: "puls_after", subjectTitle: "After the write" })]),
     );
     runtime?.reconciliation.notifyTaskMutationConfirmed({ kind: "close", taskId: "tsk_elsewhere" });
 
@@ -302,19 +412,23 @@ describe("focus survives the card leaving Today", () => {
     return null;
   }
 
-  function taskItem(taskId: string, title: string): BackendPulseItem {
-    return item({
-      pulseId: `puls_${taskId}`,
-      itemType: "task",
-      itemRef: taskId,
-      reasonCode: "task_overdue",
-      subjectTitle: title,
-      nextStep: undefined,
-    });
+  /** A canonical Task row the derivation also flagged. */
+  function todayTask(taskId: string, title: string): TodayRow {
+    return taskRow(
+      taskId,
+      title,
+      item({
+        pulseId: `puls_${taskId}`,
+        itemType: "task",
+        itemRef: taskId,
+        reasonCode: "task_overdue",
+        nextStep: undefined,
+      }),
+    );
   }
 
-  const ONE = taskItem("tsk_one", "First task");
-  const TWO = taskItem("tsk_two", "Second task");
+  const ONE = todayTask("tsk_one", "First task");
+  const TWO = todayTask("tsk_two", "Second task");
 
   /** Emulate the browser dropping focus when the focused control is disabled. */
   function emulateDisableBlur(): () => void {
@@ -340,7 +454,7 @@ describe("focus survives the card leaving Today", () => {
     return document.querySelectorAll("[data-today-task]").length;
   }
 
-  function renderToday(items: readonly BackendPulseItem[]) {
+  function renderToday(items: readonly TodayRow[]) {
     let runtime: ReturnType<typeof useTaskRuntime> | undefined;
     fetchSpy.mockImplementation(async () => pulseResponse(items));
     render(
@@ -364,7 +478,7 @@ describe("focus survives the card leaving Today", () => {
        * a frame that has not fired. A test that did not wait for the frame would
        * report a guard as unreached rather than as wrong.
        */
-      async reread(next: readonly BackendPulseItem[], settled: () => void) {
+      async reread(next: readonly TodayRow[], settled: () => void) {
         const before = fetchSpy.mock.calls.length;
         fetchSpy.mockImplementation(async () => pulseResponse(next));
         runtime?.reconciliation.notifyTaskMutationConfirmed({ kind: "close", taskId: "tsk_one" });
@@ -410,7 +524,7 @@ describe("focus survives the card leaving Today", () => {
         on the body, and reading that as "the user put it down" throws away the
         only thing that can catch them when the write then takes the card.
       */
-      const REFRESHED = taskItem("tsk_one", "First task, refreshed");
+      const REFRESHED = todayTask("tsk_one", "First task, refreshed");
       await today.reread([REFRESHED, TWO], () =>
         expect(screen.getByText("First task, refreshed")).toBeTruthy(),
       );
@@ -449,7 +563,7 @@ describe("focus survives the card leaving Today", () => {
     expect(document.activeElement).toBe(control);
 
     // A Reschedule that keeps the Task in Today: both cards come back.
-    await today.reread([taskItem("tsk_one", "First task, rescheduled"), TWO], () =>
+    await today.reread([todayTask("tsk_one", "First task, rescheduled"), TWO], () =>
       expect(screen.getByText("First task, rescheduled")).toBeTruthy(),
     );
 

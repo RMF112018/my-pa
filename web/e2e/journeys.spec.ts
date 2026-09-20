@@ -320,6 +320,11 @@ test.describe("the signed-in surfaces", () => {
     // unchanged. That the note says "Saved" at all is product truth and is
     // asserted in both modes in `capture.test.tsx`.
     await enableDiagnostics(page);
+    // The client guard is seeded from server-resolved state, so an accepted
+    // write reaches an already-rendered tree only on the next server render.
+    // That is the no-flash design working, not a test detail: nothing in the
+    // open document silently flips mode underneath the person using it.
+    await page.reload();
     const marker = `${Date.now()}`;
     await openCaptureNote(page);
     const field = page.getByTestId("capture-field");

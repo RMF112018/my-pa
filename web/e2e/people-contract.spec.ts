@@ -52,7 +52,10 @@ test("People search, profile, and resolve keep ambiguity visible", async ({ page
     await expect(page.getByTestId("people-assignments-historical")).toBeVisible();
   }
 
-  const entityId = (await page.getByTestId("people-entity-id").textContent())?.trim() ?? "";
+  // WP07 §8.7: this read the id out of a rendered diagnostic. The entity's own
+  // URL carries the same identifier, is asserted above, and is product truth in
+  // both modes — so the round-trip below is proved from the address bar instead.
+  const entityId = new URL(page.url()).pathname.split("/").pop() ?? "";
   expect(entityId).toMatch(/^ent_/);
   await page.goto(`/people?entityId=${encodeURIComponent(entityId)}`);
   await expect(page).toHaveURL(new RegExp(`/people/${entityId}$`));

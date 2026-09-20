@@ -7,11 +7,26 @@
  * the *server* can read the preference before it renders anything, which rules
  * out `localStorage` on its own: the server cannot see it, so the page would
  * have to render diagnostics and strip them at hydration, which is the exact
- * anti-pattern the contract names. `HttpOnly` additionally means page script
- * can neither read nor forge the value; the only way it changes is a
+ * anti-pattern the contract names. `HttpOnly` means page script can neither
+ * read nor write the value; the only way this application changes it is a
  * `Set-Cookie` from `POST /api/system/diagnostics`, which is authenticated and
- * same-origin. There is therefore no client-side authority that could act as a
+ * same-origin. There is therefore no *script* authority that could act as a
  * second, untrusted source of ON.
+ *
+ * **What that does not cover, stated rather than implied.** `HttpOnly` bounds
+ * script, not the cookie jar. This cookie is not `__Host-` prefixed, so a
+ * related origin able to set a `Domain=` cookie could write a well-formed value
+ * for a Principal whose id it knows — and that id is not a secret, since the
+ * product displays it. The blast radius is small and one-directional: the parser
+ * still requires the binding to recompute from *this* request's Principal, so no
+ * cross-Principal read is possible, and the only achievable effect is turning a
+ * victim's own diagnostics on, which grants presentation and nothing else.
+ * `__Host-` would close it and costs nothing structurally — `Path=/`, no
+ * `Domain`, and `Secure` already hold in production — but `__Host-` also
+ * *requires* `Secure`, which this build deliberately omits on `http://localhost`
+ * so the development and browser-test stack works. Making the cookie name differ
+ * between environments is a change to the trust core; it is recorded as a
+ * follow-up rather than made unreviewed at the end of this work package.
  *
  * This follows the shape already landed for Project Scope in
  * `lib/project-scope/preference.ts`: a named first-party cookie, a parser that

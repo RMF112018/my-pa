@@ -76,16 +76,32 @@ export function ReportDetailView({
             <dd data-testid="intelligence-kind">{report.artifact_kind}</dd>
             <dt>Stage</dt>
             <dd data-testid="intelligence-stage">{report.stage}</dd>
-            <dt>Focus</dt>
-            <dd>{report.focus_area_id ?? "none"}</dd>
+            {/* Kind, stage, date and state are the report's product truth. The
+                focus-area identifier, the artifact version counter and the
+                producing lane are engineering detail, exactly like Cycle and
+                Run below them. */}
+            {diagnosticsEnabled ? (
+              <>
+                <dt>Focus</dt>
+                <dd>{report.focus_area_id ?? "none"}</dd>
+              </>
+            ) : null}
             <dt>Report date</dt>
             <dd data-testid="intelligence-report-date">{report.report_date}</dd>
-            <dt>Version</dt>
-            <dd>{report.version}</dd>
+            {diagnosticsEnabled ? (
+              <>
+                <dt>Version</dt>
+                <dd>{report.version}</dd>
+              </>
+            ) : null}
             <dt>State</dt>
             <dd data-testid="intelligence-artifact-state">{report.artifact_state}</dd>
-            <dt>Source lane</dt>
-            <dd>{report.source_lane ?? "none"}</dd>
+            {diagnosticsEnabled ? (
+              <>
+                <dt>Source lane</dt>
+                <dd>{report.source_lane ?? "none"}</dd>
+              </>
+            ) : null}
             {diagnosticsEnabled ? (
               <>
                 <dt>Cycle</dt>

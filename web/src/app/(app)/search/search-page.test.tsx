@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
  * global policy; the incomplete-results *consequence* is product truth and is
  * asserted in the default mode below.
  */
-const { diagnostics } = vi.hoisted(() => ({ diagnostics: { enabled: true } }));
+const { diagnostics } = vi.hoisted(() => ({ diagnostics: { enabled: false } }));
 vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@/components/diagnostics/diagnostics-provider")>();
@@ -31,7 +31,8 @@ vi.mock("next/navigation", () => ({
 }));
 
 afterEach(() => {
-  diagnostics.enabled = true;
+  // Back to the product default, so a mode asked for by one test cannot leak.
+  diagnostics.enabled = false;
   cleanup();
   routerPush.mockReset();
   vi.unstubAllGlobals();
@@ -70,6 +71,8 @@ describe("Search page", () => {
   });
 
   it("summarizes coverage with omitted domains still omitted", async () => {
+    // This test's subject is the per-domain coverage rows, which are governed.
+    diagnostics.enabled = true;
     const user = userEvent.setup();
     // A fresh `Response` per call: a body can only be read once, and this test
     // renders the page twice to compare the two diagnostics modes.
@@ -125,7 +128,10 @@ describe("Search page", () => {
   });
 
   it("does not treat all-unavailable zero hits as empty", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    // A fresh Response per call: this test renders twice, and a Response body
+    // can only be read once, so a single shared instance would leave the second
+    // render parsing an already-consumed stream.
+    const answer = () =>
       new Response(
         JSON.stringify({
           shape: "backend",
@@ -137,9 +143,20 @@ describe("Search page", () => {
           ],
         }),
         { status: 200, headers: { "content-type": "application/json" } },
-      ),
-    );
+      );
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => answer());
 
+    render(<SearchPage initialQuery="morning" />);
+    // The claim: zero hits when nothing could be searched is *unavailable*, not
+    // empty. That distinction is operational truth and holds in the product
+    // default, where the per-domain coverage rows are not rendered.
+    expect(await screen.findByTestId("search-unavailable")).toHaveAttribute("data-state", "unavailable");
+    expect(screen.queryByTestId("search-empty")).toBeNull();
+    expect(screen.queryByTestId("search-coverage")).toBeNull();
+
+    // And the coverage rows still carry the omission once diagnostics are on.
+    cleanup();
+    diagnostics.enabled = true;
     render(<SearchPage initialQuery="morning" />);
     expect(await screen.findByTestId("search-unavailable")).toHaveAttribute("data-state", "unavailable");
     expect(screen.queryByTestId("search-empty")).toBeNull();

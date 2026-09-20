@@ -510,11 +510,12 @@ describe("the live read-only workspace", () => {
     );
     await user.click(await screen.findByTestId("inspector-history-more"));
     // The failed continuation is still stated as unavailable; the backend's own
-    // sentence is diagnostics and is governed by the policy.
-    expect(await screen.findByTestId("inspector-history-unavailable")).toHaveAttribute(
-      "data-state",
-      "unavailable",
-    );
+    // sentence is diagnostics and is governed by the policy. Both halves are
+    // asserted, matching the `register-unavailable` case above — the state in
+    // the product default, and the sentence's absence with it.
+    const historyUnavailable = await screen.findByTestId("inspector-history-unavailable");
+    expect(historyUnavailable).toHaveAttribute("data-state", "unavailable");
+    expect(historyUnavailable).not.toHaveTextContent("History continuation failed.");
 
     await user.click(screen.getByTestId("inspector-history-more"));
     expect(screen.queryByTestId("inspector-history-unavailable")).toBeNull();

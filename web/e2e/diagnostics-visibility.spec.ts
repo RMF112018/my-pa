@@ -262,17 +262,35 @@ test.describe("ordinary product truth is unaffected", () => {
   test("Today renders its real content in both modes", async ({ page }) => {
     await signIn(page);
 
+    /** Every product region Today rendered, by its own test id. */
+    const regions = async (): Promise<string[]> =>
+      (
+        await page.locator("main [data-testid]").evaluateAll((nodes) =>
+          nodes.map((node) => node.getAttribute("data-testid") ?? ""),
+        )
+      )
+        .filter((id) => id.length > 0)
+        .sort();
+
     await page.goto("/today");
     await expect(page.getByRole("heading", { name: /today/i }).first()).toBeVisible();
     const offText = (await page.locator("main").textContent()) ?? "";
+    const offRegions = await regions();
+    expect(offText.length).toBeGreaterThan(0);
+    expect(offRegions.length).toBeGreaterThan(0);
 
     await gotoSystem(page);
     await turnOn(page);
     await page.goto("/today");
     await expect(page.getByRole("heading", { name: /today/i }).first()).toBeVisible();
 
-    // The product content is the same; only technical narration may differ.
-    expect(offText.length).toBeGreaterThan(0);
+    // The claim this test's name makes is that turning diagnostics on does not
+    // take product content away, so the two readings are actually compared.
+    // Diagnostics may *add* regions; it may never remove one.
+    const onRegions = await regions();
+    expect(onRegions.length).toBeGreaterThan(0);
+    const missing = offRegions.filter((id) => !onRegions.includes(id));
+    expect(missing, `diagnostics-on dropped product regions: ${missing.join(", ")}`).toEqual([]);
   });
 
   test("System Security stays reachable and independent of diagnostics", async ({ page }) => {

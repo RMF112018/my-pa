@@ -22,6 +22,7 @@ export function AssignmentsPanel({
   assignments,
   disclosure,
   unavailable,
+  unavailableDiagnostic = null,
   diagnosticsEnabled = false,
 }: {
   /**
@@ -34,7 +35,16 @@ export function AssignmentsPanel({
   readonly diagnosticsEnabled?: boolean;
   assignments: readonly AssignmentView[] | null;
   disclosure: DisclosureEnvelope | null;
-  unavailable: string | null;
+  /**
+   * Whether the read failed. A boolean, not the backend's sentence: the panel
+   * needs the *fact* in both modes, and the sentence only when diagnostics are
+   * on. Carrying one string for both meant a raw gateway message crossed this
+   * boundary, which is safe only while both sides happen to be server
+   * components — a property of the files, not of the contract.
+   */
+  unavailable: boolean;
+  /** Already governed by the owning page. Never built while off. */
+  unavailableDiagnostic?: string | null;
 }) {
   if (unavailable) {
     return (
@@ -46,7 +56,7 @@ export function AssignmentsPanel({
           <SurfaceState
             kind="unavailable"
             title="Assignments could not be read"
-            error={diagnosticError(diagnosticsEnabled, unavailable)}
+            error={diagnosticError(diagnosticsEnabled, unavailableDiagnostic)}
             testId="people-assignments-unavailable"
           />
         </div>
@@ -145,6 +155,7 @@ export function RelationshipsPanel({
   subjectId,
   disclosure,
   unavailable,
+  unavailableDiagnostic = null,
   diagnosticsEnabled = false,
 }: {
   /**
@@ -158,7 +169,16 @@ export function RelationshipsPanel({
   relationships: readonly RelationshipView[] | null;
   subjectId: string;
   disclosure: DisclosureEnvelope | null;
-  unavailable: string | null;
+  /**
+   * Whether the read failed. A boolean, not the backend's sentence: the panel
+   * needs the *fact* in both modes, and the sentence only when diagnostics are
+   * on. Carrying one string for both meant a raw gateway message crossed this
+   * boundary, which is safe only while both sides happen to be server
+   * components — a property of the files, not of the contract.
+   */
+  unavailable: boolean;
+  /** Already governed by the owning page. Never built while off. */
+  unavailableDiagnostic?: string | null;
 }) {
   if (unavailable) {
     return (
@@ -170,7 +190,7 @@ export function RelationshipsPanel({
           <SurfaceState
             kind="unavailable"
             title="Relationships could not be read"
-            error={diagnosticError(diagnosticsEnabled, unavailable)}
+            error={diagnosticError(diagnosticsEnabled, unavailableDiagnostic)}
             testId="people-relationships-unavailable"
           />
         </div>
@@ -288,6 +308,7 @@ export function IdentityHistoryPanel({
   nextCursor,
   entityId,
   unavailable,
+  unavailableDiagnostic = null,
   diagnosticsEnabled = false,
 }: {
   /**
@@ -302,7 +323,16 @@ export function IdentityHistoryPanel({
   truncated: boolean;
   nextCursor: string | null;
   entityId: string;
-  unavailable: string | null;
+  /**
+   * Whether the read failed. A boolean, not the backend's sentence: the panel
+   * needs the *fact* in both modes, and the sentence only when diagnostics are
+   * on. Carrying one string for both meant a raw gateway message crossed this
+   * boundary, which is safe only while both sides happen to be server
+   * components — a property of the files, not of the contract.
+   */
+  unavailable: boolean;
+  /** Already governed by the owning page. Never built while off. */
+  unavailableDiagnostic?: string | null;
 }) {
   if (unavailable) {
     return (
@@ -314,7 +344,7 @@ export function IdentityHistoryPanel({
           <SurfaceState
             kind="unavailable"
             title="Identity history could not be read"
-            error={diagnosticError(diagnosticsEnabled, unavailable)}
+            error={diagnosticError(diagnosticsEnabled, unavailableDiagnostic)}
             testId="people-history-unavailable"
           />
         </div>

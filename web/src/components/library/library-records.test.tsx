@@ -97,7 +97,18 @@ describe("CaptureMatches cards", () => {
     const title = within(card).getByRole("heading", { level: 3 });
     expect(title.textContent).toBe("Capture · 2026-03-04 15:30 UTC");
     expect(title.textContent).not.toBe(MATCH.captureId);
+    // WP07: the version counter beside the title is a receipt, like the
+    // identifiers in Details. The title — this test's subject — is unchanged.
+    expect(within(card).queryByText("version 3")).toBeNull();
+  });
+
+  it("shows the match version counter once diagnostics are on", () => {
+    render(<CaptureMatches matches={[MATCH]} diagnosticsEnabled />);
+    const card = screen.getByTestId("library-match");
     expect(within(card).getByText("version 3")).toBeTruthy();
+    expect(within(card).getByRole("heading", { level: 3 }).textContent).toBe(
+      "Capture · 2026-03-04 15:30 UTC",
+    );
   });
 
   it("does not render capture body text even when a fake body field is present", () => {

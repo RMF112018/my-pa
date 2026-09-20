@@ -166,34 +166,45 @@ export default async function IntelligenceHistoryPage({
           testId="intelligence-history-unknown-cycle"
         />
       ) : (
-        groups.map((group) => (
+        groups.map((group, index) => (
           <section
             key={group.cycle_run_id}
-            aria-labelledby={`cycle-${group.cycle_run_id}`}
+            aria-labelledby={`cycle-${index}`}
             data-testid="intelligence-history-cycle"
             data-current={group.current ? "true" : "false"}
           >
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <h2
-                id={`cycle-${group.cycle_run_id}`}
+                id={`cycle-${index}`}
                 className="text-base font-semibold text-text-primary"
               >
                 {group.business_date ?? "Business date not resolved"}
               </h2>
               {group.current ? <Badge tone="green">Current cycle</Badge> : <Badge tone="neutral">Prior cycle</Badge>}
             </div>
-            <Card className="mb-3">
-              <CardTitle>Cycle</CardTitle>
-              <CardBody>
-                <p className="break-all font-mono text-xs">{group.cycle_run_id}</p>
-                <Link
-                  href={intelligenceHistory(group.cycle_run_id)}
-                  className="mt-2 inline-flex min-h-[var(--control-height)] items-center text-sm text-interactive underline"
-                >
-                  Open this run
-                </Link>
-              </CardBody>
-            </Card>
+            {/*
+              WP07 §6.2/AC-43/AC-44. The link into this cycle's own reports is
+              product truth and stays in both modes; the identifier it is built
+              from is a run id. Gating the id alone would have left a card whose
+              whole body was an empty line above a link, so the card is the owner
+              and the link moves out of it. The id stays in the href.
+            */}
+            {diagnosticsEnabled ? (
+              <Card className="mb-3">
+                <CardTitle>Cycle</CardTitle>
+                <CardBody>
+                  <p className="break-all font-mono text-xs">{group.cycle_run_id}</p>
+                </CardBody>
+              </Card>
+            ) : null}
+            <p className="mb-3">
+              <Link
+                href={intelligenceHistory(group.cycle_run_id)}
+                className="inline-flex min-h-[var(--control-height)] items-center text-sm text-interactive underline"
+              >
+                Open this run
+              </Link>
+            </p>
             <ReportListing
               items={group.items}
               currentCycle={group.current ? group.cycle_run_id : null}

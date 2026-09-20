@@ -29,6 +29,7 @@ import type { DisclosureEnvelope } from "@/contracts/envelope";
 import {
   diagnosticError,
   diagnosticLimitations,
+  diagnosticText,
 } from "@/lib/diagnostics/presentation";
 import { serverDiagnosticsEnabled } from "@/lib/diagnostics/server";
 
@@ -42,6 +43,20 @@ function oneParam(
   return (Array.isArray(raw) ? raw[0] : raw)?.trim() ?? "";
 }
 
+/** Did the read fail? Product truth, needed in both modes. */
+function readFailed(outcome: GatewayOutcome<unknown>): boolean {
+  return !outcome.ok;
+}
+
+/**
+ * The backend's own sentence for a failed read, or nothing.
+ *
+ * Returned raw, and wrapped in `diagnosticText` at each callsite rather than
+ * inside here. This is a **server** component, so a raw gateway message handed
+ * to a child is serialized into the RSC payload whatever the child then does
+ * with it — and the static guard that enforces that reads the callsite, so
+ * burying the helper call in here would have hidden these three from it.
+ */
 function failedMessage(outcome: GatewayOutcome<unknown>): string | null {
   if (outcome.ok) return null;
   return outcome.error.message;
@@ -204,20 +219,23 @@ export async function PeopleEntityPage({
       <AssignmentsPanel diagnosticsEnabled={diagnosticsEnabled}
         assignments={assignments}
         disclosure={assignmentDisclosure}
-        unavailable={failedMessage(assignmentsOutcome)}
+        unavailable={readFailed(assignmentsOutcome)}
+        unavailableDiagnostic={diagnosticText(diagnosticsEnabled, failedMessage(assignmentsOutcome))}
       />
       <RelationshipsPanel diagnosticsEnabled={diagnosticsEnabled}
         relationships={relationships}
         subjectId={profile.entity.entity_id}
         disclosure={relationshipDisclosure}
-        unavailable={failedMessage(relationshipsOutcome)}
+        unavailable={readFailed(relationshipsOutcome)}
+        unavailableDiagnostic={diagnosticText(diagnosticsEnabled, failedMessage(relationshipsOutcome))}
       />
       <IdentityHistoryPanel diagnosticsEnabled={diagnosticsEnabled}
         entries={historyEntries}
         truncated={historyTruncated}
         nextCursor={historyCursor}
         entityId={profile.entity.entity_id}
-        unavailable={failedMessage(historyOutcome)}
+        unavailable={readFailed(historyOutcome)}
+        unavailableDiagnostic={diagnosticText(diagnosticsEnabled, failedMessage(historyOutcome))}
       />
     </section>
   );

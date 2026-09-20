@@ -75,8 +75,16 @@ export function MissingRaster() {
   return (
     <Card data-testid="goodnotes-source-missing-digest">
       <CardBody>
-        The source raster was not shown because contentSha256 is required and was not
-        supplied on the query or by the read. No bytes were invented.
+        {/* WP07: that nothing was shown and nothing was invented is the product
+            truth. `contentSha256` is this application's own query-parameter
+            name, so it is governed like every other internal field name. */}
+        The source raster was not shown because this page was not given the digest that
+        identifies it. No bytes were invented.
+        <WhenDiagnostics>
+          <span className="ml-1">
+            `contentSha256` is required and was not supplied on the query or by the read.
+          </span>
+        </WhenDiagnostics>
       </CardBody>
     </Card>
   );

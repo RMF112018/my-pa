@@ -190,10 +190,25 @@ describe("the server never builds diagnostic props while diagnostics are off", (
       !file.source.trimStart().startsWith('"use client"'),
   );
 
+  /**
+   * The prop names that carry engineering detail across the server/client
+   * boundary, each with the helper that must decide before the element is built.
+   *
+   * `unavailableDiagnostic` is here because an independent review found the
+   * People entity page handing a raw `outcome.error.message` to its panels as
+   * `unavailable`, where it did double duty as both "the read failed" and "here
+   * is what the gateway said". That was safe only because the receiving
+   * component happens to be a server component too, so the string died
+   * server-side — a property of *that* file, not of this boundary. The prop is
+   * now split: `unavailable` is the boolean fact, needed in both modes and
+   * carrying nothing; `unavailableDiagnostic` is the backend's sentence and is
+   * guarded here, so the safety no longer depends on an accident.
+   */
   const GUARDED: ReadonlyArray<readonly [string, string]> = [
     ["error", "diagnosticError"],
     ["diagnostic", "diagnosticText"],
     ["limitations", "diagnosticLimitations"],
+    ["unavailableDiagnostic", "diagnosticText"],
   ];
 
   for (const [prop, helper] of GUARDED) {

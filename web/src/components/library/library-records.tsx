@@ -115,7 +115,10 @@ export function CaptureMatches({
           <Card data-testid="library-match">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <CardTitle>{captureTitle(match.displayLabel, match.recordedAt)}</CardTitle>
-              <Badge tone="neutral">version {match.versionNumber}</Badge>
+              {/* The version counter is a receipt, like the ids below it. */}
+              {diagnosticsEnabled ? (
+                <Badge tone="neutral">version {match.versionNumber}</Badge>
+              ) : null}
             </div>
             <CardBody>
               <dl className="grid grid-cols-[9rem_1fr] gap-x-2 gap-y-1">

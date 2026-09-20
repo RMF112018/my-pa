@@ -515,17 +515,34 @@ describe("the fixture-only lifecycle surfaces", () => {
     const user = userEvent.setup();
     mount("view=register&group=none&constraint=cst_syn_0001");
     await user.click(await screen.findByTestId("inspector-close"));
+    // The standing notice states the fixture consequence without naming the
+    // endpoint, the version or the receipt. Asserted while the lifecycle panel
+    // is open, because confirming closes it.
+    const notice = await screen.findByTestId("synthetic-notice-lifecycle");
+    expect(notice).toHaveTextContent(/Fixture only\. Nothing here is sent or saved\./i);
+    expect(notice).not.toHaveTextContent(/mutation endpoint|Constraint Code, version or receipt/i);
     await user.click(screen.getByTestId("lifecycle-confirm"));
     const live = await screen.findByTestId("workspace-live");
     expect(live).toHaveTextContent(/was not carried out\. The record is unchanged/i);
     expect(live).not.toHaveTextContent(/no version was incremented|no receipt was issued/i);
   });
 
-  it("says that a close incremented no version and issued no receipt once diagnostics are on", async () => {
+  it("names the missing endpoint, version and receipt on the lifecycle surface once diagnostics are on", async () => {
+    // The engineering detail this test is named for did not disappear when the
+    // announcement was reduced to product language — it moved to the standing
+    // notice on the lifecycle surface, which is where it belongs, and it is
+    // asserted there rather than in an announcement that no longer carries it.
+    // Asserting `/The record is unchanged/` here would have restated the OFF
+    // case above and proved nothing about diagnostics being on.
     diagnostics.enabled = true;
     const user = userEvent.setup();
     mount("view=register&group=none&constraint=cst_syn_0001");
     await user.click(await screen.findByTestId("inspector-close"));
+    const notice = await screen.findByTestId("synthetic-notice-lifecycle");
+    expect(notice).toHaveTextContent(
+      /no Constraint Code, version or receipt\s+was issued/i,
+    );
+    expect(notice).toHaveTextContent(/no Constraint mutation endpoint/i);
     await user.click(screen.getByTestId("lifecycle-confirm"));
     expect(await screen.findByTestId("workspace-live")).toHaveTextContent(
       /The record is unchanged/i,

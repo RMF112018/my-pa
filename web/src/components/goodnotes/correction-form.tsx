@@ -110,8 +110,7 @@ export function CorrectionForm({
       </Button>
       {outcome.kind === "appended" ? (
         <p role="status" data-testid="goodnotes-correction-appended">
-          A canonical revision was appended
-          .
+          A canonical revision was appended.
           <WhenDiagnostics>
             {outcome.revisionId ? <span className="ml-1">({outcome.revisionId})</span> : null}
           </WhenDiagnostics>

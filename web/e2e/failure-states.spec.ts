@@ -32,13 +32,18 @@ test.beforeEach(async ({ page }) => {
 /**
  * Turn diagnostics on for this browser, through the one route that can.
  *
- * WP07 made raw transport text — including the gateway's own "did not answer"
- * — diagnostic presentation, governed globally and off by default. The
- * *operational* half of this file's claim is unaffected and is still asserted
- * in the default mode: the state is `unavailable`, it is an `alert`, it says
- * nothing was retrieved, it offers Retry, and it never claims emptiness. What
- * moves behind the policy is the sentence that names the gateway, so the
- * assertions about that sentence move with it rather than being deleted.
+ * WP07 made raw transport text diagnostic presentation, governed globally and
+ * off by default. WP08-RT-F010 then closed the vocabulary: the gateway's own
+ * `ErrorEnvelope.message` ("the application gateway did not answer") is dropped
+ * at the boundary and is never rendered in either mode, and what names the
+ * unreachable gateway with diagnostics on is the allowlisted machine code
+ * `gateway_unreachable` alongside its class and `HTTP 503`. The assertions
+ * below therefore test that spelling; none of them was deleted.
+ *
+ * The *operational* half of this file's claim is unaffected and is still
+ * asserted in the default mode: the state is `unavailable`, it is an `alert`,
+ * it says nothing was retrieved, it offers Retry, and it never claims
+ * emptiness. What moves behind the policy is only the naming of the gateway.
  *
  * The session-service is live on this server even though the capability
  * gateway is not, so this write succeeds while every capability read fails —
@@ -97,7 +102,11 @@ for (const surface of SURFACES) {
       // claim about what the person holds. The clarification is the sentence
       // every unavailable state shares, whatever its per-surface heading.
       await expect(region).toContainText(/nothing was retrieved/i);
-      await expect(region).not.toContainText(/did not answer/i);
+      // And the diagnostic half is absent. The token asserted here is the one
+      // the closed vocabulary actually emits for this failure — the same token
+      // the diagnostics-on test below requires — so this discriminates between
+      // the two modes rather than naming a string neither mode renders.
+      await expect(region).not.toContainText(/gateway_unreachable/i);
     }
 
     const text = (await region.textContent()) ?? "";
@@ -120,7 +129,10 @@ test("no raw transport text reaches the browser while diagnostics are off", asyn
   // runs. So this reads the server's own bytes.
   //
   // `view-source` on a failed read used to disclose the gateway's raw message
-  // on every one of these surfaces. It must disclose none of it.
+  // on every one of these surfaces. It must disclose no transport detail at
+  // all. The two patterns below are the ones the closed vocabulary emits for a
+  // dead gateway with diagnostics on — the allowlisted code and the rendered
+  // status — so each would really be found in these bytes in the other mode.
   const cookies = await page.context().cookies();
   const header = cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
 
@@ -136,11 +148,11 @@ test("no raw transport text reaches the browser while diagnostics are off", asyn
     const response = await page.request.get(path, { headers: { cookie: header } });
     expect(response.status(), path).toBe(200);
     const body = await response.text();
-    expect(body, `${path} served raw transport text while diagnostics were off`).not.toMatch(
-      /did not answer/i,
+    expect(body, `${path} served a transport code while diagnostics were off`).not.toMatch(
+      /gateway_unreachable/i,
     );
-    expect(body, `${path} served a raw transport status while diagnostics were off`).not.toMatch(
-      /request failed with status/i,
+    expect(body, `${path} served a transport status while diagnostics were off`).not.toMatch(
+      /HTTP 503/i,
     );
   }
 });
@@ -150,7 +162,9 @@ test("Work names the unreachable gateway once diagnostics are on", async ({ page
   await page.goto("/work");
   const region = page.getByTestId("state-unavailable");
   await expect(region).toBeVisible();
-  await expect(region).toContainText(/did not answer/i);
+  // The gateway is named by the allowlisted machine code, which is what the
+  // closed vocabulary carries in place of the dropped `ErrorEnvelope.message`.
+  await expect(region).toContainText(/gateway_unreachable/i);
   // Turning diagnostics on adds the transport detail; it must not change what
   // the state *means*, so the operational assertions are repeated here.
   await expect(region).toContainText(/nothing was retrieved/i);

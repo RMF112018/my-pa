@@ -429,11 +429,34 @@ export interface SafeLimitations {
  * What a limitation is allowed to look like.
  *
  * A positive shape, not a deny-list: short, single-line, ordinary prose
- * punctuation, and no unbroken run long enough to be a token. A bearer token, a
- * base64 key body and a hex session id all fail the run-length rule; a
+ * punctuation, and no space-delimited run longer than `LONGEST_WORD`. A
  * connection string fails on `@` and `//`; a stack trace fails on the newline
- * and on `<`. `LOCAL_OPERATOR_LIMITATION` and every front-end literal in the
- * tree pass unchanged.
+ * and on `<`.
+ *
+ * **What the run-length rule does and does not catch, stated exactly.** It
+ * admits any space-delimited run of `LONGEST_WORD` characters or fewer, so it
+ * withholds a long bearer token or base64 key body but it *admits* a
+ * 32-character hex session id, a 32-character base64url token, and every
+ * shorter credential-shaped run — `AKIAIOSFODNN7EXAMPLE` (20),
+ * `sk_live_4eC39HqLyjWDarjt` (24), `/var/lib/mypa/secrets/app.key` (29),
+ * `db-prod-01.internal.example.com` (31). It is a crude bound on run length,
+ * not a secret detector, and the surrounding design does not rely on it being
+ * one: `message` — the field with no schema, where a raw exception or a
+ * connection string actually arrives — is dropped entirely, and this list is
+ * additionally gated behind the global diagnostics preference.
+ *
+ * **Why the bound is not tightened.** `LONGEST_WORD` cannot be lowered without
+ * withholding real product truth, because the backend's limitations are not
+ * prose: `application/disclosure.py`'s `Limitation` is a closed vocabulary of
+ * unbroken snake_case tokens, and eight of them are already longer than 32
+ * characters (`corpus_totals_are_sums_of_per_enrollment_statements` is 51), as
+ * is every `AggregateLimitation.disclosure` value. A run-length rule is
+ * therefore the wrong instrument for this field and is already withholding
+ * legitimate limitations at this threshold; lowering it would withhold nearly
+ * all of them. Recorded for the owning work package rather than papered over
+ * here — narrowing it is a change to what the product discloses, not a
+ * threshold tweak. `LOCAL_OPERATOR_LIMITATION` (longest run 14) and every
+ * front-end literal in the tree pass.
  */
 const LIMITATION_SHAPE = /^[A-Za-z0-9 ,.'’:;()/_-]{1,280}$/;
 const LONGEST_WORD = 32;

@@ -103,8 +103,14 @@ export function DiagnosticsLimitations({
     <>
       <p className="mt-2 font-medium text-text-primary">{heading}</p>
       <ul className="mt-1 list-inside list-disc" data-testid="surface-state-limitations">
-        {limitations.items.map((limitation) => (
-          <li key={limitation}>{limitation}</li>
+        {/*
+         * Keyed by position, not by text. Two withheld entries both become the
+         * same `WITHHELD_LIMITATION` sentence, so the text is not unique and
+         * keying by it produces duplicate keys and a React warning. The list is
+         * render-only and never reordered, so the index is a stable key.
+         */}
+        {limitations.items.map((limitation, index) => (
+          <li key={index}>{limitation}</li>
         ))}
       </ul>
     </>

@@ -269,6 +269,49 @@ describe("what survives is still worth reading", () => {
     expect(renderedBytes()).toContain("local-operator principal");
   });
 
+  /**
+   * The run-length rule's exact boundary, pinned so it cannot drift silently.
+   *
+   * These assert what the predicate *does*, which is not the same as what would
+   * be safe: a 32-character run is admitted, and that includes a 32-character
+   * hex session id. `safe-detail.ts` records why the bound is not lowered — the
+   * backend's limitation vocabulary is unbroken snake_case tokens, several of
+   * them longer than this — and that narrowing it is a product-disclosure
+   * decision for the owning work package, not a threshold tweak here.
+   */
+  describe("the limitation run-length boundary", () => {
+    const admit = (limitation: string) => {
+      const governed = diagnosticLimitations(true, [limitation]);
+      render(<SurfaceState kind="degraded" title="This answer is partial" limitations={governed} />);
+      return !renderedBytes().includes("did not match the safe-disclosure shape");
+    };
+
+    it("admits a run of exactly 32 characters", () => {
+      expect(admit(`a run of ${"a".repeat(32)} here`)).toBe(true);
+    });
+
+    it("withholds a run of 33 characters", () => {
+      expect(admit(`a run of ${"a".repeat(33)} here`)).toBe(false);
+    });
+
+    it("admits a 32-character hex session id, which the bound does not exclude", () => {
+      expect(admit("the session 0123456789abcdef0123456789abcdef was used")).toBe(true);
+    });
+
+    it("keeps every limitation the backend vocabulary can emit that fits the bound", () => {
+      for (const token of [
+        "content_truncated_at_fetch_limit",
+        "result_label_is_media_type_only",
+        "evidence_scope_was_not_searched",
+        "no_extracted_text_in_scope",
+        "scope_not_fully_extracted",
+      ]) {
+        cleanup();
+        expect(admit(token), token).toBe(true);
+      }
+    });
+  });
+
   it("acknowledges a correlation id without printing it", () => {
     const governed = diagnosticError(true, {
       errorClass: "unavailable",

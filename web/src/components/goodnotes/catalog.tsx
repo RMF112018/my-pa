@@ -83,10 +83,19 @@ export function PageList({
   notebookId,
   pages,
   selectedLogicalPageId,
+  diagnosticsEnabled = false,
 }: {
   notebookId: string;
   pages: readonly GoodNotesPage[];
   selectedLogicalPageId: string;
+  /**
+   * WP07 §8.7, matching `source-raster.tsx`, which already gates these exact
+   * fields. These are **server** components, so the decision is taken here
+   * rather than in a client guard: a client gate would leave the identifier in
+   * the RSC payload that ships inside the HTML. Fail-closed when a caller
+   * forgets. Every identifier stays in the href regardless.
+   */
+  readonly diagnosticsEnabled?: boolean;
 }) {
   return (
     <ul className="flex flex-col gap-3" data-testid="goodnotes-pages">
@@ -97,12 +106,20 @@ export function PageList({
           <li key={page.page_version_id}>
             <Card data-testid="goodnotes-page" aria-current={selected ? "true" : undefined}>
               <CardTitle>
-                <span className="font-mono text-sm break-all">{page.logical_page_id}</span>
+                {diagnosticsEnabled ? (
+                  <span className="font-mono text-sm break-all">{page.logical_page_id}</span>
+                ) : (
+                  "Page"
+                )}
               </CardTitle>
               <CardBody>
                 <dl className="grid grid-cols-[9rem_1fr] gap-x-2 gap-y-1">
-                  <dt className="text-muted">page version</dt>
-                  <dd className="font-mono text-xs break-all">{page.page_version_id}</dd>
+                  {diagnosticsEnabled ? (
+                    <>
+                      <dt className="text-muted">page version</dt>
+                      <dd className="font-mono text-xs break-all">{page.page_version_id}</dd>
+                    </>
+                  ) : null}
                   <dt className="text-muted">updated</dt>
                   <dd>{moment(page.updated_at)}</dd>
                   <dt className="text-muted">latest</dt>
@@ -123,7 +140,8 @@ export function PageList({
                   </a>
                 ) : (
                   <p className="mt-3 text-xs" data-testid="goodnotes-page-no-run">
-                    This page has no run id, so it cannot be opened as evidence.
+                    This page has not been processed, so it cannot be opened as evidence.
+                    {diagnosticsEnabled ? " It carries no run id." : ""}
                   </p>
                 )}
               </CardBody>
@@ -138,9 +156,12 @@ export function PageList({
 export function RunList({
   notebookId,
   runs,
+  diagnosticsEnabled = false,
 }: {
   notebookId: string;
   runs: readonly GoodNotesRun[];
+  /** See `PageList`. Server-side decision; fail-closed when a caller forgets. */
+  readonly diagnosticsEnabled?: boolean;
 }) {
   return (
     <ul className="flex flex-col gap-3" data-testid="goodnotes-runs">
@@ -151,7 +172,11 @@ export function RunList({
             <Card data-testid="goodnotes-run">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <CardTitle>
-                  <span className="font-mono text-sm break-all">{run.run_id}</span>
+                  {diagnosticsEnabled ? (
+                    <span className="font-mono text-sm break-all">{run.run_id}</span>
+                  ) : (
+                    "Run"
+                  )}
                 </CardTitle>
                 <Badge tone={run.failure_class ? "coral" : "neutral"}>{run.state}</Badge>
               </div>
@@ -175,7 +200,8 @@ export function RunList({
                   </a>
                 ) : (
                   <p className="mt-3 text-xs" data-testid="goodnotes-run-no-page">
-                    This run has no page version id, so it cannot be opened as evidence.
+                    This run produced no page, so it cannot be opened as evidence.
+                    {diagnosticsEnabled ? " It carries no page version id." : ""}
                   </p>
                 )}
               </CardBody>

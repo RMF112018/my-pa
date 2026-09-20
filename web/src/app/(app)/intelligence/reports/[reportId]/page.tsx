@@ -13,6 +13,10 @@ import { PageHeader } from "@/components/shell/page-header";
 import { SurfaceState } from "@/components/ui/surface-state";
 import { ReportDetailView } from "@/components/intelligence/report-detail-view";
 import { REPORT_IDENTIFIER } from "@/components/intelligence/cycle-selection";
+import {
+  diagnosticError,
+} from "@/lib/diagnostics/presentation";
+import { serverDiagnosticsEnabled } from "@/lib/diagnostics/server";
 
 export const metadata = { title: "Intelligence report — my-pa" };
 export const dynamic = "force-dynamic";
@@ -24,6 +28,10 @@ export default async function IntelligenceReportPage({
 }: {
   params: Promise<{ reportId: string }>;
 }) {
+  // WP07: resolved once per request (memoised) so the diagnostic-bearing
+  // props below are never built, and therefore never serialized into the
+  // RSC payload, while diagnostics are off.
+  const diagnosticsEnabled = await serverDiagnosticsEnabled();
   const cookieStore = await cookies();
   const principal = await resolveSessionPrincipal(cookieStore.get(SESSION_COOKIE_NAME)?.value);
   if (!principal) redirect("/sign-in");
@@ -67,12 +75,12 @@ export default async function IntelligenceReportPage({
         <SurfaceState
           kind="unavailable"
           title="This report could not be read"
-          error={outcome.error}
+          error={diagnosticError(diagnosticsEnabled, outcome.error)}
           testId="intelligence-report-unavailable"
         />
       </section>
     );
   }
 
-  return <ReportDetailView report={outcome.result} />;
+  return <ReportDetailView report={outcome.result} diagnosticsEnabled={diagnosticsEnabled} />;
 }

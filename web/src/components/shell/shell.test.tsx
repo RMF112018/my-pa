@@ -1,4 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * WP07 — diagnostic presentation follows the global policy. The product default
+ * is OFF; this file sets the mode each test actually means.
+ */
+const { diagnostics } = vi.hoisted(() => ({ diagnostics: { enabled: false } }));
+vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/diagnostics/diagnostics-provider")>();
+  return {
+    ...actual,
+    // Both must be replaced: `WhenDiagnostics` closes over the real hook in its
+    // own module scope, so overriding only the exported hook would leave the
+    // guard reading the unmocked policy.
+    useDiagnosticsEnabled: () => diagnostics.enabled,
+    WhenDiagnostics: ({ children }: { children: React.ReactNode }) =>
+      diagnostics.enabled ? children : null,
+  };
+});
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AppShell } from "@/components/shell/app-shell";
@@ -122,7 +141,19 @@ describe("app shell", () => {
     await user.click(within(screen.getByRole("banner")).getByRole("button", { name: "Account" }));
     expect(screen.getByTestId("principal-name")).toHaveTextContent("Synthetic A");
     expect(screen.getByTestId("principal-upn")).toHaveTextContent("synthetic.a@moss.example");
+    // WP07: which provider issued the session is build narration. The account
+    // facts above are product truth and stay; the badge is gated.
+    expect(screen.queryByText("Synthetic identity")).toBeNull();
+  });
+
+  it("shows the synthetic provider badge once diagnostics are on", async () => {
+    diagnostics.enabled = true;
+    const user = userEvent.setup();
+    render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>content</AppShell>);
+    await user.click(within(screen.getByRole("banner")).getByRole("button", { name: "Account" }));
     expect(screen.getByText("Synthetic identity")).toBeInTheDocument();
+    // ON adds the badge; it never removes the account truth beside it.
+    expect(screen.getByTestId("principal-name")).toHaveTextContent("Synthetic A");
   });
 
   it("marks the active destination with aria-current", () => {

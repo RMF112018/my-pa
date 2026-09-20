@@ -50,6 +50,14 @@ import type { ReactNode } from "react";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { mapUserError, type UserErrorInput } from "@/lib/ui/user-error";
+import {
+  DiagnosticsDetails,
+  DiagnosticsLimitations,
+} from "@/components/ui/diagnostics-details";
+
+// Re-exported so the ~40 existing callsites keep one import path. The gate
+// itself lives in that module, because it must be a client-side mount decision.
+export { DiagnosticsDetails };
 
 /** The four answers. There is deliberately no fifth and no default. */
 export type SurfaceStateKind = "empty" | "unavailable" | "degraded" | "not_implemented";
@@ -120,28 +128,6 @@ function compactKind(kind: SurfaceStateKind): boolean {
   return kind === "empty" || kind === "not_implemented";
 }
 
-/** Raw/transport copy, always behind a native Details disclosure. */
-export function DiagnosticsDetails({
-  diagnostic,
-  children,
-}: {
-  diagnostic?: string | null;
-  children?: ReactNode;
-}) {
-  if (!diagnostic && !children) return null;
-  return (
-    <div className="mt-2" data-testid="surface-state-diagnostics">
-      <p className="font-medium text-text-primary">Diagnostics</p>
-      {diagnostic ? (
-        <p className="mt-1 font-mono text-xs text-text-muted" data-testid="surface-state-diagnostic">
-          {diagnostic}
-        </p>
-      ) : null}
-      {children}
-    </div>
-  );
-}
-
 function StateDetails({
   clarification,
   limitations,
@@ -157,16 +143,7 @@ function StateDetails({
       <p className="mt-2 text-sm" data-testid="surface-state-clarification">
         {clarification}
       </p>
-      {limitations.length > 0 ? (
-        <>
-          <p className="mt-2 font-medium text-text-primary">What is missing from this answer:</p>
-          <ul className="mt-1 list-inside list-disc" data-testid="surface-state-limitations">
-            {limitations.map((limitation) => (
-              <li key={limitation}>{limitation}</li>
-            ))}
-          </ul>
-        </>
-      ) : null}
+      <DiagnosticsLimitations limitations={limitations} />
       <DiagnosticsDetails diagnostic={diagnostic} />
     </details>
   );
@@ -267,13 +244,7 @@ export function DegradedBanner({
           token to ask for the rest.
         </p>
       ) : null}
-      {limitations.length > 0 ? (
-        <ul className="mt-1 list-inside list-disc text-muted">
-          {limitations.map((limitation) => (
-            <li key={limitation}>{limitation}</li>
-          ))}
-        </ul>
-      ) : null}
+      <DiagnosticsLimitations limitations={limitations} heading="What the backend said is missing:" />
       <details className="mt-2" data-testid="surface-state-details">
         <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
         <p className="mt-2 text-muted">

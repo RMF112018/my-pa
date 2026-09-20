@@ -8,6 +8,7 @@ import { MutationFeedbackEvent } from "@/components/ui/mutation-feedback";
 import { Select } from "@/components/ui/select";
 import { Sheet } from "@/components/ui/sheet";
 import { LoadingStatus, SurfaceState } from "@/components/ui/surface-state";
+import { WhenDiagnostics } from "@/components/diagnostics/diagnostics-provider";
 import { Textarea } from "@/components/ui/textarea";
 import { CommitmentDetailView } from "@/components/work/work-detail";
 import { TaskCompactSheet } from "@/components/tasks/task-compact-sheet";
@@ -37,17 +38,32 @@ function Labeled({ label, children, hint }: { label: string; children: ReactNode
   return <label className="grid gap-1 text-sm font-medium text-text-primary"><span>{label}</span>{children}{hint ? <span className="text-xs font-normal text-muted">{hint}</span> : null}</label>;
 }
 
-function StatusNote({ message, details, className = "mt-4 rounded-lg border border-border bg-surface p-3" }: { message: string; details?: string; className?: string }) {
+/**
+ * WP07 §8.4/§6.4. Three tiers, and the middle one is why this is not one prop.
+ *
+ * `message` is the product-language outcome. `details` is *also* product truth —
+ * how many rows a bulk action affected is a fact about the user's own work, and
+ * gating it would hide the result of a mutation they just performed. Only
+ * `diagnostic` carries the receipts: a bulk-operation id, an ISO expiry, history
+ * ids, a raw backend message. Gating the whole disclosure swept up the counts,
+ * which is the mistake this split exists to prevent.
+ */
+function StatusNote({ message, details, diagnostic, className = "mt-4 rounded-lg border border-border bg-surface p-3" }: { message: string; details?: string; diagnostic?: string; className?: string }) {
   if (!message) return null;
   return (
     <div className={className}>
       <p role="status" className="text-sm text-muted">{message}</p>
       {details ? (
-        <details className="mt-2 text-xs text-muted">
-          <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
-          <p className="mt-2 whitespace-pre-wrap">{details}</p>
-        </details>
+        <p className="mt-2 text-xs text-muted whitespace-pre-wrap">{details}</p>
       ) : null}
+      <WhenDiagnostics>
+        {diagnostic ? (
+          <details className="mt-2 text-xs text-muted">
+            <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
+            <p className="mt-2 whitespace-pre-wrap">{diagnostic}</p>
+          </details>
+        ) : null}
+      </WhenDiagnostics>
     </div>
   );
 }
@@ -771,7 +787,15 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
           </div>
         ) : null}
       </div>
-      {disclosure && state !== "failed" ? <Disclosure details={disclosure} /> : null}
+      {disclosure && state !== "failed" ? (
+          /* WP07 §8.5: authority/coverage/truncation/freshness narration is the
+             diagnostic projection of the answer. The records themselves, the
+             partial-answer consequence and the pagination controls are product
+             truth and stay outside this gate. */
+          <WhenDiagnostics>
+            <Disclosure details={disclosure} />
+          </WhenDiagnostics>
+        ) : null}
       {partial ? <SurfaceState kind="degraded" title="More Work is available" detail="There are more results. Continue to the next page." /> : null}
       {nextCursor ? (
         <Button
@@ -891,29 +915,47 @@ function BulkTaskEditor({ taskIds, onConfirmed }: { taskIds: readonly string[]; 
   const [value, setValue] = useState("p1");
   const [status, setStatus] = useState("Ready to preview. Nothing has changed yet.");
   const [statusDetails, setStatusDetails] = useState("");
+  const [statusDiagnostic, setStatusDiagnostic] = useState("");
   const [preview, setPreview] = useState<TaskBulkPreviewReceipt>();
   const [mutations, setMutations] = useState<readonly TaskBulkMutation[]>();
   const [busy, setBusy] = useState(false);
   const previewAttempt = useRef(createAttemptKey("task-bulk-preview"));
   const confirmAttempt = useRef(createAttemptKey("task-bulk-confirm"));
 
-  function note(headline: string, details = "") {
+  function note(headline: string, details = "", diagnostic = "") {
     setStatus(headline);
     setStatusDetails(details);
+    setStatusDiagnostic(diagnostic);
   }
 
   function failureNote(error: unknown, phase: "preview" | "confirm", retainedPreview?: TaskBulkPreviewReceipt) {
     const failure = error as { status?: number; code?: string; message?: string };
-    const retained = retainedPreview ? `Preview ${retainedPreview.bulk_operation_id} expires ${retainedPreview.expires_at}.` : "";
+    const retained = retainedPreview
+      ? `Preview ${retainedPreview.bulk_operation_id} expires ${retainedPreview.expires_at}.`
+      : "";
     if (failure.status === 409) {
       return phase === "confirm"
-        ? note("Confirmation was refused. Nothing was applied; preview again.", `Preview expired or versions drifted. ${retained}`.trim())
-        : note("Preview conflicted. Nothing was applied; the selection and action are retained.", failure.message ?? "409 conflict");
+        ? note(
+            "Confirmation was refused. Nothing was applied; preview again.",
+            "Preview expired or versions drifted.",
+            retained,
+          )
+        : note(
+            "Preview conflicted. Nothing was applied; the selection and action are retained.",
+            "",
+            failure.message ?? "409 conflict",
+          );
     }
     if (failure.status === 503) {
-      return note("Work is unavailable. Nothing was applied.", `Selection and action are retained. ${retained}`.trim());
+      return note(
+        "Work is unavailable. Nothing was applied.",
+        "Selection and action are retained.",
+        retained,
+      );
     }
-    note(failure.message ?? `Bulk ${phase} failed. Nothing was applied.`, retained);
+    // The headline and the consequence are product language; a raw backend
+    // message is unbounded and belongs in the governed disclosure only.
+    note(`Bulk ${phase} failed. Nothing was applied.`, "", [failure.message, retained].filter(Boolean).join(" ").trim());
   }
 
   async function previewChanges() {
@@ -957,7 +999,8 @@ function BulkTaskEditor({ taskIds, onConfirmed }: { taskIds: readonly string[]; 
       setPreview(receipt);
       note(
         "Preview ready",
-        `${receipt.replayed ? "Replayed" : "Applied"} preview: ${bulkCounts(receipt)}. No task has changed. Preview ${receipt.bulk_operation_id} expires ${receipt.expires_at}.`,
+        `${receipt.replayed ? "Replayed" : "Applied"} preview: ${bulkCounts(receipt)}. No task has changed.`,
+        `Preview ${receipt.bulk_operation_id} expires ${receipt.expires_at}.`,
       );
     } catch (error) {
       if (isDefinitiveAttemptFailure(error)) previewAttempt.current.succeeded();
@@ -975,6 +1018,7 @@ function BulkTaskEditor({ taskIds, onConfirmed }: { taskIds: readonly string[]; 
       confirmAttempt.current.succeeded();
       note(
         "The preview expired before confirmation. Nothing was applied; preview again.",
+        "",
         `Preview ${preview.bulk_operation_id} expired at ${preview.expires_at}.`,
       );
       return;
@@ -995,7 +1039,8 @@ function BulkTaskEditor({ taskIds, onConfirmed }: { taskIds: readonly string[]; 
       setMutations(undefined);
       note(
         "Changes applied",
-        `${receipt.replayed ? "Replayed" : "Applied"} confirmation: ${bulkCounts(receipt)}; history_ids: ${receipt.history_ids.join(", ") || "none"}.`,
+        `${receipt.replayed ? "Replayed" : "Applied"} confirmation: ${bulkCounts(receipt)}.`,
+        `history_ids: ${receipt.history_ids.join(", ") || "none"}.`,
       );
       onConfirmed();
     } catch (error) {
@@ -1079,7 +1124,7 @@ function BulkTaskEditor({ taskIds, onConfirmed }: { taskIds: readonly string[]; 
           {busy && preview ? "Confirming…" : "Confirm exact preview"}
         </Button>
       </div>
-      <StatusNote message={status} details={statusDetails} className="mt-3" />
+      <StatusNote message={status} details={statusDetails} diagnostic={statusDiagnostic} className="mt-3" />
     </section>
   );
 }
@@ -1102,9 +1147,11 @@ function CommitmentCreate({ onDone }: { onDone: () => void }) {
         setOptionsTruncated(Boolean(answer.counterparty_options_truncated));
         setOptionsStatus("");
       })
-      .catch((error) => {
+      .catch(() => {
         if (!controller.signal.aborted) {
-          setOptionsStatus(error instanceof Error ? error.message : "Verified counterparties are unavailable");
+          // §8.4: never fall back to a raw `error.message` as the user-facing
+          // sentence. The consequence is the same either way.
+          setOptionsStatus("Verified counterparties are unavailable");
         }
       });
     return () => controller.abort();
@@ -1142,7 +1189,7 @@ function CommitmentCreate({ onDone }: { onDone: () => void }) {
         captureAttempt.current.succeeded();
         createAttempt.current.succeeded();
       }
-      setStatus(error instanceof Error ? error.message : "Commitment was not created");
+      setStatus("Commitment was not created.");
     }
   }
   return (

@@ -1,4 +1,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * WP07 — the raw-transport leg of a failed read follows the global policy.
+ *
+ * Default OFF, matching the product default, so a test that wants the
+ * Diagnostics block has to ask for it by name.
+ */
+const { diagnostics } = vi.hoisted(() => ({ diagnostics: { enabled: false } }));
+vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/diagnostics/diagnostics-provider")>();
+  return {
+    ...actual,
+    // Both must be replaced: `WhenDiagnostics` closes over the real hook in its
+    // own module scope, so overriding only the exported hook would leave the
+    // guard reading the unmocked policy.
+    useDiagnosticsEnabled: () => diagnostics.enabled,
+    WhenDiagnostics: ({ children }: { children: React.ReactNode }) =>
+      diagnostics.enabled ? children : null,
+  };
+});
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Workbench } from "@/components/work/workbench";
@@ -7,10 +28,13 @@ import { parseWorkUrlState } from "@/lib/api/work-url";
 import { TASK_FRESHNESS_INTERVAL_MS } from "@/components/work/use-task-freshness";
 
 afterEach(() => {
+  diagnostics.enabled = false;
   cleanup();
   vi.unstubAllGlobals();
   vi.useRealTimers();
   history.replaceState(null, "", "/");
+  // Back to the product default, so one ON test cannot leak into the next.
+  diagnostics.enabled = false;
 });
 
 function renderFromUrl() {
@@ -1453,6 +1477,12 @@ describe("Work surface", () => {
   });
 
   it("replays an ambiguous bulk confirmation with the exact preview, mutations, and key", async () => {
+    // WP07: this test names the retained preview by its bulk-operation id, which
+    // is a technical receipt. The replay contract it proves — same preview, same
+    // mutations, same key — is unchanged and mode-independent; the assertion on
+    // the id needs the mode that renders it. The product-language consequence
+    // ("Selection and action are retained") is asserted in both modes elsewhere.
+    diagnostics.enabled = true;
     const task = { task_id: "tsk_aaaaaaaa11111111", title: "Synthetic follow up", lifecycle_state: "waiting", priority: "p2", due_at: null, archived_at: null, created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z" };
     let confirmations = 0;
     const fetcher = vi.fn<typeof fetch>(async (input) => {
@@ -1503,12 +1533,23 @@ describe("Work surface", () => {
     const search = screen.getByRole("textbox", { name: "Search tasks" }); await userEvent.type(search, "Find");
     await userEvent.click(screen.getByRole("button", { name: "Search" }));
     await waitFor(() => expect(location.search).toContain("q=Find"));
+    // The partial-answer consequence and the pagination control are product
+    // truth and survive OFF; the technical freshness narration in the
+    // disclosure aside does not. Its ON behaviour is asserted separately below.
     expect(await screen.findByText("More Work is available")).toBeTruthy();
-    const freshness = document.querySelector('time[data-visual-dynamic="freshness"]');
-    expect(freshness?.getAttribute("datetime")).toBe("2026-08-21T12:00:00Z");
+    expect(document.querySelector('time[data-visual-dynamic="freshness"]')).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Next page" }));
     expect(location.search).toContain("cursor=tsk_aaaaaaaa11111111");
     await waitFor(() => expect(fetcher.mock.calls.some(([path]) => String(path).includes("q=Find") && String(path).includes("after=tsk_aaaaaaaa11111111"))).toBe(true));
+  });
+
+  it("discloses answer freshness and authority only once diagnostics are on", async () => {
+    diagnostics.enabled = true;
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ tasks: [{ task_id: "tsk_aaaaaaaa11111111", title: "Find this", lifecycle_state: "open", priority: null, due_at: null, archived_at: null, created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z" }], disclosure: { scope: "tasks", coverage: "partial", freshnessAt: "2026-08-21T12:00:00Z", authority: "accepted", limitations: ["bounded page"], truncated: true, nextCursor: "tsk_aaaaaaaa11111111" } }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetcher); history.replaceState(null, "", "/work?view=all-open"); renderFromUrl();
+    expect(await screen.findByText("More Work is available")).toBeTruthy();
+    const freshness = document.querySelector('time[data-visual-dynamic="freshness"]');
+    expect(freshness?.getAttribute("datetime")).toBe("2026-08-21T12:00:00Z");
   });
 
   it("does not read canonical Work while a search query is only being drafted", async () => {
@@ -1661,6 +1702,21 @@ describe("Work surface", () => {
     renderFromUrl();
     expect(await screen.findByText("This could not be read")).toBeTruthy();
     expect(screen.getByRole("alert")).toBeTruthy();
+    expect(screen.getByTestId("surface-state-detail").textContent).toBe("This could not be read. Try again.");
+    // Diagnostics are off, so the raw gateway message is absent entirely while
+    // the product-language failure and the not-empty distinction both survive.
+    expect(screen.queryByTestId("surface-state-diagnostic")).toBeNull();
+    expect(document.body.textContent ?? "").not.toMatch(/gateway down/);
+    expect(screen.queryByText("No today tasks")).toBeNull();
+  });
+
+  it("carries the raw gateway message once diagnostics are on", async () => {
+    diagnostics.enabled = true;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { code: "unavailable", message: "gateway down" } }), { status: 503, headers: { "content-type": "application/json" } })));
+    history.replaceState(null, "", "/work?view=today");
+    renderFromUrl();
+    expect(await screen.findByText("This could not be read")).toBeTruthy();
+    // ON is additive: the product-language sentence is unchanged.
     expect(screen.getByTestId("surface-state-detail").textContent).toBe("This could not be read. Try again.");
     expect(screen.getByTestId("surface-state-diagnostic").textContent).toBe("gateway down");
     expect(screen.queryByText("No today tasks")).toBeNull();

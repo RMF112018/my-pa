@@ -27,6 +27,25 @@
  * Everything here is synthetic: no real note text and no real identifier.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * WP07 — the receipt identifier and the backend's own refusal string are
+ * technical receipts governed by the global diagnostics policy. Which of the
+ * four outcomes happened, and what the person should do about it, is product
+ * truth and renders in both modes. This file's subject includes the receipts,
+ * so it runs with diagnostics on; the OFF side is asserted explicitly below.
+ */
+const { diagnostics } = vi.hoisted(() => ({ diagnostics: { enabled: true } }));
+vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/diagnostics/diagnostics-provider")>();
+  return {
+    ...actual,
+    useDiagnosticsEnabled: () => diagnostics.enabled,
+    WhenDiagnostics: ({ children }: { children: React.ReactNode }) =>
+      diagnostics.enabled ? children : null,
+  };
+});
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CaptureDialog } from "@/components/shell/capture-dialog";
@@ -70,6 +89,7 @@ async function saveOnce(note = NOTE) {
 }
 
 afterEach(() => {
+  diagnostics.enabled = true;
   cleanup();
   queueSpy.queueCaptureOffline.mockClear();
   vi.restoreAllMocks();
@@ -127,6 +147,26 @@ describe("an acknowledgement that is not a save", () => {
     expect(screen.getByTestId("capture-field")).toHaveValue(NOTE);
   });
 
+  it("still says saved, and shows no receipt identifier, while diagnostics are off", async () => {
+    // WP07 §6.4/§6.2. The dangerous direction this file exists for is unchanged:
+    // the person is still told the note is stored. The receipt identifier beside
+    // it is a technical receipt and is not rendered in the product default.
+    diagnostics.enabled = false;
+    respond({
+      shape: "backend",
+      status: "persisted",
+      created: true,
+      receipt: { receiptId: "rcpt_aaaaaaaa11111111" },
+    });
+    await saveOnce();
+
+    const status = await screen.findByTestId("capture-durable");
+    expect(status).toHaveTextContent("Saved. Your note is stored");
+    expect(status.textContent).not.toContain("rcpt_aaaaaaaa11111111");
+    expect(status.textContent).not.toContain("undefined");
+    await waitFor(() => expect(screen.getByTestId("capture-field")).toHaveValue(""));
+  });
+
   it("treats an answer it does not recognise as not-saved rather than as saved", async () => {
     // The failure direction that matters: an unfamiliar shape must understate.
     respond({ shape: "something-new", created: true });
@@ -138,6 +178,30 @@ describe("an acknowledgement that is not a save", () => {
 });
 
 describe("a refusal", () => {
+  it("says nothing was stored and keeps the note, without the backend's own words, while diagnostics are off", async () => {
+    // The refusal, and that the note survives, are product truth. The backend's
+    // message is an unbounded raw string and is governed (WP07 §6.3/§8.4).
+    diagnostics.enabled = false;
+    respond(
+      {
+        error: {
+          errorClass: "conflict",
+          code: "conflict",
+          message: "this idempotency key is bound to different content",
+        },
+      },
+      409,
+    );
+    await saveOnce();
+
+    const alert = await screen.findByTestId("capture-refused");
+    expect(alert).toHaveTextContent("nothing was stored");
+    expect(alert.textContent).not.toContain("bound to different content");
+    expect(alert.textContent).not.toContain("idempotency");
+    expect(alert.textContent).not.toMatch(/\bSaved\b/);
+    expect(screen.getByTestId("capture-field")).toHaveValue(NOTE);
+  });
+
   it("says nothing was stored, names the reason, and keeps the note", async () => {
     respond(
       {

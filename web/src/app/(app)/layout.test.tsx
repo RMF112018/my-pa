@@ -19,6 +19,15 @@ vi.mock("@/components/shell/app-shell", () => ({ AppShell: () => null }));
 
 import AppLayout from "./layout";
 
+/**
+ * The layout now returns `DiagnosticsProvider` wrapping `AppShell`, so the
+ * shell's props live one level down. This helper names that relationship once
+ * instead of spreading `.props.children.props` through every assertion.
+ */
+function shellOf(tree: { props: { children: { props: Record<string, unknown> } } }) {
+  return tree.props.children.props;
+}
+
 const PRINCIPAL = {
   principalId: "aaaaaaaa-1111-1111-1111-111111111111",
   identityProvider: "synthetic",
@@ -59,9 +68,14 @@ describe("authenticated App layout Project Scope", () => {
       invokeProjectCapability: invokeGateway,
       preferenceValue: "PROJECT:prj_aaaaaaaa11111111",
     });
-    expect(tree.props.initialProjectScope).toEqual(RESOLUTION);
-    expect(tree.props.sessionEpoch).toMatch(/^[0-9a-f]{64}$/);
-    expect(tree.props.sessionEpoch).not.toBe("a".repeat(64));
+    expect(shellOf(tree).initialProjectScope).toEqual(RESOLUTION);
+    expect(shellOf(tree).sessionEpoch).toMatch(/^[0-9a-f]{64}$/);
+    expect(shellOf(tree).sessionEpoch).not.toBe("a".repeat(64));
+
+    // WP07: diagnostics are seeded from server-resolved state, and a browser
+    // carrying no diagnostics cookie resolves OFF.
+    expect(tree.props.initialEnabled).toBe(false);
+    expect(tree.props.epoch).toBe(shellOf(tree).sessionEpoch);
   });
 
   it("derives a distinct browser-safe generation for a new verified SID", async () => {
@@ -76,9 +90,12 @@ describe("authenticated App layout Project Scope", () => {
     sid = "b".repeat(64);
     const second = await AppLayout({ children: "content" });
 
-    expect(first.props.sessionEpoch).toMatch(/^[0-9a-f]{64}$/);
-    expect(second.props.sessionEpoch).toMatch(/^[0-9a-f]{64}$/);
-    expect(second.props.sessionEpoch).not.toBe(first.props.sessionEpoch);
+    expect(shellOf(first).sessionEpoch).toMatch(/^[0-9a-f]{64}$/);
+    expect(shellOf(second).sessionEpoch).toMatch(/^[0-9a-f]{64}$/);
+    expect(shellOf(second).sessionEpoch).not.toBe(shellOf(first).sessionEpoch);
+    // A new SID is a new fencing epoch, which is what stops a delayed ON from
+    // an earlier session being applied after a Principal change.
+    expect(second.props.epoch).not.toBe(first.props.epoch);
     expect(resolveSessionPrincipal).toHaveBeenNthCalledWith(1, "a".repeat(64));
     expect(resolveSessionPrincipal).toHaveBeenNthCalledWith(2, "b".repeat(64));
   });

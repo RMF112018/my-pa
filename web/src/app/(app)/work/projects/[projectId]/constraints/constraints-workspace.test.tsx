@@ -15,6 +15,23 @@
  * about the address bar rather than about component state.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * WP07 — the version delta and the raw provenance string in the history
+ * timeline are audit receipts and follow the global policy. Who did what, when,
+ * and how it ended is product truth and renders in both modes.
+ */
+const { diagnostics } = vi.hoisted(() => ({ diagnostics: { enabled: false } }));
+vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/diagnostics/diagnostics-provider")>();
+  return {
+    ...actual,
+    useDiagnosticsEnabled: () => diagnostics.enabled,
+    WhenDiagnostics: ({ children }: { children: React.ReactNode }) =>
+      diagnostics.enabled ? children : null,
+  };
+});
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { PrincipalSession } from "@/contracts/identity";
@@ -92,6 +109,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  diagnostics.enabled = false;
   cleanup();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
@@ -447,10 +465,24 @@ describe("the shared Inspector", () => {
     mount("view=register&group=none&scope=all&q=drainage invert");
     await user.click(within(screen.getByTestId("register-row-cst_syn_0052")).getByRole("button"));
     const history = await screen.findByTestId("inspector-history");
+    // Product truth in both modes: what happened, and by whom.
     expect(history).toHaveTextContent("Created");
-    expect(history).toHaveTextContent("Version 0 → 1");
-    expect(history).toHaveTextContent("Imported from the legacy Constraints Log workbook.");
+    // Receipts, off by default.
+    expect(history).not.toHaveTextContent("Version 0 → 1");
+    expect(history).not.toHaveTextContent("Imported from the legacy Constraints Log workbook.");
     expect(history).not.toHaveTextContent("request_digest");
+
+    diagnostics.enabled = true;
+    cleanup();
+    mount("view=register&group=none&scope=all&q=drainage invert");
+    await user.click(within(screen.getByTestId("register-row-cst_syn_0052")).getByRole("button"));
+    const withDiagnostics = await screen.findByTestId("inspector-history");
+    expect(withDiagnostics).toHaveTextContent("Created");
+    expect(withDiagnostics).toHaveTextContent("Version 0 → 1");
+    expect(withDiagnostics).toHaveTextContent(
+      "Imported from the legacy Constraints Log workbook.",
+    );
+    expect(withDiagnostics).not.toHaveTextContent("request_digest");
   });
 
   it("links validated evidence and leaves unvalidated reference text unlinked", async () => {
@@ -475,13 +507,45 @@ describe("the fixture-only lifecycle surfaces", () => {
     expect(live).toHaveAttribute("role", "alert");
   });
 
-  it("says that a close incremented no version and issued no receipt", async () => {
+  it("says the record is unchanged, and names no version or receipt, while diagnostics are off", async () => {
+    // WP07 §6.4. That the close did not happen and the record is unchanged is
+    // the outcome a person acts on, and it is stated in the product default.
+    // Which version did not increment and which receipt was not issued are the
+    // engineering receipts for it.
     const user = userEvent.setup();
     mount("view=register&group=none&constraint=cst_syn_0001");
     await user.click(await screen.findByTestId("inspector-close"));
+    // The standing notice states the fixture consequence without naming the
+    // endpoint, the version or the receipt. Asserted while the lifecycle panel
+    // is open, because confirming closes it.
+    const notice = await screen.findByTestId("synthetic-notice-lifecycle");
+    expect(notice).toHaveTextContent(/Fixture only\. Nothing here is sent or saved\./i);
+    expect(notice).not.toHaveTextContent(/mutation endpoint|Constraint Code, version or receipt/i);
+    await user.click(screen.getByTestId("lifecycle-confirm"));
+    const live = await screen.findByTestId("workspace-live");
+    expect(live).toHaveTextContent(/was not carried out\. The record is unchanged/i);
+    expect(live).not.toHaveTextContent(/no version was incremented|no receipt was issued/i);
+  });
+
+  it("names the missing endpoint, version and receipt on the lifecycle surface once diagnostics are on", async () => {
+    // The engineering detail this test is named for did not disappear when the
+    // announcement was reduced to product language — it moved to the standing
+    // notice on the lifecycle surface, which is where it belongs, and it is
+    // asserted there rather than in an announcement that no longer carries it.
+    // Asserting `/The record is unchanged/` here would have restated the OFF
+    // case above and proved nothing about diagnostics being on.
+    diagnostics.enabled = true;
+    const user = userEvent.setup();
+    mount("view=register&group=none&constraint=cst_syn_0001");
+    await user.click(await screen.findByTestId("inspector-close"));
+    const notice = await screen.findByTestId("synthetic-notice-lifecycle");
+    expect(notice).toHaveTextContent(
+      /no Constraint Code, version or receipt\s+was issued/i,
+    );
+    expect(notice).toHaveTextContent(/no Constraint mutation endpoint/i);
     await user.click(screen.getByTestId("lifecycle-confirm"));
     expect(await screen.findByTestId("workspace-live")).toHaveTextContent(
-      /no version was incremented, no receipt was issued/i,
+      /The record is unchanged/i,
     );
   });
 

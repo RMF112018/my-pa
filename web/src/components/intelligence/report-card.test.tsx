@@ -77,9 +77,20 @@ describe("ReportCard", () => {
     expect(screen.getByRole("link", { name: "Morning brief" })).toBeTruthy();
   });
 
-  it("keeps report and cycle identifiers behind Details", () => {
+  it("renders no report or cycle identifier while diagnostics are off", () => {
+    // WP07 §8.6: run and cycle identifiers are policy-governed technical
+    // fields. The card's title, stage, kind and state are product truth.
     const row = entry();
     render(<ReportCard row={row} />);
+    expect(screen.queryByTestId("intelligence-report-details")).toBeNull();
+    expect(screen.queryByTestId("intelligence-report-id")).toBeNull();
+    expect(screen.queryByTestId("intelligence-report-cycle")).toBeNull();
+    expect(document.body.textContent ?? "").not.toContain(row.cycle_run_id);
+  });
+
+  it("keeps report and cycle identifiers behind Details once diagnostics are on", () => {
+    const row = entry();
+    render(<ReportCard row={row} diagnosticsEnabled />);
     const details = screen.getByTestId("intelligence-report-details");
     expect(details.querySelector("summary")?.textContent).toBe("Details");
     expect(screen.getByTestId("intelligence-report-id").textContent).toBe(row.report_id);

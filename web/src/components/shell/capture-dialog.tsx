@@ -65,6 +65,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { WhenDiagnostics } from "@/components/diagnostics/diagnostics-provider";
 import { TextField } from "@/components/ui/field";
 import { apiPost } from "@/lib/api/client";
 import { queueCaptureOffline } from "@/lib/offline/capture-queue";
@@ -254,10 +255,10 @@ export function CaptureDialog({
       setOutcome({ kind: "queued", entryId: entry.entryId });
       setText("");
       attemptKeyRef.current = null;
-    } catch (error) {
+    } catch {
       setOutcome({
         kind: "not_held",
-        reason: error instanceof Error ? error.message : "this device could not hold the note",
+        reason: "this device could not hold the note",
       });
     }
   }
@@ -331,23 +332,35 @@ export function CaptureDialog({
             {outcome.created
               ? "Saved. Your note is stored and will appear in Review."
               : "Already saved — the original receipt was returned. Nothing was stored twice."}
-            {outcome.receiptId ? (
-              <span className="ml-1 font-mono text-xs">({outcome.receiptId})</span>
-            ) : null}
+            {/* WP07: the storage outcome above is product truth. The receipt
+                identifier is the technical receipt for it. */}
+            <WhenDiagnostics>
+              {outcome.receiptId ? (
+                <span className="ml-1 font-mono text-xs">({outcome.receiptId})</span>
+              ) : null}
+            </WhenDiagnostics>
           </p>
         ) : null}
         {outcome.kind === "acknowledged" ? (
           <p role="status" data-testid="capture-acknowledged" className="text-sm text-destructive">
             Acknowledged, but <strong>not stored</strong>. This build is serving the synthetic
             provider, which keeps nothing across a restart. Keep this note somewhere else.
-            {outcome.receiptId ? (
-              <span className="ml-1 font-mono text-xs">({outcome.receiptId})</span>
-            ) : null}
+            <WhenDiagnostics>
+              {outcome.receiptId ? (
+                <span className="ml-1 font-mono text-xs">({outcome.receiptId})</span>
+              ) : null}
+            </WhenDiagnostics>
           </p>
         ) : null}
         {outcome.kind === "refused" ? (
           <p role="alert" data-testid="capture-refused" className="text-sm text-destructive">
-            Refused, and nothing was stored: {outcome.reason} Your note is still in the field.
+            {/* §6.3/§8.4: `reason` is the backend's own string, and a raw backend
+                string is unbounded. The refusal and the fact the note survives are
+                the product truth and are stated without it. */}
+            Refused, and nothing was stored. Your note is still in the field.
+            <WhenDiagnostics>
+              <span className="ml-1">{outcome.reason}</span>
+            </WhenDiagnostics>
           </p>
         ) : null}
         {outcome.kind === "queued" ? (
@@ -355,19 +368,27 @@ export function CaptureDialog({
             <strong>Held on this device only</strong> — not saved on the server. The connection
             could not be reached, so the note is encrypted and kept here, and it will be sent when
             you are back online. Until then this device holds the only copy.
-            <span className="ml-1 font-mono text-xs">({outcome.entryId})</span>
+            <WhenDiagnostics>
+              <span className="ml-1 font-mono text-xs">({outcome.entryId})</span>
+            </WhenDiagnostics>
           </p>
         ) : null}
         {outcome.kind === "not_held" ? (
           <p role="alert" data-testid="capture-not-held" className="text-sm text-destructive">
-            <strong>Not saved and not held.</strong> {outcome.reason} Your note is still in the
-            field — copy it somewhere else before closing this dialog.
+            <strong>Not saved and not held.</strong> Your note is still in the field — copy it
+            somewhere else before closing this dialog.
+            <WhenDiagnostics>
+              <span className="ml-1">{outcome.reason}</span>
+            </WhenDiagnostics>
           </p>
         ) : null}
         {outcome.kind === "unavailable" ? (
           <p role="alert" data-testid="capture-unavailable" className="text-sm text-destructive">
-            Not saved — the service could not be reached: {outcome.reason} Your note is still in
-            the field, and retrying resubmits the same attempt rather than capturing it twice.
+            Not saved — the service could not be reached. Your note is still in the field, and
+            retrying resubmits the same attempt rather than capturing it twice.
+            <WhenDiagnostics>
+              <span className="ml-1">{outcome.reason}</span>
+            </WhenDiagnostics>
           </p>
         ) : null}
         <div className="flex justify-end gap-2">

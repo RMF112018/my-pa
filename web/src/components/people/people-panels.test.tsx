@@ -107,7 +107,12 @@ describe("resolve outcomes", () => {
       "data-outcome",
       "conflicted_identifier",
     );
-    expect(screen.getByTestId("people-resolve-outcome").textContent).toMatch(/conflicted_identifier/);
+    // WP07: the outcome goes through `codeLabel()` like every other code on
+    // this surface, so the raw enum token is not printed. The outcome asserted
+    // is the same one — the label is faithful, not a prettier name.
+    expect(screen.getByTestId("people-resolve-outcome").textContent).toMatch(
+      /conflicted identifier/,
+    );
     expect(screen.queryByRole("link", { name: "Open profile" })).toBeNull();
     expect(screen.getByTestId("people-resolve-result").textContent).toMatch(/not an exact resolve/i);
   });
@@ -134,7 +139,7 @@ describe("resolve outcomes", () => {
       candidates_were_truncated: false,
     };
     render(<ResolvePanel resolution={resolution} />);
-    expect(screen.getByTestId("people-resolve-outcome").textContent).toMatch(/not_found/);
+    expect(screen.getByTestId("people-resolve-outcome").textContent).toMatch(/not found/);
     expect(screen.queryByTestId("people-resolve-candidates")).toBeNull();
   });
 
@@ -242,7 +247,7 @@ describe("current vs historical assignments", () => {
       { ...ASSIGNMENT, assignment_id: "asn_then00000000001", is_current: false, status: "ended", role: "Former role" },
     ] as AssignmentView[];
     render(
-      <AssignmentsPanel assignments={mixed} disclosure={null} unavailable={null} />,
+      <AssignmentsPanel assignments={mixed} disclosure={null} unavailable={false} />,
     );
     expect(screen.getByTestId("people-assignments-current").textContent).toMatch(/Current role/);
     expect(screen.getByTestId("people-assignments-historical").textContent).toMatch(/Former role/);
@@ -256,10 +261,25 @@ describe("unavailable companion plane", () => {
       <AssignmentsPanel
         assignments={null}
         disclosure={null}
-        unavailable="the application gateway did not answer"
+        unavailable
+        unavailableDiagnostic="the application gateway did not answer"
       />,
     );
     expect(screen.getByTestId("people-assignments-unavailable")).toHaveAttribute("data-state", "unavailable");
+  });
+
+  it("states assignments could not be read without the gateway's own words while diagnostics are off", () => {
+    // WP07: the failure is product truth and the panel still says so. The
+    // backend's sentence is governed, and the owning page does not build it at
+    // all while diagnostics are off — which is why the panel is given the fact
+    // and the sentence separately rather than one string doing both jobs.
+    render(
+      <AssignmentsPanel assignments={null} disclosure={null} unavailable />,
+    );
+    const state = screen.getByTestId("people-assignments-unavailable");
+    expect(state).toHaveAttribute("data-state", "unavailable");
+    expect(state.textContent ?? "").toMatch(/could not be read/i);
+    expect(state.textContent ?? "").not.toMatch(/gateway did not answer/i);
   });
 });
 

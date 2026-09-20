@@ -56,6 +56,11 @@ import {
 import type { CaptureListEntry } from "@/lib/api/decode/capabilities/capture.list";
 import type { CaptureSearchMatch } from "@/lib/api/decode/capabilities/capture.search";
 import type { BackendCaptureEntry, BackendCaptureMatch } from "@/contracts/views";
+import {
+  diagnosticError,
+  diagnosticLimitations,
+} from "@/lib/diagnostics/presentation";
+import { serverDiagnosticsEnabled } from "@/lib/diagnostics/server";
 
 /** The listing this page renders is a read of the moment, never a cached one. */
 const SCOPE = "library";
@@ -140,6 +145,10 @@ export async function KnowledgePage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  // WP07: resolved once per request (memoised) so the diagnostic-bearing
+  // props below are never built, and therefore never serialized into the
+  // RSC payload, while diagnostics are off.
+  const diagnosticsEnabled = await serverDiagnosticsEnabled();
   const cookieStore = await cookies();
   const principal = await resolveSessionPrincipal(cookieStore.get(SESSION_COOKIE_NAME)?.value);
   if (!principal) redirect("/sign-in");
@@ -220,21 +229,21 @@ export async function KnowledgePage({
         <SurfaceState
           kind="unavailable"
           title="This capture could not be read"
-          error={answer.error}
-          limitations={answer.disclosure.limitations}
+          error={diagnosticError(diagnosticsEnabled, answer.error)}
+          limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
           testId="library-capture-unavailable"
         />
       ) : answer.kind === "degraded" ? (
         <>
           <DegradedBanner
             scope="this capture"
-            limitations={answer.disclosure.limitations}
+            limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
             truncated={answer.disclosure.truncated}
           />
-          <CaptureItem version={answer.result} />
+          <CaptureItem version={answer.result} diagnosticsEnabled={diagnosticsEnabled} />
         </>
       ) : answer.kind === "records" ? (
-        <CaptureItem version={answer.result} />
+        <CaptureItem version={answer.result} diagnosticsEnabled={diagnosticsEnabled} />
       ) : (
         <SurfaceState
           kind="unavailable"
@@ -275,21 +284,21 @@ export async function KnowledgePage({
         <SurfaceState
           kind="unavailable"
           title="This knowledge record could not be read"
-          error={answer.error}
-          limitations={answer.disclosure.limitations}
+          error={diagnosticError(diagnosticsEnabled, answer.error)}
+          limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
           testId="library-knowledge-unavailable"
         />
       ) : answer.kind === "degraded" ? (
         <>
           <DegradedBanner
             scope="this knowledge record"
-            limitations={answer.disclosure.limitations}
+            limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
             truncated={answer.disclosure.truncated}
           />
-          <KnowledgeItem record={answer.result} />
+          <KnowledgeItem record={answer.result} diagnosticsEnabled={diagnosticsEnabled} />
         </>
       ) : answer.kind === "records" ? (
-        <KnowledgeItem record={answer.result} />
+        <KnowledgeItem record={answer.result} diagnosticsEnabled={diagnosticsEnabled} />
       ) : (
         <SurfaceState
           kind="unavailable"
@@ -317,8 +326,8 @@ export async function KnowledgePage({
           <SurfaceState
             kind="unavailable"
             title="Your captures could not be searched"
-            error={answer.error}
-            limitations={answer.disclosure.limitations}
+            error={diagnosticError(diagnosticsEnabled, answer.error)}
+            limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
             testId="library-search-unavailable"
           />
         ) : answer.kind === "empty" ? (
@@ -326,14 +335,14 @@ export async function KnowledgePage({
             kind="empty"
             title="No capture of yours matched those words"
             detail={`The search ran over your own captures and matched none of them for “${query}”.`}
-            limitations={answer.disclosure.limitations}
+            limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
             testId="library-search-empty"
           />
         ) : answer.kind === "degraded" ? (
           <>
             <DegradedBanner
               scope="this search"
-              limitations={answer.disclosure.limitations}
+              limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
               truncated={answer.disclosure.truncated}
             />
             {answer.rowCount === 0 ? (
@@ -347,11 +356,11 @@ export async function KnowledgePage({
                 testId="library-search-degraded-empty"
               />
             ) : (
-              <CaptureMatches matches={answer.result.matches.map(toMatch)} />
+              <CaptureMatches matches={answer.result.matches.map(toMatch)} diagnosticsEnabled={diagnosticsEnabled} />
             )}
           </>
         ) : (
-          <CaptureMatches matches={answer.result.matches.map(toMatch)} />
+          <CaptureMatches matches={answer.result.matches.map(toMatch)} diagnosticsEnabled={diagnosticsEnabled} />
         )}
       </>,
     );
@@ -370,8 +379,8 @@ export async function KnowledgePage({
         <SurfaceState
           kind="unavailable"
           title="Your library could not be read"
-          error={answer.error}
-          limitations={answer.disclosure.limitations}
+          error={diagnosticError(diagnosticsEnabled, answer.error)}
+          limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
           testId="library-unavailable"
         />
       ) : answer.kind === "empty" ? (
@@ -382,14 +391,14 @@ export async function KnowledgePage({
             "The capture record was read and it holds nothing. Use Capture to store your first " +
             "note; it will appear here."
           }
-          limitations={answer.disclosure.limitations}
+          limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
           testId="library-empty"
         />
       ) : answer.kind === "degraded" ? (
         <>
           <DegradedBanner
             scope="this listing"
-            limitations={answer.disclosure.limitations}
+            limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
             truncated={answer.disclosure.truncated}
           />
           {answer.rowCount === 0 ? (
@@ -403,11 +412,11 @@ export async function KnowledgePage({
               testId="library-degraded-empty"
             />
           ) : (
-            <CaptureListing entries={answer.result.captures.map(toEntry)} />
+            <CaptureListing entries={answer.result.captures.map(toEntry)} diagnosticsEnabled={diagnosticsEnabled} />
           )}
         </>
       ) : (
-        <CaptureListing entries={answer.result.captures.map(toEntry)} />
+        <CaptureListing entries={answer.result.captures.map(toEntry)} diagnosticsEnabled={diagnosticsEnabled} />
       )}
     </>,
   );

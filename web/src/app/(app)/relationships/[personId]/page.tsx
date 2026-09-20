@@ -9,6 +9,10 @@ import { acceptedTimeline, syntheticPersonId } from "@/lib/fixtures/situation";
 import { RelationshipTimeline } from "@/components/relationship/relationship-timeline";
 import { PageHeader } from "@/components/shell/page-header";
 import { SurfaceState } from "@/components/ui/surface-state";
+import {
+  diagnosticError,
+} from "@/lib/diagnostics/presentation";
+import { serverDiagnosticsEnabled } from "@/lib/diagnostics/server";
 
 export const metadata = { title: "Relationship — my-pa" };
 
@@ -17,6 +21,10 @@ export default async function RelationshipPage({
 }: {
   params: Promise<{ personId: string }>;
 }) {
+  // WP07: resolved once per request (memoised) so the diagnostic-bearing
+  // props below are never built, and therefore never serialized into the
+  // RSC payload, while diagnostics are off.
+  const diagnosticsEnabled = await serverDiagnosticsEnabled();
   const cookieStore = await cookies();
   const principal = await resolveSessionPrincipal(cookieStore.get(SESSION_COOKIE_NAME)?.value);
   if (!principal) redirect("/sign-in");
@@ -40,7 +48,7 @@ export default async function RelationshipPage({
           <SurfaceState
             kind="unavailable"
             title="Relationship timeline could not be read"
-            error={outcome.error}
+            error={diagnosticError(diagnosticsEnabled, outcome.error)}
             testId="relationship-unavailable"
           />
         </section>
@@ -54,7 +62,14 @@ export default async function RelationshipPage({
           <SurfaceState
             kind="unavailable"
             title="Relationship timeline could not be read"
-            error="the gateway result did not match the capability contract"
+            // WP07 §6.2. This is a server component, so an ungated string here
+            // is serialized into the RSC payload and ships inside the HTML even
+            // while diagnostics are off — the leak `lib/diagnostics/presentation.ts`
+            // exists to close. The sibling callsite above already routes this way.
+            error={diagnosticError(
+              diagnosticsEnabled,
+              "the gateway result did not match the capability contract",
+            )}
             testId="relationship-unavailable"
           />
         </section>

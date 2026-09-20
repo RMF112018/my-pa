@@ -1,9 +1,30 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * WP07 — diagnostic presentation follows the global policy. The product default
+ * is OFF; this file sets the mode each test actually means.
+ */
+const { diagnostics } = vi.hoisted(() => ({ diagnostics: { enabled: true } }));
+vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/diagnostics/diagnostics-provider")>();
+  return {
+    ...actual,
+    // Both must be replaced: `WhenDiagnostics` closes over the real hook in its
+    // own module scope, so overriding only the exported hook would leave the
+    // guard reading the unmocked policy.
+    useDiagnosticsEnabled: () => diagnostics.enabled,
+    WhenDiagnostics: ({ children }: { children: React.ReactNode }) =>
+      diagnostics.enabled ? children : null,
+  };
+});
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommitmentDetailView, TaskDetailView } from "@/components/work/work-detail";
 
 afterEach(() => {
+  // Back to this file's default, so the one OFF case cannot leak.
+  diagnostics.enabled = true;
   cleanup();
   vi.unstubAllGlobals();
 });
@@ -49,6 +70,32 @@ describe("Work detail context", () => {
     expect(screen.queryByText(/prj_aaaaaaaa11111111/)).toBeNull();
     expect(screen.queryByText(/sit_aaaaaaaa11111111/)).toBeNull();
     expect(screen.queryByText(/rdec_aaaaaaaa11111111/)).toBeNull();
+  });
+
+  it("mounts no Technical details and fetches no history while diagnostics are off", async () => {
+    // WP07 §8.5 / AC-48. The panel is not merely collapsed — it is not mounted,
+    // which is also what stops the history read: that request is driven by the
+    // disclosure's own expansion.
+    diagnostics.enabled = false;
+    const fetchSpy = vi.fn<typeof fetch>(async (input) => {
+      const path = String(input);
+      if (path.includes("/comments")) return Response.json({ comments: [] });
+      if (path === "/api/commitments?pageSize=100") return Response.json({ commitments: [] });
+      return Response.json({ task: TASK });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    render(<TaskDetailView taskId={TASK.task_id} />);
+    await screen.findByTestId("task-detail-sections");
+
+    expect(screen.queryByTestId("task-technical-details")).toBeNull();
+    expect(screen.queryByText("Technical details")).toBeNull();
+    expect(document.body.textContent ?? "").not.toContain("prj_aaaaaaaa11111111");
+    expect(document.body.textContent ?? "").not.toContain("rdec_aaaaaaaa11111111");
+    expect(
+      fetchSpy.mock.calls.some(([input]) => String(input).includes("/history")),
+      "a diagnostics-only history read was issued while diagnostics were off",
+    ).toBe(false);
   });
 
   it("keeps raw context references and review metadata reachable under Technical details", async () => {

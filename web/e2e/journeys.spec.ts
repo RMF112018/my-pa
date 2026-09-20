@@ -8,7 +8,7 @@
  * only way that can happen is if it was committed.
  */
 import { test, expect, type Page } from "@playwright/test";
-import { signIn, syntheticNote, expectState, visibleCaptureButton, openCaptureNote, pinInspector } from "./fixtures";
+import { enableDiagnostics, expectState, openCaptureNote, pinInspector, SEARCH_SETTLED, signIn, syntheticNote, visibleCaptureButton } from "./fixtures";
 
 /** Chrome below the `lg` (1024) split: rail hidden, Knowledge lives in More. */
 function belowLgChrome(projectName: string): boolean {
@@ -210,14 +210,16 @@ test.describe("the signed-in surfaces", () => {
     const searchbox = search.getByRole("searchbox", { name: "Search" });
     await expect(searchbox).toBeVisible();
     await searchbox.fill("morning brief");
-    await expect(
-      search.locator(
-        "[data-testid='search-coverage'], [data-testid='search-not-implemented'], [data-testid='search-unavailable']",
-      ).first(),
-    ).toBeVisible({ timeout: 30_000 });
-    const coverage = search.getByTestId("search-coverage");
-    if ((await coverage.count()) > 0) {
-      await expect(coverage).toContainText("omitted");
+    await expect(search.locator(SEARCH_SETTLED).first()).toBeVisible({ timeout: 30_000 });
+    // WP07: the per-domain coverage list is diagnostics and this journey runs
+    // in the product default, so it must not be here at all. What the reader
+    // needs from it — that a partial search is not an answer about what they
+    // hold — is product truth and is asserted in its place when the backend
+    // reports a domain it could not search.
+    await expect(search.getByTestId("search-coverage")).toHaveCount(0);
+    const incomplete = search.getByTestId("search-coverage-incomplete");
+    if ((await incomplete.count()) > 0) {
+      await expect(incomplete).toContainText(/may be incomplete/i);
     }
     await page.keyboard.press("Escape");
     await expect(search).toHaveCount(0);
@@ -263,6 +265,10 @@ test.describe("the signed-in surfaces", () => {
   });
 
   test("System reports the build it is talking to, not a constant", async ({ page }) => {
+    // WP07: this page is diagnostics. Diagnostics are globally off by
+    // default, so the mode under test has to be asked for explicitly —
+    // there is no query parameter or storage key that could do it.
+    await enableDiagnostics(page);
     await page.goto("/system");
     await expect(page.getByRole("heading", { name: "System", level: 1 })).toBeVisible();
     // Derived from `capabilities.get`, so it must name a real count. The total
@@ -307,6 +313,18 @@ test.describe("the signed-in surfaces", () => {
   });
 
   test("a capture is persisted, and the Library proves it", async ({ page }) => {
+    // WP07: this test proves persistence *by identifier* twice — the write's own
+    // receipt id, and the capture id read back through a different capability.
+    // Both are technical receipts governed by the global policy, so the mode is
+    // asked for through the one route that can and every assertion below is
+    // unchanged. That the note says "Saved" at all is product truth and is
+    // asserted in both modes in `capture.test.tsx`.
+    await enableDiagnostics(page);
+    // The client guard is seeded from server-resolved state, so an accepted
+    // write reaches an already-rendered tree only on the next server render.
+    // That is the no-flash design working, not a test detail: nothing in the
+    // open document silently flips mode underneath the person using it.
+    await page.reload();
     const marker = `${Date.now()}`;
     await openCaptureNote(page);
     const field = page.getByTestId("capture-field");

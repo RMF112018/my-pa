@@ -26,6 +26,7 @@
  */
 import { useState } from "react";
 import { Dialog } from "@/components/ui/dialog";
+import { WhenDiagnostics } from "@/components/diagnostics/diagnostics-provider";
 import { Button } from "@/components/ui/button";
 import { apiPost } from "@/lib/api/client";
 import type { DisclosureEnvelope } from "@/contracts/envelope";
@@ -106,6 +107,12 @@ const GAP_TEXT: Record<string, string> = {
 };
 
 function Spans({ spans }: { spans: readonly RevealSpan[] }) {
+  /*
+   * WP07. Every field here is engineering detail — a version id, code-point
+   * offsets, line/column, the offset basis and a content digest. The evidence
+   * itself, and the fact that it was disclosed, are product truth and render
+   * above this regardless.
+   */
   return (
     <ul data-testid="reveal-spans" className="flex flex-col gap-1 text-xs text-muted">
       {spans.map((span) => (
@@ -198,12 +205,20 @@ export function RevealDialog({
 
         {state === "evidence" && result ? (
           <div data-testid="reveal-evidence" className="flex flex-col gap-3">
-            <section className="flex flex-col gap-1">
-              <h3 className="text-xs font-semibold uppercase tracking-wide">Source spans</h3>
-              <Spans spans={result.spans} />
-            </section>
+            {/*
+              AC-44. Gating `Spans` alone left this section mounted: an empty
+              "Source spans" heading and the flex gap it reserves. The owner is
+              the section, so the section is what the policy governs.
+            */}
+            <WhenDiagnostics>
+              <section className="flex flex-col gap-1">
+                <h3 className="text-xs font-semibold uppercase tracking-wide">Source spans</h3>
+                <Spans spans={result.spans} />
+              </section>
+            </WhenDiagnostics>
 
             {result.accepted.length > 0 ? (
+              <WhenDiagnostics>
               <section data-testid="reveal-accepted" className="flex flex-col gap-1">
                 <h3 className="text-xs font-semibold uppercase tracking-wide text-moss-slate">
                   Accepted — promoted by your review
@@ -220,9 +235,11 @@ export function RevealDialog({
                   ))}
                 </ul>
               </section>
+              </WhenDiagnostics>
             ) : null}
 
             {result.proposed.length > 0 ? (
+              <WhenDiagnostics>
               <section data-testid="reveal-proposed" className="flex flex-col gap-1">
                 <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">
                   Proposed — not asserted, awaiting your disposition
@@ -238,13 +255,16 @@ export function RevealDialog({
                   ))}
                 </ul>
               </section>
+              </WhenDiagnostics>
             ) : null}
           </div>
         ) : null}
 
         {response ? (
           <div className="text-xs text-muted">
-            <p>Coverage: {response.disclosure.coverage}. {response.disclosure.limitations.join(" ")}</p>
+            <WhenDiagnostics>
+              <p>Coverage: {response.disclosure.coverage}. {response.disclosure.limitations.join(" ")}</p>
+            </WhenDiagnostics>
             {response.disclosure.truncated || response.disclosure.limitations.length > 0 ? (
               <p data-testid="reveal-limited" className="mt-1">
                 {response.disclosure.limitations.some((item) => item.toLowerCase().includes("redact"))

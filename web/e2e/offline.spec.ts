@@ -41,7 +41,7 @@
  * person is looking at, is correct and is asserted below.
  */
 import { test, expect } from "@playwright/test";
-import { signIn, syntheticNote, openCaptureNote } from "./fixtures";
+import { enableDiagnostics, openCaptureNote, signIn, syntheticNote } from "./fixtures";
 
 test.describe("offline capture and reconnect", () => {
   test("a note captured offline is held, then replayed, then durable", async ({
@@ -157,6 +157,10 @@ test.describe("offline capture and reconnect", () => {
 
   test("System reports held-queue counts as this-browser observations", async ({ page }) => {
     await signIn(page);
+    // WP07: this page is diagnostics. Diagnostics are globally off by
+    // default, so the mode under test has to be asked for explicitly —
+    // there is no query parameter or storage key that could do it.
+    await enableDiagnostics(page);
     await page.goto("/system");
     await expect(page.getByTestId("system-pwa-this-browser")).toBeVisible();
     await expect(page.getByTestId("system-pwa-queue")).toBeVisible();

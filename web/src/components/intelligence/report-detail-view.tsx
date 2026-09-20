@@ -27,7 +27,14 @@ export function structuredContentKeys(
   return Object.keys(content);
 }
 
-export function ReportDetailView({ report }: { readonly report: ReportsReadResult }) {
+export function ReportDetailView({
+  report,
+  diagnosticsEnabled = false,
+}: {
+  readonly report: ReportsReadResult;
+  /** Resolved by the owning page; fail-closed when a caller forgets. */
+  readonly diagnosticsEnabled?: boolean;
+}) {
   const bodyNodes =
     report.body_markdown !== undefined ? markdownToRich(report.body_markdown) : [];
   const structuredKeys = structuredContentKeys(report.structured_content);
@@ -69,27 +76,53 @@ export function ReportDetailView({ report }: { readonly report: ReportsReadResul
             <dd data-testid="intelligence-kind">{report.artifact_kind}</dd>
             <dt>Stage</dt>
             <dd data-testid="intelligence-stage">{report.stage}</dd>
-            <dt>Focus</dt>
-            <dd>{report.focus_area_id ?? "none"}</dd>
+            {/* Kind, stage, date and state are the report's product truth. The
+                focus-area identifier, the artifact version counter and the
+                producing lane are engineering detail, exactly like Cycle and
+                Run below them. */}
+            {diagnosticsEnabled ? (
+              <>
+                <dt>Focus</dt>
+                <dd>{report.focus_area_id ?? "none"}</dd>
+              </>
+            ) : null}
             <dt>Report date</dt>
             <dd data-testid="intelligence-report-date">{report.report_date}</dd>
-            <dt>Version</dt>
-            <dd>{report.version}</dd>
+            {diagnosticsEnabled ? (
+              <>
+                <dt>Version</dt>
+                <dd>{report.version}</dd>
+              </>
+            ) : null}
             <dt>State</dt>
             <dd data-testid="intelligence-artifact-state">{report.artifact_state}</dd>
-            <dt>Source lane</dt>
-            <dd>{report.source_lane ?? "none"}</dd>
-            <dt>Cycle</dt>
-            <dd className="break-all">{report.cycle_run_id}</dd>
-            <dt>Run</dt>
-            <dd className="break-all">{report.report_run_id}</dd>
+            {diagnosticsEnabled ? (
+              <>
+                <dt>Source lane</dt>
+                <dd>{report.source_lane ?? "none"}</dd>
+              </>
+            ) : null}
+            {diagnosticsEnabled ? (
+              <>
+                <dt>Cycle</dt>
+                <dd className="break-all">{report.cycle_run_id}</dd>
+                <dt>Run</dt>
+                <dd className="break-all">{report.report_run_id}</dd>
+              </>
+            ) : null}
             <dt>Committed</dt>
             <dd data-testid="intelligence-committed-at">{report.committed_at}</dd>
+            {/*
+              WP07: that this report supersedes another, and the link that reaches
+              it, are product truth — the affordance stays in both modes. The raw
+              report identifier as the visible link *text* is a technical receipt,
+              so the link is labelled and the id stays in the href.
+            */}
             <dt>Supersedes</dt>
             <dd data-testid="intelligence-supersedes">
               {report.supersedes_report_id ? (
                 <Link href={hrefFor(report.supersedes_report_id)} className="text-interactive underline">
-                  {report.supersedes_report_id}
+                  {diagnosticsEnabled ? report.supersedes_report_id : "The report this one replaces"}
                 </Link>
               ) : (
                 "none"
@@ -99,10 +132,10 @@ export function ReportDetailView({ report }: { readonly report: ReportsReadResul
             <dd data-testid="intelligence-dependencies">
               {report.dependency_report_ids.length === 0
                 ? "none"
-                : report.dependency_report_ids.map((id) => (
+                : report.dependency_report_ids.map((id, index) => (
                     <span key={id} className="mr-2 inline-block">
                       <Link href={hrefFor(id)} className="text-interactive underline">
-                        {id}
+                        {diagnosticsEnabled ? id : `Input report ${index + 1}`}
                       </Link>
                     </span>
                   ))}
@@ -144,15 +177,25 @@ export function ReportDetailView({ report }: { readonly report: ReportsReadResul
           </p>
         ) : (
           <div className="mt-2 text-sm" data-testid="intelligence-structured-present">
+            {/*
+              That structured content exists, and that it is not rendered as
+              Brief items, is product truth. The backend's own schema key names
+              are engineering detail.
+            */}
             <p>
-              Persisted structured content is present. Keys: {structuredKeys.join(", ")}. This is
-              not a Brief section/item schema and is not rendered as items.
+              Persisted structured content is present. This is not a Brief
+              section/item schema and is not rendered as items.
             </p>
-            <ul className="mt-1 list-inside list-disc text-xs" data-testid="intelligence-structured-keys">
-              {structuredKeys.map((key) => (
-                <li key={key}>{key}</li>
-              ))}
-            </ul>
+            {diagnosticsEnabled ? (
+              <ul
+                className="mt-1 list-inside list-disc text-xs"
+                data-testid="intelligence-structured-keys"
+              >
+                {structuredKeys.map((key) => (
+                  <li key={key}>{key}</li>
+                ))}
+              </ul>
+            ) : null}
           </div>
         )}
       </details>

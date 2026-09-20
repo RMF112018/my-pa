@@ -5,7 +5,14 @@ import { peopleEntity } from "@/lib/routes/people";
 import type { EntitySummary } from "@/lib/api/decode/capabilities/entities.search";
 import { codeLabel } from "./format";
 
-export function SearchHits({ entities }: { entities: readonly EntitySummary[] }) {
+export function SearchHits({
+  entities,
+  diagnosticsEnabled = false,
+}: {
+  entities: readonly EntitySummary[];
+  /** Resolved by the owning page; fail-closed when a caller forgets. */
+  diagnosticsEnabled?: boolean;
+}) {
   return (
     <ul data-testid="people-search-hits" className="space-y-3">
       {entities.map((row) => (
@@ -23,7 +30,9 @@ export function SearchHits({ entities }: { entities: readonly EntitySummary[] })
               <Badge tone={row.status === "active" ? "green" : "gold"}>{codeLabel(row.status)}</Badge>
             </div>
             <CardBody>
-              <p className="font-mono text-xs break-all text-muted">{row.entity_id}</p>
+              {diagnosticsEnabled ? (
+                <p className="font-mono text-xs break-all text-muted">{row.entity_id}</p>
+              ) : null}
               <p className="mt-1 text-sm">{codeLabel(row.entity_type)}</p>
               {row.affiliated_organizations.length > 0 ? (
                 <p className="mt-1 text-sm text-muted">{row.affiliated_organizations.join(", ")}</p>

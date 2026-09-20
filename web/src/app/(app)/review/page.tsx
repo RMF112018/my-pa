@@ -33,6 +33,11 @@ import { BackendReviewWorkbench } from "@/components/review/backend-review-workb
 import { PageHeader } from "@/components/shell/page-header";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
 import { toBackendReviewCase } from "@/components/review/to-backend-case";
+import {
+  diagnosticError,
+  diagnosticLimitations,
+} from "@/lib/diagnostics/presentation";
+import { serverDiagnosticsEnabled } from "@/lib/diagnostics/server";
 
 export const metadata = { title: "Review — my-pa" };
 
@@ -44,6 +49,10 @@ const SCOPE = "review";
 const BLURB = "Decide on proposals before they become records.";
 
 export default async function ReviewPage() {
+  // WP07: resolved once per request (memoised) so the diagnostic-bearing
+  // props below are never built, and therefore never serialized into the
+  // RSC payload, while diagnostics are off.
+  const diagnosticsEnabled = await serverDiagnosticsEnabled();
   const cookieStore = await cookies();
   const principal = await resolveSessionPrincipal(cookieStore.get(SESSION_COOKIE_NAME)?.value);
   if (!principal) redirect("/sign-in");
@@ -80,8 +89,8 @@ export default async function ReviewPage() {
       <SurfaceState
         kind="unavailable"
         title="Your review queue could not be read"
-        error={answer.error}
-        limitations={answer.disclosure.limitations}
+        error={diagnosticError(diagnosticsEnabled, answer.error)}
+        limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
         testId="review-queue-unavailable"
       />,
     );
@@ -103,7 +112,7 @@ export default async function ReviewPage() {
       <>
         <DegradedBanner
           scope="this review queue"
-          limitations={answer.disclosure.limitations}
+          limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
           truncated={answer.disclosure.truncated}
         />
         {answer.rowCount === 0 ? (

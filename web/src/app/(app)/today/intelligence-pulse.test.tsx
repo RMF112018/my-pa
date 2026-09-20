@@ -108,7 +108,11 @@ describe("IntelligencePulse Level-1 copy on Today", () => {
     expect(announcement.textContent).toMatch(/could not be read completely/i);
     expect(announcement.textContent).not.toMatch(/\bplane\b/i);
     expectUserTaskLevel1();
-    expect(screen.getByTestId("intelligence-pulse-details").textContent).toMatch(/report plane/i);
+    // WP07: the technical explanation lived in a Details disclosure carrying the
+    // raw cycle id. With diagnostics off it is not rendered at all, so the word
+    // the Level-1 copy was forbidden from using appears nowhere on the surface.
+    expect(screen.queryByTestId("intelligence-pulse-details")).toBeNull();
+    expect(document.body.textContent ?? "").not.toMatch(/report plane/i);
   });
 
   it("does not treat an unread list as empty or all-clear", async () => {

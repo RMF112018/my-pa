@@ -5,6 +5,10 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { LoadingStatus } from "@/components/ui/surface-state";
 import { useInspectorSelection } from "@/components/shell/inspector-selection";
+import {
+  WhenDiagnostics,
+  useDiagnosticsEnabled,
+} from "@/components/diagnostics/diagnostics-provider";
 import { apiGet } from "@/lib/api/client";
 import { decodeEntitiesIdentityHistory } from "@/lib/api/decode/capabilities/entities.identity_history";
 import { decodeEntitiesRelationships } from "@/lib/api/decode/capabilities/entities.relationships";
@@ -52,10 +56,21 @@ type HistoryState =
     };
 
 function NodeInspector({ node }: { node: GraphNode }) {
+  /*
+   * WP07. This inspector's labels *are* backend field names and its values are
+   * raw identifiers, so the whole `<dl>` below is diagnostics. What a person
+   * needs without diagnostics — which record this is, and a link to it — is
+   * kept, in human words.
+   *
+   * The identity-history read is also diagnostics-only, so it is not issued at
+   * all while diagnostics are off rather than issued and discarded.
+   */
+  const diagnosticsEnabled = useDiagnosticsEnabled();
   const [history, setHistory] = useState<HistoryState>({ status: "loading" });
   const [continuing, setContinuing] = useState(false);
 
   useEffect(() => {
+    if (!diagnosticsEnabled) return;
     let cancelled = false;
     void (async () => {
       const response = await apiGet(SESSION, identityHistoryPath(node.entity_id));
@@ -79,7 +94,7 @@ function NodeInspector({ node }: { node: GraphNode }) {
     return () => {
       cancelled = true;
     };
-  }, [node.entity_id]);
+  }, [node.entity_id, diagnosticsEnabled]);
 
   async function onContinue() {
     if (history.status !== "ready" || !history.next_cursor || continuing) return;
@@ -107,13 +122,15 @@ function NodeInspector({ node }: { node: GraphNode }) {
 
   return (
     <div data-testid="inspector-node" className="mt-3 grid gap-3">
-      <dl className="grid gap-2">
-        <Field label="display_label" value={node.display_label} />
-        <Field label="entity_type" value={node.entity_type} />
-        <Field label="status" value={node.status} />
-        <Field label="superseded_by_entity_id" value={absent(node.superseded_by_entity_id)} />
-        <Field label="entity_id" value={node.entity_id} />
-      </dl>
+      <WhenDiagnostics>
+        <dl className="grid gap-2">
+          <Field label="display_label" value={node.display_label} />
+          <Field label="entity_type" value={node.entity_type} />
+          <Field label="status" value={node.status} />
+          <Field label="superseded_by_entity_id" value={absent(node.superseded_by_entity_id)} />
+          <Field label="entity_id" value={node.entity_id} />
+        </dl>
+      </WhenDiagnostics>
       <p className="text-sm">
         <Link
           href={peopleEntity(node.entity_id)}
@@ -122,6 +139,15 @@ function NodeInspector({ node }: { node: GraphNode }) {
           {node.display_label}
         </Link>
       </p>
+      {/*
+        WP07 §6.2/AC-43. The identity-history read is diagnostics-only and is not
+        issued while diagnostics are off, so `status` stays "loading" forever and
+        this `role="status"` live region announced a read that would never
+        complete — on every node inspection, to every screen reader. The owner is
+        gated, not the rows inside it, so while off there is no live region, no
+        heading and no reserved gap.
+      */}
+      <WhenDiagnostics>
       {history.status === "loading" ? (
         <LoadingStatus label="Reading identity history…" />
       ) : (
@@ -165,6 +191,7 @@ function NodeInspector({ node }: { node: GraphNode }) {
           )}
         </div>
       )}
+      </WhenDiagnostics>
     </div>
   );
 }
@@ -178,12 +205,17 @@ function EdgeInspector({
   from?: GraphNode;
   to?: GraphNode;
 }) {
+  // The only consumers of this read are the `effective_from`/`effective_to`
+  // fields in the gated `<dl>` below, so it is diagnostics-only work and is
+  // not performed at all while diagnostics are off.
+  const diagnosticsEnabled = useDiagnosticsEnabled();
   const [windowFields, setWindowFields] = useState<{
     readonly effective_from: string | null;
     readonly effective_to: string | null;
   } | null>(null);
 
   useEffect(() => {
+    if (!diagnosticsEnabled) return;
     if (edge.edge_kind !== "relationship") return;
     let cancelled = false;
     void (async () => {
@@ -207,12 +239,13 @@ function EdgeInspector({
     return () => {
       cancelled = true;
     };
-  }, [edge.edge_id, edge.edge_kind, edge.from_entity_id]);
+  }, [edge.edge_id, edge.edge_kind, edge.from_entity_id, diagnosticsEnabled]);
 
   const stateOrStatus = edge.state ?? edge.status;
 
   return (
     <div data-testid="inspector-edge" className="mt-3 grid gap-3">
+      <WhenDiagnostics>
       <dl className="grid gap-2">
         <Field label="type" value={edge.type} />
         <Field label="edge_kind" value={edge.edge_kind} />
@@ -229,10 +262,13 @@ function EdgeInspector({
           </>
         ) : null}
       </dl>
+      </WhenDiagnostics>
       {from || to ? (
         <p className="text-xs text-text-muted">
-          {from ? from.display_label : edge.from_entity_id}
-          {to ? ` → ${to.display_label}` : edge.to_entity_id ? ` → ${edge.to_entity_id}` : ""}
+          {/* The relationship in human terms. An endpoint the graph did not
+              name is described, never printed as its key. */}
+          {from ? from.display_label : "an unnamed record"}
+          {to ? ` → ${to.display_label}` : edge.to_entity_id ? " → an unnamed record" : ""}
         </p>
       ) : null}
     </div>

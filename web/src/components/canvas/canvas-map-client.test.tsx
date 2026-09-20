@@ -1,4 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * WP07 — the fields and identifier trails asserted here are diagnostic
+ * presentation, which is globally off by default. This file's subject is that
+ * presentation, so it runs in the mode that renders it.
+ */
+const { diagnostics } = vi.hoisted(() => ({ diagnostics: { enabled: true } }));
+vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/diagnostics/diagnostics-provider")>();
+  return {
+    ...actual,
+    useDiagnosticsEnabled: () => diagnostics.enabled,
+    WhenDiagnostics: ({ children }: { children: React.ReactNode }) =>
+      diagnostics.enabled ? children : null,
+  };
+});
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import axe from "axe-core";
 import { CanvasMapClient } from "./canvas-map-client";

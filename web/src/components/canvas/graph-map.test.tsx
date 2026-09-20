@@ -1,4 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * WP07 — diagnostic presentation follows the global policy. The product default
+ * is OFF; this file sets the mode each test actually means.
+ */
+const { diagnostics } = vi.hoisted(() => ({ diagnostics: { enabled: false } }));
+vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/diagnostics/diagnostics-provider")>();
+  return {
+    ...actual,
+    // Both must be replaced: `WhenDiagnostics` closes over the real hook in its
+    // own module scope, so overriding only the exported hook would leave the
+    // guard reading the unmocked policy.
+    useDiagnosticsEnabled: () => diagnostics.enabled,
+    WhenDiagnostics: ({ children }: { children: React.ReactNode }) =>
+      diagnostics.enabled ? children : null,
+  };
+});
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import axe from "axe-core";
 import { readFileSync } from "node:fs";
@@ -264,7 +283,10 @@ describe("GraphMap keyboard, focus, and axe", () => {
     const node = screen.getByRole("button", { name: "Pat Synthetic" });
     expect(node).toHaveAttribute("tabindex", "0");
     const edge = screen.getByRole("button", {
-      name: `works_for relationship from ${FOCUS} to ${NEIGHBOR}`,
+      // WP07 §8.7: the accessible name names the records, not their keys. The
+      // raw entity ids are no longer constructed into the accessibility tree
+      // while diagnostics are off.
+      name: "works_for relationship from Pat Synthetic to Acme Synthetic",
     });
     expect(edge).toHaveAttribute("tabindex", "0");
     const svg = screen.getByTestId("canvas-map").querySelector("svg");

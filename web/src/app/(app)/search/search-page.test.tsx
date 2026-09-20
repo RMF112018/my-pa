@@ -1,4 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * WP07 §8.7 — per-domain coverage rows are technical internals and follow the
+ * global policy; the incomplete-results *consequence* is product truth and is
+ * asserted in the default mode below.
+ */
+const { diagnostics } = vi.hoisted(() => ({ diagnostics: { enabled: false } }));
+vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/diagnostics/diagnostics-provider")>();
+  return {
+    ...actual,
+    useDiagnosticsEnabled: () => diagnostics.enabled,
+    WhenDiagnostics: ({ children }: { children: React.ReactNode }) =>
+      diagnostics.enabled ? children : null,
+  };
+});
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { SearchPage } from "./search-page";
@@ -14,6 +31,8 @@ vi.mock("next/navigation", () => ({
 }));
 
 afterEach(() => {
+  // Back to the product default, so a mode asked for by one test cannot leak.
+  diagnostics.enabled = false;
   cleanup();
   routerPush.mockReset();
   vi.unstubAllGlobals();
@@ -52,8 +71,12 @@ describe("Search page", () => {
   });
 
   it("summarizes coverage with omitted domains still omitted", async () => {
+    // This test's subject is the per-domain coverage rows, which are governed.
+    diagnostics.enabled = true;
     const user = userEvent.setup();
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    // A fresh `Response` per call: a body can only be read once, and this test
+    // renders the page twice to compare the two diagnostics modes.
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       new Response(
         JSON.stringify({
           shape: "backend",
@@ -89,10 +112,26 @@ describe("Search page", () => {
     expect(coverage).toHaveTextContent("knowledge_not_enrolled");
     expect(screen.getByRole("button", { name: "Quick Capture" })).toBeTruthy();
     expect(collectLevel1Copy(document.body)).not.toMatch(/coverage token/i);
+
+    // With diagnostics off the technical rows are gone, but the reader is still
+    // told the list may be incomplete — otherwise a short result list reads as
+    // an answer about what they hold.
+    cleanup();
+    diagnostics.enabled = false;
+    render(<SearchPage initialQuery="" />);
+    await user.type(screen.getByTestId("search-command-input"), "morning");
+    await screen.findByTestId("search-group-tasks");
+    expect(screen.queryByTestId("search-coverage")).toBeNull();
+    expect(document.body.textContent ?? "").not.toContain("no_search_capability");
+    expect(screen.getByTestId("search-coverage-incomplete")).toHaveTextContent(/may be incomplete/i);
+    diagnostics.enabled = true;
   });
 
   it("does not treat all-unavailable zero hits as empty", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    // A fresh Response per call: this test renders twice, and a Response body
+    // can only be read once, so a single shared instance would leave the second
+    // render parsing an already-consumed stream.
+    const answer = () =>
       new Response(
         JSON.stringify({
           shape: "backend",
@@ -104,9 +143,20 @@ describe("Search page", () => {
           ],
         }),
         { status: 200, headers: { "content-type": "application/json" } },
-      ),
-    );
+      );
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => answer());
 
+    render(<SearchPage initialQuery="morning" />);
+    // The claim: zero hits when nothing could be searched is *unavailable*, not
+    // empty. That distinction is operational truth and holds in the product
+    // default, where the per-domain coverage rows are not rendered.
+    expect(await screen.findByTestId("search-unavailable")).toHaveAttribute("data-state", "unavailable");
+    expect(screen.queryByTestId("search-empty")).toBeNull();
+    expect(screen.queryByTestId("search-coverage")).toBeNull();
+
+    // And the coverage rows still carry the omission once diagnostics are on.
+    cleanup();
+    diagnostics.enabled = true;
     render(<SearchPage initialQuery="morning" />);
     expect(await screen.findByTestId("search-unavailable")).toHaveAttribute("data-state", "unavailable");
     expect(screen.queryByTestId("search-empty")).toBeNull();

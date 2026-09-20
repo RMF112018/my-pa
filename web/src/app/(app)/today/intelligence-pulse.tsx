@@ -23,6 +23,10 @@ import {
 } from "@/components/intelligence/cycle-selection";
 import { readinessAnswerFromOutcome } from "@/lib/api/intelligence-readiness";
 import { intelligenceHome } from "@/lib/routes/intelligence";
+import {
+  diagnosticError,
+} from "@/lib/diagnostics/presentation";
+import { serverDiagnosticsEnabled } from "@/lib/diagnostics/server";
 
 const AGGREGATE_TONE: Record<string, "green" | "gold" | "coral" | "neutral"> = {
   READY: "green",
@@ -46,6 +50,10 @@ export async function IntelligencePulse({
 }: {
   readonly principal: PrincipalSession;
 }) {
+  // WP07: resolved once per request (memoised) so the diagnostic-bearing
+  // props below are never built, and therefore never serialized into the
+  // RSC payload, while diagnostics are off.
+  const diagnosticsEnabled = await serverDiagnosticsEnabled();
   const listAnswer = surfaceAnswer(
     "today:intelligence:reports.list",
     await invokeGateway(principal, "reports.list"),
@@ -59,7 +67,7 @@ export async function IntelligencePulse({
           kind="unavailable"
           title="Morning Intelligence could not be read"
           detail="That is not all-clear."
-          error={listAnswer.error}
+          error={diagnosticError(diagnosticsEnabled, listAnswer.error)}
           testId="intelligence-pulse"
         >
           <LiveAnnouncement tone="alert" testId="intelligence-pulse-unavailable">
@@ -78,12 +86,14 @@ export async function IntelligencePulse({
           <p data-testid="intelligence-pulse-none" role="status">
             No briefings yet. That is not all-clear and not a Pulse error.
           </p>
+          {diagnosticsEnabled ? (
           <details className="mt-2" data-testid="intelligence-pulse-details">
             <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
             <p className="mt-2 text-xs text-muted">
               The report list was read and holds no briefing for your account.
             </p>
           </details>
+          ) : null}
           <OpenIntelligenceLink />
         </SurfaceState>
       </div>
@@ -101,6 +111,7 @@ export async function IntelligencePulse({
           <LiveAnnouncement tone="status" testId="intelligence-pulse-degraded">
             This briefing could not be read completely and returned nothing. That is not all-clear.
           </LiveAnnouncement>
+          {diagnosticsEnabled ? (
           <details className="mt-2" data-testid="intelligence-pulse-details">
             <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
             <p className="mt-2 text-xs text-muted">
@@ -108,6 +119,7 @@ export async function IntelligencePulse({
               incomplete read.
             </p>
           </details>
+          ) : null}
           <OpenIntelligenceLink />
         </SurfaceState>
       </div>
@@ -123,12 +135,14 @@ export async function IntelligencePulse({
           <p data-testid="intelligence-pulse-none" role="status">
             No briefings yet. That is not all-clear and not a Pulse error.
           </p>
+          {diagnosticsEnabled ? (
           <details className="mt-2" data-testid="intelligence-pulse-details">
             <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
             <p className="mt-2 text-xs text-muted">
               Listed reports have no cycle, so no briefing set can be selected.
             </p>
           </details>
+          ) : null}
         </SurfaceState>
       </div>
     );
@@ -146,16 +160,18 @@ export async function IntelligencePulse({
           kind="unavailable"
           title="Specialist readiness could not be read"
           detail="Listed reports are not all-clear."
-          error={readinessAnswer.error}
+          error={diagnosticError(diagnosticsEnabled, readinessAnswer.error)}
           testId="intelligence-pulse"
         >
           <LiveAnnouncement tone="alert" testId="intelligence-pulse-unavailable">
             Specialist readiness could not be read. Listed reports are not all-clear.
           </LiveAnnouncement>
+          {diagnosticsEnabled ? (
           <details className="mt-2" data-testid="intelligence-pulse-details">
             <summary className="cursor-pointer font-medium text-text-primary">Details</summary>
             <p className="mt-2 text-xs text-muted">cycle {cycleRunId}</p>
           </details>
+          ) : null}
           <OpenIntelligenceLink />
         </SurfaceState>
       </div>

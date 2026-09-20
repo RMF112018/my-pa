@@ -4,6 +4,9 @@ import type { DisclosureEnvelope } from "@/contracts/envelope";
 import type { UnresolvedMentionView } from "@/lib/api/decode/capabilities/entities.unresolved_mentions";
 import { peopleHome } from "@/lib/routes/people";
 import { codeLabel, moment } from "./format";
+import {
+  diagnosticLimitations,
+} from "@/lib/diagnostics/presentation";
 
 /**
  * Bounded unread mentions. Renders only disclosed summaries.
@@ -12,7 +15,16 @@ import { codeLabel, moment } from "./format";
 export function UnresolvedMentionsPanel({
   mentions,
   disclosure,
+  diagnosticsEnabled = false,
 }: {
+  /**
+   * WP07. Resolved by the owning page and passed down explicitly rather than
+   * read here, so this component stays synchronous and directly renderable in
+   * tests. The page must not build the diagnostic-bearing props at all while
+   * diagnostics are off — stripping them after the fact would still leave them
+   * in the RSC payload.
+   */
+  readonly diagnosticsEnabled?: boolean;
   mentions: readonly UnresolvedMentionView[];
   disclosure: DisclosureEnvelope;
 }) {
@@ -30,7 +42,7 @@ export function UnresolvedMentionsPanel({
       {disclosure.coverage === "partial" ? (
         <DegradedBanner
           scope="unresolved mentions"
-          limitations={disclosure.limitations}
+          limitations={diagnosticLimitations(diagnosticsEnabled, disclosure.limitations)}
           truncated={disclosure.truncated}
         />
       ) : null}

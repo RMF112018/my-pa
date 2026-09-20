@@ -15,6 +15,7 @@ import { useState } from "react";
 import type { ReviewCase, ReviewDisposition } from "@/contracts/views";
 import type { Receipt } from "@/contracts/envelope";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
+import { WhenDiagnostics } from "@/components/diagnostics/diagnostics-provider";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { TextField } from "@/components/ui/field";
@@ -166,9 +167,20 @@ export function ReviewWorkbench({ cases }: { cases: readonly ReviewCase[] }) {
                     data-testid={`review-not-persisted-${item.reviewCaseId}`}
                     className="mt-3 text-sm text-destructive"
                   >
-                    <strong>No decision was stored.</strong> The server answered &ldquo;
-                    {status.detail}&rdquo; rather than a stored decision, so this case is
-                    unchanged.
+                    {/*
+                      WP07 §6.4/§8.4, matching `backend-review-workbench.tsx`.
+                      That nothing was stored and the case is unchanged is the
+                      mutation outcome and is product language in both modes;
+                      the server's own answer is a raw backend string and is
+                      governed by the global policy.
+                    */}
+                    <strong>No decision was stored.</strong> This case is unchanged.
+                    <WhenDiagnostics>
+                      <span className="ml-1">
+                        The server answered &ldquo;{status.detail}&rdquo; rather than a stored
+                        decision.
+                      </span>
+                    </WhenDiagnostics>
                   </p>
                 ) : status.phase === "correcting" ? (
                   <CorrectionForm

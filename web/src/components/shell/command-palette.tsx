@@ -16,6 +16,10 @@ import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { SurfaceState } from "@/components/ui/surface-state";
+import {
+  useDiagnosticsEnabled,
+  WhenDiagnostics,
+} from "@/components/diagnostics/diagnostics-provider";
 import { TaskCompactSheet } from "@/components/tasks/task-compact-sheet";
 
 import {
@@ -83,6 +87,7 @@ export function SearchCommandPanel({
   enrollmentId?: string;
 }) {
   const router = useRouter();
+  const diagnosticsEnabled = useDiagnosticsEnabled();
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   /**
@@ -344,7 +349,10 @@ export function SearchCommandPanel({
           <SurfaceState
             kind="not_implemented"
             title="Search is not available in this build"
-            detail={answer.message}
+            // WP07 F-02: the backend's own sentence is raw text and belongs on
+            // the governed prop, not on `detail`, which is ungated product
+            // language. The title already states the product consequence.
+            error={{ message: answer.message }}
             testId="search-not-implemented"
           />
         ) : null}
@@ -369,7 +377,15 @@ export function SearchCommandPanel({
           <SurfaceState
             kind="empty"
             title="No matches in the domains that were searched"
-            detail="Omitted and unavailable sources are listed below."
+            // WP07 §6.4. This sentence points at the per-domain coverage list,
+            // which is diagnostics. While diagnostics are off there is no list
+            // below to point at, so pointing at one would be untrue. The
+            // consequence itself is not lost: `CoverageList` states "this list
+            // may be incomplete" in both modes whenever a domain was omitted or
+            // unavailable, and the title already says which domains answered.
+            detail={
+              diagnosticsEnabled ? "Omitted and unavailable sources are listed below." : undefined
+            }
             testId="search-empty"
           />
         ) : null}
@@ -449,7 +465,23 @@ export function SearchCommandPanel({
 }
 
 function CoverageList({ coverage }: { coverage: readonly SearchCoverage[] }) {
+  /*
+   * WP07 §8.7. The per-domain rows are technical coverage internals — a raw
+   * capability domain, a coverage state code and the backend's own reason —
+   * and are governed by the policy. The *consequence* of incomplete coverage
+   * is product truth and is stated in both modes, because a person who does
+   * not know the search was partial will read a short result list as an
+   * answer about what they hold.
+   */
+  const incomplete = coverage.filter((row) => row.state !== "complete");
   return (
+    <>
+      {incomplete.length > 0 ? (
+        <p data-testid="search-coverage-incomplete" className="mt-3 border-t pt-3 text-xs text-muted">
+          Not everything could be searched, so this list may be incomplete.
+        </p>
+      ) : null}
+      <WhenDiagnostics>
     <ul data-testid="search-coverage" className="mt-3 space-y-1 border-t pt-3 text-xs text-muted">
       {coverage.map((row) => (
         <li
@@ -463,6 +495,8 @@ function CoverageList({ coverage }: { coverage: readonly SearchCoverage[] }) {
         </li>
       ))}
     </ul>
+      </WhenDiagnostics>
+    </>
   );
 }
 

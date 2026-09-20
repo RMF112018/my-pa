@@ -15,7 +15,7 @@
  * would be asserting something this build deliberately does not do.
  */
 import { test, expect } from "@playwright/test";
-import { signIn } from "./fixtures";
+import { enableDiagnostics, signIn } from "./fixtures";
 
 /** The sizes Chromium wants before it treats an icon set as installable. */
 const REQUIRED_ICON_SIZES = ["192x192", "512x512"];
@@ -214,6 +214,8 @@ test("the System page shows this-browser PWA observations, not server-invented S
   page,
 }) => {
   await signIn(page);
+  // WP07: the this-browser PWA observations on System are diagnostics.
+  await enableDiagnostics(page);
   await page.waitForFunction(async () => (await navigator.serviceWorker.ready) !== undefined);
   await page.reload();
   await page.goto("/system");

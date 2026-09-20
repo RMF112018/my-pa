@@ -1,4 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * WP07 — diagnostic presentation follows the global policy. The product default
+ * is OFF; this file sets the mode each test actually means.
+ */
+const { diagnostics } = vi.hoisted(() => ({ diagnostics: { enabled: true } }));
+vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/diagnostics/diagnostics-provider")>();
+  return {
+    ...actual,
+    // Both must be replaced: `WhenDiagnostics` closes over the real hook in its
+    // own module scope, so overriding only the exported hook would leave the
+    // guard reading the unmocked policy.
+    useDiagnosticsEnabled: () => diagnostics.enabled,
+    WhenDiagnostics: ({ children }: { children: React.ReactNode }) =>
+      diagnostics.enabled ? children : null,
+  };
+});
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
@@ -14,6 +33,7 @@ import TaskPage from "@/app/(app)/work/tasks/[taskId]/page";
 import type { TaskDetail } from "@/contracts/work";
 
 afterEach(() => {
+  diagnostics.enabled = true;
   cleanup();
   vi.unstubAllGlobals();
 });
@@ -243,6 +263,41 @@ describe("TaskDetailView authoritative draft / conflict", () => {
     // Blind save stays locked — no second request without deliberate reapply.
     expect(screen.getByRole("button", { name: "Save title" })).toBeDisabled();
     expect(patchCount).toBe(1);
+  });
+
+  it("preserves the draft on 409 identically while diagnostics are off", async () => {
+    // AC-54. Diagnostic visibility is presentation authority only: it must not
+    // change mutation semantics. The conflict behaviour asserted above is
+    // repeated here in the product-default mode, minus the one assertion that
+    // reads the canonical version out of Technical details — which is the only
+    // part that was ever diagnostics.
+    diagnostics.enabled = false;
+    const user = userEvent.setup();
+    let patchCount = 0;
+    const fetcher = stubDetailFetch({
+      patch: (body) => {
+        patchCount += 1;
+        expect((body as { expectedVersion: number }).expectedVersion).toBe(2);
+        return json(null, 409, { current: TASK_V3 });
+      },
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    render(<TaskDetailView taskId={TASK_V2.task_id} />);
+    const title = await activateTitleEditor(user);
+    await user.clear(title);
+    await user.type(title, "My dirty title");
+    await user.click(screen.getByRole("button", { name: "Save title" }));
+
+    expect(await screen.findByTestId("task-changed-elsewhere")).toBeTruthy();
+    expect(screen.getByDisplayValue("My dirty title")).toBeTruthy();
+    expect(screen.getByText(/title “Coordinate review \(server\)”/)).toBeTruthy();
+    expectNoVersionNumber(screen.getByTestId("task-changed-elsewhere"));
+    expect(patchCount).toBe(1);
+    expect(screen.getByRole("button", { name: "Save title" })).toBeDisabled();
+
+    // And the technical panel is simply not there.
+    expect(screen.queryByTestId("task-technical-details")).toBeNull();
   });
 
   it("preserves draft on 409 without current after follow-up read", async () => {

@@ -9,6 +9,10 @@ import type { IdentityHistoryEntry } from "@/lib/api/decode/capabilities/entitie
 import { peopleEntity } from "@/lib/routes/people";
 import { directedIsCurrent, partitionByCurrency } from "./currency";
 import { codeLabel, effectiveWindow, moment } from "./format";
+import {
+  diagnosticError,
+  diagnosticLimitations,
+} from "@/lib/diagnostics/presentation";
 
 function currentBadge(current: boolean) {
   return <Badge tone={current ? "green" : "gold"}>{current ? "Current" : "Historical"}</Badge>;
@@ -18,10 +22,29 @@ export function AssignmentsPanel({
   assignments,
   disclosure,
   unavailable,
+  unavailableDiagnostic = null,
+  diagnosticsEnabled = false,
 }: {
+  /**
+   * WP07. Resolved by the owning page and passed down explicitly rather than
+   * read here, so this component stays synchronous and directly renderable in
+   * tests. The page must not build the diagnostic-bearing props at all while
+   * diagnostics are off — stripping them after the fact would still leave them
+   * in the RSC payload.
+   */
+  readonly diagnosticsEnabled?: boolean;
   assignments: readonly AssignmentView[] | null;
   disclosure: DisclosureEnvelope | null;
-  unavailable: string | null;
+  /**
+   * Whether the read failed. A boolean, not the backend's sentence: the panel
+   * needs the *fact* in both modes, and the sentence only when diagnostics are
+   * on. Carrying one string for both meant a raw gateway message crossed this
+   * boundary, which is safe only while both sides happen to be server
+   * components — a property of the files, not of the contract.
+   */
+  unavailable: boolean;
+  /** Already governed by the owning page. Never built while off. */
+  unavailableDiagnostic?: string | null;
 }) {
   if (unavailable) {
     return (
@@ -33,7 +56,7 @@ export function AssignmentsPanel({
           <SurfaceState
             kind="unavailable"
             title="Assignments could not be read"
-            error={unavailable}
+            error={diagnosticError(diagnosticsEnabled, unavailableDiagnostic)}
             testId="people-assignments-unavailable"
           />
         </div>
@@ -50,7 +73,7 @@ export function AssignmentsPanel({
       {disclosure?.coverage === "partial" ? (
         <DegradedBanner
           scope="assignments"
-          limitations={disclosure.limitations}
+          limitations={diagnosticLimitations(diagnosticsEnabled, disclosure.limitations)}
           truncated={disclosure.truncated}
         />
       ) : null}
@@ -63,7 +86,7 @@ export function AssignmentsPanel({
               <h3 className="text-sm font-medium text-text-primary">Current</h3>
               <ul className="mt-2 space-y-2">
                 {current.map((row) => (
-                  <AssignmentItem key={row.assignment_id} row={row} />
+                  <AssignmentItem key={row.assignment_id} row={row} diagnosticsEnabled={diagnosticsEnabled} />
                 ))}
               </ul>
             </div>
@@ -73,7 +96,7 @@ export function AssignmentsPanel({
               <h3 className="text-sm font-medium text-text-primary">Historical</h3>
               <ul className="mt-2 space-y-2">
                 {historical.map((row) => (
-                  <AssignmentItem key={row.assignment_id} row={row} />
+                  <AssignmentItem key={row.assignment_id} row={row} diagnosticsEnabled={diagnosticsEnabled} />
                 ))}
               </ul>
             </div>
@@ -84,7 +107,18 @@ export function AssignmentsPanel({
   );
 }
 
-function AssignmentItem({ row }: { row: AssignmentView }) {
+function AssignmentItem({
+  row,
+  diagnosticsEnabled = false,
+}: {
+  row: AssignmentView;
+  /**
+   * WP07: the scope link is product truth and the affordance stays in both
+   * modes; the raw entity id as its visible text is a technical receipt. Server
+   * component, so the branch is taken before the element is built.
+   */
+  readonly diagnosticsEnabled?: boolean;
+}) {
   const window = effectiveWindow(row.effective_from, row.effective_to);
   const current = directedIsCurrent(row);
   return (
@@ -105,7 +139,7 @@ function AssignmentItem({ row }: { row: AssignmentView }) {
             <p className="mt-1">
               Scope{" "}
               <Link href={peopleEntity(row.scope_entity_id)} className="underline decoration-interactive/40">
-                {row.scope_entity_id}
+                {diagnosticsEnabled ? row.scope_entity_id : "Open the scope entity"}
               </Link>
             </p>
           ) : null}
@@ -121,11 +155,30 @@ export function RelationshipsPanel({
   subjectId,
   disclosure,
   unavailable,
+  unavailableDiagnostic = null,
+  diagnosticsEnabled = false,
 }: {
+  /**
+   * WP07. Resolved by the owning page and passed down explicitly rather than
+   * read here, so this component stays synchronous and directly renderable in
+   * tests. The page must not build the diagnostic-bearing props at all while
+   * diagnostics are off — stripping them after the fact would still leave them
+   * in the RSC payload.
+   */
+  readonly diagnosticsEnabled?: boolean;
   relationships: readonly RelationshipView[] | null;
   subjectId: string;
   disclosure: DisclosureEnvelope | null;
-  unavailable: string | null;
+  /**
+   * Whether the read failed. A boolean, not the backend's sentence: the panel
+   * needs the *fact* in both modes, and the sentence only when diagnostics are
+   * on. Carrying one string for both meant a raw gateway message crossed this
+   * boundary, which is safe only while both sides happen to be server
+   * components — a property of the files, not of the contract.
+   */
+  unavailable: boolean;
+  /** Already governed by the owning page. Never built while off. */
+  unavailableDiagnostic?: string | null;
 }) {
   if (unavailable) {
     return (
@@ -137,7 +190,7 @@ export function RelationshipsPanel({
           <SurfaceState
             kind="unavailable"
             title="Relationships could not be read"
-            error={unavailable}
+            error={diagnosticError(diagnosticsEnabled, unavailableDiagnostic)}
             testId="people-relationships-unavailable"
           />
         </div>
@@ -154,7 +207,7 @@ export function RelationshipsPanel({
       {disclosure?.coverage === "partial" ? (
         <DegradedBanner
           scope="relationships"
-          limitations={disclosure.limitations}
+          limitations={diagnosticLimitations(diagnosticsEnabled, disclosure.limitations)}
           truncated={disclosure.truncated}
         />
       ) : null}
@@ -167,7 +220,12 @@ export function RelationshipsPanel({
               <h3 className="text-sm font-medium text-text-primary">Current</h3>
               <ul className="mt-2 space-y-2">
                 {current.map((row) => (
-                  <RelationshipItem key={row.relationship_id} row={row} subjectId={subjectId} />
+                  <RelationshipItem
+                    key={row.relationship_id}
+                    row={row}
+                    subjectId={subjectId}
+                    diagnosticsEnabled={diagnosticsEnabled}
+                  />
                 ))}
               </ul>
             </div>
@@ -177,7 +235,12 @@ export function RelationshipsPanel({
               <h3 className="text-sm font-medium text-text-primary">Historical</h3>
               <ul className="mt-2 space-y-2">
                 {historical.map((row) => (
-                  <RelationshipItem key={row.relationship_id} row={row} subjectId={subjectId} />
+                  <RelationshipItem
+                    key={row.relationship_id}
+                    row={row}
+                    subjectId={subjectId}
+                    diagnosticsEnabled={diagnosticsEnabled}
+                  />
                 ))}
               </ul>
             </div>
@@ -188,7 +251,16 @@ export function RelationshipsPanel({
   );
 }
 
-function RelationshipItem({ row, subjectId }: { row: RelationshipView; subjectId: string }) {
+function RelationshipItem({
+  row,
+  subjectId,
+  diagnosticsEnabled = false,
+}: {
+  row: RelationshipView;
+  subjectId: string;
+  /** See `AssignmentItem`. */
+  readonly diagnosticsEnabled?: boolean;
+}) {
   const outbound = row.from_entity_id === subjectId;
   const relatedId = outbound ? row.to_entity_id : row.from_entity_id;
   const direction = outbound ? "from this entity" : "toward this entity";
@@ -209,8 +281,15 @@ function RelationshipItem({ row, subjectId }: { row: RelationshipView; subjectId
           {relatedIsCanonical ? (
             <p className="mt-1">
               Related entity{" "}
-              <Link href={peopleEntity(relatedId)} className="font-mono text-xs underline decoration-interactive/40">
-                {relatedId}
+              <Link
+                href={peopleEntity(relatedId)}
+                className={
+                  diagnosticsEnabled
+                    ? "font-mono text-xs underline decoration-interactive/40"
+                    : "underline decoration-interactive/40"
+                }
+              >
+                {diagnosticsEnabled ? relatedId : "Open the related entity"}
               </Link>
             </p>
           ) : (
@@ -229,12 +308,31 @@ export function IdentityHistoryPanel({
   nextCursor,
   entityId,
   unavailable,
+  unavailableDiagnostic = null,
+  diagnosticsEnabled = false,
 }: {
+  /**
+   * WP07. Resolved by the owning page and passed down explicitly rather than
+   * read here, so this component stays synchronous and directly renderable in
+   * tests. The page must not build the diagnostic-bearing props at all while
+   * diagnostics are off — stripping them after the fact would still leave them
+   * in the RSC payload.
+   */
+  readonly diagnosticsEnabled?: boolean;
   entries: readonly IdentityHistoryEntry[] | null;
   truncated: boolean;
   nextCursor: string | null;
   entityId: string;
-  unavailable: string | null;
+  /**
+   * Whether the read failed. A boolean, not the backend's sentence: the panel
+   * needs the *fact* in both modes, and the sentence only when diagnostics are
+   * on. Carrying one string for both meant a raw gateway message crossed this
+   * boundary, which is safe only while both sides happen to be server
+   * components — a property of the files, not of the contract.
+   */
+  unavailable: boolean;
+  /** Already governed by the owning page. Never built while off. */
+  unavailableDiagnostic?: string | null;
 }) {
   if (unavailable) {
     return (
@@ -246,7 +344,7 @@ export function IdentityHistoryPanel({
           <SurfaceState
             kind="unavailable"
             title="Identity history could not be read"
-            error={unavailable}
+            error={diagnosticError(diagnosticsEnabled, unavailableDiagnostic)}
             testId="people-history-unavailable"
           />
         </div>
@@ -262,7 +360,7 @@ export function IdentityHistoryPanel({
       {truncated ? (
         <DegradedBanner
           scope="identity history"
-          limitations={["This page of the ledger is not the whole history."]}
+          limitations={diagnosticLimitations(diagnosticsEnabled, ["This page of the ledger is not the whole history."])}
           truncated
         />
       ) : null}

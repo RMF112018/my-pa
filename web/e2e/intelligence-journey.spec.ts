@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { signIn } from "./fixtures";
+import { enableDiagnostics, signIn } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -7,6 +7,13 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("Intelligence is a working surface over seeded report artifacts", async ({ page }) => {
+  // WP07: this journey asserts on run and cycle identifiers and on the backend's
+  // own structured-content key names, all of which are policy-governed technical
+  // fields. The mode is asked for through the one route that can, before the
+  // first navigation, so every assertion below is made in it and is unchanged.
+  // The product-truth half — that structured content exists and is not rendered
+  // as Brief items — is asserted in both modes in `report-detail-view.test.tsx`.
+  await enableDiagnostics(page);
   test.setTimeout(180_000);
 
   await page.goto("/intelligence");

@@ -5,6 +5,9 @@ import { SurfaceState } from "@/components/ui/surface-state";
 import type { ErrorEnvelope } from "@/contracts/envelope";
 import type { ReportsResolveSetResult } from "@/lib/api/decode/capabilities/reports.resolve_set";
 import { MORNING_BRIEF_SET_ID, nonReadyRequiredCount } from "@/components/intelligence/cycle-selection";
+import {
+  diagnosticError,
+} from "@/lib/diagnostics/presentation";
 
 const AGGREGATE_TONE: Record<string, "green" | "gold" | "coral" | "neutral"> = {
   READY: "green",
@@ -63,7 +66,16 @@ function freshnessCopy(result: ReportsResolveSetResult): string {
 export function ReadinessPanel({
   answer,
   cycleRunId,
+  diagnosticsEnabled = false,
 }: {
+  /**
+   * WP07. Resolved by the owning page and passed down explicitly rather than
+   * read here, so this component stays synchronous and directly renderable in
+   * tests. The page must not build the diagnostic-bearing props at all while
+   * diagnostics are off — stripping them after the fact would still leave them
+   * in the RSC payload.
+   */
+  readonly diagnosticsEnabled?: boolean;
   readonly answer: ReadinessAnswer;
   readonly cycleRunId: string;
 }) {
@@ -72,7 +84,7 @@ export function ReadinessPanel({
       <SurfaceState
         kind="unavailable"
         title="Specialist readiness could not be read"
-        error={answer.error}
+        error={diagnosticError(diagnosticsEnabled, answer.error)}
         detail={answer.error ? undefined : answer.detail}
         testId="intelligence-readiness-unavailable"
       />
@@ -115,10 +127,14 @@ export function ReadinessPanel({
         <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 break-words text-xs">
           <dt>Business date</dt>
           <dd data-testid="intelligence-business-date">{result.business_date}</dd>
-          <dt>Cycle</dt>
-          <dd data-testid="intelligence-cycle-run-id" className="break-all">
-            {result.cycle_run_id || cycleRunId}
-          </dd>
+          {diagnosticsEnabled ? (
+            <>
+              <dt>Cycle</dt>
+              <dd data-testid="intelligence-cycle-run-id" className="break-all">
+                {result.cycle_run_id || cycleRunId}
+              </dd>
+            </>
+          ) : null}
           <dt>Freshness</dt>
           <dd data-testid="intelligence-freshness">{freshnessCopy(result)}</dd>
         </dl>

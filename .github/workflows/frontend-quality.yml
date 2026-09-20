@@ -27,13 +27,51 @@ jobs:
           fetch-depth: 0
       - id: classify
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.event.after }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin main
-          git merge-base origin/main HEAD >/dev/null
-          mapfile -t changed < <(git diff --name-only origin/main...HEAD)
-          printf '%s\n' "${changed[@]}"
-          if printf '%s\n' "${changed[@]}" | grep -Eq '^(web/|\.github/workflows/frontend-quality\.yml$|src/my_pa/contracts/|src/my_pa/application/capabilities\.py|src/my_pa/application/(authorization|commands|service|constraint_management|constraints|constraint_settings)\.py$|tests/contract/|src/my_pa/.*/webauthn|src/my_pa/application/webauthn|src/my_pa/adapters/http/webauthn|src/my_pa/domain/identity/webauthn|src/my_pa/application/session_service|src/my_pa/adapters/http/auth_sessions|src/my_pa/bootstrap/settings.py|src/my_pa/bootstrap/gateway.py|src/my_pa/adapters/http/app.py|src/my_pa/adapters/mcp/(server|tools)\.py$|apps/gateway.py|pyproject.toml|web/package-lock.json|src/my_pa/application/goodnotes|src/my_pa/application/goodnotes_|src/my_pa/domain/goodnotes|src/my_pa/infrastructure/persistence/goodnotes|src/my_pa/domain/identity/operation\.py|src/my_pa/domain/identity/purpose\.py|src/my_pa/adapters/normalization\.py|migrations/versions/|src/my_pa/application/tasks\.py|src/my_pa/application/commitments\.py|src/my_pa/application/intelligence\.py|src/my_pa/application/relationships\.py|src/my_pa/application/identity_history\.py|src/my_pa/application/entity_|src/my_pa/infrastructure/persistence/canvas_workspace\.py|src/my_pa/infrastructure/persistence/task_management\.py|src/my_pa/infrastructure/persistence/entity\.py|src/my_pa/infrastructure/persistence/review\.py|src/my_pa/infrastructure/persistence/search\.py|src/my_pa/infrastructure/persistence/intelligence\.py|src/my_pa/infrastructure/persistence/capture\.py|src/my_pa/infrastructure/persistence/(constraints|capture_search|situation_repository|tables|unit_of_work)\.py$|src/my_pa/domain/project_controls/|src/my_pa/domain/capture/|src/my_pa/domain/situation/(situation|project_history)\.py$|src/my_pa/domain/task/|src/my_pa/domain/relationship/|src/my_pa/domain/search/|src/my_pa/domain/intelligence/|tests/situation/|tests/(architecture|capture|database|schema|security|unit)/.*(constraint|capture|project|task_management|frontend_ci_classify).*\.py$|tests/policy/test_application_authorization\.py$|tests/security/test_mcp_surface_controls\.py$|tests/unit/test_gateway_composition\.py$|ops/nas/|docs/decisions/ADR-012|docs/decisions/ADR-013|docs/plans/frontend-release-gates|src/my_pa/domain/identity/auth_grants\.py|src/my_pa/domain/identity/auth_state\.py|src/my_pa/domain/identity/user_account\.py|src/my_pa/infrastructure/persistence/auth_grants\.py|src/my_pa/infrastructure/persistence/auth_state\.py|src/my_pa/infrastructure/persistence/user_accounts\.py|src/my_pa/infrastructure/security/webauthn_ceremony\.py|apps/cli/auth\.py|tests/unit/test_auth_grants\.py|tests/unit/test_auth_state\.py|tests/unit/test_cli_auth\.py|tests/unit/test_user_account_identity\.py|tests/unit/test_webauthn_http\.py)'; then
+          # F023. The comparison uses the event's own immutable identities.
+          # Comparing a fetched `origin/main` to `HEAD` was wrong for a push to
+          # `main`: after the push those are the same commit, the diff is empty
+          # and every frontend gate classified itself away on exactly the
+          # integration event that most needed them.
+          #
+          # Anything the comparison cannot establish -- a zero `before` (first
+          # push or a new branch), a force-push whose `before` is no longer an
+          # ancestor, a shallow history, a missing object -- falls back to
+          # treating the change as applicable. Running the suite unnecessarily
+          # costs minutes; skipping it silently costs the gate.
+          changed=""
+          resolved="false"
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            if git cat-file -e "${PR_BASE_SHA}^{commit}" 2>/dev/null \
+               && git cat-file -e "${PR_HEAD_SHA}^{commit}" 2>/dev/null \
+               && base="$(git merge-base "${PR_BASE_SHA}" "${PR_HEAD_SHA}" 2>/dev/null)"; then
+              changed="$(git diff --name-only "${base}" "${PR_HEAD_SHA}")"
+              resolved="true"
+            fi
+          elif [[ "${EVENT_NAME}" == "push" ]]; then
+            if [[ -n "${PUSH_BEFORE}" && "${PUSH_BEFORE}" != "0000000000000000000000000000000000000000" ]] \
+               && git cat-file -e "${PUSH_BEFORE}^{commit}" 2>/dev/null \
+               && git cat-file -e "${PUSH_AFTER}^{commit}" 2>/dev/null; then
+              changed="$(git diff --name-only "${PUSH_BEFORE}" "${PUSH_AFTER}")"
+              resolved="true"
+            fi
+          fi
+
+          if [[ "${resolved}" != "true" ]]; then
+            echo "applicability could not be resolved for event '${EVENT_NAME}'; failing open to applicable=true"
+            echo "applicable=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          printf '%s\n' "${changed}"
+          if printf '%s\n' "${changed}" | grep -Eq '^(web/|\.github/workflows/frontend-quality\.yml$|src/my_pa/contracts/|src/my_pa/application/capabilities\.py|src/my_pa/application/(authorization|commands|service|constraint_management|constraints|constraint_settings)\.py$|tests/contract/|src/my_pa/.*/webauthn|src/my_pa/application/webauthn|src/my_pa/adapters/http/webauthn|src/my_pa/domain/identity/webauthn|src/my_pa/application/session_service|src/my_pa/adapters/http/auth_sessions|src/my_pa/bootstrap/settings.py|src/my_pa/bootstrap/gateway.py|src/my_pa/adapters/http/app.py|src/my_pa/adapters/mcp/(server|tools)\.py$|apps/gateway.py|pyproject.toml|web/package-lock.json|src/my_pa/application/goodnotes|src/my_pa/application/goodnotes_|src/my_pa/domain/goodnotes|src/my_pa/infrastructure/persistence/goodnotes|src/my_pa/domain/identity/operation\.py|src/my_pa/domain/identity/purpose\.py|src/my_pa/adapters/normalization\.py|migrations/versions/|src/my_pa/application/tasks\.py|src/my_pa/application/commitments\.py|src/my_pa/application/intelligence\.py|src/my_pa/application/relationships\.py|src/my_pa/application/identity_history\.py|src/my_pa/application/entity_|src/my_pa/infrastructure/persistence/canvas_workspace\.py|src/my_pa/infrastructure/persistence/task_management\.py|src/my_pa/infrastructure/persistence/entity\.py|src/my_pa/infrastructure/persistence/review\.py|src/my_pa/infrastructure/persistence/search\.py|src/my_pa/infrastructure/persistence/intelligence\.py|src/my_pa/infrastructure/persistence/capture\.py|src/my_pa/infrastructure/persistence/(constraints|capture_search|situation_repository|tables|unit_of_work)\.py$|src/my_pa/domain/project_controls/|src/my_pa/domain/capture/|src/my_pa/domain/situation/(situation|project_history)\.py$|src/my_pa/domain/task/|src/my_pa/domain/relationship/|src/my_pa/domain/search/|src/my_pa/domain/intelligence/|tests/situation/|tests/(architecture|capture|database|schema|security|unit)/.*(constraint|capture|project|task_management|frontend_ci_classify).*\.py$|tests/policy/test_application_authorization\.py$|tests/security/test_mcp_surface_controls\.py$|tests/unit/test_gateway_composition\.py$|ops/nas/|docs/decisions/ADR-012|docs/decisions/ADR-013|docs/plans/frontend-release-gates|src/my_pa/domain/identity/auth_grants\.py|src/my_pa/domain/identity/auth_state\.py|src/my_pa/domain/identity/user_account\.py|src/my_pa/infrastructure/persistence/auth_grants\.py|src/my_pa/infrastructure/persistence/auth_state\.py|src/my_pa/infrastructure/persistence/user_accounts\.py|src/my_pa/infrastructure/security/webauthn_ceremony\.py|apps/cli/auth\.py|tests/unit/test_auth_grants\.py|tests/unit/test_auth_state\.py|tests/unit/test_cli_auth\.py|tests/unit/test_user_account_identity\.py|tests/unit/test_webauthn_http\.py)'; then
             echo "applicable=true" >> "$GITHUB_OUTPUT"
           else
             echo "applicable=false" >> "$GITHUB_OUTPUT"
@@ -203,7 +241,7 @@ jobs:
           # so resolve the setup-python interpreter rather than the bare name.
           python_bin="$(command -v python)"
           test -x "${python_bin}"
-          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/webauthn.spec.ts e2e/auth-public.spec.ts e2e/browser-security.spec.ts e2e/work-mutations.spec.ts e2e/review-decisions.spec.ts e2e/journeys.spec.ts e2e/reports-contract.spec.ts e2e/people-contract.spec.ts e2e/intelligence-journey.spec.ts e2e/search-contract.spec.ts e2e/goodnotes.spec.ts e2e/canvas.spec.ts e2e/system.spec.ts e2e/constraints-read-plane.spec.ts e2e/project-controls-settings.spec.ts --project=desktop
+          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/webauthn.spec.ts e2e/auth-public.spec.ts e2e/browser-security.spec.ts e2e/work-mutations.spec.ts e2e/review-decisions.spec.ts e2e/journeys.spec.ts e2e/reports-contract.spec.ts e2e/people-contract.spec.ts e2e/intelligence-journey.spec.ts e2e/search-contract.spec.ts e2e/goodnotes.spec.ts e2e/canvas.spec.ts e2e/system.spec.ts e2e/diagnostics-visibility.spec.ts e2e/constraints-read-plane.spec.ts e2e/project-controls-settings.spec.ts --project=desktop
 
   accessibility:
     name: frontend / accessibility
@@ -253,7 +291,7 @@ jobs:
           set -euo pipefail
           python_bin="$(command -v python)"
           test -x "${python_bin}"
-          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/accessibility.spec.ts --project=desktop
+          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/accessibility.spec.ts e2e/diagnostics-visibility.spec.ts --project=desktop
 
   responsive:
     name: frontend / responsive
@@ -607,6 +645,7 @@ jobs:
       - name: Gate
         env:
           APPLICABLE: ${{ needs.classify.outputs.applicable }}
+          CLASSIFY: ${{ needs.classify.result }}
           STATIC: ${{ needs.static.result }}
           UNIT: ${{ needs.unit.result }}
           BUILD: ${{ needs.production-build.result }}
@@ -618,10 +657,27 @@ jobs:
           DELIVERY: ${{ needs.delivery-config.result }}
         run: |
           set -euo pipefail
-          if [[ "${APPLICABLE}" != "true" ]]; then
-            echo "frontend / required = NOT_APPLICABLE"
-            exit 0
+          # F022. `!= "true" -> exit 0` meant that anything other than an exact
+          # `true` passed this gate, including the empty string a skipped or
+          # failed classifier produces. A classifier that crashed therefore
+          # reported the blocking check green. Applicability is now a closed
+          # vocabulary, the classifier's own result is required, and an
+          # unresolved or malformed value fails.
+          if [[ "${CLASSIFY}" != "success" ]]; then
+            echo "frontend / required failed: classifier result was '${CLASSIFY}'"
+            exit 1
           fi
+          case "${APPLICABLE}" in
+            true) ;;
+            false)
+              echo "frontend / required = NOT_APPLICABLE"
+              exit 0
+              ;;
+            *)
+              echo "frontend / required failed: applicability was '${APPLICABLE}', expected 'true' or 'false'"
+              exit 1
+              ;;
+          esac
           for result in "$STATIC" "$UNIT" "$BUILD" "$CONTRACT" "$SECURITY" "$E2E" "$A11Y" "$RESPONSIVE" "$DELIVERY"; do
             if [[ "${result}" != "success" ]]; then
               echo "frontend / required failed: ${result}"

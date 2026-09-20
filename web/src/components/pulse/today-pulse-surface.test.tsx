@@ -11,6 +11,25 @@
  * real `/api/pulse` path; what is stubbed is one HTTP response.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * WP07 — the raw transport detail on a failed Today read is policy-governed.
+ * Default OFF, matching the product default.
+ */
+const { diagnostics } = vi.hoisted(() => ({ diagnostics: { enabled: false } }));
+vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/diagnostics/diagnostics-provider")>();
+  return {
+    ...actual,
+    // Both must be replaced: `WhenDiagnostics` closes over the real hook in its
+    // own module scope, so overriding only the exported hook would leave the
+    // guard reading the unmocked policy.
+    useDiagnosticsEnabled: () => diagnostics.enabled,
+    WhenDiagnostics: ({ children }: { children: React.ReactNode }) =>
+      diagnostics.enabled ? children : null,
+  };
+});
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 
 import {
@@ -33,6 +52,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  diagnostics.enabled = false;
 });
 
 function item(overrides: Partial<BackendPulseItem> = {}): BackendPulseItem {
@@ -276,12 +296,15 @@ describe("a first read that fails states the failure rather than a placeholder",
   }
 
   it("carries the route's own diagnostic into the unavailable region", async () => {
+    // The sentence names the gateway, so it is diagnostics under WP07 and is
+    // asserted in the mode that renders it. That it is the *gateway's own*
+    // sentence, reached through the envelope rather than written here, is still
+    // the point: a status code alone could not have produced it.
+    diagnostics.enabled = true;
     fetchSpy.mockImplementation(async () => refusedResponse());
     renderFresh();
     const region = await screen.findByTestId("today-unavailable");
     expect(region).toHaveAttribute("data-state", "unavailable");
-    // The sentence is the gateway's, reached through the envelope rather than
-    // written here: a status code alone could not have produced it.
     expect(region.textContent).toContain("the application gateway did not answer");
     expect(screen.queryByTestId("today-empty")).toBeNull();
     expect(screen.queryByText(TODAY_EMPTY_COPY)).toBeNull();
@@ -289,11 +312,35 @@ describe("a first read that fails states the failure rather than a placeholder",
     expect(screen.queryByTestId("today-stale")).toBeNull();
   });
 
+  it("withholds the gateway's own sentence while diagnostics are off", async () => {
+    fetchSpy.mockImplementation(async () => refusedResponse());
+    renderFresh();
+    const region = await screen.findByTestId("today-unavailable");
+    // Still a failed read, still not an empty day — only the machinery is quiet.
+    expect(region).toHaveAttribute("data-state", "unavailable");
+    expect(region.textContent).not.toContain("the application gateway did not answer");
+    expect(screen.queryByTestId("today-empty")).toBeNull();
+    expect(screen.queryByText(TODAY_EMPTY_COPY)).toBeNull();
+  });
+
   it("says only what a failure with no envelope establishes", async () => {
     fetchSpy.mockImplementation(async () => new Response("", { status: 502 }));
     renderFresh();
     const region = await screen.findByTestId("today-unavailable");
+    // Diagnostics off: the status code is engineering detail and is absent,
+    // while the state itself stays unavailable rather than collapsing to empty.
+    expect(region.textContent).not.toContain("502");
+    expect(within(region).queryByTestId("surface-state-diagnostic")).toBeNull();
+    expect(screen.queryByTestId("today-empty")).toBeNull();
+  });
+
+  it("states the transport status once diagnostics are on", async () => {
+    diagnostics.enabled = true;
+    fetchSpy.mockImplementation(async () => new Response("", { status: 502 }));
+    renderFresh();
+    const region = await screen.findByTestId("today-unavailable");
     expect(region.textContent).toContain("502");
+    // Still unavailable, not empty: ON changes presentation, never meaning.
     expect(screen.queryByTestId("today-empty")).toBeNull();
   });
 

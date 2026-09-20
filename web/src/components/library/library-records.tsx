@@ -47,7 +47,14 @@ function OpenLink({ href }: { href: string }) {
   );
 }
 
-export function CaptureListing({ entries }: { entries: readonly BackendCaptureEntry[] }) {
+export function CaptureListing({
+  entries,
+  diagnosticsEnabled = false,
+}: {
+  readonly entries: readonly BackendCaptureEntry[];
+  /** Resolved by the owning page; fail-closed when a caller forgets. */
+  readonly diagnosticsEnabled?: boolean;
+}) {
   return (
     <ul className="flex flex-col gap-3" data-testid="library-listing">
       {entries.map((entry) => (
@@ -67,6 +74,10 @@ export function CaptureListing({ entries }: { entries: readonly BackendCaptureEn
                 <dd>{moment(entry.latestRecordedAt)}</dd>
               </dl>
               <OpenLink href={captureHref(entry.captureId)} />
+              {/* WP07 §8.7: capture, version and owner identifiers are
+                  technical receipts. The title, dates and length above are the
+                  product truth a reader uses. */}
+              {diagnosticsEnabled ? (
               <details className="mt-2">
                 <summary className="cursor-pointer font-medium text-moss-slate">Details</summary>
                 <dl className="mt-2 grid grid-cols-[9rem_1fr] gap-x-2 gap-y-1">
@@ -80,6 +91,7 @@ export function CaptureListing({ entries }: { entries: readonly BackendCaptureEn
                   <dd className="font-mono text-xs break-all">{entry.ownerPrincipalId}</dd>
                 </dl>
               </details>
+              ) : null}
             </CardBody>
           </Card>
         </li>
@@ -88,7 +100,14 @@ export function CaptureListing({ entries }: { entries: readonly BackendCaptureEn
   );
 }
 
-export function CaptureMatches({ matches }: { matches: readonly BackendCaptureMatch[] }) {
+export function CaptureMatches({
+  matches,
+  diagnosticsEnabled = false,
+}: {
+  readonly matches: readonly BackendCaptureMatch[];
+  /** Resolved by the owning page; fail-closed when a caller forgets. */
+  readonly diagnosticsEnabled?: boolean;
+}) {
   return (
     <ul className="flex flex-col gap-3" data-testid="library-matches">
       {matches.map((match) => (
@@ -96,7 +115,10 @@ export function CaptureMatches({ matches }: { matches: readonly BackendCaptureMa
           <Card data-testid="library-match">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <CardTitle>{captureTitle(match.displayLabel, match.recordedAt)}</CardTitle>
-              <Badge tone="neutral">version {match.versionNumber}</Badge>
+              {/* The version counter is a receipt, like the ids below it. */}
+              {diagnosticsEnabled ? (
+                <Badge tone="neutral">version {match.versionNumber}</Badge>
+              ) : null}
             </div>
             <CardBody>
               <dl className="grid grid-cols-[9rem_1fr] gap-x-2 gap-y-1">
@@ -106,6 +128,7 @@ export function CaptureMatches({ matches }: { matches: readonly BackendCaptureMa
                 <dd>{match.characterCount} characters</dd>
               </dl>
               <OpenLink href={captureHref(match.captureId, match.versionId)} />
+              {diagnosticsEnabled ? (
               <details className="mt-2">
                 <summary className="cursor-pointer font-medium text-moss-slate">Details</summary>
                 <dl className="mt-2 grid grid-cols-[9rem_1fr] gap-x-2 gap-y-1">
@@ -115,6 +138,7 @@ export function CaptureMatches({ matches }: { matches: readonly BackendCaptureMa
                   <dd className="font-mono text-xs break-all">{match.versionId}</dd>
                 </dl>
               </details>
+              ) : null}
             </CardBody>
           </Card>
         </li>
@@ -127,13 +151,24 @@ export function CaptureMatches({ matches }: { matches: readonly BackendCaptureMa
  * One capture version from `capture.read`. This is the only Library renderer
  * that may show capture `text`: listing and search cards have no such field.
  */
-export function CaptureItem({ version }: { version: CaptureReadResult }) {
+export function CaptureItem({
+  version,
+  diagnosticsEnabled = false,
+}: {
+  readonly version: CaptureReadResult;
+  /** Resolved by the owning page; fail-closed when a caller forgets. */
+  readonly diagnosticsEnabled?: boolean;
+}) {
   return (
     <article data-testid="library-capture-item">
       <Card>
         <div className="flex flex-wrap items-start justify-between gap-2">
           <CardTitle>
-            <span className="font-mono text-sm break-all">{version.capture_id}</span>
+            {diagnosticsEnabled ? (
+              <span className="font-mono text-sm break-all">{version.capture_id}</span>
+            ) : (
+              "Capture"
+            )}
           </CardTitle>
           <Badge tone={version.is_current ? "gold" : "neutral"}>
             {version.is_current ? "current version" : `version ${version.version_number}`}
@@ -143,7 +178,8 @@ export function CaptureItem({ version }: { version: CaptureReadResult }) {
           <dl className="grid grid-cols-[9rem_1fr] gap-x-2 gap-y-1">
             <dt className="text-muted">version</dt>
             <dd className="font-mono text-xs break-all">
-              #{version.version_number} · {version.version_id}
+              #{version.version_number}
+              {diagnosticsEnabled ? ` · ${version.version_id}` : ""}
             </dd>
             <dt className="text-muted">recorded</dt>
             <dd>{moment(version.recorded_at)}</dd>
@@ -168,13 +204,24 @@ export function CaptureItem({ version }: { version: CaptureReadResult }) {
  * One knowledge record from `knowledge.read`. Renders the capability's own
  * `text` field when present and invents no second snippet.
  */
-export function KnowledgeItem({ record }: { record: KnowledgeReadResult }) {
+export function KnowledgeItem({
+  record,
+  diagnosticsEnabled = false,
+}: {
+  readonly record: KnowledgeReadResult;
+  /** Resolved by the owning page; fail-closed when a caller forgets. */
+  readonly diagnosticsEnabled?: boolean;
+}) {
   return (
     <article data-testid="library-knowledge-item">
       <Card>
         <div className="flex flex-wrap items-start justify-between gap-2">
           <CardTitle>
-            <span className="font-mono text-sm break-all">{record.knowledge_id}</span>
+            {diagnosticsEnabled ? (
+              <span className="font-mono text-sm break-all">{record.knowledge_id}</span>
+            ) : (
+              record.label
+            )}
           </CardTitle>
           <Badge tone="neutral">{record.label}</Badge>
         </div>
@@ -184,8 +231,12 @@ export function KnowledgeItem({ record }: { record: KnowledgeReadResult }) {
             <dd>{record.media_type}</dd>
             <dt className="text-muted">length</dt>
             <dd>{record.character_count} characters</dd>
-            <dt className="text-muted">source</dt>
-            <dd className="font-mono text-xs break-all">{record.provenance.source_id}</dd>
+            {diagnosticsEnabled ? (
+              <>
+                <dt className="text-muted">source</dt>
+                <dd className="font-mono text-xs break-all">{record.provenance.source_id}</dd>
+              </>
+            ) : null}
           </dl>
           {record.text !== undefined ? (
             <p

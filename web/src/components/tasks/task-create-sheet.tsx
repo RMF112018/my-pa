@@ -325,8 +325,9 @@ export function TaskCreateSheet({
         } else {
           try {
             dispatched.updateDraft(request);
-          } catch (error) {
-            setStatus(error instanceof Error ? error.message : "Draft could not be updated");
+          } catch {
+            // §8.4: the status line is product language in both modes.
+            setStatus("Draft could not be updated.");
             return;
           }
         }
@@ -353,7 +354,10 @@ export function TaskCreateSheet({
       );
       if (outcome.refused) {
         if (outcome.reason === "create dispatch already in flight") return;
-        setStatus(outcome.reason);
+        // WP07 §6.2: `reason` is the coordinator's own implementation-state
+        // narration ("create dispatch already in flight"). The consequence —
+        // nothing was created and the draft is intact — is the product truth.
+        setStatus("The Task was not created. Your draft is still here.");
         return;
       }
       // Confirmed. Reconciliation belongs to the canonical create itself, not to
@@ -368,11 +372,11 @@ export function TaskCreateSheet({
       clearFields();
       onConfirmed?.(outcome.result);
       onOpenChange(false);
-    } catch (error) {
+    } catch {
       if (dispatched.getPhase() === "ambiguous") {
         setStatus(CREATE_AMBIGUOUS_STATUS);
       } else {
-        setStatus(error instanceof Error ? error.message : "Task was not created");
+        setStatus("Task was not created.");
       }
     } finally {
       dispatchingRef.current = false;

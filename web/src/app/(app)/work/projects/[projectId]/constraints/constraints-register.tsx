@@ -432,7 +432,12 @@ export function ConstraintsRegister({
         <SurfaceState
           kind="unavailable"
           title={failure.code === "upstream_contract_invalid" ? "The Constraint answer was malformed" : "The Constraint Register could not be read"}
-          detail={failure.message}
+          // WP07 F-02: `detail` is the ungated product-language prop. A raw
+          // backend message or an HTTP status template routed through it walks
+          // straight around the policy, so the failure goes through the shared
+          // mapper instead and the raw string travels as `error`, where the
+          // diagnostics gate governs it.
+          error={failure}
           testId="register-unavailable"
         >
           {onRetry ? <Button size="sm" variant="secondary" onClick={onRetry}>Retry</Button> : null}

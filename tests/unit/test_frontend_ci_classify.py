@@ -131,3 +131,93 @@ def test_frontend_only_change_is_applicable() -> None:
 
 def test_one_project_controls_backend_change_schedules_frontend_suite() -> None:
     assert _applicable(["src/my_pa/application/constraints.py"]) is True
+
+
+class TestBlockingGateFailsClosed:
+    """F022 — `frontend / required` must not pass on an unresolved applicability.
+
+    The gate used to read `if [[ "${APPLICABLE}" != "true" ]]; then exit 0`.
+    Every value other than an exact ``true`` took that branch, including the
+    empty string GitHub substitutes when the classifier job was skipped or
+    failed. A classifier that crashed therefore reported the one blocking
+    frontend check as green, which is the precise opposite of what a required
+    check is for.
+
+    These assertions are about the published shell rather than a simulation of
+    it, because the defect was a property of the text.
+    """
+
+    def _gate(self) -> str:
+        text = WORKFLOW.read_text(encoding="utf-8")
+        start = text.index("  required:\n")
+        return text[start:]
+
+    def test_the_gate_requires_the_classifier_job_to_have_succeeded(self) -> None:
+        gate = self._gate()
+        assert "CLASSIFY: ${{ needs.classify.result }}" in gate
+        assert '"${CLASSIFY}" != "success"' in gate
+
+    def test_applicability_is_a_closed_vocabulary(self) -> None:
+        gate = self._gate()
+        # `true` and `false` are the only accepted values; the wildcard arm is
+        # what turns an empty or malformed value into a failure.
+        assert 'case "${APPLICABLE}" in' in gate
+        assert "NOT_APPLICABLE" in gate
+        assert "expected 'true' or 'false'" in gate
+
+    def test_the_old_fail_open_comparison_is_gone(self) -> None:
+        gate = self._gate()
+        assert '"${APPLICABLE}" != "true"' not in gate
+
+
+class TestApplicabilityUsesEventIdentities:
+    """F023 — a push to `main` must not compare a commit against itself.
+
+    `classify` checked out ``github.event.pull_request.head.sha || github.sha``
+    and diffed ``origin/main...HEAD``. On a push to `main` the fetched
+    `origin/main` *is* that HEAD, so the diff was empty, applicability resolved
+    `false`, and the frontend gates classified themselves away on exactly the
+    integration event that most needed them.
+    """
+
+    def _classify(self) -> str:
+        text = WORKFLOW.read_text(encoding="utf-8")
+        start = text.index("      - id: classify")
+        return text[start : text.index("  static:")]
+
+    def test_the_self_comparing_diff_is_gone(self) -> None:
+        assert "origin/main...HEAD" not in self._classify()
+
+    def test_pull_request_uses_the_event_base_and_head(self) -> None:
+        classify = self._classify()
+        assert "github.event.pull_request.base.sha" in classify
+        assert "github.event.pull_request.head.sha" in classify
+
+    def test_push_uses_the_event_before_and_after(self) -> None:
+        classify = self._classify()
+        assert "github.event.before" in classify
+        assert "github.event.after" in classify
+
+    def test_an_unresolvable_comparison_falls_back_to_applicable(self) -> None:
+        classify = self._classify()
+        # Zero-before, force-push and shallow-history cases must run the suite
+        # rather than silently skip it.
+        assert "0000000000000000000000000000000000000000" in classify
+        assert 'echo "applicable=true" >> "$GITHUB_OUTPUT"' in classify
+        assert 'resolved="false"' in classify
+
+
+class TestWp07DiagnosticsSpecIsCollected:
+    """F024 — a new spec file is not collected by a blocking lane on its own.
+
+    Playwright's default projects match ``**/*.spec.ts``, but the blocking
+    `e2e-critical` and `accessibility` lanes each name their specs explicitly.
+    A WP07 spec that nothing named would exist, pass locally, and gate nothing.
+    """
+
+    def test_named_by_the_blocking_lanes(self) -> None:
+        text = WORKFLOW.read_text(encoding="utf-8")
+        assert text.count("e2e/diagnostics-visibility.spec.ts") >= 2
+
+    def test_the_spec_file_exists(self) -> None:
+        assert (REPO / "web/e2e/diagnostics-visibility.spec.ts").is_file()

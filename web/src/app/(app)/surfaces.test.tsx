@@ -37,7 +37,7 @@
  * Every identifier below is synthetic and well-formed under the domain's own
  * opaque-identifier patterns. No real capture, no real person, no real text.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import type { PrincipalSession } from "@/contracts/identity";
 import type { PulseItem } from "@/lib/api/decode/capabilities/continuity.pulse";
@@ -58,8 +58,43 @@ const PRINCIPAL: PrincipalSession = {
 // stand in for the cookie jar and the signature check *only*; nothing here
 // supplies an identity to the page through a payload, and the pages under test
 // have no parameter one could arrive through.
+/**
+ * The diagnostics preference cookie, as this browser would carry it.
+ *
+ * `undefined` is a browser that has never turned diagnostics on, which is the
+ * product default and therefore the default here. Tests that exercise the ON
+ * presentation set a real serialized value, bound to `PRINCIPAL`, so the page
+ * is gated by the genuine parser rather than by a stubbed boolean.
+ */
+const { diagnosticsCookie, diagnostics } = vi.hoisted(() => ({
+  diagnosticsCookie: { value: undefined as string | undefined },
+  // Client components inside these server pages read the policy from React
+  // context, not from the cookie, so the two halves are set together.
+  diagnostics: { enabled: false },
+}));
+
+vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/diagnostics/diagnostics-provider")>();
+  return {
+    ...actual,
+    useDiagnosticsEnabled: () => diagnostics.enabled,
+    WhenDiagnostics: ({ children }: { children: React.ReactNode }) =>
+      diagnostics.enabled ? children : null,
+  };
+});
+
 vi.mock("next/headers", () => ({
-  cookies: async () => ({ get: () => ({ name: "mypa_session", value: "stub" }) }),
+  cookies: async () => ({
+    get: (name: string) => {
+      if (name === "my-pa-diagnostics") {
+        return diagnosticsCookie.value === undefined
+          ? undefined
+          : { name, value: diagnosticsCookie.value };
+      }
+      return { name: "mypa_session", value: "stub" };
+    },
+  }),
 }));
 vi.mock("@/lib/auth/principal", () => ({
   resolveSessionPrincipal: async () => PRINCIPAL,
@@ -82,6 +117,11 @@ import SituationsPage from "@/app/(app)/situations/page";
 import { TaskRuntimeProvider } from "@/components/work/task-runtime-provider";
 import { TODAY_EMPTY_COPY } from "@/components/pulse/today-pulse-surface";
 import SystemPage from "@/app/(app)/system/page";
+import IntelligencePage from "@/app/(app)/intelligence/page";
+import {
+  diagnosticsPreferenceValue,
+  diagnosticsPrincipalBinding,
+} from "@/lib/diagnostics/preference";
 import RelationshipPage from "@/app/(app)/relationships/[personId]/page";
 
 /** A disclosure whose coverage says the answer is whole. */
@@ -424,7 +464,11 @@ describe("Library reaches the record instead of asserting about it", () => {
     answerWith({ captures: [CAPTURE] }, whole());
     await renderServerPage(() => LibraryPage({ searchParams: NO_PARAMS }));
     expect(screen.getByTestId("library-listing")).toBeTruthy();
-    expect(screen.getByText(CAPTURE.capture_id)).toBeTruthy();
+    // WP07 §8.7: the capture identifier is a technical receipt and is not
+    // rendered while diagnostics are off. The listing itself — the subject of
+    // this test — is reached and rendered.
+    expect(screen.queryByText(CAPTURE.capture_id)).toBeNull();
+    expect(screen.getAllByTestId("library-capture").length).toBeGreaterThan(0);
     // A listing carries no content, so none may appear.
     expect(screen.queryByTestId("state-empty")).toBeNull();
   });
@@ -460,7 +504,13 @@ describe("Library reaches the record instead of asserting about it", () => {
     await renderServerPage(() => LibraryPage({ searchParams: NO_PARAMS }));
     expect(screen.getByTestId("degraded-banner")).toBeTruthy();
     expect(screen.getByTestId("library-listing")).toBeTruthy();
-    expect(screen.getByTestId("degraded-banner").textContent).toContain("one scope was skipped");
+    // The partial-answer consequence is product truth and is stated in both
+    // modes; the backend's own limitation strings are policy-governed, and this
+    // page is rendered with diagnostics off.
+    const banner = screen.getByTestId("degraded-banner").textContent ?? "";
+    expect(banner).toMatch(/records below are real/i);
+    expect(banner).toMatch(/not all of them/i);
+    expect(banner).not.toContain("one scope was skipped");
   });
 
   it("separates 'nothing matched' from 'the search did not run'", async () => {
@@ -631,6 +681,24 @@ describe("Library identity projections invoke the matching capability", () => {
 });
 
 describe("Review distinguishes an empty queue from an unread one", () => {
+  /**
+   * The case, run, page-version and review-version identifiers asserted below
+   * are technical receipts under WP07 §8.7, so this block runs with diagnostics
+   * on. The OFF side is asserted separately at the end of the block.
+   */
+  beforeAll(async () => {
+    diagnosticsCookie.value = diagnosticsPreferenceValue(
+      true,
+      await diagnosticsPrincipalBinding(PRINCIPAL.principalId),
+    );
+    diagnostics.enabled = true;
+  });
+
+  afterAll(() => {
+    diagnosticsCookie.value = undefined;
+    diagnostics.enabled = false;
+  });
+
   it("renders the backend's cases and states that they carry no text", async () => {
     answerWith({ review_cases: [REVIEW_CASE] }, whole());
     await renderServerPage(() => ReviewPage());
@@ -879,6 +947,26 @@ describe("Situations never calls a partial answer an empty board", () => {
 });
 
 describe("System reports what it was told, and says so when it was told nothing", () => {
+  /**
+   * Root System is almost entirely diagnostics, so these assertions are about
+   * the ON presentation and the suite turns diagnostics on for them. The
+   * cookie is the real serialized value bound to `PRINCIPAL`, so the page is
+   * gated by the shipped parser; a binding regression would turn this whole
+   * block red rather than quietly leaving it asserting the OFF page.
+   */
+  beforeAll(async () => {
+    diagnosticsCookie.value = diagnosticsPreferenceValue(
+      true,
+      await diagnosticsPrincipalBinding(PRINCIPAL.principalId),
+    );
+    diagnostics.enabled = true;
+  });
+
+  afterAll(() => {
+    diagnosticsCookie.value = undefined;
+    diagnostics.enabled = false;
+  });
+
   const CAPABILITIES_GET = {
     manifest: {
       contract_version: "v1",
@@ -1287,5 +1375,314 @@ describe("Knowledge offers a GoodNotes entry without claiming notebooks exist", 
     await renderServerPage(() => KnowledgePage({ searchParams: NO_PARAMS }));
     expect(screen.getByTestId("knowledge-goodnotes-entry")).toBeTruthy();
     expect(screen.getByTestId("library-synthetic")).toHaveAttribute("data-state", "not_implemented");
+  });
+});
+
+/**
+ * WP07 AC-43 / AC-44 / AC-48 — root System while diagnostics are OFF.
+ *
+ * This is the load-bearing half of the contract, and it is asserted three
+ * different ways because "OFF" has three different meanings that can regress
+ * independently: nothing diagnostic is in the **DOM**, nothing diagnostic is in
+ * the **accessibility tree**, and no diagnostic-only **work is performed**.
+ *
+ * The third is the one a rendering test alone would miss. Root System's two
+ * gateway reads — `capabilities.get` and the `reports.list` /
+ * `reports.resolve_set` pair behind Morning Intelligence readiness — exist only
+ * to produce diagnostic content at this callsite, so while OFF they must not be
+ * invoked at all. Asserting `fetch` was never called is what distinguishes
+ * gating *before* invocation from rendering and then hiding.
+ */
+describe("root System while diagnostics are off", () => {
+  beforeEach(() => {
+    diagnosticsCookie.value = undefined;
+  });
+
+  /** Every diagnostic hook the ON page renders. None may survive OFF. */
+  const DIAGNOSTIC_TEST_IDS = [
+    "system-principal-id",
+    "system-identity-provider",
+    "system-identity-subject",
+    "system-tid",
+    "system-oid",
+    "system-readiness",
+    "system-readiness-unknown",
+    "system-available",
+    "system-unavailable-caps",
+    "system-worker-planes",
+    "system-worker-planes-unknown",
+    "system-worker-heartbeat",
+    "system-worker-heartbeat-unknown",
+    "system-intelligence-aggregate",
+    "system-intelligence-members",
+    "system-intelligence-member",
+    "system-graph",
+    "system-sources-unknown",
+    "system-pwa-client-side",
+    "system-pwa-this-browser",
+    "system-source-commit",
+    "system-refresh",
+  ];
+
+  it("renders the sole control and no diagnostic content", async () => {
+    const fetchSpy = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await renderServerPage(() => SystemPage());
+
+    // Exactly one visibility control, and it is a real accessible switch.
+    const toggle = screen.getByTestId("show-diagnostics-toggle");
+    expect(toggle).toHaveAttribute("role", "switch");
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(screen.getAllByRole("switch")).toHaveLength(1);
+    expect(screen.getByRole("switch", { name: /show diagnostics/i })).toBe(toggle);
+
+    for (const testId of DIAGNOSTIC_TEST_IDS) {
+      expect(screen.queryByTestId(testId)).toBeNull();
+    }
+
+    // No diagnostic-only server work was performed to build this page.
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("leaves no diagnostic text, placeholder or reserved chrome behind", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
+    await renderServerPage(() => SystemPage());
+    const text = document.body.textContent ?? "";
+
+    // No "diagnostics are hidden" placeholder, and none of the vocabulary the
+    // ON page uses. The toggle's own label and helper copy are the exception
+    // and are matched exactly rather than by the word "diagnostics".
+    expect(text).not.toMatch(/hidden|unavailable in this view|turn on diagnostics to/i);
+    for (const vocabulary of [
+      /contracted capabilities/i,
+      /worker plane/i,
+      /last heartbeat/i,
+      /source commit/i,
+      /morning intelligence readiness/i,
+      /capability manifest/i,
+      /Microsoft Graph/i,
+    ]) {
+      expect(text).not.toMatch(vocabulary);
+    }
+
+    // The raw identity dump is diagnostics and is gone. The *sentence* about
+    // `local_operator` partitioning is not: it tells the reader their data may
+    // not be partitioned by who is signed in, which is product truth and stays
+    // true in both modes. So the identifiers are asserted absent by value, not
+    // by banning the word "principal" — which would have deleted the warning.
+    expect(text).not.toMatch(/aaaa0001-0000-0000-0000-000000000001/);
+    expect(text).not.toMatch(/11111111-2222-3333-4444-555555555555/);
+    expect(text).not.toMatch(/synthetic\.a@moss\.example/);
+    expect(screen.getByTestId("system-local-operator")).toBeTruthy();
+
+    // No empty card or reserved wrapper left standing where content used to be.
+    expect(document.querySelectorAll("dl")).toHaveLength(0);
+    expect(screen.queryAllByRole("alert")).toHaveLength(0);
+  });
+});
+
+
+/**
+ * WP07-DIAG-011 / R031 / AC-48 — Intelligence readiness is diagnostic in full.
+ *
+ * `ReadinessPanel` is classified `diagnostic`, and `reports.resolve_set` is
+ * read at this callsite for nothing else: its answer reaches the panel and no
+ * other consumer. `ReportListing` is driven by `reports.list`. So while
+ * diagnostics are off the resolve-set read is diagnostic-only and separable,
+ * and AC-48 requires it not to happen at all — gating the panel's props while
+ * the owner still makes the call is rendering-then-hiding at the transport
+ * layer, and no DOM assertion can see it.
+ *
+ * The two halves are therefore asserted together: no readiness surface in the
+ * DOM, **and** `reports.resolve_set` never requested. The ON half is asserted
+ * in the same file so a regression that silently disables the panel in both
+ * modes cannot pass either.
+ */
+describe("Intelligence readiness is diagnostic, and OFF never reaches for it", () => {
+  const REPORTS_LIST = {
+    items: [
+      {
+        report_id: "rpt_bbbbbbbb22222222",
+        cycle_run_id: "micr_bbbbbbbb22222222",
+        stage: "collector",
+        artifact_kind: "collector_candidates",
+        focus_area_id: "communications",
+        source_lane: null,
+        title: "Synthetic morning brief collector",
+        content_sha256: "b".repeat(64),
+        artifact_state: "final",
+      },
+    ],
+    next_cursor: null,
+  };
+
+  const RESOLVE_SET = {
+    cycle_run_id: "micr_bbbbbbbb22222222",
+    cycle_id: "morning_intelligence",
+    business_date: "2026-08-20",
+    set_id: "morning_brief_inputs",
+    aggregate: "BLOCKED",
+    members: [
+      {
+        member_id: "communications",
+        focus_area_id: "communications",
+        source_lane: null,
+        readiness: "STALE",
+        required: true,
+        artifact_id: "rpt_bbbbbbbb22222222",
+        producer_run_id: "prun_bbbbbbbb22222222",
+        content_sha256: "b".repeat(64),
+        committed_at: "2026-08-20T12:00:00Z",
+        readiness_reason: "superseded by a later commit",
+      },
+      {
+        member_id: "people",
+        focus_area_id: "people",
+        source_lane: null,
+        readiness: "MISSING",
+        required: true,
+        artifact_id: null,
+        producer_run_id: null,
+        content_sha256: null,
+        committed_at: null,
+        readiness_reason: "missing",
+      },
+    ],
+  };
+
+  /** Records the capability of every gateway call the page actually makes. */
+  function answerIntelligence(): string[] {
+    const called: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown) => {
+        const capability = String(url).match(/\/v1\/([^/?#]+)/)?.[1] ?? "";
+        called.push(capability);
+        const result =
+          capability === "reports.list"
+            ? REPORTS_LIST
+            : capability === "reports.resolve_set"
+              ? RESOLVE_SET
+              : {};
+        return new Response(JSON.stringify({ result, disclosure: whole() }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    );
+    return called;
+  }
+
+  /** Every hook the ON panel renders. None may survive OFF. */
+  const READINESS_TEST_IDS = [
+    "intelligence-readiness",
+    "intelligence-readiness-unavailable",
+    "intelligence-readiness-aggregate",
+    "intelligence-readiness-not-health",
+    "intelligence-readiness-partial",
+    "intelligence-readiness-ready",
+    "intelligence-business-date",
+    "intelligence-cycle-run-id",
+    "intelligence-freshness",
+    "intelligence-readiness-members",
+    "intelligence-readiness-members-none",
+    "intelligence-readiness-member",
+    "intelligence-readiness-member-state",
+  ];
+
+  describe("off", () => {
+    beforeEach(() => {
+      diagnosticsCookie.value = undefined;
+      diagnostics.enabled = false;
+    });
+
+    it("renders no readiness surface and never calls reports.resolve_set", async () => {
+      const called = answerIntelligence();
+
+      await renderServerPage(() => IntelligencePage());
+
+      // The reports themselves are product content and still arrive.
+      expect(screen.getByTestId("intelligence-listing")).toBeTruthy();
+      expect(called).toContain("reports.list");
+
+      // The diagnostic-only read did not happen. This is the assertion that
+      // distinguishes gating before invocation from gating the props.
+      expect(called).not.toContain("reports.resolve_set");
+
+      for (const testId of READINESS_TEST_IDS) {
+        expect(screen.queryByTestId(testId)).toBeNull();
+      }
+    });
+
+    it("leaves no readiness placeholder, wrapper or residue behind", async () => {
+      answerIntelligence();
+      await renderServerPage(() => IntelligencePage());
+      const text = document.body.textContent ?? "";
+
+      // No "readiness hidden" note and none of the panel's vocabulary.
+      expect(text).not.toMatch(/hidden|turn on diagnostics to|readiness/i);
+      expect(text).not.toMatch(/morning intelligence readiness/i);
+      expect(text).not.toMatch(/coverage is partial/i);
+      expect(text).not.toMatch(/freshness/i);
+
+      // Class-4 residue: the backend enums, the set id, and the member ids.
+      for (const raw of ["READY", "PARTIAL", "STALE", "SUPERSEDED", "BLOCKED"]) {
+        expect(text).not.toContain(raw);
+      }
+      expect(text).not.toContain("morning_brief_inputs");
+      expect(text).not.toContain("committed_at");
+      expect(text).not.toContain("2026-08-20T12:00:00Z");
+      expect(document.querySelector("[data-member-id]")).toBeNull();
+      expect(document.querySelector("[data-readiness]")).toBeNull();
+
+      // No empty card or reserved spacing standing where the panel used to be.
+      // The report card's own Stage/Kind/State list is product content and
+      // stays, so the check is that no term list on the page is the readiness
+      // panel's rather than that no term list exists at all.
+      const terms = [...document.querySelectorAll("dt")].map((el) => el.textContent);
+      expect(terms).toEqual(["Stage", "Kind", "State"]);
+      expect(screen.queryByTestId("intelligence-readiness")).toBeNull();
+
+      // The sentence that carries the operational truth is unchanged, so
+      // silence about specialist coverage cannot be read as a completeness
+      // claim: every report that exists is still listed.
+      expect(text).toMatch(/Missing specialists do not hide available reports/i);
+    });
+  });
+
+  describe("on", () => {
+    beforeEach(async () => {
+      diagnosticsCookie.value = diagnosticsPreferenceValue(
+        true,
+        await diagnosticsPrincipalBinding(PRINCIPAL.principalId),
+      );
+      diagnostics.enabled = true;
+    });
+
+    afterEach(() => {
+      diagnosticsCookie.value = undefined;
+      diagnostics.enabled = false;
+    });
+
+    it("calls reports.resolve_set and renders the panel unchanged", async () => {
+      const called = answerIntelligence();
+
+      await renderServerPage(() => IntelligencePage());
+
+      expect(called).toContain("reports.resolve_set");
+      expect(screen.getByTestId("intelligence-readiness")).toBeTruthy();
+      expect(screen.getByTestId("intelligence-readiness-aggregate").textContent).toBe("BLOCKED");
+      expect(screen.getByTestId("intelligence-readiness-not-health").textContent).toMatch(
+        /not a claim that the system is healthy/i,
+      );
+      // Members stay listed when the aggregate is not READY, and are not
+      // flattened to the aggregate.
+      const states = screen
+        .getAllByTestId("intelligence-readiness-member-state")
+        .map((el) => el.textContent);
+      expect(states).toEqual(["STALE", "MISSING"]);
+      expect(screen.getByTestId("intelligence-listing")).toBeTruthy();
+    });
   });
 });

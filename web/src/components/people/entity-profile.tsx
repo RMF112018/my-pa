@@ -14,6 +14,9 @@ import type {
 } from "@/lib/api/decode/capabilities/_entity-read-helpers";
 import { lifecycleIsCurrent, participationIsCurrent, partitionByCurrency } from "./currency";
 import { codeLabel, effectiveWindow, moment } from "./format";
+import {
+  diagnosticLimitations,
+} from "@/lib/diagnostics/presentation";
 
 const STATUS_TONE: Record<EntityProfileView["entity"]["status"], "green" | "gold" | "coral" | "neutral"> = {
   active: "green",
@@ -235,7 +238,16 @@ export function EntityProfilePanel({
   profile,
   headingLevel = 2,
   headingId,
+  diagnosticsEnabled = false,
 }: {
+  /**
+   * WP07. Resolved by the owning page and passed down explicitly rather than
+   * read here, so this component stays synchronous and directly renderable in
+   * tests. The page must not build the diagnostic-bearing props at all while
+   * diagnostics are off — stripping them after the fact would still leave them
+   * in the RSC payload.
+   */
+  readonly diagnosticsEnabled?: boolean;
   profile: EntityProfileView;
   headingLevel?: 1 | 2;
   headingId?: string;
@@ -268,9 +280,11 @@ export function EntityProfilePanel({
               >
                 Open surviving entity
               </Link>
-              <span className="ml-2 font-mono text-xs break-all text-muted">
-                {entity.superseded_by_entity_id}
-              </span>
+              {diagnosticsEnabled ? (
+                <span className="ml-2 font-mono text-xs break-all text-muted">
+                  {entity.superseded_by_entity_id}
+                </span>
+              ) : null}
             </p>
           ) : (
             <p className="mt-2 text-muted" data-testid="people-survivor-missing">
@@ -301,10 +315,14 @@ export function EntityProfilePanel({
           <dl className="grid grid-cols-[minmax(6rem,9rem)_1fr] gap-x-2 gap-y-1">
             <dt className="text-muted">Type</dt>
             <dd>{codeLabel(entity.entity_type)}</dd>
-            <dt className="text-muted">Stable ID</dt>
-            <dd className="font-mono text-xs break-all" data-testid="people-entity-id">
-              {entity.entity_id}
-            </dd>
+            {diagnosticsEnabled ? (
+              <>
+                <dt className="text-muted">Stable ID</dt>
+                <dd className="font-mono text-xs break-all" data-testid="people-entity-id">
+                  {entity.entity_id}
+                </dd>
+              </>
+            ) : null}
             <dt className="text-muted">Canonical name</dt>
             <dd>{entity.canonical_name}</dd>
           </dl>
@@ -312,7 +330,7 @@ export function EntityProfilePanel({
       </Card>
 
       {profile.limitations.length > 0 || !profile.is_complete ? (
-        <DegradedBanner scope="this profile" limitations={profile.limitations} />
+        <DegradedBanner scope="this profile" limitations={diagnosticLimitations(diagnosticsEnabled, profile.limitations)} />
       ) : null}
 
       {profile.organization_profile ? (
@@ -377,8 +395,13 @@ export function EntityProfilePanel({
         <h3 id="people-profile-provenance" className="font-medium text-text-primary">
           Provenance
         </h3>
+        {/*
+          WP07: "this card is not complete" is product truth — it tells the reader
+          something about their own record. `assembled_at` is when the *projection*
+          was built, which is a fact about how the system processed the request.
+        */}
         <p className="mt-1 text-muted">
-          Assembled {moment(profile.assembled_at)}
+          {diagnosticsEnabled ? `Assembled ${moment(profile.assembled_at)}` : "Profile"}
           {profile.is_complete ? "" : " · this card is not complete"}
         </p>
         {effectiveWindow(entity.created_at, entity.updated_at) ? (

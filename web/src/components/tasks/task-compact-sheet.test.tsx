@@ -1,4 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * WP07 — diagnostic presentation follows the global policy. The product default
+ * is OFF; this file sets the mode each test actually means.
+ */
+const { diagnostics } = vi.hoisted(() => ({ diagnostics: { enabled: true } }));
+vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/diagnostics/diagnostics-provider")>();
+  return {
+    ...actual,
+    // Both must be replaced: `WhenDiagnostics` closes over the real hook in its
+    // own module scope, so overriding only the exported hook would leave the
+    // guard reading the unmocked policy.
+    useDiagnosticsEnabled: () => diagnostics.enabled,
+    WhenDiagnostics: ({ children }: { children: React.ReactNode }) =>
+      diagnostics.enabled ? children : null,
+  };
+});
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
@@ -7,6 +26,7 @@ import { TaskRuntimeProvider } from "@/components/work/task-runtime-provider";
 import type { TaskDetail, TaskRow } from "@/contracts/work";
 
 afterEach(() => {
+  diagnostics.enabled = true;
   cleanup();
   vi.unstubAllGlobals();
 });
@@ -205,6 +225,26 @@ describe("TaskCompactSheet", () => {
 
     await user.keyboard("{Escape}");
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+  });
+
+  it("offers no Technical details at all while diagnostics are off", async () => {
+    // The ON case below proves the identifiers are reachable *behind* the
+    // disclosure. This proves the disclosure itself is absent by default, which
+    // is the product state and the one the ON case cannot speak to.
+    diagnostics.enabled = false;
+    const { fetcher, release } = gatedFetch();
+    vi.stubGlobal("fetch", fetcher);
+
+    renderSheet(SEED);
+    release();
+    await screen.findByTestId("task-status-control");
+    const sheet = screen.getByTestId("task-compact-sheet");
+
+    expect(within(sheet).queryByText("Technical details")).toBeNull();
+    expect(screen.queryByTestId("task-technical-details")).toBeNull();
+    expect(sheet.textContent).not.toContain(TASK_ID);
+    // Product truth: the Task's status still reads in product language.
+    expect(sheet.textContent).toContain("In progress");
   });
 
   it("keeps raw identifiers out of the compact Task view until diagnostics are opened", async () => {

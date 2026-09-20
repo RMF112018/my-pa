@@ -8,7 +8,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
-import { expectState, signIn } from "./fixtures";
+import { expectState, SEARCH_SETTLED, signIn } from "./fixtures";
 
 type ApiAnswer<T> = { status: number; body: T };
 
@@ -157,11 +157,7 @@ test("search coverage still includes goodnotes and hit hrefs stay identifier-onl
   await page.goto("/search");
   await page.getByRole("searchbox", { name: "Search" }).fill("morning brief");
   await expect(
-    page
-      .locator(
-        "[data-testid='search-coverage'], [data-testid='search-not-implemented'], [data-testid='search-unavailable']",
-      )
-      .first(),
+    page.locator(SEARCH_SETTLED).first(),
   ).toBeVisible({ timeout: 30_000 });
 
   const goodnotesLinks = page.locator('a[href*="/knowledge/goodnotes"]');
@@ -241,11 +237,7 @@ test("Search GoodNotes hits deep-link identifier-only and never call gsqs.start"
   await page.goto("/search");
   await page.getByRole("searchbox", { name: "Search" }).fill("goodnotes");
   await expect(
-    page
-      .locator(
-        "[data-testid='search-coverage'], [data-testid='search-not-implemented'], [data-testid='search-unavailable']",
-      )
-      .first(),
+    page.locator(SEARCH_SETTLED).first(),
   ).toBeVisible({ timeout: 30_000 });
 
   const goodnotesLinks = page.locator('a[href*="/knowledge/goodnotes"]');

@@ -27,6 +27,11 @@ import {
 } from "@/components/intelligence/cycle-selection";
 import { intelligenceHistory } from "@/lib/routes/intelligence";
 import type { PrincipalSession } from "@/contracts/identity";
+import {
+  diagnosticError,
+  diagnosticLimitations,
+} from "@/lib/diagnostics/presentation";
+import { serverDiagnosticsEnabled } from "@/lib/diagnostics/server";
 
 export const metadata = { title: "Intelligence — my-pa" };
 export const dynamic = "force-dynamic";
@@ -36,6 +41,14 @@ const BLURB = "Evidence-grounded reports and briefs.";
 const SYNTHETIC_DETAIL =
   "The synthetic provider has no report fixture. Report reads are not available in this build.";
 
+/**
+ * WP07-DIAG-011 / R031. Specialist readiness is classified diagnostic, and
+ * `reports.resolve_set` is read for nothing else on this page — its answer
+ * reaches `ReadinessPanel` and no other consumer. AC-48 therefore requires the
+ * gate to sit *before* the invocation: the caller must not reach this function
+ * at all while diagnostics are off, which is why the decision is made there and
+ * not here.
+ */
 async function loadReadiness(
   principal: PrincipalSession,
   cycleRunId: string,
@@ -47,6 +60,10 @@ async function loadReadiness(
 }
 
 export default async function IntelligencePage() {
+  // WP07: resolved once per request (memoised) so the diagnostic-bearing
+  // props below are never built, and therefore never serialized into the
+  // RSC payload, while diagnostics are off.
+  const diagnosticsEnabled = await serverDiagnosticsEnabled();
   const cookieStore = await cookies();
   const principal = await resolveSessionPrincipal(cookieStore.get(SESSION_COOKIE_NAME)?.value);
   if (!principal) redirect("/sign-in");
@@ -96,8 +113,8 @@ export default async function IntelligencePage() {
       <SurfaceState
         kind="unavailable"
         title="Reports could not be read"
-        error={answer.error}
-        limitations={answer.disclosure.limitations}
+        error={diagnosticError(diagnosticsEnabled, answer.error)}
+        limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
         testId="intelligence-unavailable"
       />,
     );
@@ -116,14 +133,22 @@ export default async function IntelligencePage() {
 
   const items = answer.result.items;
   const cycleRunId = currentCycleRunId(items);
+  // The readiness panel is diagnostic in full, so while diagnostics are off the
+  // diagnostic-only read is skipped and no readiness surface is rendered — no
+  // placeholder, no empty wrapper, no reserved spacing. Silence does not
+  // mislead here: nothing on this page claims the report set is complete, and
+  // `ReportListing` below still renders every report that exists regardless of
+  // specialist coverage.
   const readiness =
-    cycleRunId === null ? null : await loadReadiness(principal, cycleRunId);
-  const listing = <ReportListing items={items} currentCycle={cycleRunId} />;
+    diagnosticsEnabled && cycleRunId !== null
+      ? await loadReadiness(principal, cycleRunId)
+      : null;
+  const listing = <ReportListing items={items} currentCycle={cycleRunId} diagnosticsEnabled={diagnosticsEnabled} />;
 
   const body = (
     <>
       {readiness && cycleRunId ? (
-        <ReadinessPanel answer={readiness} cycleRunId={cycleRunId} />
+        <ReadinessPanel diagnosticsEnabled={diagnosticsEnabled} answer={readiness} cycleRunId={cycleRunId} />
       ) : null}
       <h2 className="mb-2 text-base font-semibold text-text-primary">Reports</h2>
       <p className="mb-3 text-sm text-muted">
@@ -139,7 +164,7 @@ export default async function IntelligencePage() {
       <>
         <DegradedBanner
           scope="these reports"
-          limitations={answer.disclosure.limitations}
+          limitations={diagnosticLimitations(diagnosticsEnabled, answer.disclosure.limitations)}
           truncated={answer.disclosure.truncated}
         />
         {answer.rowCount === 0 ? (

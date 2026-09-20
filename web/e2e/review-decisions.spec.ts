@@ -1,9 +1,14 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { signIn } from "./fixtures";
+import { enableDiagnostics, signIn } from "./fixtures";
 
 test.beforeEach(async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await signIn(page);
+  // WP07: these tests read the review version out of the case to prove a stored
+  // decision advanced it. That counter is an audit receipt governed by the
+  // global policy, and the claim is that it is *correct*, so the mode is asked
+  // for through the one route that can and every assertion stays as it was.
+  await enableDiagnostics(page);
 });
 
 /** Pin a row by case id before a decision hides the verb that found it. */

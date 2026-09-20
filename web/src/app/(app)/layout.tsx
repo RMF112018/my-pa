@@ -10,6 +10,9 @@ import { AppShell } from "@/components/shell/app-shell";
 import { invokeGateway } from "@/lib/api/gateway";
 import { PROJECT_SCOPE_COOKIE } from "@/lib/project-scope/preference";
 import { resolveServerProjectScope } from "@/lib/project-scope/server";
+import { DIAGNOSTICS_COOKIE } from "@/lib/diagnostics/preference";
+import { resolveDiagnosticsPreference } from "@/lib/diagnostics/server";
+import { DiagnosticsProvider } from "@/components/diagnostics/diagnostics-provider";
 
 /**
  * Signed-in layout. Middleware already guards these routes; this layout
@@ -34,13 +37,26 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     invokeProjectCapability: invokeGateway,
     preferenceValue: cookieStore.get(PROJECT_SCOPE_COOKIE)?.value,
   });
+  // Resolved here, after the Principal, so that nothing diagnostic is ever
+  // server-rendered while the preference is OFF. There is consequently no
+  // diagnostic markup to strip at hydration and no OFF flash to suppress.
+  const diagnostics = await resolveDiagnosticsPreference({
+    principal,
+    cookieValue: cookieStore.get(DIAGNOSTICS_COOKIE)?.value,
+  });
   return (
-    <AppShell
-      principal={principal}
-      sessionEpoch={sessionEpoch}
-      initialProjectScope={initialProjectScope}
+    <DiagnosticsProvider
+      initialEnabled={diagnostics.enabled}
+      generation={diagnostics.generation}
+      epoch={sessionEpoch}
     >
-      {children}
-    </AppShell>
+      <AppShell
+        principal={principal}
+        sessionEpoch={sessionEpoch}
+        initialProjectScope={initialProjectScope}
+      >
+        {children}
+      </AppShell>
+    </DiagnosticsProvider>
   );
 }

@@ -16,8 +16,28 @@
  * negative assertions matter as much as the positive ones — the unavailable
  * state must not contain the vocabulary of emptiness anywhere in its subtree.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
+
+/**
+ * WP07 — the raw-transport leg is governed by the global diagnostics policy.
+ *
+ * These tests drive the policy directly rather than standing up the provider,
+ * because what is under test here is `SurfaceState`'s decomposition, not the
+ * provider's plumbing (which `diagnostics-provider.test.tsx` covers). The
+ * default is OFF, matching the product default, so any assertion that the
+ * Diagnostics block exists has to say so explicitly — a test cannot drift into
+ * passing because it forgot which mode it was in.
+ */
+let diagnosticsEnabled = false;
+
+vi.mock("@/components/diagnostics/diagnostics-provider", () => ({
+  useDiagnosticsEnabled: () => diagnosticsEnabled,
+}));
+
+beforeEach(() => {
+  diagnosticsEnabled = false;
+});
 import { SurfaceState, DegradedBanner, LoadingStatus } from "@/components/ui/surface-state";
 
 afterEach(() => {
@@ -72,10 +92,14 @@ describe("the four non-record answers are four different answers", () => {
     expect(firstParagraphOutsideDetails(unavailable)).toHaveTextContent(
       "This could not be read. Try again.",
     );
-    expect(within(unavailable).getByTestId("surface-state-diagnostic")).toHaveTextContent("boom");
-    expect(unavailableDetails.contains(within(unavailable).getByTestId("surface-state-diagnostic"))).toBe(
-      true,
-    );
+    // Diagnostics are OFF by default, so the raw transport string is absent
+    // from the DOM entirely — not hidden, not collapsed, not present-but-empty.
+    expect(within(unavailable).queryByTestId("surface-state-diagnostic")).toBeNull();
+    expect(within(unavailable).queryByTestId("surface-state-diagnostics")).toBeNull();
+    expect(unavailableText).not.toMatch(/boom/);
+    // The epistemic clarification is product truth and survives OFF; it is the
+    // reason this component exists and is not diagnostics.
+    expect(unavailableDetails).toHaveTextContent(/read that did not happen/i);
 
     // The whole point: a failure never carries the vocabulary of emptiness.
     for (const claim of EMPTINESS_CLAIMS) {
@@ -138,7 +162,30 @@ describe("the four non-record answers are four different answers", () => {
     }
   });
 
+  it("withholds the backend's own limitation strings while diagnostics are off", () => {
+    // These read as product truth, and often are — but they are backend-authored
+    // strings and the backend puts raw transport text in them (an unreachable
+    // gateway yields the limitation "the application gateway did not answer").
+    // Nothing about a string distinguishes the two, so the list is governed as
+    // a whole and the partial-answer *consequence* is stated separately.
+    render(
+      <SurfaceState
+        kind="degraded"
+        title="Partial"
+        limitations={["capture search does not stem words"]}
+      />,
+    );
+    expect(screen.queryByTestId("surface-state-limitations")).toBeNull();
+    expect(document.body.textContent ?? "").not.toMatch(/does not stem words/);
+    // The state itself, and what it means, are unchanged.
+    expect(screen.getByTestId("state-degraded")).toHaveAttribute("data-state", "degraded");
+    expect(screen.getByTestId("surface-state-clarification").textContent).toMatch(
+      /its own answer is incomplete/i,
+    );
+  });
+
   it("renders the backend's own limitations rather than a generic sentence", () => {
+    diagnosticsEnabled = true;
     render(
       <SurfaceState
         kind="degraded"
@@ -179,9 +226,15 @@ describe("the degraded banner sits above real records", () => {
     render(<DegradedBanner scope="this listing" limitations={["one scope was skipped"]} />);
     const banner = screen.getByTestId("degraded-banner");
     expect(banner).toHaveAttribute("data-state", "degraded");
+    // The consequence is product truth and is stated in both modes.
     expect(banner.textContent).toMatch(/records below are real/i);
     expect(banner.textContent).toMatch(/not all of them/i);
-    expect(banner.textContent).toContain("one scope was skipped");
+    // The backend's own strings are not, and are absent by default.
+    expect(banner.textContent).not.toContain("one scope was skipped");
+    diagnosticsEnabled = true;
+    cleanup();
+    render(<DegradedBanner scope="this listing" limitations={["one scope was skipped"]} />);
+    expect(screen.getByTestId("degraded-banner").textContent).toContain("one scope was skipped");
     expect(within(banner).getByTestId("surface-state-details")).toHaveTextContent(
       /this page guessing it/i,
     );
@@ -210,7 +263,7 @@ describe("compact empty is not an alert card", () => {
     expect(unavailable.getAttribute("role")).toBe("alert");
   });
 
-  it("maps a transport error into Level 1 and keeps the raw string in Diagnostics", () => {
+  it("maps a transport error into Level 1 and withholds the raw string while diagnostics are off", () => {
     render(
       <SurfaceState
         kind="unavailable"
@@ -219,11 +272,33 @@ describe("compact empty is not an alert card", () => {
       />,
     );
     const root = screen.getByTestId("state-unavailable");
+    // Level 1 — the product-language consequence — is unchanged by the policy.
+    expect(firstParagraphOutsideDetails(root)).toHaveTextContent(/couldn't verify your session/i);
+    expect(firstParagraphOutsideDetails(root)?.textContent).not.toMatch(/session authority/i);
+    // The raw transport string reaches no part of the subtree, including the
+    // accessibility tree, while diagnostics are off.
+    expect(within(root).queryByTestId("surface-state-diagnostic")).toBeNull();
+    expect(root.textContent ?? "").not.toMatch(/session authority unavailable/);
+  });
+
+  it("carries the raw string in Diagnostics once diagnostics are on", () => {
+    diagnosticsEnabled = true;
+    render(
+      <SurfaceState
+        kind="unavailable"
+        title="Today could not be derived"
+        error={{ message: "session authority unavailable", code: "authority_unavailable" }}
+      />,
+    );
+    const root = screen.getByTestId("state-unavailable");
+    // ON is presentation authority only: Level 1 still says the same thing, and
+    // the raw string is additive rather than a replacement for product language.
     expect(firstParagraphOutsideDetails(root)).toHaveTextContent(/couldn't verify your session/i);
     expect(within(root).getByTestId("surface-state-diagnostic")).toHaveTextContent(
       "session authority unavailable",
     );
-    expect(firstParagraphOutsideDetails(root)?.textContent).not.toMatch(/session authority/i);
+    const details = within(root).getByTestId("surface-state-details");
+    expect(details.contains(within(root).getByTestId("surface-state-diagnostic"))).toBe(true);
   });
 });
 

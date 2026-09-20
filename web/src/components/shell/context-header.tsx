@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Sheet } from "@/components/ui/sheet";
+import { WhenDiagnostics } from "@/components/diagnostics/diagnostics-provider";
 
 export type AccountMenuProps = {
   principal: PrincipalSession;
@@ -60,16 +61,40 @@ export function AccountMenu({
       )}
       <Sheet open={accountOpen} onOpenChange={setAccountOpen} title="Account" placement="menu">
         {principal.synthetic ? (
-          <div className="mb-3">
-            <Badge tone="synthetic">Synthetic identity</Badge>
-          </div>
+          /*
+           * WP07: which identity provider issued this session is build
+           * narration, not account truth. The name and sign-out below are the
+           * account facts; this badge returns with diagnostics.
+           */
+          <WhenDiagnostics>
+            <div className="mb-3">
+              <Badge tone="synthetic">Synthetic identity</Badge>
+            </div>
+          </WhenDiagnostics>
         ) : null}
         <div className="truncate text-sm font-medium text-text-primary" data-testid="principal-name">
           {principal.displayName}
         </div>
-        <div className="truncate text-xs text-muted" data-testid="principal-upn">
-          {principal.upn ?? principal.identitySubject}
-        </div>
+        {/*
+          WP07 §8.7. A `upn` is how the account names itself and is ordinary
+          product truth. `identitySubject` is an internal subject string and was
+          only ever a fallback for accounts that have no `upn` — printing it
+          told the reader nothing they could use while exposing an internal
+          identifier. While diagnostics are off the row is simply absent rather
+          than showing the key; the display name above still identifies the
+          account.
+        */}
+        {principal.upn ? (
+          <div className="truncate text-xs text-muted" data-testid="principal-upn">
+            {principal.upn}
+          </div>
+        ) : (
+          <WhenDiagnostics>
+            <div className="truncate text-xs text-muted" data-testid="principal-upn">
+              {principal.identitySubject}
+            </div>
+          </WhenDiagnostics>
+        )}
         <div className="mt-4 border-t pt-3">
           <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-muted">Appearance</p>
           <div className="flex flex-col items-start gap-1">

@@ -8,7 +8,7 @@
  * only way that can happen is if it was committed.
  */
 import { test, expect, type Page } from "@playwright/test";
-import { enableDiagnostics, expectState, openCaptureNote, pinInspector, signIn, syntheticNote, visibleCaptureButton } from "./fixtures";
+import { enableDiagnostics, expectState, openCaptureNote, pinInspector, SEARCH_SETTLED, signIn, syntheticNote, visibleCaptureButton } from "./fixtures";
 
 /** Chrome below the `lg` (1024) split: rail hidden, Knowledge lives in More. */
 function belowLgChrome(projectName: string): boolean {
@@ -210,14 +210,16 @@ test.describe("the signed-in surfaces", () => {
     const searchbox = search.getByRole("searchbox", { name: "Search" });
     await expect(searchbox).toBeVisible();
     await searchbox.fill("morning brief");
-    await expect(
-      search.locator(
-        "[data-testid='search-coverage'], [data-testid='search-not-implemented'], [data-testid='search-unavailable']",
-      ).first(),
-    ).toBeVisible({ timeout: 30_000 });
-    const coverage = search.getByTestId("search-coverage");
-    if ((await coverage.count()) > 0) {
-      await expect(coverage).toContainText("omitted");
+    await expect(search.locator(SEARCH_SETTLED).first()).toBeVisible({ timeout: 30_000 });
+    // WP07: the per-domain coverage list is diagnostics and this journey runs
+    // in the product default, so it must not be here at all. What the reader
+    // needs from it — that a partial search is not an answer about what they
+    // hold — is product truth and is asserted in its place when the backend
+    // reports a domain it could not search.
+    await expect(search.getByTestId("search-coverage")).toHaveCount(0);
+    const incomplete = search.getByTestId("search-coverage-incomplete");
+    if ((await incomplete.count()) > 0) {
+      await expect(incomplete).toContainText(/may be incomplete/i);
     }
     await page.keyboard.press("Escape");
     await expect(search).toHaveCount(0);
@@ -330,6 +332,10 @@ test.describe("the signed-in surfaces", () => {
 
     // And the row is readable back through a different capability, which is the
     // part a receipt alone cannot prove.
+    // WP07: the capture identifier is a technical receipt, so proving the row is
+    // readable back *by that identifier* needs the mode that renders it. The
+    // claim is unchanged; only the mode it is made in is now explicit.
+    await enableDiagnostics(page);
     await page.goto("/knowledge");
     await expect(page.getByTestId("library-listing")).toBeVisible();
     await expect(page.getByTestId("library-capture").first()).toContainText(/cap_[A-Za-z0-9]+/);

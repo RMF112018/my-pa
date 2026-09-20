@@ -16,7 +16,10 @@ import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { SurfaceState } from "@/components/ui/surface-state";
-import { WhenDiagnostics } from "@/components/diagnostics/diagnostics-provider";
+import {
+  useDiagnosticsEnabled,
+  WhenDiagnostics,
+} from "@/components/diagnostics/diagnostics-provider";
 import { TaskCompactSheet } from "@/components/tasks/task-compact-sheet";
 
 import {
@@ -84,6 +87,7 @@ export function SearchCommandPanel({
   enrollmentId?: string;
 }) {
   const router = useRouter();
+  const diagnosticsEnabled = useDiagnosticsEnabled();
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   /**
@@ -373,7 +377,15 @@ export function SearchCommandPanel({
           <SurfaceState
             kind="empty"
             title="No matches in the domains that were searched"
-            detail="Omitted and unavailable sources are listed below."
+            // WP07 §6.4. This sentence points at the per-domain coverage list,
+            // which is diagnostics. While diagnostics are off there is no list
+            // below to point at, so pointing at one would be untrue. The
+            // consequence itself is not lost: `CoverageList` states "this list
+            // may be incomplete" in both modes whenever a domain was omitted or
+            // unavailable, and the title already says which domains answered.
+            detail={
+              diagnosticsEnabled ? "Omitted and unavailable sources are listed below." : undefined
+            }
             testId="search-empty"
           />
         ) : null}

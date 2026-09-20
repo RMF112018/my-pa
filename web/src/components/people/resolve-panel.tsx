@@ -117,7 +117,9 @@ export function ResolvePanel({
       </div>
       <CardBody>
         <p data-testid="people-resolve-outcome" className="font-medium text-text-primary">
-          Outcome: {resolution.outcome}
+          {/* WP07: every other code in this file goes through `codeLabel()`;
+              this one printed the raw enum token. */}
+          Outcome: {codeLabel(resolution.outcome)}
         </p>
         <p className="mt-2">{copy.detail}</p>
         {resolution.warnings.length > 0 ? (

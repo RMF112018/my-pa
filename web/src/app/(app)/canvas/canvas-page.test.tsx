@@ -237,15 +237,21 @@ describe("Canvas page", () => {
   });
 
   it.each(["yesterday", "not-a-date", "2026-01-01T00:00:00", "12345", "2026-01-01"])(
-    "refuses invalid asOf %s without calling the gateway",
+    "refuses invalid asOf %s without calling the gateway, and names no internal field while diagnostics are off",
     async (asOf) => {
       const fetchSpy = socketFails();
       await renderServerPage(() => CanvasPage({ searchParams: seededParams({ asOf }) }));
       expect(screen.getByTestId("canvas-unavailable")).toHaveAttribute("data-state", "unavailable");
       expect(screen.getByText("That map query was not valid")).toBeTruthy();
-      expect(screen.getByTestId("surface-state-detail").textContent).toBe(
-        "asOf must be an RFC 3339 timestamp with an explicit timezone.",
+      // WP07: the refusal and the recovery are product truth and are stated in
+      // both modes. `asOf` and "RFC 3339" are this application's own
+      // query-parameter and wire-format names, so they are policy-governed and
+      // absent here — which is the claim this now makes.
+      const detail = screen.getByTestId("surface-state-detail").textContent ?? "";
+      expect(detail).toBe(
+        "Some of the values in this link are not in a form the map accepts. Open the map without them to start again.",
       );
+      expect(detail).not.toMatch(/asOf|RFC 3339|hops|pageSize/);
       expect(fetchSpy).not.toHaveBeenCalled();
       expect(fetchUrls(fetchSpy).some((url) => url.includes("entities.graph"))).toBe(false);
       expect(fetchUrls(fetchSpy).some((url) => url.includes("canvas.workspace.get"))).toBe(false);

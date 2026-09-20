@@ -168,11 +168,23 @@ export default async function SystemPage() {
     ) : authMode === "local_operator" ? (
       <Card>
         <CardBody>
+          {/*
+            WP07 §6.4/§8.3. The partitioning consequence is product truth and a
+            person needs it in both modes. The sentence that delivered it named
+            the backend component and printed its raw configuration token in a
+            `<code>` element — engineering detail, and a `<code>` block has no
+            business on a deliberately bare OFF page. The two are split.
+          */}
           <p data-testid="system-local-operator">
-            <strong>And here is the limit of that.</strong> The application gateway this build
-            talks to runs in <code>local_operator</code> mode: it serves one fixed principal for
-            the life of its process, so what you are shown is that deployment&rsquo;s data and is
-            not partitioned by who is signed in to this browser.
+            <strong>And here is the limit of that.</strong> What you are shown is this
+            deployment&rsquo;s data, and it is not partitioned by who is signed in to this
+            browser: one fixed identity is served for the life of this build.
+            {diagnosticsEnabled ? (
+              <>
+                {" "}
+                The application gateway runs in <code>local_operator</code> mode.
+              </>
+            ) : null}
           </p>
         </CardBody>
       </Card>

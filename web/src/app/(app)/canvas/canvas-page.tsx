@@ -292,14 +292,21 @@ export async function CanvasPage({
   const pageSize = parseOptionalInteger(pageSizeRaw);
   const asOfParsed = parseAsOf(asOf);
   if (hops.kind === "invalid" || pageSize.kind === "invalid" || asOfParsed.kind === "invalid") {
-    const detail =
-      hops.kind === "invalid" && pageSize.kind === "invalid"
-        ? "hops and pageSize must be integers."
-        : hops.kind === "invalid"
-          ? "hops must be an integer."
-          : pageSize.kind === "invalid"
-            ? "pageSize must be an integer."
-            : "asOf must be an RFC 3339 timestamp with an explicit timezone.";
+    /*
+     * WP07 §6.4. That the map query was rejected, and that the user should
+     * correct the link they followed, is product truth. `hops`, `pageSize`,
+     * `asOf` and "RFC 3339" are this application's own query-parameter and
+     * wire-format names — engineering detail — so the precise field is named
+     * only under the global policy.
+     */
+    const invalidFields = [
+      hops.kind === "invalid" ? "hops" : null,
+      pageSize.kind === "invalid" ? "pageSize" : null,
+      asOfParsed.kind === "invalid" ? "asOf" : null,
+    ].filter((name): name is string => name !== null);
+    const detail = diagnosticsEnabled
+      ? `${invalidFields.join(" and ")} ${invalidFields.length === 1 ? "is" : "are"} not in the form this map accepts: hops and pageSize must be integers, and asOf must be an RFC 3339 timestamp with an explicit timezone.`
+      : "Some of the values in this link are not in a form the map accepts. Open the map without them to start again.";
     return frame(
       <SurfaceState
         kind="unavailable"

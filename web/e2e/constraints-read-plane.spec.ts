@@ -8,7 +8,7 @@
  * the WP05 shell renders is deliberately *not* what is being read.
  */
 import { expect, test, type Page } from "@playwright/test";
-import { signIn } from "./fixtures";
+import { enableDiagnostics, signIn } from "./fixtures";
 
 /** Mirrors the Constraint seed step in `e2e/stack.sh`. Synthetic, disposable, Principal-bound. */
 const PROJECT = "prj_e2ecst0000000001";
@@ -141,6 +141,11 @@ test("the Register refuses an undeclared or out-of-vocabulary query at the BFF",
 });
 
 test("the live shell renders Overview, server-filtered Register, and lazy Inspector reads", async ({ page }) => {
+  // WP07: the version delta this test reads out of the Inspector history is an
+  // audit receipt and is governed by the global policy. The claim being made is
+  // that the delta is *correct*, so the mode that renders it is asked for
+  // through the one route that can, and the assertion below is unchanged.
+  await enableDiagnostics(page);
   const seen: string[] = [];
   page.on("request", (request) => {
     if (request.url().includes("/api/project-controls/")) seen.push(request.url());

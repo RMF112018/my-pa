@@ -507,13 +507,28 @@ describe("the fixture-only lifecycle surfaces", () => {
     expect(live).toHaveAttribute("role", "alert");
   });
 
-  it("says that a close incremented no version and issued no receipt", async () => {
+  it("says the record is unchanged, and names no version or receipt, while diagnostics are off", async () => {
+    // WP07 §6.4. That the close did not happen and the record is unchanged is
+    // the outcome a person acts on, and it is stated in the product default.
+    // Which version did not increment and which receipt was not issued are the
+    // engineering receipts for it.
+    const user = userEvent.setup();
+    mount("view=register&group=none&constraint=cst_syn_0001");
+    await user.click(await screen.findByTestId("inspector-close"));
+    await user.click(screen.getByTestId("lifecycle-confirm"));
+    const live = await screen.findByTestId("workspace-live");
+    expect(live).toHaveTextContent(/was not carried out\. The record is unchanged/i);
+    expect(live).not.toHaveTextContent(/no version was incremented|no receipt was issued/i);
+  });
+
+  it("says that a close incremented no version and issued no receipt once diagnostics are on", async () => {
+    diagnostics.enabled = true;
     const user = userEvent.setup();
     mount("view=register&group=none&constraint=cst_syn_0001");
     await user.click(await screen.findByTestId("inspector-close"));
     await user.click(screen.getByTestId("lifecycle-confirm"));
     expect(await screen.findByTestId("workspace-live")).toHaveTextContent(
-      /no version was incremented, no receipt was issued/i,
+      /The record is unchanged/i,
     );
   });
 

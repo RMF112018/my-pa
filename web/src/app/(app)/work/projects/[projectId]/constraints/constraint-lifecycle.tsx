@@ -25,6 +25,7 @@
 import { useState, type KeyboardEvent } from "react";
 import type { ConstraintCategory, ConstraintListEntry } from "@/contracts/constraints";
 import { Badge } from "@/components/ui/badge";
+import { WhenDiagnostics } from "@/components/diagnostics/diagnostics-provider";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -34,15 +35,27 @@ import { codeLabel, DRAFT_CODE_LABEL, lifecycleLabel } from "./presentation";
 import type { ConstraintLifecycleAction } from "./constraint-inspector";
 
 /** The standing notice every one of these surfaces carries. */
+/**
+ * WP07 §6.4/§6.2. That this is a fixture and that nothing is saved is the
+ * product truth a reader needs and is stated in both modes. Which *endpoint* is
+ * missing, and which version and receipt were therefore not issued, is
+ * engineering detail and is governed by the global policy.
+ */
 export const SYNTHETIC_MUTATION_NOTICE =
-  "Fixture only. This build has no Constraint mutation endpoint, so nothing here is sent, " +
-  "saved, or issued a Constraint Code, version or receipt.";
+  "Fixture only. Nothing here is sent or saved.";
+
+export const SYNTHETIC_MUTATION_DIAGNOSTIC =
+  "This build has no Constraint mutation endpoint, so no Constraint Code, version or receipt " +
+  "was issued.";
 
 function SyntheticNotice({ surface }: { readonly surface: string }) {
   return (
     <p className="mb-3 flex items-center gap-2 text-sm text-muted" data-testid={`synthetic-notice-${surface}`}>
       <Badge tone="synthetic">Fixture</Badge>
       {SYNTHETIC_MUTATION_NOTICE}
+      <WhenDiagnostics>
+        <span>{SYNTHETIC_MUTATION_DIAGNOSTIC}</span>
+      </WhenDiagnostics>
     </p>
   );
 }
@@ -185,10 +198,10 @@ export function LifecycleDialog({ action, entry, onClose, onSyntheticOutcome }: 
 
   function commit() {
     const label = action === null ? "" : ACTION_TITLES[action];
-    onSyntheticOutcome(
-      `${label} was not carried out. This build has no Constraint mutation endpoint: no version ` +
-        "was incremented, no receipt was issued, and the record is unchanged.",
-    );
+    // The outcome — it did not happen, and the record is unchanged — is product
+    // truth. The missing endpoint, the version that did not increment and the
+    // receipt that was not issued are the receipts for it.
+    onSyntheticOutcome(`${label} was not carried out. The record is unchanged.`);
     onClose();
   }
 

@@ -311,13 +311,23 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
                       className="mt-3 text-sm text-success"
                     >
                       Decided and stored. The proposal is now <strong>{state.proposalState}</strong>
-                      , at review version {state.reviewVersion}.
-                      <span className="ml-1 font-mono text-xs">({state.decisionId})</span>
-                      {state.assertionId ? (
-                        <span className="ml-1 font-mono text-xs">
-                          assertion {state.assertionId}
-                        </span>
-                      ) : null}
+                      .
+                      {/*
+                        WP07 §6.2. The decision outcome above is review truth. The
+                        review version and the decision/assertion identifiers are
+                        the receipts for it, and are the same receipts gated out of
+                        the identity block above — rendering them here while
+                        diagnostics are off would walk straight around that gate.
+                      */}
+                      <WhenDiagnostics>
+                        <span className="ml-1">at review version {state.reviewVersion}.</span>
+                        <span className="ml-1 font-mono text-xs">({state.decisionId})</span>
+                        {state.assertionId ? (
+                          <span className="ml-1 font-mono text-xs">
+                            assertion {state.assertionId}
+                          </span>
+                        ) : null}
+                      </WhenDiagnostics>
                     </p>
                   ) : state.phase === "not_persisted" ? (
                     <p
@@ -325,9 +335,19 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
                       data-testid="review-not-persisted"
                       className="mt-3 text-sm text-destructive"
                     >
-                      <strong>No decision was stored.</strong> The server answered &ldquo;
-                      {state.detail}&rdquo; rather than a stored decision, so this case is
-                      unchanged.
+                      {/*
+                        WP07 §6.4/§8.4. That nothing was stored and the case is
+                        unchanged is the mutation outcome and is stated in product
+                        language in both modes. The server's own answer is a raw
+                        backend string and is governed.
+                      */}
+                      <strong>No decision was stored.</strong> This case is unchanged.
+                      <WhenDiagnostics>
+                        <span className="ml-1">
+                          The server answered &ldquo;{state.detail}&rdquo; rather than a stored
+                          decision.
+                        </span>
+                      </WhenDiagnostics>
                     </p>
                   ) : state.phase === "conflict" ? (
                     <p

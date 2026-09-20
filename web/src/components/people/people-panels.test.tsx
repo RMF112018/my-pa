@@ -107,7 +107,12 @@ describe("resolve outcomes", () => {
       "data-outcome",
       "conflicted_identifier",
     );
-    expect(screen.getByTestId("people-resolve-outcome").textContent).toMatch(/conflicted_identifier/);
+    // WP07: the outcome goes through `codeLabel()` like every other code on
+    // this surface, so the raw enum token is not printed. The outcome asserted
+    // is the same one — the label is faithful, not a prettier name.
+    expect(screen.getByTestId("people-resolve-outcome").textContent).toMatch(
+      /conflicted identifier/,
+    );
     expect(screen.queryByRole("link", { name: "Open profile" })).toBeNull();
     expect(screen.getByTestId("people-resolve-result").textContent).toMatch(/not an exact resolve/i);
   });
@@ -134,7 +139,7 @@ describe("resolve outcomes", () => {
       candidates_were_truncated: false,
     };
     render(<ResolvePanel resolution={resolution} />);
-    expect(screen.getByTestId("people-resolve-outcome").textContent).toMatch(/not_found/);
+    expect(screen.getByTestId("people-resolve-outcome").textContent).toMatch(/not found/);
     expect(screen.queryByTestId("people-resolve-candidates")).toBeNull();
   });
 

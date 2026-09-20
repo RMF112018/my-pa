@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { signIn } from "./fixtures";
+import { SEARCH_SETTLED, signIn } from "./fixtures";
 
 type ApiAnswer<T> = { status: number; body: T };
 
@@ -108,9 +108,7 @@ test("Search UX maps federated hits to honest hrefs without capture text", async
   await expect(page.getByRole("heading", { name: "Search", level: 1 })).toBeVisible();
   await page.getByRole("searchbox", { name: "Search" }).fill("morning brief");
   await expect(
-    page.locator(
-      "[data-testid='search-coverage'], [data-testid='search-not-implemented'], [data-testid='search-unavailable']",
-    ).first(),
+    page.locator(SEARCH_SETTLED).first(),
   ).toBeVisible({ timeout: 30_000 });
 
   const captureLinks = page.locator('a[href*="captureId="]');

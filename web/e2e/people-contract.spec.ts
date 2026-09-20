@@ -39,7 +39,10 @@ test("People search, profile, and resolve keep ambiguity visible", async ({ page
   await expect(page).not.toHaveURL(/entityId=/);
   await expect(page.getByTestId("people-profile")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Pat Synthetic", level: 1 })).toBeVisible();
-  await expect(page.getByTestId("people-entity-id")).toBeVisible();
+  // WP07 §8.7: the stable entity id is an internal identifier and is not
+  // rendered in the product default. The entity is still reached, named and
+  // addressed by its own URL, which is what this test is about.
+  await expect(page.getByTestId("people-entity-id")).toHaveCount(0);
   await expect(page.getByRole("button", { name: /merge/i })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /split|observe|author/i })).toHaveCount(0);
   if (await page.getByTestId("people-assignments-current").count()) {
@@ -110,5 +113,7 @@ test("People search and profile reflow at a narrow viewport", async ({ page }) =
 
   await page.setViewportSize({ width: 1280, height: 720 });
   await expect(page.getByTestId("people-profile")).toBeVisible();
-  await expect(page.getByTestId("people-entity-id")).toBeVisible();
+  // WP07 §8.7, as above: the profile survives the reflow; the internal id is
+  // not part of the product default at either width.
+  await expect(page.getByTestId("people-entity-id")).toHaveCount(0);
 });

@@ -139,6 +139,15 @@ function NodeInspector({ node }: { node: GraphNode }) {
           {node.display_label}
         </Link>
       </p>
+      {/*
+        WP07 §6.2/AC-43. The identity-history read is diagnostics-only and is not
+        issued while diagnostics are off, so `status` stays "loading" forever and
+        this `role="status"` live region announced a read that would never
+        complete — on every node inspection, to every screen reader. The owner is
+        gated, not the rows inside it, so while off there is no live region, no
+        heading and no reserved gap.
+      */}
+      <WhenDiagnostics>
       {history.status === "loading" ? (
         <LoadingStatus label="Reading identity history…" />
       ) : (
@@ -182,6 +191,7 @@ function NodeInspector({ node }: { node: GraphNode }) {
           )}
         </div>
       )}
+      </WhenDiagnostics>
     </div>
   );
 }

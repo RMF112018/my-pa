@@ -395,8 +395,13 @@ export function EntityProfilePanel({
         <h3 id="people-profile-provenance" className="font-medium text-text-primary">
           Provenance
         </h3>
+        {/*
+          WP07: "this card is not complete" is product truth — it tells the reader
+          something about their own record. `assembled_at` is when the *projection*
+          was built, which is a fact about how the system processed the request.
+        */}
         <p className="mt-1 text-muted">
-          Assembled {moment(profile.assembled_at)}
+          {diagnosticsEnabled ? `Assembled ${moment(profile.assembled_at)}` : "Profile"}
           {profile.is_complete ? "" : " · this card is not complete"}
         </p>
         {effectiveWindow(entity.created_at, entity.updated_at) ? (

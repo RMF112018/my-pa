@@ -114,7 +114,6 @@ function Spans({ spans }: { spans: readonly RevealSpan[] }) {
    * above this regardless.
    */
   return (
-    <WhenDiagnostics>
     <ul data-testid="reveal-spans" className="flex flex-col gap-1 text-xs text-muted">
       {spans.map((span) => (
         <li key={span.span_id}>
@@ -124,7 +123,6 @@ function Spans({ spans }: { spans: readonly RevealSpan[] }) {
         </li>
       ))}
     </ul>
-    </WhenDiagnostics>
   );
 }
 
@@ -207,10 +205,17 @@ export function RevealDialog({
 
         {state === "evidence" && result ? (
           <div data-testid="reveal-evidence" className="flex flex-col gap-3">
-            <section className="flex flex-col gap-1">
-              <h3 className="text-xs font-semibold uppercase tracking-wide">Source spans</h3>
-              <Spans spans={result.spans} />
-            </section>
+            {/*
+              AC-44. Gating `Spans` alone left this section mounted: an empty
+              "Source spans" heading and the flex gap it reserves. The owner is
+              the section, so the section is what the policy governs.
+            */}
+            <WhenDiagnostics>
+              <section className="flex flex-col gap-1">
+                <h3 className="text-xs font-semibold uppercase tracking-wide">Source spans</h3>
+                <Spans spans={result.spans} />
+              </section>
+            </WhenDiagnostics>
 
             {result.accepted.length > 0 ? (
               <WhenDiagnostics>

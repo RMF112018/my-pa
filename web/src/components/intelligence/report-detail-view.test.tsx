@@ -44,7 +44,7 @@ describe("opaque structured_content", () => {
   });
 
   it("discloses persisted structured content without rendering item schema", () => {
-    render(<ReportDetailView report={REPORT} />);
+    render(<ReportDetailView report={REPORT} diagnosticsEnabled />);
     expect(screen.getByTestId("intelligence-structured-present").textContent).toMatch(
       /not a Brief section\/item schema/,
     );
@@ -53,12 +53,46 @@ describe("opaque structured_content", () => {
     expect(screen.getByTestId("intelligence-body-markdown").textContent).toMatch(/scraped item one/);
     expect(screen.queryByText(/task from brief/i)).toBeNull();
   });
+
+  it("still discloses that structured content exists, without the backend's key names, while diagnostics are off", () => {
+    // WP07: that persisted structured content is present, and that it is not a
+    // Brief section/item schema, is product truth. The backend's own key names
+    // are engineering detail. The report body is unaffected either way.
+    render(<ReportDetailView report={REPORT} />);
+    expect(screen.getByTestId("intelligence-structured-present").textContent).toMatch(
+      /not a Brief section\/item schema/,
+    );
+    expect(screen.queryByTestId("intelligence-structured-keys")).toBeNull();
+    expect(document.body.textContent ?? "").not.toMatch(/\bmarker\b/);
+    expect(screen.queryByTestId("brief-item")).toBeNull();
+    expect(screen.getByTestId("intelligence-body-markdown").textContent).toMatch(/scraped item one/);
+  });
+
+  it("keeps the supersedes link reachable while diagnostics are off, without the raw report id", () => {
+    // AC-53: the affordance is product truth and must not disappear with the
+    // identifier. The id stays in the href; only the visible link text changes.
+    render(
+      <ReportDetailView
+        report={{
+          ...REPORT,
+          artifact_state: "superseded",
+          supersedes_report_id: "rpt_bbbbbbbb22222222",
+        }}
+      />,
+    );
+    const supersedes = screen.getByTestId("intelligence-supersedes");
+    expect(supersedes.textContent).not.toMatch(/rpt_bbbbbbbb22222222/);
+    const link = supersedes.querySelector("a");
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute("href")).toContain("rpt_bbbbbbbb22222222");
+  });
 });
 
 describe("superseded and malformed report rendering", () => {
   it("labels a superseded artifact without hiding it", () => {
     render(
       <ReportDetailView
+        diagnosticsEnabled
         report={{
           ...REPORT,
           artifact_state: "superseded",
@@ -77,6 +111,7 @@ describe("superseded and malformed report rendering", () => {
   it("does not scrape malformed HTML into Brief items", () => {
     render(
       <ReportDetailView
+        diagnosticsEnabled
         report={{
           ...REPORT,
           body_markdown: '<script>alert(1)</script>\n\n<img src="javascript:alert(1)">',

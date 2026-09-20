@@ -28,6 +28,7 @@ import { parseWorkUrlState } from "@/lib/api/work-url";
 import { TASK_FRESHNESS_INTERVAL_MS } from "@/components/work/use-task-freshness";
 
 afterEach(() => {
+  diagnostics.enabled = false;
   cleanup();
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -1476,6 +1477,12 @@ describe("Work surface", () => {
   });
 
   it("replays an ambiguous bulk confirmation with the exact preview, mutations, and key", async () => {
+    // WP07: this test names the retained preview by its bulk-operation id, which
+    // is a technical receipt. The replay contract it proves — same preview, same
+    // mutations, same key — is unchanged and mode-independent; the assertion on
+    // the id needs the mode that renders it. The product-language consequence
+    // ("Selection and action are retained") is asserted in both modes elsewhere.
+    diagnostics.enabled = true;
     const task = { task_id: "tsk_aaaaaaaa11111111", title: "Synthetic follow up", lifecycle_state: "waiting", priority: "p2", due_at: null, archived_at: null, created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z" };
     let confirmations = 0;
     const fetcher = vi.fn<typeof fetch>(async (input) => {

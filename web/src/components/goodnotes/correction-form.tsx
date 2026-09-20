@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { apiPost } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
+import { WhenDiagnostics } from "@/components/diagnostics/diagnostics-provider";
 import { TextField } from "@/components/ui/field";
 
 interface CorrectResponse {
@@ -16,8 +17,11 @@ type Outcome =
   | { readonly kind: "submitting" }
   | { readonly kind: "appended"; readonly revisionId: string }
   | { readonly kind: "understated"; readonly detail: string }
-  | { readonly kind: "refused"; readonly message: string }
-  | { readonly kind: "unavailable"; readonly message: string };
+  // `message` is always product language. `detail` is the backend's own string
+  // and is governed by the global policy (WP07 §8.4) — a raw backend string is
+  // unbounded and must never be the user-facing sentence.
+  | { readonly kind: "refused"; readonly message: string; readonly detail?: string }
+  | { readonly kind: "unavailable"; readonly message: string; readonly detail?: string };
 
 /**
  * Governed correction. The session cookie is the only identity carrier; the
@@ -64,13 +68,22 @@ export function CorrectionForm({
       }
       setOutcome(
         answer.errorClass === "unavailable"
-          ? { kind: "unavailable", message: answer.error ?? "the request did not complete" }
-          : { kind: "refused", message: answer.error ?? "the request did not complete" },
+          ? {
+              kind: "unavailable",
+              message:
+                "The correction was not recorded — the service could not be reached. Nothing was stored.",
+              detail: answer.error ?? undefined,
+            }
+          : {
+              kind: "refused",
+              message: "The correction was refused and nothing was stored.",
+              detail: answer.error ?? undefined,
+            },
       );
     } catch {
       setOutcome({
         kind: "unavailable",
-        message: "the request never reached the server, so nothing was stored",
+        message: "The request never reached the server, so nothing was stored.",
       });
     }
   }
@@ -98,22 +111,34 @@ export function CorrectionForm({
       {outcome.kind === "appended" ? (
         <p role="status" data-testid="goodnotes-correction-appended">
           A canonical revision was appended
-          {outcome.revisionId ? ` (${outcome.revisionId})` : ""}.
+          .
+          <WhenDiagnostics>
+            {outcome.revisionId ? <span className="ml-1">({outcome.revisionId})</span> : null}
+          </WhenDiagnostics>
         </p>
       ) : null}
       {outcome.kind === "understated" ? (
         <p role="status" data-testid="goodnotes-correction-understated">
-          The correction was not recorded as a stored canonical revision. {outcome.detail}
+          The correction was not recorded as a stored canonical revision.
+          <WhenDiagnostics>
+            <span className="ml-1">{outcome.detail}</span>
+          </WhenDiagnostics>
         </p>
       ) : null}
       {outcome.kind === "refused" ? (
         <p role="alert" data-testid="goodnotes-correction-refused">
           {outcome.message}
+          <WhenDiagnostics>
+            {outcome.detail ? <span className="ml-1">{outcome.detail}</span> : null}
+          </WhenDiagnostics>
         </p>
       ) : null}
       {outcome.kind === "unavailable" ? (
         <p role="alert" data-testid="goodnotes-correction-unavailable">
           {outcome.message}
+          <WhenDiagnostics>
+            {outcome.detail ? <span className="ml-1">{outcome.detail}</span> : null}
+          </WhenDiagnostics>
         </p>
       ) : null}
     </form>

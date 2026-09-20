@@ -320,6 +320,7 @@ export async function GoodNotesPage({
                   notebookId={notebookId}
                   pages={pagesAnswer.result.pages}
                   selectedLogicalPageId={logicalPageId}
+                  diagnosticsEnabled={diagnosticsEnabled}
                 />
               )}
             </>
@@ -328,6 +329,7 @@ export async function GoodNotesPage({
               notebookId={notebookId}
               pages={pagesAnswer.result.pages}
               selectedLogicalPageId={logicalPageId}
+              diagnosticsEnabled={diagnosticsEnabled}
             />
           )}
         </CatalogSection>
@@ -366,11 +368,11 @@ export async function GoodNotesPage({
                   testId="goodnotes-runs-degraded-empty"
                 />
               ) : (
-                <RunList notebookId={notebookId} runs={runsAnswer.result.runs} />
+                <RunList notebookId={notebookId} runs={runsAnswer.result.runs} diagnosticsEnabled={diagnosticsEnabled} />
               )}
             </>
           ) : (
-            <RunList notebookId={notebookId} runs={runsAnswer.result.runs} />
+            <RunList notebookId={notebookId} runs={runsAnswer.result.runs} diagnosticsEnabled={diagnosticsEnabled} />
           )}
         </CatalogSection>
       ) : null}

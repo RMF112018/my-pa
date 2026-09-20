@@ -5,6 +5,7 @@ import type {
 } from "@/lib/api/decode/capabilities/goodnotes.read";
 import { CorrectionForm } from "@/components/goodnotes/correction-form";
 import { Badge } from "@/components/ui/badge";
+import { codeLabel } from "@/components/people/format";
 import { Card, CardBody, CardTitle } from "@/components/ui/card";
 import { RichContent } from "@/components/ui/rich-content";
 
@@ -92,7 +93,11 @@ export function InterpretationPanel({
     <div data-testid="goodnotes-interpretation" className="flex flex-col gap-3">
       <p className="flex flex-wrap items-center gap-2 text-sm">
         <span className="text-muted">authority</span>
-        <Badge tone={authorityTone(interpretation.authority)}>{interpretation.authority}</Badge>
+        {/* WP07: the authority *class* is decision-relevant product truth; the
+            raw backend enum token is not. */}
+        <Badge tone={authorityTone(interpretation.authority)}>
+          {codeLabel(interpretation.authority)}
+        </Badge>
       </p>
       {interpretation.items.length === 0 ? (
         <p data-testid="goodnotes-no-items">This record carries no transcription.</p>

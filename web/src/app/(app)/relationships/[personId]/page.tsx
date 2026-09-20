@@ -62,7 +62,14 @@ export default async function RelationshipPage({
           <SurfaceState
             kind="unavailable"
             title="Relationship timeline could not be read"
-            error="the gateway result did not match the capability contract"
+            // WP07 §6.2. This is a server component, so an ungated string here
+            // is serialized into the RSC payload and ships inside the HTML even
+            // while diagnostics are off — the leak `lib/diagnostics/presentation.ts`
+            // exists to close. The sibling callsite above already routes this way.
+            error={diagnosticError(
+              diagnosticsEnabled,
+              "the gateway result did not match the capability contract",
+            )}
             testId="relationship-unavailable"
           />
         </section>

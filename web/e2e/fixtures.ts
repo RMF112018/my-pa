@@ -226,6 +226,28 @@ export const EMPTINESS_CLAIMS = [
 ];
 
 /**
+ * Every settled answer federated Search can produce, in either mode.
+ *
+ * Specs used `search-coverage` — the per-domain coverage list — as their "the
+ * search has answered" sentinel. WP07 made that list diagnostics, so while
+ * diagnostics are off it is correctly absent and the sentinel waited forever.
+ *
+ * The sentinel is not the claim those specs make; the href and hit assertions
+ * after it are. So it is re-pointed at the operational states that remain
+ * visible in both modes rather than at the diagnostic one: a build without
+ * Search, an unreadable Search, a true-empty answer, the incomplete-coverage
+ * consequence, or a group of hits. Between them these cover every terminal
+ * state of the panel, so the wait is no weaker than it was — and unlike the
+ * old one it is a wait on product truth.
+ */
+export const SEARCH_SETTLED =
+  "[data-testid='search-not-implemented']," +
+  "[data-testid='search-unavailable']," +
+  "[data-testid='search-empty']," +
+  "[data-testid='search-coverage-incomplete']," +
+  "[data-testid^='search-group-']";
+
+/**
  * Turn diagnostics on for this browser, through the one route that can.
  *
  * WP07 made diagnostics globally off by default and changeable from exactly one

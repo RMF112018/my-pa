@@ -971,9 +971,26 @@ test.describe("Create Task required-field semantics", () => {
     await expect(title).toBeFocused();
 
     // 4. The assertion native `required` could not survive. The form's own
-    //    handler refuses before it builds a request, so nothing is dispatched;
-    //    a short settle gives any stray request time to land and be counted.
-    await page.waitForTimeout(500);
+    //    handler refuses before it builds a request, so nothing is dispatched.
+    //
+    //    `submit()` in `src/components/tasks/task-create-sheet.tsx` calls
+    //    `event.preventDefault()` and then, on an empty Title, sets the error,
+    //    clears the status, focuses the field and *returns* — before
+    //    `dispatchingRef.current = true` and before any request is built. The
+    //    refusal is therefore entirely synchronous: there is never a request in
+    //    flight to wait for, so a delay here could only ever be a guess about
+    //    how long "never" takes.
+    //
+    //    What is needed is an ordering barrier, not a pause. One same-origin
+    //    request is dispatched from the page and awaited; because the listener
+    //    above is registered on this same page, anything the form had dispatched
+    //    was necessarily observed before this one completed.
+    //    `/manifest.webmanifest` is a static file under `web/public`, excluded
+    //    from the middleware matcher in `src/middleware.ts`, so it always
+    //    answers 200 and touches neither the gateway nor the database.
+    await page.evaluate(() =>
+      fetch("/manifest.webmanifest", { cache: "no-store" }).catch(() => undefined),
+    );
     expect(creates, "a refused create must issue no POST /api/tasks").toEqual([]);
 
     // Typing clears the error, so the state is not sticky.

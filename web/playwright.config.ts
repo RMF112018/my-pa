@@ -141,16 +141,23 @@ export default defineConfig({
       // installed-PWA safe areas, and no VoiceOver. Those remain WP09 and no
       // assertion here may be read as covering them.
       //
-      // **Why this lane runs one spec.** The rest of the suite was written
-      // against Chromium at desktop, tablet and Pixel geometry, and 8 of a
-      // sampled 48 existing tests fail on a WebKit phone profile at this head —
-      // stale-response ordering in Search, Board/Calendar operations, and Today
-      // empty/failed-refresh states. None of them is a control-sizing defect and
-      // none is this work package's to fix; widening the lane would hand the
-      // repository a permanently red project and bury the contract it exists to
-      // prove. Expanding this profile across the suite belongs to the regression
-      // campaign (WP-POSTUX-08), which can triage those eight on their merits.
-      testMatch: "**/mobile-foundation.spec.ts",
+      // **Why this lane is curated rather than universal.** Running the whole
+      // suite against this profile at this head collects 121 tests and returns
+      // 99 passed, 18 failed, 4 skipped. None of the 18 is a product defect.
+      // The control run settles that: the same nineteen tests under the
+      // Chromium `mobile` project — identical 393px coarse-pointer geometry —
+      // pass 19 of 19. What differs is not the geometry and not the product,
+      // but the project's *name*. Fourteen of the failures come from
+      // accommodations written as exact-equality guards on the project name
+      // (`=== "webkit"`, `=== "mobile"`, `belowLgChrome`); a seventh project
+      // called `mobile-webkit` satisfies none of them and so takes the
+      // unaccommodated branch. The remaining four are harness races. Rewriting
+      // those guards is real work and a documented residual, but it is not
+      // this lane's work, and admitting the whole suite before it is done
+      // would hand the repository a permanently red project and bury the
+      // contract this lane exists to prove. So the lane takes the specs whose
+      // green is measured and repeatable at this head, and grows by evidence.
+      testMatch: ["**/mobile-foundation.spec.ts", "**/diagnostics-visibility.spec.ts"],
       use: { ...devices["iPhone 15"] },
     },
   ],

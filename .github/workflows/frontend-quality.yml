@@ -332,6 +332,23 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npx playwright install chromium
+      - name: Verify the responsive selection is what this lane claims
+        run: |
+          set -euo pipefail
+          node scripts/verify-e2e-selection.mjs \
+            --project=desktop --project=tablet --project=mobile \
+            --file=e2e/work-acceptance.spec.ts \
+            --file=e2e/today-tasks.spec.ts \
+            --file=e2e/journeys.spec.ts \
+            --file=e2e/intelligence-journey.spec.ts \
+            --file=e2e/constraints-read-plane.spec.ts \
+            --file=e2e/mobile-foundation.spec.ts \
+            --sentinel="Work survives the 200 percent reflow equivalent with reduced motion" \
+            --sentinel="TUX07-AC-013: a failed refresh keeps the rows and marks the surface stale, and never becomes Empty" \
+            --sentinel="every app route redirects to sign-in" \
+            --sentinel="Intelligence is a working surface over seeded report artifacts" \
+            --sentinel="all six read capabilities answer from PostgreSQL through the BFF" \
+            --sentinel="ordinary interactive controls are at least 44 CSS px tall"
       - name: Run desktop, tablet, mobile and Work reflow e2e
         env:
           MYPA_E2E_PYTHON: python
@@ -341,13 +358,75 @@ jobs:
           set -euo pipefail
           python_bin="$(command -v python)"
           test -x "${python_bin}"
-          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/work-acceptance.spec.ts e2e/today-tasks.spec.ts e2e/journeys.spec.ts e2e/intelligence-journey.spec.ts e2e/constraints-read-plane.spec.ts --project=desktop --project=tablet --project=mobile
+          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/work-acceptance.spec.ts e2e/today-tasks.spec.ts e2e/journeys.spec.ts e2e/intelligence-journey.spec.ts e2e/constraints-read-plane.spec.ts e2e/mobile-foundation.spec.ts --project=desktop --project=tablet --project=mobile
+
+  mobile-webkit-postux:
+    name: frontend / mobile-webkit-postux
+    needs: classify
+    if: needs.classify.outputs.applicable == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: my_pa
+          POSTGRES_PASSWORD: ci_throwaway_not_a_secret
+          POSTGRES_DB: my_pa_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username my_pa --dbname my_pa_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+        working-directory: .
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      # WebKit, not Chromium: the whole point of this lane is the engine Safari
+      # ships, at phone geometry. Installing chromium here would run the lane
+      # against the engine three other lanes already cover.
+      - run: npx playwright install webkit
+      - name: Verify the mobile-webkit selection is what this lane claims
+        run: |
+          set -euo pipefail
+          node scripts/verify-e2e-selection.mjs \
+            --project=mobile-webkit \
+            --file=e2e/mobile-foundation.spec.ts \
+            --file=e2e/diagnostics-visibility.spec.ts \
+            --sentinel="the emulation lane really is a coarse pointer" \
+            --sentinel="ordinary interactive controls are at least 44 CSS px tall" \
+            --sentinel="the accepted preference survives navigation and reload"
+      - name: Run the curated WebKit phone lane
+        env:
+          MYPA_E2E_PYTHON: python
+          MYPA_E2E_ADMIN_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/postgres
+          MYPA_E2E_DATABASE_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/my_pa_wp13_e2e
+        run: |
+          set -euo pipefail
+          python_bin="$(command -v python)"
+          test -x "${python_bin}"
+          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/mobile-foundation.spec.ts e2e/diagnostics-visibility.spec.ts --project=mobile-webkit
 
   pwa-offline:
     name: frontend / pwa-offline
     needs: classify
     if: needs.classify.outputs.applicable == 'true'
-    continue-on-error: true
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -383,7 +462,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npx playwright install chromium
-      - name: Run Chromium desktop PWA/offline e2e (INTRODUCED / ADVISORY)
+      - name: Run Chromium desktop PWA/offline e2e (REQUIRED)
         env:
           MYPA_E2E_PYTHON: python
           MYPA_E2E_ADMIN_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/postgres
@@ -573,7 +652,6 @@ jobs:
     name: frontend / degraded-gateway
     needs: classify
     if: needs.classify.outputs.applicable == 'true'
-    continue-on-error: true
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -609,7 +687,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npx playwright install chromium
-      - name: Run dead-gateway unavailable≠empty e2e (INTRODUCED / ADVISORY)
+      - name: Run dead-gateway unavailable≠empty e2e (REQUIRED)
         env:
           MYPA_E2E_PYTHON: python
           MYPA_E2E_ADMIN_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/postgres
@@ -638,7 +716,7 @@ jobs:
 
   required:
     name: frontend / required
-    needs: [classify, static, unit, production-build, contract, security, e2e-critical, accessibility, responsive, delivery-config]
+    needs: [classify, static, unit, production-build, contract, security, e2e-critical, accessibility, responsive, mobile-webkit-postux, pwa-offline, degraded-gateway, delivery-config]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -654,6 +732,9 @@ jobs:
           E2E: ${{ needs.e2e-critical.result }}
           A11Y: ${{ needs.accessibility.result }}
           RESPONSIVE: ${{ needs.responsive.result }}
+          MOBILE_WEBKIT: ${{ needs.mobile-webkit-postux.result }}
+          PWA_OFFLINE: ${{ needs.pwa-offline.result }}
+          DEGRADED_GATEWAY: ${{ needs.degraded-gateway.result }}
           DELIVERY: ${{ needs.delivery-config.result }}
         run: |
           set -euo pipefail
@@ -678,7 +759,7 @@ jobs:
               exit 1
               ;;
           esac
-          for result in "$STATIC" "$UNIT" "$BUILD" "$CONTRACT" "$SECURITY" "$E2E" "$A11Y" "$RESPONSIVE" "$DELIVERY"; do
+          for result in "$STATIC" "$UNIT" "$BUILD" "$CONTRACT" "$SECURITY" "$E2E" "$A11Y" "$RESPONSIVE" "$MOBILE_WEBKIT" "$PWA_OFFLINE" "$DEGRADED_GATEWAY" "$DELIVERY"; do
             if [[ "${result}" != "success" ]]; then
               echo "frontend / required failed: ${result}"
               exit 1

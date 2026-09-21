@@ -8,12 +8,22 @@ the exact pattern currently published in `.github/workflows/frontend-quality.yml
 
 It does not run those jobs. It proves the classifier would have marked the
 synthetic path sets applicable or not.
+
+Applicability decides *whether* the lanes run; the rest of this module decides
+*what they run when they do*, which is the same class of silent failure seen
+from the other end. A lane that is scheduled and selects nothing reports green
+exactly as a lane that was classified away does. So alongside the classifier
+pattern this module pins, against the published workflow text: which specs a
+blocking lane names, which Playwright projects CI actually invokes, that the
+curated `mobile-webkit` lane stays curated, and that each changed lane proves
+its selection before executing it rather than after.
 """
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -221,3 +231,262 @@ class TestWp07DiagnosticsSpecIsCollected:
 
     def test_the_spec_file_exists(self) -> None:
         assert (REPO / "web/e2e/diagnostics-visibility.spec.ts").is_file()
+
+
+def _required_needs() -> list[str]:
+    """The members `frontend / required` waits on, in published order."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    match = re.search(r"name: frontend / required\n\s+needs: \[([^\]]+)\]", text)
+    assert match is not None, "frontend / required needs list is missing"
+    return [item.strip() for item in match.group(1).split(",")]
+
+
+def _job_block(job: str) -> str:
+    """The published text of one job, from its key to the next job key."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    match = re.search(rf"^  {re.escape(job)}:\n", text, re.M)
+    assert match is not None, f"job {job} is not in the workflow"
+    rest = text[match.end() :]
+    nxt = re.search(r"^  [a-z0-9-]+:", rest, re.M)
+    return text[match.start() : match.end() + (nxt.start() if nxt else len(rest))]
+
+
+def _jobs_naming(fragment: str) -> set[str]:
+    """Every job whose published block contains `fragment`."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    jobs = re.findall(r"^  ([a-z0-9-]+):$", text, re.M)
+    return {job for job in jobs if fragment in _job_block(job)}
+
+
+class TestWp08MobileFoundationSpecIsCollected:
+    """WP08-RT-F001 — the strongest mobile evidence gated nothing.
+
+    `mobile-foundation.spec.ts` carries the WP01-WP05 phone-geometry
+    assertions: coarse-pointer control sizing, the 44px target floor, the
+    reflow behaviour the brief was written around. Playwright's default
+    projects match ``**/*.spec.ts``, so it ran locally and it ran for anyone
+    who typed `npm run e2e` — but every blocking lane in `frontend / required`
+    names its specs explicitly, and none of them named this one. The file was
+    therefore free to regress, or to be deleted, without a single required
+    check noticing.
+
+    Mirrors `TestWp07DiagnosticsSpecIsCollected`: the file has to exist, and a
+    lane the gate actually blocks on has to name it.
+    """
+
+    def test_the_spec_file_exists(self) -> None:
+        assert (REPO / "web/e2e/mobile-foundation.spec.ts").is_file()
+
+    def test_a_required_lane_names_it(self) -> None:
+        naming = _jobs_naming("e2e/mobile-foundation.spec.ts")
+        assert naming, "no job in the workflow names e2e/mobile-foundation.spec.ts"
+        required = set(_required_needs())
+        blocking = naming & required
+        assert blocking, (
+            "e2e/mobile-foundation.spec.ts is named only by "
+            f"{sorted(naming)}, none of which frontend / required waits on"
+        )
+
+    def test_the_naming_lane_actually_executes_it(self) -> None:
+        """Naming it in a sentinel argument alone would prove nothing.
+
+        The sentinel step lists the file to `--list` it; the run step is what
+        executes it. A lane that verified the selection and then ran a
+        different selection would satisfy a laxer assertion than this one.
+        """
+        required = set(_required_needs())
+        executing = {
+            job
+            for job in _jobs_naming("e2e/mobile-foundation.spec.ts")
+            if re.search(
+                r"npm run e2e --[^\n]*e2e/mobile-foundation\.spec\.ts",
+                _job_block(job),
+            )
+        }
+        assert executing & required, (
+            "no required lane passes e2e/mobile-foundation.spec.ts to `npm run e2e`"
+        )
+
+
+class TestMobileWebkitProjectIsInvokedByABlockingLane:
+    """WP08-RT-F002 — a Playwright project no workflow ever ran.
+
+    `mobile-webkit` was declared in `playwright.config.ts` and selected by
+    nothing: no job passed ``--project=mobile-webkit``, so the WebKit phone
+    profile existed as configuration and produced no evidence. A project that
+    CI never invokes is indistinguishable from a project that does not work.
+
+    Declaring it is not the claim being protected. The claim is that some job
+    runs it and that the gate blocks on that job.
+    """
+
+    def test_the_project_is_declared_in_the_playwright_config(self) -> None:
+        config = (REPO / "web/playwright.config.ts").read_text(encoding="utf-8")
+        assert 'name: "mobile-webkit"' in config
+
+    def test_a_job_passes_the_project_flag(self) -> None:
+        assert _jobs_naming("--project=mobile-webkit"), (
+            "no job invokes --project=mobile-webkit; the project is dead configuration"
+        )
+
+    def test_that_job_is_a_required_gate_member(self) -> None:
+        invoking = _jobs_naming("--project=mobile-webkit")
+        required = set(_required_needs())
+        assert invoking & required, (
+            f"--project=mobile-webkit is invoked only by {sorted(invoking)}, "
+            "none of which frontend / required waits on"
+        )
+
+    def test_the_lane_installs_the_engine_it_claims_to_test(self) -> None:
+        """WebKit at phone geometry needs the WebKit browser, not Chromium.
+
+        `npx playwright install chromium` followed by `--project=mobile-webkit`
+        fails at launch rather than silently running Chromium, but it fails as
+        an infrastructure error in a required lane, which reads as flakiness
+        and invites a `continue-on-error` rather than a fix.
+        """
+        for job in _jobs_naming("--project=mobile-webkit") & set(_required_needs()):
+            block = _job_block(job)
+            assert "playwright install webkit" in block, (
+                f"{job} runs --project=mobile-webkit without installing webkit"
+            )
+
+
+class TestTheMobileWebkitLaneStaysCurated:
+    """WP08 — the curated lane must not be widened to the whole suite.
+
+    At this head the full suite under `mobile-webkit` collects 121 tests and
+    returns 18 failures, none of them a product defect: fourteen come from
+    accommodations written as exact-equality guards on the project name, and
+    four are harness races. Admitting the whole suite to a *blocking* lane
+    would hand the repository a permanently red required check, and the
+    pressure that creates is to make the lane advisory again — which would
+    destroy the evidence the lane exists to produce.
+
+    So `testMatch` names exactly the two specs whose green is measured and
+    repeatable here. Widening it to ``**/*.spec.ts`` to maximise the test count
+    must fail this test. Growing the lane by evidence means editing this list
+    deliberately, one spec at a time, which is the intended cost.
+    """
+
+    CURATED: ClassVar[list[str]] = [
+        "**/mobile-foundation.spec.ts",
+        "**/diagnostics-visibility.spec.ts",
+    ]
+
+    def _test_match(self) -> str:
+        config = (REPO / "web/playwright.config.ts").read_text(encoding="utf-8")
+        start = config.index('name: "mobile-webkit"')
+        match = re.search(r"^\s+testMatch: (\[[^\]]*\]|\"[^\"]*\"),", config[start:], re.M)
+        assert match is not None, "the mobile-webkit project declares no testMatch"
+        return match.group(1)
+
+    def test_testmatch_names_exactly_the_curated_specs(self) -> None:
+        listed = re.findall(r'"([^"]+)"', self._test_match())
+        assert listed == self.CURATED, (
+            f"the mobile-webkit testMatch is {listed}, expected exactly {self.CURATED}"
+        )
+
+    def test_testmatch_is_not_a_whole_suite_glob(self) -> None:
+        listed = re.findall(r'"([^"]+)"', self._test_match())
+        for pattern in listed:
+            # Each entry must name one spec, not a wildcard over spec names. The
+            # leading `**/` is a directory wildcard and is fine; a `*` in the
+            # filename itself is how a curated list becomes the whole suite.
+            filename = pattern.rsplit("/", 1)[-1]
+            assert "*" not in filename, (
+                f"the mobile-webkit testMatch entry {pattern!r} wildcards the spec name; "
+                "at this head the whole suite is 18 non-product failures in a blocking lane"
+            )
+
+    def test_the_lane_runs_only_specs_the_testmatch_admits(self) -> None:
+        """A spec the lane passes that `testMatch` excludes selects zero tests.
+
+        Playwright intersects the command-line selection with the project's
+        `testMatch` and exits 0 on an empty result, so the mismatch is silent:
+        the lane reports green having run nothing for that file.
+        """
+        admitted = [p.removeprefix("**/") for p in re.findall(r'"([^"]+)"', self._test_match())]
+        for job in _jobs_naming("--project=mobile-webkit"):
+            run = re.search(r"npm run e2e -- ([^\n]*)--project=mobile-webkit", _job_block(job))
+            assert run is not None, job
+            for spec in re.findall(r"\S+\.spec\.ts", run.group(1)):
+                assert any(spec.endswith(name) for name in admitted), (
+                    f"{job} passes {spec} to the mobile-webkit project, whose testMatch "
+                    f"admits only {admitted}; that file would select zero tests"
+                )
+
+
+class TestCollectionSentinelsRunBeforeExecution:
+    """WP08-RT-F008 — a selection check after the run proves nothing.
+
+    Playwright exits 0 on an empty selection and 0 on a selection that is
+    entirely skipped. A renamed spec, a narrowed `testMatch` or a describe
+    block that skips itself on every project in the lane therefore leaves the
+    lane green while it measures nothing. `verify-e2e-selection.mjs` refuses
+    that, and both lanes WP08 changed invoke it.
+
+    Ordering is the entire control. A sentinel step placed after `npm run e2e`
+    still verifies the selection, but only after the lane has already reported
+    on whatever it did or did not run — and if the run step fails first, the
+    sentinel never executes at all. It has to come first.
+    """
+
+    CHANGED_LANES = ("responsive", "mobile-webkit-postux")
+
+    def test_the_sentinel_script_exists(self) -> None:
+        assert (REPO / "web/scripts/verify-e2e-selection.mjs").is_file()
+
+    def test_each_changed_lane_invokes_the_sentinel(self) -> None:
+        for job in self.CHANGED_LANES:
+            assert "scripts/verify-e2e-selection.mjs" in _job_block(job), (
+                f"{job} changed its selection without a sentinel proving what it selects"
+            )
+
+    def test_the_sentinel_precedes_the_run_step_in_each_lane(self) -> None:
+        for job in self.CHANGED_LANES:
+            block = _job_block(job)
+            sentinel = block.index("scripts/verify-e2e-selection.mjs")
+            run = block.index("npm run e2e")
+            assert sentinel < run, (
+                f"{job} invokes verify-e2e-selection.mjs after `npm run e2e`; "
+                "a selection proved after execution proves nothing about that execution"
+            )
+
+    def test_the_sentinel_verifies_the_projects_the_lane_runs(self) -> None:
+        """Verifying a different project than the one executed is the same blind spot.
+
+        The sentinel lists the selection *for the projects it is given*. Given
+        `--project=desktop` while the lane runs `--project=mobile-webkit`, it
+        would happily pass on a selection the lane never touches.
+        """
+        for job in self.CHANGED_LANES:
+            block = _job_block(job)
+            start = block.index("verify-e2e-selection.mjs")
+            run_at = block.index("npm run e2e")
+            assert start < run_at, f"{job} invokes the sentinel after the run step"
+            verified = set(re.findall(r"--project=([a-z-]+)", block[start:run_at]))
+            run_line = re.search(r"npm run e2e -- ([^\n]+)", block)
+            assert run_line is not None, job
+            executed = set(re.findall(r"--project=([a-z-]+)", run_line.group(1)))
+            assert verified == executed, (
+                f"{job} verifies projects {sorted(verified)} but executes {sorted(executed)}"
+            )
+
+    def test_the_sentinel_declares_every_spec_the_lane_runs(self) -> None:
+        """A spec run but not declared to the sentinel is an unverified selection.
+
+        `--file` is both what the sentinel lists and what it requires to
+        contribute at least one test, so a spec left out of the `--file` set is
+        exactly the spec that can silently select nothing.
+        """
+        for job in self.CHANGED_LANES:
+            block = _job_block(job)
+            declared = set(re.findall(r"--file=(\S+\.spec\.ts)", block))
+            run_line = re.search(r"npm run e2e -- ([^\n]+)", block)
+            assert run_line is not None, job
+            executed = set(re.findall(r"(e2e/\S+\.spec\.ts)", run_line.group(1)))
+            assert executed <= declared, (
+                f"{job} runs {sorted(executed - declared)} without declaring them to "
+                "the selection sentinel"
+            )

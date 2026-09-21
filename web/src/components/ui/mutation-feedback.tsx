@@ -229,7 +229,11 @@ export function MutationFeedbackRegion({
   return (
     <div
       data-testid="mutation-feedback-region"
-      className="pointer-events-none fixed inset-x-0 z-40 flex flex-col justify-start gap-2 px-3"
+      // `fixed inset-x-0`: both horizontal edges are physical edges, so the
+      // 12px gutter is inside the ~44px landscape inset. The top offset is an
+      // inline style below because it was already one; the horizontal insets
+      // are classes because `px-3` already was.
+      className="pointer-events-none fixed inset-x-0 z-40 flex flex-col justify-start gap-2 pr-[max(0.75rem,env(safe-area-inset-right))] pl-[max(0.75rem,env(safe-area-inset-left))]"
       style={{
         // Upper overlay, preferred on narrow viewports: the region is anchored to
         // the top and grows downward, its `bottom` left auto. The offset clears

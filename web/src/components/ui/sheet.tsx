@@ -23,11 +23,11 @@ export type SheetTitleVisibility = "visible" | "sr-only";
  */
 const PLACEMENT_CLASS: Record<SheetPlacement, string> = {
   menu:
-    "fixed inset-x-0 bottom-0 z-50 max-h-[min(85dvh,32rem)] overflow-auto rounded-t-[var(--radius-lg)] border-t bg-surface px-5 pt-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-[var(--shadow-elevated)] duration-[var(--motion-normal)] motion-reduce:duration-0 lg:inset-y-0 lg:right-0 lg:left-auto lg:max-h-none lg:w-[min(90vw,32rem)] lg:rounded-none lg:border-l lg:border-t-0 lg:pt-[max(1.25rem,env(safe-area-inset-top))]",
+    "fixed inset-x-0 bottom-0 z-50 max-h-[min(85dvh,32rem)] overflow-auto rounded-t-[var(--radius-lg)] border-t bg-surface pt-5 pr-[max(1.25rem,env(safe-area-inset-right))] pb-[max(1.25rem,env(safe-area-inset-bottom))] pl-[max(1.25rem,env(safe-area-inset-left))] shadow-[var(--shadow-elevated)] duration-[var(--motion-normal)] motion-reduce:duration-0 lg:inset-y-0 lg:right-0 lg:left-auto lg:max-h-none lg:w-[min(90vw,32rem)] lg:rounded-none lg:border-l lg:border-t-0 lg:pt-[max(1.25rem,env(safe-area-inset-top))]",
   detail:
-    "fixed inset-0 z-50 overflow-auto bg-surface px-5 pt-[max(1.25rem,env(safe-area-inset-top))] pb-[max(1.25rem,env(safe-area-inset-bottom))] duration-[var(--motion-normal)] motion-reduce:duration-0 lg:inset-y-0 lg:left-auto lg:w-[min(90vw,32rem)] lg:border-l",
+    "fixed inset-0 z-50 overflow-auto bg-surface pt-[max(1.25rem,env(safe-area-inset-top))] pr-[max(1.25rem,env(safe-area-inset-right))] pb-[max(1.25rem,env(safe-area-inset-bottom))] pl-[max(1.25rem,env(safe-area-inset-left))] duration-[var(--motion-normal)] motion-reduce:duration-0 lg:inset-y-0 lg:left-auto lg:w-[min(90vw,32rem)] lg:border-l",
   inspector:
-    "fixed inset-y-0 right-0 z-50 w-[min(90vw,32rem)] overflow-auto border-l bg-surface px-5 pt-[max(1.25rem,env(safe-area-inset-top))] pb-[max(1.25rem,env(safe-area-inset-bottom))] shadow-[var(--shadow-elevated)] duration-[var(--motion-normal)] motion-reduce:duration-0",
+    "fixed inset-y-0 right-0 z-50 w-[min(90vw,32rem)] overflow-auto border-l bg-surface pt-[max(1.25rem,env(safe-area-inset-top))] pr-[max(1.25rem,env(safe-area-inset-right))] pb-[max(1.25rem,env(safe-area-inset-bottom))] pl-5 shadow-[var(--shadow-elevated)] duration-[var(--motion-normal)] motion-reduce:duration-0",
 };
 
 /*
@@ -88,7 +88,7 @@ export function Sheet({
           ) : null}
           <div className="mt-5">{children}</div>
           <DialogPrimitive.Close
-            className={`absolute right-3 min-h-11 min-w-11 rounded ${CLOSE_CLASS[placement]}`}
+            className={`absolute right-[max(0.75rem,env(safe-area-inset-right))] min-h-11 min-w-11 rounded ${CLOSE_CLASS[placement]}`}
             aria-label="Close panel"
           >
             ×

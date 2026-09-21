@@ -46,7 +46,14 @@ export default function RootLayout({
       <body className="antialiased">
         <a
           href="#main"
-          className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-surface focus:px-3 focus:py-2"
+          /*
+            `<body>` is not positioned, so once this becomes `focus:absolute`
+            its containing block is the initial containing block — the physical
+            viewport under `viewport-fit=cover`. At a flat 8px the first control
+            a keyboard or screen-reader user reaches would appear under the
+            notch.
+          */
+          className="sr-only focus:not-sr-only focus:absolute focus:top-[max(0.5rem,env(safe-area-inset-top))] focus:left-[max(0.5rem,env(safe-area-inset-left))] focus:z-50 focus:rounded focus:bg-surface focus:px-3 focus:py-2"
         >
           Skip to main content
         </a>

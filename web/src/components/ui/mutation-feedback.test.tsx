@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -262,10 +264,18 @@ describe("MutationFeedbackProvider", () => {
     // and it no longer pads below its own content pretending to hold the nav off.
     expect(region.style.bottom).toBe("");
     expect(region.style.paddingBottom).toBe("");
-    // The load-bearing offset — `top: max(0.75rem, env(safe-area-inset-top))` —
-    // cannot be asserted here: jsdom's CSS parser rejects `max()` outright and
-    // drops the whole declaration, so `region.style.top` is `""` whatever the
-    // component sets. Stated rather than faked; the real offset is e2e ground.
-    expect(region.style.top).toBe("");
+    // The load-bearing top offset cannot be asserted through the DOM here:
+    // jsdom's CSS parser rejects `max()` outright and drops the whole
+    // declaration, so `region.style.top` is `""` whether the component sets
+    // `max(...)` or nothing at all. An `expect(region.style.top).toBe("")`
+    // therefore passes in both worlds and proves nothing; it used to stand here
+    // and is deliberately gone. The declaration is pinned at source instead,
+    // which does fail if it is deleted or reworded — it still does not prove the
+    // geometry, which is device/e2e ground.
+    const source = readFileSync(
+      join(process.cwd(), "src/components/ui/mutation-feedback.tsx"),
+      "utf8",
+    );
+    expect(source).toContain('top: "max(0.75rem, env(safe-area-inset-top))"');
   });
 });

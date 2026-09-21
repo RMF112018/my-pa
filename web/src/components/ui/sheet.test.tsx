@@ -111,11 +111,14 @@ describe("Sheet safe-area handling under viewport-fit=cover", () => {
       </Sheet>,
     );
     const tokens = classTokens(screen.getByRole("dialog"));
-    expect(tokens).toContain("px-5");
     expect(tokens).toContain("pt-[max(1.25rem,env(safe-area-inset-top))]");
     expect(tokens).toContain("pb-[max(1.25rem,env(safe-area-inset-bottom))]");
-    // The uniform shorthand cannot express an inset-aware edge, so it must go.
+    // `inset-0` makes the sides physical edges too (the ~44px landscape insets).
+    expect(tokens).toContain("pl-[max(1.25rem,env(safe-area-inset-left))]");
+    expect(tokens).toContain("pr-[max(1.25rem,env(safe-area-inset-right))]");
+    // The uniform shorthands cannot express an inset-aware edge, so they go.
     expect(tokens).not.toContain("p-5");
+    expect(tokens).not.toContain("px-5");
   });
 
   it("pads the menu placement for the bottom inset, and for the top only where lg makes it a full-height rail", () => {
@@ -125,8 +128,11 @@ describe("Sheet safe-area handling under viewport-fit=cover", () => {
       </Sheet>,
     );
     const tokens = classTokens(screen.getByRole("dialog"));
-    expect(tokens).toContain("px-5");
     expect(tokens).toContain("pb-[max(1.25rem,env(safe-area-inset-bottom))]");
+    // `inset-x-0` on mobile makes both sides physical edges.
+    expect(tokens).toContain("pl-[max(1.25rem,env(safe-area-inset-left))]");
+    expect(tokens).toContain("pr-[max(1.25rem,env(safe-area-inset-right))]");
+    expect(tokens).not.toContain("px-5");
     // Mobile: a bottom sheet never touches the notch, so no top inset is spent.
     expect(tokens).toContain("pt-5");
     // lg: `lg:inset-y-0` makes it reach the physical top.
@@ -141,10 +147,15 @@ describe("Sheet safe-area handling under viewport-fit=cover", () => {
       </Sheet>,
     );
     const tokens = classTokens(screen.getByRole("dialog"));
-    expect(tokens).toContain("px-5");
     expect(tokens).toContain("pt-[max(1.25rem,env(safe-area-inset-top))]");
     expect(tokens).toContain("pb-[max(1.25rem,env(safe-area-inset-bottom))]");
+    expect(tokens).toContain("pr-[max(1.25rem,env(safe-area-inset-right))]");
+    // Right-anchored at `w-[min(90vw,32rem)]`: its left edge sits at 10vw, wider
+    // than the 44px landscape inset on any notched device, so it never reaches
+    // the left edge and keeps the plain 1.25rem there.
+    expect(tokens).toContain("pl-5");
     expect(tokens).not.toContain("p-5");
+    expect(tokens).not.toContain("px-5");
   });
 
   it.each(["detail", "inspector"] as const)(

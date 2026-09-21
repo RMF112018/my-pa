@@ -74,7 +74,14 @@ export function NavRail({
   return (
     <nav
       aria-label="Primary"
-      className={`hidden shrink-0 flex-col border-r bg-surface p-2 lg:flex ${collapsed ? "w-16" : "w-[232px]"}`}
+      /*
+       * The rail stretches the full height of the shell row inside
+       * `min-h-screen`, so its bottom — which carries the collapse control
+       * under `mt-auto` — is the physical bottom edge on a tablet, where the
+       * home indicator lives. Its left edge is physical too, but no device that
+       * reaches `lg` reports a non-zero left inset, so it keeps the plain 8px.
+       */
+      className={`hidden shrink-0 flex-col border-r bg-surface pt-2 pr-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pl-2 lg:flex ${collapsed ? "w-16" : "w-[232px]"}`}
     >
       <div className={`mb-3 px-2 ${collapsed ? "sr-only" : "text-lg font-semibold text-interactive"}`}>
         My PA
@@ -124,7 +131,16 @@ export function MobileNav({ onCapture }: { onCapture: () => void }) {
     <>
       <nav
         aria-label="Primary"
-        className="fixed inset-x-0 bottom-0 z-30 flex border-t bg-surface pb-[env(safe-area-inset-bottom)] lg:hidden"
+        /*
+         * `fixed inset-x-0 bottom-0`: bottom, left and right are all physical
+         * edges under `viewport-fit=cover`. `lg:hidden` is no protection from
+         * the side insets — the largest iPhone in landscape is still below
+         * `lg`, and landscape is exactly where the ~44px side insets are live.
+         * The bar has no base horizontal or vertical padding, so a bare `env()`
+         * on a zero base *is* `max(0, env())`; this matches the bottom rule
+         * that was already here, which is left untouched.
+         */
+        className="fixed inset-x-0 bottom-0 z-30 flex border-t bg-surface pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] lg:hidden"
       >
         {left.map((item) => {
           const active = activeFor(pathname, item.href);

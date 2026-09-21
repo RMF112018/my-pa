@@ -91,7 +91,10 @@ export function UtilityRegion({
         {/* Aside stays in the tree for desktop chrome; hide its inspector body on
             mobile so CanvasInspector (and its GETs) mount once — Sheet owns mobile. */}
         {open && !mobile ? (
-          <div className="p-4">
+          /* The aside is `md:block`, and a notched phone in landscape is above
+             `md`, so it becomes the right-most in-flow element there and its
+             right edge is the physical right edge. */
+          <div className="pt-4 pr-[max(1rem,env(safe-area-inset-right))] pb-4 pl-4">
             <InspectorContent pinned={pinned} onPinnedChange={onPinnedChange} />
             <label className="mt-6 block text-xs text-text-muted">
               Inspector width

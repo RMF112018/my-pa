@@ -49,10 +49,30 @@ async function turnOn(page: Page): Promise<void> {
     (response) =>
       response.url().includes("/api/system/diagnostics") && response.request().method() === "POST",
   );
+  // `setEnabled` in `src/components/diagnostics/diagnostics-provider.tsx` does
+  // not stop when the POST resolves: having set state it calls
+  // `router.refresh()`, which issues a client navigation — an RSC GET for the
+  // route this page is already on. Returning as soon as `aria-checked` flips
+  // leaves that navigation in flight, and a `page.goto` issued into it fails
+  // with `Navigation to "X" is interrupted by another navigation to "Y"`. The
+  // race is engine-agnostic; WebKit's scheduler simply loses it more often.
+  // So the helper waits for the refresh's own response — an observable the
+  // refresh actually produces, not a delay — and then for the re-render it
+  // carries to reach the DOM. What the callers assert is unchanged; only the
+  // point at which this helper is entitled to return has moved.
+  const refreshed = page.waitForResponse(
+    (response) =>
+      response.request().method() === "GET" &&
+      (response.url().includes("_rsc=") || response.request().headers()["rsc"] === "1"),
+  );
   await control.click();
   const response = await accepted;
   expect(response.status()).toBe(200);
   await expect(control).toHaveAttribute("aria-checked", "true");
+  await refreshed;
+  // The refreshed server payload is what re-renders the diagnostics region;
+  // its arrival in the DOM is the observable that the navigation has settled.
+  await expect(page.getByTestId("system-readiness")).toBeVisible();
 }
 
 test.describe("diagnostics are off until someone turns them on", () => {

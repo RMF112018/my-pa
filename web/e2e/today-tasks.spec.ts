@@ -468,17 +468,47 @@ test("TUX07-AC-005: rendering Today reads no Task detail, and the first operatio
   const bystanderId = await seedTodayTask(page, bystanderTitle);
 
   const { events } = observeTaskRequests(page);
+
+  /*
+    Count the surface's own foreground revalidations. This test installs no
+    `page.route`, so every `/api/pulse` here is a real answer from the real
+    server and can be counted engine-independently off the response stream.
+    Registered before navigation so nothing is missed.
+  */
+  let revalidations = 0;
+  page.on("response", (response) => {
+    // The same matcher the route-installing tests use, so "a Pulse read" means
+    // the same thing here as it does there.
+    if (PULSE_ROUTE.test(response.url())) revalidations += 1;
+  });
+
   await openToday(page);
   await expect(cardFor(page, operatedTitle)).toBeVisible();
   await expect(cardFor(page, bystanderTitle)).toBeVisible();
 
   /*
-    Sit through more than one foreground revalidation cycle before concluding
-    that rendering fans out to nothing. The policy is a 5s cadence, so a single
-    frame after first paint would not have caught a card that re-reads its Task
-    on every refresh — which is the fan-out shape that actually costs.
+    Wait for more than one foreground revalidation to have actually *happened*
+    before concluding that rendering fans out to nothing. The policy is a 5s
+    cadence (`FOREGROUND_REVALIDATION_INTERVAL_MS`), so a single frame after
+    first paint would not have caught a card that re-reads its Task on every
+    refresh — which is the fan-out shape that actually costs.
+
+    This is strictly stronger than the fixed sleep it replaces, not merely a
+    tidier spelling of it. A sleep passes vacuously if revalidation silently
+    stopped — and a surface that has stopped refreshing is the fan-out
+    regression's own next-door neighbour, so the sleep's failure mode was
+    precisely the one this test must not have. Polling asserts the cadence
+    actually delivered the refreshes whose fan-out is then asserted to be
+    empty. It also returns as soon as the third response lands rather than
+    always burning the whole window.
   */
-  await page.waitForTimeout(12_000);
+  await expect
+    .poll(() => revalidations, {
+      timeout: 60_000,
+      message: "the foreground cadence must actually deliver refreshes to fan out from",
+    })
+    .toBeGreaterThanOrEqual(3);
+
   expect(
     events,
     `rendering Today must read no Task detail:\n${describe(events)}`,
@@ -578,7 +608,11 @@ test("TUX07-AC-013: a failed refresh keeps the rows and marks the surface stale,
   // A real refused response on the client read path. The first render came from
   // the server, so what is being tested is what a *refresh* failure does to an
   // answer that already stands.
+  // This test owns the observable: every 503 the surface sees is one this
+  // handler produced, so refusals can be counted exactly rather than timed.
+  let refusals = 0;
   await page.route(PULSE_ROUTE, async (route) => {
+    refusals += 1;
     await route.fulfill({
       status: 503,
       contentType: "application/json",
@@ -596,8 +630,31 @@ test("TUX07-AC-013: a failed refresh keeps the rows and marks the surface stale,
   await expect(page.getByTestId("pulse-empty")).toHaveCount(0);
   await expect(page.locator("body")).not.toContainText(TODAY_EMPTY_COPY);
 
-  // Give the backoff two more cadences and check it has still not flipped.
-  await page.waitForTimeout(12_000);
+  /*
+    Two *further* refused refreshes, counted, before re-checking that the
+    surface still has not flipped to Empty.
+
+    The fixed 12s delay this replaces did not do what its comment claimed. The
+    failing path backs off 5s → 10s → 30s (`FOREGROUND_REVALIDATION_BACKOFF_MS`),
+    so a flat 12s window buys roughly one to two further attempts depending on
+    where in the ramp it opens, and once backoff has reached 30s it buys none at
+    all. The sleep was not merely slow; it was *under-waiting relative to its own
+    stated intent*, and would have silently observed zero additional refusals.
+
+    Counting the handler's own fulfilments removes the guess: the assertion runs
+    when two more refusals have genuinely been served, and the 90s ceiling is
+    sized for the real ramp (30s + 30s, plus slack) rather than for an assumed
+    flat cadence. In practice this returns in ~15s, because the snapshot is taken
+    while backoff is still near the bottom of the ramp.
+  */
+  const refusalsSoFar = refusals;
+  await expect
+    .poll(() => refusals, {
+      timeout: 90_000,
+      message: "the failing refresh must keep being attempted under backoff",
+    })
+    .toBeGreaterThanOrEqual(refusalsSoFar + 2);
+
   await expect(card).toBeVisible();
   await expect(page.getByTestId("today-empty")).toHaveCount(0);
 });

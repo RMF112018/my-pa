@@ -63,7 +63,10 @@ PostgreSQL or the gateway.
    without printing either value. Synthetic auth, `local_operator` as
    `MYPA_AUTH_MODE`, and Entra/MSAL browser variables are refused. There is no
    caller-configurable Principal variable. Expected Alembic head:
-   `4e9a1c7b2d60`.
+   `e6a4c2f91b73`. Derive the head from the checked-in
+   `migrations/versions` chain at the deployed commit rather than copying it
+   from this runbook; the scripts and the chain are authoritative over any
+   value recorded here.
 6. **Migrate.** Run `ops/nas/migrate.sh` only after a current backup receipt
    and a separately authorized migration instruction. Migration is never an
    application startup side effect and is not authorized by PREPARE alone.

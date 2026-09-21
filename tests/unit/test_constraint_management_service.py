@@ -1955,6 +1955,12 @@ def test_a_create_published_key_does_not_replay_a_create_draft_under_the_same_ke
     Without the operation discriminator in the composite digest a Draft created
     under a key would look like a replay of a create-and-publish carrying the
     same fields, and the caller would be handed an unpublished record.
+
+    The publication half names `DRAFT` deliberately. At the default
+    `IDENTIFIED` the two digests already differ on `target_state`, so the
+    conflict proves nothing about the discriminator; pinning both to `DRAFT`
+    makes the key sets identical and leaves `operation` as the only thing
+    that can separate them.
     """
     world = _world()
     world.service.create_draft(
@@ -1969,7 +1975,11 @@ def test_a_create_published_key_does_not_replay_a_create_draft_under_the_same_ke
         idempotency_key="wp07-create-published-03",
     )
     with pytest.raises(ConstraintIdempotencyConflictError):
-        _create_published(world, idempotency_key="wp07-create-published-03")
+        _create_published(
+            world,
+            idempotency_key="wp07-create-published-03",
+            target_state=ConstraintLifecycleState.DRAFT,
+        )
 
 
 def test_the_publication_half_records_a_derived_key_of_its_own() -> None:

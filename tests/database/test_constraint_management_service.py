@@ -25,6 +25,7 @@ from my_pa.application.constraint_management import (
     ConstraintIdempotencyConflictError,
     ConstraintManagementService,
     ConstraintMutationDisposition,
+    ConstraintMutationResult,
     ConstraintNotFoundError,
     ConstraintOperationError,
     ConstraintPartyError,
@@ -688,6 +689,204 @@ def test_close_with_follow_up_replays_without_a_second_successor(staged: Engine)
     assert again.relationship_id == first.relationship_id
     assert _count(staged, project_constraints) == 2
     assert _count(staged, project_constraint_relationships) == 1
+
+
+# --- Atomic create-and-publish (PC-CM-RUN01-WP07) ----------------------------
+
+
+def _create_published(
+    engine: Engine, category_id: str, **overrides: object
+) -> ConstraintMutationResult:
+    values: dict[str, Any] = {
+        "principal_id": PRINCIPAL_A,
+        "actor": ConstraintMutationActor.PRINCIPAL,
+        "project_id": PROJECT_A,
+        "category_id": category_id,
+        "description": "The permit set is not stamped.",
+        "date_identified": date(2026, 9, 2),
+        "bic": (PRINCIPAL_PARTY,),
+    }
+    values.update(overrides)
+    return _service(engine).create_published(**values)
+
+
+def test_create_published_commits_the_record_both_revisions_and_both_receipts(
+    staged: Engine,
+) -> None:
+    """Evidence 1 and 5, against the stored CHECKs, indexes and deferred cycle.
+
+    One call, one committed published record with a real allocated code, two
+    immutable revisions and two receipts -- and the allocator advanced exactly
+    once.
+    """
+    category_id = _category(staged)
+    result = _create_published(staged, category_id, responsible=(UNRESOLVED_PARTY,))
+
+    assert result.disposition is ConstraintMutationDisposition.APPLIED
+    assert result.record.constraint_code == "DES.01"
+    assert result.record.lifecycle_state is ConstraintLifecycleState.IDENTIFIED
+    assert result.record.version == 2
+    assert result.receipt.operation is ConstraintMutationOperation.PUBLISH
+
+    with staged.begin() as connection:
+        row = connection.execute(
+            select(project_constraints).where(
+                project_constraints.c.constraint_id == result.record.constraint_id
+            )
+        ).one()
+        allocator = connection.execute(
+            select(constraint_categories).where(constraint_categories.c.category_id == category_id)
+        ).one()
+        operations = (
+            connection.execute(
+                select(project_constraint_history.c.operation).order_by(
+                    project_constraint_history.c.occurred_at,
+                    project_constraint_history.c.after_version,
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert row._mapping["constraint_code"] == "DES.01"
+    assert row._mapping["lifecycle_state"] == ConstraintLifecycleState.IDENTIFIED.value
+    assert row._mapping["principal_id"] == PRINCIPAL_A
+    assert (allocator._mapping["next_sequence"], allocator._mapping["issued_count"]) == (2, 1)
+    assert allocator._mapping["prefix_locked_at"] is not None
+    assert list(operations)[-2:] == [
+        ConstraintMutationOperation.CREATE.value,
+        ConstraintMutationOperation.PUBLISH.value,
+    ]
+    assert _count(staged, project_constraints) == 1
+    assert _count(staged, project_constraint_revisions) == 2
+
+
+@pytest.mark.parametrize(
+    ("name", "overrides"),
+    [
+        ("no ball-in-court", {"bic": ()}),
+        ("no description", {"description": None}),
+        ("a category that was never issued", {"category_id": "ccat_neverissuedaaaa01"}),
+    ],
+)
+def test_a_refused_create_published_leaves_no_orphan_and_consumes_no_number(
+    staged: Engine, name: str, overrides: dict[str, Any]
+) -> None:
+    """Evidence 2, and this is the tier that can actually establish it.
+
+    The Draft half has already been written inside the transaction by the time
+    the publication half refuses, so "no orphan record" is a claim about a
+    database rollback rather than about a Python dictionary. All four tables are
+    measured -- the record, its revisions, its receipts and the Category
+    allocator row -- because a failure after code allocation that left the
+    sequence advanced would satisfy any check that looked only at the record.
+    """
+    category_id = _category(staged)
+    before = _count(staged, project_constraint_history)
+    with pytest.raises(Exception):  # noqa: B017 - each case raises its own type
+        _create_published(staged, category_id, **overrides)
+    with staged.begin() as connection:
+        allocator = connection.execute(
+            select(constraint_categories).where(constraint_categories.c.category_id == category_id)
+        ).one()
+    assert _count(staged, project_constraints) == 0
+    assert _count(staged, project_constraint_revisions) == 0
+    assert _count(staged, project_constraint_history) == before
+    assert (allocator._mapping["next_sequence"], allocator._mapping["issued_count"]) == (1, 0)
+    assert allocator._mapping["prefix_locked_at"] is None
+
+
+def test_a_create_published_replay_returns_the_published_record_and_writes_nothing(
+    staged: Engine,
+) -> None:
+    """Evidence 6. CM-BE-AC-065 over the composite, against the stored ledger."""
+    category_id = _category(staged)
+    first = _create_published(staged, category_id, idempotency_key="wp07-db-create-pub-1")
+    again = _create_published(staged, category_id, idempotency_key="wp07-db-create-pub-1")
+
+    assert again.disposition is ConstraintMutationDisposition.REPLAYED
+    assert again.record.constraint_id == first.record.constraint_id
+    assert again.record.constraint_code == first.record.constraint_code
+    assert again.receipt.history_id == first.receipt.history_id
+    assert again.receipt.operation is ConstraintMutationOperation.PUBLISH
+    assert _count(staged, project_constraints) == 1
+    assert _count(staged, project_constraint_revisions) == 2
+    with staged.begin() as connection:
+        allocator = connection.execute(
+            select(constraint_categories).where(constraint_categories.c.category_id == category_id)
+        ).one()
+    assert (allocator._mapping["next_sequence"], allocator._mapping["issued_count"]) == (2, 1)
+
+
+def test_a_create_published_key_reused_for_another_project_conflicts(staged: Engine) -> None:
+    """Evidence 8 and 7. A different Project is different content, never a replay.
+
+    The second request names a Project and Category this Principal genuinely
+    holds, so what refuses it is the request-identity comparison rather than an
+    ownership check -- which is the case worth measuring, because a key silently
+    replaying across Projects would hand a caller a Constraint in the wrong one.
+    """
+    second_project = "prj_svcaaaa0003aaaa"
+    with staged.begin() as connection:
+        connection.execute(
+            insert(projects).values(
+                project_id=second_project,
+                principal_id=PRINCIPAL_A,
+                name="A Second Synthetic Project",
+                state="active",
+                participants=[],
+                opened_at=T0,
+                created_at=T0,
+                updated_at=T0,
+            )
+        )
+    with SqlAlchemyConstraintManagementUnitOfWork(staged) as uow:
+        uow.constraints.insert_project_settings(
+            PRINCIPAL_A,
+            ConstraintProjectSettings(
+                principal_id=PRINCIPAL_A,
+                project_id=second_project,
+                timezone_name=ZONE,
+                version=1,
+                created_at=T0,
+                updated_at=T0,
+            ),
+        )
+    category_id = _category(staged)
+    other = (
+        _service(staged)
+        .create_category(
+            principal_id=PRINCIPAL_A,
+            project_id=second_project,
+            prefix="STR",
+            title="Structural",
+            actor=ConstraintMutationActor.PRINCIPAL,
+        )
+        .record
+    )
+    first = _create_published(staged, category_id, idempotency_key="wp07-db-create-pub-2")
+    with pytest.raises(ConstraintIdempotencyConflictError):
+        _create_published(
+            staged,
+            other.category_id,
+            project_id=second_project,
+            idempotency_key="wp07-db-create-pub-2",
+        )
+    assert _count(staged, project_constraints) == 1
+    assert (
+        _count(
+            staged,
+            project_constraints,
+            project_constraints.c.constraint_id == first.record.constraint_id,
+        )
+        == 1
+    )
+    with staged.begin() as connection:
+        allocator = connection.execute(
+            select(constraint_categories).where(
+                constraint_categories.c.category_id == other.category_id
+            )
+        ).one()
+    assert (allocator._mapping["next_sequence"], allocator._mapping["issued_count"]) == (1, 0)
 
 
 # --- Categories --------------------------------------------------------------

@@ -54,13 +54,11 @@ from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.source.registry import issue_identifier
 
 HANDLER_CAPABILITIES = tuple(capability for capability in Capability if capability in _HANDLERS)
-HANDLER_UNWIRED_CAPABILITIES = frozenset(
-    {
-        # `PC-CM-RUN01-WP06` wired `constraints.portfolio_list`,
-        # `constraints.portfolio_search` and `constraints.portfolio_overview`,
-        # so the Run 01 remainder is the name below.
-        Capability.CONSTRAINTS_CREATE_PUBLISHED,
-    }
+HANDLER_UNWIRED_CAPABILITIES: frozenset[Capability] = frozenset(
+    # `PC-CM-RUN01-WP07` wired `constraints.create_published`, which was the
+    # last declared name without a handler, so this set is empty. It stays a
+    # set, and the rules below stay written against it, because that is the
+    # shape a future package needs to declare a name ahead of wiring it.
 )
 
 
@@ -197,7 +195,7 @@ def test_the_cli_reaches_nothing_http_would_deny(capability: Capability, scene: 
 def test_the_cli_publishes_no_command_for_handler_unwired_capabilities() -> None:
     assert set(Capability) - set(_HANDLERS) == HANDLER_UNWIRED_CAPABILITIES
     assert set(_BUILDERS) == set(_HANDLERS)
-    assert len(_BUILDERS) == 171
+    assert len(_BUILDERS) == 172
     assert not HANDLER_UNWIRED_CAPABILITIES & set(_BUILDERS)
 
 

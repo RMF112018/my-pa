@@ -72,9 +72,9 @@ hash.
 
 The repository is an executable local candidate, not a documentation scaffold.
 The `my_pa` application defines one hundred and seventy-two capabilities and
-wires 171 through HTTP, MCP, and CLI composition, with PostgreSQL Principal
+wires 172 through HTTP, MCP, and CLI composition, with PostgreSQL Principal
 partitioning and two worker
-planes. **A default composition exposes 101 of them.** The six
+planes. **A default composition exposes 102 of them.** The six
 `documents.` names require `MY_PA_MANAGED_DOCUMENT_ROOT`, the
 fifty-five `entities.` names require `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`
 (and its thirty-eight writes a second switch beside it), and the

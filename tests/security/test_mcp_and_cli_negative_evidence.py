@@ -513,6 +513,9 @@ SCOPED_CAPABILITIES = [
         # never a `src_...` or an `enr_...`. All twelve are in
         # `domain.policy.decision._SCOPELESS`.
         Capability.CONSTRAINTS_CREATE,
+        # PC-CM-RUN01-WP07's atomic create-and-publish joins them unchanged: it
+        # composes two of the twelve and names nothing either of them does not.
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
         Capability.CONSTRAINTS_PUBLISH,
         Capability.CONSTRAINTS_UPDATE,
         Capability.CONSTRAINTS_TRANSITION,
@@ -853,6 +856,11 @@ CANVAS_WORKSPACE_EXEMPTION = frozenset({Capability.CANVAS_WORKSPACE_PUT})
 CONSTRAINT_AUTHORING_EXEMPTION = frozenset(
     {
         Capability.CONSTRAINTS_CREATE,
+        # PC-CM-RUN01-WP07. `constraints.create_published` carries the same
+        # `create` verb for the same reason the name above it does: what it
+        # creates is a Constraint in the acting Principal's own partition, never
+        # a configured source.
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
         Capability.CONSTRAINTS_UPDATE,
         Capability.CONSTRAINT_CATEGORIES_CREATE,
         Capability.CONSTRAINT_CATEGORIES_UPDATE,

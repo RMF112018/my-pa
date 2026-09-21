@@ -78,6 +78,7 @@ from my_pa.application.commands import (
     CreateCommitment,
     CreateConstraintCategory,
     CreateConstraintDraft,
+    CreatePublishedConstraint,
     CreateEntity,
     CreateEntityAffiliation,
     CreateEntityAssignment,
@@ -787,6 +788,11 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.CONSTRAINTS_CREATE: CreateConstraintDraft(
             project_id=issue_identifier(IdKind.PROJECT), description="A drafted control."
         ),
+        Capability.CONSTRAINTS_CREATE_PUBLISHED: CreatePublishedConstraint(
+            project_id=issue_identifier(IdKind.PROJECT),
+            category_id=issue_identifier(IdKind.CONSTRAINT_CATEGORY),
+            description="A control, published as it is raised.",
+        ),
         Capability.CONSTRAINTS_PUBLISH: PublishConstraint(
             constraint_id=issue_identifier(IdKind.PROJECT_CONSTRAINT), expected_version=1
         ),
@@ -1144,13 +1150,11 @@ def invoke(
 # service handlers. They are intentionally absent from an invocation matrix
 # whose premise is that dispatch reaches an implemented handler; the domain
 # policy pair matrix still exercises every one directly.
-HANDLER_UNWIRED_CAPABILITIES: Final = frozenset(
-    {
-        # `PC-CM-RUN01-WP06` wired `constraints.portfolio_list`,
-        # `constraints.portfolio_search` and `constraints.portfolio_overview`,
-        # so the Run 01 remainder is the name below.
-        Capability.CONSTRAINTS_CREATE_PUBLISHED,
-    }
+HANDLER_UNWIRED_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    # `PC-CM-RUN01-WP07` wired `constraints.create_published`, which was the
+    # last declared name without a handler, so this set is empty. It stays a
+    # set, and the rules below stay written against it, because that is the
+    # shape a future package needs to declare a name ahead of wiring it.
 )
 CONTRACT_ONLY_CAPABILITIES: Final = frozenset(
     {

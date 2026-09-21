@@ -615,13 +615,11 @@ _GOODNOTES_PULL_CAPABILITIES = frozenset(
         Capability.GOODNOTES_STATUS,
     }
 )
-_RUN01_UNWIRED_CAPABILITIES = frozenset(
-    {
-        # `PC-CM-RUN01-WP06` wired `constraints.portfolio_list`,
-        # `constraints.portfolio_search` and `constraints.portfolio_overview`,
-        # so the Run 01 remainder is the name below.
-        Capability.CONSTRAINTS_CREATE_PUBLISHED,
-    }
+_RUN01_UNWIRED_CAPABILITIES: frozenset[Capability] = frozenset(
+    # `PC-CM-RUN01-WP07` wired `constraints.create_published`, which was the
+    # last declared name without a handler, so this set is empty. It stays a
+    # set, and the rules below stay written against it, because that is the
+    # shape a future package needs to declare a name ahead of wiring it.
 )
 
 
@@ -674,7 +672,7 @@ def test_readiness_stops_reporting_contracts_only_because_the_manifest_is_derive
     assert isinstance(readiness, dict)
     assert readiness["state"] == ReadinessState.DEGRADED.value
     expected_available = set(_HANDLERS) - _GOODNOTES_PULL_CAPABILITIES
-    assert len(expected_available) == 168
+    assert len(expected_available) == 169
     assert readiness["implemented_capabilities"] == len(expected_available)
     assert readiness["limitations"]
     assert "Worker-plane health" in readiness["limitations"][-1]

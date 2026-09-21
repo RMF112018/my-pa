@@ -83,6 +83,7 @@ from my_pa.application.commands import (
     CreateEntityRelationship,
     CreateManagedDocument,
     CreateProject,
+    CreatePublishedConstraint,
     CreateRelationshipMemory,
     CreateSituation,
     CreateTask,
@@ -422,10 +423,13 @@ def _requested_scope(
             | SearchPortfolioConstraints()
             | ReadPortfolioConstraintOverview()
             | ListConstraintCategories()
-            # The twelve Constraint mutations name a Project or a record in the
-            # Principal's own partition and never a configured source, exactly
-            # as the six reads above do (PC-CM-IMP-WP07).
+            # The thirteen Constraint mutations name a Project or a record in
+            # the Principal's own partition and never a configured source,
+            # exactly as the six reads above do (PC-CM-IMP-WP07). The
+            # thirteenth, `constraints.create_published`, is the atomic
+            # create-and-publish added by PC-CM-RUN01-WP07.
             | CreateConstraintDraft()
+            | CreatePublishedConstraint()
             | PublishConstraint()
             | UpdateConstraint()
             | TransitionConstraint()

@@ -31,13 +31,11 @@ PRINCIPAL = Principal(
     authenticated=True,
 )
 FROZEN = datetime(2026, 8, 15, 9, 30, tzinfo=UTC)
-HANDLER_UNWIRED_CAPABILITIES = frozenset(
-    {
-        # `PC-CM-RUN01-WP06` wired `constraints.portfolio_list`,
-        # `constraints.portfolio_search` and `constraints.portfolio_overview`,
-        # so the Run 01 remainder is the name below.
-        Capability.CONSTRAINTS_CREATE_PUBLISHED,
-    }
+HANDLER_UNWIRED_CAPABILITIES: frozenset[Capability] = frozenset(
+    # `PC-CM-RUN01-WP07` wired `constraints.create_published`, which was the
+    # last declared name without a handler, so this set is empty. It stays a
+    # set, and the rules below stay written against it, because that is the
+    # shape a future package needs to declare a name ahead of wiring it.
 )
 
 

@@ -62,13 +62,11 @@ MCP_SOURCE = Path(mcp_module.__file__).read_text(encoding="utf-8")
 HANDLER_CAPABILITIES: Final = tuple(
     capability for capability in Capability if capability in _HANDLERS
 )
-HANDLER_UNWIRED_CAPABILITIES: Final = frozenset(
-    {
-        # `PC-CM-RUN01-WP06` wired `constraints.portfolio_list`,
-        # `constraints.portfolio_search` and `constraints.portfolio_overview`,
-        # so the Run 01 remainder is the name below.
-        Capability.CONSTRAINTS_CREATE_PUBLISHED,
-    }
+HANDLER_UNWIRED_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    # `PC-CM-RUN01-WP07` wired `constraints.create_published`, which was the
+    # last declared name without a handler, so this set is empty. It stays a
+    # set, and the rules below stay written against it, because that is the
+    # shape a future package needs to declare a name ahead of wiring it.
 )
 
 
@@ -131,7 +129,7 @@ def test_tools_list_publishes_exactly_the_local_capability_set(
         for capability in HANDLER_CAPABILITIES
         if capability not in _AUTHENTICATED_CLIENT_CAPABILITIES
     ]
-    assert len(listed.tools) == 168
+    assert len(listed.tools) == 169
     assert all(tool.description for tool in listed.tools), "a tool has no description"
 
 
@@ -140,7 +138,7 @@ def test_handler_unwired_capabilities_publish_no_mcp_tools() -> None:
     assert {tool.name for tool in TOOLS} == {
         capability.value for capability in HANDLER_CAPABILITIES
     }
-    assert len(TOOLS) == 171
+    assert len(TOOLS) == 172
     assert not {capability.value for capability in HANDLER_UNWIRED_CAPABILITIES} & {
         tool.name for tool in TOOLS
     }
@@ -648,7 +646,7 @@ def test_a_child_with_a_managed_root_publishes_every_locally_available_capabilit
     # every name in the withheld set must be one the handler set actually
     # publishes, so that subtracting the set's size is the same as filtering by
     # it. Planted and measured rather than assumed — adding a handler-unwired
-    # name to the frozenset above gives 168 on the left and 167 on the right and
+    # name to the frozenset above gives 169 on the left and 168 on the right and
     # this line fails. It is deliberately *not* the whole claim: that the
     # withheld names are absent and the composed ones present is the business of
     # the three assertions below, and that the surface is the right size at all

@@ -302,8 +302,8 @@ exact current claim disagrees with the tree.
 
 All one hundred and seventy-two capability names and their operator-only flags exist in
 `domain/identity/operation.py`, alongside 45 purposes in `domain/identity/purpose.py`. Of those
-names, 171 have application commands/handlers and the one remaining Run 01 name remains structurally
-unwired. The v1 request,
+names, 172 have application commands/handlers and no Run 01 name remains structurally
+unwired -- `PC-CM-RUN01-WP07` wired `constraints.create_published`, the last one. The v1 request,
 response, disclosure, and error shapes already exist and are contract-tested.
 
 ## 4. What is not implemented

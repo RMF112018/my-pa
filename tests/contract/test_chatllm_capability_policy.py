@@ -25,10 +25,11 @@ _RUN01 = frozenset(
         Capability.PROJECT_CONTROLS_STATUS,
     }
 )
-#: PC-CM-RUN01-WP05, extended by PC-CM-RUN01-WP06. The five of the six that now
-#: have handlers. Kept inside `_RUN01` rather than removed from it, because the
-#: set's other claim — that all six are `DATA_CONDITIONAL` — is unchanged and is
-#: what `_RUN01` is for.
+#: PC-CM-RUN01-WP05, extended by PC-CM-RUN01-WP06 and completed by
+#: PC-CM-RUN01-WP07. All six now have handlers. Kept as its own set rather than
+#: collapsed into `_RUN01`, because the set's other claim — that all six are
+#: `DATA_CONDITIONAL` — is unchanged and is what `_RUN01` is for, and because a
+#: future package declaring a name ahead of wiring it needs the distinction back.
 _RUN01_WIRED = frozenset(
     {
         Capability.PROJECT_CONTROLS_CONFIGURE,
@@ -36,6 +37,7 @@ _RUN01_WIRED = frozenset(
         Capability.CONSTRAINTS_PORTFOLIO_LIST,
         Capability.CONSTRAINTS_PORTFOLIO_SEARCH,
         Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
     }
 )
 _ODR = frozenset(
@@ -84,14 +86,16 @@ def test_control_plane_and_odr_are_never_data_management() -> None:
             assert policy.exclusion_rationale
 
 
-def test_run01_names_are_conditional_and_the_unwired_four_are_unimplemented() -> None:
-    """All six stay `DATA_CONDITIONAL`; two of them now have handlers.
+def test_run01_names_are_conditional_and_every_wired_one_is_implemented() -> None:
+    """All six stay `DATA_CONDITIONAL`; all six now have handlers.
 
     PC-CM-RUN01-WP05 supplied `project_controls.configure` and
-    `project_controls.status`. Their classification did not change and was not
-    changed here — it was already `DATA_CONDITIONAL` when the names landed, and
+    `project_controls.status`, WP06 the three cross-Project reads, and WP07
+    `constraints.create_published`. No classification changed and none was
+    changed here — each was already `DATA_CONDITIONAL` when the name landed, and
     what a classification says is what a name *is*, not whether this build has
-    got round to serving it.
+    got round to serving it. Both halves are still asserted, so a future package
+    that declares a name ahead of wiring it is measured the same way.
     """
     assert set(Capability) - set(_HANDLERS) == _RUN01 - _RUN01_WIRED
     for capability in _RUN01:

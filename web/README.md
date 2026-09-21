@@ -165,8 +165,8 @@ values out of band and never commit them.
 | `MYPA_CANONICAL_ORIGIN` | Required. Origin the BFF sends to the session-service whenever the incoming request carries no `Origin` header — server components, and BFF routes reached by a same-origin GET. Session resolution fails closed without it, and the scheme is significant because the session-service matches origins exactly. Production is `https://pa.bobby-fetting.me` |
 | `MYPA_GATEWAY_URL` | Absolute HTTP(S) URL for the Python gateway; no default |
 | `MYPA_SESSION_SERVICE_URL` | Optional absolute HTTP(S) URL for session-service; unset uses `MYPA_GATEWAY_URL`. Production leaves this unset |
-| `MYPA_SOURCE_COMMIT` | Optional 40–64 hex source commit from the image label; unset or invalid reports as `unknown` |
-| `MYPA_SOURCE_TREE` | Optional 40-hex source tree from the image label; unset or invalid reports as `unknown` |
+| `MYPA_SOURCE_COMMIT` | Optional 40–64 hex source commit supplied as environment; production requires it to equal the `repository_commit` of the deployment manifest the image was gated against; unset or invalid reports as `unknown` |
+| `MYPA_SOURCE_TREE` | Optional 40-hex source tree supplied as environment; production requires it to equal the `repository_tree` of the deployment manifest the image was gated against; unset or invalid reports as `unknown` |
 | `MYPA_GATEWAY_AUTH_MODE` | `local_operator` or `entra`; must match the Python gateway plane |
 | `MYPA_DATA_PROVIDER` | Optional explicit `synthetic` fixture switch; unset means off |
 | `MYPA_ENTRA_HOME_TENANT_ID` | Optional home tenant when configured; not a browser MSAL client id |

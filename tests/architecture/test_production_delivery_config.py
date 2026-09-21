@@ -245,3 +245,141 @@ def test_rollback_refuses_latest_and_missing_and_build(tmp_path: Path) -> None:
 def test_rollback_script_is_executable() -> None:
     assert ROLLBACK.is_file()
     assert stat.S_IXUSR & ROLLBACK.stat().st_mode
+
+
+def _manifest_with(tmp_path: Path, name: str, commit: str, tree: str) -> Path:
+    manifest = tmp_path / name
+    manifest.write_text(
+        EXAMPLE_MANIFEST.read_text(encoding="utf-8")
+        .replace('repository_commit = "REQUIRED_FULL_SHA"', f'repository_commit = "{commit}"')
+        .replace('repository_tree = "REQUIRED_FULL_TREE_SHA"', f'repository_tree = "{tree}"'),
+        encoding="utf-8",
+    )
+    return manifest
+
+
+def _env_with_source(tmp_path: Path, name: str, commit: str | None, tree: str | None) -> Path:
+    text = (NAS / "production-environment.example.env").read_text(encoding="utf-8")
+    example_commit = "MYPA_SOURCE_COMMIT=" + ("a" * 40)
+    example_tree = "MYPA_SOURCE_TREE=" + ("b" * 40)
+    text = text.replace(
+        example_commit,
+        "" if commit is None else f"MYPA_SOURCE_COMMIT={commit}",
+    ).replace(
+        example_tree,
+        "" if tree is None else f"MYPA_SOURCE_TREE={tree}",
+    )
+    env_file = tmp_path / name
+    env_file.write_text(text, encoding="utf-8")
+    return env_file
+
+
+def test_production_env_refuses_well_formed_source_identity_disagreeing_with_manifest(
+    tmp_path: Path,
+) -> None:
+    env = _module(NAS / "validate-production-env.py")
+    deployed_commit = "d190422d6663caf92976cab3392b20fce10b9918"
+    deployed_tree = "ba140b0841c2211b4ba704f9a15ec8fdbcd5193d"
+    wrong_commit = "c" * 40
+    wrong_tree = "e" * 40
+    assert env.SOURCE_COMMIT.fullmatch(wrong_commit) is not None
+    assert env.SOURCE_TREE.fullmatch(wrong_tree) is not None
+    manifest = _manifest_with(tmp_path, "deployed.toml", deployed_commit, deployed_tree)
+    env_file = _env_with_source(tmp_path, "wrong.env", wrong_commit, wrong_tree)
+    errors = env.validate_paths(
+        env_file,
+        NAS / "production-environment.schema.toml",
+        deployment_manifest_path=manifest,
+    )
+    assert "source_commit_manifest_mismatch" in errors
+    assert "source_tree_manifest_mismatch" in errors
+    assert "source_commit_not_full_hex" not in errors
+    assert "source_tree_not_full_hex" not in errors
+
+
+def test_production_env_accepts_source_identity_agreeing_with_manifest(tmp_path: Path) -> None:
+    env = _module(NAS / "validate-production-env.py")
+    deployed_commit = "d190422d6663caf92976cab3392b20fce10b9918"
+    deployed_tree = "ba140b0841c2211b4ba704f9a15ec8fdbcd5193d"
+    manifest = _manifest_with(tmp_path, "deployed.toml", deployed_commit, deployed_tree)
+    env_file = _env_with_source(
+        tmp_path,
+        "agreeing.env",
+        deployed_commit.upper(),
+        deployed_tree.upper(),
+    )
+    errors = env.validate_paths(
+        env_file,
+        NAS / "production-environment.schema.toml",
+        deployment_manifest_path=manifest,
+    )
+    assert errors == []
+
+
+def test_production_env_refuses_absent_source_identity_when_manifest_supplied(
+    tmp_path: Path,
+) -> None:
+    env = _module(NAS / "validate-production-env.py")
+    manifest = _manifest_with(
+        tmp_path,
+        "deployed.toml",
+        "d190422d6663caf92976cab3392b20fce10b9918",
+        "ba140b0841c2211b4ba704f9a15ec8fdbcd5193d",
+    )
+    env_file = _env_with_source(tmp_path, "absent.env", None, None)
+    errors = env.validate_paths(
+        env_file,
+        NAS / "production-environment.schema.toml",
+        deployment_manifest_path=manifest,
+    )
+    assert "source_commit_absent_under_manifest" in errors
+    assert "source_tree_absent_under_manifest" in errors
+
+
+def test_production_env_fails_closed_on_unreadable_deployment_manifest(tmp_path: Path) -> None:
+    env = _module(NAS / "validate-production-env.py")
+    missing = env.validate_paths(
+        NAS / "production-environment.example.env",
+        NAS / "production-environment.schema.toml",
+        deployment_manifest_path=tmp_path / "gone.toml",
+    )
+    assert len(missing) == 1
+    assert missing[0].startswith("input_unreadable:")
+
+    wrong_schema = tmp_path / "wrong.toml"
+    wrong_schema.write_text('schema = "my-pa.nas-production-environment.v1"\n', encoding="utf-8")
+    refused = env.validate_paths(
+        NAS / "production-environment.example.env",
+        NAS / "production-environment.schema.toml",
+        deployment_manifest_path=wrong_schema,
+    )
+    assert refused == ["input_unreadable:unsupported_deployment_manifest_schema"]
+
+
+def test_production_env_cli_refuses_manifest_source_identity_mismatch(tmp_path: Path) -> None:
+    manifest = _manifest_with(
+        tmp_path,
+        "deployed.toml",
+        "d190422d6663caf92976cab3392b20fce10b9918",
+        "ba140b0841c2211b4ba704f9a15ec8fdbcd5193d",
+    )
+    env_file = _env_with_source(tmp_path, "wrong.env", "c" * 40, "e" * 40)
+    completed = subprocess.run(  # noqa: S603
+        [
+            str(NAS / "validate-production-env.py"),
+            "--env",
+            str(env_file),
+            "--schema",
+            str(NAS / "production-environment.schema.toml"),
+            "--deployment-manifest",
+            str(manifest),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 1
+    combined = completed.stdout + completed.stderr
+    assert "production environment refused: " in combined
+    assert "source_commit_manifest_mismatch" in combined
+    assert "source_tree_manifest_mismatch" in combined

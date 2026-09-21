@@ -272,7 +272,10 @@ superseded):
   `synthetic`, `local_operator`, and `entra`. Entra/MSAL browser variables stay
   forbidden. BFF/Python session-service and WebAuthn secret pairs must match;
   [`validate-production-env.py`](validate-production-env.py) compares them
-  without printing either value.
+  without printing either value; given `--deployment-manifest` it also refuses
+  `MYPA_SOURCE_COMMIT` / `MYPA_SOURCE_TREE` that are absent or disagree with
+  the manifest `repository_commit` / `repository_tree` the image gate bound
+  the image labels to.
 - Private smoke is transport-only. Production WebAuthn is observed only at
   `https://pa.bobby-fetting.me` after `PRODUCTION_ACTIVATION_APPROVED`. The
   operator-gated procedure is

@@ -1686,6 +1686,42 @@ test.describe("the normalized Work List at coarse geometry", () => {
       `WP-POSTUX-03 row rhythm on ${test.info().project.name}: ${box!.height.toFixed(1)}px ` +
         `(audited ${AUDITED_ROW_HEIGHT_PX}px, ceiling ${WORK_ROW_HEIGHT_CEILING_PX}px)`,
     );
+    // TEMPORARY DIAGNOSTIC (WP08). This row measures 164.0px under Chromium on
+    // the CI image, 164.0px under both engines on macOS, and 212.0px under
+    // WebKit on that same CI image. Font absence cannot explain a divergence
+    // Chromium does not share, so the open question is which face each engine
+    // resolves `--font-sans` to, and whether the extra height is wrapped lines
+    // or one inflated line box. `getClientRects().length` separates those two:
+    // it counts line boxes directly, which `lineHeight: normal` cannot.
+    const typography = await row.evaluate((element) => {
+      const rowStyle = getComputedStyle(element);
+      const title = element.querySelector<HTMLElement>(
+        "h1,h2,h3,h4,[data-testid*='title'],a,span",
+      );
+      return {
+        row: {
+          fontFamily: rowStyle.fontFamily,
+          fontSize: rowStyle.fontSize,
+          lineHeight: rowStyle.lineHeight,
+          clientHeight: element.clientHeight,
+          scrollHeight: element.scrollHeight,
+        },
+        title: title
+          ? {
+              tag: title.tagName,
+              text: (title.textContent ?? "").slice(0, 48),
+              fontFamily: getComputedStyle(title).fontFamily,
+              fontSize: getComputedStyle(title).fontSize,
+              lineHeight: getComputedStyle(title).lineHeight,
+              lineBoxes: title.getClientRects().length,
+              height: title.getBoundingClientRect().height,
+            }
+          : null,
+      };
+    });
+    console.log(
+      `WP-POSTUX-03 typography on ${test.info().project.name}: ${JSON.stringify(typography)}`,
+    );
     expect(
       box!.height,
       `an ordinary active row must sit under the ${WORK_ROW_HEIGHT_CEILING_PX}px ceiling ` +

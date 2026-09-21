@@ -31,6 +31,9 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   themeColor: "#173F67",
+  // Required for `env(safe-area-inset-*)` to resolve non-zero on iOS. Without
+  // it every safe-area rule in this application is inert.
+  viewportFit: "cover",
 };
 
 export default function RootLayout({

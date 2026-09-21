@@ -157,3 +157,57 @@ describe("Work detail context", () => {
     expect(await screen.findByText(expected)).toBeTruthy();
   });
 });
+
+/*
+  WP09 corrective. The Commitment detail edit form's Counterparty control was a
+  leftover raw `<select className="h-10 …">` — 40px, under the 44px
+  WP03-AC-054 coarse-pointer target, and with no font-size of its own, so it
+  inherited under 16px and triggered automatic iOS focus zoom (the WP01 defect
+  class). It now uses the shared `@/components/ui/select` primitive, like the
+  bench selects migrated in WP-POSTUX-03 / W4.
+
+  `h-[var(--control-height)]` IS the contract, not decoration. WebKit refuses to
+  honour `min-height` on a default-appearance `<select>` and collapses it to its
+  ~22px intrinsic height, so only a *definite* height holds the target there.
+  The old local `h-10` would override the primitive's height, so its absence is
+  as load-bearing as the token's presence.
+*/
+function classTokens(element: Element): string[] {
+  return element.className.split(/\s+/).filter(Boolean);
+}
+
+describe("Commitment detail Counterparty control", () => {
+  async function renderCommitmentDetail() {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      const path = String(input);
+      if (path.includes("/history")) return Response.json({ history: [] });
+      return Response.json({
+        commitment: COMMITMENT,
+        follow_up_task: null,
+        counterparty_options: [COMMITMENT.counterparty],
+      });
+    }));
+    render(<CommitmentDetailView commitmentId={COMMITMENT.commitment_id} />);
+    return (await screen.findByLabelText("Counterparty")) as HTMLSelectElement;
+  }
+
+  it("carries the shared Select primitive's control-height and control-font-size tokens, and no local h-10", async () => {
+    const tokens = classTokens(await renderCommitmentDetail());
+    expect(tokens).toContain("h-[var(--control-height)]");
+    expect(tokens).toContain("min-h-[var(--control-height)]");
+    expect(tokens).toContain("text-[length:var(--control-font-size)]");
+    expect(tokens).not.toContain("h-10");
+  });
+
+  it("preserves the control's behaviour: required native combobox, accessible name, and verified options", async () => {
+    const counterparty = await renderCommitmentDetail();
+    expect(counterparty.tagName).toBe("SELECT");
+    expect(counterparty.required).toBe(true);
+    expect(Array.from(counterparty.options).map((option) => [option.value, option.textContent])).toEqual([
+      [COMMITMENT.counterparty.person_id, COMMITMENT.counterparty.display_name],
+    ]);
+    expect(counterparty.value).toBe(COMMITMENT.counterparty_person_id);
+    await userEvent.selectOptions(counterparty, COMMITMENT.counterparty.person_id);
+    expect(counterparty.value).toBe(COMMITMENT.counterparty_person_id);
+  });
+});

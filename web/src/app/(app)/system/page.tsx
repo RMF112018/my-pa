@@ -28,8 +28,10 @@
  * **The schema head is not restated here and must not be.** A migration revision
  * copied into the web tier is a claim nothing on this side can check, and it was
  * already stale by eight revisions the last time someone tried. Deployed source
- * identity is the labelled `MYPA_SOURCE_COMMIT` / `MYPA_SOURCE_TREE` hex, or
- * `unknown` when those are unset or invalid.
+ * identity is the `MYPA_SOURCE_COMMIT` / `MYPA_SOURCE_TREE` hex supplied as
+ * environment — required by `ops/nas/validate-production-env.py` to agree with
+ * the deployment manifest the image was gated against — or `unknown` when those
+ * are unset or invalid.
  *
  * **Morning Intelligence is `reports.resolve_set` for `morning_brief_inputs`.**
  * `cycle_run_id` is taken from the first `reports.list` item, the same discovery
@@ -575,7 +577,7 @@ export default async function SystemPage() {
             <li>
               Runtime identity: source commit{" "}
               <span data-testid="system-source-commit">{source.sourceCommit}</span>, source tree{" "}
-              {source.sourceTree}. Unset or non-hex labels report as unknown — never a branch
+              {source.sourceTree}. Unset or non-hex values report as unknown — never a branch
               name, never a filesystem path.
             </li>
           </ul>

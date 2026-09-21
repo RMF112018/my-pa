@@ -33,8 +33,13 @@
  * **PWA observation is client-side.** This route does not report this browser's
  * service-worker controller, Cache Storage, online bit, or IndexedDB queue
  * counts — the server cannot know them. Deployed source identity is
- * `runtimeIdentity` from `MYPA_SOURCE_COMMIT` / `MYPA_SOURCE_TREE` image labels,
- * or `unknown` when those are unset or not hex — never a `gitSha` / `commitSha`
+ * `runtimeIdentity` from `MYPA_SOURCE_COMMIT` / `MYPA_SOURCE_TREE`, which are
+ * supplied as environment, not derived from image labels: a `LABEL` is image
+ * metadata and never becomes `process.env`. They are required to agree with the
+ * deployment manifest the image was gated against, and
+ * `ops/nas/validate-production-env.py --deployment-manifest` refuses a
+ * production environment where they do not. This route reports whatever the
+ * environment supplies, or `unknown` when those are unset or not hex — never a `gitSha` / `commitSha`
  * field, never `"main"`, never `process.cwd()`.
  */
 import { NextResponse, type NextRequest } from "next/server";

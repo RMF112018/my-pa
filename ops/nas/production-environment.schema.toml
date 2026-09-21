@@ -200,18 +200,18 @@ required = true
 semantics = "Verified numeric GID for frontend-cloudflared."
 
 # ---------------------------------------------------------------------------
-# Deployed source identity (image labels / web env)
+# Deployed source identity (web env; manifest-bound)
 # ---------------------------------------------------------------------------
 
 [variable.MYPA_SOURCE_COMMIT]
 classification = "non-secret"
 required = true
-semantics = "Full git commit (40–64 hex) baked into the web image. Never a branch name or short SHA."
+semantics = "Full git commit (40–64 hex) supplied as environment; must equal the deployment manifest `repository_commit` the image was gated against. Never a branch name or short SHA."
 
 [variable.MYPA_SOURCE_TREE]
 classification = "non-secret"
 required = true
-semantics = "Full git tree SHA (exactly 40 hex) baked into the web image."
+semantics = "Full git tree SHA (exactly 40 hex) supplied as environment; must equal the deployment manifest `repository_tree` the image was gated against."
 
 # ---------------------------------------------------------------------------
 # Forbidden in production web

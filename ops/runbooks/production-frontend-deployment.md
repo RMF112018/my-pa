@@ -38,9 +38,17 @@ PostgreSQL or the gateway.
    python ops/nas/validate-production-env.py \
      --env /volume1/my-pa/secrets/production.env \
      --schema ops/nas/production-environment.schema.toml \
-     --compose ops/nas/compose.example.yml
+     --compose ops/nas/compose.example.yml \
+     --deployment-manifest /volume1/my-pa/deployment/manifest.toml
    python ops/nas/validate-delivery-config.py
    ```
+
+   `--deployment-manifest` is the step 3 manifest. `MYPA_SOURCE_COMMIT` /
+   `MYPA_SOURCE_TREE` are supplied as environment and are not read from the
+   image labels, so the validator refuses the environment unless they equal
+   the manifest `repository_commit` / `repository_tree` the image gate bound
+   those labels to. Omitting the flag leaves the System page free to report a
+   well-formed but wrong source identity.
 
    Production web `MYPA_AUTH_MODE` is `passkey`.
    `MYPA_GATEWAY_AUTH_MODE` / Python `MY_PA_AUTH_MODE` may remain

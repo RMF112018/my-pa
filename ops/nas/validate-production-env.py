@@ -23,6 +23,7 @@ DIGEST_PINNED = re.compile(
     r"^[^:@\s]+(?:/[^:@\s]+)*:[^:@\s]+@sha256:[0-9a-f]{64}$",
     re.IGNORECASE,
 )
+DEPLOYMENT_MANIFEST_SCHEMA = "my-pa.nas-deployment-manifest.v1"
 SECRET_PAIRS = (
     ("MYPA_SESSION_SERVICE_SECRET", "MY_PA_SESSION_SERVICE_SECRET"),
     ("MYPA_WEBAUTHN_BFF_SECRET", "MY_PA_WEBAUTHN_BFF_SECRET"),
@@ -42,6 +43,14 @@ def load_schema(path: Path) -> dict[str, Any]:
     payload = tomllib.loads(path.read_text(encoding="utf-8"))
     if payload.get("schema") != "my-pa.nas-production-environment.v1":
         raise ValueError("unsupported_environment_schema")
+    return payload
+
+
+def load_deployment_manifest(path: Path) -> dict[str, Any]:
+    """Load the non-secret deployment manifest the image gate binds labels against."""
+    payload = tomllib.loads(path.read_text(encoding="utf-8"))
+    if payload.get("schema") != DEPLOYMENT_MANIFEST_SCHEMA:
+        raise ValueError("unsupported_deployment_manifest_schema")
     return payload
 
 
@@ -141,6 +150,7 @@ def validate_env(
     *,
     compose_text: str | None = None,
     compose_json: Mapping[str, Any] | None = None,
+    deployment_manifest: Mapping[str, Any] | None = None,
 ) -> list[str]:
     errors: list[str] = []
     variables = schema.get("variable")
@@ -222,6 +232,21 @@ def validate_env(
         errors.append("source_commit_not_full_hex")
     if tree and SOURCE_TREE.fullmatch(tree) is None:
         errors.append("source_tree_not_full_hex")
+    if deployment_manifest is not None:
+        # The image gate binds image labels to this manifest; these variables are
+        # supplied as environment and are otherwise unbound, so a well-formed but
+        # wrong hex would be reported by the product as deployed source identity.
+        # Hex case is not a divergence, so compare normalised.
+        for env_name, manifest_key, reason in (
+            ("MYPA_SOURCE_COMMIT", "repository_commit", "source_commit"),
+            ("MYPA_SOURCE_TREE", "repository_tree", "source_tree"),
+        ):
+            supplied = values.get(env_name, "").strip().lower()
+            expected = str(deployment_manifest.get(manifest_key, "")).strip().lower()
+            if not supplied:
+                errors.append(f"{reason}_absent_under_manifest")
+            elif supplied != expected:
+                errors.append(f"{reason}_manifest_mismatch")
 
     for image_key in (
         "MY_PA_APP_IMAGE_ID",
@@ -251,10 +276,14 @@ def validate_paths(
     *,
     compose_path: Path | None = None,
     compose_json_path: Path | None = None,
+    deployment_manifest_path: Path | None = None,
 ) -> list[str]:
+    deployment_manifest: dict[str, Any] | None = None
     try:
         schema = load_schema(schema_path)
         values = load_env(env_path)
+        if deployment_manifest_path is not None:
+            deployment_manifest = load_deployment_manifest(deployment_manifest_path)
     except (OSError, ValueError, tomllib.TOMLDecodeError) as exc:
         return [f"input_unreadable:{exc}"]
     compose_text = None
@@ -266,7 +295,13 @@ def validate_paths(
         if not isinstance(parsed, dict):
             return ["compose_json_not_object"]
         compose_json = parsed
-    return validate_env(values, schema, compose_text=compose_text, compose_json=compose_json)
+    return validate_env(
+        values,
+        schema,
+        compose_text=compose_text,
+        compose_json=compose_json,
+        deployment_manifest=deployment_manifest,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -283,12 +318,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--compose", type=Path, default=None)
     parser.add_argument("--compose-json", type=Path, default=None)
+    parser.add_argument("--deployment-manifest", type=Path, default=None)
     args = parser.parse_args(argv)
     errors = validate_paths(
         args.env,
         args.schema,
         compose_path=args.compose,
         compose_json_path=args.compose_json,
+        deployment_manifest_path=args.deployment_manifest,
     )
     if errors:
         print(

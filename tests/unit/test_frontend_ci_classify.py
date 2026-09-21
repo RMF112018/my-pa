@@ -347,9 +347,38 @@ class TestMobileWebkitProjectIsInvokedByABlockingLane:
         """
         for job in _jobs_naming("--project=mobile-webkit") & set(_required_needs()):
             block = _job_block(job)
-            assert "playwright install webkit" in block, (
+            assert "playwright install" in block and "webkit" in block, (
                 f"{job} runs --project=mobile-webkit without installing webkit"
             )
+
+    def test_every_webkit_install_carries_with_deps(self) -> None:
+        """Downloading WebKit is not the same as being able to launch it.
+
+        `npx playwright install webkit` fetches the browser and nothing else.
+        Chromium happens to run anyway on `ubuntu-latest` because its shared
+        libraries are already on the image; WebKit's are not, so the lane died
+        at `browserType.launch` with `libgtk-4.so.1`, `libgraphene-1.0.so.0`,
+        `libevent-2.1.so.7` and the whole GStreamer set missing. Every one of
+        the 80 tests failed in two to four milliseconds, before a page existed.
+
+        That failure mode is the dangerous one: it is indistinguishable at a
+        glance from the suite being broken, it lands in a *required* lane, and
+        the obvious way to quiet it is the `continue-on-error` this package
+        exists to remove. The repository already had the answer -- the
+        pre-existing `browsers` lane installs `--with-deps firefox webkit` --
+        so this asserts the convention rather than leaving the next lane to
+        rediscover it by burning a CI cycle.
+        """
+        text = WORKFLOW.read_text(encoding="utf-8")
+        offenders = [
+            line.strip()
+            for line in text.splitlines()
+            if "playwright install" in line and "webkit" in line and "--with-deps" not in line
+        ]
+        assert offenders == [], (
+            "a lane installs webkit without --with-deps, so the browser "
+            f"downloads but cannot launch: {offenders}"
+        )
 
 
 class TestTheMobileWebkitLaneStaysCurated:

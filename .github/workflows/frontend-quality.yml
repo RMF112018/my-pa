@@ -401,7 +401,7 @@ jobs:
       # WebKit, not Chromium: the whole point of this lane is the engine Safari
       # ships, at phone geometry. Installing chromium here would run the lane
       # against the engine three other lanes already cover.
-      - run: npx playwright install webkit
+      - run: npx playwright install --with-deps webkit
       - name: Verify the mobile-webkit selection is what this lane claims
         run: |
           set -euo pipefail

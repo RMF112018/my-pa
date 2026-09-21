@@ -281,4 +281,31 @@ describe("TaskCompactSheet", () => {
     expect(screen.queryByTestId("task-cancel-trigger")).toBeNull();
     expect(screen.queryByRole("combobox")).toBeNull();
   });
+
+  /*
+    WP09 corrective. The `detail` Sheet now supplies the bottom safe-area inset
+    itself, so every descendant that used to compensate for its absence is a
+    double-count once the inset is real (~34px of dead space each). This asserts
+    the single-supplier rule structurally rather than asserting that some
+    element somewhere mentions `env(`.
+  */
+  it("supplies the bottom safe-area inset exactly once, at the sheet container", async () => {
+    const { fetcher, release } = gatedFetch();
+    vi.stubGlobal("fetch", fetcher);
+
+    renderSheet(SEED);
+    release();
+    // The canonical article only mounts after hydration; it is one of the
+    // historic double-counters, so the assertion must run after it exists.
+    await screen.findByTestId("task-status-control");
+
+    const dialog = screen.getByRole("dialog");
+    const carriers = [dialog, ...Array.from(dialog.querySelectorAll("*"))].filter(
+      (element) =>
+        typeof element.className === "string" &&
+        element.className.includes("safe-area-inset-bottom"),
+    );
+
+    expect(carriers).toEqual([dialog]);
+  });
 });

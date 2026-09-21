@@ -629,8 +629,17 @@ function TaskDetailViewInner({
     );
   }
 
+  /*
+   * WP09 corrective: this article carried `pb-[env(safe-area-inset-bottom)]`,
+   * which double-counted on both of its render paths. Standalone at
+   * `/work/tasks/[taskId]` it sits inside `AppShell`'s `<main>`, which already
+   * pads `var(--nav-height) + env(safe-area-inset-bottom)`; inside the compact
+   * Sheet the `detail` placement now supplies the inset on the Sheet container.
+   * Cosmetic while the inset resolved to 0px, ~34px of dead space once it does
+   * not. The sibling Commitment article never carried it.
+   */
   return (
-    <article className="mx-auto max-w-4xl pb-[env(safe-area-inset-bottom)]">
+    <article className="mx-auto max-w-4xl">
       {embedded ? null : (
         <Link href="/work?view=all-open" className="text-sm text-moss-green underline">
           ← Work

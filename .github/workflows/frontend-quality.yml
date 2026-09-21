@@ -412,6 +412,49 @@ jobs:
             --sentinel="the emulation lane really is a coarse pointer" \
             --sentinel="ordinary interactive controls are at least 44 CSS px tall" \
             --sentinel="the accepted preference survives navigation and reload"
+      # TEMPORARY DIAGNOSTIC (WP08). Chromium and WebKit disagree about this
+      # runner's fonts and nothing else explains the numbers. At 390px the
+      # WP-POSTUX-03 row measures 164.0px under Chromium on this same image,
+      # 164.0px under both engines on macOS, and 212.0px under WebKit here.
+      # Font *absence* cannot be the cause or Chromium would diverge too, so
+      # the question is which face each engine resolves `--font-sans` to.
+      # This step answers that and changes nothing; it is removed once the
+      # remedy is chosen from its output rather than from guesswork.
+      - name: Report the face each engine resolves (diagnostic only)
+        run: |
+          set +e
+          echo "=== fc-match, as fontconfig sees it ==="
+          for family in sans-serif system-ui ui-sans-serif "-apple-system" "BlinkMacSystemFont" "Segoe UI"; do
+            printf '%-22s -> %s\n' "${family}" "$(fc-match "${family}" 2>/dev/null)"
+          done
+          echo "=== as each engine actually resolves it ==="
+          node -e '
+            const { webkit, chromium } = require("@playwright/test");
+            const STACK = "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif";
+            (async () => {
+              for (const [name, type] of [["webkit", webkit], ["chromium", chromium]]) {
+                try {
+                  const browser = await type.launch();
+                  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+                  await page.setContent(
+                    `<div id="p" style="font-family:${STACK};font-size:16px">Ordinary active row title</div>`,
+                  );
+                  const probe = await page.evaluate(() => {
+                    const el = document.getElementById("p");
+                    const cs = getComputedStyle(el);
+                    const r = el.getBoundingClientRect();
+                    return { family: cs.fontFamily, size: cs.fontSize, lineHeight: cs.lineHeight,
+                             height: r.height, width: r.width };
+                  });
+                  console.log(name, JSON.stringify(probe));
+                  await browser.close();
+                } catch (error) {
+                  console.log(name, "probe failed:", error.message);
+                }
+              }
+            })();
+          '
+          exit 0
       - name: Run the curated WebKit phone lane
         env:
           MYPA_E2E_PYTHON: python

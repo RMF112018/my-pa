@@ -251,6 +251,21 @@ def _job_block(job: str) -> str:
     return text[match.start() : match.end() + (nxt.start() if nxt else len(rest))]
 
 
+def _without_comments(block: str) -> str:
+    """The job block with YAML comment lines removed.
+
+    These assertions read flags out of workflow *text*, and a comment is text.
+    The mobile-WebKit exclusion is documented in prose that necessarily quotes
+    the flags it is explaining -- `--project=mobile`, `--grep-invert` -- and a
+    parser that cannot tell a comment from a command reads that documentation
+    as configuration. It did: the projects assertion failed because the comment
+    explaining where the invariant is still enforced mentions the lane that
+    enforces it. Stripping comments fixes the parser rather than the prose,
+    because the prose is correct and worth keeping.
+    """
+    return "\n".join(line for line in block.splitlines() if not line.lstrip().startswith("#"))
+
+
 def _jobs_naming(fragment: str) -> set[str]:
     """Every job whose published block contains `fragment`."""
     text = WORKFLOW.read_text(encoding="utf-8")
@@ -494,7 +509,8 @@ class TestCollectionSentinelsRunBeforeExecution:
             start = block.index("verify-e2e-selection.mjs")
             run_at = block.index("npm run e2e")
             assert start < run_at, f"{job} invokes the sentinel after the run step"
-            verified = set(re.findall(r"--project=([a-z-]+)", block[start:run_at]))
+            scan = _without_comments(block[start:run_at])
+            verified = set(re.findall(r"--project=([a-z-]+)", scan))
             run_line = re.search(r"npm run e2e -- ([^\n]+)", block)
             assert run_line is not None, job
             executed = set(re.findall(r"--project=([a-z-]+)", run_line.group(1)))
@@ -511,7 +527,7 @@ class TestCollectionSentinelsRunBeforeExecution:
         """
         for job in self.CHANGED_LANES:
             block = _job_block(job)
-            declared = set(re.findall(r"--file=(\S+\.spec\.ts)", block))
+            declared = set(re.findall(r"--file=(\S+\.spec\.ts)", _without_comments(block)))
             run_line = re.search(r"npm run e2e -- ([^\n]+)", block)
             assert run_line is not None, job
             executed = set(re.findall(r"(e2e/\S+\.spec\.ts)", run_line.group(1)))
@@ -519,3 +535,80 @@ class TestCollectionSentinelsRunBeforeExecution:
                 f"{job} runs {sorted(executed - declared)} without declaring them to "
                 "the selection sentinel"
             )
+
+
+class TestTheMobileWebkitExclusionIsExactlyOneNamedTest:
+    """WP08 — the one assertion this lane does not run, pinned by name.
+
+    `an ordinary active row sits under the rhythm ceiling` is excluded from the
+    mobile-WebKit lane, and the reason is measured rather than asserted. The row
+    is 164.0px under Chromium on the CI image and under both engines on macOS,
+    and 212.0px under WebKit on that same image. Fontconfig there resolves every
+    family in `--font-sans` to DejaVu Sans -- no Apple face is installed -- and
+    WebKit sizes a `<select>` from the resolved font, so the Status control is
+    142px rather than 116px, its band overflows the 332px row and reflows onto a
+    second 44px line. 212 - 164 = 48 is that wrapped band; the title reports
+    `lineBoxes: 1` identically everywhere and never wrapped.
+
+    **Why this guard exists at all.** An exclusion is a bypass with a good
+    reason attached, and the reason does not travel. Once `--grep-invert` is in
+    a lane, the next red test has both a precedent and a mechanism, and the
+    second exclusion will not get the scrutiny the first one did. So the shape
+    is pinned: exactly one lane may exclude, exactly one test by that exact
+    name, and the assertion must still be enforced somewhere that can measure
+    it. Widening the exclusion fails here rather than passing quietly.
+    """
+
+    EXCLUDED: ClassVar[str] = "an ordinary active row sits under the rhythm ceiling"
+
+    def test_only_the_mobile_webkit_lane_excludes_anything(self) -> None:
+        text = WORKFLOW.read_text(encoding="utf-8")
+        assert text.count("--grep-invert") == 1, (
+            "exactly one lane may exclude a test by name; a second exclusion "
+            "must be argued on its own evidence, not inherited from this one"
+        )
+        assert "--grep-invert" in _job_block("mobile-webkit-postux")
+
+    def test_it_excludes_that_one_test_and_no_other(self) -> None:
+        block = _job_block("mobile-webkit-postux")
+        found = re.findall(r'--grep-invert\s+"([^"]+)"', block)
+        assert found == [self.EXCLUDED], (
+            f"the mobile-webkit exclusion must be exactly {self.EXCLUDED!r}, got {found!r}"
+        )
+        # A regex alternation would widen the exclusion while still matching a
+        # single --grep-invert, so the pattern must be a plain literal.
+        for metacharacter in ("|", "*", "+", ".*", "(", "["):
+            assert metacharacter not in self.EXCLUDED, metacharacter
+
+    def test_the_excluded_test_actually_exists(self) -> None:
+        """An exclusion naming nothing would silently exclude nothing."""
+        spec = (REPO / "web/e2e/mobile-foundation.spec.ts").read_text(encoding="utf-8")
+        assert f'test("{self.EXCLUDED}"' in spec, (
+            f"{self.EXCLUDED!r} is excluded by name but no test declares that title"
+        )
+
+    def test_the_assertion_is_still_gated_by_a_lane_that_can_measure_it(self) -> None:
+        """The invariant must lose an engine, not its enforcement.
+
+        `responsive` runs the same spec under `--project=mobile` at the same
+        390px and enforces the same ceiling, on Chromium, where the control
+        intrinsic does not depend on the absent font. If that lane ever stops
+        running the spec, or starts excluding things itself, this exclusion
+        stops being a duplicate and starts being a hole.
+        """
+        responsive = _without_comments(_job_block("responsive"))
+        # The *run* command, not the job block: the sentinel also names this
+        # spec in a --file argument, so a block-wide substring check passes on
+        # a lane that has stopped executing it. A perturbation that removed the
+        # spec from the command and left the sentinel argument in place slipped
+        # through exactly that way.
+        run_line = re.search(r"npm run e2e -- ([^\n]+)", responsive)
+        assert run_line is not None, "responsive has no run command"
+        command = run_line.group(1)
+        assert "e2e/mobile-foundation.spec.ts" in command, (
+            "responsive no longer executes mobile-foundation.spec.ts, so the "
+            "mobile-webkit exclusion is a coverage hole rather than a duplicate"
+        )
+        assert "--project=mobile" in command
+        assert "--grep-invert" not in command
+        assert "responsive" in _required_needs()

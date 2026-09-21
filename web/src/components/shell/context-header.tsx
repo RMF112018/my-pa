@@ -139,7 +139,23 @@ export function ContextHeader({
   const reviewActive = activeFor(pathname, "/review");
 
   return (
-    <header className="flex min-h-12 items-center justify-between gap-2 border-b border-border bg-surface px-3 py-1.5">
+    <header
+      /*
+       * Safe-area contract (WP09 corrective). This header is the first in-flow
+       * child of the shell root and the first content in `<body>`, which has
+       * `margin: 0` and no padding. Under `viewport-fit=cover` its box therefore
+       * begins at the *physical* screen top, inside the status bar / Dynamic
+       * Island band — taking the brand, the Review link and the Account button
+       * with it. It also spans the full width at every breakpoint, so its left
+       * and right edges are physical edges in landscape. Each such edge takes
+       * `max(<base>, env(...))`: `max`, never a sum, so a device with a zero
+       * inset renders exactly as it did before. The bottom edge is not padded —
+       * content flows below the header, so it can never reach the home
+       * indicator. `px`/`py` are dropped rather than overridden, because a
+       * shorthand cannot express a per-edge inset.
+       */
+      className="flex min-h-12 items-center justify-between gap-2 border-b border-border bg-surface pt-[max(0.375rem,env(safe-area-inset-top))] pr-[max(0.75rem,env(safe-area-inset-right))] pb-1.5 pl-[max(0.75rem,env(safe-area-inset-left))]"
+    >
       <span className="shrink-0 text-lg font-semibold text-interactive">My PA</span>
       <div className="ml-auto flex min-w-0 items-center justify-end gap-1 lg:hidden">
         <Link

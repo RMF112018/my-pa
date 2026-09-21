@@ -97,7 +97,14 @@ export function OfflineQueueStatus({ principalId }: { principalId: string }) {
     <div
       role="status"
       data-testid="offline-queue-status"
-      className="fixed bottom-2 left-2 z-20 max-w-xs rounded border border-moss-coral bg-surface p-2 text-xs shadow"
+      /*
+       * `fixed`, flush to the bottom and left viewport edges: under
+       * `viewport-fit=cover` 8px puts this inside the ~34px home indicator, and
+       * inside the ~44px landscape left inset. This is the one element whose
+       * whole job is telling the reader their captured work is held on this
+       * device and not saved, so it is the last thing that may be clipped.
+       */
+      className="fixed bottom-[max(0.5rem,env(safe-area-inset-bottom))] left-[max(0.5rem,env(safe-area-inset-left))] z-20 max-w-xs rounded border border-moss-coral bg-surface p-2 text-xs shadow"
     >
       <p data-testid="offline-queue-held">
         <strong>{held}</strong> note{held === 1 ? "" : "s"} held on this device only — not saved on

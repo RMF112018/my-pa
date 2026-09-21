@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -238,7 +240,17 @@ describe("MutationFeedbackProvider", () => {
     expect(screen.queryByText("Failure 0")).toBeNull();
   });
 
-  it("places the region with nav-height / safe-area aware offset", () => {
+  /*
+    WP09 corrective. The previous assertion here only checked that the string
+    `safe-area-inset-bottom` appeared in `paddingBottom`. It did, and the
+    declaration was inert: the region is top-anchored with `bottom` auto, so
+    padding below its content cannot move that content up and cannot keep it
+    clear of the nav. A substring assertion cannot tell a live rule from a dead
+    one, which is how the dead rule survived. The name of this test claims only
+    what the body proves: the inert offset is gone. The load-bearing top offset
+    is unassertable here for the reason given below.
+  */
+  it("leaves no inert bottom offset on the top-anchored feedback region", () => {
     const { api } = renderFeedback();
     act(() => {
       api.publish({
@@ -248,7 +260,22 @@ describe("MutationFeedbackProvider", () => {
       });
     });
     const region = screen.getByTestId("mutation-feedback-region");
-    expect(region.style.paddingBottom).toContain("--nav-height");
-    expect(region.style.paddingBottom).toContain("safe-area-inset-bottom");
+    // The region is top-anchored (bottom auto), so it never sets a bottom edge,
+    // and it no longer pads below its own content pretending to hold the nav off.
+    expect(region.style.bottom).toBe("");
+    expect(region.style.paddingBottom).toBe("");
+    // The load-bearing top offset cannot be asserted through the DOM here:
+    // jsdom's CSS parser rejects `max()` outright and drops the whole
+    // declaration, so `region.style.top` is `""` whether the component sets
+    // `max(...)` or nothing at all. An `expect(region.style.top).toBe("")`
+    // therefore passes in both worlds and proves nothing; it used to stand here
+    // and is deliberately gone. The declaration is pinned at source instead,
+    // which does fail if it is deleted or reworded — it still does not prove the
+    // geometry, which is device/e2e ground.
+    const source = readFileSync(
+      join(process.cwd(), "src/components/ui/mutation-feedback.tsx"),
+      "utf8",
+    );
+    expect(source).toContain('top: "max(0.75rem, env(safe-area-inset-top))"');
   });
 });

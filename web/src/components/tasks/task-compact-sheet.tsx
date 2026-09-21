@@ -36,7 +36,10 @@ export function TaskCompactSheet({ taskId, open, onOpenChange, seed }: TaskCompa
       titleVisibility="sr-only"
       placement="detail"
     >
-      <div data-testid="task-compact-sheet" className="pb-[env(safe-area-inset-bottom)]">
+      {/* The Sheet container is the single supplier of the bottom safe-area
+          inset for this subtree (WP09 corrective); a second one here would
+          double-count it into ~34px of dead space on a notched device. */}
+      <div data-testid="task-compact-sheet">
         <TaskDetailViewConnected taskId={taskId} embedded seed={seed} />
       </div>
     </Sheet>

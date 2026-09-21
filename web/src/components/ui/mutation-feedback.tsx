@@ -229,11 +229,26 @@ export function MutationFeedbackRegion({
   return (
     <div
       data-testid="mutation-feedback-region"
-      className="pointer-events-none fixed inset-x-0 z-40 flex flex-col justify-start gap-2 px-3"
+      // `fixed inset-x-0`: both horizontal edges are physical edges, so the
+      // 12px gutter is inside the ~44px landscape inset. The top offset is an
+      // inline style below because it was already one; the horizontal insets
+      // are classes because `px-3` already was.
+      className="pointer-events-none fixed inset-x-0 z-40 flex flex-col justify-start gap-2 pr-[max(0.75rem,env(safe-area-inset-right))] pl-[max(0.75rem,env(safe-area-inset-left))]"
       style={{
-        // Upper overlay preferred on narrow viewports; bottom inset keeps clear of nav.
+        // Upper overlay, preferred on narrow viewports: the region is anchored to
+        // the top and grows downward, its `bottom` left auto. The offset clears
+        // the notch under viewport-fit=cover.
+        //
+        // WP09 corrective: this previously also set a `paddingBottom` of
+        // `--nav-height` plus the bottom inset, commented as keeping the region
+        // clear of the nav. It could not. Padding below an auto-height,
+        // top-anchored box adds dead space underneath its content; it cannot
+        // move that content upward, and the box is `pointer-events-none` with no
+        // background, so the padding was inert in every respect. The claim is
+        // removed rather than restated. Keeping the stack clear of the nav would
+        // need a real bottom edge and an overflow policy for a tall queue, which
+        // is a behavioural change outside this corrective's scope.
         top: "max(0.75rem, env(safe-area-inset-top))",
-        paddingBottom: "calc(var(--nav-height, 3.5rem) + env(safe-area-inset-bottom, 0px) + 0.75rem)",
       }}
     >
       <ul className="mx-auto flex w-full max-w-lg flex-col gap-2" aria-label="Mutation feedback">

@@ -118,7 +118,16 @@ export function AppShell({
               <div className="min-w-0 flex-1">
                 <main
                   id="main"
-                  className="min-w-0 p-4 pb-[calc(var(--nav-height)+env(safe-area-inset-bottom))] lg:p-6 lg:pb-6"
+                  /*
+                   * Below `lg` the nav rail is hidden, so `main` is the
+                   * full-width in-flow region and its left and right edges are
+                   * physical edges in landscape. It remains the single supplier
+                   * of the bottom inset for its subtree (see work-detail.tsx,
+                   * which gave up its own). At `lg` the shorthand takes over:
+                   * the rail and the utility region own the sides there, and no
+                   * device at that width reports a non-zero side inset.
+                   */
+                  className="min-w-0 pt-4 pr-[max(1rem,env(safe-area-inset-right))] pb-[calc(var(--nav-height)+env(safe-area-inset-bottom))] pl-[max(1rem,env(safe-area-inset-left))] lg:p-6 lg:pb-6"
                 >
                   {children}
                 </main>

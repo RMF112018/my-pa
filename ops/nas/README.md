@@ -286,7 +286,9 @@ superseded):
   [`validate-auth-runtime-evidence.py`](validate-auth-runtime-evidence.py)
   `--allow-template`. Neither file is runtime evidence.
 
-Expected Alembic head for operator assertions: `4e9a1c7b2d60`.
+Expected Alembic head for operator assertions: `e6a4c2f91b73`. Derive the head
+from the `migrations/versions` chain at the deployed commit rather than
+trusting this line.
 
 Later packages own executable behavior:
 

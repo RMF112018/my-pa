@@ -314,6 +314,58 @@ filesystem/permission probes, a configured disk floor, a recent verified backup
 receipt, and a configured maximum age for the last Apple admission. Missing
 configuration or a stale signal refuses.
 
+## Compose provenance labels are not authoritative
+
+Docker Compose writes `com.docker.compose.project.config_files` and
+`com.docker.compose.project.working_dir` when a container is **created**, and
+never updates them afterwards. A service whose image ID and config hash are
+unchanged is not recreated by `up`, so it legitimately keeps the labels from
+whichever checkout first created it, long after the rest of the stack has moved
+to newer runtime directories. This is expected Compose behaviour, not drift,
+and it is normal for the canonical PostgreSQL service in particular: its image
+is the pinned upstream PostgreSQL child, so it stays byte-identical across
+application rebuilds and the container is correctly left running untouched.
+
+**Do not read `config_files` as the definition that governs a running
+service.** The label records history, not authority. The definition in force is
+the Compose file passed to the current lifecycle command, bound through the
+runtime admission and the deployable image manifest.
+
+The realistic mistake this invites: a live PostgreSQL container may name an
+older checkout whose `compose.example.yml` still differs materially from the
+runtime copy — for example still carrying `MYPA_AUTH_MODE: local_operator` and
+omitting `MYPA_SESSION_SERVICE_SECRET` in its `web` block. Editing that file
+because a label pointed at it changes nothing about the running stack, and
+silently diverges from the definition the gates actually enforce.
+
+No gate consults these two labels. `runtime_identity_gate.py` binds running
+identity per service through the container image ID, the
+`com.docker.compose.project` / `com.docker.compose.service` labels, and
+`com.docker.compose.config-hash`. Because `ops/nas/compose.example.yml`
+declares `name: my-pa-nas-contract`, service lookup resolves by project and
+service label regardless of which file created the container. A `config_files`
+or `working_dir` mismatch is therefore a bookkeeping artifact and does not on
+its own cause a fail-closed refusal.
+
+**A creation-era mismatch is not always benign, though.**
+`com.docker.compose.config-hash` is also written at creation, and
+`runtime_identity_gate.py` compares it against `docker compose config --hash`
+computed from the Compose file in force; a divergence refuses as
+`SERVICE_running_config`. So a container created from a materially different
+checkout can still refuse — on its config hash, never on `config_files`. Only
+the provenance-path labels are non-binding.
+
+The other gates do not share one mechanism, and should not be read as if they
+did: `image_gate.py` binds image provenance labels
+(`org.opencontainers.image.revision`, `io.my-pa.repository-tree`,
+`org.opencontainers.image.created`, and `io.my-pa.target-platform`) and
+exempts `postgres` and `proxy` from them, while `preserved_backup_gate.py`
+inspects no container at all.
+
+Correcting such a label requires recreating the container, which is a
+provisioning action with its own operator gate and a real service interruption.
+Do not recreate a healthy PostgreSQL container to tidy a label.
+
 ## Pilot restart policy
 
 [`../nas/compose.pilot.example.yml`](../nas/compose.pilot.example.yml) contains

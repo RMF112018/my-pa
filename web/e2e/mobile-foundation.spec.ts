@@ -1686,41 +1686,42 @@ test.describe("the normalized Work List at coarse geometry", () => {
       `WP-POSTUX-03 row rhythm on ${test.info().project.name}: ${box!.height.toFixed(1)}px ` +
         `(audited ${AUDITED_ROW_HEIGHT_PX}px, ceiling ${WORK_ROW_HEIGHT_CEILING_PX}px)`,
     );
-    // TEMPORARY DIAGNOSTIC (WP08). This row measures 164.0px under Chromium on
-    // the CI image, 164.0px under both engines on macOS, and 212.0px under
-    // WebKit on that same CI image. Font absence cannot explain a divergence
-    // Chromium does not share, so the open question is which face each engine
-    // resolves `--font-sans` to, and whether the extra height is wrapped lines
-    // or one inflated line box. `getClientRects().length` separates those two:
-    // it counts line boxes directly, which `lineHeight: normal` cannot.
-    const typography = await row.evaluate((element) => {
-      const rowStyle = getComputedStyle(element);
-      const title = element.querySelector<HTMLElement>(
-        "h1,h2,h3,h4,[data-testid*='title'],a,span",
-      );
-      return {
-        row: {
-          fontFamily: rowStyle.fontFamily,
-          fontSize: rowStyle.fontSize,
-          lineHeight: rowStyle.lineHeight,
-          clientHeight: element.clientHeight,
-          scrollHeight: element.scrollHeight,
-        },
-        title: title
-          ? {
-              tag: title.tagName,
-              text: (title.textContent ?? "").slice(0, 48),
-              fontFamily: getComputedStyle(title).fontFamily,
-              fontSize: getComputedStyle(title).fontSize,
-              lineHeight: getComputedStyle(title).lineHeight,
-              lineBoxes: title.getClientRects().length,
-              height: title.getBoundingClientRect().height,
-            }
-          : null,
+    // TEMPORARY DIAGNOSTIC (WP08). The row is 164.0px under Chromium on the CI
+    // image and under both engines on macOS, and 212.0px under WebKit on that
+    // same image. The title is not the cause: it reports `lineBoxes: 1` and a
+    // 48px height on every one of them, and `lineHeight` is an explicit 24px
+    // that a wider face cannot inflate. Fontconfig resolves every family in
+    // `--font-sans` to DejaVu Sans on that runner, so the substitution is real
+    // but lands somewhere other than the title. This walks the row and reports
+    // every descendant that occupies vertical space, so the 48px can be
+    // attributed to an element rather than inferred.
+    const layout = await row.evaluate((element) => {
+      const rows: unknown[] = [];
+      const walk = (node: Element, depth: number) => {
+        if (depth > 4) return;
+        for (const child of Array.from(node.children)) {
+          const rect = child.getBoundingClientRect();
+          if (rect.height > 0) {
+            rows.push({
+              depth,
+              tag: child.tagName,
+              testid: child.getAttribute("data-testid"),
+              height: Math.round(rect.height),
+              width: Math.round(rect.width),
+              lineBoxes: child.getClientRects().length,
+              display: getComputedStyle(child).display,
+              wrap: getComputedStyle(child).flexWrap,
+              text: (child.textContent ?? "").trim().slice(0, 32),
+            });
+          }
+          walk(child, depth + 1);
+        }
       };
+      walk(element, 0);
+      return { rowHeight: Math.round(element.getBoundingClientRect().height), children: rows };
     });
     console.log(
-      `WP-POSTUX-03 typography on ${test.info().project.name}: ${JSON.stringify(typography)}`,
+      `WP-POSTUX-03 layout on ${test.info().project.name}: ${JSON.stringify(layout)}`,
     );
     expect(
       box!.height,

@@ -358,8 +358,9 @@ the provenance-path labels are non-binding.
 The other gates do not share one mechanism, and should not be read as if they
 did: `image_gate.py` binds image provenance labels
 (`org.opencontainers.image.revision`, `io.my-pa.repository-tree`,
-`io.my-pa.target-platform`) and exempts `postgres` and `proxy` from them,
-while `preserved_backup_gate.py` inspects no container at all.
+`org.opencontainers.image.created`, and `io.my-pa.target-platform`) and
+exempts `postgres` and `proxy` from them, while `preserved_backup_gate.py`
+inspects no container at all.
 
 Correcting such a label requires recreating the container, which is a
 provisioning action with its own operator gate and a real service interruption.

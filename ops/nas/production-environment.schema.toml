@@ -1,6 +1,8 @@
 # Non-secret production environment schema for https://pa.bobby-fetting.me.
 # Names and semantics only. Never commit live secrets.
-# Expected Alembic head for operator assertions: 4e9a1c7b2d60
+# Expected Alembic head for operator assertions: e6a4c2f91b73
+# Derive the head from the migrations/versions chain at the deployed commit
+# rather than trusting this comment.
 # There is no caller-configurable Principal variable.
 schema = "my-pa.nas-production-environment.v1"
 environment_schema_version = "1"

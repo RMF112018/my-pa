@@ -863,7 +863,7 @@ describe("System reports what is off as off", () => {
     expect(body.runtimeIdentity).toEqual({ sourceCommit: "unknown", sourceTree: "unknown" });
   });
 
-  it("reports labelled source commit and tree when they are hex", async () => {
+  it("reports supplied source commit and tree when they are hex", async () => {
     const commit = `${"a".repeat(40)}`;
     const tree = `${"b".repeat(40)}`;
     vi.stubEnv("MYPA_SOURCE_COMMIT", commit);

@@ -3,8 +3,10 @@
  *
  * Capability readiness is counted off `capabilities.get`. Live worker health is
  * a different field. Connected sources are unknown — never an invented empty
- * list. Deployed identity is `runtimeIdentity` from image labels, never
- * `gitSha` / `commitSha` / `schemaHead` / `"main"`.
+ * list. Deployed identity is `runtimeIdentity` from `MYPA_SOURCE_COMMIT` /
+ * `MYPA_SOURCE_TREE`, supplied as environment and not derived from image
+ * labels, and required to agree with the deployment manifest the image was
+ * gated against, never `gitSha` / `commitSha` / `schemaHead` / `"main"`.
  * PWA fields on this page are labelled as this-browser observations; the server
  * route does not claim them. Morning Intelligence members stay listed when the
  * aggregate is not READY.

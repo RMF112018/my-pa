@@ -577,7 +577,7 @@ export default async function SystemPage() {
             <li>
               Runtime identity: source commit{" "}
               <span data-testid="system-source-commit">{source.sourceCommit}</span>, source tree{" "}
-              {source.sourceTree}. Unset or non-hex labels report as unknown — never a branch
+              {source.sourceTree}. Unset or non-hex values report as unknown — never a branch
               name, never a filesystem path.
             </li>
           </ul>

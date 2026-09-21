@@ -200,7 +200,7 @@ required = true
 semantics = "Verified numeric GID for frontend-cloudflared."
 
 # ---------------------------------------------------------------------------
-# Deployed source identity (image labels / web env)
+# Deployed source identity (web env; manifest-bound)
 # ---------------------------------------------------------------------------
 
 [variable.MYPA_SOURCE_COMMIT]

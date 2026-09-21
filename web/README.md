@@ -88,7 +88,7 @@ All application pages require a verified session. `/sign-in`, `/setup`, and
 | `PATCH /api/commitments/:commitmentId` | `commitments.update` | Applies one expected-version bounded Commitment update |
 | `GET /api/commitments/:commitmentId/history` | `commitments.history` | Reads the Commitment's append-only history |
 | `POST /api/commitments/:commitmentId/close` | `commitments.close` | Closes a Commitment explicitly with validated closure evidence |
-| `/system`, `GET /api/system` | `capabilities.get`, `reports.list`, `reports.resolve_set` | Reports the runtime manifest, readiness, worker planes, and `runtimeIdentity` from image labels (unknown when unset); Morning Intelligence is resolver aggregate and members (READY is not system health); PWA observation is client-side; connected sources remain unknown |
+| `/system`, `GET /api/system` | `capabilities.get`, `reports.list`, `reports.resolve_set` | Reports the runtime manifest, readiness, worker planes, and `runtimeIdentity` supplied as environment and required to agree with the deployment manifest (unknown when unset); Morning Intelligence is resolver aggregate and members (READY is not system health); PWA observation is client-side; connected sources remain unknown |
 | `GET /api/health` | none | Unauthenticated liveness. `{ ok: true, status: "live" }` when `NODE_ENV` parses and `MYPA_AUTH_MODE` is a usable web value; otherwise 503 `misconfigured` with no env echo |
 | `/work/projects/:projectId/constraints` | Constraint read routes below plus `GET /api/projects` | Live read-only Overview, server-filtered/searchable Register with opaque continuation, and lazy detail/history in the shared Inspector. Explicit synthetic mode retains the fixture workspace; a failed live read never falls back to it. Mutation controls remain deferred. |
 | `GET /api/project-controls/projects/:projectId/constraints` | `constraints.list`, `constraints.search` | One Project's Register; a non-empty `q` selects search and applies that command's narrower allowlist, so a filter, sort or grouping sent with a term is refused rather than dropped |
@@ -198,7 +198,8 @@ this file or in image labels.
 export MYPA_AUTH_MODE=passkey
 export MYPA_CANONICAL_ORIGIN=https://pa.bobby-fetting.me
 # Leave MYPA_SESSION_SERVICE_URL unset: session-service is MYPA_GATEWAY_URL.
-# MYPA_SOURCE_COMMIT and MYPA_SOURCE_TREE come from the image labels
+# MYPA_SOURCE_COMMIT and MYPA_SOURCE_TREE are supplied as environment and must
+# equal the deployment manifest `repository_commit` / `repository_tree`
 # (40–64 hex commit; 40 hex tree). Unset or invalid values report as unknown.
 ```
 

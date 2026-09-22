@@ -42,6 +42,10 @@ from my_pa.infrastructure.persistence.tables import (
 ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "e6a4c2f91b73"
 PREVIOUS: Final = "c4f1a8e52d90"
+#: The chain head this revision's test runs against. `6f6ead27d122` (CCA-005 /
+#: WP-TUX-01 legacy direct-Principal origin reconciliation) is additive on
+#: `REVISION`, so `REVISION` is no longer the head.
+HEAD: Final = "6f6ead27d122"
 MIGRATION: Final = (
     ROOT / "migrations" / "versions" / "20260914_e6a4c2f91b73_project_controls_run01_integrity.py"
 )
@@ -99,7 +103,7 @@ def _offline_sql() -> str:
 
 def test_revision_identity_and_frozen_vocabulary_are_exact() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [REVISION]
+    assert script.get_heads() == [HEAD]
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 
     before = _values(_literal("_CAPABILITIES_BEFORE_THIS_REVISION"))

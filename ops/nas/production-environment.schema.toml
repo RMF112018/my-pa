@@ -1,6 +1,6 @@
 # Non-secret production environment schema for https://pa.bobby-fetting.me.
 # Names and semantics only. Never commit live secrets.
-# Expected Alembic head for operator assertions: e6a4c2f91b73
+# Expected Alembic head for operator assertions: 6f6ead27d122
 # Derive the head from the migrations/versions chain at the deployed commit
 # rather than trusting this comment.
 # There is no caller-configurable Principal variable.

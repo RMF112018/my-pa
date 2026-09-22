@@ -602,6 +602,95 @@ def test_attestation_verifier_refuses_interrupted_partial_and_tampered_readback(
     assert module.verify() == ["backup_runtime_attestation_mismatch"]
 
 
+def test_attestation_writer_refuses_interrupted_partial_before_publication(
+    attestation: tuple[ModuleType, dict[str, Path], list[list[str]]],
+) -> None:
+    module, paths, _ = attestation
+    output = paths["evidence"] / f"{paths['dump'].name}.runtime-attestation.toml"
+    partial = paths["evidence"] / f".{output.name}.partial-interrupted"
+    partial.write_text("incomplete", encoding="utf-8")
+
+    assert module.write() == ["backup_runtime_attestation_refused"]
+    assert not output.exists()
+    assert list(paths["evidence"].iterdir()) == [partial]
+    assert partial.read_text(encoding="utf-8") == "incomplete"
+    assert module.verify() == ["backup_runtime_attestation_partial"]
+
+
+@pytest.mark.parametrize(
+    "attack",
+    (
+        "group-writable-file",
+        "world-writable-file",
+        "non-executable-file",
+        "nonroot-file",
+        "hardlink-file",
+        "symlink-file",
+        "writable-parent",
+        "nonroot-parent",
+    ),
+)
+def test_attestation_refuses_untrusted_canonical_clis(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, attack: str
+) -> None:
+    module = _module()
+    tools = tmp_path / "trusted-tools"
+    tools.mkdir(mode=0o755)
+    tools.chmod(0o755)
+    docker = tools / "docker"
+    git = tools / "git"
+    for path in (docker, git):
+        path.write_text("synthetic executable", encoding="utf-8")
+        path.chmod(0o755)
+    tools_inode = tools.stat().st_ino
+    docker_inode = docker.stat().st_ino
+    original_fstat = os.fstat
+    attack_active = False
+
+    def root_fstat(descriptor: int) -> SimpleNamespace:
+        source = original_fstat(descriptor)
+        directory = stat.S_ISDIR(source.st_mode)
+        mode = (source.st_mode & ~0o7777) | 0o755 if directory else source.st_mode
+        owner = 0
+        if attack_active and directory and source.st_ino == tools_inode:
+            if attack == "writable-parent":
+                mode |= 0o022
+            elif attack == "nonroot-parent":
+                owner = 1000
+        if attack_active and source.st_ino == docker_inode and attack == "nonroot-file":
+            owner = 1000
+        return SimpleNamespace(
+            st_mode=mode,
+            st_uid=owner,
+            st_nlink=source.st_nlink,
+            st_size=source.st_size,
+            st_dev=source.st_dev,
+            st_ino=source.st_ino,
+        )
+
+    monkeypatch.setattr(module.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(module.os, "fstat", root_fstat)
+    monkeypatch.setattr(module, "CANONICAL_DOCKER", docker)
+    monkeypatch.setattr(module, "CANONICAL_GIT", git)
+    module._require_root_and_tools()
+
+    attack_active = True
+    if attack == "group-writable-file":
+        docker.chmod(0o775)
+    elif attack == "world-writable-file":
+        docker.chmod(0o757)
+    elif attack == "non-executable-file":
+        docker.chmod(0o644)
+    elif attack == "hardlink-file":
+        os.link(docker, tools / "docker-alias")
+    elif attack == "symlink-file":
+        docker.unlink()
+        docker.symlink_to(git)
+
+    with pytest.raises(OSError):
+        module._require_root_and_tools()
+
+
 def test_attestation_trust_helpers_refuse_symlink_parent_file_mode_and_hardlink(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -203,11 +203,24 @@ def _require_root_and_tools() -> None:
     if os.geteuid() != 0:
         raise OSError("root operator identity required")
     for path, label in ((CANONICAL_DOCKER, "Docker"), (CANONICAL_GIT, "Git")):
-        metadata = path.lstat()
-        if not (
-            stat.S_ISREG(metadata.st_mode) and os.access(path, os.X_OK) and metadata.st_uid == 0
-        ):
-            raise OSError(f"canonical {label} CLI unavailable")
+        parent_fd = _trusted_directory_fd(path.parent, leaf_mode=0o755)
+        try:
+            descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+            try:
+                metadata = os.fstat(descriptor)
+                mode = stat.S_IMODE(metadata.st_mode)
+                if not (
+                    stat.S_ISREG(metadata.st_mode)
+                    and metadata.st_uid == 0
+                    and metadata.st_nlink == 1
+                    and mode & 0o111
+                    and mode & 0o022 == 0
+                ):
+                    raise OSError(f"canonical {label} CLI unavailable")
+            finally:
+                os.close(descriptor)
+        finally:
+            os.close(parent_fd)
 
 
 def _digest_trusted_dump(path: Path) -> tuple[str, int]:
@@ -607,6 +620,9 @@ def _publish_exclusively(output: Path, data: bytes) -> None:
     partial = _partial_path(output)
     parent_fd = _trusted_directory_fd(ATTESTATION_ROOT, leaf_mode=0o700)
     try:
+        partial_prefix = f".{output.name}.partial-"
+        if any(name.startswith(partial_prefix) for name in os.listdir(parent_fd)):  # noqa: PTH208
+            raise OSError("interrupted attestation partial exists")
         descriptor = os.open(
             partial.name,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,

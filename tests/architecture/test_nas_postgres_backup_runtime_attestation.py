@@ -7,6 +7,7 @@ import importlib
 import importlib.util
 import json
 import os
+import stat
 import sys
 import tomllib
 from datetime import UTC, datetime
@@ -606,11 +607,16 @@ def test_attestation_trust_helpers_refuse_symlink_parent_file_mode_and_hardlink(
 ) -> None:
     module = _module()
     original_fstat = os.fstat
+    synthetic_trusted_ancestors = False
 
     def root_fstat(descriptor: int) -> SimpleNamespace:
         source = original_fstat(descriptor)
         return SimpleNamespace(
-            st_mode=source.st_mode,
+            st_mode=(
+                (source.st_mode & ~0o7777) | 0o755
+                if synthetic_trusted_ancestors and stat.S_ISDIR(source.st_mode)
+                else source.st_mode
+            ),
             st_uid=0,
             st_nlink=source.st_nlink,
             st_size=source.st_size,
@@ -619,12 +625,19 @@ def test_attestation_trust_helpers_refuse_symlink_parent_file_mode_and_hardlink(
         )
 
     monkeypatch.setattr(module.os, "fstat", root_fstat)
-    descriptor = module._trusted_directory_fd(ROOT, leaf_mode=0o755)
+    trusted = tmp_path / "trusted"
+    trusted.mkdir(mode=0o755)
+    trusted.chmod(0o755)
+    symlink = tmp_path / "symlink"
+    symlink.symlink_to(trusted, target_is_directory=True)
+    synthetic_trusted_ancestors = True
+    descriptor = module._trusted_directory_fd(trusted, leaf_mode=0o755)
     os.close(descriptor)
     with pytest.raises(OSError):
-        module._trusted_directory_fd(Path("/var"), leaf_mode=0o755)
+        module._trusted_directory_fd(symlink, leaf_mode=0o755)
+    synthetic_trusted_ancestors = False
     with pytest.raises(OSError):
-        module._trusted_directory_fd(Path("/private/tmp"), leaf_mode=0o1777)
+        module._trusted_directory_fd(tmp_path, leaf_mode=0o755)
     monkeypatch.setattr(
         module,
         "_trusted_directory_fd",

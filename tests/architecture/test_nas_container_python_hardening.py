@@ -67,6 +67,14 @@ def _write(path: Path, content: str, *, mode: int = 0o700) -> None:
     path.chmod(mode)
 
 
+def _rewrite_admission(admission: Path, contents: str) -> None:
+    """Mutate a synthetic admission while preserving the launch precondition."""
+    admission.chmod(0o600)
+    admission.write_text(contents, encoding="utf-8")
+    admission.chmod(0o400)
+    assert admission.stat().st_mode & 0o777 == 0o400
+
+
 def _synthetic_wrapper(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path, Path, Path]:
     """Copy the checked-in launcher with only its fixed host paths redirected.
 
@@ -399,7 +407,7 @@ def test_container_python_refuses_malformed_full_admission_before_docker(
         contents += 'unexpected = "synthetic"\n'
     elif mutation == "duplicate":
         contents += 'status = "admitted"\n'
-    admission.write_text(contents, encoding="utf-8")
+    _rewrite_admission(admission, contents)
 
     result = _run(launcher, tools)
 
@@ -429,7 +437,7 @@ def test_container_python_refuses_admission_source_identity_mismatch_before_dock
     )
     repository_path = launcher.parents[2]
     if identity_case == "source-path":
-        admission.write_text(_admission_contents(Path("/synthetic/wrong-source")), encoding="utf-8")
+        _rewrite_admission(admission, _admission_contents(Path("/synthetic/wrong-source")))
     elif identity_case == "commit":
         git_state.write_text(f"{'2' * 40}\n{TREE}\n\n{repository_path}\n", encoding="utf-8")
     elif identity_case == "tree":

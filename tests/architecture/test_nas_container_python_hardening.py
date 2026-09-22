@@ -131,6 +131,11 @@ def _synthetic_wrapper(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path, Pa
         "format=$2\npath=$4\n"
         'case "$format" in\n'
         "  '%u:%a:%F')\n"
+        '    case "${SYNTH_POSTGRES_DATA_CASE:-}:$path" in\n'
+        "      postgres-owned:*/nas/postgres/data) printf '999:700:directory\\n' ;;\n"
+        "      writable-ancestor:*/nas/postgres) printf '0:777:directory\\n' ;;\n"
+        "      unsafe-leaf:*/nas/postgres/data) printf '999:770:directory\\n' ;;\n"
+        "      *)\n"
         '    case "${SYNTH_DOCKER_SOCKET_CASE:-}:$path" in\n'
         "      docker-nonroot-ancestor:*/my-pa-ds-*) printf '1000:700:directory\\n' ;;\n"
         "      docker-writable-ancestor:*/my-pa-ds-*) printf '0:777:directory\\n' ;;\n"
@@ -160,6 +165,7 @@ def _synthetic_wrapper(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path, Pa
         "          *) printf '0:700:directory\\n' ;;\n"
         "        esac ;;\n"
         "        esac ;;\n"
+        "    esac ;;\n"
         "    esac ;;\n"
         "    esac ;;\n"
         "    esac ;;\n"
@@ -464,6 +470,7 @@ def test_attestation_mode_uses_fixed_script_and_mount_permissions(
         python_argv=argv,
         extra_environment={
             "MY_PA_NAS_ROOT": str(tmp_path / "nas"),
+            "SYNTH_POSTGRES_DATA_CASE": "postgres-owned",
             "PYTHONPATH": "/synthetic/forbidden-import-hook",
             "SENSITIVE_PARENT_SENTINEL": "synthetic-secret-marker",
         },
@@ -524,6 +531,38 @@ def test_attestation_mode_refuses_untrusted_host_evidence_before_git_or_docker(
     assert result.returncode != 0
     if mutation == "not-private":
         assert "attestation evidence directory must be root-owned mode 0700" in result.stderr
+    assert not calls.exists()
+    assert not git_calls.exists()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="requires Linux /proc descriptor execution")
+@pytest.mark.parametrize("mutation", ("symlink", "writable-ancestor", "unsafe-leaf"))
+def test_attestation_mode_refuses_untrusted_postgres_data_path_before_git_or_docker(
+    tmp_path: Path, mutation: str
+) -> None:
+    launcher, calls, _environment, git_calls, tools, _admission, _git_state = _synthetic_wrapper(
+        tmp_path
+    )
+    data_path = tmp_path / "nas/postgres/data"
+    extra_environment = {"MY_PA_NAS_ROOT": str(tmp_path / "nas")}
+    if mutation == "symlink":
+        data_path.rename(tmp_path / "nas/postgres/data-real")
+        data_path.symlink_to(tmp_path / "nas/postgres/data-real", target_is_directory=True)
+    else:
+        extra_environment["SYNTH_POSTGRES_DATA_CASE"] = mutation
+    result = _run(
+        launcher,
+        tools,
+        python_argv=("--postgres-backup-attestation",),
+        extra_environment=extra_environment,
+    )
+    assert result.returncode != 0
+    if mutation == "symlink":
+        assert "PostgreSQL data directory is unavailable" in result.stderr
+    elif mutation == "writable-ancestor":
+        assert "trusted path ancestors must not be group- or world-writable" in result.stderr
+    else:
+        assert "PostgreSQL data directory must be mode 0700" in result.stderr
     assert not calls.exists()
     assert not git_calls.exists()
 

@@ -424,6 +424,23 @@ verify_root_owned_private_directory() {
   [ "$metadata" = '0:700:directory' ] || fail "$label must be root-owned mode 0700"
 }
 
+verify_postgres_data_directory() {
+  path=/volume1/my-pa/postgres/data
+  [ ! -L "$path" ] && [ -d "$path" ] || fail "PostgreSQL data directory is unavailable"
+  # The parent remains a trusted root-owned chain. initdb may make only the
+  # leaf postgres-owned; postgres_gate later checks the authenticated RW bind.
+  verify_root_owned_ancestors "${path%/*}"
+  metadata=$("$stat_bin" -c '%u:%a:%F' -- "$path") || \
+    fail "PostgreSQL data directory metadata is unavailable"
+  owner=${metadata%%:*}
+  remainder=${metadata#*:}
+  case "$owner" in
+    ''|*[!0-9]*) fail "PostgreSQL data directory ownership is invalid" ;;
+  esac
+  [ "$remainder" = '700:directory' ] || \
+    fail "PostgreSQL data directory must be mode 0700"
+}
+
 verify_optional_root_owned_regular_file() {
   path=$1
   label=$2
@@ -500,7 +517,7 @@ if [ "$attestation_mode" != ordinary ]; then
   verify_root_owned_private_directory /var/lib/my-pa/postgres-backup-attestations 'attestation evidence directory'
   verify_root_owned_private_directory /volume1/my-pa/deployment 'deployment directory'
   verify_root_owned_private_directory /volume1/my-pa/backups 'backup directory'
-  verify_root_owned_private_directory /volume1/my-pa/postgres/data 'PostgreSQL data directory'
+  verify_postgres_data_directory
   verify_root_owned_private_directory /volume1/my-pa/secrets 'Compose environment directory'
   verify_root_owned_regular_file /volume1/my-pa/secrets/nas.env 'NAS Compose environment'
   verify_root_owned_regular_file /volume1/my-pa/secrets/web.env 'web Compose environment'

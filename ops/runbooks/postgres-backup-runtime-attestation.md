@@ -50,6 +50,13 @@ so operators must preserve root ownership and directory integrity during the
 launch; the Docker socket remains a host-root capability despite the narrow
 mounts.
 
+The PostgreSQL data bind root is an exception to the root-owned input
+directory rule: the official image can make that leaf postgres-owned mode 0700
+after `initdb`. The launcher still requires a non-symlink mode-0700 directory
+under a root-owned, non-writable parent chain. The protected PostgreSQL
+resource gate then verifies that the authenticated container has the exact
+read-write bind mount; the launcher does not assume a fixed postgres UID.
+
 Publication requires the dump to be at most 900 seconds old. Later verification
 checks the recorded creation and attestation times against that publication
 window and rechecks the retained dump and current runtime identity. A retained

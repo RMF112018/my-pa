@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { taskCreateResponse } from "@/lib/task/testing/task-mutation-fixture";
 
 /**
  * WP07 — the raw-transport leg of a failed read follows the global policy.
@@ -1638,7 +1639,9 @@ describe("Work surface", () => {
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       const path = String(input);
       if (path === "/api/tasks" && init?.method === "POST") {
-        return new Response(JSON.stringify({ task: { task_id: "tsk_aaaaaaaa11111111" }, history: {}, replayed: false }), { status: 200, headers: { "content-type": "application/json" } });
+        // A canonical create answer: the surface verifies the whole mutation
+        // before it announces anything.
+        return new Response(JSON.stringify(taskCreateResponse({ taskId: "tsk_aaaaaaaa11111111", title: "Direct task" })), { status: 200, headers: { "content-type": "application/json" } });
       }
       if (path.startsWith("/api/commitments")) return new Response(JSON.stringify({ commitments: [] }), { status: 200, headers: { "content-type": "application/json" } });
       return new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } });
@@ -1756,7 +1759,7 @@ describe("Work surface", () => {
     });
     await act(async () => {
       resolveCreate(
-        new Response(JSON.stringify({ task: { task_id: "tsk_aaaaaaaa11111111" }, history: {}, replayed: false }), {
+        new Response(JSON.stringify(taskCreateResponse({ taskId: "tsk_aaaaaaaa11111111", title: "Direct task" })), {
           status: 200,
           headers: { "content-type": "application/json" },
         }),
@@ -1849,7 +1852,7 @@ describe("Work surface", () => {
           });
         }
         return new Response(
-          JSON.stringify({ task: { task_id: "tsk_aaaaaaaa11111111" }, history: {}, replayed: false }),
+          JSON.stringify(taskCreateResponse({ taskId: "tsk_aaaaaaaa11111111", title: "Direct task" })),
           { status: 200, headers: { "content-type": "application/json" } },
         );
       }
@@ -1889,7 +1892,7 @@ describe("Work surface", () => {
       if (path === "/api/tasks" && init?.method === "POST") {
         createPosts += 1;
         return new Response(
-          JSON.stringify({ task: { task_id: "tsk_aaaaaaaa11111111" }, history: {}, replayed: false }),
+          JSON.stringify(taskCreateResponse({ taskId: "tsk_aaaaaaaa11111111", title: "Direct task" })),
           { status: 200, headers: { "content-type": "application/json" } },
         );
       }
@@ -1914,7 +1917,7 @@ describe("Work surface", () => {
       if (path === "/api/tasks" && init?.method === "POST") {
         createPosts += 1;
         return new Response(
-          JSON.stringify({ task: { task_id: "tsk_aaaaaaaa11111111" }, history: {}, replayed: false }),
+          JSON.stringify(taskCreateResponse({ taskId: "tsk_aaaaaaaa11111111", title: "Direct task" })),
           { status: 200, headers: { "content-type": "application/json" } },
         );
       }
@@ -1955,7 +1958,9 @@ describe("Work surface", () => {
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       const path = String(input);
       if (path === "/api/tasks" && init?.method === "POST") {
-        return new Response(JSON.stringify({ task: { task_id: "tsk_aaaaaaaa11111111" }, history: {}, replayed: false }), { status: 200, headers: { "content-type": "application/json" } });
+        // A canonical create answer: the surface verifies the whole mutation
+        // before it announces anything.
+        return new Response(JSON.stringify(taskCreateResponse({ taskId: "tsk_aaaaaaaa11111111", title: "Direct task" })), { status: 200, headers: { "content-type": "application/json" } });
       }
       return new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } });
     });
@@ -2005,7 +2010,9 @@ describe("Work surface", () => {
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       const path = String(input);
       if (path === "/api/tasks" && init?.method === "POST") {
-        return new Response(JSON.stringify({ task: { task_id: "tsk_aaaaaaaa11111111" }, history: {}, replayed: false }), { status: 200, headers: { "content-type": "application/json" } });
+        // A canonical create answer: the surface verifies the whole mutation
+        // before it announces anything.
+        return new Response(JSON.stringify(taskCreateResponse({ taskId: "tsk_aaaaaaaa11111111", title: "Direct task" })), { status: 200, headers: { "content-type": "application/json" } });
       }
       return new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } });
     });
@@ -2032,7 +2039,7 @@ describe("Work surface", () => {
     const fetcher = vi.fn<typeof fetch>(async (input, init) => {
       const path = String(input);
       if (path === "/api/tasks" && init?.method === "POST") {
-        return new Response(JSON.stringify({ task: { task_id: "tsk_aaaaaaaa11111111" }, history: {}, replayed: false }), {
+        return new Response(JSON.stringify(taskCreateResponse({ taskId: "tsk_aaaaaaaa11111111", title: "Direct task" })), {
           status: 200,
           headers: { "content-type": "application/json" },
         });

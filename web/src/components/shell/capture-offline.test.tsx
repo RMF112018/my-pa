@@ -40,7 +40,28 @@ afterEach(() => {
   webLocks.restore();
 });
 
+import { useReducer, type ComponentProps } from "react";
 import { CaptureDialog } from "@/components/shell/capture-dialog";
+import { beginCaptureExperience, captureSessionReducer } from "@/lib/capture/session";
+/**
+ * The dialog no longer owns its draft, kind or Project — the shell does. This
+ * harness is that owner, so these tests exercise the real reducer rather than a
+ * stub of it.
+ */
+function CaptureHarness(
+  props: Omit<ComponentProps<typeof CaptureDialog>, "session" | "dispatch">,
+) {
+  const [session, dispatch] = useReducer(captureSessionReducer, undefined, () =>
+    beginCaptureExperience({
+      experienceId: "capture-test",
+      principalId: props.principalId,
+      sessionEpoch: 0,
+      projectId: null,
+    }),
+  );
+  return <CaptureDialog {...props} session={session} dispatch={dispatch} />;
+}
+
 import { openOfflineDatabase } from "@/lib/offline/db";
 import { queueSnapshot } from "@/lib/offline/queue";
 
@@ -58,7 +79,7 @@ afterEach(() => {
 
 async function saveWhileOffline(note = NOTE) {
   const user = userEvent.setup();
-  render(<CaptureDialog open onClose={() => {}} principalId={PRINCIPAL_ID} />);
+  render(<CaptureHarness open onClose={() => {}} principalId={PRINCIPAL_ID} />);
   await user.click(await screen.findByTestId("capture-choice-quick_note"));
   await user.type(screen.getByTestId("capture-field"), note);
   await user.click(screen.getByRole("button", { name: "Save" }));
@@ -144,7 +165,7 @@ describe("Create Task is not a capture and cannot enter the offline queue", () =
     const onCreateTask = vi.fn();
     const user = userEvent.setup();
     render(
-      <CaptureDialog
+      <CaptureHarness
         open
         onClose={() => {}}
         principalId={PRINCIPAL_ID}

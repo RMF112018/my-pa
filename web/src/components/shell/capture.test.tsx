@@ -46,9 +46,31 @@ vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) 
       diagnostics.enabled ? children : null,
   };
 });
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useReducer, type ComponentProps } from "react";
+import { contentSha256 } from "@/lib/capture/receipt";
 import { CaptureDialog } from "@/components/shell/capture-dialog";
+import { beginCaptureExperience, captureSessionReducer } from "@/lib/capture/session";
+/**
+ * The dialog no longer owns its draft, kind or Project — the shell does. This
+ * harness is that owner, so these tests exercise the real reducer rather than a
+ * stub of it.
+ */
+function CaptureHarness(
+  props: Omit<ComponentProps<typeof CaptureDialog>, "session" | "dispatch">,
+) {
+  const [session, dispatch] = useReducer(captureSessionReducer, undefined, () =>
+    beginCaptureExperience({
+      experienceId: "capture-test",
+      principalId: props.principalId,
+      sessionEpoch: 0,
+      projectId: null,
+    }),
+  );
+  return <CaptureDialog {...props} session={session} dispatch={dispatch} />;
+}
+
 
 // The offline hold is proved in `capture-offline.test.tsx` against the real
 // queue; here the module is a spy so the chooser can be held to writing nothing.
@@ -67,16 +89,79 @@ const NOTE = "synthetic note epsilon — flange tolerance review";
  */
 const PRINCIPAL_ID = "syn-aaaa0001";
 
+/**
+ * Answer the capture POST with `body`, and every other request with an empty
+ * Project page.
+ *
+ * A fresh `Response` per call rather than one shared instance: the dialog now
+ * also reads `/api/projects` for its Project chooser, and a body can only be
+ * consumed once — a single shared Response made the second read fail as
+ * unreadable content.
+ */
 function respond(body: unknown, status = 200) {
-  return vi
-    .spyOn(globalThis, "fetch")
-    .mockResolvedValue(new Response(JSON.stringify(body), { status }));
+  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    if (!String(input).startsWith("/api/capture")) {
+      return new Response(JSON.stringify({ projects: [], nextCursor: null }), { status: 200 });
+    }
+    return new Response(JSON.stringify(body), { status });
+  });
+}
+
+/** The parsed body of the one capture POST, ignoring Project reads. */
+function capturePostBody(spy: ReturnType<typeof respond>): Record<string, unknown> {
+  const call = spy.mock.calls.find(
+    ([input, init]) =>
+      String(input).startsWith("/api/capture") &&
+      String((init as RequestInit | undefined)?.method).toUpperCase() === "POST",
+  );
+  if (!call) throw new Error("no capture POST was issued");
+  return JSON.parse(String((call[1] as RequestInit).body));
+}
+
+/**
+ * Answer the capture POST with a complete canonical receipt for what was sent.
+ *
+ * The browser now verifies the whole acknowledgement — Principal, key, kind,
+ * content digest and Project — before it says anything was saved, so a stub with
+ * a receipt identifier on it is no longer a stub of a durable save. The digest
+ * and the key have to come from the request, because both are minted at runtime.
+ */
+function respondPersisted(receiptOverrides: Record<string, unknown> = {}, topLevel: Record<string, unknown> = {}) {
+  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const path = String(input);
+    if (!path.startsWith("/api/capture")) {
+      return new Response(JSON.stringify({ projects: [], nextCursor: null }), { status: 200 });
+    }
+    const sent = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    return new Response(
+      JSON.stringify({
+        shape: "backend",
+        status: "persisted",
+        captureKind: sent.captureKind,
+        created: true,
+        receipt: {
+          receiptId: "rcpt_aaaaaaaa11111111",
+          captureId: "cap_aaaaaaaa11111111",
+          versionId: "capver_aaaaaaaa11111111",
+          versionNumber: 1,
+          idempotencyKey: sent.idempotencyKey,
+          contentSha256: await contentSha256(String(sent.text ?? "")),
+          principalId: PRINCIPAL_ID,
+          issuedAt: "2026-09-22T12:00:00Z",
+          projectId: sent.projectId ?? null,
+          ...receiptOverrides,
+        },
+        ...topLevel,
+      }),
+      { status: 200 },
+    );
+  });
 }
 
 /** Open Capture and take the chooser's Quick note branch into data entry. */
 async function enterNoteEntry(kind: "quick_note" | "conversation_log" = "quick_note") {
   const user = userEvent.setup();
-  render(<CaptureDialog open onClose={() => {}} principalId={PRINCIPAL_ID} />);
+  render(<CaptureHarness open onClose={() => {}} principalId={PRINCIPAL_ID} />);
   await user.click(await screen.findByTestId(`capture-choice-${kind}`));
   return user;
 }
@@ -97,12 +182,7 @@ afterEach(() => {
 
 describe("a durable save", () => {
   it("says saved, and only for a persisted receipt", async () => {
-    respond({
-      shape: "backend",
-      status: "persisted",
-      created: true,
-      receipt: { receiptId: "rcpt_aaaaaaaa11111111" },
-    });
+    respondPersisted();
     await saveOnce();
 
     const status = await screen.findByTestId("capture-durable");
@@ -116,12 +196,7 @@ describe("a durable save", () => {
   });
 
   it("distinguishes a replay from a first save without calling it a failure", async () => {
-    respond({
-      shape: "backend",
-      status: "persisted",
-      created: false,
-      receipt: { receiptId: "rcpt_aaaaaaaa11111111" },
-    });
+    respondPersisted({}, { created: false });
     await saveOnce();
 
     const status = await screen.findByTestId("capture-durable");
@@ -152,12 +227,7 @@ describe("an acknowledgement that is not a save", () => {
     // the person is still told the note is stored. The receipt identifier beside
     // it is a technical receipt and is not rendered in the product default.
     diagnostics.enabled = false;
-    respond({
-      shape: "backend",
-      status: "persisted",
-      created: true,
-      receipt: { receiptId: "rcpt_aaaaaaaa11111111" },
-    });
+    respondPersisted();
     await saveOnce();
 
     const status = await screen.findByTestId("capture-durable");
@@ -167,12 +237,15 @@ describe("an acknowledgement that is not a save", () => {
     await waitFor(() => expect(screen.getByTestId("capture-field")).toHaveValue(""));
   });
 
-  it("treats an answer it does not recognise as not-saved rather than as saved", async () => {
+  it("treats an answer it does not recognise as unconfirmed rather than as saved", async () => {
     // The failure direction that matters: an unfamiliar shape must understate.
+    // It is now *ambiguous* rather than "acknowledged, not stored" — a shape this
+    // tier cannot read is not evidence that nothing was written, and only the
+    // synthetic provider's explicit acknowledgement says that.
     respond({ shape: "something-new", created: true });
     await saveOnce();
 
-    expect(await screen.findByTestId("capture-acknowledged")).toBeInTheDocument();
+    expect(await screen.findByTestId("capture-unavailable")).toBeInTheDocument();
     expect(screen.queryByTestId("capture-durable")).toBeNull();
   });
 });
@@ -246,9 +319,15 @@ describe("an unreachable backend", () => {
     // The retry carries the *same* idempotency key, so a save that did land on
     // the far side of a lost response cannot become a second capture.
     await user.click(screen.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
-    const keys = spy.mock.calls.map(
-      (call) => JSON.parse((call[1] as RequestInit).body as string).idempotencyKey,
+    const captureCalls = () =>
+      spy.mock.calls.filter(
+        ([input, init]) =>
+          String(input).startsWith("/api/capture") &&
+          String((init as RequestInit | undefined)?.method).toUpperCase() === "POST",
+      );
+    await waitFor(() => expect(captureCalls()).toHaveLength(2));
+    const keys = captureCalls().map(
+      (call) => JSON.parse(String((call[1] as RequestInit).body)).idempotencyKey,
     );
     expect(keys[0]).toBe(keys[1]);
   });
@@ -275,15 +354,15 @@ describe("one field is the whole precondition", () => {
     );
     const user = userEvent.setup();
     const { rerender } = render(
-      <CaptureDialog open onClose={() => {}} principalId={PRINCIPAL_ID} />,
+      <CaptureHarness open onClose={() => {}} principalId={PRINCIPAL_ID} />,
     );
     await user.click(await screen.findByTestId("capture-choice-quick_note"));
     await user.type(screen.getByTestId("capture-field"), NOTE);
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByTestId("capture-refused")).toBeInTheDocument();
 
-    rerender(<CaptureDialog open={false} onClose={() => {}} principalId={PRINCIPAL_ID} />);
-    rerender(<CaptureDialog open onClose={() => {}} principalId={PRINCIPAL_ID} />);
+    rerender(<CaptureHarness open={false} onClose={() => {}} principalId={PRINCIPAL_ID} />);
+    rerender(<CaptureHarness open onClose={() => {}} principalId={PRINCIPAL_ID} />);
 
     // A reopened dialog is back at the chooser with the prior outcome cleared.
     await waitFor(() => expect(screen.queryByTestId("capture-refused")).toBeNull());
@@ -304,14 +383,14 @@ describe("one field is the whole precondition", () => {
     */
     const user = userEvent.setup();
     const { rerender } = render(
-      <CaptureDialog open onClose={() => {}} principalId={PRINCIPAL_ID} />,
+      <CaptureHarness open onClose={() => {}} principalId={PRINCIPAL_ID} />,
     );
 
     await user.click(await screen.findByTestId("capture-choice-quick_note"));
     await waitFor(() => expect(screen.getByTestId("capture-field")).toHaveFocus());
 
-    rerender(<CaptureDialog open={false} onClose={() => {}} principalId={PRINCIPAL_ID} />);
-    rerender(<CaptureDialog open onClose={() => {}} principalId={PRINCIPAL_ID} />);
+    rerender(<CaptureHarness open={false} onClose={() => {}} principalId={PRINCIPAL_ID} />);
+    rerender(<CaptureHarness open onClose={() => {}} principalId={PRINCIPAL_ID} />);
 
     await waitFor(() =>
       expect(screen.getByTestId("capture-choice-create_task")).toHaveFocus(),
@@ -320,28 +399,68 @@ describe("one field is the whole precondition", () => {
   });
 
   it("offers the kind as a default rather than a step, and sends the selected one", async () => {
-    const spy = respond({
-      shape: "backend",
-      status: "persisted",
-      created: true,
-      receipt: { receiptId: "rcpt_aaaaaaaa11111111" },
-    });
+    const spy = respondPersisted();
     const user = await enterNoteEntry();
     expect(screen.getByTestId("capture-kind-quick_note")).toBeChecked();
 
-    await user.type(screen.getByTestId("capture-field"), NOTE);
+    // The two forms keep separate drafts (C03), so the note is authored in the
+    // form it is sent from rather than carried across the switch.
     await user.click(screen.getByTestId("capture-kind-conversation_log"));
+    await user.type(screen.getByTestId("capture-field"), NOTE);
     await user.click(screen.getByRole("button", { name: "Save" }));
 
-    await waitFor(() => expect(spy).toHaveBeenCalled());
-    const body = JSON.parse((spy.mock.calls[0][1] as RequestInit).body as string);
-    expect(body.captureKind).toBe("conversation_log");
+    await waitFor(() =>
+      expect(spy.mock.calls.some(([input]) => String(input).startsWith("/api/capture"))).toBe(true),
+    );
+    expect(capturePostBody(spy).captureKind).toBe("conversation_log");
+  });
+});
+
+describe("one activation is one capture", () => {
+  it("issues exactly one request and one key when Save is double-activated", async () => {
+    // The mutex is synchronous and claimed before any await, so the second
+    // activation cannot arrive between the first one and the pending render.
+    let release!: (value: Response) => void;
+    const gate = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const path = String(input);
+      if (!path.startsWith("/api/capture")) {
+        return new Response(JSON.stringify({ projects: [], nextCursor: null }), { status: 200 });
+      }
+      void init;
+      return gate;
+    });
+
+    const user = await enterNoteEntry();
+    await user.type(screen.getByTestId("capture-field"), NOTE);
+    const save = screen.getByRole("button", { name: "Save" });
+    // Three activations in one tick, with no render flushed between them: the
+    // disabled attribute has not been applied yet, so what stops the second and
+    // third from minting a key and issuing a request is the synchronous mutex.
+    await act(async () => {
+      save.click();
+      save.click();
+      save.click();
+    });
+
+    const captureCalls = spy.mock.calls.filter(([input]) =>
+      String(input).startsWith("/api/capture"),
+    );
+    expect(captureCalls).toHaveLength(1);
+
+    release(new Response(JSON.stringify({ shape: "synthetic", status: "acknowledged_not_persisted" }), { status: 200 }));
+    await screen.findByTestId("capture-acknowledged");
+    expect(
+      spy.mock.calls.filter(([input]) => String(input).startsWith("/api/capture")),
+    ).toHaveLength(1);
   });
 });
 
 describe("the chooser in front of capture", () => {
   it("offers exactly Create Task, Quick note and Conversation log", async () => {
-    render(<CaptureDialog open onClose={() => {}} principalId={PRINCIPAL_ID} />);
+    render(<CaptureHarness open onClose={() => {}} principalId={PRINCIPAL_ID} />);
     const chooser = await screen.findByTestId("capture-chooser");
     expect(within(chooser).getAllByRole("button").map((b) => b.textContent)).toEqual([
       "Create Task",
@@ -354,12 +473,7 @@ describe("the chooser in front of capture", () => {
   });
 
   it("takes Quick note into the unchanged capture branch with that kind selected", async () => {
-    const spy = respond({
-      shape: "backend",
-      status: "persisted",
-      created: true,
-      receipt: { receiptId: "rcpt_aaaaaaaa11111111" },
-    });
+    const spy = respondPersisted();
     const user = await enterNoteEntry("quick_note");
 
     expect(screen.getByTestId("capture-kind-quick_note")).toBeChecked();
@@ -369,18 +483,15 @@ describe("the chooser in front of capture", () => {
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     expect(await screen.findByTestId("capture-durable")).toHaveTextContent("Saved.");
-    const body = JSON.parse((spy.mock.calls[0][1] as RequestInit).body as string);
+    const body = capturePostBody(spy);
     expect(body).toMatchObject({ text: NOTE, captureKind: "quick_note" });
     expect(body.idempotencyKey).toMatch(/^cap-/);
+    // No Project is sent explicitly rather than omitted.
+    expect(body.projectId).toBeNull();
   });
 
   it("takes Conversation log into the same branch with that kind selected", async () => {
-    const spy = respond({
-      shape: "backend",
-      status: "persisted",
-      created: true,
-      receipt: { receiptId: "rcpt_aaaaaaaa11111111" },
-    });
+    const spy = respondPersisted();
     const user = await enterNoteEntry("conversation_log");
 
     expect(screen.getByTestId("capture-kind-conversation_log")).toBeChecked();
@@ -388,8 +499,7 @@ describe("the chooser in front of capture", () => {
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     expect(await screen.findByTestId("capture-durable")).toHaveTextContent("Saved.");
-    const body = JSON.parse((spy.mock.calls[0][1] as RequestInit).body as string);
-    expect(body.captureKind).toBe("conversation_log");
+    expect(capturePostBody(spy).captureKind).toBe("conversation_log");
   });
 
   it("reports Create Task without capturing anything at all", async () => {
@@ -397,7 +507,7 @@ describe("the chooser in front of capture", () => {
     const onCreateTask = vi.fn();
     const user = userEvent.setup();
     render(
-      <CaptureDialog
+      <CaptureHarness
         open
         onClose={() => {}}
         principalId={PRINCIPAL_ID}

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { contentSha256 } from "@/lib/capture/receipt";
 
 /**
  * WP07 — diagnostic presentation follows the global policy. The product default
@@ -300,17 +301,36 @@ describe("app shell", () => {
 
   it("opens Capture, focuses the field, and sends one attempt-keyed submission", async () => {
     const user = userEvent.setup();
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
+    // A fresh Response per call, and a complete canonical receipt: the browser
+    // verifies the whole acknowledgement before it says anything was saved, and
+    // the dialog now also reads `/api/projects` for its Project chooser.
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const path = String(input);
+      if (!path.startsWith("/api/capture")) {
+        return new Response(JSON.stringify({ projects: [], nextCursor: null }), { status: 200 });
+      }
+      const sent = JSON.parse(String((init as RequestInit | undefined)?.body ?? "{}"));
+      return new Response(
         JSON.stringify({
           shape: "backend",
           status: "persisted",
+          captureKind: sent.captureKind,
           created: true,
-          receipt: { receiptId: "rcpt_aaaaaaaa11111111" },
+          receipt: {
+            receiptId: "rcpt_aaaaaaaa11111111",
+            captureId: "cap_aaaaaaaa11111111",
+            versionId: "capver_aaaaaaaa11111111",
+            versionNumber: 1,
+            idempotencyKey: sent.idempotencyKey,
+            contentSha256: await contentSha256(String(sent.text ?? "")),
+            principalId: PRINCIPAL.principalId,
+            issuedAt: "2026-09-22T12:00:00Z",
+            projectId: sent.projectId ?? null,
+          },
         }),
         { status: 200 },
-      ),
-    );
+      );
+    });
 
     render(<AppShell principal={PRINCIPAL} sessionEpoch={SESSION_EPOCH}>content</AppShell>);
     await user.click(screen.getByTestId("capture-button-desktop"));
@@ -332,7 +352,13 @@ describe("app shell", () => {
       "/api/capture",
       expect.objectContaining({ method: "POST" }),
     );
-    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    // The capture POST specifically: the dialog also reads the Project page.
+    const captureCall = fetchSpy.mock.calls.find(
+      ([input, init]) =>
+        String(input).startsWith("/api/capture") &&
+        String((init as RequestInit | undefined)?.method).toUpperCase() === "POST",
+    )!;
+    const body = JSON.parse(String((captureCall[1] as RequestInit).body));
     expect(body.text).toBe("synthetic note delta");
     // The kind is a default rather than a step: nothing was selected.
     expect(body.captureKind).toBe("quick_note");

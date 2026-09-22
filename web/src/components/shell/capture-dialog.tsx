@@ -62,13 +62,55 @@
  * proposals appear in Review when they exist — it does not claim a degradation it
  * cannot observe.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type Dispatch } from "react";
 import { Dialog } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { WhenDiagnostics } from "@/components/diagnostics/diagnostics-provider";
 import { TextField } from "@/components/ui/field";
+import { CaptureProjectSelector } from "@/components/capture/capture-project-selector";
 import { apiPost } from "@/lib/api/client";
+import { verifyCaptureReceipt } from "@/lib/capture/receipt";
+import { freezeCaptureIntent, type CaptureSessionEvent, type CaptureSessionState } from "@/lib/capture/session";
+import { CaptureQueueProtocolError } from "@/lib/offline/capture-intent-codec";
+import { CaptureQueueUnavailableError } from "@/lib/offline/coordinator";
+import { OfflineKeyUnavailableError } from "@/lib/offline/key";
+import { OfflineQueueFullError } from "@/lib/offline/queue";
 import { queueCaptureOffline } from "@/lib/offline/capture-queue";
+
+/**
+ * The fixed confirmation for discarding unsent drafts.
+ *
+ * Deliberately says what is *not* discarded. Someone closing a dialog with a
+ * half-typed note has to be able to tell this apart from deleting the notes this
+ * device is already holding for them.
+ */
+export const CAPTURE_DISCARD_PROMPT =
+  "Discard the unsent drafts in this capture? Held offline notes are not deleted.";
+
+/**
+ * Why a note could not be held, in fixed product language.
+ *
+ * Every one of these means the same thing about the person's work — it is still
+ * in the field and nothing was lost — and they differ only in what to do next.
+ * The exception object is never rendered and never logged.
+ */
+function notHeldReason(error: unknown): string {
+  if (error instanceof OfflineQueueFullError) {
+    return "This device is already holding as many unsent notes as it can.";
+  }
+  if (error instanceof CaptureQueueUnavailableError) {
+    return error.reason === "busy"
+      ? "Another tab is using the offline queue. Try again in a moment."
+      : "This browser cannot hold notes offline.";
+  }
+  if (error instanceof CaptureQueueProtocolError) {
+    return "A different note is already held under this submission. Both were kept.";
+  }
+  if (error instanceof OfflineKeyUnavailableError) {
+    return "This device has no usable key for offline notes.";
+  }
+  return "This device could not hold the note.";
+}
 
 /** The two source classes a person may author. Quick note unless they say otherwise. */
 const CAPTURE_KINDS = [
@@ -108,27 +150,13 @@ type Outcome =
   | { readonly kind: "queued"; readonly entryId: string }
   | { readonly kind: "not_held"; readonly reason: string };
 
-/**
- * Which acknowledgement this is, read from the route's own answer.
- *
- * `status === "persisted"` is the single condition for calling a save durable,
- * and it is checked positively: a response whose shape this function does not
- * recognise falls to `acknowledged`, which understates rather than overstates.
- * The failure direction matters — an unrecognised answer treated as durable is a
- * person told their note is safe when nothing knows that it is.
- */
-function acknowledgement(data: CaptureAck): Outcome {
-  const receiptId = data.receipt?.receiptId ?? data.receiptId ?? null;
-  if (data.status === "persisted") {
-    return { kind: "durable", receiptId, created: data.created !== false };
-  }
-  return { kind: "acknowledged", receiptId };
-}
 
 export function CaptureDialog({
   open,
   onClose,
   principalId,
+  session,
+  dispatch,
   onCreateTask,
 }: {
   open: boolean;
@@ -141,24 +169,43 @@ export function CaptureDialog({
    * server never authenticated.
    */
   principalId: string;
+  /** The shell's local Capture experience. This component owns none of it. */
+  session: CaptureSessionState;
+  dispatch: Dispatch<CaptureSessionEvent>;
   /**
    * The person chose Create Task rather than a note.
    *
    * Nothing about a capture has happened when this fires — no attempt key, no
    * request, no queue write — and this component opens nothing itself. The shell
-   * owns the handoff so that exactly one overlay is mounted at a time.
+   * owns the handoff so that exactly one overlay is mounted at a time, and the
+   * nullable Project travels as an explicit argument rather than being re-read.
    */
-  onCreateTask?: () => void;
+  onCreateTask?: (projectId: string | null) => void;
 }) {
   const [stage, setStage] = useState<Stage>("choose");
-  const [text, setText] = useState("");
-  const [kind, setKind] = useState<CaptureKind>("quick_note");
   const [outcome, setOutcome] = useState<Outcome>({ kind: "idle" });
   const fieldRef = useRef<HTMLTextAreaElement>(null);
   const firstChoiceRef = useRef<HTMLButtonElement>(null);
+  const projectFieldId = useId();
   // One idempotency key per submission attempt: minted at first save, kept
   // across retries of the same text, discarded when the text changes.
   const attemptKeyRef = useRef<string | null>(null);
+  /**
+   * The synchronous duplicate-submit mutex.
+   *
+   * Claimed before any await and before any React state update, because a second
+   * activation can arrive before the pending render lands. Without it a
+   * double-tap mints a second key and issues a second request, which is two
+   * captures for one intent.
+   */
+  const savingRef = useRef(false);
+
+  // The draft, the kind and the Project all live in the shell's experience.
+  // This component reads them and dispatches; it stores none of them, so a close
+  // and reopen resumes what the shell still holds rather than a stale local copy.
+  const kind: CaptureKind = session.form;
+  const text = kind === "quick_note" ? session.noteDraft : session.conversationDraft;
+  const projectId = session.projectId;
 
   // A newly opened dialog starts at the chooser, with no prior outcome showing.
   useEffect(() => {
@@ -190,44 +237,94 @@ export function CaptureDialog({
 
   /** Enter the unchanged capture branch with the chosen kind already selected. */
   function chooseKind(chosen: CaptureKind) {
-    setKind(chosen);
+    dispatch({ type: "select_form", form: chosen });
     setStage("entry");
+  }
+
+  /**
+   * Confirm discarding unsent drafts, through the browser's own prompt.
+   *
+   * A platform modal, not a second application focus trap. Cancelling keeps the
+   * modal, the drafts and the Project exactly as they were.
+   */
+  function confirmDiscardUnsent(): boolean {
+    return window.confirm(CAPTURE_DISCARD_PROMPT);
+  }
+
+  /** Close, confirming first when there is unsent work to lose. */
+  function requestClose() {
+    const dirty = session.noteDraft.trim() !== "" || session.conversationDraft.trim() !== "";
+    // An in-flight or ambiguous submission is not a draft to discard: closing
+    // does not cancel a request the server may already have committed.
+    const unresolved = outcome.kind === "saving" || outcome.kind === "unavailable";
+    if (dirty && !unresolved && !confirmDiscardUnsent()) return;
+    if (dirty && !unresolved) dispatch({ type: "discard_unsent" });
+    onClose();
   }
 
   async function save() {
     if (!text.trim()) return;
-    setOutcome({ kind: "saving" });
+    // Synchronous, before any await and before any state update.
+    if (savingRef.current) return;
+    savingRef.current = true;
     if (!attemptKeyRef.current) {
       attemptKeyRef.current = `cap-${crypto.randomUUID()}`;
     }
+    // Principal, epoch, kind, text, Project and key are frozen together here.
+    const intent = freezeCaptureIntent(session, attemptKeyRef.current);
+    const experienceId = session.experienceId;
+    const epoch = session.sessionEpoch;
+    setOutcome({ kind: "saving" });
+    dispatch({ type: "freeze", intent });
     try {
       const result = await apiPost<CaptureAck>({ hasSession: true }, "/api/capture", {
-        text: text.trim(),
-        captureKind: kind,
-        idempotencyKey: attemptKeyRef.current,
+        text: intent.text,
+        captureKind: intent.captureKind,
+        idempotencyKey: intent.idempotencyKey,
+        // Omission and explicit null both mean No Project; this sends the
+        // explicit form so the receipt's Project can be compared against it.
+        projectId: intent.projectId,
       });
       if (result.ok && result.data) {
-        const settled = acknowledgement(result.data);
-        setOutcome(settled);
-        // The field is cleared only for a durable save. An acknowledgement that
-        // is not a save leaves the note where the person can still copy it.
-        if (settled.kind === "durable") {
-          setText("");
-          attemptKeyRef.current = null;
+        // The browser repeats the whole check independently. A nominal success
+        // this tier cannot verify is ambiguous, never a save.
+        const verdict = await verifyCaptureReceipt(result.data, intent);
+        if (!verdict.ok) {
+          if (verdict.reason === "not_persisted") {
+            setOutcome({ kind: "acknowledged", receiptId: result.data.receiptId ?? null });
+            dispatch({ type: "result", experienceId, sessionEpoch: epoch, outcome: "refused" });
+            return;
+          }
+          setOutcome({ kind: "unavailable", reason: verdict.reason });
+          dispatch({ type: "result", experienceId, sessionEpoch: epoch, outcome: "ambiguous" });
+          return;
         }
+        setOutcome({
+          kind: "durable",
+          receiptId: verdict.ack.receipt.receiptId,
+          created: verdict.ack.created,
+        });
+        dispatch({ type: "result", experienceId, sessionEpoch: epoch, outcome: "persisted" });
+        attemptKeyRef.current = null;
         return;
       }
       const reason = result.error ?? "the request did not complete";
-      setOutcome(
-        result.errorClass === "unavailable"
-          ? { kind: "unavailable", reason }
-          : { kind: "refused", reason },
-      );
+      if (result.errorClass === "unavailable") {
+        // Includes the BFF's own 503 `upstream_contract_invalid`. The backend may
+        // have committed; the frozen intent and its key are kept for the retry.
+        setOutcome({ kind: "unavailable", reason });
+        dispatch({ type: "result", experienceId, sessionEpoch: epoch, outcome: "ambiguous" });
+        return;
+      }
+      setOutcome({ kind: "refused", reason });
+      dispatch({ type: "result", experienceId, sessionEpoch: epoch, outcome: "refused" });
     } catch {
       // The request never reached the server, so nothing on the far side knows
       // this note exists. Hold it on this device rather than telling someone to
       // retry a note they may close the tab on.
-      await hold();
+      await hold(intent, experienceId, epoch);
+    } finally {
+      savingRef.current = false;
     }
   }
 
@@ -239,30 +336,29 @@ export function CaptureDialog({
    * capture rather than two. It is cleared only when the entry is safely held,
    * so a subsequent save in the same dialog starts its own attempt.
    */
-  async function hold() {
-    const key = attemptKeyRef.current;
-    if (!key) {
-      setOutcome({ kind: "not_held", reason: "no submission key was minted for this note" });
-      return;
-    }
+  async function hold(
+    intent: ReturnType<typeof freezeCaptureIntent>,
+    experienceId: string,
+    epoch: number,
+  ) {
     try {
+      // Exactly the frozen tuple, including the Project and the same key.
       const entry = await queueCaptureOffline({
         principalId,
-        text: text.trim(),
-        captureKind: kind,
-        idempotencyKey: key,
-        // Explicitly No Project. This dialog has no local Project selection yet;
-        // the Capture Project context that supplies one is the shell owner's.
-        projectId: null,
+        text: intent.text,
+        captureKind: intent.captureKind,
+        idempotencyKey: intent.idempotencyKey,
+        projectId: intent.projectId,
       });
       setOutcome({ kind: "queued", entryId: entry.entryId });
-      setText("");
+      // Ownership transfers only after the queue has committed.
+      dispatch({ type: "result", experienceId, sessionEpoch: epoch, outcome: "enqueued" });
       attemptKeyRef.current = null;
-    } catch {
-      setOutcome({
-        kind: "not_held",
-        reason: "this device could not hold the note",
-      });
+    } catch (error) {
+      // Every refusal keeps the draft. The key is kept too, so a retry is the
+      // same attempt rather than a second capture.
+      setOutcome({ kind: "not_held", reason: notHeldReason(error) });
+      dispatch({ type: "result", experienceId, sessionEpoch: epoch, outcome: "ambiguous" });
     }
   }
 
@@ -280,7 +376,7 @@ export function CaptureDialog({
             ref={firstChoiceRef}
             variant="ghost"
             data-testid="capture-choice-create_task"
-            onClick={() => onCreateTask?.()}
+            onClick={() => onCreateTask?.(projectId)}
           >
             Create Task
           </Button>
@@ -307,12 +403,23 @@ export function CaptureDialog({
           label="What happened?"
           hint="One field is enough. Captured items are held for review — nothing is asserted on your behalf."
           value={text}
+          disabled={outcome.kind === "saving"}
           onChange={(e) => {
-            setText(e.target.value);
+            dispatch({ type: "edit_draft", form: kind, text: e.target.value });
             // Edited text is a new submission attempt, not a retry.
             attemptKeyRef.current = null;
           }}
           data-testid="capture-field"
+        />
+        <CaptureProjectSelector
+          id={projectFieldId}
+          value={projectId}
+          /* Frozen while a submission is in flight: the Project that was sent is
+             what the receipt will be compared against. */
+          disabled={outcome.kind === "saving"}
+          onChange={(next) => dispatch({ type: "select_project", projectId: next })}
+          principalId={principalId}
+          sessionEpoch={session.sessionEpoch}
         />
         <fieldset className="flex flex-wrap items-center gap-3">
           <legend className="sr-only">Capture kind</legend>
@@ -323,7 +430,8 @@ export function CaptureDialog({
                 name="capture-kind"
                 value={option.value}
                 checked={kind === option.value}
-                onChange={() => setKind(option.value)}
+                disabled={outcome.kind === "saving"}
+                onChange={() => dispatch({ type: "select_form", form: option.value })}
                 data-testid={`capture-kind-${option.value}`}
               />
               {option.label}
@@ -402,7 +510,7 @@ export function CaptureDialog({
           >
             Back
           </Button>
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="ghost" data-testid="capture-close" onClick={requestClose}>
             Close
           </Button>
           <Button onClick={save} disabled={outcome.kind === "saving" || !text.trim()}>

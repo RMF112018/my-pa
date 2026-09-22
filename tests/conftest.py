@@ -397,6 +397,34 @@ from my_pa.infrastructure.providers.fixture import FixtureSourceProvider
 
 pytest_plugins = ("tests.db.fixtures",)
 
+
+def _github_actions_annotation_value(value: str) -> str:
+    """Encode command delimiters without rendering any test failure detail."""
+    return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def _annotate_github_actions_failure(nodeid: str, phase: str) -> None:
+    """Emit a deliberately minimal Actions annotation for one failed report."""
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    print(
+        "::error title=pytest failed::"
+        f"phase={phase}; nodeid={_github_actions_annotation_value(nodeid)}"
+    )
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    """Annotate failed setup, call, and teardown reports only on Actions."""
+    if report.failed and report.when in {"setup", "call", "teardown"}:
+        _annotate_github_actions_failure(report.nodeid, report.when)
+
+
+def pytest_collectreport(report: pytest.CollectReport) -> None:
+    """Annotate a failed collection without emitting its failure detail."""
+    if report.failed:
+        _annotate_github_actions_failure(report.nodeid, "collection")
+
+
 # Operational scripts execute with this directory on sys.path. Architecture
 # tests import them by file path and reproduce that same import environment.
 OPS_NAS = str(Path(__file__).resolve().parents[1] / "ops/nas")

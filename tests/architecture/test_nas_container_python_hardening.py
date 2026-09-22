@@ -372,7 +372,7 @@ def test_container_python_refuses_noncanonical_operator_admission_before_docker_
     ("mutation", "expected_error"),
     (
         ("missing", "operator admission shape is invalid"),
-        ("extra", "operator admission has an unexpected field"),
+        ("extra", "operator admission shape is invalid"),
         ("duplicate", "operator admission contains duplicate fields"),
         ("invalid-status", "operator admission shape is invalid"),
         ("invalid-schema", "operator admission shape is invalid"),
@@ -731,11 +731,19 @@ def test_container_python_refuses_trusted_git_root_mismatch_before_docker(tmp_pa
     sys.platform != "linux", reason="requires Linux /proc/self descriptor execution"
 )
 @pytest.mark.parametrize(
-    "socket_case",
-    ("symlink", "writable-ancestor", "nonroot", "unsupported-metadata"),
+    ("socket_case", "expected_error"),
+    (
+        ("symlink", "Tailscale socket"),
+        (
+            "writable-ancestor",
+            "trusted path ancestors must not be group- or world-writable",
+        ),
+        ("nonroot", "Tailscale socket"),
+        ("unsupported-metadata", "Tailscale socket"),
+    ),
 )
 def test_container_python_refuses_hostile_tailscale_socket_before_mount(
-    tmp_path: Path, socket_case: str
+    tmp_path: Path, socket_case: str, expected_error: str
 ) -> None:
     launcher, calls, _environment, _git_calls, tools, _admission, _git_state = _synthetic_wrapper(
         tmp_path
@@ -766,7 +774,7 @@ def test_container_python_refuses_hostile_tailscale_socket_before_mount(
         socket_path.unlink(missing_ok=True)
 
     assert result.returncode != 0
-    assert "Tailscale socket" in result.stderr
+    assert expected_error in result.stderr
     observed_calls = calls.read_text(encoding="utf-8")
     assert "run" not in observed_calls
     assert ":/var/run/tailscale/tailscaled.sock:ro" not in observed_calls

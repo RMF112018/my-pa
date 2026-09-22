@@ -157,7 +157,15 @@ export default defineConfig({
       // would hand the repository a permanently red project and bury the
       // contract this lane exists to prove. So the lane takes the specs whose
       // green is measured and repeatable at this head, and grows by evidence.
-      testMatch: ["**/mobile-foundation.spec.ts", "**/diagnostics-visibility.spec.ts"],
+      // WP08 admits one more by name and by measurement, not by widening: the
+      // Capture Project control is a native `<select>`, and WebKit resolves
+      // `<select>` intrinsics differently from Chromium, which is exactly the
+      // class of difference this lane exists to catch.
+      testMatch: [
+        "**/mobile-foundation.spec.ts",
+        "**/diagnostics-visibility.spec.ts",
+        "**/capture-project-accessibility.spec.ts",
+      ],
       use: { ...devices["iPhone 15"] },
     },
   ],

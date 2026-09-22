@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -22,6 +23,19 @@ def _hook_module() -> ModuleType:
 
 def _reset(hook: ModuleType) -> None:
     hook.pytest_sessionstart(SimpleNamespace())
+
+
+@pytest.fixture(autouse=True)
+def _clear_synthetic_annotation_queue_between_tests() -> Iterator[None]:
+    """Keep direct hook exercises isolated from this module's outer session."""
+    hook = _hook_module()
+    hook._GITHUB_ACTIONS_FAILURES.clear()
+    hook._GITHUB_ACTIONS_FAILURE_KEYS.clear()
+    try:
+        yield
+    finally:
+        hook._GITHUB_ACTIONS_FAILURES.clear()
+        hook._GITHUB_ACTIONS_FAILURE_KEYS.clear()
 
 
 @pytest.mark.parametrize("value", [None, "", "false", "TRUE", "1"])
@@ -138,6 +152,31 @@ def test_session_start_and_finish_clear_queued_state(
     assert capsys.readouterr().out == expected
     assert not hook._GITHUB_ACTIONS_FAILURES
     assert not hook._GITHUB_ACTIONS_FAILURE_KEYS
+
+
+def test_fixture_teardown_discards_a_synthetic_queue_before_outer_sessionfinish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The module fixture owns cleanup of direct synthetic hook state."""
+    hook = _hook_module()
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+
+    hook._queue_github_actions_failure("tests/unit/test_nested.py::test_failure", "call")
+    assert hook._GITHUB_ACTIONS_FAILURES
+    assert hook._GITHUB_ACTIONS_FAILURE_KEYS
+
+
+def test_fixture_cleanup_leaves_no_annotation_for_outer_sessionfinish(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The preceding synthetic queue was cleared by the module fixture teardown."""
+    hook = _hook_module()
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+
+    assert not hook._GITHUB_ACTIONS_FAILURES
+    assert not hook._GITHUB_ACTIONS_FAILURE_KEYS
+    hook.pytest_sessionfinish(SimpleNamespace(), exitstatus=0)
+    assert capsys.readouterr().out == ""
 
 
 def test_deferred_annotation_escapes_github_command_delimiters(

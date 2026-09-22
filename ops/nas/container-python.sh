@@ -20,6 +20,44 @@ unset DOCKER_CLI_EXPERIMENTAL DOCKER_CLI_PLUGIN_EXTRA_DIRS
 unset COMPOSE_FILE COMPOSE_PATH_SEPARATOR COMPOSE_PROJECT_NAME COMPOSE_PROFILES
 unset MY_PA_NAS_DOCKER MY_PA_NAS_COMPOSE_PLUGIN MY_PA_NAS_OPERATOR_ADMISSION
 
+# This mode has no caller-selected program, arguments, mounts, or network
+# authority. Parse it before the admission and Docker work below.
+attestation_mode=ordinary
+if [ "${1-}" = --postgres-backup-attestation ]; then
+  case "$#" in
+    1) attestation_mode=publish ;;
+    2)
+      [ "$2" = --verify ] || { echo 'invalid attestation arguments' >&2; exit 64; }
+      attestation_mode=verify
+      ;;
+    *) echo 'invalid attestation arguments' >&2; exit 64 ;;
+  esac
+  if [ "${MY_PA_NAS_TAILSCALE+x}" = x ] || [ "${MY_PA_NAS_TAILSCALE_SOCKET+x}" = x ]; then
+    echo 'Tailscale authority is unavailable in attestation mode' >&2
+    exit 64
+  fi
+  if [ "${MY_PA_NAS_ROOT+x}" = x ] && [ "$MY_PA_NAS_ROOT" != /volume1/my-pa ]; then
+    echo 'attestation NAS root must be canonical' >&2
+    exit 64
+  fi
+  MY_PA_NAS_ROOT=/volume1/my-pa
+  export MY_PA_NAS_ROOT
+  if [ "${MY_PA_NAS_ENV_FILE+x}" = x ] && \
+    [ "$MY_PA_NAS_ENV_FILE" != /volume1/my-pa/secrets/nas.env ]; then
+    echo 'attestation NAS environment path must be canonical' >&2
+    exit 64
+  fi
+  if [ "${MY_PA_WEB_ENV_FILE+x}" = x ] && \
+    [ "$MY_PA_WEB_ENV_FILE" != /volume1/my-pa/secrets/web.env ]; then
+    echo 'attestation web environment path must be canonical' >&2
+    exit 64
+  fi
+  MY_PA_NAS_ENV_FILE=/volume1/my-pa/secrets/nas.env
+  MY_PA_WEB_ENV_FILE=/volume1/my-pa/secrets/web.env
+  export MY_PA_NAS_ENV_FILE MY_PA_WEB_ENV_FILE
+  unset PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONINSPECT
+fi
+
 stat_bin=/usr/bin/stat
 docker_path=/usr/local/bin/docker
 compose_path=/usr/local/bin/docker-compose
@@ -378,6 +416,14 @@ verify_root_owned_source_directory() {
   [ "$metadata" = '0:700:directory' ] || fail "repository source root must be root-owned mode 0700"
 }
 
+verify_root_owned_private_directory() {
+  path=$1
+  label=$2
+  verify_root_owned_ancestors "$path"
+  metadata=$("$stat_bin" -c '%u:%a:%F' -- "$path") || fail "$label metadata is unavailable"
+  [ "$metadata" = '0:700:directory' ] || fail "$label must be root-owned mode 0700"
+}
+
 verify_optional_root_owned_regular_file() {
   path=$1
   label=$2
@@ -448,6 +494,18 @@ esac
 [ "$script_path" = "$repo_root/ops/nas/container-python.sh" ] || \
   fail "launcher path is not the fixed repository wrapper"
 verify_root_owned_source_directory "$repo_root"
+if [ "$attestation_mode" != ordinary ]; then
+  # The daemon resolves bind sources by pathname. Preflight the physical host
+  # source chain, not merely the paths seen inside the operator container.
+  verify_root_owned_private_directory /var/lib/my-pa/postgres-backup-attestations 'attestation evidence directory'
+  verify_root_owned_private_directory /volume1/my-pa/deployment 'deployment directory'
+  verify_root_owned_private_directory /volume1/my-pa/backups 'backup directory'
+  verify_root_owned_private_directory /volume1/my-pa/postgres/data 'PostgreSQL data directory'
+  verify_root_owned_private_directory /volume1/my-pa/secrets 'Compose environment directory'
+  verify_root_owned_regular_file /volume1/my-pa/secrets/nas.env 'NAS Compose environment'
+  verify_root_owned_regular_file /volume1/my-pa/secrets/web.env 'web Compose environment'
+  verify_root_owned_private_directory /etc/my-pa 'admission directory'
+fi
 git_dir=$repo_root/.git
 verify_trusted_git_metadata "$git_dir"
 verify_root_owned_socket "$docker_socket_path" 'Docker socket'
@@ -511,9 +569,15 @@ loaded=$({ /usr/bin/env -i PATH=/usr/bin:/bin HOME=/nonexistent "$docker_fd" ima
   --format '{{.Id}}|{{.Os}}|{{.Architecture}}' "$image_id"; } 2>/dev/null)
 [ "$loaded" = "$image_id|linux|amd64" ] || fail "admitted operator image is unavailable"
 
-python_arguments=$#
-[ "$python_arguments" -gt 0 ] || fail "Python arguments are required" 64
-set -- "$image_id" "$@"
+if [ "$attestation_mode" = ordinary ]; then
+  python_arguments=$#
+  [ "$python_arguments" -gt 0 ] || fail "Python arguments are required" 64
+  set -- "$image_id" "$@"
+elif [ "$attestation_mode" = verify ]; then
+  set -- "$image_id" "$repo_root/ops/nas/write-postgres-backup-runtime-attestation.py" --verify
+else
+  set -- "$image_id" "$repo_root/ops/nas/write-postgres-backup-runtime-attestation.py"
+fi
 
 # Preserve only the closed Compose interpolation and synthetic-acceptance
 # environment. `--env NAME` asks Docker to copy the value without placing it in
@@ -538,7 +602,9 @@ done
 # only the Docker authority they already require. Its path is operator input,
 # not a host executable this wrapper invokes, and is still constrained to a
 # root-owned, non-writable executable and socket pair.
-if [ "${MY_PA_NAS_TAILSCALE+x}" = x ] || [ "${MY_PA_NAS_TAILSCALE_SOCKET+x}" = x ]; then
+if [ "$attestation_mode" = ordinary ] && {
+  [ "${MY_PA_NAS_TAILSCALE+x}" = x ] || [ "${MY_PA_NAS_TAILSCALE_SOCKET+x}" = x ];
+}; then
   : "${MY_PA_NAS_TAILSCALE:?exact NAS Tailscale executable required}"
   : "${MY_PA_NAS_TAILSCALE_SOCKET:?exact NAS Tailscale socket required}"
   case "$MY_PA_NAS_TAILSCALE$MY_PA_NAS_TAILSCALE_SOCKET" in
@@ -561,21 +627,46 @@ fi
 # expose unrelated sensitive process state to its child processes.
 sanitize_docker_client_environment
 
-"$docker_fd" run --rm -i \
-  --network none \
-  --read-only \
-  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m \
-  --cap-drop ALL \
-  --security-opt no-new-privileges \
-  --user 0:0 \
-  --volume "$docker_socket_path:/var/run/docker.sock" \
-  --volume "$docker_path:/usr/local/bin/docker:ro" \
-  --volume "$compose_path:$compose_plugin_dir/docker-compose:ro" \
-  --volume /volume1/my-pa:/volume1/my-pa \
-  --volume /etc/my-pa:/etc/my-pa \
-  --volume "$repo_root:$repo_root:ro" \
-  --env MY_PA_NAS_DOCKER=/usr/local/bin/docker \
-  --env DOCKER_CLI_PLUGIN_EXTRA_DIRS="$compose_plugin_dir" \
-  --workdir "$repo_root" \
-  --entrypoint python \
-  "$@"
+run_operator_container() {
+  "$docker_fd" run --rm -i \
+    --network none \
+    --read-only \
+    --tmpfs /tmp:rw,nosuid,nodev,noexec,size=32m \
+    --cap-drop ALL \
+    --security-opt no-new-privileges \
+    --user 0:0 \
+    --volume "$docker_socket_path:/var/run/docker.sock" \
+    --volume "$docker_path:/usr/local/bin/docker:ro" \
+    --volume "$compose_path:$compose_plugin_dir/docker-compose:ro" \
+    --volume "$repo_root:$repo_root:ro" \
+    --env MY_PA_NAS_DOCKER=/usr/local/bin/docker \
+    --env DOCKER_CLI_PLUGIN_EXTRA_DIRS="$compose_plugin_dir" \
+    --workdir "$repo_root" \
+    --entrypoint python \
+    "$@"
+}
+
+if [ "$attestation_mode" = ordinary ]; then
+  run_operator_container \
+    --volume /volume1/my-pa:/volume1/my-pa \
+    --volume /etc/my-pa:/etc/my-pa \
+    "$@"
+elif [ "$attestation_mode" = verify ]; then
+  run_operator_container \
+    --volume /volume1/my-pa/deployment:/volume1/my-pa/deployment:ro \
+    --volume /volume1/my-pa/backups:/volume1/my-pa/backups:ro \
+    --volume /volume1/my-pa/postgres/data:/volume1/my-pa/postgres/data:ro \
+    --volume /volume1/my-pa/secrets:/volume1/my-pa/secrets:ro \
+    --volume /etc/my-pa:/etc/my-pa:ro \
+    --volume /var/lib/my-pa/postgres-backup-attestations:/var/lib/my-pa/postgres-backup-attestations:ro \
+    "$@"
+else
+  run_operator_container \
+    --volume /volume1/my-pa/deployment:/volume1/my-pa/deployment:ro \
+    --volume /volume1/my-pa/backups:/volume1/my-pa/backups:ro \
+    --volume /volume1/my-pa/postgres/data:/volume1/my-pa/postgres/data:ro \
+    --volume /volume1/my-pa/secrets:/volume1/my-pa/secrets:ro \
+    --volume /etc/my-pa:/etc/my-pa:ro \
+    --volume /var/lib/my-pa/postgres-backup-attestations:/var/lib/my-pa/postgres-backup-attestations \
+    "$@"
+fi

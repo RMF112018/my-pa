@@ -30,6 +30,26 @@ attestation. The Docker socket still confers host-level authority, so the
 operator image, fixed script/arguments, and canonical tools are security
 boundaries. No filesystem mount alone confines Docker actions.
 
+The protected operator launcher accepts only
+`--postgres-backup-attestation` for publication or
+`--postgres-backup-attestation --verify` for readback. It selects the fixed
+writer itself, requires its existing source/engine/image admission to match
+the current clean checkout, refuses extra arguments, alternate NAS roots and
+Tailscale authority, and drops caller Python import-path controls. The host
+evidence directory must already be a root-owned mode-0700 physical directory
+with no symlink or writable ancestor. The launcher mounts the admitted source,
+NAS deployment and backup inputs, PostgreSQL data path, Compose environment
+files at the fixed `secrets/nas.env` and `secrets/web.env` paths, and
+`/etc/my-pa` read-only; only the evidence directory is mounted
+read-write for publication and read-only for verification. Compose may read
+the root-only environment files inside the protected process, but their values
+must not appear in arguments, output, or the attestation. The launcher never
+sources `production.env`. A changed checkout needs a new operator admission
+before either mode can run. Docker resolves bind paths after the host preflight,
+so operators must preserve root ownership and directory integrity during the
+launch; the Docker socket remains a host-root capability despite the narrow
+mounts.
+
 Publication requires the dump to be at most 900 seconds old. Later verification
 checks the recorded creation and attestation times against that publication
 window and rechecks the retained dump and current runtime identity. A retained

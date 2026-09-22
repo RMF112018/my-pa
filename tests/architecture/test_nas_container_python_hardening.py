@@ -98,6 +98,15 @@ def _synthetic_wrapper(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path, Pa
     git_calls = tmp_path / "git-calls"
     git_environment = tmp_path / "git-environment"
     git_endpoint = tmp_path / "git-endpoint"
+    nas_root = tmp_path / "nas"
+    for relative in ("deployment", "backups", "postgres/data", "secrets"):
+        (nas_root / relative).mkdir(parents=True)
+    _write(nas_root / "secrets/nas.env", "SYNTHETIC_ONLY=1\n", mode=0o400)
+    _write(nas_root / "secrets/web.env", "SYNTHETIC_ONLY=1\n", mode=0o400)
+    evidence_root = tmp_path / "evidence"
+    evidence_root.mkdir()
+    etc_root = tmp_path / "admissions"
+    etc_root.mkdir()
     tools.mkdir()
     _write(engine_projection, "synthetic-engine-id|synthetic-engine\n", mode=0o600)
     launcher.parent.mkdir(parents=True)
@@ -142,10 +151,14 @@ def _synthetic_wrapper(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path, Pa
         "      unsupported-metadata:*/socket-parent/tailscale.sock) printf '0:600:unknown\\n' ;;\n"
         "      *:*/socket-parent/tailscale.sock) printf '0:600:socket\\n' ;;\n"
         "      *)\n"
+        '        case "${SYNTH_EVIDENCE_CASE:-}:$path" in\n'
+        "          not-private:*/evidence) printf '0:755:directory\\n' ;;\n"
+        "          *)\n"
         "        case ${SYNTH_STAT_CASE:-ok} in\n"
         "          bad-ancestor-mode) printf '0:777:directory\\n' ;;\n"
         "          bad-ancestor-owner) printf '1000:700:directory\\n' ;;\n"
         "          *) printf '0:700:directory\\n' ;;\n"
+        "        esac ;;\n"
         "        esac ;;\n"
         "    esac ;;\n"
         "    esac ;;\n"
@@ -248,6 +261,9 @@ def _synthetic_wrapper(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path, Pa
     for before, after in replacements.items():
         assert before in source
         source = source.replace(before, after)
+    source = source.replace("/volume1/my-pa", str(nas_root))
+    source = source.replace("/var/lib/my-pa/postgres-backup-attestations", str(evidence_root))
+    source = source.replace("/etc/my-pa", str(etc_root))
     # The production descriptor paths are Linux-specific and intentionally
     # remain unchanged in the copied source. Linux executes them; macOS has no
     # procfs and therefore skips only the success-path execution test below.
@@ -355,6 +371,161 @@ def test_container_python_keeps_tailscale_authority_opt_in_and_prevalidated() ->
     assert "verify_root_owned_socket \"$tailscale_socket_path\" 'Tailscale socket'" in source
     assert "${tailscale_host_binary}:/usr/local/bin/tailscale:ro" in source
     assert "${tailscale_socket_path}:/var/run/tailscale/tailscaled.sock:ro" in source
+
+
+def test_attestation_mode_has_fixed_program_and_narrow_mounts() -> None:
+    source = (ROOT / "ops/nas/container-python.sh").read_text(encoding="utf-8")
+    assert 'if [ "${1-}" = --postgres-backup-attestation ]; then' in source
+    assert (
+        'set -- "$image_id" "$repo_root/ops/nas/write-postgres-backup-runtime-attestation.py"'
+        in source
+    )
+    assert (
+        'set -- "$image_id" '
+        '"$repo_root/ops/nas/write-postgres-backup-runtime-attestation.py" --verify' in source
+    )
+    assert "unset PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONINSPECT" in source
+    assert "Tailscale authority is unavailable in attestation mode" in source
+    assert (
+        "verify_root_owned_private_directory /var/lib/my-pa/postgres-backup-attestations" in source
+    )
+    assert "--volume /volume1/my-pa/deployment:/volume1/my-pa/deployment:ro" in source
+    assert "--volume /volume1/my-pa/backups:/volume1/my-pa/backups:ro" in source
+    assert "--volume /volume1/my-pa/postgres/data:/volume1/my-pa/postgres/data:ro" in source
+    assert "--volume /volume1/my-pa/secrets:/volume1/my-pa/secrets:ro" in source
+    assert "verify_root_owned_regular_file /volume1/my-pa/secrets/nas.env" in source
+    assert "verify_root_owned_regular_file /volume1/my-pa/secrets/web.env" in source
+    assert "--volume /etc/my-pa:/etc/my-pa:ro" in source
+    assert (
+        "--volume /var/lib/my-pa/postgres-backup-attestations:"
+        "/var/lib/my-pa/postgres-backup-attestations:ro" in source
+    )
+    assert (
+        "--volume /var/lib/my-pa/postgres-backup-attestations:"
+        "/var/lib/my-pa/postgres-backup-attestations \\" in source
+    )
+
+
+@pytest.mark.parametrize(
+    "argv",
+    (
+        ("--postgres-backup-attestation", "--bad"),
+        ("--postgres-backup-attestation", "--verify", "extra"),
+    ),
+)
+def test_attestation_mode_refuses_extra_argv_before_host_access(argv: tuple[str, ...]) -> None:
+    launcher = ROOT / "ops/nas/container-python.sh"
+    result = subprocess.run(  # noqa: S603 - exits before host access by contract
+        [str(launcher), *argv],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 64
+    assert result.stderr == "invalid attestation arguments\n"
+
+
+def test_attestation_mode_refuses_authority_and_path_overrides_before_host_access() -> None:
+    launcher = ROOT / "ops/nas/container-python.sh"
+    cases = (
+        ("MY_PA_NAS_TAILSCALE", "Tailscale authority is unavailable in attestation mode"),
+        ("MY_PA_NAS_ROOT", "attestation NAS root must be canonical"),
+        ("MY_PA_NAS_ENV_FILE", "attestation NAS environment path must be canonical"),
+        ("MY_PA_WEB_ENV_FILE", "attestation web environment path must be canonical"),
+    )
+    for name, expected in cases:
+        result = subprocess.run(  # noqa: S603 - exits before host access by contract
+            [str(launcher), "--postgres-backup-attestation"],
+            env={name: "/synthetic/forbidden"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 64
+        assert result.stderr == expected + "\n"
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="requires Linux /proc descriptor execution")
+@pytest.mark.parametrize("verify", (False, True), ids=("publish", "verify"))
+def test_attestation_mode_uses_fixed_script_and_mount_permissions(
+    tmp_path: Path, verify: bool
+) -> None:
+    launcher, calls, environment, _git_calls, tools, _admission, _git_state = _synthetic_wrapper(
+        tmp_path
+    )
+    argv = (
+        ("--postgres-backup-attestation", "--verify")
+        if verify
+        else ("--postgres-backup-attestation",)
+    )
+    result = _run(
+        launcher,
+        tools,
+        python_argv=argv,
+        extra_environment={
+            "MY_PA_NAS_ROOT": str(tmp_path / "nas"),
+            "PYTHONPATH": "/synthetic/forbidden-import-hook",
+            "SENSITIVE_PARENT_SENTINEL": "synthetic-secret-marker",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    arguments = [
+        part.decode() for part in calls.with_name("docker-run-argv").read_bytes().split(b"\0")[:-1]
+    ]
+    image_index = arguments.index(IMAGE_ID)
+    expected_script = str(
+        launcher.parents[2] / "ops/nas/write-postgres-backup-runtime-attestation.py"
+    )
+    assert arguments[image_index + 1 :] == (
+        [expected_script, "--verify"] if verify else [expected_script]
+    )
+    mounts = [
+        arguments[index + 1] for index, value in enumerate(arguments[:-1]) if value == "--volume"
+    ]
+    nas_root = tmp_path / "nas"
+    assert f"{nas_root}/deployment:{nas_root}/deployment:ro" in mounts
+    assert f"{nas_root}/backups:{nas_root}/backups:ro" in mounts
+    assert f"{nas_root}/postgres/data:{nas_root}/postgres/data:ro" in mounts
+    assert f"{nas_root}/secrets:{nas_root}/secrets:ro" in mounts
+    evidence_root = tmp_path / "evidence"
+    evidence_mount = f"{evidence_root}:{evidence_root}" + (":ro" if verify else "")
+    assert evidence_mount in mounts
+    assert f"{nas_root}:{nas_root}" not in mounts
+    assert not any("tailscale" in mount for mount in mounts)
+    assert "synthetic-secret-marker" not in result.stdout + result.stderr
+    observed_environment = environment.read_text(encoding="utf-8")
+    assert f"MY_PA_NAS_ENV_FILE={nas_root}/secrets/nas.env" in observed_environment
+    assert f"MY_PA_WEB_ENV_FILE={nas_root}/secrets/web.env" in observed_environment
+    assert "PYTHONPATH=" not in observed_environment
+    assert "SENSITIVE_PARENT_SENTINEL=" not in observed_environment
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="requires Linux /proc descriptor execution")
+@pytest.mark.parametrize("mutation", ("symlink", "not-private"))
+def test_attestation_mode_refuses_untrusted_host_evidence_before_git_or_docker(
+    tmp_path: Path, mutation: str
+) -> None:
+    launcher, calls, _environment, git_calls, tools, _admission, _git_state = _synthetic_wrapper(
+        tmp_path
+    )
+    evidence = tmp_path / "evidence"
+    extra_environment = {"MY_PA_NAS_ROOT": str(tmp_path / "nas")}
+    if mutation == "symlink":
+        evidence.rename(tmp_path / "evidence-real")
+        evidence.symlink_to(tmp_path / "evidence-real", target_is_directory=True)
+    else:
+        extra_environment["SYNTH_EVIDENCE_CASE"] = "not-private"
+    result = _run(
+        launcher,
+        tools,
+        python_argv=("--postgres-backup-attestation",),
+        extra_environment=extra_environment,
+    )
+    assert result.returncode != 0
+    if mutation == "not-private":
+        assert "attestation evidence directory must be root-owned mode 0700" in result.stderr
+    assert not calls.exists()
+    assert not git_calls.exists()
 
 
 @pytest.mark.parametrize(

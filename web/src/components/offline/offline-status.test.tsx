@@ -35,7 +35,7 @@ afterEach(() => {
 async function queueFor(principalId: string, text: string, idempotencyKey: string) {
   const db = await openOfflineDatabase();
   const key = await principalContentKey(db, principalId);
-  return enqueueCapture(db, key, { principalId, text, captureKind: "quick_note", idempotencyKey });
+  return enqueueCapture(db, key, { principalId, text, captureKind: "quick_note", idempotencyKey, projectId: null });
 }
 
 async function payloadPresent(entryId: string): Promise<boolean> {

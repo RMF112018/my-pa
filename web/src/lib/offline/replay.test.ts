@@ -16,7 +16,7 @@
  *
  * Every note and identifier below is obviously synthetic.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IDBFactory } from "fake-indexeddb";
 import { PAYLOAD_STORE, openOfflineDatabase, request, transactionDone } from "@/lib/offline/db";
 import { principalContentKey } from "@/lib/offline/key";
@@ -24,10 +24,12 @@ import { enqueueCapture, queueSnapshot, type OfflineEntry } from "@/lib/offline/
 import {
   contentSha256,
   replayQueuedCaptures,
-  verifyReceipt,
   type ReplayResponse,
   type ReplayTransport,
 } from "@/lib/offline/replay";
+import { verifyCaptureReceipt } from "@/lib/capture/receipt";
+import type { FrozenCaptureIntent } from "@/lib/capture/contract";
+import { installTestWebLocks } from "@/lib/offline/testing/web-locks";
 
 const PRINCIPAL_A = "syn-aaaa0001";
 const PRINCIPAL_B = "syn-bbbb0002";
@@ -37,9 +39,18 @@ const sessionFor = (principalId: string) => async () => ({
   replayBinding: `binding-${principalId}`,
 });
 
+let locks: ReturnType<typeof installTestWebLocks>;
+
 beforeEach(() => {
   globalThis.indexedDB = new IDBFactory();
   vi.restoreAllMocks();
+  // jsdom has no Web Locks API and the queue fails closed without one, so every
+  // mutation would otherwise be refused before it began.
+  locks = installTestWebLocks();
+});
+
+afterEach(() => {
+  locks.restore();
 });
 
 async function payloadPresent(db: IDBDatabase, entryId: string): Promise<boolean> {
@@ -53,6 +64,7 @@ async function queueOne(
   principalId: string,
   text = NOTE,
   idempotencyKey = "cap-synthetic-0001",
+  projectId: string | null = null,
 ): Promise<{ db: IDBDatabase; key: CryptoKey; entry: OfflineEntry }> {
   const db = await openOfflineDatabase();
   const key = await principalContentKey(db, principalId);
@@ -61,6 +73,7 @@ async function queueOne(
     text,
     captureKind: "quick_note",
     idempotencyKey,
+    projectId,
   });
   return { db, key, entry };
 }
@@ -70,6 +83,7 @@ async function goodReceipt(
   text: string,
   idempotencyKey: string,
   created = true,
+  projectId: string | null = null,
 ): Promise<ReplayResponse> {
   return {
     status: 200,
@@ -87,6 +101,7 @@ async function goodReceipt(
         contentSha256: await contentSha256(text),
         principalId: PRINCIPAL_A,
         issuedAt: "2026-08-09T00:00:00Z",
+        projectId,
       },
     },
   };
@@ -109,15 +124,11 @@ describe("the digest this tier computes is the digest the backend computes", () 
 
 describe("control 2 — a queued entry never rebinds Principal", () => {
   it("checks the authenticating Principal before decrypting a stale rendered Principal's entry", async () => {
-    const { db, key, entry } = await queueOne(PRINCIPAL_A);
+    const { db, entry } = await queueOne(PRINCIPAL_A);
     const decrypt = vi.spyOn(crypto.subtle, "decrypt");
     const transport = vi.fn<ReplayTransport>();
 
-    const summary = await replayQueuedCaptures(
-      db,
-      PRINCIPAL_A,
-      key,
-      transport,
+    const summary = await replayQueuedCaptures(db, PRINCIPAL_A, transport,
       sessionFor(PRINCIPAL_B),
     );
 
@@ -132,11 +143,11 @@ describe("control 2 — a queued entry never rebinds Principal", () => {
   });
 
   it("fails closed before decrypt when current authentication cannot be established", async () => {
-    const { db, key, entry } = await queueOne(PRINCIPAL_A);
+    const { db, entry } = await queueOne(PRINCIPAL_A);
     const decrypt = vi.spyOn(crypto.subtle, "decrypt");
     const transport = vi.fn<ReplayTransport>();
 
-    await replayQueuedCaptures(db, PRINCIPAL_A, key, transport, async () => null);
+    await replayQueuedCaptures(db, PRINCIPAL_A, transport, async () => null);
 
     expect(decrypt).not.toHaveBeenCalled();
     expect(transport).not.toHaveBeenCalled();
@@ -145,11 +156,11 @@ describe("control 2 — a queued entry never rebinds Principal", () => {
   });
 
   it("session expiry does not quarantine, rebind, or drop the owning principal's ciphertext", async () => {
-    const { db, key, entry } = await queueOne(PRINCIPAL_A);
+    const { db, entry } = await queueOne(PRINCIPAL_A);
     const decrypt = vi.spyOn(crypto.subtle, "decrypt");
     const transport = vi.fn<ReplayTransport>();
 
-    const summary = await replayQueuedCaptures(db, PRINCIPAL_A, key, transport, async () => null);
+    const summary = await replayQueuedCaptures(db, PRINCIPAL_A, transport, async () => null);
 
     expect(decrypt).not.toHaveBeenCalled();
     expect(transport).not.toHaveBeenCalled();
@@ -169,11 +180,12 @@ describe("control 2 — a queued entry never rebinds Principal", () => {
 
   it("quarantines a foreign entry, never sends it, and never decrypts it", async () => {
     const { db, entry } = await queueOne(PRINCIPAL_A);
-    const keyB = await principalContentKey(db, PRINCIPAL_B);
+    // B signs in and gets its own key. It is never handed A's entry to open.
+    await principalContentKey(db, PRINCIPAL_B);
     const decrypt = vi.spyOn(crypto.subtle, "decrypt");
     const transport = vi.fn<ReplayTransport>();
 
-    const summary = await replayQueuedCaptures(db, PRINCIPAL_B, keyB, transport, sessionFor(PRINCIPAL_B));
+    const summary = await replayQueuedCaptures(db, PRINCIPAL_B, transport, sessionFor(PRINCIPAL_B));
 
     expect(transport).not.toHaveBeenCalled();
     expect(decrypt).not.toHaveBeenCalled();
@@ -187,19 +199,20 @@ describe("control 2 — a queued entry never rebinds Principal", () => {
   });
 
   it("replays the caller's own entry in the same pass that quarantines the foreign one", async () => {
-    const { db, key, entry } = await queueOne(PRINCIPAL_A, NOTE, "cap-synthetic-mine");
+    const { db, entry } = await queueOne(PRINCIPAL_A, NOTE, "cap-synthetic-mine");
     const keyB = await principalContentKey(db, PRINCIPAL_B);
     const theirs = await enqueueCapture(db, keyB, {
       principalId: PRINCIPAL_B,
       text: "synthetic note owned by b",
       captureKind: "quick_note",
       idempotencyKey: "cap-synthetic-theirs",
+      projectId: null,
     });
     const transport = vi.fn<ReplayTransport>(async (req) =>
       goodReceipt(req.text, req.idempotencyKey),
     );
 
-    const summary = await replayQueuedCaptures(db, PRINCIPAL_A, key, transport, sessionFor(PRINCIPAL_A));
+    const summary = await replayQueuedCaptures(db, PRINCIPAL_A, transport, sessionFor(PRINCIPAL_A));
 
     expect(summary).toMatchObject({ replayed: 1, quarantined: 1 });
     expect(transport).toHaveBeenCalledTimes(1);
@@ -215,18 +228,25 @@ describe("control 2 — a queued entry never rebinds Principal", () => {
       text: "synthetic note beta",
       captureKind: "quick_note",
       idempotencyKey: "cap-synthetic-second",
+      projectId: null,
     });
-    const resolveSession = vi
-      .fn()
-      .mockResolvedValueOnce({ principalId: PRINCIPAL_A, replayBinding: "binding-a" })
-      .mockResolvedValueOnce({ principalId: PRINCIPAL_B, replayBinding: "binding-b" });
+    // One attempt now resolves authority three times — before decrypting, before
+    // the write, and before the deletion — so the first entry consumes three
+    // answers under A and the account switch lands on the second entry.
+    const sessions = [
+      { principalId: PRINCIPAL_A, replayBinding: "binding-a" },
+      { principalId: PRINCIPAL_A, replayBinding: "binding-a" },
+      { principalId: PRINCIPAL_A, replayBinding: "binding-a" },
+      { principalId: PRINCIPAL_B, replayBinding: "binding-b" },
+    ];
+    const resolveSession = vi.fn(async () => sessions.shift() ?? null);
     const transport = vi.fn<ReplayTransport>(async (request) =>
       goodReceipt(request.text, request.idempotencyKey),
     );
 
-    const summary = await replayQueuedCaptures(db, PRINCIPAL_A, key, transport, resolveSession);
+    const summary = await replayQueuedCaptures(db, PRINCIPAL_A, transport, resolveSession);
 
-    expect(resolveSession).toHaveBeenCalledTimes(2);
+    expect(resolveSession).toHaveBeenCalledTimes(4);
     expect(transport).toHaveBeenCalledTimes(1);
     expect(summary).toMatchObject({ replayed: 1, needsReauth: 1, stoppedForReauth: true });
     expect(await payloadPresent(db, entry.entryId)).toBe(false);
@@ -245,13 +265,14 @@ describe("control 4 — a stale session fails closed", () => {
       text: "synthetic note beta",
       captureKind: "quick_note",
       idempotencyKey: "cap-synthetic-second",
+      projectId: null,
     });
     const transport = vi.fn<ReplayTransport>(async () => ({
       status,
       body: { error: { errorClass: "authentication", code: "unauthenticated" } },
     }));
 
-    const summary = await replayQueuedCaptures(db, PRINCIPAL_A, key, transport, sessionFor(PRINCIPAL_A));
+    const summary = await replayQueuedCaptures(db, PRINCIPAL_A, transport, sessionFor(PRINCIPAL_A));
 
     expect(summary).toMatchObject({ needsReauth: 1, replayed: 0, stoppedForReauth: true });
     // The pass stopped: the second entry was never attempted.
@@ -272,6 +293,7 @@ describe("control 4 — a stale session fails closed", () => {
       text: "synthetic note beta",
       captureKind: "quick_note",
       idempotencyKey: "cap-synthetic-second",
+      projectId: null,
     });
     const transport = vi.fn<ReplayTransport>(async () => ({
       status: 409,
@@ -284,11 +306,7 @@ describe("control 4 — a stale session fails closed", () => {
       },
     }));
 
-    const summary = await replayQueuedCaptures(
-      db,
-      PRINCIPAL_A,
-      key,
-      transport,
+    const summary = await replayQueuedCaptures(db, PRINCIPAL_A, transport,
       sessionFor(PRINCIPAL_A),
     );
 
@@ -302,17 +320,13 @@ describe("control 4 — a stale session fails closed", () => {
   });
 
   it("does not treat an unrelated 409 as an authentication transition", async () => {
-    const { db, key } = await queueOne(PRINCIPAL_A);
+    const { db } = await queueOne(PRINCIPAL_A);
     const transport = vi.fn<ReplayTransport>(async () => ({
       status: 409,
       body: { error: { errorClass: "conflict", code: "some_other_conflict" } },
     }));
 
-    const summary = await replayQueuedCaptures(
-      db,
-      PRINCIPAL_A,
-      key,
-      transport,
+    const summary = await replayQueuedCaptures(db, PRINCIPAL_A, transport,
       sessionFor(PRINCIPAL_A),
     );
 
@@ -321,12 +335,12 @@ describe("control 4 — a stale session fails closed", () => {
   });
 
   it("never replays without a session — the transport is the only way out and it is authenticated", async () => {
-    const { db, key, entry } = await queueOne(PRINCIPAL_A);
+    const { db, entry } = await queueOne(PRINCIPAL_A);
     const transport = vi.fn<ReplayTransport>(async () => ({ status: 401, body: null }));
-    await replayQueuedCaptures(db, PRINCIPAL_A, key, transport, sessionFor(PRINCIPAL_A));
+    await replayQueuedCaptures(db, PRINCIPAL_A, transport, sessionFor(PRINCIPAL_A));
     // A second pass may try again — that is one attempt per pass, driven by a
     // mount or an `online` event, not a loop — and it still refuses to delete.
-    await replayQueuedCaptures(db, PRINCIPAL_A, key, transport, sessionFor(PRINCIPAL_A));
+    await replayQueuedCaptures(db, PRINCIPAL_A, transport, sessionFor(PRINCIPAL_A));
     expect(transport).toHaveBeenCalledTimes(2);
     expect(await payloadPresent(db, entry.entryId)).toBe(true);
   });
@@ -334,10 +348,10 @@ describe("control 4 — a stale session fails closed", () => {
 
 describe("control 5 — the local payload is deleted only for a verified receipt", () => {
   it("deletes when all four checks pass", async () => {
-    const { db, key, entry } = await queueOne(PRINCIPAL_A);
+    const { db, entry } = await queueOne(PRINCIPAL_A);
     const transport: ReplayTransport = async (req) => goodReceipt(req.text, req.idempotencyKey);
 
-    const summary = await replayQueuedCaptures(db, PRINCIPAL_A, key, transport, sessionFor(PRINCIPAL_A));
+    const summary = await replayQueuedCaptures(db, PRINCIPAL_A, transport, sessionFor(PRINCIPAL_A));
 
     expect(summary).toMatchObject({ replayed: 1, failed: 0 });
     expect(await payloadPresent(db, entry.entryId)).toBe(false);
@@ -445,11 +459,11 @@ describe("control 5 — the local payload is deleted only for a verified receipt
   ];
 
   it.each(malformed)("leaves the payload intact for %s", async (_label, mangle) => {
-    const { db, key, entry } = await queueOne(PRINCIPAL_A);
+    const { db, entry } = await queueOne(PRINCIPAL_A);
     const transport: ReplayTransport = async (req) =>
       mangle(await goodReceipt(req.text, req.idempotencyKey));
 
-    const summary = await replayQueuedCaptures(db, PRINCIPAL_A, key, transport, sessionFor(PRINCIPAL_A));
+    const summary = await replayQueuedCaptures(db, PRINCIPAL_A, transport, sessionFor(PRINCIPAL_A));
 
     expect(summary.replayed).toBe(0);
     expect(summary.failed).toBe(1);
@@ -458,29 +472,25 @@ describe("control 5 — the local payload is deleted only for a verified receipt
   });
 
   it("leaves the payload intact when the transport throws", async () => {
-    const { db, key, entry } = await queueOne(PRINCIPAL_A);
+    const { db, entry } = await queueOne(PRINCIPAL_A);
     const transport: ReplayTransport = async () => {
       throw new TypeError("synthetic network failure");
     };
-    const summary = await replayQueuedCaptures(db, PRINCIPAL_A, key, transport, sessionFor(PRINCIPAL_A));
+    const summary = await replayQueuedCaptures(db, PRINCIPAL_A, transport, sessionFor(PRINCIPAL_A));
     expect(summary).toMatchObject({ replayed: 0, failed: 1 });
     expect(await payloadPresent(db, entry.entryId)).toBe(true);
   });
 
   it("keeps ciphertext when a 200 body is lost, then deletes on a later matching receipt", async () => {
-    const { db, key, entry } = await queueOne(PRINCIPAL_A);
+    const { db, entry } = await queueOne(PRINCIPAL_A);
     const lost: ReplayTransport = async () => ({ status: 200, body: null });
-    const first = await replayQueuedCaptures(db, PRINCIPAL_A, key, lost, sessionFor(PRINCIPAL_A));
+    const first = await replayQueuedCaptures(db, PRINCIPAL_A, lost, sessionFor(PRINCIPAL_A));
     expect(first).toMatchObject({ replayed: 0, failed: 1 });
     expect(await payloadPresent(db, entry.entryId)).toBe(true);
     expect((await queueSnapshot(db))[0].idempotencyKey).toBe("cap-synthetic-0001");
 
     const matched: ReplayTransport = async (req) => goodReceipt(req.text, req.idempotencyKey, false);
-    const second = await replayQueuedCaptures(
-      db,
-      PRINCIPAL_A,
-      key,
-      matched,
+    const second = await replayQueuedCaptures(db, PRINCIPAL_A, matched,
       sessionFor(PRINCIPAL_A),
     );
     expect(second).toMatchObject({ replayed: 1, failed: 0 });
@@ -489,74 +499,78 @@ describe("control 5 — the local payload is deleted only for a verified receipt
   });
 
   it("leaves the payload intact on a 5xx", async () => {
-    const { db, key, entry } = await queueOne(PRINCIPAL_A);
+    const { db, entry } = await queueOne(PRINCIPAL_A);
     const transport: ReplayTransport = async () => ({ status: 503, body: null });
-    const summary = await replayQueuedCaptures(db, PRINCIPAL_A, key, transport, sessionFor(PRINCIPAL_A));
+    const summary = await replayQueuedCaptures(db, PRINCIPAL_A, transport, sessionFor(PRINCIPAL_A));
     expect(summary).toMatchObject({ replayed: 0, failed: 1 });
     expect(await payloadPresent(db, entry.entryId)).toBe(true);
   });
 
-  it("names the failed check rather than collapsing them", async () => {
-    const digest = await contentSha256(NOTE);
-    expect(verifyReceipt({ shape: "synthetic" }, { idempotencyKey: "k", contentSha256: digest, principalId: PRINCIPAL_A })).toEqual({
+  it("names the failed check rather than collapsing them, through the one shared verifier", async () => {
+    // The local verifier this module used to carry is gone. These assertions run
+    // against `lib/capture/receipt.ts` — the same function `/api/capture` uses —
+    // so a receipt that would release queued bytes is judged by exactly one set
+    // of rules. Its own exhaustive negatives live in that module's tests.
+    const intent: FrozenCaptureIntent = {
+      principalId: PRINCIPAL_A,
+      sessionEpoch: 0,
+      captureKind: "quick_note",
+      text: NOTE,
+      idempotencyKey: "k",
+      projectId: null,
+    };
+    const persisted = (await goodReceipt(NOTE, "k")).body as Record<string, unknown>;
+    const receipt = persisted["receipt"] as Record<string, unknown>;
+
+    await expect(verifyCaptureReceipt({ shape: "synthetic" }, intent)).resolves.toEqual({
       ok: false,
-      reason: "not_backend_shape",
+      reason: "not_persisted",
     });
-    expect(
-      verifyReceipt(
-        { shape: "backend", status: "acknowledged_not_persisted" },
-        { idempotencyKey: "k", contentSha256: digest, principalId: PRINCIPAL_A },
+    await expect(
+      verifyCaptureReceipt({ ...persisted, status: "acknowledged_not_persisted" }, intent),
+    ).resolves.toEqual({ ok: false, reason: "not_persisted" });
+    await expect(
+      verifyCaptureReceipt(
+        { ...persisted, receipt: { ...receipt, idempotencyKey: "other" } },
+        intent,
       ),
-    ).toEqual({ ok: false, reason: "not_persisted" });
-    expect(
-      verifyReceipt(
-        { shape: "backend", status: "persisted", receipt: { receiptId: "r", idempotencyKey: "other" } },
-        { idempotencyKey: "k", contentSha256: digest, principalId: PRINCIPAL_A },
+    ).resolves.toEqual({ ok: false, reason: "key_mismatch" });
+    await expect(
+      verifyCaptureReceipt(
+        { ...persisted, receipt: { ...receipt, contentSha256: "0".repeat(64) } },
+        intent,
       ),
-    ).toEqual({ ok: false, reason: "idempotency_key_mismatch" });
-    expect(
-      verifyReceipt(
-        {
-          shape: "backend",
-          status: "persisted",
-          receipt: { receiptId: "r", idempotencyKey: "k", contentSha256: "0".repeat(64) },
-        },
-        { idempotencyKey: "k", contentSha256: digest, principalId: PRINCIPAL_A },
+    ).resolves.toEqual({ ok: false, reason: "digest_mismatch" });
+    await expect(
+      verifyCaptureReceipt(
+        { ...persisted, receipt: { ...receipt, principalId: PRINCIPAL_B } },
+        intent,
       ),
-    ).toEqual({ ok: false, reason: "digest_mismatch" });
-    expect(
-      verifyReceipt(
-        {
-          shape: "backend",
-          status: "persisted",
-          receipt: {
-            receiptId: "r",
-            idempotencyKey: "k",
-            contentSha256: digest,
-            principalId: PRINCIPAL_B,
-          },
-        },
-        { idempotencyKey: "k", contentSha256: digest, principalId: PRINCIPAL_A },
+    ).resolves.toEqual({ ok: false, reason: "principal_mismatch" });
+    await expect(
+      verifyCaptureReceipt(
+        { ...persisted, receipt: { ...receipt, projectId: "prj_aaaaaaaa11111111" } },
+        intent,
       ),
-    ).toEqual({ ok: false, reason: "principal_mismatch" });
+    ).resolves.toEqual({ ok: false, reason: "project_mismatch" });
   });
 });
 
 describe("control 7 — the idempotency key is minted once and never regenerated", () => {
   it("sends the same key on every attempt", async () => {
-    const { db, key } = await queueOne(PRINCIPAL_A, NOTE, "cap-synthetic-stable");
+    const { db } = await queueOne(PRINCIPAL_A, NOTE, "cap-synthetic-stable");
     const seen: string[] = [];
     const failing: ReplayTransport = async (req) => {
       seen.push(req.idempotencyKey);
       return { status: 503, body: null };
     };
-    await replayQueuedCaptures(db, PRINCIPAL_A, key, failing, sessionFor(PRINCIPAL_A));
-    await replayQueuedCaptures(db, PRINCIPAL_A, key, failing, sessionFor(PRINCIPAL_A));
+    await replayQueuedCaptures(db, PRINCIPAL_A, failing, sessionFor(PRINCIPAL_A));
+    await replayQueuedCaptures(db, PRINCIPAL_A, failing, sessionFor(PRINCIPAL_A));
     const succeeding: ReplayTransport = async (req) => {
       seen.push(req.idempotencyKey);
       return goodReceipt(req.text, req.idempotencyKey);
     };
-    await replayQueuedCaptures(db, PRINCIPAL_A, key, succeeding, sessionFor(PRINCIPAL_A));
+    await replayQueuedCaptures(db, PRINCIPAL_A, succeeding, sessionFor(PRINCIPAL_A));
 
     expect(seen).toEqual([
       "cap-synthetic-stable",
@@ -566,23 +580,23 @@ describe("control 7 — the idempotency key is minted once and never regenerated
   });
 
   it("treats a replay that returns created:false as a success and deletes the payload", async () => {
-    const { db, key, entry } = await queueOne(PRINCIPAL_A, NOTE, "cap-synthetic-replayed");
+    const { db, entry } = await queueOne(PRINCIPAL_A, NOTE, "cap-synthetic-replayed");
     const transport: ReplayTransport = async (req) =>
       goodReceipt(req.text, req.idempotencyKey, false);
 
-    const summary = await replayQueuedCaptures(db, PRINCIPAL_A, key, transport, sessionFor(PRINCIPAL_A));
+    const summary = await replayQueuedCaptures(db, PRINCIPAL_A, transport, sessionFor(PRINCIPAL_A));
 
     expect(summary).toMatchObject({ replayed: 1 });
     expect(await payloadPresent(db, entry.entryId)).toBe(false);
   });
 
   it("does not resend an entry whose payload a verified receipt already removed", async () => {
-    const { db, key } = await queueOne(PRINCIPAL_A, NOTE, "cap-synthetic-once");
+    const { db } = await queueOne(PRINCIPAL_A, NOTE, "cap-synthetic-once");
     const transport = vi.fn<ReplayTransport>(async (req) =>
       goodReceipt(req.text, req.idempotencyKey),
     );
-    await replayQueuedCaptures(db, PRINCIPAL_A, key, transport, sessionFor(PRINCIPAL_A));
-    await replayQueuedCaptures(db, PRINCIPAL_A, key, transport, sessionFor(PRINCIPAL_A));
+    await replayQueuedCaptures(db, PRINCIPAL_A, transport, sessionFor(PRINCIPAL_A));
+    await replayQueuedCaptures(db, PRINCIPAL_A, transport, sessionFor(PRINCIPAL_A));
     expect(transport).toHaveBeenCalledTimes(1);
   });
 });

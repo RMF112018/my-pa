@@ -40,6 +40,7 @@ describe("this-browser PWA observations", () => {
       text: "synthetic held note",
       captureKind: "quick_note",
       idempotencyKey: "cap-synthetic-pwa-obs",
+      projectId: null,
     });
 
     render(<ThisBrowserPwaStatus />);

@@ -26,6 +26,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { IDBFactory } from "fake-indexeddb";
+import { installTestWebLocks } from "@/lib/offline/testing/web-locks";
+/**
+ * The capture queue serializes through an origin-wide Web Lock and fails closed
+ * without one. jsdom has no Web Locks API, so the shell's offline path needs the
+ * stand-in installed to exercise anything but the refusal.
+ */
+let webLocks: ReturnType<typeof installTestWebLocks>;
+beforeEach(() => {
+  webLocks = installTestWebLocks();
+});
+afterEach(() => {
+  webLocks.restore();
+});
+
 import { CaptureDialog } from "@/components/shell/capture-dialog";
 import { openOfflineDatabase } from "@/lib/offline/db";
 import { queueSnapshot } from "@/lib/offline/queue";

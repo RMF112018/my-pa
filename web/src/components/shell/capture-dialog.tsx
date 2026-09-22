@@ -251,6 +251,9 @@ export function CaptureDialog({
         text: text.trim(),
         captureKind: kind,
         idempotencyKey: key,
+        // Explicitly No Project. This dialog has no local Project selection yet;
+        // the Capture Project context that supplies one is the shell owner's.
+        projectId: null,
       });
       setOutcome({ kind: "queued", entryId: entry.entryId });
       setText("");

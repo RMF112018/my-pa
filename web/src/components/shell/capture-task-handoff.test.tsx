@@ -41,6 +41,14 @@ const offline = vi.hoisted(() => ({
     counts: { pending: 0, stalled: 0, quarantined: 0, needsReauth: 0 },
   })),
   heldCaptures: vi.fn(async () => []),
+  // Counts without a replay: the indicator's refresh path.
+  heldCaptureCounts: vi.fn(async () => ({
+    pending: 0,
+    stalled: 0,
+    quarantined: 0,
+    needsReauth: 0,
+    heldBytes: 0,
+  })),
   releaseHeldCapture: vi.fn(),
   deleteHeldCapture: vi.fn(),
 }));

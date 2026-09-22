@@ -7,53 +7,67 @@
  * guarantee is claimed**: a note queued in a tab that is then closed stays
  * queued until the app is opened again.
  *
- * **The authenticated Principal check precedes plaintext access.** Replay asks
- * the server which Principal the current HttpOnly session authenticates, then
- * compares that answer with the immutable queue owner before calling the only
- * function that decrypts. A stale rendered Principal therefore has no authority.
+ * **There is one receipt verifier and it does not live here.** This module used
+ * to carry its own, checking five fields. It now imports
+ * `verifyCaptureReceipt` from `lib/capture/receipt.ts` — the same function the
+ * online BFF path uses — because two verifiers for one receipt is two answers to
+ * "was this stored", and the weaker one decides what gets deleted. The shared
+ * verifier validates the **whole** canonical acknowledgement and compares
+ * Principal, idempotency key, kind, content digest and **Project including
+ * null** against the frozen intent.
  *
- * **A local payload is deleted only for a receipt that has been checked, not for
- * an HTTP 200.** `verifyReceipt` requires all five of:
+ * **The session is re-resolved at every boundary that matters**: before the
+ * payload is decrypted, immediately before the POST, and again before the
+ * deletion. Both the Principal and the opaque replay binding must be unchanged
+ * for that attempt. A same-Principal cookie transition still blocks the
+ * deletion, because the proof that authorized the write was obtained under a
+ * session that no longer exists.
  *
- * 1. `shape === "backend"` — the synthetic provider's answer is a different
- *    shape and must never earn a deletion;
- * 2. `status === "persisted"` — `acknowledged_not_persisted` is exactly the
- *    state in which the note is *not* stored, so it deletes nothing;
- * 3. a non-empty `receipt.receiptId`, and `receipt.idempotencyKey` equal to the
- *    key this entry was minted with — a receipt for someone else's submission is
- *    not this entry's receipt;
- * 4. `receipt.contentSha256` equal to a SHA-256 this tier computes locally over
- *    the exact bytes the backend hashes.
- * 5. `receipt.principalId` equal to the queue owner and the Principal established
- *    by replay-time session introspection.
+ * **Deletion is the narrowest operation in this file.** It requires a complete
+ * verified receipt *and* a final transactional comparison against the exact
+ * bytes the attempt worked from. HTTP 2xx alone, a synthetic acknowledgement, an
+ * echoed Project, a missing field, the wrong Project or a null mismatch all
+ * leave the ciphertext exactly where it was.
  *
- * The fourth is checkable here because the backend's digest is reproducible from
- * the web tier: `my_pa.domain.capture.version.digest_of` is
- * `hashlib.sha256(text.encode("utf-8")).hexdigest()` over the capture text **as
- * stored**, with no normalisation, and `POST /api/capture` sends `text.trim()`
- * and the Python side stores that string verbatim. So the digest over the same
- * trimmed string is the digest the receipt must carry.
- *
- * Anything else — a transport failure, a malformed body, a partially shaped
- * receipt, a mismatched digest — leaves the ciphertext exactly where it was.
+ * **The Project is the frozen one.** It comes out of the authenticated payload
+ * and is sent verbatim. Current global Project Scope is never consulted: the
+ * note was filed against a Project when it was written, and replaying it
+ * somewhere else because the user has since changed context would be the same
+ * defect as rebinding it to a different Principal.
  *
  * **The idempotency key is never regenerated.** It is minted once at enqueue and
- * replayed verbatim, so a second replay of the same entry meets the backend's
- * `UNIQUE (principal_id, idempotency_key)` and returns the original receipt with
+ * replayed verbatim, so a second replay meets the backend's `UNIQUE
+ * (principal_id, idempotency_key)` and returns the original receipt with
  * `created: false`. That is a success and it deletes the local payload: the note
  * is stored, and storing it twice is what the key exists to prevent.
  */
+import {
+  contentSha256 as sharedContentSha256,
+  verifyCaptureReceipt,
+} from "@/lib/capture/receipt";
+import type { CaptureKind, FrozenCaptureIntent } from "@/lib/capture/contract";
+import {
+  CaptureQueueProtocolError,
+  type CaptureQueueProtocolReason,
+} from "@/lib/offline/capture-intent-codec";
+import { CaptureQueueUnavailableError, withCaptureQueueLock } from "@/lib/offline/coordinator";
+import { CaptureKeyUnavailableError, loadPrincipalKey } from "@/lib/offline/key";
 import {
   deleteReplayed,
   markNeedsReauth,
   markReplayFailed,
   quarantineEntry,
   queueSnapshot,
-  readPayloadText,
+  readCaptureIntent,
+  readPayloadRecord,
   replayable,
   retains,
+  snapshotRetainedPayload,
   type OfflineEntry,
 } from "@/lib/offline/queue";
+
+/** How long one replay attempt may take before it is abandoned as ambiguous. */
+export const REPLAY_ATTEMPT_TIMEOUT_MS = 15_000;
 
 /** What a transport hands back. Deliberately the raw status and body. */
 export interface ReplayResponse {
@@ -64,9 +78,11 @@ export interface ReplayResponse {
 /** How a replay reaches the server. Injected so the verification can be tested. */
 export type ReplayTransport = (request: {
   readonly text: string;
-  readonly captureKind: string;
+  readonly captureKind: CaptureKind;
   readonly idempotencyKey: string;
+  readonly projectId: string | null;
   readonly replayBinding: string;
+  readonly signal: AbortSignal;
 }) => Promise<ReplayResponse>;
 
 export interface AuthenticatedReplaySession {
@@ -76,79 +92,13 @@ export interface AuthenticatedReplaySession {
 
 export type ReplaySessionResolver = () => Promise<AuthenticatedReplaySession | null>;
 
-/** Why a receipt was not accepted. Each value names one failed check. */
-export type ReceiptRejection =
-  | "not_an_object"
-  | "not_backend_shape"
-  | "not_persisted"
-  | "missing_receipt_id"
-  | "idempotency_key_mismatch"
-  | "digest_mismatch"
-  | "principal_mismatch";
-
-export type ReceiptVerdict =
-  | { readonly ok: true; readonly receiptId: string; readonly created: boolean }
-  | { readonly ok: false; readonly reason: ReceiptRejection };
-
-/** SHA-256 of the UTF-8 bytes of `text`, lowercase hex — the backend's `digest_of`. */
-export async function contentSha256(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(text) as BufferSource,
-  );
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 /**
- * Whether this response is a receipt for this entry's submission.
+ * SHA-256 of the UTF-8 bytes of `text`, lowercase hex — the backend's `digest_of`.
  *
- * Every check is positive. A body whose shape this function does not recognise
- * falls through to a rejection rather than to acceptance, because the failure
- * directions are not symmetric: a rejected good receipt costs one replayed
- * submission that the idempotency key collapses, and an accepted bad one deletes
- * the only copy of somebody's note.
+ * Re-exported rather than reimplemented: existing callers keep their import and
+ * there is still exactly one hashing implementation in the tree.
  */
-export function verifyReceipt(
-  body: unknown,
-  expected: {
-    readonly idempotencyKey: string;
-    readonly contentSha256: string;
-    readonly principalId: string;
-  },
-): ReceiptVerdict {
-  if (typeof body !== "object" || body === null) return { ok: false, reason: "not_an_object" };
-  const envelope = body as {
-    shape?: unknown;
-    status?: unknown;
-    created?: unknown;
-    receipt?: {
-      receiptId?: unknown;
-      idempotencyKey?: unknown;
-      contentSha256?: unknown;
-      principalId?: unknown;
-    };
-  };
-  if (envelope.shape !== "backend") return { ok: false, reason: "not_backend_shape" };
-  if (envelope.status !== "persisted") return { ok: false, reason: "not_persisted" };
-  const receipt = envelope.receipt;
-  if (typeof receipt !== "object" || receipt === null) {
-    return { ok: false, reason: "missing_receipt_id" };
-  }
-  const receiptId = receipt.receiptId;
-  if (typeof receiptId !== "string" || receiptId.trim().length === 0) {
-    return { ok: false, reason: "missing_receipt_id" };
-  }
-  if (receipt.idempotencyKey !== expected.idempotencyKey) {
-    return { ok: false, reason: "idempotency_key_mismatch" };
-  }
-  if (receipt.contentSha256 !== expected.contentSha256) {
-    return { ok: false, reason: "digest_mismatch" };
-  }
-  if (receipt.principalId !== expected.principalId) {
-    return { ok: false, reason: "principal_mismatch" };
-  }
-  return { ok: true, receiptId, created: envelope.created !== false };
-}
+export const contentSha256 = sharedContentSha256;
 
 /** What one replay pass did. Counts, never content. */
 export interface ReplaySummary {
@@ -158,6 +108,8 @@ export interface ReplaySummary {
   readonly needsReauth: number;
   readonly failed: number;
   readonly stoppedForReauth: boolean;
+  /** Rows the queue lock or a missing key prevented this pass from attempting. */
+  readonly blocked: number;
 }
 
 /** Statuses that mean "this session is not usable", and end the pass. */
@@ -170,24 +122,49 @@ function isStaleSession(response: ReplayResponse): boolean {
   return body.error?.code === "replay_session_changed";
 }
 
+function sameSession(
+  left: AuthenticatedReplaySession,
+  right: AuthenticatedReplaySession | null,
+): right is AuthenticatedReplaySession {
+  return (
+    right !== null &&
+    right.principalId === left.principalId &&
+    right.replayBinding === left.replayBinding
+  );
+}
+
+async function resolveQuietly(
+  resolveSession: ReplaySessionResolver,
+): Promise<AuthenticatedReplaySession | null> {
+  try {
+    return await resolveSession();
+  } catch {
+    return null;
+  }
+}
+
+/** The protocol reason a thrown queue error carries, or a bounded fallback. */
+function protocolReason(error: unknown): CaptureQueueProtocolReason {
+  if (error instanceof CaptureQueueProtocolError) return error.reason;
+  if (error instanceof CaptureKeyUnavailableError) return "key_unavailable";
+  return "malformed_intent";
+}
+
 /**
- * Replay everything queued under `currentPrincipalId` after independently
- * resolving the current authenticated session.
+ * Replay everything queued under `currentPrincipalId`.
  *
- * `key` is that principal's content key. It is only ever used on entries whose
- * stored `principalId` equals `currentPrincipalId`, so it is never asked to
- * decrypt bytes it did not seal.
+ * `currentPrincipalId` is the rendered identity used to select the local key. It
+ * is not authentication authority: `resolveSession` obtains that immediately
+ * before every entry, and again before the write and the deletion.
  *
- * `currentPrincipalId` remains the rendered identity used to select the local
- * key. It is not authentication authority. `resolveSession` obtains that
- * authority immediately before every entry, and its opaque binding is carried
- * to the write so the BFF can reject a cookie change between check and
- * admission.
+ * Each row is attempted while holding the origin-wide queue lock, which is taken
+ * and released per row rather than once per pass — one bounded network attempt
+ * per acquisition, so a second tab is never locked out for a whole drain and a
+ * stalled attempt never holds the queue.
  */
 export async function replayQueuedCaptures(
   db: IDBDatabase,
   currentPrincipalId: string,
-  key: CryptoKey,
   transport: ReplayTransport,
   resolveSession: ReplaySessionResolver,
 ): Promise<ReplaySummary> {
@@ -197,6 +174,7 @@ export async function replayQueuedCaptures(
   let quarantined = 0;
   let needsReauth = 0;
   let failed = 0;
+  let blocked = 0;
   let stoppedForReauth = false;
 
   for (const entry of entries) {
@@ -219,91 +197,191 @@ export async function replayQueuedCaptures(
     if (!replayable(entry)) continue;
     if (stoppedForReauth) break;
 
-    let authenticated: AuthenticatedReplaySession | null = null;
+    let result: ReplayRowResult;
     try {
-      authenticated = await resolveSession();
-    } catch {
-      authenticated = null;
+      result = await withCaptureQueueLock(() =>
+        replayOne(db, currentPrincipalId, entry, transport, resolveSession),
+      );
+    } catch (error) {
+      // No lock is no attempt. Nothing was decrypted, nothing was sent, no
+      // replay attempt is consumed, and the bytes are untouched.
+      if (error instanceof CaptureQueueUnavailableError) {
+        blocked += 1;
+        continue;
+      }
+      throw error;
     }
 
-    // This is the authoritative per-entry replay-time identity check. It occurs
-    // before `replayOne`, which is the only function that reads/decrypts payload
-    // bytes. Resolving inside the loop prevents a session snapshot from becoming
-    // authority for later entries in the same drain.
-    if (authenticated === null || entry.principalId !== authenticated.principalId) {
-      await markNeedsReauth(db, entry.entryId, "current authenticated principal does not own entry");
-      needsReauth += 1;
-      stoppedForReauth = true;
-      break;
+    if (result.outcome === "blocked") {
+      blocked += 1;
+      continue;
     }
-
-    attempted += 1;
-    const outcome = await replayOne(db, key, entry, transport, authenticated);
+    if (result.attempted) attempted += 1;
+    const outcome = result.outcome;
     if (outcome === "replayed") replayed += 1;
     else if (outcome === "needs_reauth") {
       needsReauth += 1;
       // Stop the pass. Continuing would send every remaining note into the same
       // refusal and turn one stale session into a queue of failures.
       stoppedForReauth = true;
-    } else failed += 1;
+    } else if (outcome === "failed") failed += 1;
   }
 
-  return { attempted, replayed, quarantined, needsReauth, failed, stoppedForReauth };
+  return { attempted, replayed, quarantined, needsReauth, failed, blocked, stoppedForReauth };
 }
 
+type ReplayOutcome = "replayed" | "needs_reauth" | "failed" | "blocked" | "not_attempted";
+
+/**
+ * One row's result, and whether it consumed an attempt.
+ *
+ * The two are not the same question. A missing authority, an unusable key, a
+ * lock held elsewhere or a row another tab already finished are all decided
+ * *before* anything is sent, and none of them is an attempt: counting them would
+ * spend an entry's five-failure budget on conditions that never reached the
+ * network. Only a row whose transport actually ran has been attempted.
+ */
+interface ReplayRowResult {
+  readonly outcome: ReplayOutcome;
+  readonly attempted: boolean;
+}
+
+/**
+ * One row, under the lock.
+ *
+ * Reads the full sequence top to bottom: authority, then key, then bytes, then
+ * authority again, then the network, then the receipt, then authority a third
+ * time, then the transactional deletion. Every step that fails leaves the
+ * ciphertext where it is.
+ */
 async function replayOne(
   db: IDBDatabase,
-  key: CryptoKey,
+  currentPrincipalId: string,
   entry: OfflineEntry,
   transport: ReplayTransport,
-  authenticated: AuthenticatedReplaySession,
-): Promise<"replayed" | "needs_reauth" | "failed"> {
-  let text: string | null;
-  try {
-    text = await readPayloadText(db, key, entry.entryId);
-  } catch {
-    // A payload that will not decrypt is not evidence that it should be thrown
-    // away. It is recorded and kept.
-    await markReplayFailed(db, entry.entryId, "payload_undecryptable");
-    return "failed";
-  }
-  if (text === null) {
-    await markReplayFailed(db, entry.entryId, "payload_missing");
-    return "failed";
+  resolveSession: ReplaySessionResolver,
+): Promise<ReplayRowResult> {
+  // Re-fold under the lock: another tab may have completed or released this row
+  // between the snapshot and the acquisition.
+  const current = (await queueSnapshot(db)).find(
+    (candidate) => candidate.entryId === entry.entryId,
+  );
+  if (!current || !retains(current) || !replayable(current)) {
+    return { outcome: "not_attempted", attempted: false };
   }
 
+  const opening = await resolveQuietly(resolveSession);
+  if (opening === null || opening.principalId !== current.principalId) {
+    await markNeedsReauth(db, current.entryId, "current authenticated principal does not own entry");
+    return { outcome: "needs_reauth", attempted: false };
+  }
+
+  // Read-only. Replay never mints a key: a fresh one could not open these bytes,
+  // and writing it would destroy the only thing that ever could.
+  let key: CryptoKey | null;
+  try {
+    key = await loadPrincipalKey(db, currentPrincipalId);
+  } catch {
+    // An unusable stored key is a property of the stored bytes, not of this
+    // attempt. It is not an attempt and consumes no replay budget.
+    return { outcome: "blocked", attempted: false };
+  }
+  if (key === null) return { outcome: "blocked", attempted: false };
+
+  const record = await readPayloadRecord(db, current.entryId);
+  if (record === null) {
+    await markReplayFailed(db, current.entryId, "payload_missing");
+    return { outcome: "failed", attempted: true };
+  }
+  const snapshot = await snapshotRetainedPayload(db, current);
+  if (snapshot === null) {
+    await markReplayFailed(db, current.entryId, "payload_missing");
+    return { outcome: "failed", attempted: true };
+  }
+
+  let intent: { text: string; projectId: string | null };
+  try {
+    intent = await readCaptureIntent(db, key, current, record);
+  } catch (error) {
+    // Unsupported, unauthenticated or malformed bytes are never POSTed. The
+    // owned attempt had begun, so it appends exactly one bounded failure and the
+    // bytes are retained; retrying the network would not change what they are.
+    await markReplayFailed(db, current.entryId, protocolReason(error));
+    return { outcome: "failed", attempted: true };
+  }
+
+  // Immediately before the write. The cookie may have changed while the payload
+  // was being decrypted, and the binding carried to the BFF must be the current
+  // one or the BFF's own replay admission will refuse it.
+  const beforeWrite = await resolveQuietly(resolveSession);
+  if (!sameSession(opening, beforeWrite)) {
+    await markNeedsReauth(db, current.entryId, "session_changed");
+    return { outcome: "needs_reauth", attempted: false };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REPLAY_ATTEMPT_TIMEOUT_MS);
   let response: ReplayResponse;
   try {
     response = await transport({
-      text,
-      captureKind: entry.captureKind,
-      idempotencyKey: entry.idempotencyKey,
-      replayBinding: authenticated.replayBinding,
+      text: intent.text,
+      captureKind: current.captureKind as CaptureKind,
+      idempotencyKey: current.idempotencyKey,
+      projectId: intent.projectId,
+      replayBinding: beforeWrite.replayBinding,
+      signal: controller.signal,
     });
   } catch {
-    await markReplayFailed(db, entry.entryId, "transport_failed");
-    return "failed";
+    // An abort or a transport failure is ambiguous: the backend may have
+    // committed. It is never "not stored" and it never deletes.
+    await markReplayFailed(db, current.entryId, "transport_unconfirmed");
+    return { outcome: "failed", attempted: true };
+  } finally {
+    clearTimeout(timeout);
   }
 
   if (isStaleSession(response)) {
-    await markNeedsReauth(db, entry.entryId, `session refused with ${response.status}`);
-    return "needs_reauth";
+    await markNeedsReauth(db, current.entryId, "session_changed");
+    return { outcome: "needs_reauth", attempted: true };
   }
   if (response.status < 200 || response.status >= 300) {
-    await markReplayFailed(db, entry.entryId, `http_${response.status}`);
-    return "failed";
+    await markReplayFailed(db, current.entryId, `http_${response.status}`);
+    return { outcome: "failed", attempted: true };
   }
 
-  const verdict = verifyReceipt(response.body, {
-    idempotencyKey: entry.idempotencyKey,
-    contentSha256: await contentSha256(text),
-    principalId: authenticated.principalId,
-  });
+  const frozen: FrozenCaptureIntent = {
+    principalId: beforeWrite.principalId,
+    // In-memory generation counter only; not persisted and not part of identity.
+    sessionEpoch: 0,
+    captureKind: current.captureKind as CaptureKind,
+    text: intent.text,
+    idempotencyKey: current.idempotencyKey,
+    projectId: intent.projectId,
+  };
+  const verdict = await verifyCaptureReceipt(response.body, frozen);
   if (!verdict.ok) {
-    await markReplayFailed(db, entry.entryId, verdict.reason);
-    return "failed";
+    await markReplayFailed(db, current.entryId, verdict.reason);
+    return { outcome: "failed", attempted: true };
   }
 
-  await deleteReplayed(db, entry.entryId, verdict.receiptId);
-  return "replayed";
+  // The third and last session check. An earlier proof cannot authorize a
+  // deletion after a logout or a Principal switch.
+  const beforeDelete = await resolveQuietly(resolveSession);
+  if (!sameSession(opening, beforeDelete)) {
+    await markNeedsReauth(db, current.entryId, "session_changed");
+    return { outcome: "needs_reauth", attempted: true };
+  }
+
+  const deletion = await deleteReplayed(db, snapshot, verdict.ack.receipt.receiptId);
+  if (!deletion.ok) {
+    // Another actor finished this row, or the record under that key is no longer
+    // the one that was verified. Either way the bytes here are not the bytes the
+    // receipt covers, so they stay.
+    if (deletion.reason === "already_terminal") {
+      return { outcome: "not_attempted", attempted: true };
+    }
+    await markReplayFailed(db, current.entryId, "receipt_invalid");
+    return { outcome: "failed", attempted: true };
+  }
+  return { outcome: "replayed", attempted: true };
 }

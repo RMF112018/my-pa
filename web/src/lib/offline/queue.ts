@@ -42,7 +42,28 @@ import {
   request,
   transactionDone,
 } from "@/lib/offline/db";
-import { seal, unseal, type SealedPayload } from "@/lib/offline/key";
+import { sealBytes, unseal, unsealBytes, type SealedPayload } from "@/lib/offline/key";
+import type { CaptureKind } from "@/lib/capture/contract";
+import {
+  CAPTURE_INTENT_SCHEMA_VERSION,
+  CaptureQueueProtocolError,
+  captureIntentAdditionalData,
+  decodeCaptureIntentV2,
+  detectCapturePayloadVersion,
+  encodeCaptureIntentV2,
+  type CaptureIntentEnvelope,
+  type CapturePayloadVersion,
+} from "@/lib/offline/capture-intent-codec";
+
+/**
+ * The local event a committed queue mutation dispatches.
+ *
+ * It lives beside the queue rather than on the browser facade because the
+ * listener is a UI concern that must survive a test double of that facade: a
+ * mocked composition module that omitted this constant would silently stop the
+ * indicator refreshing.
+ */
+export const CAPTURE_QUEUE_CHANGED_EVENT = "mypa:capture-queue-changed";
 
 /** How many entries may be held at once. A count, checked before every enqueue. */
 export const MAX_QUEUED_ENTRIES = 50;
@@ -78,12 +99,21 @@ export interface OfflineEntry {
   readonly captureKind: string;
   readonly byteLength: number;
   readonly queuedAt: number;
+  /**
+   * The application protocol this entry was written under.
+   *
+   * Absent means a historical row written before the versioned intent existed.
+   * It is not defaulted to 2 and not defaulted to 1: absence is the marker, and
+   * `detectCapturePayloadVersion` reads the raw stored values rather than
+   * trusting this annotation, because persisted input can be anything.
+   */
+  readonly schemaVersion?: 2;
   readonly state: OfflineEntryState;
   readonly attemptCount: number;
   readonly lastReason: string | null;
 }
 
-type OfflineEventRecord =
+export type OfflineEventRecord =
   | {
       seq?: number;
       entryId: string;
@@ -93,6 +123,7 @@ type OfflineEventRecord =
       idempotencyKey: string;
       captureKind: string;
       byteLength: number;
+      schemaVersion?: 2;
     }
   | { seq?: number; entryId: string; type: "quarantined"; at: number; reason: string }
   | { seq?: number; entryId: string; type: "needs_reauth"; at: number; reason: string }
@@ -101,10 +132,11 @@ type OfflineEventRecord =
   | { seq?: number; entryId: string; type: "payload_deleted"; at: number; receiptId: string }
   | { seq?: number; entryId: string; type: "user_deleted"; at: number; principalId: string };
 
-interface PayloadRecord {
+export interface PayloadRecord {
   readonly entryId: string;
   readonly iv: Uint8Array;
   readonly ciphertext: ArrayBuffer;
+  readonly schemaVersion?: 2;
 }
 
 /**
@@ -152,6 +184,9 @@ export function foldEntries(events: readonly OfflineEventRecord[]): readonly Off
         captureKind: event.captureKind,
         byteLength: event.byteLength,
         queuedAt: event.at,
+        ...(event.schemaVersion === CAPTURE_INTENT_SCHEMA_VERSION
+          ? { schemaVersion: CAPTURE_INTENT_SCHEMA_VERSION }
+          : {}),
         state: "pending",
         attemptCount: 0,
         lastReason: null,
@@ -224,32 +259,168 @@ export async function queueSnapshot(db: IDBDatabase): Promise<readonly OfflineEn
   return foldEntries(events);
 }
 
+/** The intent one enqueue carries. No session binding, no display name, no epoch. */
+export interface CaptureQueueIntent {
+  readonly principalId: string;
+  readonly text: string;
+  readonly captureKind: CaptureKind;
+  readonly idempotencyKey: string;
+  readonly projectId: string | null;
+}
+
+/** One entry's decrypted intent, and which protocol it was stored under. */
+export interface DecryptedCaptureIntent {
+  readonly version: CapturePayloadVersion;
+  readonly text: string;
+  /** Historical rows have no Project. That is null, not unknown, and not inferred. */
+  readonly projectId: string | null;
+}
+
+/** Read one payload record without decrypting it. */
+export async function readPayloadRecord(
+  db: IDBDatabase,
+  entryId: string,
+): Promise<PayloadRecord | null> {
+  const tx = db.transaction(PAYLOAD_STORE, "readonly");
+  const record = (await request(tx.objectStore(PAYLOAD_STORE).get(entryId))) as
+    | PayloadRecord
+    | undefined;
+  await transactionDone(tx).catch(() => undefined);
+  return record ?? null;
+}
+
+function envelopeOf(entry: OfflineEntry): CaptureIntentEnvelope {
+  return {
+    entryId: entry.entryId,
+    principalId: entry.principalId,
+    idempotencyKey: entry.idempotencyKey,
+    captureKind: entry.captureKind as CaptureKind,
+    queuedAt: entry.queuedAt,
+  };
+}
+
+/**
+ * Decrypt and validate one entry's intent.
+ *
+ * The version is decided by the stored markers before any decryption is
+ * attempted, and there is exactly one attempt. A v2 row is opened with its
+ * envelope as additional data; a historical row is opened as raw text with none.
+ * Neither falls back to the other — trying v2 and then retrying without AAD
+ * would use authentication failure as a version probe and would eventually
+ * accept a downgraded row as legacy.
+ *
+ * An unsupported or mismatched marker pair never decrypts at all.
+ */
+export async function readCaptureIntent(
+  db: IDBDatabase,
+  key: CryptoKey,
+  entry: OfflineEntry,
+  record: PayloadRecord,
+): Promise<DecryptedCaptureIntent> {
+  const version = detectCapturePayloadVersion(
+    { schemaVersion: entry.schemaVersion },
+    { schemaVersion: record.schemaVersion },
+  );
+  if (version === "unsupported") throw new CaptureQueueProtocolError("unsupported_version");
+
+  const sealed: SealedPayload = { iv: record.iv, ciphertext: record.ciphertext };
+  if (version === "legacy") {
+    let text: string;
+    try {
+      text = await unseal(key, sealed);
+    } catch {
+      throw new CaptureQueueProtocolError("authentication_failed");
+    }
+    // A historical row carried no Project and no authenticated kind binding. Any
+    // Project-shaped content inside its plaintext is not authority and does not
+    // supply an association; the historical answer is null and stays null.
+    return { version, text, projectId: null };
+  }
+
+  const envelope = envelopeOf(entry);
+  let plaintext: Uint8Array;
+  try {
+    plaintext = await unsealBytes(key, sealed, captureIntentAdditionalData(envelope));
+  } catch {
+    throw new CaptureQueueProtocolError("authentication_failed");
+  }
+  const intent = decodeCaptureIntentV2(plaintext, envelope);
+  return { version, text: intent.text, projectId: intent.projectId };
+}
+
 /**
  * Queue one note, encrypted, bound to `principalId`.
  *
- * The text is sealed before the transaction opens, so no plaintext is ever
- * handed to the store and the only failure that can leave a half-written entry
- * is one IndexedDB itself aborts — which aborts the event and the payload
- * together, since both are written in one transaction.
+ * **The entry ID is minted before the seal**, because it is part of the
+ * additional authenticated data: an envelope has to name the row it belongs to
+ * before the bytes that name it are produced.
+ *
+ * **An identical intent under an existing key is not queued twice.** A retry of
+ * the same held note — same Principal, same idempotency key, same text, kind and
+ * Project — returns the entry that already exists without resealing anything or
+ * appending a second `enqueued` row. A *different* material tuple under that key
+ * is a conflict: both the existing bytes and the caller's new draft are kept,
+ * and the caller is told, because one key naming two different notes is exactly
+ * the ambiguity the backend's uniqueness constraint would resolve by refusing.
+ *
+ * Equality is established by decrypting the existing entry. When that is not
+ * possible — a historical row whose Project was never authenticated, a payload
+ * that will not open — equality is *not assumed*: the enqueue is refused as a
+ * conflict rather than writing a second row under the same key.
+ *
+ * Sealing happens before the transaction opens, so no plaintext is handed to the
+ * store and no transaction waits on crypto. The capacity check, the journal
+ * append and the payload write are one transaction; a refusal or an abort writes
+ * nothing and evicts nothing.
  */
 export async function enqueueCapture(
   db: IDBDatabase,
   key: CryptoKey,
-  input: {
-    readonly principalId: string;
-    readonly text: string;
-    readonly captureKind: string;
-    readonly idempotencyKey: string;
-  },
+  input: CaptureQueueIntent,
 ): Promise<OfflineEntry> {
-  const sealed = await seal(key, input.text);
+  const existing = (await queueSnapshot(db)).find(
+    (candidate) =>
+      retains(candidate) &&
+      candidate.principalId === input.principalId &&
+      candidate.idempotencyKey === input.idempotencyKey,
+  );
+  if (existing) {
+    const record = await readPayloadRecord(db, existing.entryId);
+    if (!record) throw new CaptureQueueProtocolError("intent_conflict");
+    let held: DecryptedCaptureIntent;
+    try {
+      held = await readCaptureIntent(db, key, existing, record);
+    } catch {
+      throw new CaptureQueueProtocolError("intent_conflict");
+    }
+    const same =
+      held.version === "v2" &&
+      held.text === input.text &&
+      held.projectId === input.projectId &&
+      existing.captureKind === input.captureKind;
+    if (!same) throw new CaptureQueueProtocolError("intent_conflict");
+    return existing;
+  }
+
   const entryId = `oq-${crypto.randomUUID()}`;
   const at = Date.now();
+  const envelope: CaptureIntentEnvelope = {
+    entryId,
+    principalId: input.principalId,
+    idempotencyKey: input.idempotencyKey,
+    captureKind: input.captureKind,
+    queuedAt: at,
+  };
+  const sealed = await sealBytes(
+    key,
+    encodeCaptureIntentV2({ ...envelope, text: input.text, projectId: input.projectId }),
+    captureIntentAdditionalData(envelope),
+  );
 
   const tx = db.transaction([EVENT_STORE, PAYLOAD_STORE], "readwrite");
   const eventStore = tx.objectStore(EVENT_STORE);
-  const existing = (await request(eventStore.getAll())) as OfflineEventRecord[];
-  const retained = foldEntries(existing).filter(retains);
+  const events = (await request(eventStore.getAll())) as OfflineEventRecord[];
+  const retained = foldEntries(events).filter(retains);
   if (retained.length >= MAX_QUEUED_ENTRIES) {
     tx.abort();
     throw new OfflineQueueFullError("entries", retained.length, MAX_QUEUED_ENTRIES);
@@ -268,12 +439,14 @@ export async function enqueueCapture(
     idempotencyKey: input.idempotencyKey,
     captureKind: input.captureKind,
     byteLength: sealed.ciphertext.byteLength,
+    schemaVersion: CAPTURE_INTENT_SCHEMA_VERSION,
   };
   eventStore.add(event);
   const payload: PayloadRecord = {
     entryId,
     iv: sealed.iv,
     ciphertext: sealed.ciphertext,
+    schemaVersion: CAPTURE_INTENT_SCHEMA_VERSION,
   };
   tx.objectStore(PAYLOAD_STORE).add(payload);
   await transactionDone(tx);
@@ -285,6 +458,7 @@ export async function enqueueCapture(
     captureKind: input.captureKind,
     byteLength: sealed.ciphertext.byteLength,
     queuedAt: at,
+    schemaVersion: CAPTURE_INTENT_SCHEMA_VERSION,
     state: "pending",
     attemptCount: 0,
     lastReason: null,
@@ -326,26 +500,132 @@ export async function markReplayFailed(
 }
 
 /**
+ * The exact bytes and identity one replay attempt worked from.
+ *
+ * Carried into the deletion so the final transaction can prove it is deleting
+ * the record it verified rather than whatever currently sits at that key.
+ */
+export interface RetainedPayloadSnapshot {
+  readonly entryId: string;
+  readonly principalId: string;
+  readonly idempotencyKey: string;
+  readonly captureKind: string;
+  readonly queuedAt: number;
+  readonly schemaVersion?: 2;
+  readonly byteLength: number;
+  readonly iv: Uint8Array;
+  readonly ciphertext: ArrayBuffer;
+}
+
+/** The snapshot for one entry, or null when its bytes are already gone. */
+export async function snapshotRetainedPayload(
+  db: IDBDatabase,
+  entry: OfflineEntry,
+): Promise<RetainedPayloadSnapshot | null> {
+  const record = await readPayloadRecord(db, entry.entryId);
+  if (!record) return null;
+  return {
+    entryId: entry.entryId,
+    principalId: entry.principalId,
+    idempotencyKey: entry.idempotencyKey,
+    captureKind: entry.captureKind,
+    queuedAt: entry.queuedAt,
+    ...(entry.schemaVersion === CAPTURE_INTENT_SCHEMA_VERSION
+      ? { schemaVersion: CAPTURE_INTENT_SCHEMA_VERSION }
+      : {}),
+    byteLength: entry.byteLength,
+    iv: record.iv,
+    ciphertext: record.ciphertext,
+  };
+}
+
+function sameBytes(left: ArrayBufferLike, right: ArrayBufferLike): boolean {
+  if (left.byteLength !== right.byteLength) return false;
+  const a = new Uint8Array(left);
+  const b = new Uint8Array(right);
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) return false;
+  }
+  return true;
+}
+
+/** Why a verified deletion did not happen. The bytes are kept in every case. */
+export type DeletionRefusal = "already_terminal" | "payload_replaced" | "payload_missing";
+
+export type DeletionOutcome =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: DeletionRefusal };
+
+/**
  * Delete one entry's ciphertext and append the event that says why.
  *
  * The `receiptId` is required rather than optional: the only deletion this
  * module performs is one a server receipt earned, and a call that cannot name
  * the receipt has not earned it.
+ *
+ * **The snapshot is required for a second reason.** Between the moment a replay
+ * verified a receipt and the moment it deletes, this row may have been completed
+ * by another tab, released, or replaced. So the final transaction re-reads the
+ * folded entry and the payload record and compares identity, immutable metadata,
+ * the schema marker, the byte length and the IV and ciphertext bytes against what
+ * the attempt actually worked from. Anything different is retained, not deleted:
+ * a receipt for one note can never authorize deleting a different one.
+ *
+ * Crypto and receipt verification happen before this call. Nothing here awaits
+ * anything but the transaction itself, so the read-compare-delete sequence
+ * cannot be interleaved by IndexedDB.
  */
 export async function deleteReplayed(
   db: IDBDatabase,
-  entryId: string,
+  snapshot: RetainedPayloadSnapshot,
   receiptId: string,
-): Promise<void> {
+): Promise<DeletionOutcome> {
   const tx = db.transaction([EVENT_STORE, PAYLOAD_STORE], "readwrite");
-  tx.objectStore(PAYLOAD_STORE).delete(entryId);
-  tx.objectStore(EVENT_STORE).add({
-    entryId,
+  const eventStore = tx.objectStore(EVENT_STORE);
+  const payloadStore = tx.objectStore(PAYLOAD_STORE);
+
+  const events = (await request(eventStore.getAll())) as OfflineEventRecord[];
+  const current = foldEntries(events).find((entry) => entry.entryId === snapshot.entryId);
+  if (!current || !retains(current)) {
+    tx.abort();
+    return { ok: false, reason: "already_terminal" };
+  }
+  if (
+    current.principalId !== snapshot.principalId ||
+    current.idempotencyKey !== snapshot.idempotencyKey ||
+    current.captureKind !== snapshot.captureKind ||
+    current.queuedAt !== snapshot.queuedAt ||
+    current.byteLength !== snapshot.byteLength ||
+    current.schemaVersion !== snapshot.schemaVersion
+  ) {
+    tx.abort();
+    return { ok: false, reason: "payload_replaced" };
+  }
+
+  const record = (await request(payloadStore.get(snapshot.entryId))) as PayloadRecord | undefined;
+  if (!record) {
+    tx.abort();
+    return { ok: false, reason: "payload_missing" };
+  }
+  if (
+    record.schemaVersion !== snapshot.schemaVersion ||
+    record.ciphertext.byteLength !== snapshot.ciphertext.byteLength ||
+    !sameBytes(record.iv.buffer, snapshot.iv.buffer) ||
+    !sameBytes(record.ciphertext, snapshot.ciphertext)
+  ) {
+    tx.abort();
+    return { ok: false, reason: "payload_replaced" };
+  }
+
+  payloadStore.delete(snapshot.entryId);
+  eventStore.add({
+    entryId: snapshot.entryId,
     type: "payload_deleted",
     at: Date.now(),
     receiptId,
   } satisfies OfflineEventRecord);
   await transactionDone(tx);
+  return { ok: true };
 }
 
 /** Release a quarantined entry only after its original Principal signs in. */
@@ -413,20 +693,33 @@ export async function quarantineForeignEntries(
   return foreign.length;
 }
 
-/** Read and decrypt one entry's payload. Returns `null` when the bytes are gone. */
+/**
+ * Read and decrypt one entry's intent. Returns `null` when the bytes are gone.
+ *
+ * Routes through `readCaptureIntent`, so the version markers decide how the
+ * payload is opened and a v2 row is authenticated against its journal identity.
+ * A caller that only wants the words gets the words; a caller that needs the
+ * Project must use `readCaptureIntent`, because this one cannot report it.
+ */
+export async function readPayloadIntent(
+  db: IDBDatabase,
+  key: CryptoKey,
+  entryId: string,
+): Promise<DecryptedCaptureIntent | null> {
+  const record = await readPayloadRecord(db, entryId);
+  if (!record) return null;
+  const entry = (await queueSnapshot(db)).find((candidate) => candidate.entryId === entryId);
+  if (!entry) return null;
+  return readCaptureIntent(db, key, entry, record);
+}
+
+/** The authored text of one entry's intent, or `null` when the bytes are gone. */
 export async function readPayloadText(
   db: IDBDatabase,
   key: CryptoKey,
   entryId: string,
 ): Promise<string | null> {
-  const tx = db.transaction(PAYLOAD_STORE, "readonly");
-  const record = (await request(tx.objectStore(PAYLOAD_STORE).get(entryId))) as
-    | PayloadRecord
-    | undefined;
-  await transactionDone(tx).catch(() => undefined);
-  if (!record) return null;
-  const sealed: SealedPayload = { iv: record.iv, ciphertext: record.ciphertext };
-  return unseal(key, sealed);
+  return (await readPayloadIntent(db, key, entryId))?.text ?? null;
 }
 
 /** How many entries sit in each state. What a surface renders. */

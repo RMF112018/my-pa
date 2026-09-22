@@ -16,6 +16,7 @@ import {
   OfflineQueueFullError,
   countStates,
   deleteReplayed,
+  snapshotRetainedPayload,
   deleteHeldByUser,
   enqueueCapture,
   foldEntries,
@@ -66,6 +67,7 @@ describe("what is written at rest", () => {
       text: note,
       captureKind: "quick_note",
       idempotencyKey: "cap-synthetic-0001",
+      projectId: null,
     });
 
     const payload = await rawPayload(db, entry.entryId);
@@ -85,6 +87,7 @@ describe("what is written at rest", () => {
       text: "synthetic note beta",
       captureKind: "quick_note",
       idempotencyKey: "cap-synthetic-0002",
+      projectId: null,
     });
     const events = await rawEvents(db);
     expect(events).toHaveLength(1);
@@ -105,6 +108,7 @@ describe("the log is append-only and no entry is rewritten", () => {
       text: "synthetic note gamma",
       captureKind: "quick_note",
       idempotencyKey: "cap-synthetic-0003",
+      projectId: null,
     });
     const before = JSON.stringify((await rawEvents(db))[0]);
 
@@ -130,11 +134,19 @@ describe("the log is append-only and no entry is rewritten", () => {
       text: "synthetic note delta",
       captureKind: "quick_note",
       idempotencyKey: "cap-synthetic-0004",
+      projectId: null,
     });
     await markReplayFailed(db, entry.entryId, "http_500");
     expect(await rawPayload(db, entry.entryId)).toBeDefined();
 
-    await deleteReplayed(db, entry.entryId, "rcpt-synthetic-0001");
+    // Deletion now requires the exact snapshot the attempt verified, not just
+    // an entry ID: a receipt for one note may never delete a different record
+    // that happens to sit at the same key.
+    const snapshot = await snapshotRetainedPayload(db, (await queueSnapshot(db))[0]!);
+    expect(snapshot).not.toBeNull();
+    await expect(deleteReplayed(db, snapshot!, "rcpt-synthetic-0001")).resolves.toEqual({
+      ok: true,
+    });
     expect(await rawPayload(db, entry.entryId)).toBeUndefined();
     const events = await rawEvents(db);
     expect(events.at(-1)).toMatchObject({
@@ -153,6 +165,7 @@ describe("the fold", () => {
       text: "synthetic note epsilon",
       captureKind: "quick_note",
       idempotencyKey: "cap-synthetic-0005",
+      projectId: null,
     });
     for (let attempt = 0; attempt < MAX_REPLAY_ATTEMPTS - 1; attempt += 1) {
       await markReplayFailed(db, entry.entryId, "http_500");
@@ -192,6 +205,7 @@ describe("the bound refuses; it never evicts", () => {
         text: `synthetic note ${index}`,
         captureKind: "quick_note",
         idempotencyKey: `cap-synthetic-bound-${index}`,
+        projectId: null,
       });
     }
     const before = await queueSnapshot(db);
@@ -203,6 +217,7 @@ describe("the bound refuses; it never evicts", () => {
         text: "synthetic note over the bound",
         captureKind: "quick_note",
         idempotencyKey: "cap-synthetic-bound-over",
+        projectId: null,
       }),
     ).rejects.toBeInstanceOf(OfflineQueueFullError);
 
@@ -224,6 +239,7 @@ describe("the bound refuses; it never evicts", () => {
       text: half,
       captureKind: "quick_note",
       idempotencyKey: "cap-synthetic-bytes-1",
+      projectId: null,
     });
     await expect(
       enqueueCapture(db, key, {
@@ -231,6 +247,7 @@ describe("the bound refuses; it never evicts", () => {
         text: half,
         captureKind: "quick_note",
         idempotencyKey: "cap-synthetic-bytes-2",
+        projectId: null,
       }),
     ).rejects.toMatchObject({ name: "OfflineQueueFullError", bound: "bytes" });
     expect(await queueSnapshot(db)).toHaveLength(1);
@@ -246,12 +263,14 @@ describe("an account switch quarantines rather than replays, deletes, or rebinds
       text: "synthetic note owned by a",
       captureKind: "quick_note",
       idempotencyKey: "cap-synthetic-a",
+      projectId: null,
     });
     const theirs = await enqueueCapture(db, keyB, {
       principalId: PRINCIPAL_B,
       text: "synthetic note owned by b",
       captureKind: "quick_note",
       idempotencyKey: "cap-synthetic-b",
+      projectId: null,
     });
 
     const quarantined = await quarantineForeignEntries(db, PRINCIPAL_A);
@@ -276,6 +295,7 @@ describe("an account switch quarantines rather than replays, deletes, or rebinds
       text: "synthetic note owned by b",
       captureKind: "quick_note",
       idempotencyKey: "cap-synthetic-b2",
+      projectId: null,
     });
     expect(await quarantineForeignEntries(db, PRINCIPAL_A)).toBe(1);
     expect(await quarantineForeignEntries(db, PRINCIPAL_A)).toBe(0);
@@ -289,6 +309,7 @@ describe("an account switch quarantines rather than replays, deletes, or rebinds
       text: "synthetic note released by b",
       captureKind: "quick_note",
       idempotencyKey: "cap-synthetic-b3",
+      projectId: null,
     });
     await quarantineForeignEntries(db, PRINCIPAL_A);
     await expect(releaseQuarantined(db, entry.entryId, PRINCIPAL_A)).rejects.toThrow(
@@ -309,6 +330,7 @@ describe("an account switch quarantines rather than replays, deletes, or rebinds
       text: "synthetic note deleted by a",
       captureKind: "quick_note",
       idempotencyKey: "cap-synthetic-a-delete",
+      projectId: null,
     });
     await expect(deleteHeldByUser(db, entry.entryId, PRINCIPAL_B)).rejects.toThrow(
       /owning principal/,
@@ -333,6 +355,7 @@ describe("durability across a database reopen", () => {
       text: note,
       captureKind: "quick_note",
       idempotencyKey: "cap-synthetic-reload",
+      projectId: null,
     });
     db.close();
 

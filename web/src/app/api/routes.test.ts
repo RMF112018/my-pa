@@ -136,6 +136,15 @@ const REVEAL_UNAVAILABLE = {
   versions_with_completed_derivation: 0,
 };
 
+/**
+ * The SHA-256 of the exact UTF-8 bytes of the capture text these stubs use.
+ *
+ * A placeholder digest stood here until `/api/capture` began verifying that the
+ * receipt it publishes answers the request it dispatched. A stub that does not
+ * digest its own text is no longer a stub of a canonical answer.
+ */
+const A_NOTE_SHA256 = "f63e34a034f19a24438f2d74b242bc96682abd843ecc4ea63fefed4006d860a3";
+
 const CAPTURE_RECEIPT = {
   receipt_id: "rcpt_aaaaaaaa11111111",
   principal_id: "prn_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -143,7 +152,7 @@ const CAPTURE_RECEIPT = {
   version_id: "capver_aaaaaaaa11111111",
   version_number: 1,
   idempotency_key: "k1",
-  content_sha256: "0".repeat(64),
+  content_sha256: A_NOTE_SHA256,
   project_id: null,
   issued_at: "2026-08-09T12:00:00Z",
   created: true,
@@ -612,7 +621,7 @@ describe("the capture receipt is the backend's own", () => {
       version_id: "capver_aaaaaaaa11111111",
       version_number: 1,
       idempotency_key: "k1",
-      content_sha256: "0".repeat(64),
+      content_sha256: A_NOTE_SHA256,
       project_id: null,
       issued_at: "2026-08-09T12:00:00Z",
       created: true,
@@ -634,6 +643,8 @@ describe("the capture receipt is the backend's own", () => {
       text: "a note",
       idempotency_key: "k1",
       capture_kind: "quick_note",
+      // No Project is sent as an explicit null, not as an omitted key.
+      project_id: null,
     });
   });
 
@@ -645,7 +656,7 @@ describe("the capture receipt is the backend's own", () => {
       version_id: "capver_aaaaaaaa11111111",
       version_number: 1,
       idempotency_key: "k1",
-      content_sha256: "0".repeat(64),
+      content_sha256: A_NOTE_SHA256,
       project_id: null,
       issued_at: "2026-08-09T12:00:00Z",
       created: true,
@@ -709,7 +720,7 @@ describe("the capture receipt is the backend's own", () => {
       version_id: "capver_aaaaaaaa11111111",
       version_number: 1,
       idempotency_key: "k3",
-      content_sha256: "0".repeat(64),
+      content_sha256: A_NOTE_SHA256,
       project_id: null,
       issued_at: "2026-08-09T12:00:00Z",
       created: true,

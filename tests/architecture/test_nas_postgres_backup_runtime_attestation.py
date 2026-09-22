@@ -116,6 +116,11 @@ def attestation(
     for directory in (etc, deployment_root, backups, evidence):
         directory.mkdir(mode=0o700)
         directory.chmod(0o700)
+    synthetic_docker = tmp_path / "trusted-tools/docker"
+    synthetic_docker.parent.mkdir(mode=0o700)
+    synthetic_docker.write_text("#!/bin/sh\nexit 99\n", encoding="ascii")
+    synthetic_docker.chmod(0o500)
+    monkeypatch.setattr(module, "CANONICAL_DOCKER", synthetic_docker)
     (tmp_path / "postgres/data").mkdir(parents=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     dump_name = f"my-pa-{timestamp}.dump"
@@ -734,6 +739,12 @@ def test_attester_runs_existing_gates_with_synthetic_secret_kept_private(
     module, paths, commands = attestation
     monkeypatch.setattr(module, "_verify_read_only_gates", module._test_actual_gate_verifier)
     monkeypatch.setattr(sys, "argv", ["attestation"])
+    nas_tools = importlib.import_module("nas_tools")
+    module.CANONICAL_DOCKER.chmod(0o400)
+    with pytest.raises(RuntimeError):
+        nas_tools.docker()
+    module.CANONICAL_DOCKER.chmod(0o500)
+    assert nas_tools.docker() == str(module.CANONICAL_DOCKER)
 
     assert module.main() == 0
     output = capsys.readouterr().out

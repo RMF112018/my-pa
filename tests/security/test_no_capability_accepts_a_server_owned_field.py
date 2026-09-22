@@ -51,13 +51,11 @@ PRINCIPAL: Final = Principal(
 )
 FROZEN: Final = datetime(2026, 8, 15, 9, 30, tzinfo=UTC)
 PUBLISHED_REMOTE_CAPABILITIES: Final = frozenset(_HANDLERS)
-HANDLER_UNWIRED_CAPABILITIES: Final = frozenset(
-    {
-        # `PC-CM-RUN01-WP06` wired `constraints.portfolio_list`,
-        # `constraints.portfolio_search` and `constraints.portfolio_overview`,
-        # so the Run 01 remainder is the name below.
-        Capability.CONSTRAINTS_CREATE_PUBLISHED,
-    }
+HANDLER_UNWIRED_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    # `PC-CM-RUN01-WP07` wired `constraints.create_published`, which was the
+    # last declared name without a handler, so this set is empty. It stays a
+    # set, and the rules below stay written against it, because that is the
+    # shape a future package needs to declare a name ahead of wiring it.
 )
 
 #: The names Phase B publishes. Written out so the sweep below is provably
@@ -107,7 +105,7 @@ def test_the_population_is_the_handler_backed_remote_tool_set() -> None:
     assert population, "there are no capabilities, so nothing below proves anything"
     assert population >= PHASE_B_CAPABILITIES
     assert population == command_backed
-    assert len(population) == 171
+    assert len(population) == 172
     assert set(Capability) - population == HANDLER_UNWIRED_CAPABILITIES
     assert not population & HANDLER_UNWIRED_CAPABILITIES
     assert population | HANDLER_UNWIRED_CAPABILITIES == set(Capability)

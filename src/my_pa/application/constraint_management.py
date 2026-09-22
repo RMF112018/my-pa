@@ -422,6 +422,7 @@ class ConstraintManagementService:
         client_context: str | None = None,
         correlation_id: str | None = None,
         active_uow: _ActiveConstraintUnitOfWork | None = None,
+        digest_override: str | None = None,
     ) -> ConstraintMutationResult:
         """Create and save a Draft.
 
@@ -479,12 +480,14 @@ class ConstraintManagementService:
                 date_identified=date_identified,
                 due_date=due_date,
                 reference=reference,
+                current_update=current_update,
                 bic=_party_digest(parties[0]),
                 responsible=_party_digest(parties[1]),
                 target_state=ConstraintLifecycleState.DRAFT,
             ),
             change=change,
             active_uow=active_uow,
+            digest_override=digest_override,
         )
 
     def publish(
@@ -574,6 +577,139 @@ class ConstraintManagementService:
             change=change,
             active_uow=active_uow,
             digest_override=digest_override,
+        )
+
+    def create_published(
+        self,
+        *,
+        principal_id: str,
+        actor: ConstraintMutationActor,
+        project_id: str | None = None,
+        category_id: str | None = None,
+        description: str | None = None,
+        date_identified: date | None = None,
+        due_date: date | None = None,
+        reference: str | None = None,
+        current_update: str | None = None,
+        bic: Sequence[PartyRef] = (),
+        responsible: Sequence[PartyRef] = (),
+        target_state: ConstraintLifecycleState = ConstraintLifecycleState.IDENTIFIED,
+        idempotency_key: str | None = None,
+        client_context: str | None = None,
+        correlation_id: str | None = None,
+    ) -> ConstraintMutationResult:
+        """Create a Constraint and publish it, as one atomic operation.
+
+        One unit of work covers both steps: mint the Draft, then resolve the
+        publication defaults, validate every Publish precondition against the
+        resolved record, allocate the public code under the Category's row lock,
+        and write both revisions and both receipts. A failure at either step --
+        an incomplete record, a Category that is not this Principal's or no
+        longer active, a missing BIC, an integrity violation on the code --
+        rolls the whole transaction back and leaves zero partial state: no
+        orphan Draft, and no consumed Constraint number.
+
+        Completeness is not re-stated here. The Draft half stays as lenient as
+        `create_draft`, and `publish` runs the domain's
+        `validate_publish_completeness` against the *resolved* candidate, so a
+        create-and-publish is refused by exactly the rules a later Publish would
+        have applied -- which is the point of composing the two rather than
+        writing a third set of them.
+
+        This is an addition, never a replacement: the Draft-then-Publish path
+        remains, and a caller who wants to stage an incomplete record still
+        uses it.
+
+        Like `close_with_follow_up` this method takes no `active_uow`: it *is*
+        a composite, and letting a caller supply the transaction would let a
+        larger unit commit a half-created, half-published record that this
+        operation's whole contract is that it cannot.
+        """
+        parties = (tuple(bic), tuple(responsible))
+        # One request, one identity. `operation` discriminates it from the
+        # `create_draft` request that carries the same field names, so a key
+        # reused across the two conflicts rather than replaying the wrong half.
+        digest = _digest(
+            operation="constraints.create_published",
+            project_id=project_id,
+            category_id=category_id,
+            description=description,
+            date_identified=date_identified,
+            due_date=due_date,
+            reference=reference,
+            current_update=current_update,
+            bic=_party_digest(parties[0]),
+            responsible=_party_digest(parties[1]),
+            target_state=target_state,
+        )
+        publish_key = (
+            None
+            if idempotency_key is None
+            else _derived_key(idempotency_key, "create-published-publish")
+        )
+        if idempotency_key is not None:
+            _validate_idempotency_key(idempotency_key)
+
+        with self._unit_of_work() as uow:
+            # No row lock precedes this gate, and none can: a creation names no
+            # row to lock. `_mutate` states the accepted answer -- a concurrent
+            # duplicate creation under one key is refused fail-closed by the
+            # stored partial unique index on the receipt key, which rolls the
+            # whole composite back rather than committing half of it.
+            if idempotency_key is not None:
+                prior = uow.constraints.find_history_by_idempotency_key(
+                    principal_id, idempotency_key
+                )
+                if prior is not None:
+                    if prior.request_digest != digest:
+                        raise ConstraintIdempotencyConflictError(
+                            "the idempotency key was used for different normalized content"
+                        )
+                    return self._replayed_create_published(uow, principal_id, prior, publish_key)
+
+            draft = self.create_draft(
+                principal_id=principal_id,
+                actor=actor,
+                project_id=project_id,
+                category_id=category_id,
+                description=description,
+                date_identified=date_identified,
+                due_date=due_date,
+                reference=reference,
+                current_update=current_update,
+                bic=parties[0],
+                responsible=parties[1],
+                idempotency_key=idempotency_key,
+                client_context=client_context,
+                correlation_id=correlation_id,
+                active_uow=uow,
+                digest_override=digest,
+            )
+            if draft.disposition is ConstraintMutationDisposition.REPLAYED:
+                # The second guard behind the same fact: `create_draft`'s own
+                # gate found a receipt under this request's key, so the whole
+                # composite has already been applied and the publication must
+                # not run again and consume a second number.
+                return self._replayed_create_published(
+                    uow, principal_id, draft.receipt, publish_key
+                )
+            published = self.publish(
+                principal_id=principal_id,
+                constraint_id=draft.record.constraint_id,
+                expected_version=draft.record.version,
+                actor=actor,
+                target_state=target_state,
+                idempotency_key=publish_key,
+                client_context=client_context,
+                correlation_id=correlation_id,
+                active_uow=uow,
+                digest_override=digest,
+            )
+
+        return ConstraintMutationResult(
+            disposition=ConstraintMutationDisposition.APPLIED,
+            record=published.record,
+            receipt=published.receipt,
         )
 
     def update(
@@ -2085,6 +2221,36 @@ class ConstraintManagementService:
             relationship_id=edges[0].relationship_id,
         )
 
+    def _replayed_create_published(
+        self,
+        uow: _ActiveConstraintUnitOfWork,
+        principal_id: str,
+        prior: ConstraintHistoryEntry,
+        publish_key: str | None,
+    ) -> ConstraintMutationResult:
+        """Return the original Create + Publish without executing anything again.
+
+        The caller's key sits on the creation receipt, because that is the
+        first of the two writes; what the caller is owed back is the *published*
+        record and the *publish* receipt, not the Draft's. Both are recovered
+        from what the first attempt committed: the record by the identity the
+        keyed receipt names, and the publication receipt from the derived key
+        that attempt recorded it under.
+        """
+        record = uow.constraints.get(principal_id, prior.constraint_id)
+        receipt = (
+            None
+            if publish_key is None
+            else uow.constraints.find_history_by_idempotency_key(principal_id, publish_key)
+        )
+        if record is None or receipt is None:
+            raise RuntimeError("a recorded create-published receipt names state that still exists")
+        return ConstraintMutationResult(
+            disposition=ConstraintMutationDisposition.REPLAYED,
+            record=record,
+            receipt=receipt,
+        )
+
     def _replayed_reorder(
         self,
         uow: _ActiveConstraintUnitOfWork,
@@ -2136,16 +2302,23 @@ def _validate_idempotency_key(idempotency_key: object) -> str:
     return idempotency_key
 
 
-def _derived_key(idempotency_key: str) -> str:
-    """The successor's replay key inside one Close + Follow-up.
+def _derived_key(idempotency_key: str, purpose: str = "follow-up-successor") -> str:
+    """The second keyed receipt's replay key inside one composite request.
 
     One request, two keyed receipts: the two ledgers hold one key per Principal,
-    so the successor's publication cannot reuse the caller's key verbatim. It is
+    so the composite's second write cannot reuse the caller's key verbatim. It is
     derived rather than concatenated so the result is bounded whatever the
     caller's key length, and deterministic so a replay finds the same row.
+
+    `purpose` namespaces the derivation, so one caller key used for a Close +
+    Follow-up and for a Create-Published does not derive the same second key
+    twice and collide on the ledger's one-key-per-Principal index. The default
+    is the Close + Follow-up namespace the prefix `cfu-` already names, so that
+    composite's derived keys are byte-identical to what it has always recorded.
     """
-    suffix = hashlib.sha256(f"follow-up-successor:{idempotency_key}".encode()).hexdigest()
-    return f"cfu-{suffix[:40]}"
+    suffix = hashlib.sha256(f"{purpose}:{idempotency_key}".encode()).hexdigest()
+    prefix = "cfu" if purpose == "follow-up-successor" else "ccp"
+    return f"{prefix}-{suffix[:40]}"
 
 
 def _text(value: object) -> str | None:

@@ -558,6 +558,7 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.CANVAS_WORKSPACE_PUT,
         # PC-CM-IMP-WP07's twelve. All twelve change product-owned state.
         Capability.CONSTRAINTS_CREATE,
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
         Capability.CONSTRAINTS_PUBLISH,
         Capability.CONSTRAINTS_UPDATE,
         Capability.CONSTRAINTS_TRANSITION,
@@ -642,7 +643,11 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         # that already existed; `constraints.close_follow_up` marks the
         # predecessor *and* mints the successor; `constraint_categories.update`
         # revises a live row, `deactivate` retires one, and `reorder` rewrites
-        # the display order of every Category in the Project.
+        # the display order of every Category in the Project. PC-CM-RUN01-WP07's
+        # `constraints.create_published` is here for Publish's reason rather than
+        # `create`'s: it consumes the Category allocator sequence, which is what
+        # keeps a name out of `_ADDITIVE_WRITE_CAPABILITIES`.
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
         Capability.CONSTRAINTS_PUBLISH,
         Capability.CONSTRAINTS_UPDATE,
         Capability.CONSTRAINTS_TRANSITION,

@@ -173,12 +173,12 @@ NORMALIZE_SITES = (cli_module, http_module, mcp_module)
 TRANSPORT_NAMES = frozenset({"http", "mcp", "cli"})
 CORRECTED_VALUE_MARKER = "PRIVATE-CORRECTED-VALUE-MARKER"
 
-#: PC-CM-RUN01-WP06 wired `constraints.portfolio_list`,
-#: `constraints.portfolio_search` and `constraints.portfolio_overview`, so what
-#: is left here is the name Run 01 has not reached. It stays a set rather than
-#: becoming a single member, because the next package to wire a name should have
-#: to remove it from a set rather than restructure this declaration.
-FUTURE_CAPABILITIES = frozenset({Capability.CONSTRAINTS_CREATE_PUBLISHED})
+#: PC-CM-RUN01-WP07 wired `constraints.create_published`, which was the last
+#: declared name Run 01 had not reached, so this set is empty. It stays a set
+#: -- and the rules below stay written against it -- because that is the shape
+#: a future package needs to declare a name ahead of wiring it, and rebuilding
+#: the declaration then is a larger change than adding a member to it.
+FUTURE_CAPABILITIES: frozenset[Capability] = frozenset()
 IMPLEMENTED_CAPABILITIES = tuple(capability for capability in Capability if capability in _HANDLERS)
 
 #: Two sets of names used to stand here and neither does now.
@@ -1346,7 +1346,8 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "expected_version": 1,
             "idempotency_key": "parity-sync-resolve-0001",
         },
-        # PC-CM-IMP-WP07's twelve Constraint Management mutations. Each names a
+        # PC-CM-IMP-WP07's twelve Constraint Management mutations, and the
+        # atomic create-and-publish PC-CM-RUN01-WP07 added beside them. Each names a
         # seeded record in the state its operation requires -- Publish a Draft,
         # Reopen a closed record, a reorder every Category of the Project exactly
         # once -- so each one *answers* here rather than refusing, which is what
@@ -1359,6 +1360,19 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "description": "A drafted Project control.",
             "date_identified": "2026-08-02",
             "due_date": "2026-09-02",
+        },
+        # PC-CM-RUN01-WP07's atomic create-and-publish names no seeded record
+        # at all -- it mints the one it publishes -- so it carries the complete
+        # authoring payload Publish's preconditions require, and the identity
+        # and the public code it mints are masked like every other one here.
+        Capability.CONSTRAINTS_CREATE_PUBLISHED: {
+            "project_id": scene.constraint_project_id,
+            "category_id": scene.constraint_category_id,
+            "description": "A Project control, published as it is raised.",
+            "date_identified": "2026-08-02",
+            "due_date": "2026-09-02",
+            "bic": [{"kind": "principal"}],
+            "to_state": "identified",
         },
         Capability.CONSTRAINTS_PUBLISH: {
             "constraint_id": scene.constraint_draft_id,
@@ -1999,7 +2013,7 @@ def test_there_are_three_transports_to_compare() -> None:
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
     # The command union and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 172, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 173, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -2730,19 +2744,27 @@ def test_every_transport_answers_a_world_that_is_not_empty(
 def test_declared_unwired_capabilities_stay_separate_from_positive_parity(
     staged: tuple[Scene, KnowledgeRecord],
 ) -> None:
-    """The six future names are declared, unavailable, and have no command schema."""
+    """No declared name is unwired now, and the separation still holds vacuously.
+
+    `PC-CM-RUN01-WP07` wired `constraints.create_published`, the last member
+    this set held. The set equality below is the load-bearing claim and is not
+    vacuous: it asserts that *every* declared capability has a handler, which is
+    a stronger statement than the one this test made while a name was missing.
+    The three loops over the set are kept rather than deleted, so a future
+    package that declares a name ahead of wiring it gets these rules for free.
+    """
     from my_pa.adapters.mcp import TOOLS
     from my_pa.adapters.normalization import _BUILDERS
     from my_pa.application.errors import UnsupportedError
 
     assert set(Capability) - set(_HANDLERS) == FUTURE_CAPABILITIES
-    assert len(IMPLEMENTED_CAPABILITIES) == 171
+    assert len(IMPLEMENTED_CAPABILITIES) == 172
     assert set(_BUILDERS) == set(IMPLEMENTED_CAPABILITIES)
     assert {Capability(tool.name) for tool in TOOLS} == set(IMPLEMENTED_CAPABILITIES)
 
     manifest = build_capability_manifest(implemented=frozenset(_HANDLERS), limits=DEFAULT_LIMITS)
     availability = {status.name: status.availability.value for status in manifest.capabilities}
-    assert {availability[capability] for capability in FUTURE_CAPABILITIES} == {"not_implemented"}
+    assert {availability[capability] for capability in FUTURE_CAPABILITIES} <= {"not_implemented"}
 
     scene, _record = staged
     for capability in FUTURE_CAPABILITIES:

@@ -1877,13 +1877,14 @@ def _project_controls_configure() -> dict[str, Any]:
 
 def test_committed_python_fixtures_match_live_model_dumps() -> None:
     """A live Python dump still equals the bytes Vitest decodes, parsed as JSON."""
-    # `PC-CM-RUN01-WP06` wired `constraints.portfolio_list`,
-    # `constraints.portfolio_search` and `constraints.portfolio_overview`, so
-    # the Run 01 remainder is the name below. The BFF now reaches all of them:
-    # `web/src/contracts/gateway.json` declares them and
-    # `test_live_python_payloads_cover_every_gateway_capability` is what ties
-    # that declaration to a live Python dump rather than to a belief about one.
-    assert set(Capability) - set(_HANDLERS) == {Capability.CONSTRAINTS_CREATE_PUBLISHED}
+    # `PC-CM-RUN01-WP07` wired `constraints.create_published`, the last name
+    # Run 01 declared without a handler, so the remainder is empty. Browser
+    # transport for it is a later package: `web/src/contracts/gateway.json`
+    # does not declare it, and
+    # `test_live_python_payloads_cover_every_gateway_capability` ties that
+    # declaration to a live Python dump rather than to a belief about one, so
+    # the fixtures below still cover exactly the gateway's own set.
+    assert set(Capability) - set(_HANDLERS) == set()
     assert SUCCESS_PATH.is_file(), f"committed Python fixtures missing at {SUCCESS_PATH}"
     committed = json.loads(SUCCESS_PATH.read_text(encoding="utf-8"))
     live = python_success_payloads()

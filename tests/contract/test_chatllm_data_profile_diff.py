@@ -191,11 +191,12 @@ def test_full_plane_effective_target_is_one_hundred_forty_nine() -> None:
     already classified moves it without anything here being reclassified. The
     two Project Controls names and the three Report-authoring names landed on
     disjoint paths; the figure below was re-measured on the merged tree rather
-    than summed from the two branches' deltas.
+    than summed from the two branches' deltas. PC-CM-RUN01-WP07's
+    `constraints.create_published` moved it by one more, on the same reading.
     """
     composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
     desired = desired_effective_capabilities(composed)
-    assert len(desired) == 152
+    assert len(desired) == 153
     assert Capability.PROJECT_CONTROLS_CONFIGURE in desired
     assert Capability.PROJECT_CONTROLS_STATUS in desired
     assert Capability.REPORTS_BEGIN_CYCLE in desired
@@ -208,7 +209,7 @@ def test_full_plane_effective_target_is_one_hundred_forty_nine() -> None:
 def test_default_plane_effective_target_is_eighty_three() -> None:
     composed = composed_capabilities(IMPLEMENTED, _DEFAULT_PLANES)
     desired = desired_effective_capabilities(composed)
-    assert len(desired) == 86
+    assert len(desired) == 87
     assert Capability.DOCUMENTS_READ not in desired
     assert Capability.ENTITIES_SEARCH not in desired
     assert Capability.CONSTRAINTS_LIST in desired
@@ -224,12 +225,16 @@ def test_unimplemented_run01_names_are_not_grant_failures() -> None:
         resource=RESOURCE,
         scope=SCOPE,
     )
-    assert Capability.CONSTRAINTS_CREATE_PUBLISHED in diff.policy_required_not_implemented
+    # PC-CM-RUN01-WP07 wired `constraints.create_published`, so it is no longer
+    # policy-required-not-implemented: it is an ordinary grant to add, exactly
+    # like the ones below it. Asserted both ways round, as those are, so
+    # this row cannot quietly become vacuous.
+    assert Capability.CONSTRAINTS_CREATE_PUBLISHED not in diff.policy_required_not_implemented
     assert (
         diff.outcomes[Capability.CONSTRAINTS_CREATE_PUBLISHED]
-        is ChatLLMProfileOutcome.POLICY_REQUIRED_NOT_IMPLEMENTED
+        is not ChatLLMProfileOutcome.POLICY_REQUIRED_NOT_IMPLEMENTED
     )
-    assert Capability.CONSTRAINTS_CREATE_PUBLISHED not in diff.add
+    assert Capability.CONSTRAINTS_CREATE_PUBLISHED in diff.add
     # PC-CM-RUN01-WP05, extended by PC-CM-RUN01-WP06. The two Project Controls
     # names and the three cross-Project Constraint reads are no longer among the
     # unimplemented, so they are ordinary grants to add rather than policy-

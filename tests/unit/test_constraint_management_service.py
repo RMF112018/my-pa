@@ -30,12 +30,14 @@ from my_pa.application.constraint_management import (
     ConstraintIdempotencyConflictError,
     ConstraintManagementService,
     ConstraintMutationDisposition,
+    ConstraintMutationResult,
     ConstraintNotFoundError,
     ConstraintOperationError,
     ConstraintPartyError,
     ConstraintProjectUnavailableError,
     ConstraintReorderError,
     ConstraintVersionConflictError,
+    _derived_key,
 )
 from my_pa.domain.project_controls.business_time import ProjectTimezoneError
 from my_pa.domain.project_controls.category import (
@@ -1027,6 +1029,34 @@ def test_the_same_key_with_a_different_digest_conflicts_and_executes_nothing() -
     assert world.state.constraints[(PRINCIPAL_A, published.constraint_id)].reference == "RFI-014"
 
 
+def test_a_create_draft_key_reused_for_a_different_current_update_conflicts() -> None:
+    """CM-BE-AC-066. `current_update` is stored on the Draft, so it is semantic
+    content of the create request and must reach the request digest. Before
+    PC-CM-RUN01-WP07 it was the one mutation parameter omitted from its
+    `_digest(...)` call, so two creates differing only in it replayed instead of
+    conflicting -- silently returning a record whose current-update was not the
+    one asked for.
+    """
+    world = _world()
+    world.service.create_draft(
+        principal_id=PRINCIPAL_A,
+        actor=ConstraintMutationActor.PRINCIPAL,
+        project_id=PROJECT_A,
+        description="A drafted constraint.",
+        current_update="Awaiting the stamped set.",
+        idempotency_key="wp07-current-update-0001",
+    )
+    with pytest.raises(ConstraintIdempotencyConflictError):
+        world.service.create_draft(
+            principal_id=PRINCIPAL_A,
+            actor=ConstraintMutationActor.PRINCIPAL,
+            project_id=PROJECT_A,
+            description="A drafted constraint.",
+            current_update="The stamped set arrived.",
+            idempotency_key="wp07-current-update-0001",
+        )
+
+
 def test_a_replayed_publish_consumes_no_second_number() -> None:
     world = _world()
     draft = _draft(world)
@@ -1738,6 +1768,244 @@ def test_close_with_follow_up_conflicts_on_a_reused_key_with_different_content()
     assert len(world.state.constraints) == 2
 
 
+# --- Atomic create-and-publish (PC-CM-RUN01-WP07) ----------------------------
+
+
+def _create_published(world: _World, **overrides: object) -> ConstraintMutationResult:
+    values: dict[str, Any] = {
+        "principal_id": PRINCIPAL_A,
+        "actor": ConstraintMutationActor.PRINCIPAL,
+        "project_id": PROJECT_A,
+        "category_id": world.category(),
+        "description": "The permit set is not stamped.",
+        "date_identified": date(2026, 9, 2),
+        "due_date": date(2026, 9, 16),
+        "bic": (PRINCIPAL_PARTY,),
+    }
+    values.update(overrides)
+    return world.service.create_published(**values)
+
+
+def test_create_published_mints_and_publishes_in_one_transaction() -> None:
+    """Evidence 1. One call, one complete record, both receipts, one number."""
+    world = _world()
+    result = _create_published(world, current_update="Chased the architect.")
+
+    assert result.disposition is ConstraintMutationDisposition.APPLIED
+    assert result.record.constraint_id.startswith("cst_")
+    assert result.record.lifecycle_state is ConstraintLifecycleState.IDENTIFIED
+    assert result.record.constraint_code == "DES.01"
+    assert result.record.published_at == T0
+    assert result.record.version == 2
+    assert result.record.principal_id == PRINCIPAL_A
+    assert result.record.current_update == "Chased the architect."
+    assert missing_publish_fields(result.record) == ()
+
+    row = world.state.categories[(PRINCIPAL_A, world.category())]
+    assert (row.next_sequence, row.issued_count) == (2, 1)
+    assert row.category.prefix_locked_at == T0
+
+
+def test_create_published_writes_the_creation_and_the_publication_receipts() -> None:
+    """Evidence 5. The receipt and revision shape, both halves of it.
+
+    The *caller* is handed the publication receipt, because that is the write
+    that made the record what the answer says it is. Both receipts are on the
+    ledger, in order, and each carries its own operation and version pair.
+    """
+    world = _world()
+    result = _create_published(world)
+    entries = _history(world, result.record.constraint_id)
+
+    assert [entry.operation for entry in entries] == [
+        ConstraintMutationOperation.CREATE,
+        ConstraintMutationOperation.PUBLISH,
+    ]
+    assert all(entry.outcome is ConstraintMutationOutcome.APPLIED for entry in entries)
+    assert [(entry.before_version, entry.after_version) for entry in entries] == [(0, 1), (1, 2)]
+    assert result.receipt == entries[1]
+    assert all(entry.revision_id is not None for entry in entries)
+    # One request, one identity: both receipts carry the composite digest, which
+    # is what makes a replay of either half a replay of the whole request.
+    assert len({entry.request_digest for entry in entries}) == 1
+
+    revisions = [stored for _, stored in world.state.revisions]
+    assert [revision.version for revision in revisions] == [1, 2]
+    published = revisions[1]
+    assert published.constraint_code == "DES.01"
+    assert published.lifecycle_state is ConstraintLifecycleState.IDENTIFIED
+
+
+def test_create_published_takes_its_principal_from_the_caller_not_the_request() -> None:
+    """Evidence 3. A Project this Principal does not have is refused."""
+    world = _world()
+    with pytest.raises(ConstraintProjectUnavailableError):
+        _create_published(world, project_id=PROJECT_B, category_id=None)
+
+
+def test_create_published_cannot_bind_another_principals_category() -> None:
+    """Evidence 3/4. The Category seam is the same one `create_draft` has."""
+    world = _world()
+    world.service.create_category(
+        principal_id=PRINCIPAL_B,
+        project_id=PROJECT_B,
+        prefix="THEIRS",
+        title="Theirs",
+        actor=ConstraintMutationActor.PRINCIPAL,
+    )
+    with pytest.raises(ConstraintCategoryNotFoundError):
+        _create_published(world, category_id=world.category(PRINCIPAL_B))
+
+
+@pytest.mark.parametrize(
+    ("overrides", "missing"),
+    [
+        ({"description": None}, "description"),
+        ({"bic": ()}, "bic"),
+        ({"category_id": None}, "category_id"),
+    ],
+)
+def test_create_published_is_refused_by_the_domains_publish_completeness_rules(
+    overrides: dict[str, Any], missing: str
+) -> None:
+    """Evidence 4. Category and BIC validation, from `validate_publish_completeness`.
+
+    No second copy of the rules: these are the refusals a later Publish of the
+    same incomplete record would have produced, which is the point of composing
+    the two operations rather than restating their preconditions.
+    """
+    world = _world()
+    with pytest.raises(ConstraintPublishError) as caught:
+        _create_published(world, **overrides)
+    assert missing in str(caught.value)
+
+
+def test_create_published_resolves_the_same_publish_defaults_a_later_publish_would() -> None:
+    """The omitted dates default through `publish`, not through a second copy.
+
+    Date Identified defaults to `projectToday` and Due to `+10` business days,
+    which is why neither is among the refusals above: they are supplied by the
+    publication half rather than required of the caller.
+    """
+    world = _world()
+    result = _create_published(world, date_identified=None, due_date=None)
+    assert result.record.date_identified is not None
+    assert result.record.due_date is not None
+    assert result.record.due_date > result.record.date_identified
+    assert missing_publish_fields(result.record) == ()
+
+
+def test_a_refused_create_published_leaves_no_record_and_consumes_no_number() -> None:
+    """Evidence 2, at the unit tier. Nothing partial survives the refusal.
+
+    The allocator proof this tier can give is that the in-memory category row is
+    untouched and no constraint row was written. That a *database* transaction
+    rolls back the same way is `tests/database/` business, because only there is
+    there a transaction to roll back.
+    """
+    world = _world()
+    with pytest.raises(ConstraintPublishError):
+        _create_published(world, bic=())
+    assert not world.state.constraints
+    assert not world.state.revisions
+    row = world.state.categories[(PRINCIPAL_A, world.category())]
+    assert (row.next_sequence, row.issued_count) == (1, 0)
+    assert row.category.prefix_locked_at is None
+
+
+def test_the_same_key_and_payload_replays_the_published_record_and_publish_receipt() -> None:
+    """Evidence 6. CM-BE-AC-065, for the composite.
+
+    What comes back is the *published* record and the *publication* receipt --
+    not the Draft the caller's key actually sits on -- and the second attempt
+    allocates no second number.
+    """
+    world = _world()
+    first = _create_published(world, idempotency_key="wp07-create-published-01")
+    again = _create_published(world, idempotency_key="wp07-create-published-01")
+
+    assert again.disposition is ConstraintMutationDisposition.REPLAYED
+    assert again.record == first.record
+    assert again.record.constraint_code == first.record.constraint_code
+    assert again.receipt == first.receipt
+    assert again.receipt.operation is ConstraintMutationOperation.PUBLISH
+    assert len(_history(world, first.record.constraint_id)) == 2
+    row = world.state.categories[(PRINCIPAL_A, world.category())]
+    assert (row.next_sequence, row.issued_count) == (2, 1)
+
+
+def test_the_same_key_with_different_content_conflicts_and_executes_nothing() -> None:
+    """Evidence 7. CM-BE-AC-066: a conflict, never a replay of the wrong record."""
+    world = _world()
+    _create_published(world, idempotency_key="wp07-create-published-02")
+    with pytest.raises(ConstraintIdempotencyConflictError):
+        _create_published(
+            world,
+            description="A different constraint entirely.",
+            idempotency_key="wp07-create-published-02",
+        )
+    assert len(world.state.constraints) == 1
+    row = world.state.categories[(PRINCIPAL_A, world.category())]
+    assert (row.next_sequence, row.issued_count) == (2, 1)
+
+
+def test_a_create_published_key_does_not_replay_a_create_draft_under_the_same_key() -> None:
+    """The two requests share every field name, so the digest discriminates them.
+
+    Without the operation discriminator in the composite digest a Draft created
+    under a key would look like a replay of a create-and-publish carrying the
+    same fields, and the caller would be handed an unpublished record.
+
+    The publication half names `DRAFT` deliberately. At the default
+    `IDENTIFIED` the two digests already differ on `target_state`, so the
+    conflict proves nothing about the discriminator; pinning both to `DRAFT`
+    makes the key sets identical and leaves `operation` as the only thing
+    that can separate them.
+    """
+    world = _world()
+    world.service.create_draft(
+        principal_id=PRINCIPAL_A,
+        actor=ConstraintMutationActor.PRINCIPAL,
+        project_id=PROJECT_A,
+        category_id=world.category(),
+        description="The permit set is not stamped.",
+        date_identified=date(2026, 9, 2),
+        due_date=date(2026, 9, 16),
+        bic=(PRINCIPAL_PARTY,),
+        idempotency_key="wp07-create-published-03",
+    )
+    with pytest.raises(ConstraintIdempotencyConflictError):
+        _create_published(
+            world,
+            idempotency_key="wp07-create-published-03",
+            target_state=ConstraintLifecycleState.DRAFT,
+        )
+
+
+def test_the_publication_half_records_a_derived_key_of_its_own() -> None:
+    """One request, two keyed receipts, and neither ledger holds a key twice.
+
+    The derived key is namespaced per composite, so a caller key used for a
+    Close + Follow-up and for a Create-Published does not derive one key twice
+    and collide on the ledger's one-key-per-Principal index.
+    """
+    world = _world()
+    result = _create_published(world, idempotency_key="wp07-create-published-04")
+    entries = _history(world, result.record.constraint_id)
+    keys = [entry.idempotency_key for entry in entries]
+    assert keys[0] == "wp07-create-published-04"
+    assert keys[1] is not None and keys[1] != keys[0]
+    assert keys[1].startswith("ccp-")
+    assert keys[1] != _derived_key("wp07-create-published-04")
+
+
+def test_create_published_refuses_a_malformed_key_by_type_not_truthiness() -> None:
+    world = _world()
+    for bad in (1234567890, "short", "not a valid key"):
+        with pytest.raises(ConstraintOperationError):
+            _create_published(world, idempotency_key=bad)
+
+
 # --- The receipt ledger ------------------------------------------------------
 
 
@@ -1795,6 +2063,7 @@ def test_the_service_exposes_no_generic_status_setter() -> None:
         "close_with_follow_up",
         "create_category",
         "create_draft",
+        "create_published",
         "deactivate_category",
         "publish",
         "reopen",

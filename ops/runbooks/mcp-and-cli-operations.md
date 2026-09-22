@@ -78,10 +78,9 @@ refuses, MCP and the CLI refuse, with the same code, the same message, the same
 `safe_details`, and the same audit event. That is `SPEC-AC-001`, and
 The public vocabulary declares one hundred and seventy-two capabilities.
 `tests/contract/test_transport_parity.py` distinguishes that vocabulary from
-the one hundred and seventy-one command-backed names and holds positive request
+the one hundred and seventy-two command-backed names and holds positive request
 and response parity over the latter set. Its
-separate unwired contract holds the exact one remaining Run 01 name as
-`not_implemented`,
+separate unwired contract is vacuous now that no declared name is left without one,
 without an MCP tool or command schema, while the generic HTTP/CLI name path
 returns the canonical unsupported response.
 
@@ -189,14 +188,14 @@ one declared capability, `tools`, and nothing else.
 
 `tools/list` returns the tools **this process can serve**, and that is not the
 same as the tools this build implements. The build declares **172** capability
-names; 171 have application commands/handlers and the exact one remaining Run 01 name
-remains unwired. The measured application composition with GoodNotes pull enabled has
-**101 application-available capabilities**: 171 implemented handlers less the six
+names; 172 have application commands/handlers and no declared name is left without one.
+The measured application composition with GoodNotes pull enabled has
+**102 application-available capabilities**: 172 implemented handlers less the six
 `documents.`, fifty-five `entities.`, and nine `relationship_memory.` handlers
 whose composition gates remain off. A local stdio MCP session has no authenticated
 client identity, so it additionally withholds the three client-bound GoodNotes
-pull operations and publishes **98 tools**. An authenticated MCP client against
-that same 101-capability application composition sees all 101. These figures are
+pull operations and publishes **99 tools**. An authenticated MCP client against
+that same 102-capability application composition sees all 102. These figures are
 derived in `test_current_state_docs_derive_the_default_capability_split` from a
 real `ApplicationService` and `published_tools`, not from a second list.
 
@@ -205,8 +204,8 @@ configured**, and nothing else gates them. There is no default location and no
 inference: with the variable unset the composition root builds no managed byte
 store, `capabilities.get` omits those names, `tools/list` omits those tools, and
 a `tools/call` naming one is refused `unsupported`. Set the variable and the
-same application composition serves 107 capabilities; its unauthenticated local
-stdio MCP publication serves 104. The remaining composition-gated names are the
+same application composition serves 108 capabilities; its unauthenticated local
+stdio MCP publication serves 105. The remaining composition-gated names are the
 fifty-five `entities.` names, which `D-RI-20`
 gates behind `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` on exactly the same terms
 — and whose thirty-eight writes need
@@ -214,8 +213,7 @@ gates behind `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` on exactly the same terms
 the plane switch alone still withholds its write half — and the nine
 `relationship_memory.` names, which need the plane variable *and*
 `MY_PA_RELATIONSHIP_MEMORY_ENABLED`; a fully composed authenticated child publishes
-all 171 implemented tools, while the one declared Run 01 name remains absent until
-its handler lands. An operator who expects `documents.create`
+all 172 implemented tools, every declared name now having a handler. An operator who expects `documents.create`
 on the list and does not find it should look at that variable first — it is the
 only thing that decides it. (Pointing the plane at real storage is `EXT-10` and
 remains operator-gated; `docs/operations/mcv-limitations.md` section 13 states
@@ -224,10 +222,10 @@ the same gating and the plane's limits.)
 Measured against a real child process — `.venv/bin/python apps/gateway.py mcp`
 — by
 `tests/contract/test_mcp_transport.py::test_a_real_child_process_publishes_only_what_it_was_composed_with`
-(unconfigured local stdio: 98, with the three authenticated-client capabilities
+(unconfigured local stdio: 99, with the three authenticated-client capabilities
 absent) and
 `::test_a_child_with_a_managed_root_publishes_every_locally_available_capability`
-(fully feature-composed local stdio: 168, again excluding exactly those three).
+(fully feature-composed local stdio: 169, again excluding exactly those three).
 
 **Current-state correction (2026-09-08):** earlier snapshots in this section
 mixed declared capability totals, application availability, feature-gated

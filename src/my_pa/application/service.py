@@ -159,6 +159,7 @@ from my_pa.application.commands import (
     CreateManagedDocument,
     CreateManagedDocumentCommand,
     CreateProject,
+    CreatePublishedConstraint,
     CreateRelationshipMemory,
     CreateSituation,
     CreateTask,
@@ -10342,6 +10343,43 @@ class ApplicationService:
             authorization, self._constraint_mutation_result(result)
         )
 
+    def _constraints_create_published(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CreatePublishedConstraint,
+    ) -> _Result:
+        """`constraints.create_published`: one transaction mints and publishes.
+
+        The same envelope `constraints.create` and `constraints.publish` carry,
+        because the answer is the same shape: the authoritative record and the
+        one receipt the caller is owed -- here the *publication* receipt, the
+        second of the two the composite writes. The Principal is the
+        authenticated caller's and is never read off the command.
+        """
+        del unit_of_work
+        with _translated(), _constraint_mutation_translated():
+            result = self._constraint_mutations().create_published(
+                principal_id=authorization.principal.principal_id,
+                actor=ConstraintMutationActor.PRINCIPAL,
+                project_id=command.project_id,
+                category_id=command.category_id,
+                description=command.description,
+                date_identified=command.date_identified,
+                due_date=command.due_date,
+                reference=command.reference,
+                current_update=command.current_update,
+                bic=command.bic,
+                responsible=command.responsible,
+                target_state=command.to_state,
+                idempotency_key=command.idempotency_key,
+                client_context=command.client_context,
+                correlation_id=command.correlation_id,
+            )
+        return self._constraint_authoring_result(
+            authorization, self._constraint_mutation_result(result)
+        )
+
     def _constraints_publish(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: PublishConstraint
     ) -> _Result:
@@ -12871,6 +12909,7 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         ),
         Capability.CONSTRAINT_CATEGORIES_LIST: ApplicationService._constraint_categories_list,
         Capability.CONSTRAINTS_CREATE: ApplicationService._constraints_create,
+        Capability.CONSTRAINTS_CREATE_PUBLISHED: (ApplicationService._constraints_create_published),
         Capability.CONSTRAINTS_PUBLISH: ApplicationService._constraints_publish,
         Capability.CONSTRAINTS_UPDATE: ApplicationService._constraints_update,
         Capability.CONSTRAINTS_TRANSITION: ApplicationService._constraints_transition,
@@ -13247,6 +13286,10 @@ _CONSTRAINT_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
 _CONSTRAINT_AUTHORING_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     {
         Capability.CONSTRAINTS_CREATE,
+        # PC-CM-RUN01-WP07. The atomic create-and-publish is an authoring grant
+        # on the identical argument as the two it composes, and is withheld on
+        # exactly the composition they are withheld on.
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
         Capability.CONSTRAINTS_PUBLISH,
         Capability.CONSTRAINTS_UPDATE,
         Capability.CONSTRAINTS_TRANSITION,

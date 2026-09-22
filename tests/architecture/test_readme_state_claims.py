@@ -558,9 +558,9 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     }
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
-    assert implemented == 171
+    assert implemented == 172
     assert len(withheld_families) == 70
-    assert unwired == {Capability.CONSTRAINTS_CREATE_PUBLISHED}
+    assert unwired == set()
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
     # composed by default, and `RI-ENT-WP-10`'s five record-family reads arrived
     # on the withheld side too, as do `RI-ENT-WP-11`'s record-family writes. The
@@ -577,7 +577,14 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # first package in this campaign to move that figure, because these three
     # were counted as withheld while they were unwired rather than as
     # composition-gated.
-    assert default == 101 and total == 172 and withheld == 71
+    # `PC-CM-RUN01-WP07` wired `constraints.create_published`, the last declared
+    # name without a handler. It is in none of the three withheld families, so
+    # the default grows by one and the withheld figure *falls* by one -- for the
+    # same reason WP06's three did, these having been counted as withheld while
+    # unwired rather than as composition-gated. The withheld figure is now
+    # exactly the three families, and the structurally-unwired remainder is
+    # empty for the first time in this campaign.
+    assert default == 102 and total == 172 and withheld == 70
 
     # Exercise the same application and MCP publication composition that owns
     # the current 91-tool measurement. GoodNotes pull is part of that measured
@@ -604,7 +611,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert authenticated_mcp_capabilities == {
         capability.value for capability in application_capabilities
     }
-    assert len(local_mcp_capabilities) == default - 3 == 98
+    assert len(local_mcp_capabilities) == default - 3 == 99
     assert authenticated_mcp_capabilities - local_mcp_capabilities == {
         "goodnotes.pull",
         "goodnotes.complete",
@@ -645,13 +652,26 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # derived together rather than spelled, because a guard that asserted the
     # plural wording while the prose had gone singular would be checking a
     # sentence the document no longer contains.
+    # The remainder reached zero at `PC-CM-RUN01-WP07`, so the three sentences
+    # that used to count it now have to say there is none rather than count to
+    # nothing: "the zero remaining Run 01 names" is not a sentence any of these
+    # documents should contain. The claim being bound is unchanged -- the
+    # withheld figure is accounted for in full and cannot go stale -- and both
+    # branches are written out, so a future package that declares a name ahead
+    # of wiring it gets the counting form back automatically rather than
+    # needing this guard rebuilt.
     names = "name" if unwired_count == 1 else "names"
-    readme_breakdown = (
-        f"and the {SPELLED_COUNTS[unwired_count].lower()} remaining Run 01 {names} — are\n"
-        "`not_implemented`"
-    )
+    if unwired_count:
+        readme_breakdown = (
+            f"and the {SPELLED_COUNTS[unwired_count].lower()} remaining Run 01 {names} — are\n"
+            "`not_implemented`"
+        )
+    else:
+        readme_breakdown = (
+            "names, which is now the whole of the withheld figure — are\n`not_implemented`"
+        )
     assert readme_breakdown in readme, (
-        "The README's breakdown of the withheld capabilities no longer names the "
+        "The README's breakdown of the withheld capabilities no longer accounts for the "
         f"{unwired_count} structurally unwired Run 01 {names}. It is the sentence "
         f"that accounts for all {withheld} of them."
     )
@@ -679,19 +699,27 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert (
         f"the {SPELLED_COUNTS[implemented].lower()} command-backed names" in normalized_runbook
     ), "the MCP/CLI runbook's command-backed figure no longer matches the dispatch table"
-    assert (
+    unwired_runbook_claim = (
         f"the exact {SPELLED_COUNTS[unwired_count].lower()} remaining run 01 {names} "
-        "as `not_implemented`" in normalized_runbook
-    ), "the MCP/CLI runbook's unwired Run 01 figure no longer matches the dispatch table"
+        "as `not_implemented`"
+        if unwired_count
+        else "no declared name is left without one"
+    )
+    assert unwired_runbook_claim in normalized_runbook, (
+        "the MCP/CLI runbook's unwired Run 01 figure no longer matches the dispatch table"
+    )
     assert f"A default process serves\n{SPELLED_COUNTS[default].lower()}" in gateway_runbook
     assert (
         f"{SPELLED_COUNTS[len(withheld_families)].lower()} handler-implemented capabilities "
         "are composition-withheld"
     ) in gateway_runbook
-    assert (
+    gateway_unwired_claim = (
         f"{SPELLED_COUNTS[unwired_count].lower()}\n"
         f"{'is' if unwired_count == 1 else 'are'} structurally unwired"
-    ) in gateway_runbook
+        if unwired_count
+        else "none\nis structurally unwired"
+    )
+    assert gateway_unwired_claim in gateway_runbook
     assert (
         f"`{withheld} of {total} total capabilities are unavailable or unwired.`" in gateway_runbook
     )
@@ -702,10 +730,13 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     normalized_completion_state = " ".join(completion_state.split()).lower()
     assert f"all {SPELLED_COUNTS[total].lower()} capability names" in normalized_completion_state
     assert f"names, {implemented} have application commands/handlers" in normalized_completion_state
-    assert (
+    completion_unwired_claim = (
         f"{SPELLED_COUNTS[unwired_count].lower()} remaining run 01 {names} "
         f"{'remains' if unwired_count == 1 else 'remain'} structurally unwired"
-    ) in normalized_completion_state
+        if unwired_count
+        else "no run 01 name remains structurally unwired"
+    )
+    assert completion_unwired_claim in normalized_completion_state
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
     assert "one hundred and seventy-two capabilities" in module_boundaries

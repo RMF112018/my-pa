@@ -9182,6 +9182,67 @@ class CreateConstraintDraft:
 
 
 @dataclass(frozen=True, slots=True)
+class CreatePublishedConstraint:
+    """`constraints.create_published`: mint one Constraint already in the Register.
+
+    The authoring fields of `CreateConstraintDraft` plus the target state of
+    `PublishConstraint`, and neither of that pair's `expected_version` or
+    `constraint_id`: there is no record yet to name or to have a version.
+    Like `PublishConstraint` it consumes the Category's allocator sequence, so
+    it is in `_WRITE_CAPABILITIES` and deliberately not in
+    `_ADDITIVE_WRITE_CAPABILITIES`, and the code it issues is never a field here.
+
+    Completeness is deliberately not re-stated as validation on this command.
+    A caller who omits the Category, the description, the dates or the BIC is
+    refused by the domain's `validate_publish_completeness` inside the one
+    transaction -- the same rules a later Publish would have applied -- rather
+    than by a second, bespoke copy of them on the wire shape.
+    """
+
+    capability: ClassVar[Capability] = Capability.CONSTRAINTS_CREATE_PUBLISHED
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+        {
+            "bic": _party_schema("Ball-in-court parties for the published Constraint."),
+            "responsible": _party_schema("Responsible parties for the published Constraint."),
+        }
+    )
+
+    project_id: str | None = None
+    category_id: str | None = None
+    description: str | None = None
+    date_identified: date | None = None
+    due_date: date | None = None
+    reference: str | None = None
+    current_update: str | None = None
+    bic: tuple[PartyRef, ...] = ()
+    responsible: tuple[PartyRef, ...] = ()
+    to_state: ConstraintLifecycleState = ConstraintLifecycleState.IDENTIFIED
+    idempotency_key: str | None = None
+    client_context: str | None = None
+    correlation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _constraint_optional_identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
+        _constraint_optional_identifier(
+            self.category_id, IdKind.CONSTRAINT_CATEGORY, SafeDetail.SELECTOR
+        )
+        _constraint_optional_text(self.description, SafeDetail.TEXT)
+        _constraint_date(self.date_identified, SafeDetail.SELECTOR)
+        _constraint_date(self.due_date, SafeDetail.DUE_AT)
+        _constraint_optional_text(self.reference, SafeDetail.SELECTOR)
+        _constraint_optional_text(self.current_update, SafeDetail.TEXT)
+        _constraint_parties(self.bic, SafeDetail.SELECTOR)
+        _constraint_parties(self.responsible, SafeDetail.SELECTOR)
+        _constraint_enum(self.to_state, ConstraintLifecycleState, SafeDetail.LIFECYCLE_STATE)
+        if self.idempotency_key is not None:
+            _idempotency_key(self.idempotency_key)
+        _constraint_idempotency_key(self.idempotency_key)
+        _constraint_optional_text(self.client_context, SafeDetail.SELECTOR)
+        _constraint_optional_text(self.correlation_id, SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
 class PublishConstraint:
     """`constraints.publish`: issue a Draft's public code and move it into the Register.
 
@@ -9860,6 +9921,7 @@ type Command = (
     | AcknowledgeConstraintSync
     | ResolveConstraintSyncConflict
     | CreateConstraintDraft
+    | CreatePublishedConstraint
     | PublishConstraint
     | UpdateConstraint
     | TransitionConstraint

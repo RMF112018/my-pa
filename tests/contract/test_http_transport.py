@@ -120,6 +120,7 @@ from my_pa.application.commands import (
     CreateEntityRelationship,
     CreateManagedDocument,
     CreateProject,
+    CreatePublishedConstraint,
     CreateRelationshipMemory,
     CreateSituation,
     CreateTask,
@@ -332,12 +333,10 @@ from my_pa.domain.task.lifecycle import (
 HANDLER_CAPABILITIES = tuple(capability for capability in Capability if capability in _HANDLERS)
 
 _UNIMPLEMENTED_CAPABILITIES: frozenset[Capability] = frozenset(
-    {
-        # `PC-CM-RUN01-WP06` wired `constraints.portfolio_list`,
-        # `constraints.portfolio_search` and `constraints.portfolio_overview`,
-        # so the Run 01 remainder is the name below.
-        Capability.CONSTRAINTS_CREATE_PUBLISHED,
-    }
+    # `PC-CM-RUN01-WP07` wired `constraints.create_published`, which was the
+    # last declared name without a handler, so this set is empty. It stays a
+    # set, and the rules below stay written against it, because that is the
+    # shape a future package needs to declare a name ahead of wiring it.
 )
 
 #: The nine `relationship_memory.` names, which are implemented and are refused
@@ -930,6 +929,18 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "description": "A drafted Project control.",
             "date_identified": "2026-08-02",
             "due_date": "2026-09-02",
+        },
+        # PC-CM-RUN01-WP07's atomic create-and-publish names no seeded record --
+        # it mints the one it publishes -- so it carries the complete authoring
+        # payload Publish's preconditions require.
+        Capability.CONSTRAINTS_CREATE_PUBLISHED: {
+            "project_id": scene.constraint_project_id,
+            "category_id": scene.constraint_category_id,
+            "description": "A Project control, published as it is raised.",
+            "date_identified": "2026-08-02",
+            "due_date": "2026-09-02",
+            "bic": [{"kind": "principal"}],
+            "to_state": "identified",
         },
         Capability.CONSTRAINTS_PUBLISH: {
             "constraint_id": scene.constraint_draft_id,
@@ -1882,7 +1893,8 @@ def commands_for(
             expected_version=1,
             idempotency_key="http-sync-resolve-0001",
         ),
-        # PC-CM-IMP-WP07's twelve authoring commands, written as what the payload
+        # PC-CM-IMP-WP07's twelve authoring commands and PC-CM-RUN01-WP07's
+        # thirteenth, written as what the payload
         # table above must normalise to: the closed vocabularies as their enum
         # members, the ISO dates as `date`, and the party arrays as `PartyRef`.
         Capability.CONSTRAINTS_CREATE: CreateConstraintDraft(
@@ -1891,6 +1903,15 @@ def commands_for(
             description="A drafted Project control.",
             date_identified=date(2026, 8, 2),
             due_date=date(2026, 9, 2),
+        ),
+        Capability.CONSTRAINTS_CREATE_PUBLISHED: CreatePublishedConstraint(
+            project_id=scene.constraint_project_id,
+            category_id=scene.constraint_category_id,
+            description="A Project control, published as it is raised.",
+            date_identified=date(2026, 8, 2),
+            due_date=date(2026, 9, 2),
+            bic=(PartyRef(kind=PartyKind.PRINCIPAL),),
+            to_state=ConstraintLifecycleState.IDENTIFIED,
         ),
         Capability.CONSTRAINTS_PUBLISH: PublishConstraint(
             constraint_id=scene.constraint_draft_id,
@@ -2453,7 +2474,7 @@ def test_handler_unwired_capabilities_return_the_canonical_http_problem(
     capability: Capability, scene: Scene, wire: Wire
 ) -> None:
     assert set(Capability) - set(_HANDLERS) == _UNIMPLEMENTED_CAPABILITIES
-    assert len(HANDLER_CAPABILITIES) == 171
+    assert len(HANDLER_CAPABILITIES) == 172
     reply = wire.send(capability.value, document_for(capability, scene, {}))
     problem = ProblemDetail.model_validate(reply.document())
     assert reply.status == 501

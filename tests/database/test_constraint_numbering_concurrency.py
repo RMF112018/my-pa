@@ -44,6 +44,7 @@ from my_pa.application.constraint_management import (
     ConstraintFollowUpResult,
     ConstraintManagementService,
     ConstraintMutationDisposition,
+    ConstraintMutationResult,
 )
 from my_pa.domain.project_controls.constraint import ProjectConstraint
 from my_pa.domain.project_controls.history import ConstraintMutationActor
@@ -426,6 +427,63 @@ def test_two_concurrent_same_key_close_with_follow_ups_replay_rather_than_collid
     assert _rows(engine, project_constraint_relationships) == 1
     assert _codes(engine) == ["DES.01", "DES.02"]
     assert _allocator(engine, category_id) == (3, 2)
+
+
+def test_two_concurrent_same_key_create_publisheds_commit_exactly_one_constraint(
+    staged: Engine,
+) -> None:
+    """Evidence 9, and the honest shape of it for a creation.
+
+    The other two composites name a row they can lock before their replay gate,
+    so their loser is guaranteed `REPLAYED`. A creation names no such row --
+    `_mutate`'s docstring says so, and `create_published` repeats it -- so two
+    overlapping requests carrying one key can both read an empty ledger, and the
+    loser is refused *fail-closed* by the stored partial unique index on the
+    receipt key rather than being handed a replay. Both outcomes are accepted
+    here and both are safe; what is not accepted, and what this test exists to
+    measure, is a second Constraint, a second consumed number, or a partially
+    written one.
+
+    So the assertions are on the state rather than on which of the two answers
+    the loser got: exactly one Constraint, exactly one code, the allocator
+    advanced exactly once, and any loser that *did* answer answering with the
+    winner's own record. A build whose gate leaked a second creation through
+    fails on the row counts whichever way the race went.
+    """
+    engine = _impatient(staged)
+    category_id = _category(engine)
+
+    def create_published() -> object:
+        try:
+            return _service(engine).create_published(
+                principal_id=PRINCIPAL_A,
+                actor=ConstraintMutationActor.PRINCIPAL,
+                project_id=PROJECT_A,
+                category_id=category_id,
+                description="A synthetic constraint.",
+                date_identified=date(2026, 9, 2),
+                bic=BIC,
+                idempotency_key="wp07-race-create-pub-1",
+            )
+        except Exception as refusal:
+            return refusal
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(create_published) for _ in range(2)]
+        outcomes = [future.result(timeout=JOIN_TIMEOUT_SECONDS) for future in futures]
+
+    results = [outcome for outcome in outcomes if isinstance(outcome, ConstraintMutationResult)]
+    assert results, f"neither request committed: {outcomes}"
+    assert any(result.disposition is ConstraintMutationDisposition.APPLIED for result in results)
+    applied = next(
+        result for result in results if result.disposition is ConstraintMutationDisposition.APPLIED
+    )
+    for result in results:
+        assert result.record.constraint_id == applied.record.constraint_id
+        assert result.record.constraint_code == applied.record.constraint_code
+    assert _rows(engine, project_constraints) == 1
+    assert _codes(engine) == ["DES.01"]
+    assert _allocator(engine, category_id) == (2, 1)
 
 
 def test_two_concurrent_same_key_reorders_replay_rather_than_collide(staged: Engine) -> None:

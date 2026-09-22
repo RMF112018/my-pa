@@ -36,6 +36,7 @@ from my_pa.application.commands import (
     ConstraintUpdateField,
     CreateConstraintCategory,
     CreateConstraintDraft,
+    CreatePublishedConstraint,
     DeactivateConstraintCategory,
     PublishConstraint,
     ReopenConstraint,
@@ -55,6 +56,7 @@ from my_pa.domain.source.registry import issue_identifier
 
 AUTHORING_COMMANDS: Final[tuple[type, ...]] = (
     CreateConstraintDraft,
+    CreatePublishedConstraint,
     PublishConstraint,
     UpdateConstraint,
     TransitionConstraint,
@@ -68,8 +70,12 @@ AUTHORING_COMMANDS: Final[tuple[type, ...]] = (
     ReorderConstraintCategories,
 )
 
-#: The two that mint a record and therefore have no version to expect.
-CREATIONS: Final[frozenset[type]] = frozenset({CreateConstraintDraft, CreateConstraintCategory})
+#: The three that mint a record and therefore have no version to expect.
+#: `CreatePublishedConstraint` (PC-CM-RUN01-WP07) joins them: it creates the
+#: record it publishes, so there is no prior version for a caller to name.
+CREATIONS: Final[frozenset[type]] = frozenset(
+    {CreateConstraintDraft, CreatePublishedConstraint, CreateConstraintCategory}
+)
 
 
 def _fields(command: type) -> set[str]:
@@ -106,6 +112,7 @@ def test_each_command_declares_the_one_capability_it_serves() -> None:
     assert len(served) == len(AUTHORING_COMMANDS)
     assert served == {
         Capability.CONSTRAINTS_CREATE,
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
         Capability.CONSTRAINTS_PUBLISH,
         Capability.CONSTRAINTS_UPDATE,
         Capability.CONSTRAINTS_TRANSITION,
@@ -136,7 +143,7 @@ def test_no_authoring_command_carries_a_server_issued_code(command: type) -> Non
 
 
 @pytest.mark.parametrize("command", AUTHORING_COMMANDS, ids=lambda c: c.__name__)
-def test_expected_version_is_present_on_the_ten_and_absent_from_the_two(command: type) -> None:
+def test_expected_version_is_present_on_the_nine_and_absent_from_the_three(command: type) -> None:
     """`CM-BE-AC-082`. Required, not optional: a defaulted version would be a bypass."""
     fields = {field.name: field for field in dataclasses.fields(command)}
     if command in CREATIONS:
@@ -340,6 +347,34 @@ def test_a_reopen_refuses_a_state_outside_the_closed_vocabulary() -> None:
             to_state="identified",  # type: ignore[arg-type]
             expected_version=1,
         )
+
+
+def test_a_create_published_carries_the_draft_fields_and_the_target_state() -> None:
+    """One command for one request: everything `create` takes, plus `to_state`.
+
+    Neither `constraint_id` nor `expected_version` is among them -- there is no
+    record yet to name -- and completeness is not re-stated here, because
+    `validate_publish_completeness` decides it inside the one transaction.
+    """
+    command = CreatePublishedConstraint(
+        project_id=_project_id(),
+        category_id=_category_id(),
+        description="A Project control, published as it is raised.",
+        date_identified=date(2026, 9, 2),
+        due_date=date(2026, 9, 16),
+        reference="RFI-014",
+        current_update="Chased the architect.",
+    )
+    assert command.capability is Capability.CONSTRAINTS_CREATE_PUBLISHED
+    assert command.to_state is ConstraintLifecycleState.IDENTIFIED
+    assert _fields(CreatePublishedConstraint) == (_fields(CreateConstraintDraft) | {"to_state"})
+    assert "constraint_id" not in _fields(CreatePublishedConstraint)
+    assert "expected_version" not in _fields(CreatePublishedConstraint)
+
+
+def test_a_create_published_accepts_no_lifecycle_state_outside_the_vocabulary() -> None:
+    with pytest.raises(InvalidRequestError):
+        CreatePublishedConstraint(to_state="identified")  # type: ignore[arg-type]
 
 
 def test_a_publish_defaults_to_the_first_active_state() -> None:

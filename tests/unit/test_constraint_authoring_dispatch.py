@@ -9,7 +9,7 @@ policy refusal about the request. A process that returned `denied` for an
 unwired plane would be telling a caller their grant was wrong.
 
 `bootstrap.gateway` hands the Constraint unit-of-work factory over under every
-settings shape, so a real build always serves these twelve. What is asserted
+settings shape, so a real build always serves these fourteen. What is asserted
 here is the floor beneath that: the one composition input they need, absent.
 """
 
@@ -36,6 +36,10 @@ from tests.conftest import Scene, build_service
 AUTHORING: Final[frozenset[Capability]] = frozenset(
     {
         Capability.CONSTRAINTS_CREATE,
+        # PC-CM-RUN01-WP07. The atomic create-and-publish is the fourteenth
+        # authoring grant: one transaction that mints a Constraint and issues
+        # its public code, composing the capabilities either side of it.
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
         Capability.CONSTRAINTS_PUBLISH,
         Capability.CONSTRAINTS_UPDATE,
         Capability.CONSTRAINTS_TRANSITION,
@@ -47,8 +51,8 @@ AUTHORING: Final[frozenset[Capability]] = frozenset(
         Capability.CONSTRAINT_CATEGORIES_UPDATE,
         Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
         Capability.CONSTRAINT_CATEGORIES_REORDER,
-        # PC-CM-RUN01-WP05. Stating a Project's calendar is the thirteenth
-        # authoring grant: it moves a settings version, writes a receipt, and
+        # PC-CM-RUN01-WP05. Stating a Project's calendar is an authoring grant
+        # in its own right: it moves a settings version, writes a receipt, and
         # changes what every date-derived reading of that Project means.
         Capability.PROJECT_CONTROLS_CONFIGURE,
     }
@@ -63,7 +67,7 @@ def _uncomposed(scene: Scene) -> ApplicationService:
 # ---- the wiring --------------------------------------------------------------
 
 
-def test_the_declared_authoring_set_is_the_thirteen() -> None:
+def test_the_declared_authoring_set_is_the_fourteen() -> None:
     assert _CONSTRAINT_AUTHORING_CAPABILITIES == AUTHORING
 
 

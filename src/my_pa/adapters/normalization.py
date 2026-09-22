@@ -93,6 +93,7 @@ from my_pa.application.commands import (
     CreateEntityRelationship,
     CreateManagedDocument,
     CreateProject,
+    CreatePublishedConstraint,
     CreateRelationshipMemory,
     CreateSituation,
     CreateTask,
@@ -2135,6 +2136,10 @@ def _create_constraint_draft(payload: Mapping[str, Any]) -> Command:
     return CreateConstraintDraft(**_constraint_authoring(payload))
 
 
+def _create_published_constraint(payload: Mapping[str, Any]) -> Command:
+    return CreatePublishedConstraint(**_constraint_authoring(payload))
+
+
 def _publish_constraint(payload: Mapping[str, Any]) -> Command:
     return PublishConstraint(**_constraint_authoring(payload))
 
@@ -2339,6 +2344,7 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW: _read_portfolio_constraint_overview,
         Capability.CONSTRAINT_CATEGORIES_LIST: _list_constraint_categories,
         Capability.CONSTRAINTS_CREATE: _create_constraint_draft,
+        Capability.CONSTRAINTS_CREATE_PUBLISHED: _create_published_constraint,
         Capability.CONSTRAINTS_PUBLISH: _publish_constraint,
         Capability.CONSTRAINTS_UPDATE: _update_constraint,
         Capability.CONSTRAINTS_TRANSITION: _transition_constraint,

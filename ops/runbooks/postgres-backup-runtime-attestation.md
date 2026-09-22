@@ -5,9 +5,17 @@ credential-rotation procedure. The canonical attestation writer may publish
 only an immutable attestation for a fresh, custom-format PostgreSQL dump receipt
 after it binds that dump to
 the exact admitted repository, image, engine, PostgreSQL container, and running
-six-service runtime. Passing it is prerequisite evidence for a separately
+six-service runtime. It checks the receipt's checksum and asks `pg_restore --list`
+in that authenticated PostgreSQL container to read the archive before
+publication. Passing it is prerequisite evidence for a separately
 authorized recovery or credential operation; it never authorizes or performs
 one.
+
+Publication requires the dump to be at most 900 seconds old. Later verification
+checks the recorded creation and attestation times against that publication
+window and rechecks the retained dump and current runtime identity. A retained
+attestation can therefore verify after 900 seconds if those identities still
+match; it cannot be newly published after that window.
 
 An attestation does not restore anything. The existing scratch-only restore
 flow can diagnose data recovery from the retained dump, but cannot recreate an

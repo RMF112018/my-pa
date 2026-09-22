@@ -48,6 +48,7 @@ HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 SHA256_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 RECEIPT_NAME = re.compile(r"my-pa-(\d{8}T\d{6}Z)\.dump\.sha256\Z")
 MAX_AGE_SECONDS = 900
+ARCHIVE_LIST_TIMEOUT_SECONDS = 600
 SAFE_ENGINE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}\Z")
 SAFE_PATH = re.compile(r"/[A-Za-z0-9._/-]*\Z")
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
@@ -223,8 +224,8 @@ def _require_root_and_tools() -> None:
             os.close(parent_fd)
 
 
-def _digest_trusted_dump(path: Path) -> tuple[str, int]:
-    """Hash opaque database data without retaining it in process memory."""
+def _digest_trusted_dump(path: Path, postgres_id: str, expected_digest: str) -> tuple[str, int]:
+    """Hash and inspect one trusted descriptor without retaining dump data."""
     if path.parent != BACKUP_ROOT:
         raise OSError("untrusted backup parent")
     parent_fd = _trusted_directory_fd(BACKUP_ROOT, leaf_mode=0o700)
@@ -255,10 +256,42 @@ def _digest_trusted_dump(path: Path) -> tuple[str, int]:
             if (
                 first != b"PGDMP"
                 or total != before.st_size
-                or (before.st_dev, before.st_ino, before.st_size)
-                != (after.st_dev, after.st_ino, after.st_size)
+                or digest.hexdigest() != expected_digest
+                or (
+                    before.st_dev,
+                    before.st_ino,
+                    before.st_size,
+                    before.st_mtime_ns,
+                    before.st_ctime_ns,
+                )
+                != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
             ):
-                raise OSError("dump changed or is not PostgreSQL custom format")
+                raise OSError("dump changed or does not match its receipt")
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            subprocess.run(  # noqa: S603 - fixed command and authenticated container ID
+                [str(CANONICAL_DOCKER), "exec", "-i", postgres_id, "pg_restore", "--list"],
+                stdin=descriptor,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=ARCHIVE_LIST_TIMEOUT_SECONDS,
+                check=True,
+            )
+            after = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(after.st_mode)
+                or after.st_uid != 0
+                or stat.S_IMODE(after.st_mode) != 0o600
+                or after.st_nlink != 1
+                or (
+                    before.st_dev,
+                    before.st_ino,
+                    before.st_size,
+                    before.st_mtime_ns,
+                    before.st_ctime_ns,
+                )
+                != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+            ):
+                raise OSError("dump changed during archive inspection")
             return digest.hexdigest(), total
         finally:
             os.close(descriptor)
@@ -266,7 +299,9 @@ def _digest_trusted_dump(path: Path) -> tuple[str, int]:
         os.close(parent_fd)
 
 
-def _receipt_and_dump(deployment: dict[str, Any]) -> tuple[str, str, int, bytes, datetime]:
+def _receipt_and_dump(
+    deployment: dict[str, Any], postgres_id: str, *, require_fresh: bool
+) -> tuple[str, str, int, bytes, datetime]:
     receipt_name = str(deployment.get("backup_receipt", ""))
     receipt_path = Path(receipt_name)
     if (
@@ -284,13 +319,13 @@ def _receipt_and_dump(deployment: dict[str, Any]) -> tuple[str, str, int, bytes,
     expected = re.fullmatch(rf"([0-9a-f]{{64}})  {re.escape(dump_name)}\n", receipt.decode("ascii"))
     if expected is None:
         raise ValueError("invalid checksum receipt")
-    dump_digest, dump_bytes = _digest_trusted_dump(BACKUP_ROOT / dump_name)
-    if dump_digest != expected.group(1):
-        raise ValueError("dump checksum mismatch")
     created = _timestamp(match.group(1))
     age = (datetime.now(UTC) - created).total_seconds()
-    if age < 0 or age > MAX_AGE_SECONDS:
+    if require_fresh and (age < 0 or age > MAX_AGE_SECONDS):
         raise ValueError("backup receipt is not fresh")
+    dump_digest, dump_bytes = _digest_trusted_dump(
+        BACKUP_ROOT / dump_name, postgres_id, expected.group(1)
+    )
     return dump_name, dump_digest, dump_bytes, receipt, created
 
 
@@ -667,13 +702,18 @@ def _publish_exclusively(output: Path, data: bytes) -> None:
         os.close(parent_fd)
 
 
-def _collect() -> tuple[dict[str, Any], Path]:
+def _collect(*, require_fresh: bool) -> tuple[dict[str, Any], Path]:
     _require_root_and_tools()
     raw, identity = _identity_inputs()
     deployment, image, runtime, resources = _validate_identity(identity, raw)
-    dump_name, dump_digest, dump_bytes, receipt, created = _receipt_and_dump(deployment)
     compose_source, pilot_source = _source_provenance(image)
     services, config_hashes = _live_identity(image, runtime, resources)
+    dump_name, dump_digest, dump_bytes, receipt, created = _receipt_and_dump(
+        deployment, services["postgres"], require_fresh=require_fresh
+    )
+    attested = datetime.now(UTC)
+    if require_fresh and not 0 <= (attested - created).total_seconds() <= MAX_AGE_SECONDS:
+        raise ValueError("backup receipt expired before publication")
     fields: dict[str, Any] = {
         "schema": SCHEMA,
         "status": "verified",
@@ -683,7 +723,7 @@ def _collect() -> tuple[dict[str, Any], Path]:
         "backup_receipt_filename": dump_name + ".sha256",
         "backup_receipt_sha256": _sha256(receipt),
         "dump_created_at": created.isoformat().replace("+00:00", "Z"),
-        "attested_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "attested_at": attested.isoformat().replace("+00:00", "Z"),
         "max_age_seconds": MAX_AGE_SECONDS,
         "repository_commit": image["repository_commit"],
         "repository_tree": image["repository_tree"],
@@ -708,7 +748,7 @@ def _collect() -> tuple[dict[str, Any], Path]:
 
 def write() -> list[str]:
     try:
-        fields, output = _collect()
+        fields, output = _collect(require_fresh=True)
         _publish_exclusively(output, _render(fields))
     except (
         OSError,
@@ -727,7 +767,7 @@ def write() -> list[str]:
 
 def verify() -> list[str]:
     try:
-        expected, output = _collect()
+        expected, output = _collect(require_fresh=False)
         partial_prefix = f".{output.name}.partial-"
         root_fd = _trusted_directory_fd(ATTESTATION_ROOT, leaf_mode=0o700)
         try:
@@ -753,13 +793,15 @@ def verify() -> list[str]:
     try:
         attested = datetime.fromisoformat(str(actual["attested_at"]).replace("Z", "+00:00"))
         created = datetime.fromisoformat(str(actual["dump_created_at"]).replace("Z", "+00:00"))
-    except (KeyError, ValueError):
+    except (KeyError, ValueError, TypeError):
         return ["backup_runtime_attestation_mismatch"]
     if (
         set(actual) != set(expected)
         or any(actual.get(key) != expected[key] for key in required)
         or not _rfc3339(actual.get("attested_at"))
         or attested < created
+        or (attested - created).total_seconds() > MAX_AGE_SECONDS
+        or attested > datetime.now(UTC)
     ):
         return ["backup_runtime_attestation_mismatch"]
     return []

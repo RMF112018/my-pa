@@ -8,9 +8,10 @@ import importlib.util
 import json
 import os
 import stat
+import subprocess
 import sys
 import tomllib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -212,6 +213,8 @@ def attestation(
             st_size=source.st_size,
             st_dev=source.st_dev,
             st_ino=source.st_ino,
+            st_mtime_ns=source.st_mtime_ns,
+            st_ctime_ns=source.st_ctime_ns,
         )
 
     monkeypatch.setattr(module.os, "fstat", root_fstat)
@@ -270,6 +273,29 @@ def attestation(
         raise AssertionError(command)
 
     monkeypatch.setattr(module, "_run", runner)
+
+    def list_archive(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        commands.append(command)
+        assert command == [
+            str(module.CANONICAL_DOCKER),
+            "exec",
+            "-i",
+            containers["postgres"],
+            "pg_restore",
+            "--list",
+        ]
+        assert kwargs["stdout"] == subprocess.DEVNULL
+        assert kwargs["stderr"] == subprocess.DEVNULL
+        assert kwargs["timeout"] == module.ARCHIVE_LIST_TIMEOUT_SECONDS == 600
+        assert kwargs["check"] is True
+        descriptor = kwargs["stdin"]
+        assert isinstance(descriptor, int)
+        archive = os.read(descriptor, 1024)
+        if archive != b"PGDMP synthetic custom-format dump":
+            raise subprocess.CalledProcessError(1, command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(module.subprocess, "run", list_archive)
     return (
         module,
         {
@@ -290,7 +316,7 @@ def attestation(
     )
 
 
-def test_attestation_publish_verify_is_atomic_readback_and_never_operates_database(
+def test_attestation_publish_verify_is_atomic_readback_and_only_lists_archive(
     attestation: tuple[ModuleType, dict[str, object], list[list[str]]],
 ) -> None:
     module, paths, commands = attestation
@@ -351,11 +377,137 @@ def test_attestation_publish_verify_is_atomic_readback_and_never_operates_databa
         paths["containers"]["postgres"],
     ] in commands
     invoked = "\n".join(" ".join(command) for command in commands)
-    assert " pg_dump" not in invoked and "pg_restore" not in invoked and "psql" not in invoked
+    assert " pg_dump" not in invoked and "psql" not in invoked
+    assert invoked.count(" pg_restore --list") == 2
     assert (
         " backup.sh" not in invoked and " lifecycle" not in invoked and " compose " not in invoked
     )
     assert "Config.Env" not in output.read_text(encoding="utf-8")
+
+
+def test_retained_attestation_verifies_after_write_window_but_cannot_be_reissued(
+    attestation: tuple[ModuleType, dict[str, Path], list[list[str]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module, paths, _ = attestation
+    assert module.write() == []
+    output = next(paths["evidence"].glob("*.runtime-attestation.toml"))
+    recorded = tomllib.loads(output.read_text(encoding="utf-8"))
+    created = datetime.fromisoformat(recorded["dump_created_at"].replace("Z", "+00:00"))
+    later = created + timedelta(seconds=module.MAX_AGE_SECONDS + 60)
+
+    class LaterDatetime(datetime):
+        @classmethod
+        def now(cls, tz: object = None) -> datetime:
+            assert tz == UTC
+            return later
+
+    monkeypatch.setattr(module, "datetime", LaterDatetime)
+    assert module.verify() == []
+    assert module.write() == ["backup_runtime_attestation_refused"]
+    projections = paths["projections"]
+    projections["engine"] = "different-engine\tnas-synthetic\n"
+    assert module.verify() == ["backup_runtime_attestation_refused"]
+    projections["engine"] = f"{ENGINE_ID}\t{ENGINE_NAME}\n"
+
+    too_late = (
+        (created + timedelta(seconds=module.MAX_AGE_SECONDS + 1)).isoformat().replace("+00:00", "Z")
+    )
+    _rewrite(
+        output,
+        output.read_text(encoding="utf-8").replace(
+            f"attested_at = {json.dumps(recorded['attested_at'])}",
+            f"attested_at = {json.dumps(too_late)}",
+        ),
+    )
+    assert module.verify() == ["backup_runtime_attestation_mismatch"]
+
+
+def test_attestation_refuses_future_recorded_time(
+    attestation: tuple[ModuleType, dict[str, Path], list[list[str]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module, paths, _ = attestation
+    assert module.write() == []
+    output = next(paths["evidence"].glob("*.runtime-attestation.toml"))
+    recorded = tomllib.loads(output.read_text(encoding="utf-8"))
+    created = datetime.fromisoformat(recorded["dump_created_at"].replace("Z", "+00:00"))
+    frozen = created + timedelta(seconds=60)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz: object = None) -> datetime:
+            assert tz == UTC
+            return frozen
+
+    monkeypatch.setattr(module, "datetime", FrozenDatetime)
+    future = (created + timedelta(seconds=120)).isoformat().replace("+00:00", "Z")
+    _rewrite(
+        output,
+        output.read_text(encoding="utf-8").replace(
+            f"attested_at = {json.dumps(recorded['attested_at'])}",
+            f"attested_at = {json.dumps(future)}",
+        ),
+    )
+    assert module.verify() == ["backup_runtime_attestation_mismatch"]
+
+
+def test_writer_refuses_when_archive_check_finishes_after_freshness_window(
+    attestation: tuple[ModuleType, dict[str, Path], list[list[str]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module, paths, _ = attestation
+    created = datetime.strptime(paths["dump"].name[6:22], "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+    current = created + timedelta(seconds=module.MAX_AGE_SECONDS - 1)
+
+    class MovingDatetime(datetime):
+        @classmethod
+        def now(cls, tz: object = None) -> datetime:
+            assert tz == UTC
+            return current
+
+    monkeypatch.setattr(module, "datetime", MovingDatetime)
+    list_archive = module.subprocess.run
+
+    def slow_archive(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        nonlocal current
+        result = list_archive(command, **kwargs)
+        current = created + timedelta(seconds=module.MAX_AGE_SECONDS + 1)
+        return result
+
+    monkeypatch.setattr(module.subprocess, "run", slow_archive)
+    assert module.write() == ["backup_runtime_attestation_refused"]
+    assert not list(paths["evidence"].iterdir())
+
+
+@pytest.mark.parametrize("archive", (b"PGDMP", b"PGDMP invalid archive body"))
+def test_checksum_matching_magic_prefix_is_not_a_readable_archive(
+    attestation: tuple[ModuleType, dict[str, Path], list[list[str]]], archive: bytes
+) -> None:
+    module, paths, commands = attestation
+    paths["dump"].write_bytes(archive)
+    paths["dump"].chmod(0o600)
+    _rewrite(paths["receipt"], f"{_sha(archive)}  {paths['dump'].name}\n", 0o600)
+
+    assert module.write() == ["backup_runtime_attestation_refused"]
+    assert not list(paths["evidence"].iterdir())
+    assert commands[-1][-2:] == ["pg_restore", "--list"]
+
+
+def test_archive_list_timeout_refuses_publication(
+    attestation: tuple[ModuleType, dict[str, Path], list[list[str]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module, paths, _ = attestation
+
+    def timeout(command: list[str], **kwargs: object) -> None:
+        assert command[-2:] == ["pg_restore", "--list"]
+        assert kwargs["timeout"] == module.ARCHIVE_LIST_TIMEOUT_SECONDS
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(module.subprocess, "run", timeout)
+    assert module.write() == ["backup_runtime_attestation_refused"]
+    assert not list(paths["evidence"].iterdir())
 
 
 @pytest.mark.parametrize(
@@ -765,4 +917,5 @@ def test_attestation_main_never_prints_synthetic_input_or_secret_like_values(
     source = (ROOT / "ops/nas/write-postgres-backup-runtime-attestation.py").read_text(
         encoding="utf-8"
     )
-    assert "pg_dump" not in source and "pg_restore" not in source and "psql" not in source
+    assert "pg_dump" not in source and "psql" not in source
+    assert '"pg_restore", "--list"' in source

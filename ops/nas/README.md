@@ -171,7 +171,10 @@ overrides for `MY_PA_NAS_DOCKER`, `MY_PA_NAS_COMPOSE_PLUGIN`, and
 `MY_PA_NAS_OPERATOR_ADMISSION`; do not use those names to select alternate
 tools or admissions for an operator invocation. Before either Docker or Git
 runs, the wrapper verifies those paths and their ancestors are root-owned,
-non-writable, non-symlinked, and identity-stable. The operator admission must
+non-writable, non-symlinked, and identity-stable. The resolved repository root
+must also be root-owned with exact mode `0700` before either tool runs because
+the checkout is later bind-mounted into the Docker-socket operator container.
+The operator admission must
 be a root-owned, mode-0400 regular file with exactly one link. It passes only its documented
 Compose/synthetic-acceptance environment-name allowlist to the Docker client;
 unrelated inherited process environment is removed.

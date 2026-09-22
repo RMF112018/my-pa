@@ -374,6 +374,8 @@ verify_root_owned_source_directory() {
 '*|*//*|*/./*|*/../*|*/.|*/..) fail "repository source path is not canonical" ;;
   esac
   verify_root_owned_ancestors "$path"
+  metadata=$("$stat_bin" -c '%u:%a:%F' -- "$path") || fail "repository source metadata is unavailable"
+  [ "$metadata" = '0:700:directory' ] || fail "repository source root must be root-owned mode 0700"
 }
 
 verify_optional_root_owned_regular_file() {

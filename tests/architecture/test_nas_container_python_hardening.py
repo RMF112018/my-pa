@@ -127,6 +127,7 @@ def _synthetic_wrapper(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path, Pa
         "      docker-writable-ancestor:*/my-pa-ds-*) printf '0:777:directory\\n' ;;\n"
         "      *)\n"
         '    case "${SYNTH_GIT_CASE:-}:$path" in\n'
+        "      open-source-root:*/trusted-source) printf '0:755:directory\\n' ;;\n"
         "      nonroot-ancestor:*/trusted-source) printf '1000:700:directory\\n' ;;\n"
         "      writable-ancestor:*/trusted-source) printf '0:777:directory\\n' ;;\n"
         "      nonroot-objects:*/.git/objects) printf '1000:700:directory\\n' ;;\n"
@@ -302,6 +303,7 @@ def test_container_python_uses_fixed_host_authorities_and_clears_overrides() -> 
     assert "git_path=/usr/bin/git" in source
     assert "admission_path=/etc/my-pa/operator-runtime.toml" in source
     assert "operator admission must be root-owned mode 0400 with one link" in source
+    assert "repository source root must be root-owned mode 0700" in source
     assert '"$docker_fd" image inspect' in source
     assert '"$docker_fd" run' in source
     assert "\"$docker_fd\" info --format '{{.ID}}|{{.Name}}'" in source
@@ -710,6 +712,27 @@ def test_container_python_refuses_untrusted_git_metadata_before_git(
 
     assert result.returncode != 0
     assert expected_error in result.stderr
+    assert not calls.exists()
+    assert not git_calls.exists()
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux", reason="requires Linux /proc/self descriptor execution"
+)
+def test_container_python_refuses_open_source_root_before_git_or_docker(tmp_path: Path) -> None:
+    launcher, calls, _environment, git_calls, tools, _admission, _git_state = _synthetic_wrapper(
+        tmp_path
+    )
+    repo_root = launcher.parents[2]
+    repo_root.chmod(0o755)
+    lower_privilege_writable = repo_root / "src/my_pa/observed.py"
+    lower_privilege_writable.parent.mkdir(parents=True)
+    _write(lower_privilege_writable, "synthetic tracked content\n", mode=0o666)
+
+    result = _run(launcher, tools, extra_environment={"SYNTH_GIT_CASE": "open-source-root"})
+
+    assert result.returncode != 0
+    assert "repository source root must be root-owned mode 0700" in result.stderr
     assert not calls.exists()
     assert not git_calls.exists()
 

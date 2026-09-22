@@ -278,7 +278,14 @@ set_admission_field() {
 
 read_and_validate_admission_contract() {
   admission_field_count=0
-  while IFS= read -r line <&6; do
+  while :; do
+    line=
+    if IFS= read -r line <&6; then
+      :
+    else
+      [ -z "$line" ] && break
+      fail "operator admission shape is invalid"
+    fi
     case "$line" in
       schema\ =\ \"*\") field=schema ;;
       status\ =\ \"*\") field=status ;;
@@ -504,21 +511,12 @@ loaded=$({ /usr/bin/env -i PATH=/usr/bin:/bin HOME=/nonexistent "$docker_fd" ima
 
 python_arguments=$#
 [ "$python_arguments" -gt 0 ] || fail "Python arguments are required" 64
-python_args=""
-for value in "$@"; do
-  case "$value" in
-    *'
-'*) fail "newline-containing Python arguments are prohibited" 64 ;;
-  esac
-  python_args="${python_args}${python_args:+
-}${value}"
-done
+set -- "$image_id" "$@"
 
 # Preserve only the closed Compose interpolation and synthetic-acceptance
 # environment. `--env NAME` asks Docker to copy the value without placing it in
 # this process's command line or output. All Docker client control variables
 # were cleared above before the client can be run.
-env_args=""
 for name in \
   MY_PA_POSTGRES_IMAGE_ID MY_PA_APP_IMAGE_ID MY_PA_WEB_IMAGE_ID \
   MY_PA_PROXY_IMAGE MY_PA_PROXY_IMAGE_DIGEST MY_PA_DB_PASSWORD \
@@ -529,9 +527,7 @@ for name in \
 do
   eval "present=\${$name+x}"
   if [ "$present" = x ]; then
-    env_args="${env_args}${env_args:+
-}--env
-${name}"
+    set -- --env "$name" "$@"
   fi
 done
 
@@ -540,7 +536,6 @@ done
 # only the Docker authority they already require. Its path is operator input,
 # not a host executable this wrapper invokes, and is still constrained to a
 # root-owned, non-writable executable and socket pair.
-tailscale_args=""
 if [ "${MY_PA_NAS_TAILSCALE+x}" = x ] || [ "${MY_PA_NAS_TAILSCALE_SOCKET+x}" = x ]; then
   : "${MY_PA_NAS_TAILSCALE:?exact NAS Tailscale executable required}"
   : "${MY_PA_NAS_TAILSCALE_SOCKET:?exact NAS Tailscale socket required}"
@@ -555,29 +550,8 @@ if [ "${MY_PA_NAS_TAILSCALE+x}" = x ] || [ "${MY_PA_NAS_TAILSCALE_SOCKET+x}" = x
   # Sockets cannot be opened as ordinary read descriptors without connecting
   # to the service. Mount the verified canonical path only after its direct
   # no-link and full trusted-ancestor checks have passed.
-  tailscale_args="--volume
-${tailscale_host_binary}:/usr/local/bin/tailscale:ro
---volume
-${tailscale_socket_path}:/var/run/tailscale/tailscaled.sock:ro"
-fi
-
-# Reconstruct allowlisted environment options, the image, then the original
-# Python argv. Repository gate arguments are ordinary newline-free paths/flags.
-old_ifs=$IFS
-IFS='
-'
-case $- in
-  *f*) globbing_was_disabled=1 ;;
-  *) globbing_was_disabled=0; set -f ;;
-esac
-set --
-for value in $env_args; do set -- "$@" "$value"; done
-for value in $tailscale_args; do set -- "$@" "$value"; done
-set -- "$@" "$image_id"
-for value in $python_args; do set -- "$@" "$value"; done
-IFS=$old_ifs
-if [ "$globbing_was_disabled" -eq 0 ]; then
-  set +f
+  set -- --volume "${tailscale_socket_path}:/var/run/tailscale/tailscaled.sock:ro" "$@"
+  set -- --volume "${tailscale_host_binary}:/usr/local/bin/tailscale:ro" "$@"
 fi
 
 # `--env NAME` copies only the retained allowlist. Drop every other inherited

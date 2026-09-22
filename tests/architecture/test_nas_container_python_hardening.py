@@ -92,6 +92,7 @@ def _synthetic_wrapper(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path, Pa
     admission = tmp_path / "operator-runtime.toml"
     git_state = tmp_path / "git-state"
     calls = tmp_path / "docker-calls"
+    run_argv = tmp_path / "docker-run-argv"
     environment = tmp_path / "docker-environment"
     engine_projection = tools / "engine-projection"
     git_calls = tmp_path / "git-calls"
@@ -196,9 +197,11 @@ def _synthetic_wrapper(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path, Pa
         docker,
         "#!/bin/sh\n"
         f'calls="{calls}"\n'
+        f'run_argv="{run_argv}"\n'
         f'environment="{environment}"\n'
         f'engine_projection="{engine_projection}"\n'
         'printf \'%s\\n\' "$*" >> "$calls"\n'
+        'if [ "$1" = run ]; then printf \'%s\\0\' "$@" > "$run_argv"; fi\n'
         'if [ "$1 $2" = "info --format" ]; then\n'
         '  [ "$3" = "{{.ID}}|{{.Name}}" ] || exit 98\n'
         '  /bin/cat "$engine_projection"\n'
@@ -384,6 +387,7 @@ def test_container_python_refuses_noncanonical_operator_admission_before_docker_
         ("duplicate", "operator admission contains duplicate fields"),
         ("invalid-status", "operator admission shape is invalid"),
         ("invalid-schema", "operator admission shape is invalid"),
+        ("unterminated-extra", "operator admission shape is invalid"),
     ),
 )
 def test_container_python_refuses_malformed_full_admission_before_docker(
@@ -407,6 +411,8 @@ def test_container_python_refuses_malformed_full_admission_before_docker(
         contents += 'unexpected = "synthetic"\n'
     elif mutation == "duplicate":
         contents += 'status = "admitted"\n'
+    elif mutation == "unterminated-extra":
+        contents += 'unexpected = "synthetic"'
     _rewrite_admission(admission, contents)
 
     result = _run(launcher, tools)
@@ -532,6 +538,36 @@ def test_container_python_preserves_literal_wildcard_python_argv(
     docker_run_argv = calls.read_text(encoding="utf-8").splitlines()[-1].split()
     assert docker_run_argv[-len(python_argv) :] == list(python_argv)
     assert not set(expanded_entries).intersection(docker_run_argv)
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux", reason="requires Linux /proc/self descriptor execution"
+)
+@pytest.mark.parametrize("disable_globbing", (False, True), ids=("globbing-on", "globbing-off"))
+def test_container_python_preserves_exact_python_argv_with_empty_newline_and_wildcards(
+    tmp_path: Path, disable_globbing: bool
+) -> None:
+    launcher, calls, _environment, _git_calls, tools, _admission, _git_state = _synthetic_wrapper(
+        tmp_path
+    )
+    python_argv = ("", "line-one\nline-two", "glob-star-*", "glob-question-?", "glob-bracket-[ab]")
+    for entry in ("glob-star-match", "glob-question-x", "glob-bracket-a"):
+        (launcher.parent / entry).touch()
+
+    result = _run(
+        launcher,
+        tools,
+        python_argv=python_argv,
+        disable_globbing=disable_globbing,
+    )
+
+    assert result.returncode == 0, result.stderr
+    run_argv = calls.with_name("docker-run-argv").read_bytes().split(b"\0")[:-1]
+    arguments = [value.decode("utf-8") for value in run_argv]
+    assert arguments[0] == "run"
+    image_index = arguments.index(IMAGE_ID)
+    assert arguments[image_index + 1 :] == list(python_argv)
+    assert "" not in arguments[:image_index]
 
 
 @pytest.mark.skipif(

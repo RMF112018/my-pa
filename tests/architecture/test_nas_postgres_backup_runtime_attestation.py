@@ -116,6 +116,7 @@ def attestation(
     for directory in (etc, deployment_root, backups, evidence):
         directory.mkdir(mode=0o700)
         directory.chmod(0o700)
+    (tmp_path / "postgres/data").mkdir(parents=True)
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     dump_name = f"my-pa-{timestamp}.dump"
     dump = backups / dump_name
@@ -151,11 +152,52 @@ def attestation(
         }
     smoke_digest = _sha(json.dumps(smoke_render, sort_keys=True, separators=(",", ":")).encode())
     pilot_digest = _sha(json.dumps(pilot_render, sort_keys=True, separators=(",", ":")).encode())
+    compose_source_digest = _sha((ROOT / "ops/nas/compose.example.yml").read_bytes())
+    proxy_digest = "sha256:" + "7" * 64
+    synthetic_password = "synthetic-password-marker-not-a-real-secret"  # noqa: S105 - inert fixture
+    postgres_render = {
+        "name": PROJECT,
+        "services": {
+            "postgres": {
+                "image": image_ids["postgres"],
+                "platform": "linux/amd64",
+                "restart": "no",
+                "environment": {
+                    "POSTGRES_DB": "my_pa",
+                    "POSTGRES_USER": "my_pa",
+                    "POSTGRES_PASSWORD": synthetic_password,
+                    "POSTGRES_INITDB_ARGS": "--data-checksums --locale=C.UTF-8 --encoding=UTF8",
+                },
+                "networks": {"data-plane": {}},
+                "volumes": [
+                    {
+                        "type": "bind",
+                        "source": f"{tmp_path}/postgres/data",
+                        "target": "/var/lib/postgresql/data",
+                    }
+                ],
+            }
+        },
+        "networks": {"data-plane": {"name": NETWORK, "internal": True, "external": False}},
+    }
+    redacted_postgres = json.loads(json.dumps(postgres_render))
+    redacted_marker = "<redacted-runtime-secret>"
+    redacted_postgres["services"]["postgres"]["environment"]["POSTGRES_PASSWORD"] = redacted_marker
+    postgres_render_digest = _sha(
+        json.dumps(redacted_postgres, sort_keys=True, separators=(",", ":")).encode()
+    )
+    monkeypatch.setenv("MY_PA_DB_PASSWORD", synthetic_password)
+    monkeypatch.setenv("MY_PA_NAS_ROOT", str(tmp_path))
+    monkeypatch.setenv("MY_PA_POSTGRES_IMAGE_ID", image_ids["postgres"])
     deployment = deployment_root / "manifest.toml"
     _rewrite(
         deployment,
         'schema = "my-pa.nas-deployment-manifest.v1"\n'
         f'repository_commit = "{COMMIT}"\nrepository_tree = "{TREE}"\n'
+        f'app_image_id = "{image_ids["gateway"]}"\n'
+        f'web_image_id = "{image_ids["web"]}"\n'
+        f'proxy_image_digest = "{proxy_digest}"\n'
+        f'compose_hash = "{compose_source_digest}"\n'
         'deployed_at = "2026-09-21T00:00:00Z"\n'
         f'backup_receipt = "{receipt}"\n',
     )
@@ -188,8 +230,10 @@ def attestation(
         'schema = "my-pa.nas-postgres-bootstrap-admission.v1"\nstatus = "admitted"\n'
         f'repository_commit = "{COMMIT}"\nrepository_tree = "{TREE}"\n'
         f'docker_engine_id = "{ENGINE_ID}"\ndocker_engine_name = "{ENGINE_NAME}"\n'
-        f'image_manifest_sha256 = "{image_digest}"\ncompose_sha256 = "{"b" * 64}"\n'
-        f'resolved_postgres_sha256 = "{"c" * 64}"\npostgres_image_id = "{image_ids["postgres"]}"\n'
+        f'image_manifest_sha256 = "{image_digest}"\n'
+        f'compose_sha256 = "{compose_source_digest}"\n'
+        f'resolved_postgres_sha256 = "{postgres_render_digest}"\n'
+        f'postgres_image_id = "{image_ids["postgres"]}"\n'
         f'database_operator_image_id = "{image_ids["gateway"]}"\nproject_name = "{PROJECT}"\n'
         f'service_name = "postgres"\ndata_network = "{NETWORK}"\n'
         f'postgres_data_path = "{tmp_path}/postgres/data"\ndata_network_internal = true\n',
@@ -248,10 +292,25 @@ def attestation(
             for name, container_id in containers.items()
         },
         "storage": f"bind,{tmp_path}/postgres/data,/var/lib/postgresql/data,true;\t{NETWORK},\n",
+        "network_internal": True,
+        "host_ports": False,
+        "pilot_hashes_match": False,
+        "running_hashes": dict(config_hashes),
     }
 
     def runner(command: list[str]) -> str:
         commands.append(command)
+        if command[:2] == [str(module.CANONICAL_DOCKER), "compose"]:
+            pilot_mode = command.count("--file") == 2
+            if command[-3:] == ["config", "--format", "json"]:
+                return json.dumps(pilot_render if pilot_mode else smoke_render)
+            if command[-2:] == ["config", "--images"]:
+                return "\n".join(service_images.values())
+            if command[-3:] == ["config", "--hash", "*"]:
+                prefix = "pilot-" if pilot_mode and not projections["pilot_hashes_match"] else ""
+                return "\n".join(f"{name} {prefix}{config_hashes[name]}" for name in SERVICES)
+            if command[-2] == "-q" and command[-3] == "ps":
+                return containers[command[-1]] + "\n"
         if command[:3] == [str(module.CANONICAL_GIT), "-C", str(ROOT)]:
             if command[-1] == "HEAD":
                 return str(projections["git_head"]) + "\n"
@@ -261,6 +320,8 @@ def attestation(
                 return str(projections["git_dirty"])
         if command == [str(module.CANONICAL_DOCKER), "info", "--format", "{{.ID}}\t{{.Name}}"]:
             return str(projections["engine"])
+        if command == [str(module.CANONICAL_DOCKER), "info", "--format", "{{json .}}"]:
+            return json.dumps({"ID": ENGINE_ID, "Name": ENGINE_NAME})
         if command[:2] == [str(module.CANONICAL_DOCKER), "ps"]:
             assert command[-2:] == ["--format", "{{.ID}}"]
             return str(projections["ids"])
@@ -270,12 +331,110 @@ def attestation(
             assert command[3] == module.POSTGRES_STORAGE_FORMAT
             assert command[4] == containers["postgres"]
             return str(projections["storage"])
+        if command[:2] == [str(module.CANONICAL_DOCKER), "inspect"]:
+            name = next(
+                name for name, container_id in containers.items() if container_id == command[2]
+            )
+            return json.dumps(
+                [
+                    {
+                        "Image": image_ids[name],
+                        "Config": {
+                            "Labels": {
+                                "com.docker.compose.project": PROJECT,
+                                "com.docker.compose.service": name,
+                                "com.docker.compose.config-hash": projections["running_hashes"][
+                                    name
+                                ],
+                            }
+                        },
+                    }
+                ]
+            )
         raise AssertionError(command)
 
     monkeypatch.setattr(module, "_run", runner)
 
-    def list_archive(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+    def list_archive(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         commands.append(command)
+        if command[:2] == [str(module.CANONICAL_DOCKER), "compose"]:
+            assert kwargs["env"] != os.environ
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(postgres_render))
+        if command == [str(module.CANONICAL_DOCKER), "info", "--format", "{{json .}}"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=json.dumps(
+                    {"ID": ENGINE_ID, "Name": ENGINE_NAME, "NCPU": 4, "MemTotal": 4096}
+                ),
+            )
+        if command[:3] == [str(module.CANONICAL_DOCKER), "image", "inspect"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=json.dumps(
+                    [
+                        {"Id": image_ids["postgres"], "Os": "linux", "Architecture": "amd64"},
+                        {"Id": image_ids["gateway"], "Os": "linux", "Architecture": "amd64"},
+                    ]
+                ),
+            )
+        if command == [str(module.CANONICAL_DOCKER), "inspect", containers["postgres"]]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=json.dumps(
+                    [
+                        {
+                            "Image": image_ids["postgres"],
+                            "State": {"Running": True},
+                            "Config": {
+                                "Env": [f"POSTGRES_PASSWORD={synthetic_password}"],
+                                "Labels": {
+                                    "com.docker.compose.project": PROJECT,
+                                    "com.docker.compose.service": "postgres",
+                                },
+                            },
+                            "HostConfig": {
+                                "PortBindings": {"5432/tcp": [{}]}
+                                if projections["host_ports"]
+                                else {}
+                            },
+                            "NetworkSettings": {"Networks": {NETWORK: {}}},
+                            "Mounts": [
+                                {
+                                    "Type": "bind",
+                                    "Source": f"{tmp_path}/postgres/data",
+                                    "Destination": "/var/lib/postgresql/data",
+                                    "RW": True,
+                                }
+                            ],
+                        }
+                    ]
+                ),
+            )
+        if command == [str(module.CANONICAL_DOCKER), "network", "inspect", NETWORK]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=json.dumps(
+                    [
+                        {
+                            "Name": NETWORK,
+                            "Internal": projections["network_internal"],
+                            "Labels": {
+                                "com.docker.compose.project": PROJECT,
+                                "com.docker.compose.network": "data-plane",
+                            },
+                            "Containers": {containers["postgres"]: {}},
+                        }
+                    ]
+                ),
+            )
+        if command == ["df", "-PT", f"{tmp_path}/postgres/data"]:
+            return subprocess.CompletedProcess(
+                command, 0, stdout="Filesystem Type\n/dev/synthetic btrfs\n"
+            )
         assert command == [
             str(module.CANONICAL_DOCKER),
             "exec",
@@ -296,6 +455,10 @@ def attestation(
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(module.subprocess, "run", list_archive)
+    monkeypatch.setattr(
+        module, "_test_actual_gate_verifier", module._verify_read_only_gates, raising=False
+    )
+    monkeypatch.setattr(module, "_verify_read_only_gates", lambda _postgres_id: None)
     return (
         module,
         {
@@ -506,6 +669,161 @@ def test_archive_list_timeout_refuses_publication(
         raise subprocess.TimeoutExpired(command, kwargs["timeout"])
 
     monkeypatch.setattr(module.subprocess, "run", timeout)
+    assert module.write() == ["backup_runtime_attestation_refused"]
+    assert not list(paths["evidence"].iterdir())
+
+
+@pytest.mark.parametrize(
+    "field", ("app_image_id", "web_image_id", "proxy_image_digest", "compose_hash")
+)
+@pytest.mark.parametrize("mutation", ("missing", "mismatch"))
+def test_deployment_manifest_images_and_compose_are_bound_to_admissions(
+    attestation: tuple[ModuleType, dict[str, Path], list[list[str]]],
+    field: str,
+    mutation: str,
+) -> None:
+    module, paths, _ = attestation
+    manifest = tomllib.loads(paths["deployment"].read_text(encoding="utf-8"))
+    original = f'{field} = "{manifest[field]}"\n'
+    incorrect = ("" if field == "compose_hash" else "sha256:") + "f" * 64
+    replacement = "" if mutation == "missing" else f'{field} = "{incorrect}"\n'
+    _rewrite(
+        paths["deployment"],
+        paths["deployment"].read_text(encoding="utf-8").replace(original, replacement),
+    )
+    assert module.write() == ["backup_runtime_attestation_refused"]
+    assert not list(paths["evidence"].iterdir())
+
+
+def test_bootstrap_compose_digest_must_match_canonical_source(
+    attestation: tuple[ModuleType, dict[str, Path], list[list[str]]],
+) -> None:
+    module, paths, _ = attestation
+    _rewrite(
+        paths["bootstrap"],
+        paths["bootstrap"]
+        .read_text(encoding="utf-8")
+        .replace(
+            f'compose_sha256 = "{_sha((ROOT / "ops/nas/compose.example.yml").read_bytes())}"',
+            f'compose_sha256 = "{"f" * 64}"',
+        ),
+    )
+    assert module.write() == ["backup_runtime_attestation_refused"]
+
+
+def test_runtime_proxy_reference_must_match_image_manifest(
+    attestation: tuple[ModuleType, dict[str, Path], list[list[str]]],
+) -> None:
+    module, paths, _ = attestation
+    original = "caddy@sha256:" + "7" * 64
+    incorrect = "caddy@sha256:" + "8" * 64
+    _rewrite(
+        paths["runtime"],
+        paths["runtime"]
+        .read_text(encoding="utf-8")
+        .replace(f'proxy = "{original}"', f'proxy = "{incorrect}"'),
+    )
+    assert module.write() == ["backup_runtime_attestation_refused"]
+
+
+def test_attester_runs_existing_gates_with_synthetic_secret_kept_private(
+    attestation: tuple[ModuleType, dict[str, object], list[list[str]]],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module, paths, commands = attestation
+    monkeypatch.setattr(module, "_verify_read_only_gates", module._test_actual_gate_verifier)
+    monkeypatch.setattr(sys, "argv", ["attestation"])
+
+    assert module.main() == 0
+    output = capsys.readouterr().out
+    evidence = next(paths["evidence"].glob("*.runtime-attestation.toml"))
+    assert "synthetic-password-marker" not in output + evidence.read_text(encoding="utf-8")
+    assert output == "PostgreSQL backup runtime attestation published\n"
+    assert sum(command[-3:] == ["config", "--hash", "*"] for command in commands) == 4
+    assert [str(module.CANONICAL_DOCKER), "network", "inspect", NETWORK] in commands
+    assert ["df", "-PT", str(paths["resources"].parent.parent / "postgres/data")] in commands
+
+
+@pytest.mark.parametrize(
+    "drift",
+    (
+        "bootstrap_render",
+        "runtime_render",
+        "runtime_config",
+        "network_internal",
+        "host_ports",
+        "resource_numeric",
+        "two_modes",
+    ),
+)
+def test_existing_gates_refuse_synthetic_attestation_drift(
+    attestation: tuple[ModuleType, dict[str, object], list[list[str]]],
+    monkeypatch: pytest.MonkeyPatch,
+    drift: str,
+) -> None:
+    module, paths, _ = attestation
+    monkeypatch.setattr(module, "_verify_read_only_gates", module._test_actual_gate_verifier)
+    if drift == "bootstrap_render":
+        admission = paths["bootstrap"]
+        original = tomllib.loads(admission.read_text(encoding="utf-8"))["resolved_postgres_sha256"]
+        _rewrite(admission, admission.read_text(encoding="utf-8").replace(original, "f" * 64))
+    elif drift == "runtime_render":
+        admission = paths["runtime"]
+        original = tomllib.loads(admission.read_text(encoding="utf-8"))["resolved_compose_sha256"][
+            "smoke"
+        ]
+        _rewrite(admission, admission.read_text(encoding="utf-8").replace(original, "f" * 64))
+    elif drift == "runtime_config":
+        paths["projections"]["running_hashes"]["gateway"] = "f" * 64
+    elif drift == "network_internal":
+        paths["projections"]["network_internal"] = False
+    elif drift == "host_ports":
+        paths["projections"]["host_ports"] = True
+    elif drift == "resource_numeric":
+        resources = paths["resources"]
+        _rewrite(
+            resources,
+            resources.read_text(encoding="utf-8").replace("logical_cpus = 4", "logical_cpus = 0"),
+        )
+    else:
+        paths["projections"]["pilot_hashes_match"] = True
+
+    assert module.write() == ["backup_runtime_attestation_refused"]
+    assert not list(paths["evidence"].iterdir())
+
+
+@pytest.mark.parametrize("drift", ("runtime_file", "gateway_label"))
+def test_attester_rechecks_input_and_live_identity_after_archive_inspection(
+    attestation: tuple[ModuleType, dict[str, object], list[list[str]]],
+    monkeypatch: pytest.MonkeyPatch,
+    drift: str,
+) -> None:
+    module, paths, _ = attestation
+    archive_runner = module.subprocess.run
+
+    def mutate_after_archive(
+        command: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        result = archive_runner(command, **kwargs)
+        if command[-2:] == ["pg_restore", "--list"]:
+            if drift == "runtime_file":
+                runtime = paths["runtime"]
+                _rewrite(
+                    runtime,
+                    runtime.read_text(encoding="utf-8").replace(
+                        'status = "admitted"', 'status = "changed"'
+                    ),
+                )
+            else:
+                gateway = paths["containers"]["gateway"]
+                before = paths["projections"]["container"][gateway]
+                paths["projections"]["container"][gateway] = before.replace(
+                    paths["config_hashes"]["gateway"], "f" * 64
+                )
+        return result
+
+    monkeypatch.setattr(module.subprocess, "run", mutate_after_archive)
     assert module.write() == ["backup_runtime_attestation_refused"]
     assert not list(paths["evidence"].iterdir())
 

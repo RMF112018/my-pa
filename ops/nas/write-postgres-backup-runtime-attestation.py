@@ -168,6 +168,22 @@ def _image_gate() -> ModuleType:
     return module
 
 
+def _read_only_gate(filename: str) -> ModuleType:
+    if filename not in {
+        "runtime_identity_gate.py",
+        "postgres-bootstrap-identity-gate.py",
+        "postgres_gate.py",
+    }:
+        raise ValueError("unsupported read-only gate")
+    path = Path(__file__).with_name(filename)
+    spec = importlib.util.spec_from_file_location(filename.removesuffix(".py"), path)
+    if spec is None or spec.loader is None:
+        raise ImportError("read-only gate unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _timestamp(value: object) -> datetime:
     try:
         parsed = datetime.strptime(str(value), "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
@@ -419,11 +435,15 @@ def _validate_identity(
         )
     ):
         raise ValueError("runtime image role mismatch")
+    if (
+        deployment.get("app_image_id") != images["app"]["docker_image_id"]
+        or deployment.get("web_image_id") != images["web"]["docker_image_id"]
+        or deployment.get("proxy_image_digest") != images["proxy"]["oci_manifest_digest"]
+    ):
+        raise ValueError("deployment image identity mismatch")
     for name, reference in runtime_images.items():
         if name == "proxy":
-            if "@sha256:" not in str(reference) or not SHA256_ID.fullmatch(
-                str(reference).rpartition("@")[2]
-            ):
+            if reference != images["proxy"]["reference"]:
                 raise ValueError("runtime proxy reference mismatch")
         elif reference != runtime_ids[name]:
             raise ValueError("runtime service reference mismatch")
@@ -598,6 +618,54 @@ def _live_identity(
     return service_ids, service_config_hashes
 
 
+def _verify_read_only_gates(postgres_id: str) -> None:
+    """Re-run existing admission gates without returning rendered or inspected data."""
+    if os.environ.get("MY_PA_NAS_DOCKER") != str(CANONICAL_DOCKER):
+        raise ValueError("canonical Docker CLI not selected")
+    compose = Path(__file__).with_name("compose.example.yml")
+    pilot = Path(__file__).with_name("compose.pilot.example.yml")
+    try:
+        runtime_gate = _read_only_gate("runtime_identity_gate.py")
+        bootstrap_gate = _read_only_gate("postgres-bootstrap-identity-gate.py")
+        postgres_gate = _read_only_gate("postgres_gate.py")
+        for overlay in (None, pilot):
+            if runtime_gate.verify(
+                compose,
+                IMAGE_MANIFEST,
+                pilot_overlay_path=overlay,
+                admission_path=RUNTIME_ADMISSION,
+                owner_uid=os.geteuid(),
+                runner=_run,
+            ):
+                raise ValueError("runtime admission revalidation refused")
+        running_modes = [
+            overlay
+            for overlay in (None, pilot)
+            if not runtime_gate.verify(
+                compose,
+                IMAGE_MANIFEST,
+                pilot_overlay_path=overlay,
+                admission_path=RUNTIME_ADMISSION,
+                owner_uid=os.geteuid(),
+                running=True,
+                runner=_run,
+            )
+        ]
+        if len(running_modes) != 1:
+            raise ValueError("runtime mode identity refused")
+        if bootstrap_gate.verify(
+            compose,
+            IMAGE_MANIFEST,
+            admission_path=POSTGRES_BOOTSTRAP_ADMISSION,
+            owner_uid=os.geteuid(),
+        ) or postgres_gate.verify(POSTGRES_RESOURCES, live=True, container_id=postgres_id):
+            raise ValueError("PostgreSQL admission revalidation refused")
+    except Exception:
+        # Existing gates can transiently hold Compose or inspect output with
+        # credentials. Never expose their exception text or returned payloads.
+        raise ValueError("read-only admission revalidation refused") from None
+
+
 def _render(fields: dict[str, Any]) -> bytes:
     bootstrap_digest = json.dumps(fields["postgres_bootstrap_admission_sha256"])
     lines = [
@@ -707,10 +775,21 @@ def _collect(*, require_fresh: bool) -> tuple[dict[str, Any], Path]:
     raw, identity = _identity_inputs()
     deployment, image, runtime, resources = _validate_identity(identity, raw)
     compose_source, pilot_source = _source_provenance(image)
+    if (
+        identity["bootstrap"].get("compose_sha256") != compose_source
+        or deployment.get("compose_hash") != compose_source
+    ):
+        raise ValueError("canonical Compose source identity mismatch")
     services, config_hashes = _live_identity(image, runtime, resources)
     dump_name, dump_digest, dump_bytes, receipt, created = _receipt_and_dump(
         deployment, services["postgres"], require_fresh=require_fresh
     )
+    _verify_read_only_gates(services["postgres"])
+    raw_after, _ = _identity_inputs()
+    if raw_after != raw or _source_provenance(image) != (compose_source, pilot_source):
+        raise ValueError("source or admission changed during archive inspection")
+    if _live_identity(image, runtime, resources) != (services, config_hashes):
+        raise ValueError("running service identity changed during archive inspection")
     attested = datetime.now(UTC)
     if require_fresh and not 0 <= (attested - created).total_seconds() <= MAX_AGE_SECONDS:
         raise ValueError("backup receipt expired before publication")

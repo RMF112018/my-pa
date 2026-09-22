@@ -397,6 +397,59 @@ from my_pa.infrastructure.providers.fixture import FixtureSourceProvider
 
 pytest_plugins = ("tests.db.fixtures",)
 
+_GITHUB_ACTIONS_FAILURES: list[tuple[str, str]] = []
+_GITHUB_ACTIONS_FAILURE_KEYS: set[tuple[str, str]] = set()
+
+
+def _github_actions_annotation_value(value: str) -> str:
+    """Encode command delimiters without rendering any test failure detail."""
+    return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def _queue_github_actions_failure(nodeid: str, phase: str) -> None:
+    """Retain only one sanitized, detail-free annotation per failed report kind."""
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    failure = (_github_actions_annotation_value(nodeid), _github_actions_annotation_value(phase))
+    if failure not in _GITHUB_ACTIONS_FAILURE_KEYS:
+        _GITHUB_ACTIONS_FAILURE_KEYS.add(failure)
+        _GITHUB_ACTIONS_FAILURES.append(failure)
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    """Annotate failed setup, call, and teardown reports only on Actions."""
+    if report.failed and report.when in {"setup", "call", "teardown"}:
+        _queue_github_actions_failure(report.nodeid, report.when)
+
+
+def pytest_collectreport(report: pytest.CollectReport) -> None:
+    """Annotate a failed collection without emitting its failure detail."""
+    if report.failed:
+        _queue_github_actions_failure(report.nodeid, "collection")
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    """Discard any retained report identifiers before a new test session."""
+    del session
+    _GITHUB_ACTIONS_FAILURES.clear()
+    _GITHUB_ACTIONS_FAILURE_KEYS.clear()
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Flush only minimal Actions annotations after all reports are complete."""
+    del session
+    try:
+        if os.environ.get("GITHUB_ACTIONS") != "true":
+            return
+        for nodeid, phase in _GITHUB_ACTIONS_FAILURES:
+            print(f"::error title=pytest failed::phase={phase}; nodeid={nodeid}")
+        if exitstatus != 0 and not _GITHUB_ACTIONS_FAILURES:
+            print(f"::error title=pytest failed::phase=session; exitstatus={int(exitstatus)}")
+    finally:
+        _GITHUB_ACTIONS_FAILURES.clear()
+        _GITHUB_ACTIONS_FAILURE_KEYS.clear()
+
+
 # Operational scripts execute with this directory on sys.path. Architecture
 # tests import them by file path and reproduce that same import environment.
 OPS_NAS = str(Path(__file__).resolve().parents[1] / "ops/nas")

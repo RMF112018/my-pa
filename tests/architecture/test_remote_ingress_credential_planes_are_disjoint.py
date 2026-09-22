@@ -106,11 +106,28 @@ INGRESS_MARKERS: Final = (
 #: Changing any of them is legitimate — and must be *deliberate*. Re-derive the
 #: digest with `shasum -a 256`, and say in the same change why the condition
 #: WP-08 named is still not created.
+#:
+#: **R01-WP08 re-derivation, `replay.ts` and `queue.ts`.** Both files changed for
+#: the Capture Project work: the queue gained a versioned, authenticated intent
+#: whose Project lives inside the ciphertext, and replay gave up its own weaker
+#: receipt check in favour of the one shared verifier. Neither adds a session
+#: surface, and both *narrow* the conditions under which queued bytes move.
+#: Replay now re-resolves the authenticated session three times per attempt —
+#: before decryption, immediately before the POST, and again before the deletion
+#: — and both the Principal and the opaque replay binding must be unchanged
+#: across all three, so a second identity cannot inherit an attempt the first
+#: began. Deletion additionally requires a complete canonical receipt and a
+#: transactional byte-for-byte comparison against the snapshot the attempt
+#: verified. Nothing here mints, accepts or forwards a credential; the transport
+#: still carries only the existing `x-my-pa-replay-binding` comparison value over
+#: same-origin credentials. WP-08 NOTE 1 is therefore still not created: no HMAC
+#: or `local_operator` browser session exists to hold, production synthetic still
+#: throws, and the two ingress planes remain disjoint.
 PINNED: Final = {
     "lib/auth/synthetic.ts": "3d5c196ac3475433aa3a391507ded753b942d51f6b383180ae93db3c43d87f60",
     "lib/auth/mode.ts": "731b24fd88dc7f3ba46611249a0ec4474e1f4be9a6d26f161a710a8b6f069fc5",
-    "lib/offline/replay.ts": "d50531075de6019a5be503fb36fbfa0fb97faf42136fdd5fec6b85b167c51e5d",
-    "lib/offline/queue.ts": "c4bf1cd90ff88696583aa9e377eedcf1f3e16169868dee4e08ff711ae3792ead",
+    "lib/offline/replay.ts": "9c9d5916bb24a70545bc9fc0faa42d007cd19b5e7c302c4e7aed2ff829a19ff3",
+    "lib/offline/queue.ts": "b8ffc7610a8f54e1491de8a3881160ddd9e5da3cdd6b8e8f7df7087c08ab4674",
 }
 
 

@@ -23,6 +23,7 @@ from my_pa.contracts.ports import CaptureAdmissionRequest
 from my_pa.contracts.v1.envelope import ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.capture.version import CaptureContent, ProcessingPolicy
+from my_pa.domain.capture.submission import CaptureKind
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.identity.operation import Capability
 from my_pa.infrastructure.persistence.tables import audit_events, projects
@@ -253,6 +254,60 @@ def test_project_is_material_to_idempotency_and_never_reassigned(
             ).scalar_one()
             == PROJECT
         )
+
+
+@pytest.mark.database
+def test_the_same_key_with_a_different_kind_conflicts_and_writes_nothing(
+    runtime: GatewayRuntime,
+) -> None:
+    """WP08 C02: the kind is bound to the key by admission, not by a request echo.
+
+    The Python receipt does not publish the persisted Capture kind, so the
+    browser's own `captureKind` is routing metadata rather than readback. What
+    makes the binding real is this: one idempotency key admitted as a quick note
+    cannot be re-admitted as a conversation log. The conflict is the evidence,
+    and nothing is written by the attempt.
+    """
+    principal_id = runtime.principal.principal_id
+    _seed_project(runtime.work_engine, PROJECT, principal_id)
+    created = succeeded(
+        _create(runtime, key="wp08-kind-material", project_id=PROJECT), "quick_note create"
+    )
+    before = counts(runtime.work_engine)
+
+    refused = invoke(
+        runtime,
+        Capability.CAPTURE_CREATE,
+        CreateCapture(
+            text=TEXT,
+            idempotency_key="wp08-kind-material",
+            project_id=PROJECT,
+            capture_kind=CaptureKind.CONVERSATION_LOG,
+        ),
+        "wp08-kind-conflict",
+    )
+    assert refused.error is not None
+    assert refused.error.code == ErrorCode.CONFLICT
+    assert tuple(refused.error.safe_details) == ("idempotency_key",)
+    # No second root, no second version, and no Conversation seed the refused
+    # kind would have implied.
+    assert _work_plane(counts(runtime.work_engine)) == _work_plane(before)
+    with runtime.work_engine.connect() as connection:
+        seeded = connection.execute(
+            text(
+                "SELECT count(*) FROM knowledge.capture_conversations "
+                "WHERE capture_id = :capture_id"
+            ),
+            {"capture_id": created["capture_id"]},
+        ).scalar_one()
+    assert seeded == 0
+
+    # And the original admission is intact: same kind, same key, same Project.
+    replayed = succeeded(
+        _create(runtime, key="wp08-kind-material", project_id=PROJECT), "quick_note replay"
+    )
+    assert replayed["capture_id"] == created["capture_id"]
+    assert replayed["project_id"] == PROJECT
 
 
 @pytest.mark.database

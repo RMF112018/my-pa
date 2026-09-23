@@ -511,6 +511,7 @@ test.describe("WP-POSTUX-05 Close pending lock and sheet focus", () => {
 
     await page.getByRole("button", { name: "Close panel" }).click();
     await expect(page.getByTestId("task-compact-sheet")).toHaveCount(0);
+    await expect(page.getByRole("link", { name: new RegExp(survivor) })).toBeFocused();
 
     const landed = await page.evaluate(() => {
       const active = document.activeElement as HTMLElement | null;
@@ -529,7 +530,6 @@ test.describe("WP-POSTUX-05 Close pending lock and sheet focus", () => {
     expect(landed!.connected, `focus landed on a detached node: ${JSON.stringify(landed)}`).toBe(true);
     expect(landed!.inWork, `focus left Work entirely: ${JSON.stringify(landed)}`).toBe(true);
     expect(landed!.row, `focus should be inside a surviving row: ${JSON.stringify(landed)}`).not.toBeNull();
-    await expect(page.getByRole("link", { name: new RegExp(survivor) })).toBeFocused();
   });
 
   test("Close panel after closing the last Task lands on the Work heading", async ({ page }) => {

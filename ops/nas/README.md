@@ -1,28 +1,32 @@
-# NAS runtime scaffold
+# NAS runtime contract and operations
 
-This directory records the accepted NAS runtime contract. NAS-01 is
-non-deploying: these files do not create a NAS root, build images, start
-containers, enable Tailscale Serve, initialize or migrate a database, read live
-personal data, or mint credentials.
+This directory records the accepted NAS runtime contract and its gated
+operations. NAS-01 was an inert scaffold; current scripts can build candidates,
+admit images, migrate, and start an already provisioned runtime when their live
+identity checks and separate operator authorizations pass. Checked-in examples
+and this README do not themselves authorize deployment or activation. For an
+existing smoke-runtime upgrade from a workstation-built package, use
+[`$my-pa-nas-build-deploy`](../../.codex/skills/my-pa-nas-build-deploy/SKILL.md)
+and its workflow; first-time provisioning and pilot activation have different
+gates in [`../runbooks/nas-lifecycle.md`](../runbooks/nas-lifecycle.md).
 
 Files:
 
 - [`runtime-contract.toml`](runtime-contract.toml) is the machine-readable
   topology and authority contract used by architecture tests.
-- [`compose.example.yml`](compose.example.yml) is a disabled example of the
-  future container layout. Every image, secret, NAS path, platform, and service
-  identity is required explicitly; it has no usable defaults. It also names a
-  NAS-04 gateway bind setting that does not exist yet, deliberately preventing
-  this topology contract from being mistaken for a runnable stack.
+- [`compose.example.yml`](compose.example.yml) is the canonical six-service
+  Compose definition. Its image, environment, path, platform, and service
+  identities require exact admitted values; a checkout or example file alone
+  is not a runnable deployment.
 - [`compose.public-browser.example.yml`](compose.public-browser.example.yml) is an optional `--profile public-browser-edge` overlay for ADR-012 public browser Cloudflare ingress; it does not change the private six-service count.
-- [`proxy-allowlist.example.caddy`](proxy-allowlist.example.caddy) shows the
-  fail-closed route ordering. It is mounted only by the disabled example.
+- [`proxy-allowlist.example.caddy`](proxy-allowlist.example.caddy) defines the
+  fail-closed private proxy route ordering used by the Compose contract.
 - [`image-manifest.example.toml`](image-manifest.example.toml) separates the
   OCI platform-child digest, Docker image/config ID, and exported archive
   checksum. Its candidate status and placeholder evidence deliberately fail
   [`image_gate.py`](image_gate.py); only `--live` inspection of the target
-  Docker engine and all three exported archives can pass.
-- Offline app/web/PostgreSQL archives are addressed at runtime by the exact
+  Docker engine and all four runtime archives can pass.
+- Offline app/web/PostgreSQL/proxy archives are addressed at runtime by the exact
   loaded Docker image/config ID because `docker load` does not preserve a
   registry `RepoDigest`. PostgreSQL candidate creation separately verifies the
   exported child against the pinned `postgres:17.10` parent index. The OCI
@@ -41,21 +45,24 @@ Files:
   Docker-socket mount. It is not a Compose service and grants no persistent
   container Docker authority. Emergency shutdown remains a host-shell path and
   does not depend on this image or its admission.
-- [`start.sh`](start.sh) is an intentional refusal until the exact live NAS
-  reports `linux/amd64`, loaded digest resolution is proven, and NAS-04 adds the
-  gateway container bind. A later activation may use only Compose `--no-build
-  --pull never` after that gate passes.
+- [`start.sh`](start.sh) now prepares and starts the admitted six-service
+  runtime only after exact live image, lifecycle, firewall, and running-identity
+  gates pass. It uses Compose `--no-build --pull never` and cleans up a partial
+  start; it is not a public-activation command.
 - [`build-candidates.sh`](build-candidates.sh) refuses a dirty source tree and
-  exports linux/amd64 app/web archives plus BuildKit identity metadata. Its
-  output is still non-deployable. [`load-candidates.sh`](load-candidates.sh)
-  remains an explicit operator/device refusal until the live NAS and the exact
-  official PostgreSQL platform-child archive are available.
+  exports linux/amd64 app, web, and operator archives plus pinned PostgreSQL
+  and exact digest-pinned proxy archives, metadata, and non-deployable candidate
+  manifests. [`load-candidates.sh`](load-candidates.sh) first checks all four
+  runtime archive and metadata hashes, then loads them into the live NAS Docker
+  engine and issues an engine-bound deployable image manifest only if the live
+  gate passes. The separate operator archive/admission path is described in
+  [`../runbooks/nas-lifecycle.md`](../runbooks/nas-lifecycle.md).
 
 The existing [`../compose/postgres.yml`](../compose/postgres.yml) remains a
 single-Mac local-development service. It is not a NAS, pilot, or production
 compose file.
 
-NAS-03 adds an unpublished PostgreSQL bind-mount contract plus explicit
+NAS-03 introduced a PostgreSQL bind-mount contract plus explicit
 [`validate-storage.sh`](validate-storage.sh), [`migrate.sh`](migrate.sh),
 [`backup.sh`](backup.sh), and
 [`restore-to-scratch.sh`](restore-to-scratch.sh) operations. They all require a
@@ -267,7 +274,8 @@ deployment-manifest example, fail-closed `validate-production-env.py` /
 `validate-delivery-config.py`, and dry-run `rollback.sh`. Public hostname is
 `pa.bobby-fetting.me`. Canonical origin is exactly
 `https://pa.bobby-fetting.me`. WebAuthn RP ID is exactly `pa.bobby-fetting.me`.
-Live DNS and Cloudflare routing are not performed.
+This repository documentation does not perform DNS or Cloudflare routing and
+does not attest to their current live state.
 See [`../runbooks/production-frontend-deployment.md`](../runbooks/production-frontend-deployment.md).
 
 Production authentication (current; historical browser `local_operator` is
@@ -300,16 +308,15 @@ superseded):
   [`validate-auth-runtime-evidence.py`](validate-auth-runtime-evidence.py)
   `--allow-template`. Neither file is runtime evidence.
 
-Expected Alembic head for operator assertions: `e6a4c2f91b73`. Derive the head
-from the `migrations/versions` chain at the deployed commit rather than
-trusting this line.
+Derive the single Alembic head from the `migrations/versions` chain at the
+deployed commit; no stored revision in this README is deployment authority.
 
-Later packages own executable behavior:
+Implementation areas by package:
 
 - NAS-02 images supply app/web Dockerfiles and the
   platform/digest/archive contract.
   Live NAS inspection, image load, and deployable-manifest issuance remain
-  operator/device gates; no image here is currently deployable;
+  operator/device gates; checked-in examples are not deployable admissions;
 - NAS-03 PostgreSQL storage, migration, backup, and scratch restore;
 - NAS-04/05 services and filesystem permissions;
 - NAS-06 private HTTPS ingress, production browser passkey (historical

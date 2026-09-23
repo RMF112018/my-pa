@@ -30,6 +30,13 @@ ordinary working directory or its repository-local Git metadata.
 
 Require the candidate manifest to bind the detached commit/tree, clean source, `linux/amd64`, and every archive/metadata digest. Independently compute SHA-256 for every transferred member, including the source bundle, candidate manifest, and supporting index/candidate files, into a package inventory. Record file sizes and reject links, missing members, duplicates, or files that change during hashing.
 
+The closed package has fourteen members: `app`, `web`, `operator`, `postgres`,
+and `proxy` each contribute one `.tar` and one `.metadata.json`, plus
+`postgres.index.json`, `image-manifest.candidate.toml`,
+`operator-runtime.candidate.toml`, and the source bundle. Inventory the exact
+basenames and count; an inventory file is transport evidence, not a fifteenth
+candidate member.
+
 For a build-only request, report the non-deployable candidate commit/tree,
 platform, manifest, member hashes/sizes, and validation results, then stop here.
 Do not authenticate a NAS, transfer artifacts, load images, or create an
@@ -68,10 +75,26 @@ mode ambiguity.
 
 Re-fetch `origin` immediately before transfer. If `origin/main` no longer equals the build commit/tree, stop, discard the candidate as superseded, and rebuild from a new clean detached worktree. "Live origin/main" means current at this boundary, not current when the session began.
 
-Transfer into a fresh owner-only NAS staging directory. Read every member back on the NAS and verify its SHA-256 and size against the local inventory before any image load. Do not transfer repository dirt, protected configuration, credentials, session tokens, database dumps, or personal data with the package.
+Use the authenticated `ssh bf-nas` target only after its host/device identity
+and the exact noninteractive privilege for each proposed operation have been
+proved. A successful `sudo -n` check for one command grants no general file,
+Git, Docker, or protected-configuration authority. There is no checked-in
+transfer helper or preapproved landing path. Establish a fresh exclusive
+owner-only landing directory, transfer only the fourteen inventoried members,
+then create a distinct, fresh root-owned mode-0700 versioned artifact directory
+under an authenticated protected NAS parent. Copy only verified regular files
+into that new directory as root-owned mode-0400 files. Refuse an existing
+destination, links, extra members, ownership/mode drift, or a path into the
+running checkout. Read every staged member back on the NAS and match its
+SHA-256 and size to the local inventory before any image load. Do not invent a
+literal transfer command or root destination until the target's writable
+landing path, parent ownership, and exact `sudo -n` command set are verified.
+Do not transfer repository dirt, protected configuration, credentials, session
+tokens, database dumps, or personal data with the package.
 
 Verify the source bundle on the NAS, then clone it without checkout into a new
-exclusive owner-only source directory and detach at the exact build commit.
+exclusive root-owned mode-0700 versioned source directory and detach at the
+exact build commit.
 Require `HEAD`, `HEAD^{tree}`, and an empty porcelain status to equal the
 candidate identities. The source directory must not pre-exist, and no link or
 path may resolve into the prior checkout. Preserve the prior checkout and its
@@ -86,41 +109,18 @@ runtime: perform those old-identity and data-safety gates from the preserved
 clean old checkout bound to the old manifest and admissions. Every
 candidate/new-runtime gate must run from the new checkout.
 
-Re-fetch `origin` again after remote readback and immediately before the first NAS image/admission mutation. Any commit or tree change invalidates the staged package for a live-main deployment; stop and rebuild rather than loading stale images.
-
 Preserve the previous package, source checkout, deployable manifest, runtime admission, resolved Compose identity, and service-state inventory as the non-destructive rollback candidate. Do not overwrite evidence, source, or admission files; use new exclusive paths.
 
-When the NAS uses the containerized Python operator, first run the new
-checkout's `ops/nas/bootstrap-operator-runtime.sh` against the transferred
-operator candidate/archive/metadata and issue a new exclusive operator
-admission bound to this source and engine. Never run current gates through an
-operator admission bound to an older source. When the NAS uses host Python,
-prove it meets the current runbook contract instead.
-
-With that canonical NAS Docker/Python operator identity, run `ops/nas/load-candidates.sh` against the verified candidate. This is the live engine mutation boundary: it validates archives before loading, admits exact image/config IDs, and emits a new deployable manifest. Validate the emitted manifest with the live image gate and record its digest plus the live engine identity.
-
-Use protected configuration only after explicit authorization. Read it in place through the repository wrappers, without logging values, placing them on command lines, or copying them to evidence. Any later content change requires explicit protected-configuration mutation authority. Missing, linked, over-permissive, placeholder, or identity-inconsistent protected inputs are blockers.
-
-Keep the old canonical image references, image manifest, runtime admission, and
-PostgreSQL bootstrap admission active while the old containers run. In an
-isolated prospective environment that supplies the new manifest's exact image
-references plus the authorized existing non-image configuration, generate a
-new runtime admission and a new PostgreSQL bootstrap admission at exclusive,
-noncanonical staging paths. Require both generators to pass, parse the staged
-artifacts, and record their hashes and metadata; the generators validate their
-inputs and renders. The runtime consumer hardcodes its canonical admission
-path. Although the PostgreSQL identity gate exposes a staged-admission
-override, this workflow deliberately leaves both staged admissions outside the
-consumer path until their coordinated canonical switch, while the old runtime
-is still active. All admission and Compose digests must bind the same source
-commit/tree, images, engine, and smoke mode. Do not claim consumer validation
-until the canonical switch in section 6.
-
-Before stopping anything, return to the preserved old lifecycle environment:
-bind the old manifest to the still-canonical old admissions, run its current
-image/lifecycle and running-identity gates, and prove the rollback inputs remain
-readable and byte-identical. Do not point a running old container at the staged
-new admission.
+Use protected configuration only after explicit authorization. Read it in place
+through the repository wrappers, without logging values, placing them on
+command lines, or copying them to evidence. A content change requires separate
+protected-configuration mutation authority. Missing, linked, over-permissive,
+placeholder, or identity-inconsistent inputs are blockers. Leave the old
+operator, runtime, and PostgreSQL bootstrap admissions, image manifest, image
+references, Compose selection, and environment selected while checking the
+old runtime and quiescing writers in sections 4–5. The new operator admission
+and candidate-load boundary follows quiescence in section 5; do not run new
+checkout Python gates through an older operator admission.
 
 ## 4. Firewall admission
 
@@ -147,6 +147,12 @@ The ingress-plane contract is exact:
 
 Bridge, subnet, network, project, and order are derived live. Never hardcode them, bypass a refusal with raw `iptables`, disable DSM firewall, or equate one plane's passing check with another's. DSM reload or reboot requires data-plane reapply/check first and ingress-plane reapply/check second, with fresh authorization for mutations.
 
+Before stopping anything, remain in the preserved old lifecycle environment:
+bind its manifest and still-canonical old admissions, run the applicable old
+image/lifecycle and running-identity gates, and prove the rollback package and
+admissions are readable and byte-identical. Do not change the canonical
+operator admission while these old-checkout gates are running.
+
 ## 5. Writer quiescence and pre-migration backup
 
 Quiesce all database writers, not merely the canonical six-service stack. Capture current state first. Discover sessions from `pg_stat_activity` using metadata only, then map clients and Docker network/container identities to exact Compose project/service labels. Include separately managed overlays or projects (for example remote MCP or GSQS evaluation) whenever live evidence shows they connect to canonical PostgreSQL.
@@ -167,6 +173,55 @@ Obtain separate authorization before stopping dependent Compose projects not alr
 
 Require zero non-operator sessions capable of writing and recheck after a bounded quiet interval. If sessions return, identify and stop the owning authorized service; do not terminate unknown sessions or continue under contention. Keep PostgreSQL itself running for backup and migration.
 
+Re-fetch `origin` immediately before the first NAS image/admission mutation.
+If its `main` commit or tree differs from the staged build, stop and restore
+only the verified prior service states under the old admission; rebuild rather
+than loading a stale candidate. Reconfirm source/package readback and the old
+admission's identity. Run the new checkout's
+`bootstrap-operator-runtime.sh` against the root-owned
+mode-0400 transferred operator candidate, archive, and metadata. It loads the
+operator image and writes a *new exclusive* root-owned mode-0400 operator
+admission bound to the new source and live engine. This preserved-runtime
+backup path requires the current operator admission even if host Python 3.12
+is available; host Python is only an alternative for applicable old-checkout
+gates when its exact contract is separately proved. Do not infer that contract
+from `sudo -n`.
+
+The containerized Python wrapper ignores an admission override and reads only
+`/etc/my-pa/operator-runtime.toml`. A noncanonical staged admission therefore
+cannot run `load-candidates.sh`. Before switching that canonical file, obtain
+a separate point-of-action authorization to mutate protected configuration;
+preserve the old admission byte-for-byte with verified root ownership, mode,
+hash, and an exclusive rollback path. Publish the verified new admission by an
+atomic same-filesystem replacement of only that canonical regular file, with
+root ownership, mode `0400`, and no symlink. Read it back byte-for-byte and
+verify the new checkout's wrapper accepts its exact source, operator image,
+and engine. On a partial or failed switch, restore the preserved old admission
+atomically, verify it and the old runtime identity, and stop; do not proceed
+with a mixed gate state. No checked-in command performs this switch, and
+generic `sudo -n` or an unverified remote path is insufficient authority.
+
+Keep the old runtime and PostgreSQL bootstrap admissions, image manifest,
+image references, Compose selection, and protected environment unchanged
+while old containers remain selected. With the newly canonical operator
+identity, run the new checkout's `load-candidates.sh` against the verified
+candidate. This mutates the Docker image store, not the running stack: the
+script checks all four runtime archives and metadata before loading, binds
+exact loaded IDs to the live engine, and writes a new exclusive deployable
+manifest. Verify that manifest with `image_gate.py --live` and record its
+digest. If it fails, preserve the old stack; restore the old operator admission
+only through the verified rollback path before any old-checkout gate or service
+restart.
+
+In an isolated prospective environment, supply the new manifest's exact image
+references plus the authorized existing non-image configuration. Generate new
+runtime and PostgreSQL bootstrap admissions at exclusive noncanonical paths;
+verify their source, engine, image, Compose, and smoke-mode bindings and record
+their hashes. Leave those two admissions outside the consumer path until the
+coordinated canonical switch in section 6. The runtime consumer hardcodes its
+canonical admission path; a staged PostgreSQL override is not permission to
+select only one new admission. Do not claim consumer validation yet.
+
 Only after the zero-writer quiet gate passes, use an existing owner-only backup
 directory outside both the current and preserved repositories. It must be an
 unlinked physical directory owned by the effective operator with exact mode
@@ -176,12 +231,15 @@ admission, resource admission, and protected environment still selected, set
 `MY_PA_PRESERVED_RUNTIME_SOURCE` to the exact preserved clean old checkout and
 `MY_PA_CURRENT_GATE_SOURCE` to the exact clean current checkout, and
 `MY_PA_CURRENT_GATE_IMAGE_MANIFEST` to the current checkout's exact deployable
-manifest. Require the existing root-owned mode-0400 current operator admission
+manifest. Require the newly canonical root-owned mode-0400 operator admission
 (canonical default `/etc/my-pa/operator-runtime.toml`) to pass its complete
 authoritative schema and bind that same source, engine, operator image,
 externally staged candidate, archive, metadata and their byte digests, Python,
-Git, OpenSSL, and Compose identities. Canonical Docker must run the standalone
-gate baked into that exact admitted image with no network and a read-only
+Git, OpenSSL, and Compose identities. Prove the preserved old checkout is
+reachable inside the new wrapper's `/volume1/my-pa` mount; otherwise require a
+separately proven host Python 3.12 path for those old gates or stop. Canonical
+Docker must run the standalone gate baked into that exact admitted image with
+no network and a read-only
 filesystem. It mounts every external input at its own fixed
 `/run/my-pa-input/` destination, never over `/usr/local` tooling; it validates
 the full admission, external artifacts, source,
@@ -240,7 +298,9 @@ with required root ownership and mode `0400`. Do not use symlinks or expose
 unrelated protected values. Verify the canonical files byte-match the staged artifacts and rerun
 the new manifest's non-running image, bootstrap, lifecycle, and Compose gates.
 Any partial switch must remain fail-closed; restore the complete old
-configuration/admission set before migration or stop for operator recovery.
+configuration/admission set, including its byte-preserved operator admission
+when returning to old-checkout gates, before migration or stop for operator
+recovery.
 
 Export the just-verified pre-migration backup receipt and run `ops/nas/migrate.sh` explicitly from the newly admitted source checkout and new manifest/bootstrap admission. Migration must never be an application startup side effect.
 
@@ -280,7 +340,13 @@ If post-start validation fails while PostgreSQL remains healthy, use the verifie
 
 If the PostgreSQL container identity changed unexpectedly, leave it and every writer stopped, preserve the data directory and evidence, and hand off to a separately scoped provisioning/resource-readmission objective. Do not generate or publish a replacement resource artifact in this workflow. Any other incompatibility or uncertain recovery identity is likewise a stop and escalation condition.
 
-Before migration, rollback may restore the prior image manifest/runtime admission and exact prior service states. After migration, use only a compatibility-proven prior runtime; never downgrade or destructively restore canonical data without explicit authorization. If safe compatibility cannot be proved, preserve PostgreSQL and evidence, keep writers stopped, and escalate.
+Before migration, rollback may restore the prior image manifest, runtime and
+PostgreSQL bootstrap admissions, operator admission, protected configuration,
+and exact prior service states as one verified old-runtime set. After migration,
+use only a compatibility-proven prior runtime; never downgrade or destructively
+restore canonical data without explicit authorization. If safe compatibility
+cannot be proved, preserve PostgreSQL and evidence, keep writers stopped, and
+escalate.
 
 Write a sanitized, immutable deployment receipt outside the repository. It must include:
 

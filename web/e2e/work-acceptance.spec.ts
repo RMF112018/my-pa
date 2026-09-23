@@ -1661,6 +1661,7 @@ test.describe("normalized Work List", () => {
     await expect(feedback(page).getByText(new RegExp(`${doomed}.*closed`))).toBeVisible();
     await expect(listRow(page, doomed)).toHaveCount(0);
     await expect(listRow(page, survivor)).toHaveCount(1);
+    await expect(listRow(page, survivor).getByTestId("task-list-row-title")).toBeFocused();
 
     const landed = await page.evaluate(() => {
       const active = document.activeElement as HTMLElement | null;

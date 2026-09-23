@@ -401,8 +401,7 @@ def _trusted_executable(path: str, uid: int = 0, stop: Path = Path("/")) -> None
             stop,
         )
         return
-    path = Path(path)
-    _trusted_regular_executable(path, uid, stop)
+    _trusted_regular_executable(Path(path), uid, stop)
 
 
 def _trusted_socket(path: Path, uid: int = 0, stop: Path = Path("/")) -> None:
@@ -415,7 +414,7 @@ def _trusted_socket(path: Path, uid: int = 0, stop: Path = Path("/")) -> None:
 
 def _literal_toml(data: bytes) -> dict[str, Any]:
     """Parse only the flat literal subset used by NAS identity artifacts."""
-    result = {}
+    result: dict[str, Any] = {}
     section = ""
     text = data.decode("utf-8")
     _require(len(data) <= 65536 and "\r" not in text and "\x00" not in text)
@@ -513,7 +512,8 @@ def _run(
             process.wait(timeout=timeout_seconds)
             output = b""
         else:
-            _require(process.stdout is not None)
+            if process.stdout is None:
+                raise RefusalError
             chunks: list[bytes] = []
             size = 0
             with selectors.DefaultSelector() as selector:
@@ -619,7 +619,7 @@ def _archive_config_id(path: Path, uid: int, stop: Path) -> str:
         opened = os.fstat(stream.fileno())
         _require((before.st_dev, before.st_ino) == (opened.st_dev, opened.st_ino))
         with tarfile.open(fileobj=stream, mode="r:") as archive:
-            by_name = {}
+            by_name: dict[str, tarfile.TarInfo] = {}
             total_size = 0
             for member in archive:
                 _require(len(by_name) < 20000 and member.name not in by_name)
@@ -630,25 +630,31 @@ def _archive_config_id(path: Path, uid: int, stop: Path) -> str:
 
             def bounded_member(name: str, limit: int) -> bytes:
                 member = by_name.get(name)
-                _require(member is not None and member.isfile() and 0 < member.size <= limit)
+                if member is None or not member.isfile() or not 0 < member.size <= limit:
+                    raise RefusalError
                 member_stream = archive.extractfile(member)
-                _require(member_stream is not None)
+                if member_stream is None:
+                    raise RefusalError
                 content = member_stream.read(limit + 1)
                 _require(len(content) == member.size)
                 return content
 
             manifest = _unique_json(bounded_member("manifest.json", 1_048_576))
-            _require(isinstance(manifest, list) and len(manifest) == 1)
-            _require(isinstance(manifest[0], dict))
+            if not isinstance(manifest, list) or len(manifest) != 1:
+                raise RefusalError
+            if not isinstance(manifest[0], dict):
+                raise RefusalError
             config_name = manifest[0].get("Config")
-            _require(isinstance(config_name, str))
+            if not isinstance(config_name, str):
+                raise RefusalError
             _require(
                 re.fullmatch(r"[0-9a-f]{64}\.json", config_name) is not None
                 or re.fullmatch(r"blobs/sha256/[0-9a-f]{64}", config_name) is not None
             )
             config_bytes = bounded_member(config_name, 16_777_216)
             config = _unique_json(config_bytes)
-            _require(isinstance(config, dict))
+            if not isinstance(config, dict):
+                raise RefusalError
             _require(config.get("os") == "linux" and config.get("architecture") == "amd64")
             image_id = "sha256:" + _sha(config_bytes)
             config_basename = config_name.rsplit("/", 1)[-1]
@@ -701,7 +707,8 @@ def _operator_artifacts(
     _require(candidate.get("archive_sha256") == operator.get("operator_archive_sha256"))
     _require(candidate.get("build_metadata_sha256") == operator.get("operator_metadata_sha256"))
     metadata = _unique_json(_trusted_file(metadata_path, uid, limit=1_048_576, stop=stop))
-    _require(isinstance(metadata, dict))
+    if not isinstance(metadata, dict):
+        raise RefusalError
     _require(metadata.get("containerimage.digest") == operator.get("operator_manifest_digest"))
     _require(metadata.get("containerimage.config.digest") == operator.get("operator_image_id"))
     _require(_archive_config_id(archive, uid, stop) == operator.get("operator_image_id"))
@@ -919,7 +926,7 @@ def _gate_transaction(
         raise RefusalError
 
     try:
-        for signum in (signal.SIGINT, signal.SIGTERM):
+        for signum in (int(signal.SIGINT), int(signal.SIGTERM)):
             prior_handlers[signum] = signal.getsignal(signum)
             signal.signal(signum, interrupted)
         try:
@@ -934,13 +941,13 @@ def _gate_transaction(
             try:
                 _require(_engine(runner) == initial_engine)
                 recovered = _gate_inspect(name, runner)
-                candidate = recovered.get("Id")
+                recovered_candidate = recovered.get("Id")
                 if (
-                    isinstance(candidate, str)
-                    and re.fullmatch(r"[0-9a-f]{64}", candidate)
-                    and _gate_identity(recovered, candidate, name, nonce, command)
+                    isinstance(recovered_candidate, str)
+                    and re.fullmatch(r"[0-9a-f]{64}", recovered_candidate)
+                    and _gate_identity(recovered, recovered_candidate, name, nonce, command)
                 ):
-                    cid = candidate
+                    cid = recovered_candidate
                     created = True
             except Exception:  # A failed lookup cannot prove a timed-out create was absent.
                 unresolved = True
@@ -1063,9 +1070,11 @@ def _ingress(
         _require(service_data["image_id"] == service_image_ids[name])
     host = data.get("tailnet_hostname")
     target = data.get("loopback_target")
-    _require(isinstance(host, str) and re.fullmatch(r"[a-z0-9.-]{3,253}", host))
+    if not isinstance(host, str) or re.fullmatch(r"[a-z0-9.-]{3,253}", host) is None:
+        raise RefusalError
     _require(data.get("canonical_origin") == "https://" + host)
-    _require(isinstance(target, str) and re.fullmatch(r"127\.0\.0\.1:[1-9][0-9]{0,4}", target))
+    if not isinstance(target, str) or re.fullmatch(r"127\.0\.0\.1:[1-9][0-9]{0,4}", target) is None:
+        raise RefusalError
     port = target.rsplit(":", 1)[1]
     _require(int(port) <= 65535)
     proxy = data.get("services.proxy", {})
@@ -1131,8 +1140,10 @@ def verify(
     _require(
         old_manifest.get("status") == "deployable" and old_manifest.get("source_clean") is True
     )
-    _require(isinstance(old_commit, str) and HEX40.fullmatch(old_commit) is not None)
-    _require(isinstance(old_tree, str) and HEX40.fullmatch(old_tree) is not None)
+    if not isinstance(old_commit, str) or HEX40.fullmatch(old_commit) is None:
+        raise RefusalError
+    if not isinstance(old_tree, str) or HEX40.fullmatch(old_tree) is None:
+        raise RefusalError
     _require(
         old_manifest.get("target_os") == "linux"
         and old_manifest.get("target_architecture") == "amd64"

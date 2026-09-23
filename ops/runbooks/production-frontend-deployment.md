@@ -65,17 +65,35 @@ restart or image replacement from changing live public traffic.
    `image-manifest.candidate.toml`, `operator-runtime.candidate.toml`, and an
    exact-HEAD Git source bundle: fourteen inventoried members. Verify bundle
    head, SHA-256, size, and member set; re-fetch `origin/main` before transfer.
-3. **Transfer and stage without touching the running stack.** Prove the exact
-   `sudo -n` privilege for each planned operation, an exclusive owner-only
-   landing directory, and a protected root-owned staging parent. Transfer only
-   the inventoried members; make a *new* versioned root-owned mode-0700 NAS
-   artifact directory with root-owned mode-0400 regular files, read back every
-   hash and size, and clone the bundle without checkout into a *new* exclusive
-   root-owned mode-0700 source directory. Require exact HEAD/tree and a clean
-   worktree. Never modify the old checkout or copy credentials, environment,
-   database dumps, or session material. No transfer or privilege command is
-   specified until those paths and permissions are verified; the observed
-   absence of `/volume1/my-pa/deployment` is not permission to create it.
+3. **Transfer source first and preflight the preserved runtime.** Prove the
+   exact `sudo -n` privilege for each planned operation, an exclusive owner-only
+   landing directory, and a protected root-owned staging parent. Transfer and
+   read back only the inventoried source bundle first. Verify its advertised
+   head and clone it without checkout into a *new* exclusive root-owned
+   mode-0700 source directory at the exact HEAD/tree; require a clean worktree.
+   The fixed-purpose read-only `ops/nas/preserved-runtime-env-preflight.py`
+   from that verified checkout uses the bounded `/usr/bin/python3` privilege,
+   first authenticates the old admission/source/manifest/engine/admitted
+   operator image and candidate/metadata/archive bytes plus fixed tool,
+   socket, and mount identities, then requires full PASS from the
+   authoritative pre-source gate baked into that old operator image. The gate
+   runs with no network, a read-only filesystem, dropped capabilities, and
+   dedicated read-only inputs; host Python 3.8 does not replace it. Only after
+   PASS does the helper select old versioned environment files in memory and
+   invoke old lifecycle/running-identity gates for the preserved `smoke`
+   runtime. Full static ingress shape and live proxy publication are an early
+   screen; full ingress, Tailscale, and public route/traffic gates remain.
+   A refusal stops before the other thirteen members transfer and leaves all
+   runtime state selected as it was. A pass permits a fresh
+   `origin/main` check, transfer of the remaining thirteen members, a *new*
+   versioned root-owned mode-0700 NAS artifact directory with root-owned
+   mode-0400 regular files, and SHA-256/size readback of all fourteen members.
+   Repeat the old-runtime and live-main gates before later mutation. A pass
+   does not authorize writer stopping or protected-configuration mutation.
+   Never modify the old checkout or copy credentials, environment, database
+   dumps, or session material. Do not invent a transfer command, staging
+   destination, or broader privilege; the observed absence of
+   `/volume1/my-pa/deployment` is not permission to create it.
 4. **Old-runtime gates, quiescence, then candidate admission.** Recheck current
    `origin/main`, public routing/traffic state, and the specific
    production-impact authorization immediately before stopping writers; stop

@@ -5,6 +5,57 @@ NAS. Every command requires `MY_PA_NAS_COMPOSE_FILE` naming the exact Compose
 file. The default `MY_PA_LIFECYCLE_MODE=smoke` preserves `restart: "no"` for all
 six long-lived services.
 
+## Preserved smoke-runtime identity before package transfer
+
+For a live-main upgrade of an already admitted smoke runtime, follow the
+[`my-pa-nas-build-deploy` workflow](../../.codex/skills/my-pa-nas-build-deploy/references/workflow.md).
+Inventory the closed fourteen-member package locally and re-fetch authenticated
+`origin/main` before transfer. Land and read back only its exact-HEAD source
+bundle first. Verify its advertised head and clone it into a new exclusive,
+clean, root-owned checkout at the inventoried commit/tree. A bundle checksum
+alone is not source authentication. The authenticated remote, current fetched
+commit/tree, local inventory, NAS byte readback, bundle verification, and new
+checkout identity must agree.
+
+Before the other thirteen members cross to the NAS, run the new checkout's
+fixed-purpose `ops/nas/preserved-runtime-env-preflight.py` through the
+verified `/usr/bin/python3` Python 3.8 interpreter and bounded noninteractive
+privilege. It does not change canonical configuration. Before any old-checkout
+wrapper, it must verify the old admission, source, manifest, engine, admitted
+operator image, candidate/metadata/archive binding, fixed Git/Docker/Compose
+tools and socket, and dedicated mount paths. It must then require full PASS
+from the authoritative pre-source gate baked into the exact admitted old
+operator image, with no network, a read-only filesystem, dropped capabilities,
+and fixed read-only input mounts. Host Python 3.8 cannot replace or bypass that
+gate. The Docker socket retains API authority even when mounted read-only.
+The helper creates one labeled, transaction-bound ephemeral gate container,
+waits for exit zero, removes only its verified CID, and must confirm that exact
+CID and name absent through a fresh Docker daemon query before old wrappers
+or preflight PASS. A host CLI timeout is not proof of cleanup.
+
+Only after that PASS may the helper select old versioned environment files in
+memory and run the old lifecycle and running-identity gates. The
+rendered/admitted/live identities must match. The canonical protected Compose
+file must byte-match the preserved checkout's `ops/nas/compose.example.yml`;
+old gates must execute against that checkout file and the admitted running
+smoke stack. Full static ingress-manifest shape and live proxy publication are
+an early screen; full ingress, public route/traffic, and Tailscale admission
+remain separate gates.
+
+Keep old runtime, PostgreSQL, and firewall state untouched. The preflight must
+not print protected values or unbounded command output. If it refuses, stop
+with the old runtime selected and leave the other thirteen members untransferred.
+On daemon outage, ambiguous creation, or unverified cleanup, stop transfer,
+report only the sanitized non-secret transaction identity for operator
+recovery, and never remove a foreign container. An uncatchable host `SIGKILL`
+can prevent cleanup; prove the exact transaction container absent before
+resuming.
+If it passes, re-fetch `origin/main`, transfer and read back the remaining
+members, and repeat the full old-runtime and live-main gates at their later
+mutation boundaries. A preflight PASS grants no deployment, writer-stopping,
+or protected-configuration mutation authority. This early preflight does not
+replace the preserved-mode pre-migration backup gates below.
+
 ## Canonical PostgreSQL bootstrap
 
 A new NAS has no database container or data-plane network, so it cannot enter

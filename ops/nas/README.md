@@ -10,6 +10,61 @@ existing smoke-runtime upgrade from a workstation-built package, use
 and its workflow; first-time provisioning and pilot activation have different
 gates in [`../runbooks/nas-lifecycle.md`](../runbooks/nas-lifecycle.md).
 
+An existing smoke-runtime upgrade stages the exact-HEAD Git source bundle
+first, before the other thirteen members of the closed local package. After
+NAS byte readback and bundle verification, clone it into a new exclusive clean
+root-owned checkout. The fixed-purpose
+[`preserved-runtime-env-preflight.py`](preserved-runtime-env-preflight.py) from
+that checkout uses the verified host Python 3.8 path to check the preserved
+old checkout, old image manifest and admissions, selected `smoke` mode, and
+running identity. Before invoking an old wrapper, it must verify the canonical
+old operator admission, source, manifest, Docker engine, admitted operator
+image/platform/labels, old candidate/metadata/archive bytes and config, fixed
+Git/Docker/Compose tools, socket, and dedicated mount paths. It then requires
+full PASS from the authoritative pre-source gate baked into that exact old
+image, run with no network, a read-only filesystem, dropped capabilities, and
+fixed read-only input mounts. Host Python 3.8 is only the bootstrap verifier;
+it does not replace that gate. The helper creates a labeled, transaction-bound
+ephemeral gate container, waits for exit zero, removes only its verified CID,
+and proves that exact CID and name are absent in a fresh daemon check. A CLI
+timeout or a missing daemon is not cleanup evidence.
+
+Only after gate PASS may the helper select the versioned old production/NAS/web
+environment files in memory without changing canonical configuration, check
+the admission/rendered/live hashes, and invoke the old lifecycle and
+running-identity gates. The preserved checkout's
+`ops/nas/compose.example.yml` must byte-match the canonical protected Compose
+file. Full static ingress-manifest shape and live proxy publication are an
+early screen; full ingress, public route/traffic, and Tailscale gates remain
+separate. The helper reports no secret values. A refusal leaves the old runtime
+selected and blocks transfer of the remaining thirteen members. A pass permits
+their transfer and byte readback but does not authorize
+deployment, writer stopping, or protected-configuration mutation. The workflow
+still repeats the full gates and live-`origin/main` checks before any
+operator/image/admission mutation. The exact sequence and authority gates
+are in the linked skill workflow.
+
+If creation is ambiguous, the Docker daemon is unavailable, or cleanup cannot
+be verified, stop transfer and preserve the old runtime. Report only a
+sanitized non-secret gate-transaction identity for operator recovery; never
+remove a foreign container. An uncatchable host `SIGKILL` may leave the gate
+container behind, so its exact absence must be established before resuming.
+
+Preflight threat model: trust begins with authenticated live `origin/main`, the
+locally inventoried source bundle, exact clean root-owned new and preserved
+checkouts, root-owned protected manifest/admissions, and the observed Docker
+engine. Caller environment, paths, protected files, and Git/Compose/Docker
+output are untrusted inputs; the helper constrains paths and file metadata,
+checks byte and runtime identities, supplies a narrow process environment,
+and refuses malformed or excessive output. Protected values stay in memory
+and are not printed. Running as root and invoking the old Docker-socket-capable
+gate/lifecycle retain inherent root/Docker authority; a `:ro` socket mount
+does not constrain Docker API calls. These checks therefore depend on
+trusted host binaries, daemon, and admitted artifacts. A PASS proves only the
+bounded old-runtime identity check. It gives no assurance about public route,
+traffic, full ingress, or Tailscale state and no authority to stop services or mutate
+configuration, images, PostgreSQL, or firewall state.
+
 Files:
 
 - [`runtime-contract.toml`](runtime-contract.toml) is the machine-readable

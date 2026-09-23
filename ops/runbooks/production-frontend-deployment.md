@@ -160,7 +160,8 @@ of the observed public-edge containers. Reauthenticate their current service,
 DNS, tunnel, and traffic state before any change; a running edge is not proof
 that public cutover was approved or completed.
 
-After private smoke is green and the operator has approved:
+After the post-start health and transport checks pass and the operator has
+separately approved the specific public-edge change:
 
 1. Render the frontend tunnel config with
    `ops/nas/render-frontend-cloudflared-config.py` to the owner-only path named

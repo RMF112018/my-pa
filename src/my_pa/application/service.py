@@ -3327,6 +3327,56 @@ _DIRECT_REENRICHMENT_CAPABILITIES = frozenset(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class ApplicationCompositionState:
+    """The composition gates `available_capabilities` reads, as plain data.
+
+    Kept beside the service so the runtime answer and the derived answer cannot
+    disagree: `available_capabilities` builds one of these from its own fields
+    and `derive_available_capabilities` applies the same removal rules to it.
+    """
+
+    managed_documents: bool
+    relationship_intelligence: bool
+    relationship_intelligence_writes: bool
+    relationship_memory: bool
+    producer_origins_registered: bool
+    relationship_identity_correction: bool
+    goodnotes_pull: bool
+    constraints: bool
+
+
+def derive_available_capabilities(
+    implemented: frozenset[Capability], state: ApplicationCompositionState
+) -> frozenset[Capability]:
+    """Apply the composition removal rules to `implemented`.
+
+    The exact rules `ApplicationService.available_capabilities` applies, spelled
+    once here so a profile planner and the runtime answer derive from the same
+    function.
+    """
+    served = set(implemented)
+    if not state.managed_documents:
+        served -= _MANAGED_CAPABILITIES
+    if not state.relationship_intelligence:
+        served -= _ENTITY_CAPABILITIES
+    if not state.relationship_intelligence_writes:
+        served -= _ENTITY_WRITE_CAPABILITIES
+    if not (state.relationship_intelligence and state.relationship_memory):
+        served -= _RELATIONSHIP_MEMORY_CAPABILITIES
+    if not state.producer_origins_registered:
+        served -= _PRODUCER_CAPABILITIES
+    if not state.relationship_identity_correction:
+        served -= _IDENTITY_CORRECTION_CAPABILITIES
+    if not state.goodnotes_pull:
+        served -= _GOODNOTES_PULL_CAPABILITIES
+    if not state.constraints:
+        served -= _CONSTRAINT_CAPABILITIES
+        served -= _CONSTRAINT_AUTHORING_CAPABILITIES
+        served -= _CONSTRAINT_SYNC_CAPABILITIES
+    return frozenset(served)
+
+
 class ApplicationService:
     """Every capability this build can execute, behind one entry point."""
 
@@ -3507,55 +3557,19 @@ class ApplicationService:
         publishes the tools derived from it, so a client's tool list and the
         manifest cannot disagree about what exists.
         """
-        served = frozenset(_HANDLERS)
-        if self._managed_store_or_none is None:
-            served -= _MANAGED_CAPABILITIES
-        if not self._relationship_intelligence_enabled:
-            served -= _ENTITY_CAPABILITIES
-        # The write half, narrowed separately. Subtracted after the line above
-        # rather than folded into it, because the two answer different questions
-        # and a build can be in either state: the plane off withholds the
-        # whole `entities.` family, and the plane on with writes off withholds
-        # `_ENTITY_WRITE_CAPABILITIES` out of it.
-        if not self._relationship_intelligence_writes_enabled:
-            served -= _ENTITY_WRITE_CAPABILITIES
-        # Two conditions, not one. The plane needs its own switch *and* the
-        # entity plane, because a memory's subject is an Entity and the
-        # repository proves ownership of it by reading `knowledge.entities`.
-        if not (self._relationship_intelligence_enabled and self._relationship_memory_enabled):
-            served -= _RELATIONSHIP_MEMORY_CAPABILITIES
-        # A proposal surface without a trusted server registration would
-        # advertise a write every authenticated caller can only be denied.
-        # Withhold both producer capabilities when composition has no exact
-        # producer identity; per-Principal resolution still fails closed.
-        if not self._producer_origins.has_registrations:
-            served -= _PRODUCER_CAPABILITIES
-        # Governed identity correction, narrowed separately again. Its own switch
-        # requires the write switch, which requires the plane switch, and
-        # `Settings._check` refuses a process configured otherwise -- so the three
-        # subtractions above have already removed these names whenever a lower
-        # gate is off, and this line is what a build with every lower gate on still
-        # has to pass. Written as its own condition rather than folded into the
-        # write subtraction because the two answer different questions and a
-        # build can be in either state.
-        if not self._relationship_identity_correction_enabled:
-            served -= _IDENTITY_CORRECTION_CAPABILITIES
-        if not self._goodnotes_pull_enabled:
-            served -= _GOODNOTES_PULL_CAPABILITIES
-        # The Constraint read plane, withheld on composition rather than on a
-        # switch: there is no `MY_PA_` variable that turns it off, and the one
-        # thing it needs is the unit-of-work factory a composition root either
-        # handed over or did not.
-        if self._constraint_management_unit_of_work is None:
-            served -= _CONSTRAINT_CAPABILITIES
-            # The authoring half, subtracted beside the read half and under the
-            # same condition rather than folded into it: the two are separate
-            # sets because they are separate grants, and a later build that
-            # composes one without the other must be able to say so here rather
-            # than by editing a single fused constant (PC-CM-IMP-WP07).
-            served -= _CONSTRAINT_AUTHORING_CAPABILITIES
-            served -= _CONSTRAINT_SYNC_CAPABILITIES
-        return served
+        return derive_available_capabilities(
+            frozenset(_HANDLERS),
+            ApplicationCompositionState(
+                managed_documents=self._managed_store_or_none is not None,
+                relationship_intelligence=self._relationship_intelligence_enabled,
+                relationship_intelligence_writes=self._relationship_intelligence_writes_enabled,
+                relationship_memory=self._relationship_memory_enabled,
+                producer_origins_registered=self._producer_origins.has_registrations,
+                relationship_identity_correction=self._relationship_identity_correction_enabled,
+                goodnotes_pull=self._goodnotes_pull_enabled,
+                constraints=self._constraint_management_unit_of_work is not None,
+            ),
+        )
 
     def invoke(
         self,

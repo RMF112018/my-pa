@@ -9,6 +9,7 @@ from my_pa.domain.identity.chatllm_capability_policy import (
     is_chatllm_data_management,
 )
 from my_pa.domain.identity.operation import (
+    REMOTE_CAPABILITY_VERSION,
     Capability,
     is_destructive_capability,
     is_write_capability,
@@ -58,6 +59,12 @@ _REPORT_WRITES = frozenset(
 def test_policy_covers_every_public_capability_exactly_once() -> None:
     assert set(CHATLLM_CAPABILITY_POLICY) == set(Capability)
     assert len(CHATLLM_CAPABILITY_POLICY) == 172
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v2"
+
+
+def test_remote_capability_version_is_v1_and_not_the_profile_version() -> None:
+    assert REMOTE_CAPABILITY_VERSION == "v1"
+    assert REMOTE_CAPABILITY_VERSION != CHATLLM_DATA_PROFILE_VERSION
     assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v2"
 
 

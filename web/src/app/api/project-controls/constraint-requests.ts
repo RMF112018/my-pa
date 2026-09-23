@@ -233,6 +233,33 @@ export const SETTINGS_FIELDS: Readonly<Record<string, WorkField>> = {
   expectedVersion: { gateway: "expected_version", type: "integer" },
 } as const;
 
+function notFound(message: string): NextResponse {
+  const response = NextResponse.json(
+    { error: { errorClass: "not_found", code: "not_found", message } },
+    { status: 404 },
+  );
+  response.headers.set("cache-control", "private, no-store");
+  return response;
+}
+
+/**
+ * The one nondisclosing answer for a Constraint that is not in the URL's Project.
+ *
+ * Defined once and imported by every route that binds a Constraint to its path
+ * Project — the detail and history reads and the exact-Project mutation
+ * preflight — so "belongs to another of your Projects" has exactly one shape,
+ * byte for byte, wherever it is asked. `private, no-store` is set here because
+ * this response is built outside the shared work-route helpers.
+ */
+export function constraintNotFound(): NextResponse {
+  return notFound("Constraint was not found");
+}
+
+/** The same answer for a Category that is not in the URL's Project. */
+export function categoryNotFound(): NextResponse {
+  return notFound("Category was not found");
+}
+
 /**
  * The refusal for a path segment that is not the identifier kind it must be.
  *

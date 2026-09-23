@@ -422,14 +422,8 @@ describe("the pre-dispatch admit hook", () => {
     stubGateway(
       () =>
         new Response(
-          JSON.stringify({
-            type: "about:blank",
-            title: "not found",
-            status: 404,
-            code: "not_found",
-            detail: "x",
-          }),
-          { status: 404, headers: { "content-type": "application/problem+json" } },
+          JSON.stringify({ error: { code: "not_found", message: "x" } }),
+          { status: 404, headers: { "content-type": "application/json" } },
         ),
     );
     const viaGateway = await workPost(
@@ -447,6 +441,7 @@ describe("the pre-dispatch admit hook", () => {
     const gatewayAnswer = await viaGateway.json();
     expect(Object.keys(hookAnswer).sort()).toEqual(Object.keys(gatewayAnswer).sort());
     expect(hookAnswer.state).toBe(gatewayAnswer.state);
+    expect(hookAnswer.error).toEqual(gatewayAnswer.error);
     expect(hookAnswer.disclosure).toEqual(gatewayAnswer.disclosure);
   });
 

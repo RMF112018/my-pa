@@ -73,6 +73,35 @@ correlation input the application does not trust, exactly as it is over HTTP.
 [`ops/runbooks/mcp-and-cli-operations.md`](/ops/runbooks/mcp-and-cli-operations.md)
 covers running it.
 
+## `remote_mcp.py` — remote MCP authority and ChatLLM profile convergence
+
+`remote_mcp.py` administers durable remote MCP clients, kill switches, and
+grants. The three `profile-*` commands (`profile-diff`, `profile-plan`,
+`profile-apply`) are atomic convergence tooling for the ChatLLM full-data
+profile: they derive the desired capability set from the same
+`application_composition_state` the gateway serves, compare it to the client's
+durable grants, and emit the `chatllm-profile-cli-v1` JSON contract
+(`schema_version, command, profile_version, target, eligibility, gates, pre,
+post, applied, committed, converged, rolled_back, failure`). The document
+never carries a raw OAuth client ID, a raw resource/audience, a raw grant
+UUID, a token, a secret, or personal data — client, resource, and existing
+grant rows are named only by `sha256:` fingerprints.
+
+`profile-diff` and `profile-plan` never mutate; they exit `0` only when the
+profile is converged, `1` otherwise, and `2` for an unresolvable selector, an
+unsupported profile version, or invalid usage. `profile-apply` runs inside one
+transaction: it locks the client row, re-reads grants, mutates in REVOKE then
+RENEW then ADD phase order, and re-reads and recomputes before committing.
+Unless the post-apply state has no blockers, no pending revoke/renew/add,
+exactly one canonical durable active grant per desired capability, and no
+extra profile-owned active grant, the transaction rolls back and the CLI emits
+a rollback document (`rolled_back=true`). Success JSON is printed only after
+commit, and `applied=true` implies `committed=true` and `converged=true`.
+
+The operating contract, recommended grant profile, and activation sequence
+live in
+[`ops/runbooks/managed-knowledge-context.md`](/ops/runbooks/managed-knowledge-context.md).
+
 ## `gsqs_b0.py` — governed GSQS live-B0 control plane
 
 Preflight never discloses. Prediction acquisition is a local stdio host

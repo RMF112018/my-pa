@@ -70,11 +70,10 @@ MANAGED_STORE: Final = "src/my_pa/infrastructure/managed_document_stores/filesys
 #: Modules other than the managed byte store that call a filesystem-write API,
 #: with what each writes and why it is not the managed plane.
 #:
-#: **Not an exemption list.** An entry is a claim that this call site writes to a
-#: location its *caller* named explicitly on a command line, that the location is
-#: a build or review artifact rather than user content, and that no managed root
-#: and no source root can reach it. A module added here is a decision someone has
-#: to write down.
+#: **Not an exemption list.** Each entry identifies the bounded artifact and
+#: destination of one reviewed write path and explains why it cannot reach a
+#: managed or source root. A module added here is a decision someone has to
+#: write down.
 REGISTERED_WRITERS: Final[dict[str, str]] = {
     "src/my_pa/infrastructure/goodnotes/local.py": (
         "BoundedLocalOCRTranscriber._run_bounded calls os.write only on stdin.fileno() "
@@ -152,6 +151,12 @@ REGISTERED_WRITERS: Final[dict[str, str]] = {
     "ops/nas/generate-postgres-bootstrap-admission.py": (
         "writes only engine-bound PostgreSQL bootstrap identity evidence to an explicit, new "
         "root-controlled operator path; it contains no database password or personal bytes."
+    ),
+    "ops/nas/write-postgres-backup-runtime-attestation.py": (
+        "publishes only a new immutable, root-owned mode-0400 PostgreSQL backup/runtime "
+        "identity attestation under the fixed /var/lib/my-pa/postgres-backup-attestations "
+        "mode-0700 evidence directory, after no-follow root-owned ancestor checks; "
+        "it never writes backup, source, managed-document, or credential bytes."
     ),
     "ops/nas/run_synthetic_acceptance.py": (
         "writes only synthetic pytest receipt digests into an explicit fresh evidence "

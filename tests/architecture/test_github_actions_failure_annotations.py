@@ -1,7 +1,9 @@
-"""GitHub Actions failure annotations remain deferred and failure-safe."""
+"""GitHub Actions failure annotations remain bounded and failure-safe."""
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -23,6 +25,24 @@ def _hook_module() -> ModuleType:
 
 def _reset(hook: ModuleType) -> None:
     hook.pytest_sessionstart(SimpleNamespace())
+
+
+def _fast_run_script(name: str) -> str:
+    """Extract one checked-in literal Actions run block without a YAML dependency."""
+    lines = (
+        (ROOT / ".github/workflows/repository-checks.yml").read_text(encoding="utf-8").splitlines()
+    )
+    start = lines.index(f"      - name: {name}")
+    run = lines.index("        run: |", start)
+    body: list[str] = []
+    for line in lines[run + 1 :]:
+        if line.startswith("          "):
+            body.append(line[10:])
+        elif not line:
+            body.append("")
+        else:
+            break
+    return "\n".join(body)
 
 
 @pytest.fixture(autouse=True)
@@ -59,7 +79,7 @@ def test_annotations_are_silent_when_github_actions_is_not_exactly_true(
     assert not hook._GITHUB_ACTIONS_FAILURE_KEYS
 
 
-def test_failed_reports_queue_until_sessionfinish_then_flush_once(
+def test_failed_reports_emit_immediately_and_replay_once_at_session_finish(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     hook = _hook_module()
@@ -78,10 +98,7 @@ def test_failed_reports_queue_until_sessionfinish_then_flush_once(
         SimpleNamespace(failed=True, nodeid="tests/unit/test_collection_failure.py")
     )
 
-    assert capsys.readouterr().out == ""
-    hook.pytest_sessionfinish(SimpleNamespace(), exitstatus=1)
-
-    assert capsys.readouterr().out == (
+    expected = (
         "::error title=pytest failed::phase=setup; "
         "nodeid=tests/unit/test_example.py::test_setup\n"
         "::error title=pytest failed::phase=call; "
@@ -91,11 +108,15 @@ def test_failed_reports_queue_until_sessionfinish_then_flush_once(
         "::error title=pytest failed::phase=collection; "
         "nodeid=tests/unit/test_collection_failure.py\n"
     )
+    assert capsys.readouterr().out == expected
+    hook.pytest_sessionfinish(SimpleNamespace(), exitstatus=1)
+
+    assert capsys.readouterr().out == expected
     assert not hook._GITHUB_ACTIONS_FAILURES
     assert not hook._GITHUB_ACTIONS_FAILURE_KEYS
 
 
-def test_duplicate_failed_reports_emit_one_deferred_annotation(
+def test_duplicate_failed_reports_emit_one_immediate_and_one_final_annotation(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     hook = _hook_module()
@@ -107,17 +128,18 @@ def test_duplicate_failed_reports_emit_one_deferred_annotation(
 
     hook.pytest_runtest_logreport(report)
     hook.pytest_runtest_logreport(report)
-    assert capsys.readouterr().out == ""
-    hook.pytest_sessionfinish(SimpleNamespace(), exitstatus=1)
-
-    assert capsys.readouterr().out == (
+    expected = (
         "::error title=pytest failed::phase=call; "
         "nodeid=tests/unit/test_example.py::test_duplicate\n"
     )
+    assert capsys.readouterr().out == expected
+    hook.pytest_sessionfinish(SimpleNamespace(), exitstatus=1)
+
+    assert capsys.readouterr().out == expected
 
 
 def test_session_failure_without_reports_emits_numeric_status_only(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
     hook = _hook_module()
     _reset(hook)
@@ -129,8 +151,54 @@ def test_session_failure_without_reports_emits_numeric_status_only(
     assert not hook._GITHUB_ACTIONS_FAILURES
     assert not hook._GITHUB_ACTIONS_FAILURE_KEYS
 
+    python = tmp_path / "python"
+    python.write_text('#!/bin/sh\nexit "$SYNTHETIC_PYTEST_EXIT"\n', encoding="ascii")
+    python.chmod(0o700)
+    marker = (
+        'python -m pytest -m "not slow and not database and not network and not connector '
+        'and not evaluation and not e2e and not recovery"'
+    )
+    for name in ("Test Python FAST tier", "Test Python FAST tier at the declared floor"):
+        script = _fast_run_script(name)
+        assert script.count(marker) == 1
+        environment = {
+            "PATH": os.pathsep.join((str(tmp_path), "/usr/bin", "/bin")),
+            "GITHUB_ACTIONS": "true",
+            "SYNTHETIC_PYTEST_EXIT": "37",
+        }
+        failed = subprocess.run(  # noqa: S603 - checked-in workflow with synthetic Python only
+            ["/bin/bash", "-e", "-o", "pipefail", "-c", script],
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert failed.returncode == 37
+        assert failed.stdout == "::error title=pytest failed::phase=process; exitstatus=37\n"
+        assert failed.stderr == ""
 
-def test_session_start_and_finish_clear_queued_state(
+        passed = subprocess.run(  # noqa: S603 - checked-in workflow with synthetic Python only
+            ["/bin/bash", "-e", "-o", "pipefail", "-c", script],
+            env={**environment, "SYNTHETIC_PYTEST_EXIT": "0"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert passed.returncode == 0
+        assert passed.stdout == passed.stderr == ""
+
+        not_actions = subprocess.run(  # noqa: S603 - checked-in workflow with synthetic Python only
+            ["/bin/bash", "-e", "-o", "pipefail", "-c", script],
+            env={key: value for key, value in environment.items() if key != "GITHUB_ACTIONS"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert not_actions.returncode == 1
+        assert not_actions.stdout == not_actions.stderr == ""
+
+
+def test_session_start_and_finish_clear_queued_state_with_bounded_summary(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     hook = _hook_module()
@@ -142,26 +210,35 @@ def test_session_start_and_finish_clear_queued_state(
     assert not hook._GITHUB_ACTIONS_FAILURES
     assert not hook._GITHUB_ACTIONS_FAILURE_KEYS
 
-    hook._queue_github_actions_failure("tests/unit/test_example.py::test_case", "call")
+    for index in range(hook._GITHUB_ACTIONS_FAILURE_LIMIT + 3):
+        hook._queue_github_actions_failure(f"tests/unit/test_example.py::test_case_{index}", "call")
+    immediate = capsys.readouterr().out
+    assert immediate.count("::error title=pytest failed::phase=call;") == 10
+    assert "test_case_0\n" in immediate
+    assert "test_case_10\n" not in immediate
     hook.pytest_sessionfinish(SimpleNamespace(), exitstatus=1)
 
-    expected = (
-        "::error title=pytest failed::phase=call; "
-        + "nodeid=tests/unit/test_example.py::test_case\n"
+    final = capsys.readouterr().out
+    assert final.startswith(immediate)
+    assert final.endswith(
+        "::error title=pytest failed::phase=summary; additional_unique_failures=3\n"
     )
-    assert capsys.readouterr().out == expected
+    assert final.count("::error title=pytest failed::phase=call;") == 10
     assert not hook._GITHUB_ACTIONS_FAILURES
     assert not hook._GITHUB_ACTIONS_FAILURE_KEYS
 
 
 def test_fixture_teardown_discards_a_synthetic_queue_before_outer_sessionfinish(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The module fixture owns cleanup of direct synthetic hook state."""
+    """Immediate evidence survives even when fixture teardown clears the queue."""
     hook = _hook_module()
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
 
     hook._queue_github_actions_failure("tests/unit/test_nested.py::test_failure", "call")
+    assert capsys.readouterr().out == (
+        "::error title=pytest failed::phase=call; nodeid=tests/unit/test_nested.py::test_failure\n"
+    )
     assert hook._GITHUB_ACTIONS_FAILURES
     assert hook._GITHUB_ACTIONS_FAILURE_KEYS
 
@@ -179,7 +256,7 @@ def test_fixture_cleanup_leaves_no_annotation_for_outer_sessionfinish(
     assert capsys.readouterr().out == ""
 
 
-def test_deferred_annotation_escapes_github_command_delimiters(
+def test_immediate_and_final_annotations_escape_github_command_delimiters(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     hook = _hook_module()
@@ -189,13 +266,14 @@ def test_deferred_annotation_escapes_github_command_delimiters(
     hook._queue_github_actions_failure(
         "tests/unit/test_example.py::test_case[%\r\nmarker]", "call%\r\n"
     )
-    assert capsys.readouterr().out == ""
-    hook.pytest_sessionfinish(SimpleNamespace(), exitstatus=1)
-
-    assert capsys.readouterr().out == (
+    expected = (
         "::error title=pytest failed::phase=call%25%0D%0A; "
         "nodeid=tests/unit/test_example.py::test_case[%25%0D%0Amarker]\n"
     )
+    assert capsys.readouterr().out == expected
+    hook.pytest_sessionfinish(SimpleNamespace(), exitstatus=1)
+
+    assert capsys.readouterr().out == expected
 
 
 def test_deferred_annotation_never_renders_report_details_or_environment_payloads(
@@ -216,7 +294,7 @@ def test_deferred_annotation_never_renders_report_details_or_environment_payload
     )
 
     hook.pytest_runtest_logreport(report)
-    assert capsys.readouterr().out == ""
+    immediate = capsys.readouterr().out
     hook.pytest_sessionfinish(SimpleNamespace(), exitstatus=1)
 
     output = capsys.readouterr().out
@@ -224,7 +302,7 @@ def test_deferred_annotation_never_renders_report_details_or_environment_payload
         "::error title=pytest failed::phase=call; "
         + "nodeid=tests/unit/test_example.py::test_failure\n"
     )
-    assert output == expected
+    assert immediate == output == expected
     for forbidden in (
         "synthetic exception payload",
         "synthetic captured output",

@@ -399,6 +399,7 @@ pytest_plugins = ("tests.db.fixtures",)
 
 _GITHUB_ACTIONS_FAILURES: list[tuple[str, str]] = []
 _GITHUB_ACTIONS_FAILURE_KEYS: set[tuple[str, str]] = set()
+_GITHUB_ACTIONS_FAILURE_LIMIT = 10
 
 
 def _github_actions_annotation_value(value: str) -> str:
@@ -407,13 +408,16 @@ def _github_actions_annotation_value(value: str) -> str:
 
 
 def _queue_github_actions_failure(nodeid: str, phase: str) -> None:
-    """Retain only one sanitized, detail-free annotation per failed report kind."""
+    """Emit the first failures now and retain them for session-end replay."""
     if os.environ.get("GITHUB_ACTIONS") != "true":
         return
     failure = (_github_actions_annotation_value(nodeid), _github_actions_annotation_value(phase))
-    if failure not in _GITHUB_ACTIONS_FAILURE_KEYS:
-        _GITHUB_ACTIONS_FAILURE_KEYS.add(failure)
+    if failure in _GITHUB_ACTIONS_FAILURE_KEYS:
+        return
+    _GITHUB_ACTIONS_FAILURE_KEYS.add(failure)
+    if len(_GITHUB_ACTIONS_FAILURES) < _GITHUB_ACTIONS_FAILURE_LIMIT:
         _GITHUB_ACTIONS_FAILURES.append(failure)
+        print(f"::error title=pytest failed::phase={failure[1]}; nodeid={failure[0]}", flush=True)
 
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:
@@ -436,14 +440,20 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    """Flush only minimal Actions annotations after all reports are complete."""
+    """Replay bounded failures and report any suppressed count at session end."""
     del session
     try:
         if os.environ.get("GITHUB_ACTIONS") != "true":
             return
         for nodeid, phase in _GITHUB_ACTIONS_FAILURES:
             print(f"::error title=pytest failed::phase={phase}; nodeid={nodeid}")
-        if exitstatus != 0 and not _GITHUB_ACTIONS_FAILURES:
+        suppressed = len(_GITHUB_ACTIONS_FAILURE_KEYS) - len(_GITHUB_ACTIONS_FAILURES)
+        if suppressed > 0:
+            print(
+                "::error title=pytest failed::phase=summary; "
+                f"additional_unique_failures={suppressed}"
+            )
+        if exitstatus != 0 and not _GITHUB_ACTIONS_FAILURE_KEYS:
             print(f"::error title=pytest failed::phase=session; exitstatus={int(exitstatus)}")
     finally:
         _GITHUB_ACTIONS_FAILURES.clear()

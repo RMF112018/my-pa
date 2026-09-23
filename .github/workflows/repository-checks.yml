@@ -172,7 +172,14 @@ jobs:
         if: steps.fast.outputs.applicable == 'true'
         shell: bash
         run: |
-          python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"
+          [[ "${GITHUB_ACTIONS-}" == true ]] || exit 1
+          if python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"; then
+            :
+          else
+            status=$?
+            echo "::error title=pytest failed::phase=process; exitstatus=${status}"
+            exit "$status"
+          fi
 
       - name: Package governance candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -468,7 +475,14 @@ jobs:
         if: steps.floor.outputs.applicable == 'true'
         shell: bash
         run: |
-          python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"
+          [[ "${GITHUB_ACTIONS-}" == true ]] || exit 1
+          if python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"; then
+            :
+          else
+            status=$?
+            echo "::error title=pytest failed::phase=process; exitstatus=${status}"
+            exit "$status"
+          fi
 
   database-current-head:
     # Ordinary current-schema tests. One Alembic upgrade per worker, then clones.

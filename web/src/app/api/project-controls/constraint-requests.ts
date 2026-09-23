@@ -520,8 +520,9 @@ export const CATEGORY_REORDER_FIELDS: Readonly<Record<string, WorkField>> = {
  * repeats, and the version list is exactly as long as the id list — the
  * `ReorderConstraintCategories.__post_init__` shape checks, refused here so the
  * message names the browser field. Whether the ids are the Project's *complete*
- * active set, and whether each version is current, is the backend's and only
- * the backend's to decide.
+ * Category set — every Category in every state, not only the active ones — and
+ * whether each version is current, is the backend's and only the backend's to
+ * decide.
  */
 export function validateCategoryReorder(payload: Readonly<Record<string, unknown>>): string | null {
   const ids = payload.ordered_category_ids;

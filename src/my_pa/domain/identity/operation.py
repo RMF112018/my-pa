@@ -24,6 +24,7 @@ from typing import Final
 from my_pa.domain.identity.purpose import Purpose
 
 __all__ = [
+    "REMOTE_CAPABILITY_VERSION",
     "AuthorizedCapability",
     "Capability",
     "NativeSourceCapability",
@@ -32,6 +33,11 @@ __all__ = [
     "is_write_capability",
     "permitted_purposes",
 ]
+
+#: The capability-grant version the remote boundary authenticates. Distinct
+#: from `CHATLLM_DATA_PROFILE_VERSION` (`chatllm-data-v2`), which names the
+#: derived profile contract rather than the durable grant identity.
+REMOTE_CAPABILITY_VERSION: Final = "v1"
 
 
 class Capability(StrEnum):

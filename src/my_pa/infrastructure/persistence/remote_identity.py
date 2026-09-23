@@ -23,12 +23,13 @@ from sqlalchemy import (
     Uuid,
     func,
     select,
+    text,
     update,
 )
 from sqlalchemy.engine import Row
 
 from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID
-from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.operation import REMOTE_CAPABILITY_VERSION, Capability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.infrastructure.persistence.user_accounts import IDENTITY_METADATA
 
@@ -175,6 +176,21 @@ remote_capability_grants = Table(
     Column("expires_at", DateTime(timezone=True)),
     Column("revoked_at", DateTime(timezone=True)),
     Column("created_at", DateTime(timezone=True), nullable=False),
+    #: One unrevoked grant per canonical identity. Partial so revoked history
+    #: and a new active replacement coexist; `NULLS NOT DISTINCT` so a
+    #: capability-wide `purpose IS NULL` grant still occupies exactly one slot.
+    Index(
+        "uq_remote_capability_grants_unrevoked_identity",
+        "remote_client_id",
+        "external_scope",
+        "capability",
+        "capability_version",
+        "purpose",
+        "resource",
+        unique=True,
+        postgresql_where=text("revoked_at IS NULL"),
+        postgresql_nulls_not_distinct=True,
+    ),
 )
 
 remote_security_controls = Table(
@@ -240,7 +256,7 @@ class RemoteIdentityRepository:
                 remote_capability_grants.c.is_write,
             ).where(
                 remote_capability_grants.c.remote_client_id == row.id,
-                remote_capability_grants.c.capability_version == "v1",
+                remote_capability_grants.c.capability_version == REMOTE_CAPABILITY_VERSION,
                 remote_capability_grants.c.external_scope.in_(token_scopes),
                 remote_capability_grants.c.resource == resource,
                 remote_capability_grants.c.revoked_at.is_(None),
@@ -333,6 +349,80 @@ class RemoteIdentityRepository:
                 remote_capability_grants.c.revoked_at.is_(None),
             )
             .values(expires_at=None)
+        )
+        return result.rowcount == 1
+
+    def lock_client_for_update(self, *, oauth_client_id: str) -> Row[Any] | None:
+        """Lock one client row for the transaction, or return None if absent."""
+        return self._connection.execute(
+            select(remote_clients)
+            .where(remote_clients.c.oauth_client_id == oauth_client_id)
+            .with_for_update()
+        ).one_or_none()
+
+    def lock_client_for_update_by_id(self, *, remote_client_id: UUID) -> Row[Any] | None:
+        """Lock one client row by identifier for the transaction, or None."""
+        return self._connection.execute(
+            select(remote_clients).where(remote_clients.c.id == remote_client_id).with_for_update()
+        ).one_or_none()
+
+    def get_security_controls(self) -> Row[Any] | None:
+        """Return the singleton remote security controls row, or None."""
+        return self._connection.execute(
+            select(
+                remote_security_controls.c.remote_enabled,
+                remote_security_controls.c.writes_enabled,
+            ).where(remote_security_controls.c.singleton.is_(True))
+        ).one_or_none()
+
+    def renew_canonical_grant(
+        self,
+        *,
+        grant_id: UUID,
+        remote_client_id: UUID,
+        external_scope: str,
+        capability: Capability,
+        capability_version: str,
+        purpose: Purpose | None,
+        resource: str,
+        is_write: bool,
+    ) -> bool:
+        """Clear expiry only on the exact unrevoked canonical grant identity."""
+        result = self._connection.execute(
+            update(remote_capability_grants)
+            .where(
+                remote_capability_grants.c.id == grant_id,
+                remote_capability_grants.c.remote_client_id == remote_client_id,
+                remote_capability_grants.c.external_scope == external_scope,
+                remote_capability_grants.c.capability == capability.value,
+                remote_capability_grants.c.capability_version == capability_version,
+                remote_capability_grants.c.purpose.is_(None)
+                if purpose is None
+                else remote_capability_grants.c.purpose == purpose.value,
+                remote_capability_grants.c.resource == resource,
+                remote_capability_grants.c.is_write.is_(is_write),
+                remote_capability_grants.c.revoked_at.is_(None),
+            )
+            .values(expires_at=None)
+        )
+        return result.rowcount == 1
+
+    def revoke_capability_grant(
+        self,
+        *,
+        grant_id: UUID,
+        remote_client_id: UUID,
+        now: datetime,
+    ) -> bool:
+        """Revoke one unrevoked grant row owned by the client."""
+        result = self._connection.execute(
+            update(remote_capability_grants)
+            .where(
+                remote_capability_grants.c.id == grant_id,
+                remote_capability_grants.c.remote_client_id == remote_client_id,
+                remote_capability_grants.c.revoked_at.is_(None),
+            )
+            .values(revoked_at=now)
         )
         return result.rowcount == 1
 
@@ -445,7 +535,7 @@ class RemoteIdentityRepository:
             .select_from(remote_capability_grants)
             .where(
                 remote_capability_grants.c.remote_client_id == remote_client_id,
-                remote_capability_grants.c.capability_version == "v1",
+                remote_capability_grants.c.capability_version == REMOTE_CAPABILITY_VERSION,
                 remote_capability_grants.c.external_scope.in_(token_scopes),
                 remote_capability_grants.c.resource == resource,
                 remote_capability_grants.c.revoked_at.is_(None),
@@ -476,7 +566,7 @@ class RemoteIdentityRepository:
                 remote_client_id=remote_client_id,
                 external_scope=external_scope,
                 capability=capability.value,
-                capability_version="v1",
+                capability_version=REMOTE_CAPABILITY_VERSION,
                 purpose=None if purpose is None else purpose.value,
                 resource=resource,
                 is_write=is_write,

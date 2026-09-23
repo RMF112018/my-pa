@@ -45,7 +45,13 @@ import { Sheet } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { useTaskRuntime } from "@/components/work/task-runtime-provider";
 import { browserWorkClock, workRequest } from "@/lib/api/work-client";
+import { CaptureProjectSelector } from "@/components/capture/capture-project-selector";
 import type { CreateIntentSession, TaskCreateRequest } from "@/lib/task/create-intent";
+import {
+  isUnreadableCreateResponse,
+  unverifiedTaskCreateError,
+  verifyTaskCreateResult,
+} from "@/lib/task/create-receipt";
 import {
   NO_PRIORITY_LABEL,
   TASK_DUE_FIELD_LABEL,
@@ -67,9 +73,20 @@ export interface TaskCreateSheetProps {
   readonly onOpenChange: (open: boolean) => void;
   readonly entry: "work" | "capture" | "scoped_context";
   readonly context?: TaskCreateContext;
-  /** Capture chooser only: return to the chooser instead of closing. */
-  readonly onBack?: () => void;
+  /**
+   * Capture chooser only: return to the chooser instead of closing.
+   *
+   * The payload is what this sheet actually holds — the frozen request's Project
+   * when an intent is unresolved, the editable draft's otherwise — so Capture
+   * resumes showing the truth rather than the context it proposed. Existing
+   * no-argument callbacks stay assignment-compatible.
+   */
+  readonly onBack?: (context: { projectId: string | null }) => void;
   readonly onConfirmed?: (task: unknown) => void;
+  /** Supplied by the shell from the verified session; guards Project reads. */
+  readonly principalId?: string;
+  /** In-memory generation counter for discarding stale Project answers. */
+  readonly sessionEpoch?: number;
 }
 
 export const TASK_CREATE_TITLE_LABEL = "Title";
@@ -80,6 +97,9 @@ export const TASK_CREATE_TITLE_REQUIRED = "Enter a task title.";
 const CREATE_PENDING_STATUS = "Creating task…";
 const CREATE_AMBIGUOUS_STATUS =
   "Create may still have succeeded. Retry with the same intent — do not edit it until this resolves.";
+/** Shown when a frozen Project displaced the launcher's proposal. */
+export const TASK_CREATE_FROZEN_PROJECT_NOTE =
+  "This create is already under way against the Project it was started with. It was not moved.";
 
 /** Priority choices in product language. `""` is the explicit absence of a priority. */
 const PRIORITY_CHOICES: readonly { readonly value: "" | TaskPriority; readonly label: string }[] = [
@@ -109,6 +129,8 @@ export function TaskCreateSheet({
   context,
   onBack,
   onConfirmed,
+  principalId,
+  sessionEpoch = 0,
 }: TaskCreateSheetProps): React.JSX.Element {
   const runtime = useTaskRuntime();
   const clock = useMemo(() => browserWorkClock(), []);
@@ -118,6 +140,7 @@ export function TaskCreateSheet({
   const descriptionId = `${baseId}-description`;
   const priorityId = `${baseId}-priority`;
   const dueId = `${baseId}-due`;
+  const projectId = `${baseId}-project`;
   const formRef = useRef<HTMLFormElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
   const primaryRef = useRef<HTMLButtonElement>(null);
@@ -135,6 +158,18 @@ export function TaskCreateSheet({
   const [description, setDescription] = useState("");
   const [priority, setPriority] = useState<"" | TaskPriority>("");
   const [due, setDue] = useState("");
+  /**
+   * The Project this create will name, editable only while nothing is frozen.
+   *
+   * Local to this surface. It is seeded from the launcher's context when a new
+   * editable experience is bound and from the frozen request when one is
+   * resumed — and the frozen one always wins, which is the whole point: a
+   * launcher proposing B while an unresolved create against A exists resumes A.
+   */
+  const [draftProjectId, setDraftProjectId] = useState<string | null>(null);
+  /** Set once the Principal changes the Project, so the launcher stops seeding it. */
+  const [projectTouched, setProjectTouched] = useState(false);
+  const [frozenProjectDisplaced, setFrozenProjectDisplaced] = useState(false);
   const [titleError, setTitleError] = useState<string | null>(null);
   const [status, setStatus] = useState("");
   const [pending, setPending] = useState(false);
@@ -172,6 +207,9 @@ export function TaskCreateSheet({
       // Civil day in the browser's zone — a UTC truncation of the frozen instant
       // can name the wrong day.
       setDue(frozenRequest.dueAt ? civilDayInZone(frozenRequest.dueAt, clock.timezone) : "");
+      // The frozen Project, verbatim. Never the launcher's current proposal.
+      setDraftProjectId(frozenRequest.projectId ?? null);
+      setProjectTouched(true);
       setTitleError(null);
       setStatus(nextPhase === "ambiguous" ? CREATE_AMBIGUOUS_STATUS : CREATE_PENDING_STATUS);
       return true;
@@ -184,6 +222,9 @@ export function TaskCreateSheet({
     setDescription("");
     setPriority("");
     setDue("");
+    setDraftProjectId(null);
+    setProjectTouched(false);
+    setFrozenProjectDisplaced(false);
     setTitleError(null);
     setStatus("");
   }, []);
@@ -193,9 +234,20 @@ export function TaskCreateSheet({
    * its frozen request when it owns one, an empty form otherwise.
    */
   const bindSession = useCallback(
-    (next: CreateIntentSession) => {
+    (next: CreateIntentSession, launcherProjectId?: string) => {
       setSession(next);
-      if (!showFrozenRequest(next)) clearFields();
+      if (showFrozenRequest(next)) {
+        // A frozen request displaced whatever the launcher proposed. Say so
+        // rather than showing A while the person believes they asked for B.
+        const frozenProject = next.getFrozenRequest()?.projectId ?? null;
+        setFrozenProjectDisplaced(
+          launcherProjectId !== undefined && (launcherProjectId || null) !== frozenProject,
+        );
+        return;
+      }
+      clearFields();
+      // Seeded here: binding a *new editable* experience.
+      setDraftProjectId(launcherProjectId || null);
     },
     [showFrozenRequest, clearFields],
   );
@@ -218,8 +270,8 @@ export function TaskCreateSheet({
        write that must never happen in a render pass. */
     const next =
       unresolved ?? (isSpent(sessionRef.current) ? store.openSession() : undefined);
-    if (next) bindSession(next);
-  }, [open, runtime, bindSession]);
+    if (next) bindSession(next, context?.projectId);
+  }, [open, runtime, bindSession, context?.projectId]);
 
   /**
    * Observe the bound session (WP02-AC-070). The subscription is keyed on the
@@ -281,6 +333,21 @@ export function TaskCreateSheet({
     dismiss?.focus();
   }, [resumedFocusKey, phase]);
 
+  /**
+   * The Project this surface is actually naming, in strict precedence order.
+   *
+   * A frozen request wins outright — that is C08, and it is why a launcher
+   * proposing B cannot move a create already under way against A. Otherwise the
+   * Principal's own choice wins, and only an untouched editable surface adopts
+   * the launcher's scope. Derived rather than stored, so no effect has to race
+   * the render that shows it.
+   */
+  const effectiveProjectId: string | null = frozen
+    ? (session.getFrozenRequest()?.projectId ?? null)
+    : projectTouched
+      ? draftProjectId
+      : (context?.projectId ?? null);
+
   function buildRequest(): TaskCreateRequest {
     return {
       title: title.trim(),
@@ -288,7 +355,9 @@ export function TaskCreateSheet({
       description: description.trim() ? description : undefined,
       priority: priority || undefined,
       dueAt: due ? civilDayEndIso(due, clock.timezone) : undefined,
-      projectId: context?.projectId || undefined,
+      // No Project is omission in the Task contract, not null. The editable
+      // local value wins for a fresh intent; a frozen one is never rebuilt.
+      projectId: effectiveProjectId ?? undefined,
       situationId: context?.situationId || undefined,
     };
   }
@@ -336,11 +405,24 @@ export function TaskCreateSheet({
       setPending(true);
       setStatus(current === "ambiguous" ? "Retrying the same create…" : CREATE_PENDING_STATUS);
       const outcome = await dispatched.submit(
-        async ({ request: frozenRequest, idempotencyKey }) =>
-          workRequest("/api/tasks", {
-            method: "POST",
-            body: JSON.stringify({ ...frozenRequest, idempotencyKey }),
-          }),
+        async ({ request: frozenRequest, idempotencyKey }) => {
+          let body: unknown;
+          try {
+            body = await workRequest("/api/tasks", {
+              method: "POST",
+              body: JSON.stringify({ ...frozenRequest, idempotencyKey }),
+            });
+          } catch (error) {
+            // An unreadable 2xx is the same ambiguity as a failed verification,
+            // and must reach the session classified the same way.
+            if (isUnreadableCreateResponse(error)) throw unverifiedTaskCreateError();
+            throw error;
+          }
+          // Inside the callback, before `submit` resolves: by the time it has,
+          // this surface has already announced and reconciliation has already
+          // been told. A response that cannot be verified must never get that far.
+          return verifyTaskCreateResult(body, frozenRequest);
+        },
         {
           feedback: () => {
             const confirmedTitle = dispatched.getFrozenRequest()?.title ?? title.trim();
@@ -485,6 +567,30 @@ export function TaskCreateSheet({
           </Select>
         </div>
 
+        {principalId ? (
+          <div className="flex flex-col gap-1">
+            <CaptureProjectSelector
+              id={projectId}
+              value={effectiveProjectId}
+              /* Editing is permitted only while nothing is frozen: a pending or
+                 ambiguous create names the Project it was dispatched with. */
+              disabled={inert}
+              onChange={(next) => {
+                if (frozen) return;
+                setProjectTouched(true);
+                setDraftProjectId(next);
+              }}
+              principalId={principalId}
+              sessionEpoch={sessionEpoch}
+            />
+            {frozenProjectDisplaced ? (
+              <p data-testid="task-create-frozen-project" className="text-xs text-muted">
+                {TASK_CREATE_FROZEN_PROJECT_NOTE}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+
         <div className="flex flex-col gap-1">
           <label htmlFor={dueId} className="text-sm font-medium text-text-primary">
             {TASK_DUE_FIELD_LABEL}
@@ -533,7 +639,19 @@ export function TaskCreateSheet({
             {primaryLabel}
           </Button>
           {entry === "capture" && onBack ? (
-            <Button type="button" variant="secondary" className="min-h-11" onClick={onBack}>
+            <Button
+              type="button"
+              variant="secondary"
+              className="min-h-11"
+              data-testid="task-create-back"
+              onClick={() =>
+                onBack({
+                  // What this sheet holds: the frozen request's Project while an
+                  // intent is unresolved, the editable draft's otherwise.
+                  projectId: effectiveProjectId,
+                })
+              }
+            >
               Back
             </Button>
           ) : null}

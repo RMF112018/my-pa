@@ -112,6 +112,24 @@ def _applicable(paths: list[str]) -> bool:
         (["tests/policy/test_application_authorization.py"], True),
         (["tests/unit/test_gateway_composition.py"], True),
         ([".github/workflows/frontend-quality.yml"], True),
+        # WP08 backend consumer and proof paths, each on its own merit.
+        (["tests/capture/test_project_binding.py"], True),
+        (["tests/capture/test_conversation_project_lineage.py"], True),
+        # FINDING-04: this one selected on no keyword before WP08 — its filename
+        # contains neither `capture` as a path remainder keyword nor `project`.
+        (["tests/capture/test_conversation_log.py"], True),
+        (["tests/unit/test_task_project_assignment.py"], True),
+        (["tests/schema/test_project_controls_run01_integrity_migration.py"], True),
+        (["tests/unit/test_frontend_ci_classify.py"], True),
+        (["src/my_pa/infrastructure/jobs/capture_pipeline.py"], True),
+        (["web/src/lib/capture/contract.ts"], True),
+        (["web/src/lib/offline/capture-intent-codec.ts"], True),
+        (["web/e2e/capture-project.spec.ts"], True),
+        # And the negatives the narrow addition must not have widened.
+        (["tests/capture/test_display_label.py"], False),
+        (["tests/capture/test_idempotency.py"], False),
+        (["tests/unit/test_review_policy.py"], False),
+        (["tests/capture/test_conversation_log.py.old"], False),
         (["docs/plans/frontend-acceptance-ledger.md"], False),
         (["README.md"], False),
         (["src/my_pa/application/managed_documents.py"], False),
@@ -231,6 +249,60 @@ class TestWp07DiagnosticsSpecIsCollected:
 
     def test_the_spec_file_exists(self) -> None:
         assert (REPO / "web/e2e/diagnostics-visibility.spec.ts").is_file()
+
+
+class TestWp08CaptureProjectSpecsAreCollected:
+    """WP08 — four new specs, each named by a lane the gate actually blocks on.
+
+    Playwright's default projects match ``**/*.spec.ts``, so a new spec runs for
+    anyone who types `npm run e2e` and gates nothing. Every blocking lane names
+    its specs explicitly, so a spec no lane names is free to regress or be
+    deleted without a required check noticing. Mirrors the WP07 and
+    mobile-foundation guards above.
+    """
+
+    SPECS: ClassVar[dict[str, str]] = {
+        "e2e/capture-project.spec.ts": "e2e-critical",
+        "e2e/capture-task-project.spec.ts": "e2e-critical",
+        "e2e/capture-offline-project.spec.ts": "pwa-offline",
+        "e2e/capture-project-accessibility.spec.ts": "accessibility",
+    }
+
+    @pytest.mark.parametrize("spec", sorted(SPECS))
+    def test_the_spec_file_exists(self, spec: str) -> None:
+        assert (REPO / "web" / spec).is_file()
+
+    @pytest.mark.parametrize("spec", sorted(SPECS))
+    def test_a_required_lane_names_it(self, spec: str) -> None:
+        naming = _jobs_naming(spec)
+        assert naming, f"no job in the workflow names {spec}"
+        blocking = naming & set(_required_needs())
+        assert blocking, (
+            f"{spec} is named only by {sorted(naming)}, none of which frontend / required waits on"
+        )
+
+    @pytest.mark.parametrize(("spec", "job"), sorted(SPECS.items()))
+    def test_the_expected_lane_executes_it(self, spec: str, job: str) -> None:
+        """Naming it in a sentinel argument alone would prove nothing."""
+        block = _without_comments(_job_block(job))
+        run_steps = [line for line in block.splitlines() if "npm run e2e --" in line]
+        assert run_steps, f"job {job} has no e2e run step"
+        assert any(spec in line for line in run_steps), (
+            f"{job} does not execute {spec}; it is named only in a non-run step"
+        )
+
+    def test_the_capture_route_security_test_is_named_by_the_security_lane(self) -> None:
+        block = _without_comments(_job_block("security"))
+        assert "src/app/api/capture/project-route.test.ts" in block, (
+            "the Capture Project route security test is not named by frontend / security"
+        )
+        assert (REPO / "web/src/app/api/capture/project-route.test.ts").is_file()
+
+    def test_the_offline_spec_is_in_the_required_pwa_lane(self) -> None:
+        """The offline queue's evidence must sit in a lane the gate blocks on."""
+        assert "pwa-offline" in set(_required_needs())
+        block = _without_comments(_job_block("pwa-offline"))
+        assert "e2e/capture-offline-project.spec.ts" in block
 
 
 def _required_needs() -> list[str]:
@@ -416,6 +488,10 @@ class TestTheMobileWebkitLaneStaysCurated:
     CURATED: ClassVar[list[str]] = [
         "**/mobile-foundation.spec.ts",
         "**/diagnostics-visibility.spec.ts",
+        # WP08: the Capture Project control is a native `<select>`, whose
+        # intrinsics WebKit resolves differently from Chromium. Admitted by name
+        # and measured, which is how this list is meant to grow.
+        "**/capture-project-accessibility.spec.ts",
     ]
 
     def _test_match(self) -> str:

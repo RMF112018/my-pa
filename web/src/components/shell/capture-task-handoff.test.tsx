@@ -18,6 +18,7 @@
  * Everything here is synthetic.
  */
 import { useEffect } from "react";
+import { taskCreateResponse } from "@/lib/task/testing/task-mutation-fixture";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -41,6 +42,14 @@ const offline = vi.hoisted(() => ({
     counts: { pending: 0, stalled: 0, quarantined: 0, needsReauth: 0 },
   })),
   heldCaptures: vi.fn(async () => []),
+  // Counts without a replay: the indicator's refresh path.
+  heldCaptureCounts: vi.fn(async () => ({
+    pending: 0,
+    stalled: 0,
+    quarantined: 0,
+    needsReauth: 0,
+    heldBytes: 0,
+  })),
   releaseHeldCapture: vi.fn(),
   deleteHeldCapture: vi.fn(),
 }));
@@ -215,7 +224,7 @@ describe("a Capture-launched create reconciles active Task queries", () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const path = String(input);
       if (path === "/api/tasks" && String(init?.method).toUpperCase() === "POST") {
-        return Response.json({ task: created });
+        return Response.json(taskCreateResponse({ taskId: created.task_id, title: created.title }));
       }
       return new Response("{}", { status: 200 });
     });

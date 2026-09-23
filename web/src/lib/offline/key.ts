@@ -62,7 +62,9 @@
  * something wrote a key this module would not have written.
  */
 import {
+  EVENT_STORE,
   KEY_STORE,
+  PAYLOAD_STORE,
   openOfflineDatabase,
   request,
   transactionDone,
@@ -73,6 +75,9 @@ export const IV_BYTES = 12;
 
 /** The one algorithm this module generates, and the one it will use. */
 export const CONTENT_KEY_ALGORITHM = { name: "AES-GCM", length: 256 } as const;
+
+/** The explicit authentication tag length, in bits. */
+export const AUTH_TAG_BITS = 128;
 
 /**
  * Raised when a usable, non-extractable content key cannot be established.
@@ -92,6 +97,28 @@ export class OfflineKeyUnavailableError extends Error {
   }
 }
 
+/**
+ * The content-free key failure the queue protocol reports.
+ *
+ * `OfflineKeyUnavailableError` carries an operator-facing explanation and is the
+ * right thing to raise where a human is reading the message. This one is the
+ * fixed protocol code the queue and replay paths classify on, so a UI never has
+ * to parse prose and a journal never records one.
+ *
+ * It **extends** that error rather than standing beside it, because an unusable
+ * stored key is a case of "no usable key is available" and every caller that
+ * already refuses on the general error must keep refusing on this one. A sibling
+ * class would be a second failure that existing fail-closed checks miss.
+ */
+export class CaptureKeyUnavailableError extends OfflineKeyUnavailableError {
+  readonly reason = "key_unavailable" as const;
+
+  constructor() {
+    super("the stored key is not one this module would have written");
+    this.name = "CaptureKeyUnavailableError";
+  }
+}
+
 interface StoredKeyRecord {
   readonly principalId: string;
   readonly key: CryptoKey;
@@ -99,25 +126,119 @@ interface StoredKeyRecord {
 }
 
 /**
- * The content key for `principalId`, generated on first use.
+ * Whether a value read back out of IndexedDB is the key this module writes.
  *
- * Both the read and the generate-and-store path check `extractable`, because the
- * two failures are different: a stored extractable key means something else
- * wrote it, and a generated extractable key would mean this environment ignored
- * the argument. Neither is used.
+ * Checked on every load rather than only on write, because a stored key that
+ * does not match is evidence that something else wrote it, and a key this module
+ * would not have created is not one it will use.
  */
-export async function principalContentKey(
+function usableContentKey(value: unknown): value is CryptoKey {
+  if (typeof value !== "object" || value === null) return false;
+  const key = value as CryptoKey;
+  if (key.type !== "secret") return false;
+  if (key.extractable) return false;
+  const algorithm = key.algorithm as AesKeyAlgorithm | undefined;
+  if (!algorithm || algorithm.name !== "AES-GCM" || algorithm.length !== 256) return false;
+  const usages = key.usages;
+  if (!Array.isArray(usages)) return false;
+  return usages.includes("encrypt") && usages.includes("decrypt");
+}
+
+/** Read one stored key record. No validation, no generation. */
+async function readKeyRecord(
+  db: IDBDatabase,
+  principalId: string,
+): Promise<StoredKeyRecord | undefined> {
+  const tx = db.transaction(KEY_STORE, "readonly");
+  const record = (await request(tx.objectStore(KEY_STORE).get(principalId))) as
+    | StoredKeyRecord
+    | undefined;
+  await transactionDone(tx).catch(() => undefined);
+  return record;
+}
+
+/**
+ * The stored content key for `principalId`, or `null` when there is none.
+ *
+ * **Read-only. This path never generates.** Status reads, held-note counts and
+ * replay all come through here, and every one of them is a situation where
+ * minting a key would be wrong: a fresh key cannot decrypt retained ciphertext,
+ * so generating one on a read would replace the only thing that could ever open
+ * the notes already held.
+ *
+ * A stored value that is not a usable non-extractable AES-GCM 256 key is
+ * `CaptureKeyUnavailableError`, not a repair and not a silent `null`: absent and
+ * corrupt are different states, and only one of them may be followed by
+ * creating a first key.
+ */
+export async function loadPrincipalKey(
+  db: IDBDatabase,
+  principalId: string,
+): Promise<CryptoKey | null> {
+  const record = await readKeyRecord(db, principalId);
+  if (!record) return null;
+  if (!usableContentKey(record.key)) throw new CaptureKeyUnavailableError();
+  return record.key;
+}
+
+/**
+ * Whether any retained ciphertext exists for this Principal.
+ *
+ * Deliberately computed here from the two stores rather than through the queue's
+ * fold: `queue.ts` imports this module, and the question is narrow enough that
+ * it does not need state semantics. A payload record that still exists and whose
+ * `enqueued` event names this Principal is retained ciphertext, whatever state
+ * the fold would assign it.
+ */
+async function retainsCiphertext(db: IDBDatabase, principalId: string): Promise<boolean> {
+  const tx = db.transaction([EVENT_STORE, PAYLOAD_STORE], "readonly");
+  const events = (await request(tx.objectStore(EVENT_STORE).getAll())) as readonly {
+    entryId?: unknown;
+    type?: unknown;
+    principalId?: unknown;
+  }[];
+  const payloadIds = (await request(
+    tx.objectStore(PAYLOAD_STORE).getAllKeys(),
+  )) as readonly IDBValidKey[];
+  await transactionDone(tx).catch(() => undefined);
+  const held = new Set(payloadIds.map((id) => String(id)));
+  return events.some(
+    (event) =>
+      event.type === "enqueued" &&
+      event.principalId === principalId &&
+      typeof event.entryId === "string" &&
+      held.has(event.entryId),
+  );
+}
+
+/**
+ * The content key for `principalId`, creating a first one only when that is safe.
+ *
+ * "Safe" is a narrow condition and it is checked rather than assumed: there must
+ * be no retained ciphertext for this Principal. If bytes are held and their key
+ * is gone — an evicted key store, a partially cleared profile — those bytes are
+ * permanently unreadable, and writing a new key over that state would convert a
+ * recoverable-looking problem into a silent one while making the old notes no
+ * more readable than before. The queue fails closed and keeps them.
+ *
+ * The candidate is generated **outside** any transaction and committed with
+ * `add`, never `put`. Two tabs racing to initialize therefore both see one
+ * winner: the loser's `add` fails on the existing record and it adopts the
+ * stored key. A `put` would let the second tab overwrite the first tab's key
+ * after the first had already sealed a payload under it.
+ */
+export async function getOrCreatePrincipalKey(
   db: IDBDatabase,
   principalId: string,
 ): Promise<CryptoKey> {
-  const existing = await readKey(db, principalId);
-  if (existing) {
-    if (existing.extractable) {
-      throw new OfflineKeyUnavailableError(
-        "the stored key for this principal is extractable, which this module never writes",
-      );
-    }
-    return existing;
+  const existing = await loadPrincipalKey(db, principalId);
+  if (existing) return existing;
+
+  if (await retainsCiphertext(db, principalId)) {
+    throw new OfflineKeyUnavailableError(
+      "this device still holds encrypted notes for this principal and their key is gone. " +
+        "A new key cannot decrypt them, so none is written: the bytes are kept as they are",
+    );
   }
 
   let generated: CryptoKey;
@@ -137,10 +258,15 @@ export async function principalContentKey(
     );
   }
 
-  const record: StoredKeyRecord = { principalId, key: generated, createdAt: Date.now() };
   try {
     const tx = db.transaction(KEY_STORE, "readwrite");
-    tx.objectStore(KEY_STORE).put(record);
+    const store = tx.objectStore(KEY_STORE);
+    // Re-read inside the same short transaction. Between the load above and here
+    // another tab may have committed its own candidate, and the stored one wins.
+    const current = (await request(store.get(principalId))) as StoredKeyRecord | undefined;
+    if (!current) {
+      store.add({ principalId, key: generated, createdAt: Date.now() } satisfies StoredKeyRecord);
+    }
     await transactionDone(tx);
   } catch (error) {
     // A `CryptoKey` that will not survive a structured clone into IndexedDB is
@@ -153,44 +279,60 @@ export async function principalContentKey(
     );
   }
 
-  const readBack = await readKey(db, principalId);
-  if (!readBack) {
-    throw new OfflineKeyUnavailableError("the stored key did not read back");
+  const readBack = await readKeyRecord(db, principalId);
+  if (!readBack) throw new OfflineKeyUnavailableError("the stored key did not read back");
+  if (!usableContentKey(readBack.key)) {
+    throw new OfflineKeyUnavailableError(
+      "the key read back as something this module would not have written",
+    );
   }
-  if (readBack.extractable) {
-    throw new OfflineKeyUnavailableError("the key read back as extractable");
-  }
-  return readBack;
+  return readBack.key;
 }
 
-async function readKey(db: IDBDatabase, principalId: string): Promise<CryptoKey | null> {
-  const tx = db.transaction(KEY_STORE, "readonly");
-  const record = (await request(tx.objectStore(KEY_STORE).get(principalId))) as
-    | StoredKeyRecord
-    | undefined;
-  await transactionDone(tx).catch(() => undefined);
-  if (!record) return null;
-  const key = record.key;
-  if (!key || typeof key !== "object" || !("algorithm" in key)) {
-    throw new OfflineKeyUnavailableError("the stored key record does not hold a CryptoKey");
-  }
-  return key;
+/**
+ * The content key for `principalId`, generated on first use.
+ *
+ * Retained for the callers that legitimately want get-or-create semantics. It is
+ * exactly `getOrCreatePrincipalKey`; the distinction that matters now is which
+ * callers may reach it at all, and read paths may not.
+ */
+export async function principalContentKey(
+  db: IDBDatabase,
+  principalId: string,
+): Promise<CryptoKey> {
+  return getOrCreatePrincipalKey(db, principalId);
 }
 
-/** One encrypted record: a fresh IV and the AES-GCM ciphertext of the UTF-8 text. */
+/** One encrypted record: a fresh IV and the AES-GCM ciphertext. */
 export interface SealedPayload {
   readonly iv: Uint8Array;
   readonly ciphertext: ArrayBuffer;
 }
 
-/** Encrypt `text` under `key` with a fresh 96-bit IV. */
-export async function seal(key: CryptoKey, text: string): Promise<SealedPayload> {
+/**
+ * Encrypt `plaintext` under `key` with a fresh 96-bit IV and an explicit tag.
+ *
+ * `additionalData` is authenticated but not encrypted. A v2 caller passes the
+ * codec's envelope bytes here, which is what binds one payload to one journal
+ * row; legacy text calls pass nothing, because the rows they wrote had no such
+ * binding and pretending otherwise would not make it true retroactively.
+ */
+export async function sealBytes(
+  key: CryptoKey,
+  plaintext: Uint8Array,
+  additionalData?: Uint8Array,
+): Promise<SealedPayload> {
   const iv = new Uint8Array(IV_BYTES);
   crypto.getRandomValues(iv);
   const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv: iv as BufferSource },
+    {
+      name: "AES-GCM",
+      iv: iv as BufferSource,
+      tagLength: AUTH_TAG_BITS,
+      ...(additionalData ? { additionalData: additionalData as BufferSource } : {}),
+    },
     key,
-    new TextEncoder().encode(text) as BufferSource,
+    plaintext as BufferSource,
   );
   return { iv, ciphertext };
 }
@@ -198,17 +340,47 @@ export async function seal(key: CryptoKey, text: string): Promise<SealedPayload>
 /**
  * Decrypt a sealed payload under `key`.
  *
- * AES-GCM authenticates, so a payload sealed under a different principal's key —
- * or one whose bytes were altered at rest — fails here rather than yielding
- * something plausible.
+ * AES-GCM authenticates, so a payload sealed under a different principal's key,
+ * one whose bytes were altered at rest, or one whose additional data does not
+ * match what it was sealed with, fails here rather than yielding something
+ * plausible. There is no retry with different additional data: a caller that
+ * tried v2 bytes and then tried again without them would be using decryption
+ * failure as a version probe, and would eventually accept a downgrade.
  */
-export async function unseal(key: CryptoKey, payload: SealedPayload): Promise<string> {
+export async function unsealBytes(
+  key: CryptoKey,
+  payload: SealedPayload,
+  additionalData?: Uint8Array,
+): Promise<Uint8Array> {
   const plaintext = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: payload.iv as BufferSource },
+    {
+      name: "AES-GCM",
+      iv: payload.iv as BufferSource,
+      tagLength: AUTH_TAG_BITS,
+      ...(additionalData ? { additionalData: additionalData as BufferSource } : {}),
+    },
     key,
     payload.ciphertext,
   );
-  return new TextDecoder().decode(plaintext);
+  return new Uint8Array(plaintext);
+}
+
+/** Encrypt `text` under `key`. The historical text contract, over the byte primitives. */
+export async function seal(
+  key: CryptoKey,
+  text: string,
+  additionalData?: Uint8Array,
+): Promise<SealedPayload> {
+  return sealBytes(key, new TextEncoder().encode(text), additionalData);
+}
+
+/** Decrypt a sealed payload as text. The historical text contract, non-fatal decode. */
+export async function unseal(
+  key: CryptoKey,
+  payload: SealedPayload,
+  additionalData?: Uint8Array,
+): Promise<string> {
+  return new TextDecoder().decode(await unsealBytes(key, payload, additionalData));
 }
 
 /** Open the database and resolve the content key in one step. */
@@ -216,5 +388,5 @@ export async function openWithContentKey(
   principalId: string,
 ): Promise<{ db: IDBDatabase; key: CryptoKey }> {
   const db = await openOfflineDatabase();
-  return { db, key: await principalContentKey(db, principalId) };
+  return { db, key: await getOrCreatePrincipalKey(db, principalId) };
 }

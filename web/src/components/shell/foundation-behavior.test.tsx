@@ -10,11 +10,20 @@ const offline = vi.hoisted(() => ({
     counts: { pending: 0, stalled: 0, quarantined: 0, needsReauth: 0 },
   })),
   held: vi.fn(async () => []),
+  // Counts without a replay: the indicator's refresh path.
+  counts: vi.fn(async () => ({
+    pending: 0,
+    stalled: 0,
+    quarantined: 0,
+    needsReauth: 0,
+    heldBytes: 0,
+  })),
 }));
 
 vi.mock("@/lib/offline/capture-queue", () => ({
   drainCaptureQueue: offline.drain,
   heldCaptures: offline.held,
+  heldCaptureCounts: offline.counts,
   releaseHeldCapture: vi.fn(),
   deleteHeldCapture: vi.fn(),
 }));

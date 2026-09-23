@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+import { taskCreateResponse } from "@/lib/task/testing/task-mutation-fixture";
 import { TaskCreateSheet } from "@/components/tasks/task-create-sheet";
 import {
   TaskRuntimeProvider,
@@ -18,13 +19,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const CREATED = {
-  task: {
-    task_id: "tsk_bbbbbbbb22222222",
-    title: "Coordinate the review",
-    lifecycle_state: "open",
-  },
-};
+// The create surface verifies the whole canonical mutation before it announces
+// anything, so the stub has to be one.
+const CREATED = taskCreateResponse();
 
 /** Every create POST answers immediately; nothing else is expected to be called. */
 function immediateFetch() {
@@ -307,7 +304,17 @@ describe("TaskCreateSheet", () => {
 
     const region = await screen.findByTestId("mutation-feedback-region");
     expect(region.textContent).toContain("Task created: Coordinate the review");
-    await waitFor(() => expect(onConfirmed).toHaveBeenCalledWith(CREATED));
+    // The confirmed result is now the *verified* canonical mutation, not the raw
+    // body: the surface only announces what it could check.
+    await waitFor(() =>
+      expect(onConfirmed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          task: expect.objectContaining({ task_id: CREATED.task.task_id, project_id: null }),
+          history: expect.objectContaining({ action: "create", outcome: "applied" }),
+          replayed: false,
+        }),
+      ),
+    );
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 

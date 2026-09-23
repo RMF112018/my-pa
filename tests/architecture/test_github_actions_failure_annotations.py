@@ -60,21 +60,6 @@ def _synthetic_ledger(tmp_path: Path) -> tuple[Path, Path]:
     return runner_temp, ledger
 
 
-def test_failure_ledger_env_does_not_enter_application_settings_namespace() -> None:
-    """The CI-only ledger must not become an unknown product setting."""
-    ledger_name = "CI_PYTEST_FAILURE_LEDGER"
-    for step in ("Test Python FAST tier", "Test Python FAST tier at the declared floor"):
-        assert f'export {ledger_name}="$ledger"' in _fast_run_script(step)
-    assert f'os.environ.get("{ledger_name}", "")' in HOOK_PATH.read_text(encoding="utf-8")
-
-    load_settings(
-        {
-            "MY_PA_DATABASE_URL": "postgresql+psycopg://localhost/my_pa",
-            ledger_name: "synthetic-ledger-path",
-        }
-    )
-
-
 @pytest.fixture(autouse=True)
 def _clear_synthetic_annotation_queue_between_tests(
     monkeypatch: pytest.MonkeyPatch,
@@ -215,8 +200,17 @@ def test_session_failure_without_reports_emits_numeric_status_only(
         'python -m pytest -m "not slow and not database and not network and not connector '
         'and not evaluation and not e2e and not recovery"'
     )
+    ledger_name = "CI_PYTEST_FAILURE_LEDGER"
+    assert f'os.environ.get("{ledger_name}", "")' in HOOK_PATH.read_text(encoding="utf-8")
+    load_settings(
+        {
+            "MY_PA_DATABASE_URL": "postgresql+psycopg://localhost/my_pa",
+            ledger_name: "synthetic-ledger-path",
+        }
+    )
     for name in ("Test Python FAST tier", "Test Python FAST tier at the declared floor"):
         script = _fast_run_script(name)
+        assert f'export {ledger_name}="$ledger"' in script
         assert script.count(marker) == 1
         environment = {
             "PATH": os.pathsep.join((str(tmp_path), "/usr/bin", "/bin")),

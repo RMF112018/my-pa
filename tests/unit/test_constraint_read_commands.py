@@ -755,7 +755,7 @@ def test_the_project_bound_never_states_a_count_of_projects(
     owned = _OwnedProjects(_synthetic_projects(MAX_PORTFOLIO_PROJECTS + 7))
     envelope = _run(_portfolio_service(scene, owned), scene, _portfolio_command(capability))
     assert envelope.result is not None
-    rendered = json.dumps(envelope.model_dump(mode="json"))
+    rendered = json.dumps(envelope.model_dump(mode="json", exclude={"correlation_id"}))
     assert str(MAX_PORTFOLIO_PROJECTS + 7) not in rendered
     for project_id in owned.project_ids:
         assert project_id not in rendered

@@ -878,7 +878,7 @@ def _gate_identity(
             and data["ReadonlyRootfs"] is True
             and data["Tmpfs"] == {"/tmp": "rw,nosuid,nodev,noexec,size=16m"}  # noqa: S108
             and data["CapDrop"] == ["ALL"]
-            and data["SecurityOpt"] == ["no-new-privileges"]
+            and data["SecurityOpt"] == ["no-new-privileges:true"]
             and data["Privileged"] is False
             and data["AutoRemove"] is False
             and data["Restart"] == "no"

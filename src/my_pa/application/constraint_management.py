@@ -1413,7 +1413,18 @@ class ConstraintManagementService:
                 "constraint_category_reorder_repeats_a_category",
                 "a reorder names each category exactly once",
             )
-        digest = _digest(project_id=project_id, ordered_category_ids=list(wanted))
+        # The expected versions are part of the request's identity, as every
+        # other authoring digest's `expected_version` is: without them, a
+        # same-key retry carrying different optimistic-concurrency inputs would
+        # replay a reorder it did not ask for. They are listed in the order of
+        # `wanted`, not the mapping's, so the caller's insertion order alone
+        # cannot change the digest. `.get` keeps a missing entry a version
+        # conflict below rather than an error here.
+        digest = _digest(
+            project_id=project_id,
+            ordered_category_ids=list(wanted),
+            expected_versions=[expected_versions.get(category_id) for category_id in wanted],
+        )
         if idempotency_key is not None:
             _validate_idempotency_key(idempotency_key)
 

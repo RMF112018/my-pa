@@ -22,6 +22,7 @@ from sqlalchemy import Engine, func, insert, select
 from sqlalchemy.sql import ColumnElement, FromClause
 
 from my_pa.application.constraint_management import (
+    ConstraintCategoryVersionConflictError,
     ConstraintIdempotencyConflictError,
     ConstraintManagementService,
     ConstraintMutationDisposition,
@@ -950,6 +951,68 @@ def test_a_reorder_writes_one_atomic_new_order(staged: Engine) -> None:
         }
     assert [stored[category_id][0] for category_id in order] == [0, 1, 2]
     assert all(version == 2 for _, version in stored.values())
+
+
+def _stored_categories(engine: Engine) -> dict[str, tuple[int, int]]:
+    """Each Category's stored `(display_order, version)`."""
+    with engine.begin() as connection:
+        return {
+            row._mapping["category_id"]: (row._mapping["display_order"], row._mapping["version"])
+            for row in connection.execute(select(constraint_categories)).all()
+        }
+
+
+def test_a_reorder_key_replays_only_the_expected_versions_it_was_issued_with(
+    staged: Engine,
+) -> None:
+    """PC-CM-WP07-CARRIED-REORDER-DIGEST: expected versions are request identity.
+
+    The same key with the same order and versions replays; the same key with
+    one expected version changed is refused as an idempotency conflict against
+    the stored receipt's digest, and no display order, version or receipt moves.
+    """
+    ids = sorted(_category(staged, prefix=prefix) for prefix in ("DES", "PRO", "PER"))
+    order = list(reversed(ids))
+
+    def reorder(versions: dict[str, int]) -> ConstraintMutationDisposition:
+        return (
+            _service(staged)
+            .reorder_categories(
+                principal_id=PRINCIPAL_A,
+                project_id=PROJECT_A,
+                ordered_category_ids=order,
+                expected_versions=versions,
+                actor=ConstraintMutationActor.PRINCIPAL,
+                idempotency_key="wp09-db-reorder-key-0001",
+            )
+            .disposition
+        )
+
+    assert reorder(dict.fromkeys(ids, 1)) is ConstraintMutationDisposition.APPLIED
+    applied = _stored_categories(staged)
+    receipts = _count(staged, constraint_category_history)
+    assert reorder(dict.fromkeys(ids, 1)) is ConstraintMutationDisposition.REPLAYED
+    with pytest.raises(ConstraintIdempotencyConflictError):
+        reorder({**dict.fromkeys(ids, 1), ids[1]: 2})
+    assert _stored_categories(staged) == applied
+    assert _count(staged, constraint_category_history) == receipts
+
+
+def test_a_stale_member_version_refuses_the_whole_reorder_in_the_database(
+    staged: Engine,
+) -> None:
+    """CM-BE-AC-022: a conflict on one member leaves every stored order as it was."""
+    ids = sorted(_category(staged, prefix=prefix) for prefix in ("DES", "PRO", "PER"))
+    before = _stored_categories(staged)
+    with pytest.raises(ConstraintCategoryVersionConflictError):
+        _service(staged).reorder_categories(
+            principal_id=PRINCIPAL_A,
+            project_id=PROJECT_A,
+            ordered_category_ids=list(reversed(ids)),
+            expected_versions={**dict.fromkeys(ids, 1), ids[2]: 99},
+            actor=ConstraintMutationActor.PRINCIPAL,
+        )
+    assert _stored_categories(staged) == before
 
 
 def test_a_prefix_is_immutable_once_a_code_has_been_issued_under_it(staged: Engine) -> None:

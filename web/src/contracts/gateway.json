@@ -555,6 +555,260 @@
         "timezone_name": "America/New_York",
         "idempotency_key": "idk_aaaaaaaa11111111"
       }
+    },
+    "constraints.create": {
+      "purpose": "constraint_authoring",
+      "payloadFields": [
+        "project_id",
+        "category_id",
+        "description",
+        "date_identified",
+        "due_date",
+        "reference",
+        "current_update",
+        "bic",
+        "responsible",
+        "idempotency_key",
+        "client_context",
+        "correlation_id"
+      ],
+      "probe": {
+        "project_id": "prj_aaaaaaaa11111111",
+        "idempotency_key": "idk_aaaaaaaa11111111"
+      }
+    },
+    "constraints.create_published": {
+      "purpose": "constraint_authoring",
+      "payloadFields": [
+        "project_id",
+        "category_id",
+        "description",
+        "date_identified",
+        "due_date",
+        "reference",
+        "current_update",
+        "bic",
+        "responsible",
+        "to_state",
+        "idempotency_key",
+        "client_context",
+        "correlation_id"
+      ],
+      "probe": {
+        "project_id": "prj_aaaaaaaa11111111",
+        "idempotency_key": "idk_aaaaaaaa11111111"
+      }
+    },
+    "constraints.update": {
+      "purpose": "constraint_authoring",
+      "payloadFields": [
+        "constraint_id",
+        "expected_version",
+        "description",
+        "date_identified",
+        "due_date",
+        "reference",
+        "current_update",
+        "bic",
+        "responsible",
+        "project_id",
+        "category_id",
+        "clear_fields",
+        "idempotency_key",
+        "client_context",
+        "correlation_id"
+      ],
+      "probe": {
+        "constraint_id": "cst_aaaaaaaa11111111",
+        "expected_version": 1,
+        "idempotency_key": "idk_aaaaaaaa11111111"
+      }
+    },
+    "constraints.publish": {
+      "purpose": "constraint_authoring",
+      "payloadFields": [
+        "constraint_id",
+        "expected_version",
+        "to_state",
+        "category_id",
+        "date_identified",
+        "due_date",
+        "bic",
+        "responsible",
+        "idempotency_key",
+        "client_context",
+        "correlation_id"
+      ],
+      "probe": {
+        "constraint_id": "cst_aaaaaaaa11111111",
+        "expected_version": 1,
+        "idempotency_key": "idk_aaaaaaaa11111111"
+      }
+    },
+    "constraints.transition": {
+      "purpose": "constraint_authoring",
+      "payloadFields": [
+        "constraint_id",
+        "to_state",
+        "expected_version",
+        "idempotency_key",
+        "client_context",
+        "correlation_id"
+      ],
+      "probe": {
+        "constraint_id": "cst_aaaaaaaa11111111",
+        "to_state": "in_progress",
+        "expected_version": 1,
+        "idempotency_key": "idk_aaaaaaaa11111111"
+      }
+    },
+    "constraints.close": {
+      "purpose": "constraint_authoring",
+      "payloadFields": [
+        "constraint_id",
+        "expected_version",
+        "completion_date",
+        "closure_commentary",
+        "idempotency_key",
+        "client_context",
+        "correlation_id"
+      ],
+      "probe": {
+        "constraint_id": "cst_aaaaaaaa11111111",
+        "expected_version": 1,
+        "idempotency_key": "idk_aaaaaaaa11111111"
+      }
+    },
+    "constraints.close_follow_up": {
+      "purpose": "constraint_authoring",
+      "payloadFields": [
+        "constraint_id",
+        "expected_version",
+        "successor_description",
+        "completion_date",
+        "closure_commentary",
+        "successor_category_id",
+        "successor_due_date",
+        "successor_state",
+        "successor_bic",
+        "successor_responsible",
+        "idempotency_key",
+        "client_context",
+        "correlation_id"
+      ],
+      "probe": {
+        "constraint_id": "cst_aaaaaaaa11111111",
+        "expected_version": 1,
+        "successor_description": "Synthetic follow-up constraint",
+        "idempotency_key": "idk_aaaaaaaa11111111"
+      }
+    },
+    "constraints.void": {
+      "purpose": "constraint_authoring",
+      "payloadFields": [
+        "constraint_id",
+        "expected_version",
+        "void_reason",
+        "voided_date",
+        "idempotency_key",
+        "client_context",
+        "correlation_id"
+      ],
+      "probe": {
+        "constraint_id": "cst_aaaaaaaa11111111",
+        "expected_version": 1,
+        "void_reason": "Synthetic duplicate",
+        "idempotency_key": "idk_aaaaaaaa11111111"
+      }
+    },
+    "constraints.reopen": {
+      "purpose": "constraint_authoring",
+      "payloadFields": [
+        "constraint_id",
+        "to_state",
+        "expected_version",
+        "reason",
+        "idempotency_key",
+        "client_context",
+        "correlation_id"
+      ],
+      "probe": {
+        "constraint_id": "cst_aaaaaaaa11111111",
+        "to_state": "identified",
+        "expected_version": 1,
+        "idempotency_key": "idk_aaaaaaaa11111111"
+      }
+    },
+    "constraint_categories.create": {
+      "purpose": "constraint_authoring",
+      "payloadFields": [
+        "project_id",
+        "code_segment",
+        "title",
+        "description",
+        "display_order",
+        "state",
+        "idempotency_key",
+        "client_context",
+        "correlation_id"
+      ],
+      "probe": {
+        "project_id": "prj_aaaaaaaa11111111",
+        "code_segment": "2",
+        "title": "Site access",
+        "idempotency_key": "idk_aaaaaaaa11111111"
+      }
+    },
+    "constraint_categories.update": {
+      "purpose": "constraint_authoring",
+      "payloadFields": [
+        "category_id",
+        "expected_version",
+        "code_segment",
+        "title",
+        "description",
+        "display_order",
+        "idempotency_key",
+        "client_context",
+        "correlation_id"
+      ],
+      "probe": {
+        "category_id": "ccat_aaaaaaaa11111111",
+        "expected_version": 1,
+        "idempotency_key": "idk_aaaaaaaa11111111"
+      }
+    },
+    "constraint_categories.deactivate": {
+      "purpose": "constraint_authoring",
+      "payloadFields": [
+        "category_id",
+        "expected_version",
+        "idempotency_key",
+        "client_context",
+        "correlation_id"
+      ],
+      "probe": {
+        "category_id": "ccat_aaaaaaaa11111111",
+        "expected_version": 1,
+        "idempotency_key": "idk_aaaaaaaa11111111"
+      }
+    },
+    "constraint_categories.reorder": {
+      "purpose": "constraint_authoring",
+      "payloadFields": [
+        "project_id",
+        "ordered_category_ids",
+        "expected_versions",
+        "idempotency_key",
+        "client_context",
+        "correlation_id"
+      ],
+      "probe": {
+        "project_id": "prj_aaaaaaaa11111111",
+        "ordered_category_ids": ["ccat_aaaaaaaa11111111"],
+        "expected_versions": [1],
+        "idempotency_key": "idk_aaaaaaaa11111111"
+      }
     }
   },
   "_dispositionComment": [

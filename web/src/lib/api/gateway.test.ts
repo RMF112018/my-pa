@@ -33,7 +33,7 @@ import {
   gatewayAuthMode,
   syntheticDataEnabled,
 } from "@/lib/api/gateway-config";
-import type { PrincipalSession } from "@/contracts/identity";
+import { FORBIDDEN_IDENTITY_FIELDS, type PrincipalSession } from "@/contracts/identity";
 import { resetSessionRegistry } from "@/lib/auth/session-registry";
 
 const PRINCIPAL: PrincipalSession = {
@@ -190,6 +190,51 @@ describe("the request document", () => {
         principal_id: "prn_ffffffffffffffffffffffffffffffff",
       }),
     ).rejects.toThrow(/caller-supplied identity field/);
+  });
+});
+
+/**
+ * R01-WP09: the thirteen Constraint authoring capabilities admitted to the
+ * shared contract. Named here, not derived from the file, so that removing one
+ * or giving it another purpose is a failing diff rather than a quieter contract.
+ */
+const CONSTRAINT_AUTHORING_CAPABILITIES = [
+  "constraints.create",
+  "constraints.create_published",
+  "constraints.update",
+  "constraints.publish",
+  "constraints.transition",
+  "constraints.close",
+  "constraints.close_follow_up",
+  "constraints.void",
+  "constraints.reopen",
+  "constraint_categories.create",
+  "constraint_categories.update",
+  "constraint_categories.deactivate",
+  "constraint_categories.reorder",
+] as const;
+
+describe("the Constraint authoring contract entries", () => {
+  const capabilities: Record<string, { purpose: string; payloadFields: readonly string[] }> =
+    contract.capabilities;
+
+  it("declares all thirteen, each under the constraint_authoring purpose", () => {
+    for (const name of CONSTRAINT_AUTHORING_CAPABILITIES) {
+      expect(capabilities[name], `${name} is not declared`).toBeDefined();
+      expect(capabilities[name]?.purpose, name).toBe("constraint_authoring");
+    }
+  });
+
+  it("names no caller identity in any payload field", () => {
+    // `client_context` and `correlation_id` are present, and they are the
+    // BFF's to supply server-side; the browser field maps never admit them.
+    // What must never appear is a field naming *who* is asking.
+    for (const name of CONSTRAINT_AUTHORING_CAPABILITIES) {
+      const fields = capabilities[name]?.payloadFields ?? [];
+      for (const forbidden of FORBIDDEN_IDENTITY_FIELDS) {
+        expect(fields, `${name} declares ${forbidden}`).not.toContain(forbidden);
+      }
+    }
   });
 });
 

@@ -211,9 +211,18 @@ describe("the browser is not handed transport, identity, or a foreign integratio
     [/\bexcel\b/i, "Excel"],
     [/workbook/i, "a workbook path"],
     [/openpyxl|xlsx/i, "a spreadsheet library"],
-  ])("no Constraint source mentions %s (%s)", (pattern) => {
+  ])("no Constraint source mentions %s (%s)", (pattern, label) => {
     for (const path of CONSTRAINT_SOURCES) {
-      expect(code(path), path).not.toMatch(pattern);
+      let source = code(path);
+      if (label === "a workbook path") {
+        // R01-WP09. `"legacy_workbook_import"` is a member of the closed
+        // `ConstraintOrigin` provenance vocabulary, which the authoring
+        // decoders must validate (artifact 17 §9). It names where a record
+        // came from, not a workbook path or integration, so exactly that quoted
+        // literal is removed before the sweep; any other mention still fails.
+        source = source.replaceAll('"legacy_workbook_import"', "");
+      }
+      expect(source, path).not.toMatch(pattern);
     }
   });
 

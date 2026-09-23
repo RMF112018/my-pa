@@ -2920,5 +2920,814 @@
       "settings_version": 2,
       "settings_updated_at": "2026-08-09T12:00:00+00:00"
     }
+  },
+  "constraints.create": {
+    "disposition": "applied",
+    "constraint": {
+      "constraint_id": "cst_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "lifecycle_state": "draft",
+      "origin": "product",
+      "created_at": "2026-08-01T09:00:00+00:00",
+      "updated_at": "2026-08-09T12:00:00+00:00",
+      "version": 1,
+      "project_id": "prj_aaaaaaaa11111111",
+      "category_id": "ccat_aaaaaaaa11111111",
+      "constraint_code": null,
+      "description": "Synthetic access constraint",
+      "date_identified": "2026-08-01",
+      "due_date": "2026-08-16",
+      "reference": null,
+      "current_update": null,
+      "bic": [
+        {
+          "kind": "principal",
+          "entity_id": null,
+          "label": null
+        },
+        {
+          "kind": "entity",
+          "entity_id": "ent_aaaaaaaa11111111",
+          "label": "Pat"
+        }
+      ],
+      "responsible": [
+        {
+          "kind": "unresolved",
+          "entity_id": null,
+          "label": "Steel subcontractor"
+        }
+      ],
+      "completion_date": null,
+      "closure_commentary": null,
+      "voided_date": null,
+      "void_reason": null,
+      "record_quality": "normal",
+      "published_at": null
+    },
+    "receipt": {
+      "history_id": "chst_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "constraint_id": "cst_aaaaaaaa11111111",
+      "operation": "create",
+      "actor": "principal",
+      "outcome": "applied",
+      "before_version": 0,
+      "after_version": 1,
+      "occurred_at": "2026-08-09T12:00:00+00:00",
+      "recorded_at": "2026-08-09T12:00:00+00:00",
+      "project_id": "prj_aaaaaaaa11111111",
+      "revision_id": "crev_aaaaaaaa11111111",
+      "idempotency_key": "parity-constraint-authoring-1",
+      "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "client_context": "web",
+      "correlation_id": "corr_aaaaaaaa11111111",
+      "safe_failure_reason": null
+    }
+  },
+  "constraints.create_published": {
+    "disposition": "applied",
+    "constraint": {
+      "constraint_id": "cst_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "lifecycle_state": "identified",
+      "origin": "product",
+      "created_at": "2026-08-01T09:00:00+00:00",
+      "updated_at": "2026-08-09T12:00:00+00:00",
+      "version": 2,
+      "project_id": "prj_aaaaaaaa11111111",
+      "category_id": "ccat_aaaaaaaa11111111",
+      "constraint_code": "2.01",
+      "description": "Synthetic access constraint",
+      "date_identified": "2026-08-01",
+      "due_date": "2026-08-16",
+      "reference": "RFI-014",
+      "current_update": "Awaiting gate keys",
+      "bic": [
+        {
+          "kind": "principal",
+          "entity_id": null,
+          "label": null
+        },
+        {
+          "kind": "entity",
+          "entity_id": "ent_aaaaaaaa11111111",
+          "label": "Pat"
+        }
+      ],
+      "responsible": [
+        {
+          "kind": "unresolved",
+          "entity_id": null,
+          "label": "Steel subcontractor"
+        }
+      ],
+      "completion_date": null,
+      "closure_commentary": null,
+      "voided_date": null,
+      "void_reason": null,
+      "record_quality": "normal",
+      "published_at": "2026-08-09T12:00:00+00:00"
+    },
+    "receipt": {
+      "history_id": "chst_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "constraint_id": "cst_aaaaaaaa11111111",
+      "operation": "publish",
+      "actor": "principal",
+      "outcome": "applied",
+      "before_version": 1,
+      "after_version": 2,
+      "occurred_at": "2026-08-09T12:00:00+00:00",
+      "recorded_at": "2026-08-09T12:00:00+00:00",
+      "project_id": "prj_aaaaaaaa11111111",
+      "revision_id": "crev_aaaaaaaa11111111",
+      "idempotency_key": "parity-constraint-authoring-1",
+      "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "client_context": "web",
+      "correlation_id": "corr_aaaaaaaa11111111",
+      "safe_failure_reason": null
+    }
+  },
+  "constraints.update": {
+    "disposition": "applied",
+    "constraint": {
+      "constraint_id": "cst_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "lifecycle_state": "identified",
+      "origin": "product",
+      "created_at": "2026-08-01T09:00:00+00:00",
+      "updated_at": "2026-08-09T12:00:00+00:00",
+      "version": 3,
+      "project_id": "prj_aaaaaaaa11111111",
+      "category_id": "ccat_aaaaaaaa11111111",
+      "constraint_code": "2.01",
+      "description": "Synthetic access constraint",
+      "date_identified": "2026-08-01",
+      "due_date": "2026-08-16",
+      "reference": "RFI-014",
+      "current_update": "Gate keys issued",
+      "bic": [
+        {
+          "kind": "principal",
+          "entity_id": null,
+          "label": null
+        },
+        {
+          "kind": "entity",
+          "entity_id": "ent_aaaaaaaa11111111",
+          "label": "Pat"
+        }
+      ],
+      "responsible": [
+        {
+          "kind": "unresolved",
+          "entity_id": null,
+          "label": "Steel subcontractor"
+        }
+      ],
+      "completion_date": null,
+      "closure_commentary": null,
+      "voided_date": null,
+      "void_reason": null,
+      "record_quality": "normal",
+      "published_at": "2026-08-09T12:00:00+00:00"
+    },
+    "receipt": {
+      "history_id": "chst_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "constraint_id": "cst_aaaaaaaa11111111",
+      "operation": "update",
+      "actor": "principal",
+      "outcome": "applied",
+      "before_version": 2,
+      "after_version": 3,
+      "occurred_at": "2026-08-09T12:00:00+00:00",
+      "recorded_at": "2026-08-09T12:00:00+00:00",
+      "project_id": "prj_aaaaaaaa11111111",
+      "revision_id": "crev_aaaaaaaa11111111",
+      "idempotency_key": "parity-constraint-authoring-1",
+      "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "client_context": "web",
+      "correlation_id": "corr_aaaaaaaa11111111",
+      "safe_failure_reason": null
+    }
+  },
+  "constraints.publish": {
+    "disposition": "applied",
+    "constraint": {
+      "constraint_id": "cst_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "lifecycle_state": "identified",
+      "origin": "product",
+      "created_at": "2026-08-01T09:00:00+00:00",
+      "updated_at": "2026-08-09T12:00:00+00:00",
+      "version": 2,
+      "project_id": "prj_aaaaaaaa11111111",
+      "category_id": "ccat_aaaaaaaa11111111",
+      "constraint_code": "2.01",
+      "description": "Synthetic access constraint",
+      "date_identified": "2026-08-01",
+      "due_date": "2026-08-16",
+      "reference": "RFI-014",
+      "current_update": "Awaiting gate keys",
+      "bic": [
+        {
+          "kind": "principal",
+          "entity_id": null,
+          "label": null
+        },
+        {
+          "kind": "entity",
+          "entity_id": "ent_aaaaaaaa11111111",
+          "label": "Pat"
+        }
+      ],
+      "responsible": [
+        {
+          "kind": "unresolved",
+          "entity_id": null,
+          "label": "Steel subcontractor"
+        }
+      ],
+      "completion_date": null,
+      "closure_commentary": null,
+      "voided_date": null,
+      "void_reason": null,
+      "record_quality": "normal",
+      "published_at": "2026-08-09T12:00:00+00:00"
+    },
+    "receipt": {
+      "history_id": "chst_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "constraint_id": "cst_aaaaaaaa11111111",
+      "operation": "publish",
+      "actor": "principal",
+      "outcome": "applied",
+      "before_version": 1,
+      "after_version": 2,
+      "occurred_at": "2026-08-09T12:00:00+00:00",
+      "recorded_at": "2026-08-09T12:00:00+00:00",
+      "project_id": "prj_aaaaaaaa11111111",
+      "revision_id": "crev_aaaaaaaa11111111",
+      "idempotency_key": "parity-constraint-authoring-1",
+      "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "client_context": "web",
+      "correlation_id": "corr_aaaaaaaa11111111",
+      "safe_failure_reason": null
+    }
+  },
+  "constraints.transition": {
+    "disposition": "applied",
+    "constraint": {
+      "constraint_id": "cst_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "lifecycle_state": "in_progress",
+      "origin": "product",
+      "created_at": "2026-08-01T09:00:00+00:00",
+      "updated_at": "2026-08-09T12:00:00+00:00",
+      "version": 3,
+      "project_id": "prj_aaaaaaaa11111111",
+      "category_id": "ccat_aaaaaaaa11111111",
+      "constraint_code": "2.01",
+      "description": "Synthetic access constraint",
+      "date_identified": "2026-08-01",
+      "due_date": "2026-08-16",
+      "reference": "RFI-014",
+      "current_update": "Awaiting gate keys",
+      "bic": [
+        {
+          "kind": "principal",
+          "entity_id": null,
+          "label": null
+        },
+        {
+          "kind": "entity",
+          "entity_id": "ent_aaaaaaaa11111111",
+          "label": "Pat"
+        }
+      ],
+      "responsible": [
+        {
+          "kind": "unresolved",
+          "entity_id": null,
+          "label": "Steel subcontractor"
+        }
+      ],
+      "completion_date": null,
+      "closure_commentary": null,
+      "voided_date": null,
+      "void_reason": null,
+      "record_quality": "normal",
+      "published_at": "2026-08-09T12:00:00+00:00"
+    },
+    "receipt": {
+      "history_id": "chst_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "constraint_id": "cst_aaaaaaaa11111111",
+      "operation": "transition",
+      "actor": "principal",
+      "outcome": "applied",
+      "before_version": 2,
+      "after_version": 3,
+      "occurred_at": "2026-08-09T12:00:00+00:00",
+      "recorded_at": "2026-08-09T12:00:00+00:00",
+      "project_id": "prj_aaaaaaaa11111111",
+      "revision_id": "crev_aaaaaaaa11111111",
+      "idempotency_key": "parity-constraint-authoring-1",
+      "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "client_context": "web",
+      "correlation_id": "corr_aaaaaaaa11111111",
+      "safe_failure_reason": null
+    }
+  },
+  "constraints.close": {
+    "disposition": "applied",
+    "constraint": {
+      "constraint_id": "cst_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "lifecycle_state": "closed",
+      "origin": "product",
+      "created_at": "2026-08-01T09:00:00+00:00",
+      "updated_at": "2026-08-09T12:00:00+00:00",
+      "version": 4,
+      "project_id": "prj_aaaaaaaa11111111",
+      "category_id": "ccat_aaaaaaaa11111111",
+      "constraint_code": "2.01",
+      "description": "Synthetic access constraint",
+      "date_identified": "2026-08-01",
+      "due_date": "2026-08-16",
+      "reference": "RFI-014",
+      "current_update": "Awaiting gate keys",
+      "bic": [
+        {
+          "kind": "principal",
+          "entity_id": null,
+          "label": null
+        },
+        {
+          "kind": "entity",
+          "entity_id": "ent_aaaaaaaa11111111",
+          "label": "Pat"
+        }
+      ],
+      "responsible": [
+        {
+          "kind": "unresolved",
+          "entity_id": null,
+          "label": "Steel subcontractor"
+        }
+      ],
+      "completion_date": "2026-08-09",
+      "closure_commentary": "Keys issued to the steel crew",
+      "voided_date": null,
+      "void_reason": null,
+      "record_quality": "normal",
+      "published_at": "2026-08-09T12:00:00+00:00"
+    },
+    "receipt": {
+      "history_id": "chst_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "constraint_id": "cst_aaaaaaaa11111111",
+      "operation": "close",
+      "actor": "principal",
+      "outcome": "applied",
+      "before_version": 3,
+      "after_version": 4,
+      "occurred_at": "2026-08-09T12:00:00+00:00",
+      "recorded_at": "2026-08-09T12:00:00+00:00",
+      "project_id": "prj_aaaaaaaa11111111",
+      "revision_id": "crev_aaaaaaaa11111111",
+      "idempotency_key": "parity-constraint-authoring-1",
+      "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "client_context": "web",
+      "correlation_id": "corr_aaaaaaaa11111111",
+      "safe_failure_reason": null
+    }
+  },
+  "constraints.close_follow_up": {
+    "disposition": "applied",
+    "predecessor": {
+      "constraint_id": "cst_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "lifecycle_state": "closed",
+      "origin": "product",
+      "created_at": "2026-08-01T09:00:00+00:00",
+      "updated_at": "2026-08-09T12:00:00+00:00",
+      "version": 4,
+      "project_id": "prj_aaaaaaaa11111111",
+      "category_id": "ccat_aaaaaaaa11111111",
+      "constraint_code": "2.01",
+      "description": "Synthetic access constraint",
+      "date_identified": "2026-08-01",
+      "due_date": "2026-08-16",
+      "reference": "RFI-014",
+      "current_update": "Awaiting gate keys",
+      "bic": [
+        {
+          "kind": "principal",
+          "entity_id": null,
+          "label": null
+        },
+        {
+          "kind": "entity",
+          "entity_id": "ent_aaaaaaaa11111111",
+          "label": "Pat"
+        }
+      ],
+      "responsible": [
+        {
+          "kind": "unresolved",
+          "entity_id": null,
+          "label": "Steel subcontractor"
+        }
+      ],
+      "completion_date": "2026-08-09",
+      "closure_commentary": "Keys issued to the steel crew",
+      "voided_date": null,
+      "void_reason": null,
+      "record_quality": "normal",
+      "published_at": "2026-08-09T12:00:00+00:00"
+    },
+    "successor": {
+      "constraint_id": "cst_bbbbbbbb22222222",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "lifecycle_state": "identified",
+      "origin": "product",
+      "created_at": "2026-08-01T09:00:00+00:00",
+      "updated_at": "2026-08-09T12:00:00+00:00",
+      "version": 2,
+      "project_id": "prj_aaaaaaaa11111111",
+      "category_id": "ccat_aaaaaaaa11111111",
+      "constraint_code": "2.02",
+      "description": "Synthetic follow-up constraint",
+      "date_identified": "2026-08-09",
+      "due_date": "2026-08-23",
+      "reference": null,
+      "current_update": null,
+      "bic": [
+        {
+          "kind": "principal",
+          "entity_id": null,
+          "label": null
+        },
+        {
+          "kind": "entity",
+          "entity_id": "ent_aaaaaaaa11111111",
+          "label": "Pat"
+        }
+      ],
+      "responsible": [
+        {
+          "kind": "unresolved",
+          "entity_id": null,
+          "label": "Steel subcontractor"
+        }
+      ],
+      "completion_date": null,
+      "closure_commentary": null,
+      "voided_date": null,
+      "void_reason": null,
+      "record_quality": "normal",
+      "published_at": "2026-08-09T12:00:00+00:00"
+    },
+    "predecessor_receipt": {
+      "history_id": "chst_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "constraint_id": "cst_aaaaaaaa11111111",
+      "operation": "close",
+      "actor": "principal",
+      "outcome": "applied",
+      "before_version": 3,
+      "after_version": 4,
+      "occurred_at": "2026-08-09T12:00:00+00:00",
+      "recorded_at": "2026-08-09T12:00:00+00:00",
+      "project_id": "prj_aaaaaaaa11111111",
+      "revision_id": "crev_aaaaaaaa11111111",
+      "idempotency_key": "parity-constraint-authoring-1",
+      "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "client_context": "web",
+      "correlation_id": "corr_aaaaaaaa11111111",
+      "safe_failure_reason": null
+    },
+    "successor_receipt": {
+      "history_id": "chst_bbbbbbbb22222222",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "constraint_id": "cst_bbbbbbbb22222222",
+      "operation": "publish",
+      "actor": "principal",
+      "outcome": "applied",
+      "before_version": 1,
+      "after_version": 2,
+      "occurred_at": "2026-08-09T12:00:00+00:00",
+      "recorded_at": "2026-08-09T12:00:00+00:00",
+      "project_id": "prj_aaaaaaaa11111111",
+      "revision_id": "crev_bbbbbbbb22222222",
+      "idempotency_key": "parity-constraint-authoring-successor",
+      "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "client_context": "web",
+      "correlation_id": "corr_aaaaaaaa11111111",
+      "safe_failure_reason": null
+    },
+    "relationship_id": "crel_aaaaaaaa11111111"
+  },
+  "constraints.void": {
+    "disposition": "applied",
+    "constraint": {
+      "constraint_id": "cst_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "lifecycle_state": "void",
+      "origin": "product",
+      "created_at": "2026-08-01T09:00:00+00:00",
+      "updated_at": "2026-08-09T12:00:00+00:00",
+      "version": 3,
+      "project_id": "prj_aaaaaaaa11111111",
+      "category_id": "ccat_aaaaaaaa11111111",
+      "constraint_code": "2.01",
+      "description": "Synthetic access constraint",
+      "date_identified": "2026-08-01",
+      "due_date": "2026-08-16",
+      "reference": "RFI-014",
+      "current_update": "Awaiting gate keys",
+      "bic": [
+        {
+          "kind": "principal",
+          "entity_id": null,
+          "label": null
+        },
+        {
+          "kind": "entity",
+          "entity_id": "ent_aaaaaaaa11111111",
+          "label": "Pat"
+        }
+      ],
+      "responsible": [
+        {
+          "kind": "unresolved",
+          "entity_id": null,
+          "label": "Steel subcontractor"
+        }
+      ],
+      "completion_date": null,
+      "closure_commentary": null,
+      "voided_date": "2026-08-09",
+      "void_reason": "Duplicate of 2.03",
+      "record_quality": "normal",
+      "published_at": "2026-08-09T12:00:00+00:00"
+    },
+    "receipt": {
+      "history_id": "chst_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "constraint_id": "cst_aaaaaaaa11111111",
+      "operation": "void",
+      "actor": "principal",
+      "outcome": "applied",
+      "before_version": 2,
+      "after_version": 3,
+      "occurred_at": "2026-08-09T12:00:00+00:00",
+      "recorded_at": "2026-08-09T12:00:00+00:00",
+      "project_id": "prj_aaaaaaaa11111111",
+      "revision_id": "crev_aaaaaaaa11111111",
+      "idempotency_key": "parity-constraint-authoring-1",
+      "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "client_context": "web",
+      "correlation_id": "corr_aaaaaaaa11111111",
+      "safe_failure_reason": null
+    }
+  },
+  "constraints.reopen": {
+    "disposition": "applied",
+    "constraint": {
+      "constraint_id": "cst_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "lifecycle_state": "identified",
+      "origin": "product",
+      "created_at": "2026-08-01T09:00:00+00:00",
+      "updated_at": "2026-08-09T12:00:00+00:00",
+      "version": 5,
+      "project_id": "prj_aaaaaaaa11111111",
+      "category_id": "ccat_aaaaaaaa11111111",
+      "constraint_code": "2.01",
+      "description": "Synthetic access constraint",
+      "date_identified": "2026-08-01",
+      "due_date": "2026-08-16",
+      "reference": "RFI-014",
+      "current_update": "Awaiting gate keys",
+      "bic": [
+        {
+          "kind": "principal",
+          "entity_id": null,
+          "label": null
+        },
+        {
+          "kind": "entity",
+          "entity_id": "ent_aaaaaaaa11111111",
+          "label": "Pat"
+        }
+      ],
+      "responsible": [
+        {
+          "kind": "unresolved",
+          "entity_id": null,
+          "label": "Steel subcontractor"
+        }
+      ],
+      "completion_date": null,
+      "closure_commentary": null,
+      "voided_date": null,
+      "void_reason": null,
+      "record_quality": "normal",
+      "published_at": "2026-08-09T12:00:00+00:00"
+    },
+    "receipt": {
+      "history_id": "chst_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "constraint_id": "cst_aaaaaaaa11111111",
+      "operation": "reopen",
+      "actor": "principal",
+      "outcome": "applied",
+      "before_version": 4,
+      "after_version": 5,
+      "occurred_at": "2026-08-09T12:00:00+00:00",
+      "recorded_at": "2026-08-09T12:00:00+00:00",
+      "project_id": "prj_aaaaaaaa11111111",
+      "revision_id": "crev_aaaaaaaa11111111",
+      "idempotency_key": "parity-constraint-authoring-1",
+      "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "client_context": "web",
+      "correlation_id": "corr_aaaaaaaa11111111",
+      "safe_failure_reason": null
+    }
+  },
+  "constraint_categories.create": {
+    "disposition": "applied",
+    "category": {
+      "category_id": "ccat_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "project_id": "prj_aaaaaaaa11111111",
+      "prefix": "2",
+      "title": "Site access",
+      "state": "active",
+      "created_at": "2026-08-01T09:00:00+00:00",
+      "updated_at": "2026-08-09T12:00:00+00:00",
+      "description": "Access, egress and laydown",
+      "display_order": 0,
+      "prefix_locked_at": null
+    },
+    "receipt": {
+      "history_id": "cchst_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "project_id": "prj_aaaaaaaa11111111",
+      "category_id": "ccat_aaaaaaaa11111111",
+      "operation": "create",
+      "actor": "principal",
+      "outcome": "applied",
+      "before_version": 0,
+      "after_version": 1,
+      "occurred_at": "2026-08-09T12:00:00+00:00",
+      "recorded_at": "2026-08-09T12:00:00+00:00",
+      "idempotency_key": "parity-category-authoring-1",
+      "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "client_context": "web",
+      "correlation_id": "corr_aaaaaaaa11111111",
+      "safe_failure_reason": null
+    }
+  },
+  "constraint_categories.update": {
+    "disposition": "applied",
+    "category": {
+      "category_id": "ccat_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "project_id": "prj_aaaaaaaa11111111",
+      "prefix": "2",
+      "title": "Site access and laydown",
+      "state": "active",
+      "created_at": "2026-08-01T09:00:00+00:00",
+      "updated_at": "2026-08-09T12:00:00+00:00",
+      "description": "Access, egress and laydown",
+      "display_order": 0,
+      "prefix_locked_at": "2026-08-09T12:00:00+00:00"
+    },
+    "receipt": {
+      "history_id": "cchst_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "project_id": "prj_aaaaaaaa11111111",
+      "category_id": "ccat_aaaaaaaa11111111",
+      "operation": "update",
+      "actor": "principal",
+      "outcome": "applied",
+      "before_version": 1,
+      "after_version": 2,
+      "occurred_at": "2026-08-09T12:00:00+00:00",
+      "recorded_at": "2026-08-09T12:00:00+00:00",
+      "idempotency_key": "parity-category-authoring-1",
+      "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "client_context": "web",
+      "correlation_id": "corr_aaaaaaaa11111111",
+      "safe_failure_reason": null
+    }
+  },
+  "constraint_categories.deactivate": {
+    "disposition": "applied",
+    "category": {
+      "category_id": "ccat_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "project_id": "prj_aaaaaaaa11111111",
+      "prefix": "2",
+      "title": "Site access",
+      "state": "inactive",
+      "created_at": "2026-08-01T09:00:00+00:00",
+      "updated_at": "2026-08-09T12:00:00+00:00",
+      "description": "Access, egress and laydown",
+      "display_order": 0,
+      "prefix_locked_at": null
+    },
+    "receipt": {
+      "history_id": "cchst_aaaaaaaa11111111",
+      "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+      "project_id": "prj_aaaaaaaa11111111",
+      "category_id": "ccat_aaaaaaaa11111111",
+      "operation": "update",
+      "actor": "principal",
+      "outcome": "applied",
+      "before_version": 2,
+      "after_version": 3,
+      "occurred_at": "2026-08-09T12:00:00+00:00",
+      "recorded_at": "2026-08-09T12:00:00+00:00",
+      "idempotency_key": "parity-category-authoring-1",
+      "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "client_context": "web",
+      "correlation_id": "corr_aaaaaaaa11111111",
+      "safe_failure_reason": null
+    }
+  },
+  "constraint_categories.reorder": {
+    "disposition": "applied",
+    "categories": [
+      {
+        "category_id": "ccat_bbbbbbbb22222222",
+        "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+        "project_id": "prj_aaaaaaaa11111111",
+        "prefix": "1",
+        "title": "Power",
+        "state": "active",
+        "created_at": "2026-08-01T09:00:00+00:00",
+        "updated_at": "2026-08-09T12:00:00+00:00",
+        "description": "Access, egress and laydown",
+        "display_order": 0,
+        "prefix_locked_at": null
+      },
+      {
+        "category_id": "ccat_aaaaaaaa11111111",
+        "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+        "project_id": "prj_aaaaaaaa11111111",
+        "prefix": "2",
+        "title": "Site access",
+        "state": "active",
+        "created_at": "2026-08-01T09:00:00+00:00",
+        "updated_at": "2026-08-09T12:00:00+00:00",
+        "description": "Access, egress and laydown",
+        "display_order": 1,
+        "prefix_locked_at": null
+      }
+    ],
+    "receipts": [
+      {
+        "history_id": "cchst_bbbbbbbb22222222",
+        "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+        "project_id": "prj_aaaaaaaa11111111",
+        "category_id": "ccat_bbbbbbbb22222222",
+        "operation": "update",
+        "actor": "principal",
+        "outcome": "applied",
+        "before_version": 1,
+        "after_version": 2,
+        "occurred_at": "2026-08-09T12:00:00+00:00",
+        "recorded_at": "2026-08-09T12:00:00+00:00",
+        "idempotency_key": "parity-category-reorder-1",
+        "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "client_context": "web",
+        "correlation_id": "corr_aaaaaaaa11111111",
+        "safe_failure_reason": null
+      },
+      {
+        "history_id": "cchst_cccccccc33333333",
+        "principal_id": "prn_aaaaaaaa11111111aaaaaaaa11111111",
+        "project_id": "prj_aaaaaaaa11111111",
+        "category_id": "ccat_aaaaaaaa11111111",
+        "operation": "update",
+        "actor": "principal",
+        "outcome": "applied",
+        "before_version": 3,
+        "after_version": 4,
+        "occurred_at": "2026-08-09T12:00:00+00:00",
+        "recorded_at": "2026-08-09T12:00:00+00:00",
+        "idempotency_key": null,
+        "request_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "client_context": "web",
+        "correlation_id": "corr_aaaaaaaa11111111",
+        "safe_failure_reason": null
+      }
+    ]
   }
 }

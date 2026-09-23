@@ -173,10 +173,62 @@ jobs:
         shell: bash
         run: |
           [[ "${GITHUB_ACTIONS-}" == true ]] || exit 1
-          if python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"; then
+          [[ -n "${RUNNER_TEMP-}" && "$RUNNER_TEMP" == /* && -d "$RUNNER_TEMP" && ! -L "$RUNNER_TEMP" ]] || exit 1
+          umask 077
+          ledger_dir="$(mktemp -d "$RUNNER_TEMP/my-pa-fast-ledger.XXXXXXXX")" || exit 1
+          ledger=""
+          trap 'rm -f -- "$ledger"; rmdir -- "$ledger_dir"' EXIT
+          ledger="$(mktemp "$ledger_dir/failures.XXXXXXXX")" || exit 1
+          [[ -f "$ledger" && ! -L "$ledger" ]] || exit 1
+          exec 9<"$ledger" || exit 1
+          export MY_PA_PYTEST_FAILURE_LEDGER="$ledger"
+          status=0
+          if python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery" 9<&-; then
             :
           else
             status=$?
+          fi
+          unset MY_PA_PYTEST_FAILURE_LEDGER
+          ledger_invalid=0
+          if validated_annotations="$(python -c '
+          import os
+          import re
+          import sys
+
+          try:
+              os.lseek(sys.stdin.fileno(), 0, os.SEEK_SET)
+          except OSError:
+              raise SystemExit(1)
+          data = sys.stdin.buffer.read(10 * 1024 + 1)
+          pattern = re.compile(
+              rb"::error title=pytest failed::phase=(setup|call|teardown|collection); "
+              rb"nodeid=tests/([A-Za-z0-9_./:~-]|%[0-9A-F]{2})+"
+          )
+          if len(data) > 10 * 1024 or not data.isascii() or b"\x00" in data:
+              raise SystemExit(1)
+          if data and not data.endswith(b"\n"):
+              raise SystemExit(1)
+          lines = data.split(b"\n")[:-1] if data else []
+          if len(lines) > 10 or any(len(line) + 1 > 1024 or not pattern.fullmatch(line) for line in lines):
+              raise SystemExit(1)
+          sys.stdout.buffer.write(data)
+          ' <&9)"; then
+            :
+          else
+            ledger_invalid=1
+          fi
+          exec 9<&-
+          if (( ledger_invalid != 0 )); then
+            echo "::error title=pytest failed::phase=ledger; exitstatus=1"
+            if (( status == 0 )); then exit 1; fi
+          elif [[ -n "$validated_annotations" ]]; then
+            if (( status == 0 )); then
+              echo "::error title=pytest failed::phase=ledger; exitstatus=1"
+              exit 1
+            fi
+            printf '%s\n' "$validated_annotations"
+          fi
+          if (( status != 0 )); then
             echo "::error title=pytest failed::phase=process; exitstatus=${status}"
             exit "$status"
           fi
@@ -476,10 +528,62 @@ jobs:
         shell: bash
         run: |
           [[ "${GITHUB_ACTIONS-}" == true ]] || exit 1
-          if python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"; then
+          [[ -n "${RUNNER_TEMP-}" && "$RUNNER_TEMP" == /* && -d "$RUNNER_TEMP" && ! -L "$RUNNER_TEMP" ]] || exit 1
+          umask 077
+          ledger_dir="$(mktemp -d "$RUNNER_TEMP/my-pa-fast-ledger.XXXXXXXX")" || exit 1
+          ledger=""
+          trap 'rm -f -- "$ledger"; rmdir -- "$ledger_dir"' EXIT
+          ledger="$(mktemp "$ledger_dir/failures.XXXXXXXX")" || exit 1
+          [[ -f "$ledger" && ! -L "$ledger" ]] || exit 1
+          exec 9<"$ledger" || exit 1
+          export MY_PA_PYTEST_FAILURE_LEDGER="$ledger"
+          status=0
+          if python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery" 9<&-; then
             :
           else
             status=$?
+          fi
+          unset MY_PA_PYTEST_FAILURE_LEDGER
+          ledger_invalid=0
+          if validated_annotations="$(python -c '
+          import os
+          import re
+          import sys
+
+          try:
+              os.lseek(sys.stdin.fileno(), 0, os.SEEK_SET)
+          except OSError:
+              raise SystemExit(1)
+          data = sys.stdin.buffer.read(10 * 1024 + 1)
+          pattern = re.compile(
+              rb"::error title=pytest failed::phase=(setup|call|teardown|collection); "
+              rb"nodeid=tests/([A-Za-z0-9_./:~-]|%[0-9A-F]{2})+"
+          )
+          if len(data) > 10 * 1024 or not data.isascii() or b"\x00" in data:
+              raise SystemExit(1)
+          if data and not data.endswith(b"\n"):
+              raise SystemExit(1)
+          lines = data.split(b"\n")[:-1] if data else []
+          if len(lines) > 10 or any(len(line) + 1 > 1024 or not pattern.fullmatch(line) for line in lines):
+              raise SystemExit(1)
+          sys.stdout.buffer.write(data)
+          ' <&9)"; then
+            :
+          else
+            ledger_invalid=1
+          fi
+          exec 9<&-
+          if (( ledger_invalid != 0 )); then
+            echo "::error title=pytest failed::phase=ledger; exitstatus=1"
+            if (( status == 0 )); then exit 1; fi
+          elif [[ -n "$validated_annotations" ]]; then
+            if (( status == 0 )); then
+              echo "::error title=pytest failed::phase=ledger; exitstatus=1"
+              exit 1
+            fi
+            printf '%s\n' "$validated_annotations"
+          fi
+          if (( status != 0 )); then
             echo "::error title=pytest failed::phase=process; exitstatus=${status}"
             exit "$status"
           fi

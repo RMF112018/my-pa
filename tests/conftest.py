@@ -36,6 +36,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import stat
 import sys
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
@@ -43,6 +44,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Final, cast
+from urllib.parse import quote
 
 import pytest
 
@@ -397,6 +399,14 @@ from my_pa.infrastructure.providers.fixture import FixtureSourceProvider
 
 pytest_plugins = ("tests.db.fixtures",)
 
+# Tests may patch os globally while a failed report is being processed.
+_GITHUB_ACTIONS_OS_OPEN = os.open
+_GITHUB_ACTIONS_OS_LSTAT = os.lstat
+_GITHUB_ACTIONS_OS_FSTAT = os.fstat
+_GITHUB_ACTIONS_OS_WRITE = os.write
+_GITHUB_ACTIONS_OS_CLOSE = os.close
+_GITHUB_ACTIONS_OS_GETEUID = os.geteuid
+
 _GITHUB_ACTIONS_FAILURES: list[tuple[str, str]] = []
 _GITHUB_ACTIONS_FAILURE_KEYS: set[tuple[str, str]] = set()
 _GITHUB_ACTIONS_FAILURE_LIMIT = 10
@@ -404,19 +414,85 @@ _GITHUB_ACTIONS_FAILURE_LIMIT = 10
 
 def _github_actions_annotation_value(value: str) -> str:
     """Encode command delimiters without rendering any test failure detail."""
-    return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    return quote(value, safe="/:._-")
+
+
+def _append_github_actions_failure_ledger(nodeid: str, phase: str) -> None:
+    """Append only a bounded annotation to the protected runner-temp ledger."""
+    ledger_name = os.environ.get("MY_PA_PYTEST_FAILURE_LEDGER", "")
+    runner_temp_name = os.environ.get("RUNNER_TEMP", "")
+    if not ledger_name or not runner_temp_name or not hasattr(os, "O_NOFOLLOW"):
+        return
+    ledger = Path(ledger_name)
+    private_directory = ledger.parent
+    runner_temp = Path(runner_temp_name)
+    directory_suffix = private_directory.name.removeprefix("my-pa-fast-ledger.")
+    ledger_suffix = ledger.name.removeprefix("failures.")
+    if (
+        not ledger.is_absolute()
+        or not runner_temp.is_absolute()
+        or private_directory.parent != runner_temp
+        or not private_directory.name.startswith("my-pa-fast-ledger.")
+        or len(directory_suffix) != 8
+        or not directory_suffix.isalnum()
+        or not ledger.name.startswith("failures.")
+        or len(ledger_suffix) != 8
+        or not ledger_suffix.isalnum()
+        or phase not in {"setup", "call", "teardown", "collection"}
+        or not nodeid.startswith("tests/")
+    ):
+        return
+    annotation = f"::error title=pytest failed::phase={phase}; nodeid={nodeid}\n".encode()
+    if len(annotation) > 1024:
+        return
+    try:
+        directory = _GITHUB_ACTIONS_OS_LSTAT(private_directory)
+        pathname = _GITHUB_ACTIONS_OS_LSTAT(ledger)
+        if (
+            not stat.S_ISDIR(directory.st_mode)
+            or directory.st_uid != _GITHUB_ACTIONS_OS_GETEUID()
+            or stat.S_IMODE(directory.st_mode) != 0o700
+            or not stat.S_ISREG(pathname.st_mode)
+            or pathname.st_uid != _GITHUB_ACTIONS_OS_GETEUID()
+            or stat.S_IMODE(pathname.st_mode) != 0o600
+            or pathname.st_nlink != 1
+        ):
+            return
+        descriptor = _GITHUB_ACTIONS_OS_OPEN(
+            ledger, os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW | os.O_CLOEXEC
+        )
+        try:
+            opened = _GITHUB_ACTIONS_OS_FSTAT(descriptor)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_uid != _GITHUB_ACTIONS_OS_GETEUID()
+                or stat.S_IMODE(opened.st_mode) != 0o600
+                or opened.st_nlink != 1
+                or (opened.st_dev, opened.st_ino) != (pathname.st_dev, pathname.st_ino)
+            ):
+                return
+            if _GITHUB_ACTIONS_OS_WRITE(descriptor, annotation) != len(annotation):
+                return
+        finally:
+            _GITHUB_ACTIONS_OS_CLOSE(descriptor)
+    except OSError:
+        return
 
 
 def _queue_github_actions_failure(nodeid: str, phase: str) -> None:
     """Emit the first failures now and retain them for session-end replay."""
     if os.environ.get("GITHUB_ACTIONS") != "true":
         return
-    failure = (_github_actions_annotation_value(nodeid), _github_actions_annotation_value(phase))
+    failure = (
+        _github_actions_annotation_value(nodeid)[:512],
+        _github_actions_annotation_value(phase)[:64],
+    )
     if failure in _GITHUB_ACTIONS_FAILURE_KEYS:
         return
     _GITHUB_ACTIONS_FAILURE_KEYS.add(failure)
     if len(_GITHUB_ACTIONS_FAILURES) < _GITHUB_ACTIONS_FAILURE_LIMIT:
         _GITHUB_ACTIONS_FAILURES.append(failure)
+        _append_github_actions_failure_ledger(*failure)
         print(f"::error title=pytest failed::phase={failure[1]}; nodeid={failure[0]}", flush=True)
 
 

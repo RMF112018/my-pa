@@ -30,7 +30,7 @@ and database revision, DNS/public reachability, and activation approval were
 not established. Reauthenticate all of them at the next action boundary; do
 not carry this snapshot forward as current state.
 
-## PREPARE / SAFE
+## PREPARE / GATED UPGRADE
 
 This is an already-bootstrapped canonical **smoke-runtime upgrade** route, not
 first-time provisioning or pilot activation. Follow
@@ -38,7 +38,8 @@ first-time provisioning or pilot activation. Follow
 and its [workflow](../../.codex/skills/my-pa-nas-build-deploy/references/workflow.md)
 for the complete point-of-action gates. The following is a release checklist,
 not an executable remote-command recipe. An existing public edge must be
-inventoried and left unchanged until its separate authority is established.
+inventoried. Leaving its containers unchanged does not prevent canonical web
+restart or image replacement from changing live public traffic.
 
 1. **Authenticate current identity.** Independently verify `ssh bf-nas` host
    and device identity, linux/amd64 Docker engine, canonical project and exact
@@ -48,7 +49,13 @@ inventoried and left unchanged until its separate authority is established.
    writers. A `no` restart policy alone does not prove smoke mode. If the mode
    is pilot or any identity is ambiguous, stop; do not reuse the dated note.
    Distinguish this frontend tunnel from the remote MCP tunnel in
-   `ops/nas/remote/`.
+   `ops/nas/remote/`. Authenticate current public-edge routing, reachability,
+   traffic, and activation-approval state using separately authorized,
+   privacy-safe evidence; do not invent a public probe. If the edge is active
+   or its state remains unknown, stop before writer quiescence until the
+   operator approves a production-impact, maintenance, and rollback plan
+   covering service interruption and an externally visible new app version.
+   That approval is not permission for a new public cutover.
 2. **Build on this workstation.** From a fresh detached, clean checkout of the
    *current* authenticated `origin/main`, run `ops/nas/build-candidates.sh`
    with a separately accepted exact proxy platform-child digest. No proxy
@@ -70,9 +77,11 @@ inventoried and left unchanged until its separate authority is established.
    specified until those paths and permissions are verified; the observed
    absence of `/volume1/my-pa/deployment` is not permission to create it.
 4. **Old-runtime gates, quiescence, then candidate admission.** Recheck current
-   `origin/main`. Under the *old* canonical operator/runtime admissions, prove
-   the old running stack, rollback inputs, firewall state, and PostgreSQL
-   identity. Separately authorize stopping the five canonical application
+   `origin/main`, public routing/traffic state, and the specific
+   production-impact authorization immediately before stopping writers; stop
+   on drift or missing approval. Under the *old* canonical operator/runtime
+   admissions, prove the old running stack, rollback inputs, firewall state,
+   and PostgreSQL identity. Separately authorize stopping the five canonical application
    writers and each dependent project; leave the same admitted PostgreSQL
    running and prove zero non-operator writers. Stage the new operator admission
    from its transferred archive. Because `container-python.sh` fixes
@@ -116,17 +125,21 @@ inventoried and left unchanged until its separate authority is established.
    Take and verify a post-migration backup, then restore it to a new scratch
    database and check the derived head and health. Never downgrade canonical
    `my_pa` or treat an image rollback as database rollback.
-7. **Private start and verification.** Run `ops/nas/preflight.sh`, repeat the
+7. **Canonical start and verification.** Run `ops/nas/preflight.sh`, repeat the
    PostgreSQL compatibility proof, and obtain a separate point-of-action
    authorization for possible interruption of that *same* PostgreSQL container
-   before `ops/nas/start.sh`. The start script internally uses Compose
-   `--no-build --pull never` for the canonical six services; it can stop all six
-   on a failed partial start. Require the original PostgreSQL container ID and
+   before `ops/nas/start.sh`. Revalidate the production-impact plan and
+   public route/traffic state: an unchanged public edge may serve the new
+   canonical web version or expose the interruption. Stop on drift. The start
+   script internally uses Compose `--no-build --pull never` for the canonical
+   six services; it can stop all six on a failed partial start. Require the
+   original PostgreSQL container ID and
    resource gate to survive, then six exact services, `ops/nas/health.sh`,
    repository-derived migration head, and restoration of only previously
    running compatible dependents. Do not alter existing `public-proxy` or
-   `frontend-cloudflared` state as part of private smoke.
-8. **Private transport smoke and stop boundary.** Check the private web health
+   `frontend-cloudflared` state as part of this smoke upgrade, but do not call
+   the upgrade private-only for that reason.
+8. **Post-start transport smoke and stop boundary.** Check the private web health
    response (`{ ok: true, status: "live" }` in production passkey mode), exact
    `node server.js` process, full source commit/tree, absent browser Entra/MSAL
    variables, and private proxy refusal of machine-internal `/v1/*`. This is
@@ -153,8 +166,8 @@ After private smoke is green and the operator has approved:
    `ops/nas/render-frontend-cloudflared-config.py` to the owner-only path named
    by `MY_PA_FRONTEND_CLOUDFLARED_CONFIG`. Refuse overwrite.
 2. Start or change `public-proxy` and `frontend-cloudflared` from
-   `ops/nas/compose.public-browser.example.yml` only if their verified
-   current state and the specific authorization call for it. Do not
+   `ops/nas/compose.public-browser.example.yml` only when their verified
+   current state and specific operator authorization permit that action. Do not
    host-publish `0.0.0.0`, postgres, or gateway.
 3. Example DNS cutover command (not evidence that it has or has not run):
 
@@ -189,7 +202,9 @@ the path is not established by the dated observation above.
 The dry-run prints the exact `app_image_id`, `web_image_id`,
 `proxy_image_digest`, and `cloudflared_image` that would be used, refuses a
 `latest` tag, and refuses `docker build`. Live image load/start remains an
-operator action against those exact IDs.
+operator action against those exact IDs. Its static
+`PRODUCTION_ACTIVATION_NOT_PERFORMED` output is a dry-run script marker, not
+evidence of live DNS, tunnel, traffic, or activation state.
 
 **Emergency public-edge stop** must identify the exact current Compose
 project, files, and two edge services before acting. Stop only

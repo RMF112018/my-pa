@@ -56,6 +56,15 @@ manifest, firewall checks, and other Compose projects that use the canonical
 database or its networks. Redact values that carry credentials or personal
 data.
 
+Also authenticate the current public-edge routing, reachability, traffic,
+and activation-approval state with privacy-safe evidence. Obtain separate
+authority before any live traffic inspection or sensitive evidence access;
+do not invent a probe or infer an inactive edge from unchanged edge containers.
+An active or unknown public edge is a stop before writer quiescence until the
+operator explicitly approves a production-impact, maintenance, and rollback
+plan covering service interruption and the externally visible new app version.
+That plan does not authorize a new public cutover or waive any later gate.
+
 Require the selected and admitted lifecycle mode to be `smoke`. If the target
 is in `pilot` mode or the request would activate pilot, stop and route a
 separately authorized pilot objective through fresh exact-head NAS-10 evidence,
@@ -157,6 +166,13 @@ operator admission while these old-checkout gates are running.
 
 Quiesce all database writers, not merely the canonical six-service stack. Capture current state first. Discover sessions from `pg_stat_activity` using metadata only, then map clients and Docker network/container identities to exact Compose project/service labels. Include separately managed overlays or projects (for example remote MCP or GSQS evaluation) whenever live evidence shows they connect to canonical PostgreSQL.
 
+Immediately before stopping any canonical application service, revalidate the
+public-edge routing/traffic state and the specific operator-approved
+production-impact, maintenance, and rollback plan when the edge is active or
+unknown. Without that current evidence and approval, stop. Stopping web or
+restarting it at a new image may interrupt or change public traffic even if
+`public-proxy` and `frontend-cloudflared` remain running.
+
 Do not use `ops/nas/stop.sh` for this gate: it stops PostgreSQL with the five
 application services. In the preserved old protected lifecycle environment,
 from the preserved clean old checkout whose HEAD/tree match the old manifest,
@@ -208,8 +224,9 @@ identity, run the new checkout's `load-candidates.sh` against the verified
 candidate. This mutates the Docker image store, not the running stack: the
 script checks all four runtime archives and metadata before loading, binds
 exact loaded IDs to the live engine, and writes a new exclusive deployable
-manifest. Verify that manifest with `image_gate.py --live` and record its
-digest. If it fails, preserve the old stack; restore the old operator admission
+manifest. Verify it with `image_gate.py` using the deployable manifest, the
+exact verified `--archive-dir`, and `--live`; record its digest. If it fails,
+preserve the old stack; restore the old operator admission
 only through the verified rollback path before any old-checkout gate or service
 restart.
 
@@ -314,6 +331,12 @@ Schema rollback is forward-only by default. Reverting images does not authorize 
 
 Run `ops/nas/preflight.sh` with the new deployable manifest and exact verified archive directory. Immediately before starting, repeat the complete prospective/live PostgreSQL config-hash, admitted-container, resource-gate, image, mount, data-directory, project, and service comparison from section 6, including the same side-effect-free `tooling-common.sh` plus exact `nas_docker compose ... config --hash postgres` invocation. Any mismatch is a mandatory stop; do not rely on its earlier result. A complete match does not eliminate interruption risk because `start.sh` invokes all-service cleanup after several failure modes.
 
+Revalidate the operator-approved production-impact plan and current public
+route/traffic state immediately before start. The canonical web service may
+serve live public requests through an unchanged edge; this is not a
+private-only restart. If the plan or route identity drifted, stop before
+`start.sh` and preserve the verified safe state.
+
 Immediately before `ops/nas/start.sh`, obtain a separate point-of-action authorization for possible interruption of that same admitted canonical PostgreSQL container and the resulting impact on every dependent service. Present the matching identities, verified post-migration backup/restore receipt, stopped dependent-service state, and recovery plan. This authorization does not permit container recreation or resource re-admission. If authorization is withheld, stop before start. Then use `ops/nas/start.sh`; the canonical start path is `create --no-build --pull never` followed by `up --detach --no-build --pull never`. Do not invoke a generic Compose build, pull, or unbounded `up` on the NAS.
 
 If a first start is intentionally preparing a previously absent ingress network, accept only the exact documented ingress-firewall refusal and verified zero-running-service cleanup. That refusal can stop PostgreSQL and therefore consumes the PostgreSQL interruption authorization above. Then run the ingress script's read-only `plan` and `check`; if mutation is required, obtain its separate point-of-action authorization, apply only with the exact confirmation value, unset it immediately, and require `check` to pass before retrying `start.sh`. Every other failure is a blocker.
@@ -357,6 +380,9 @@ Write a sanitized, immutable deployment receipt outside the repository. It must 
 - prospective/live PostgreSQL Compose config hashes and whether PostgreSQL was
   interrupted, recreated, or recovered;
 - firewall plan/check/apply outcomes without rule-set secrets;
+- authenticated public route/traffic state and the applicable operator-approved
+  production-impact, maintenance, and rollback plan identity without sensitive
+  traffic contents;
 - exact prior/final canonical and dependent-service states;
 - preflight, migration, start, health, diagnostics, and rollback-check results with timestamps and exit status; and
 - deviations, gates not run, residual risks, and intentionally unperformed work.

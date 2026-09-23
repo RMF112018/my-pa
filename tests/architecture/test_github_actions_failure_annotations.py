@@ -11,6 +11,8 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from my_pa.bootstrap.settings import load_settings
+
 ROOT = Path(__file__).resolve().parents[2]
 HOOK_PATH = ROOT / "tests" / "conftest.py"
 
@@ -58,12 +60,27 @@ def _synthetic_ledger(tmp_path: Path) -> tuple[Path, Path]:
     return runner_temp, ledger
 
 
+def test_failure_ledger_env_does_not_enter_application_settings_namespace() -> None:
+    """The CI-only ledger must not become an unknown product setting."""
+    ledger_name = "CI_PYTEST_FAILURE_LEDGER"
+    for step in ("Test Python FAST tier", "Test Python FAST tier at the declared floor"):
+        assert f'export {ledger_name}="$ledger"' in _fast_run_script(step)
+    assert f'os.environ.get("{ledger_name}", "")' in HOOK_PATH.read_text(encoding="utf-8")
+
+    load_settings(
+        {
+            "MY_PA_DATABASE_URL": "postgresql+psycopg://localhost/my_pa",
+            ledger_name: "synthetic-ledger-path",
+        }
+    )
+
+
 @pytest.fixture(autouse=True)
 def _clear_synthetic_annotation_queue_between_tests(
     monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[None]:
     """Keep direct hook exercises isolated from this module's outer session."""
-    monkeypatch.delenv("MY_PA_PYTEST_FAILURE_LEDGER", raising=False)
+    monkeypatch.delenv("CI_PYTEST_FAILURE_LEDGER", raising=False)
     hook = _hook_module()
     hook._GITHUB_ACTIONS_FAILURES.clear()
     hook._GITHUB_ACTIONS_FAILURE_KEYS.clear()
@@ -174,15 +191,15 @@ def test_session_failure_without_reports_emits_numeric_status_only(
         '  exec "$SYNTHETIC_REAL_PYTHON" "$@"\n'
         "fi\n"
         'if [ -n "${SYNTHETIC_PYTEST_ANNOTATION-}" ]; then\n'
-        '  printf "%s\\n" "$SYNTHETIC_PYTEST_ANNOTATION" >> "$MY_PA_PYTEST_FAILURE_LEDGER"\n'
+        '  printf "%s\\n" "$SYNTHETIC_PYTEST_ANNOTATION" >> "$CI_PYTEST_FAILURE_LEDGER"\n'
         "fi\n"
         'if [ "${SYNTHETIC_PYTEST_NUL-}" = 1 ]; then\n'
         "  printf '::error title=pytest failed::phase=call; "
         "nodeid=tests/unit/test_bad\\000synthetic-secret-marker\\n' "
-        '>> "$MY_PA_PYTEST_FAILURE_LEDGER"\n'
+        '>> "$CI_PYTEST_FAILURE_LEDGER"\n'
         "fi\n"
         'if [ -n "${SYNTHETIC_PYTEST_UNTERMINATED-}" ]; then\n'
-        '  printf "%s" "$SYNTHETIC_PYTEST_UNTERMINATED" >> "$MY_PA_PYTEST_FAILURE_LEDGER"\n'
+        '  printf "%s" "$SYNTHETIC_PYTEST_UNTERMINATED" >> "$CI_PYTEST_FAILURE_LEDGER"\n'
         "fi\n"
         'if [ "${SYNTHETIC_PROBE_FD9-}" = 1 ]; then\n'
         "  if ( IFS= read -r _ <&9 ) 2>/dev/null; then exit 98; fi\n"
@@ -383,7 +400,7 @@ def test_session_start_and_finish_clear_queued_state_with_bounded_summary(
 
     runner_temp, ledger = _synthetic_ledger(tmp_path)
     monkeypatch.setenv("RUNNER_TEMP", str(runner_temp))
-    monkeypatch.setenv("MY_PA_PYTEST_FAILURE_LEDGER", str(ledger))
+    monkeypatch.setenv("CI_PYTEST_FAILURE_LEDGER", str(ledger))
     for index in range(hook._GITHUB_ACTIONS_FAILURE_LIMIT + 3):
         hook._queue_github_actions_failure(f"tests/unit/test_example.py::test_case_{index}", "call")
     immediate = capsys.readouterr().out
@@ -460,7 +477,7 @@ def test_deferred_annotation_never_renders_report_details_or_environment_payload
     monkeypatch.setenv("ANNOTATION_TEST_UNRELATED_VALUE", "synthetic-environment-value")
     runner_temp, ledger = _synthetic_ledger(tmp_path)
     monkeypatch.setenv("RUNNER_TEMP", str(runner_temp))
-    monkeypatch.setenv("MY_PA_PYTEST_FAILURE_LEDGER", str(ledger))
+    monkeypatch.setenv("CI_PYTEST_FAILURE_LEDGER", str(ledger))
     report = SimpleNamespace(
         failed=True,
         when="call",

@@ -419,7 +419,7 @@ def _github_actions_annotation_value(value: str) -> str:
 
 def _append_github_actions_failure_ledger(nodeid: str, phase: str) -> None:
     """Append only a bounded annotation to the protected runner-temp ledger."""
-    ledger_name = os.environ.get("MY_PA_PYTEST_FAILURE_LEDGER", "")
+    ledger_name = os.environ.get("CI_PYTEST_FAILURE_LEDGER", "")
     runner_temp_name = os.environ.get("RUNNER_TEMP", "")
     if not ledger_name or not runner_temp_name or not hasattr(os, "O_NOFOLLOW"):
         return

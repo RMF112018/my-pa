@@ -181,14 +181,14 @@ jobs:
           ledger="$(mktemp "$ledger_dir/failures.XXXXXXXX")" || exit 1
           [[ -f "$ledger" && ! -L "$ledger" ]] || exit 1
           exec 9<"$ledger" || exit 1
-          export MY_PA_PYTEST_FAILURE_LEDGER="$ledger"
+          export CI_PYTEST_FAILURE_LEDGER="$ledger"
           status=0
           if python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery" 9<&-; then
             :
           else
             status=$?
           fi
-          unset MY_PA_PYTEST_FAILURE_LEDGER
+          unset CI_PYTEST_FAILURE_LEDGER
           ledger_invalid=0
           if validated_annotations="$(python -c '
           import os
@@ -536,14 +536,14 @@ jobs:
           ledger="$(mktemp "$ledger_dir/failures.XXXXXXXX")" || exit 1
           [[ -f "$ledger" && ! -L "$ledger" ]] || exit 1
           exec 9<"$ledger" || exit 1
-          export MY_PA_PYTEST_FAILURE_LEDGER="$ledger"
+          export CI_PYTEST_FAILURE_LEDGER="$ledger"
           status=0
           if python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery" 9<&-; then
             :
           else
             status=$?
           fi
-          unset MY_PA_PYTEST_FAILURE_LEDGER
+          unset CI_PYTEST_FAILURE_LEDGER
           ledger_invalid=0
           if validated_annotations="$(python -c '
           import os

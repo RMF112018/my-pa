@@ -164,6 +164,20 @@ On Synology, invoke the gate through `container-python.sh` with
 mounts both read-only at their conventional container paths only when both
 values are present; supplying just one or a non-socket path refuses before the
 operator container starts.
+
+`container-python.sh` treats its host Docker client, Compose plugin, Git
+binary, and operator admission as fixed trusted paths. It ignores caller
+overrides for `MY_PA_NAS_DOCKER`, `MY_PA_NAS_COMPOSE_PLUGIN`, and
+`MY_PA_NAS_OPERATOR_ADMISSION`; do not use those names to select alternate
+tools or admissions for an operator invocation. Before either Docker or Git
+runs, the wrapper verifies those paths and their ancestors are root-owned,
+non-writable, non-symlinked, and identity-stable. The resolved repository root
+must also be root-owned with exact mode `0700` before either tool runs because
+the checkout is later bind-mounted into the Docker-socket operator container.
+The operator admission must
+be a root-owned, mode-0400 regular file with exactly one link. It passes only its documented
+Compose/synthetic-acceptance environment-name allowlist to the Docker client;
+unrelated inherited process environment is removed.
 The checked-in ingress manifest refuses. Enabling Serve or changing a firewall
 remains an explicit operator action and has no script in this package.
 

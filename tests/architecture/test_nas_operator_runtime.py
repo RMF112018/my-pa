@@ -6,12 +6,9 @@ import hashlib
 import importlib.util
 import io
 import json
-import os
 import re
-import socket
 import subprocess
 import tarfile
-import tempfile
 import tomllib
 from pathlib import Path
 from types import ModuleType
@@ -86,8 +83,11 @@ def test_operator_runtime_is_separate_hardened_and_nonpersistent() -> None:
         assert "--read-only" in script
         assert "--cap-drop ALL" in script
         assert "no-new-privileges" in script
-        assert "/var/run/docker.sock:/var/run/docker.sock" in script
-    assert "operator admission must be root-owned mode 0400 with one link" in wrapper
+    assert "/var/run/docker.sock:/var/run/docker.sock" in bootstrap
+    assert "docker_socket_path=/var/run/docker.sock" in wrapper
+    assert "verify_root_owned_socket \"$docker_socket_path\" 'Docker socket'" in wrapper
+    assert '--volume "$docker_socket_path:/var/run/docker.sock"' in wrapper
+    assert "must be a root-owned unlinked regular file" in wrapper
     assert "--rm -i" in wrapper
     for script in (bootstrap, wrapper):
         assert "$compose_plugin_dir/docker-compose:ro" in script
@@ -274,172 +274,3 @@ def test_operator_admission_renders_with_closed_nonsecret_sentinels(
     assert "operator_admission_shape" in module.admission_shape_errors(
         {**admission, "unexpected": "refuse"}
     )
-
-
-def test_container_python_preserves_stdin_compose_plugin_and_closed_environment(
-    tmp_path: Path, request: pytest.FixtureRequest
-) -> None:
-    tools = tmp_path / "bin"
-    tools.mkdir()
-    calls = tmp_path / "docker-argv"
-    stdin = tmp_path / "docker-stdin"
-    image_id = "sha256:" + "a" * 64
-    admission = tmp_path / "operator-runtime.toml"
-    admission.write_text(f'operator_image_id = "{image_id}"\n', encoding="utf-8")
-    admission.chmod(0o400)
-    fake_stat = tools / "stat"
-    fake_stat.write_text("#!/bin/sh\nprintf '0:400:1\\n'\n", encoding="utf-8")
-    fake_compose = tools / "docker-compose"
-    fake_compose.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    fake_tailscale = tools / "tailscale"
-    fake_tailscale.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    socket_suffix = hashlib.sha256(str(tmp_path).encode()).hexdigest()[:16]
-    tailscale_socket = Path(tempfile.gettempdir()) / f"my-pa-{socket_suffix}.sock"
-    socket_handle = socket.socket(socket.AF_UNIX)
-    socket_handle.bind(str(tailscale_socket))
-    request.addfinalizer(socket_handle.close)
-    request.addfinalizer(lambda: tailscale_socket.unlink(missing_ok=True))
-    fake_docker = tools / "docker"
-    fake_docker.write_text(
-        "#!/bin/sh\n"
-        f'image_id="{image_id}"\n'
-        'if [ "$1 $2" = "image inspect" ]; then '
-        'printf "%s|linux|amd64\\n" "$image_id"; exit 0; fi\n'
-        f': > "{calls}"\n'
-        f'for value in "$@"; do printf "%s\\n" "$value" >> "{calls}"; done\n'
-        f'cat > "{stdin}"\n',
-        encoding="utf-8",
-    )
-    for path in (fake_stat, fake_compose, fake_tailscale, fake_docker):
-        path.chmod(0o700)
-
-    result = subprocess.run(  # noqa: S603 - checked-in wrapper with synthetic tools
-        [str(ROOT / "ops/nas/container-python.sh"), "-", "argument"],
-        cwd=ROOT,
-        env={
-            **os.environ,
-            "PATH": f"{tools}:/usr/bin:/bin",
-            "MY_PA_NAS_DOCKER": str(fake_docker),
-            "MY_PA_NAS_COMPOSE_PLUGIN": str(fake_compose),
-            "MY_PA_NAS_OPERATOR_ADMISSION": str(admission),
-            "MY_PA_NAS_TAILSCALE": str(fake_tailscale),
-            "MY_PA_NAS_TAILSCALE_SOCKET": str(tailscale_socket),
-            "MY_PA_DB_PASSWORD": "synthetic-not-a-secret",
-            "UNAPPROVED_OPERATOR_VALUE": "must-not-pass",
-        },
-        input="stdin-sentinel",
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stderr
-    arguments = calls.read_text(encoding="utf-8").splitlines()
-    assert "-i" in arguments
-    assert f"{fake_compose}:/usr/local/lib/docker/cli-plugins/docker-compose:ro" in arguments
-    assert f"{fake_tailscale}:/usr/local/bin/tailscale:ro" in arguments
-    assert f"{tailscale_socket}:/var/run/tailscale/tailscaled.sock:ro" in arguments
-    assert "DOCKER_CLI_PLUGIN_EXTRA_DIRS=/usr/local/lib/docker/cli-plugins" in arguments
-    assert "MY_PA_DB_PASSWORD" in arguments
-    assert "UNAPPROVED_OPERATOR_VALUE" not in arguments
-    assert "synthetic-not-a-secret" not in arguments
-    assert arguments[-3:] == [image_id, "-", "argument"]
-    assert stdin.read_text(encoding="utf-8") == "stdin-sentinel"
-
-
-def test_container_python_refuses_invalid_tailscale_authority(
-    tmp_path: Path, request: pytest.FixtureRequest
-) -> None:
-    tools = tmp_path / "bin"
-    tools.mkdir()
-    image_id = "sha256:" + "a" * 64
-    admission = tmp_path / "operator-runtime.toml"
-    admission.write_text(f'operator_image_id = "{image_id}"\n', encoding="utf-8")
-    admission.chmod(0o400)
-    fake_stat = tools / "stat"
-    fake_stat.write_text("#!/bin/sh\nprintf '0:400:1\\n'\n", encoding="utf-8")
-    fake_compose = tools / "docker-compose"
-    fake_compose.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    fake_docker = tools / "docker"
-    fake_docker.write_text(
-        "#!/bin/sh\n"
-        f'image_id="{image_id}"\n'
-        'if [ "$1 $2" = "image inspect" ]; then '
-        'printf "%s|linux|amd64\\n" "$image_id"; exit 0; fi\n'
-        "exit 0\n",
-        encoding="utf-8",
-    )
-    fake_tailscale = tools / "tailscale"
-    fake_tailscale.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    for path in (fake_stat, fake_compose, fake_docker, fake_tailscale):
-        path.chmod(0o700)
-    socket_suffix = hashlib.sha256(str(tmp_path).encode()).hexdigest()[:16]
-    tailscale_socket = Path(tempfile.gettempdir()) / f"my-pa-neg-{socket_suffix}.sock"
-    socket_handle = socket.socket(socket.AF_UNIX)
-    socket_handle.bind(str(tailscale_socket))
-    request.addfinalizer(socket_handle.close)
-    request.addfinalizer(lambda: tailscale_socket.unlink(missing_ok=True))
-    nonsocket = tmp_path / "not-a-socket"
-    nonsocket.touch()
-    base_environment = {
-        **os.environ,
-        "PATH": f"{tools}:/usr/bin:/bin",
-        "MY_PA_NAS_DOCKER": str(fake_docker),
-        "MY_PA_NAS_COMPOSE_PLUGIN": str(fake_compose),
-        "MY_PA_NAS_OPERATOR_ADMISSION": str(admission),
-    }
-    cases = (
-        (
-            {"MY_PA_NAS_TAILSCALE": str(fake_tailscale)},
-            "exact NAS Tailscale socket required",
-        ),
-        (
-            {"MY_PA_NAS_TAILSCALE_SOCKET": str(tailscale_socket)},
-            "exact NAS Tailscale executable required",
-        ),
-        (
-            {
-                "MY_PA_NAS_TAILSCALE": str(fake_tailscale),
-                "MY_PA_NAS_TAILSCALE_SOCKET": str(nonsocket),
-            },
-            "Tailscale socket is unavailable",
-        ),
-        (
-            {
-                "MY_PA_NAS_TAILSCALE": str(tools),
-                "MY_PA_NAS_TAILSCALE_SOCKET": str(tailscale_socket),
-            },
-            "Tailscale executable is unavailable",
-        ),
-        (
-            {
-                "MY_PA_NAS_TAILSCALE": f"{fake_tailscale}\n--privileged",
-                "MY_PA_NAS_TAILSCALE_SOCKET": str(tailscale_socket),
-            },
-            "newline-containing Tailscale paths are prohibited",
-        ),
-        (
-            {
-                "MY_PA_NAS_TAILSCALE": fake_tailscale.name,
-                "MY_PA_NAS_TAILSCALE_SOCKET": str(tailscale_socket),
-            },
-            "Tailscale executable path must be absolute",
-        ),
-        (
-            {
-                "MY_PA_NAS_TAILSCALE": str(fake_tailscale),
-                "MY_PA_NAS_TAILSCALE_SOCKET": os.path.relpath(tailscale_socket, ROOT),
-            },
-            "Tailscale socket path must be absolute",
-        ),
-    )
-    for extra_environment, expected_error in cases:
-        result = subprocess.run(  # noqa: S603 - wrapper with synthetic tools
-            [str(ROOT / "ops/nas/container-python.sh"), "-c", "pass"],
-            cwd=ROOT,
-            env={**base_environment, **extra_environment},
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode != 0
-        assert expected_error in result.stderr

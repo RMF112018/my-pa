@@ -26,6 +26,7 @@ import hashlib
 import os
 import secrets
 import stat
+import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -564,6 +565,15 @@ def test_a_rewrite_that_restores_the_modification_time_is_still_detected(
     before = target.stat()
     source = provider(sandbox)
     entry = next(iter(source.list_children()))
+
+    next_ctime_second = before.st_ctime_ns // 1_000_000_000 + 1
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        if time.time_ns() // 1_000_000_000 >= next_ctime_second:
+            break
+        time.sleep(0.01)
+    else:
+        pytest.fail("filesystem clock did not advance past the observed change time")
 
     target.write_bytes(b"bbbb")
     os.utime(target, ns=(before.st_atime_ns, before.st_mtime_ns))

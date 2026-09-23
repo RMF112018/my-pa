@@ -92,7 +92,12 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,
-  reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : [["list"]],
+  reporter:
+    process.env.CI && process.env.CI_RESPONSIVE_DIAGNOSTIC === "1"
+      ? [["list"], ["html", { open: "never" }], ["./e2e/ci-responsive-reporter.ts"]]
+      : process.env.CI
+        ? [["list"], ["html", { open: "never" }]]
+        : [["list"]],
   timeout: 90_000,
   expect: { timeout: 10_000 },
   use: {

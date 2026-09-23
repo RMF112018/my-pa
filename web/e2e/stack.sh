@@ -39,6 +39,8 @@ GATEWAY_PORT="${MYPA_E2E_GATEWAY_PORT:-9099}"
 GATEWAY_LOG="${WEB_DIR}/.e2e-gateway.log"
 
 gateway_pid=""
+diagnostic="${CI_RESPONSIVE_DIAGNOSTIC:-}"
+setup_stage="python_check"
 
 # CREATE and DROP DATABASE cannot run inside a transaction block, so the
 # connection is put in AUTOCOMMIT — the same thing the Python database suites do
@@ -62,7 +64,19 @@ cleanup() {
   fi
   administer "DROP DATABASE IF EXISTS \"${DATABASE_NAME}\" WITH (FORCE)" || true
 }
-trap cleanup EXIT
+
+on_exit() {
+  local status=$?
+  trap - EXIT
+  if [[ "${diagnostic}" == "1" && "${status}" -ne 0 && "${setup_stage}" != "playwright" ]]; then
+    # Only fixed stage names assigned below and the shell's numeric exit code
+    # enter this annotation. Never include a command, path, or subprocess text.
+    printf '::error title=Responsive setup failed::stage=%s status=%d\n' "${setup_stage}" "${status}" >&2
+  fi
+  cleanup
+  exit "${status}"
+}
+trap on_exit EXIT
 
 if [[ ! -x "${PYTHON}" ]]; then
   echo "e2e: ${PYTHON} is not executable. The browser suite needs the repository venv." >&2
@@ -70,22 +84,29 @@ if [[ ! -x "${PYTHON}" ]]; then
 fi
 
 echo "e2e: creating the disposable database ${DATABASE_NAME}"
+setup_stage="database_reset"
 administer "DROP DATABASE IF EXISTS \"${DATABASE_NAME}\" WITH (FORCE)"
+setup_stage="database_create"
 administer "CREATE DATABASE \"${DATABASE_NAME}\""
 
 echo "e2e: migrating it to head"
+setup_stage="database_migrate"
 ( cd "${REPO_DIR}" && PYTHONPATH="${REPO_DIR}/src" MY_PA_DATABASE_URL="${DATABASE_URL}" "${PYTHON}" -m alembic upgrade head >/dev/null )
 
 echo "e2e: seeding one Principal-scoped synthetic counterparty"
+setup_stage="seed_work"
 ( cd "${REPO_DIR}" && PYTHONPATH="${REPO_DIR}/src" MY_PA_DATABASE_URL="${DATABASE_URL}" "${PYTHON}" tests/end_to_end/seed_work.py )
 
 echo "e2e: seeding two Principal-scoped open review cases"
+setup_stage="seed_review"
 ( cd "${REPO_DIR}" && PYTHONPATH="${REPO_DIR}/src" MY_PA_DATABASE_URL="${DATABASE_URL}" "${PYTHON}" tests/end_to_end/seed_review.py )
 
 echo "e2e: seeding one Principal-scoped Intelligence artifact"
+setup_stage="seed_reports"
 ( cd "${REPO_DIR}" && PYTHONPATH="${REPO_DIR}/src" MY_PA_DATABASE_URL="${DATABASE_URL}" "${PYTHON}" tests/end_to_end/seed_reports.py )
 
 echo "e2e: seeding Principal-scoped synthetic people"
+setup_stage="seed_entities"
 ( cd "${REPO_DIR}" && PYTHONPATH="${REPO_DIR}/src" MY_PA_DATABASE_URL="${DATABASE_URL}" "${PYTHON}" tests/end_to_end/seed_entities.py )
 
 # Seed one Principal-scoped synthetic Constraint Register.
@@ -98,6 +119,7 @@ echo "e2e: seeding Principal-scoped synthetic people"
 # no Constraint mutation and so cannot create them through the BFF the way the
 # Work seed creates Commitments. Everything below is synthetic and disposable.
 echo "e2e: seeding one Principal-scoped synthetic Constraint Register"
+setup_stage="seed_constraints"
 (
   cd "${REPO_DIR}"
   PYTHONPATH="${REPO_DIR}/src" MY_PA_DATABASE_URL="${DATABASE_URL}" "${PYTHON}" - <<'SEED'
@@ -269,6 +291,7 @@ SEED
 )
 
 echo "e2e: starting the Python gateway on 127.0.0.1:${GATEWAY_PORT}"
+setup_stage="gateway_start"
 # Session-service origin checks use this allowlist. Live Next is :3100; the
 # dead-gateway Next is :3101. Omitting :3101 makes synthetic sign-in 403.
 (
@@ -287,6 +310,7 @@ echo "e2e: starting the Python gateway on 127.0.0.1:${GATEWAY_PORT}"
 ) >"${GATEWAY_LOG}" 2>&1 &
 gateway_pid=$!
 
+setup_stage="gateway_ready"
 for _ in $(seq 1 50); do
   if grep -q "serving" "${GATEWAY_LOG}" 2>/dev/null; then break; fi
   if ! kill -0 "${gateway_pid}" 2>/dev/null; then
@@ -298,5 +322,6 @@ for _ in $(seq 1 50); do
 done
 
 echo "e2e: running the browser suite"
+setup_stage="playwright"
 cd "${WEB_DIR}"
 MYPA_E2E_GATEWAY_URL="http://127.0.0.1:${GATEWAY_PORT}" npx playwright test "$@"

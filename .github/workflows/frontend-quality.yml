@@ -331,6 +331,11 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
+      - name: Verify responsive diagnostics use fixed annotations
+        run: |
+          set -euo pipefail
+          node --test e2e/ci-responsive-reporter.test.mjs
+          bash e2e/ci-responsive-stage.test.sh
       - run: npx playwright install chromium
       - name: Verify the responsive selection is what this lane claims
         run: |
@@ -353,6 +358,7 @@ jobs:
             --sentinel="WP08 Capture Project opened controls preserve focus and width"
       - name: Run desktop, tablet, mobile and Work reflow e2e
         env:
+          CI_RESPONSIVE_DIAGNOSTIC: "1"
           MYPA_E2E_PYTHON: python
           MYPA_E2E_ADMIN_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/postgres
           MYPA_E2E_DATABASE_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/my_pa_wp13_e2e

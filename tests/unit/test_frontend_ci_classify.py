@@ -278,8 +278,7 @@ class TestWp08CaptureProjectSpecsAreCollected:
         assert naming, f"no job in the workflow names {spec}"
         blocking = naming & set(_required_needs())
         assert blocking, (
-            f"{spec} is named only by {sorted(naming)}, "
-            "none of which frontend / required waits on"
+            f"{spec} is named only by {sorted(naming)}, none of which frontend / required waits on"
         )
 
     @pytest.mark.parametrize(("spec", "job"), sorted(SPECS.items()))

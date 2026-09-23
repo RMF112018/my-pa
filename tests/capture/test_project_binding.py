@@ -22,8 +22,8 @@ from my_pa.bootstrap.gateway import GatewayRuntime
 from my_pa.contracts.ports import CaptureAdmissionRequest
 from my_pa.contracts.v1.envelope import ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
-from my_pa.domain.capture.version import CaptureContent, ProcessingPolicy
 from my_pa.domain.capture.submission import CaptureKind
+from my_pa.domain.capture.version import CaptureContent, ProcessingPolicy
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.identity.operation import Capability
 from my_pa.infrastructure.persistence.tables import audit_events, projects

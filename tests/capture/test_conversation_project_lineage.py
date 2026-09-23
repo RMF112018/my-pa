@@ -44,10 +44,10 @@ from my_pa.application.commands import (
 )
 from my_pa.bootstrap.gateway import GatewayRuntime
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
+from my_pa.domain.capture.review import Disposition
 from my_pa.domain.capture.submission import CaptureKind
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
-from my_pa.domain.capture.review import Disposition
 from my_pa.infrastructure.jobs.capture_pipeline import process_capture_version
 from my_pa.infrastructure.jobs.worker import issue_worker_owner, run_worker
 from my_pa.infrastructure.persistence.jobs import CAPTURE_JOBS
@@ -252,11 +252,15 @@ def test_conversation_project_survives_the_real_worker_and_review_lineage(
     _drain(runtime)
 
     with runtime.work_engine.connect() as connection:
-        stages = connection.execute(
-            select(capture_stage_results.c.stage).where(
-                capture_stage_results.c.version_id == version_id
+        stages = (
+            connection.execute(
+                select(capture_stage_results.c.stage).where(
+                    capture_stage_results.c.version_id == version_id
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         proposal_rows = connection.execute(
             select(capture_proposals.c.proposal_id, capture_proposals.c.version_id).where(
                 capture_proposals.c.version_id == version_id
@@ -321,7 +325,12 @@ def test_conversation_project_survives_the_real_worker_and_review_lineage(
     # 8. And the canonical read still reports it, so the lineage and the read
     #    agree rather than one of them being repaired by the other.
     read = succeeded(
-        invoke(runtime, Capability.CAPTURE_READ, ReadCapture(capture_id=capture_id), "lineage-read"),
+        invoke(
+            runtime,
+            Capability.CAPTURE_READ,
+            ReadCapture(capture_id=capture_id),
+            "lineage-read",
+        ),
         "capture.read",
     )
     assert read["project_id"] == PROJECT
@@ -342,11 +351,15 @@ def test_conversation_with_no_project_stays_no_project_through_the_same_path(
     _drain(runtime)
 
     with runtime.work_engine.connect() as connection:
-        proposal_versions = connection.execute(
-            select(capture_proposals.c.version_id).where(
-                capture_proposals.c.version_id == version_id
+        proposal_versions = (
+            connection.execute(
+                select(capture_proposals.c.version_id).where(
+                    capture_proposals.c.version_id == version_id
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
     assert proposal_versions, "no proposal was produced for the no-Project conversation"
     for proposal_version in proposal_versions:
         # Null, not inferred from anywhere. Nothing downstream may supply one.
@@ -355,11 +368,15 @@ def test_conversation_with_no_project_stays_no_project_through_the_same_path(
     accepted = _accept_one_case(runtime)
     if accepted is not None:
         with runtime.work_engine.connect() as connection:
-            assertion_versions = connection.execute(
-                select(capture_assertions.c.version_id).where(
-                    capture_assertions.c.version_id == version_id
+            assertion_versions = (
+                connection.execute(
+                    select(capture_assertions.c.version_id).where(
+                        capture_assertions.c.version_id == version_id
+                    )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
         for assertion_version in assertion_versions:
             assert _project_through_version(runtime.work_engine, assertion_version) is None
 
@@ -395,11 +412,15 @@ def test_replaying_the_same_conversation_intent_adds_no_second_lineage(
     _drain(runtime)
     _drain(runtime)
     with runtime.work_engine.connect() as connection:
-        proposals = connection.execute(
-            select(capture_proposals.c.proposal_id).where(
-                capture_proposals.c.version_id == first["version_id"]
+        proposals = (
+            connection.execute(
+                select(capture_proposals.c.proposal_id).where(
+                    capture_proposals.c.version_id == first["version_id"]
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
     assert len(proposals) == len(set(proposals))
     assert _project_through_version(runtime.work_engine, first["version_id"]) == PROJECT
 
@@ -418,15 +439,23 @@ def test_a_foreign_principal_cannot_reach_the_conversation_lineage(
     _drain(runtime)
 
     with runtime.work_engine.connect() as connection:
-        foreign_cases = connection.execute(
-            select(capture_review_cases.c.review_case_id).where(
-                capture_review_cases.c.principal_id == FOREIGN_PRINCIPAL
+        foreign_cases = (
+            connection.execute(
+                select(capture_review_cases.c.review_case_id).where(
+                    capture_review_cases.c.principal_id == FOREIGN_PRINCIPAL
+                )
             )
-        ).scalars().all()
-        owned_versions = connection.execute(
-            select(capture_versions.c.owner_principal_id).where(
-                capture_versions.c.version_id == created["version_id"]
+            .scalars()
+            .all()
+        )
+        owned_versions = (
+            connection.execute(
+                select(capture_versions.c.owner_principal_id).where(
+                    capture_versions.c.version_id == created["version_id"]
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
     assert foreign_cases == []
     assert owned_versions == [principal_id]

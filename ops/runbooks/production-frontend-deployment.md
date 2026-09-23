@@ -63,7 +63,7 @@ restart or image replacement from changing live public traffic.
    package comprises app, web, operator, PostgreSQL, and proxy `.tar` plus
    `.metadata.json` files, `postgres.index.json`,
    `image-manifest.candidate.toml`, `operator-runtime.candidate.toml`, and an
-   exact-HEAD Git source bundle: fourteen inventoried members. Verify bundle
+   exact-HEAD Git source bundle: 14 inventoried members. Verify bundle
    head, SHA-256, size, and member set; re-fetch `origin/main` before transfer.
 3. **Transfer source first and preflight the preserved runtime.** Prove the
    exact `sudo -n` privilege for each planned operation, an exclusive owner-only
@@ -83,11 +83,11 @@ restart or image replacement from changing live public traffic.
    invoke old lifecycle/running-identity gates for the preserved `smoke`
    runtime. Full static ingress shape and live proxy publication are an early
    screen; full ingress, Tailscale, and public route/traffic gates remain.
-   A refusal stops before the other thirteen members transfer and leaves all
+   A refusal stops before the other 13 members transfer and leaves all
    runtime state selected as it was. A pass permits a fresh
-   `origin/main` check, transfer of the remaining thirteen members, a *new*
+   `origin/main` check, transfer of the remaining 13 members, a *new*
    versioned root-owned mode-0700 NAS artifact directory with root-owned
-   mode-0400 regular files, and SHA-256/size readback of all fourteen members.
+   mode-0400 regular files, and SHA-256/size readback of all 14 members.
    Repeat the old-runtime and live-main gates before later mutation. A pass
    does not authorize writer stopping or protected-configuration mutation.
    Never modify the old checkout or copy credentials, environment, database

@@ -11,7 +11,7 @@ and its workflow; first-time provisioning and pilot activation have different
 gates in [`../runbooks/nas-lifecycle.md`](../runbooks/nas-lifecycle.md).
 
 An existing smoke-runtime upgrade stages the exact-HEAD Git source bundle
-first, before the other thirteen members of the closed local package. After
+first, before the other 13 members of the closed local package. After
 NAS byte readback and bundle verification, clone it into a new exclusive clean
 root-owned checkout. The fixed-purpose
 [`preserved-runtime-env-preflight.py`](preserved-runtime-env-preflight.py) from
@@ -37,7 +37,7 @@ running-identity gates. The preserved checkout's
 file. Full static ingress-manifest shape and live proxy publication are an
 early screen; full ingress, public route/traffic, and Tailscale gates remain
 separate. The helper reports no secret values. A refusal leaves the old runtime
-selected and blocks transfer of the remaining thirteen members. A pass permits
+selected and blocks transfer of the remaining 13 members. A pass permits
 their transfer and byte readback but does not authorize
 deployment, writer stopping, or protected-configuration mutation. The workflow
 still repeats the full gates and live-`origin/main` checks before any

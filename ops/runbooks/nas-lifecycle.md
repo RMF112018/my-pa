@@ -9,7 +9,7 @@ six long-lived services.
 
 For a live-main upgrade of an already admitted smoke runtime, follow the
 [`my-pa-nas-build-deploy` workflow](../../.codex/skills/my-pa-nas-build-deploy/references/workflow.md).
-Inventory the closed fourteen-member package locally and re-fetch authenticated
+Inventory the closed 14-member package locally and re-fetch authenticated
 `origin/main` before transfer. Land and read back only its exact-HEAD source
 bundle first. Verify its advertised head and clone it into a new exclusive,
 clean, root-owned checkout at the inventoried commit/tree. A bundle checksum
@@ -17,7 +17,7 @@ alone is not source authentication. The authenticated remote, current fetched
 commit/tree, local inventory, NAS byte readback, bundle verification, and new
 checkout identity must agree.
 
-Before the other thirteen members cross to the NAS, run the new checkout's
+Before the other 13 members cross to the NAS, run the new checkout's
 fixed-purpose `ops/nas/preserved-runtime-env-preflight.py` through the
 verified `/usr/bin/python3` Python 3.8 interpreter and bounded noninteractive
 privilege. It does not change canonical configuration. Before any old-checkout
@@ -44,7 +44,7 @@ remain separate gates.
 
 Keep old runtime, PostgreSQL, and firewall state untouched. The preflight must
 not print protected values or unbounded command output. If it refuses, stop
-with the old runtime selected and leave the other thirteen members untransferred.
+with the old runtime selected and leave the other 13 members untransferred.
 On daemon outage, ambiguous creation, or unverified cleanup, stop transfer,
 report only the sanitized non-secret transaction identity for operator
 recovery, and never remove a foreign container. An uncatchable host `SIGKILL`

@@ -188,7 +188,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
         working-directory: web
-      - run: npx vitest run src/lib/http/mutation-admission.test.ts src/lib/http/origin.test.ts src/lib/http/mutation-route-manifest.test.ts src/lib/http/security-headers.test.ts src/lib/http/safe-href.test.ts src/app/api/capture/project-route.test.ts
+      - run: npx vitest run src/lib/http/mutation-admission.test.ts src/lib/http/origin.test.ts src/lib/http/mutation-route-manifest.test.ts src/lib/http/security-headers.test.ts src/lib/http/safe-href.test.ts src/app/api/capture/project-route.test.ts src/app/api/project-controls/constraint-security.test.ts
         working-directory: web
 
   e2e-critical:
@@ -242,6 +242,20 @@ jobs:
           python_bin="$(command -v python)"
           test -x "${python_bin}"
           MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/webauthn.spec.ts e2e/auth-public.spec.ts e2e/browser-security.spec.ts e2e/work-mutations.spec.ts e2e/review-decisions.spec.ts e2e/journeys.spec.ts e2e/reports-contract.spec.ts e2e/people-contract.spec.ts e2e/intelligence-journey.spec.ts e2e/search-contract.spec.ts e2e/goodnotes.spec.ts e2e/canvas.spec.ts e2e/system.spec.ts e2e/diagnostics-visibility.spec.ts e2e/constraints-read-plane.spec.ts e2e/project-controls-settings.spec.ts e2e/capture-project.spec.ts e2e/capture-task-project.spec.ts --project=desktop
+      - name: Run the Constraint authoring real-stack desktop e2e
+        env:
+          MYPA_E2E_PYTHON: python
+          MYPA_E2E_ADMIN_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/postgres
+          MYPA_E2E_DATABASE_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/my_pa_wp13_e2e
+        run: |
+          set -euo pipefail
+          # R01-WP09 (plan D3): its own `npm run e2e` invocation, so stack.sh
+          # drops and re-seeds a fresh disposable database for it. This spec
+          # mutates the seeded Register, and constraints-read-plane.spec.ts in
+          # the step above asserts exact seed counts; never merge the two lists.
+          python_bin="$(command -v python)"
+          test -x "${python_bin}"
+          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/constraints-mutations.spec.ts --project=desktop
 
   accessibility:
     name: frontend / accessibility

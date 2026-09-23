@@ -108,6 +108,71 @@ export const MUTATION_ROUTE_MANIFEST: readonly MutationRouteManifestEntry[] = [
   },
   {
     method: "POST",
+    path: "src/app/api/project-controls/projects/[projectId]/constraints/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
+    path: "src/app/api/project-controls/projects/[projectId]/constraints/drafts/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "PATCH",
+    path: "src/app/api/project-controls/projects/[projectId]/constraints/[constraintId]/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
+    path: "src/app/api/project-controls/projects/[projectId]/constraints/[constraintId]/publish/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
+    path: "src/app/api/project-controls/projects/[projectId]/constraints/[constraintId]/transition/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
+    path: "src/app/api/project-controls/projects/[projectId]/constraints/[constraintId]/close/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
+    path: "src/app/api/project-controls/projects/[projectId]/constraints/[constraintId]/close-follow-up/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
+    path: "src/app/api/project-controls/projects/[projectId]/constraints/[constraintId]/void/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
+    path: "src/app/api/project-controls/projects/[projectId]/constraints/[constraintId]/reopen/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
+    path: "src/app/api/project-controls/projects/[projectId]/constraint-categories/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "PATCH",
+    path: "src/app/api/project-controls/projects/[projectId]/constraint-categories/[categoryId]/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
+    path: "src/app/api/project-controls/projects/[projectId]/constraint-categories/[categoryId]/deactivate/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
+    path: "src/app/api/project-controls/projects/[projectId]/constraint-categories/reorder/route.ts",
+    classification: "AUTHENTICATED_BROWSER_MUTATION",
+  },
+  {
+    method: "POST",
     path: "src/app/api/system/diagnostics/route.ts",
     classification: "AUTHENTICATED_BROWSER_MUTATION",
   },

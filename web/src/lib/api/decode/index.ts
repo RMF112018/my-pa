@@ -83,6 +83,19 @@ import { decodeConstraintsPortfolioOverview } from "./capabilities/constraints.p
 import { decodeConstraintCategoriesList } from "./capabilities/constraint_categories.list";
 import { decodeProjectControlsStatus } from "./capabilities/project_controls.status";
 import { decodeProjectControlsConfigure } from "./capabilities/project_controls.configure";
+import { decodeConstraintsCreate } from "./capabilities/constraints.create";
+import { decodeConstraintsCreatePublished } from "./capabilities/constraints.create_published";
+import { decodeConstraintsUpdate } from "./capabilities/constraints.update";
+import { decodeConstraintsPublish } from "./capabilities/constraints.publish";
+import { decodeConstraintsTransition } from "./capabilities/constraints.transition";
+import { decodeConstraintsClose } from "./capabilities/constraints.close";
+import { decodeConstraintsCloseFollowUp } from "./capabilities/constraints.close_follow_up";
+import { decodeConstraintsVoid } from "./capabilities/constraints.void";
+import { decodeConstraintsReopen } from "./capabilities/constraints.reopen";
+import { decodeConstraintCategoriesCreate } from "./capabilities/constraint_categories.create";
+import { decodeConstraintCategoriesUpdate } from "./capabilities/constraint_categories.update";
+import { decodeConstraintCategoriesDeactivate } from "./capabilities/constraint_categories.deactivate";
+import { decodeConstraintCategoriesReorder } from "./capabilities/constraint_categories.reorder";
 import type { CapabilityResults, Decoder, GatewayCapability } from "./types";
 
 export type { CapabilityResults, DecodeResult, Decoder } from "./types";
@@ -171,6 +184,19 @@ export const DECODERS = {
   "constraint_categories.list": decodeConstraintCategoriesList,
   "project_controls.status": decodeProjectControlsStatus,
   "project_controls.configure": decodeProjectControlsConfigure,
+  "constraints.create": decodeConstraintsCreate,
+  "constraints.create_published": decodeConstraintsCreatePublished,
+  "constraints.update": decodeConstraintsUpdate,
+  "constraints.publish": decodeConstraintsPublish,
+  "constraints.transition": decodeConstraintsTransition,
+  "constraints.close": decodeConstraintsClose,
+  "constraints.close_follow_up": decodeConstraintsCloseFollowUp,
+  "constraints.void": decodeConstraintsVoid,
+  "constraints.reopen": decodeConstraintsReopen,
+  "constraint_categories.create": decodeConstraintCategoriesCreate,
+  "constraint_categories.update": decodeConstraintCategoriesUpdate,
+  "constraint_categories.deactivate": decodeConstraintCategoriesDeactivate,
+  "constraint_categories.reorder": decodeConstraintCategoriesReorder,
 } satisfies { [K in GatewayCapability]: Decoder<CapabilityResults[K]> };
 
 /**

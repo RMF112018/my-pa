@@ -23,6 +23,13 @@ from pathlib import Path
 from typing import Any, Final
 
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
+from my_pa.application.constraint_management import (
+    ConstraintCategoryMutationResult,
+    ConstraintCategoryReorderResult,
+    ConstraintFollowUpResult,
+    ConstraintMutationDisposition,
+    ConstraintMutationResult,
+)
 from my_pa.application.constraint_settings import (
     ProjectControlsConfigurationResult,
     ProjectControlsDisposition,
@@ -33,6 +40,7 @@ from my_pa.application.goodnotes_content import content_payload
 from my_pa.application.goodnotes_semantics import work_payload
 from my_pa.application.service import (
     _HANDLERS,
+    ApplicationService,
     _constraint_payload,
     _project_controls_configuration_payload,
     _project_controls_status_payload,
@@ -68,21 +76,26 @@ from my_pa.domain.extraction.text import EXTRACTOR, EXTRACTOR_VERSION
 from my_pa.domain.goodnotes.models import GoodNotesPageRaster, GoodNotesPageWork
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.modeling.gate import ModelRoutePolicy
-from my_pa.domain.project_controls.category import ConstraintCategoryState
+from my_pa.domain.project_controls.category import ConstraintCategory, ConstraintCategoryState
 from my_pa.domain.project_controls.constraint import (
     ConstraintAttentionReason,
     ConstraintFieldKey,
     ConstraintLifecycleState,
+    ConstraintOrigin,
     ConstraintRecordQuality,
+    ProjectConstraint,
 )
 from my_pa.domain.project_controls.history import (
+    ConstraintCategoryHistoryEntry,
+    ConstraintCategoryMutationOperation,
+    ConstraintHistoryEntry,
     ConstraintMutationActor,
     ConstraintMutationOperation,
     ConstraintMutationOutcome,
     ConstraintProjectSettingsHistoryEntry,
     ConstraintProjectSettingsOutcome,
 )
-from my_pa.domain.project_controls.party import PartyKind
+from my_pa.domain.project_controls.party import PartyKind, PartyRef
 from my_pa.domain.project_controls.read_models import (
     ConstraintCategoryRef,
     ConstraintCategoryView,
@@ -1485,6 +1498,19 @@ def python_success_payloads() -> dict[str, dict[str, Any]]:
         "constraint_categories.list": _constraint_categories_list(),
         "project_controls.status": _project_controls_status(),
         "project_controls.configure": _project_controls_configure(),
+        "constraints.create": _constraints_create(),
+        "constraints.create_published": _constraints_create_published(),
+        "constraints.update": _constraints_update(),
+        "constraints.publish": _constraints_publish(),
+        "constraints.transition": _constraints_transition(),
+        "constraints.close": _constraints_close(),
+        "constraints.close_follow_up": _constraints_close_follow_up(),
+        "constraints.void": _constraints_void(),
+        "constraints.reopen": _constraints_reopen(),
+        "constraint_categories.create": _constraint_categories_create(),
+        "constraint_categories.update": _constraint_categories_update(),
+        "constraint_categories.deactivate": _constraint_categories_deactivate(),
+        "constraint_categories.reorder": _constraint_categories_reorder(),
     }
 
 
@@ -1875,12 +1901,345 @@ def _project_controls_configure() -> dict[str, Any]:
     )
 
 
+# --- Constraint authoring (R01-WP09) -----------------------------------------
+#
+# The thirteen authoring results, built from the *domain* dataclasses the
+# mutation service returns and serialised the way the handlers serialise them.
+# The single-record and single-Category shapes go through the handlers' own
+# `ApplicationService._constraint_mutation_result` /
+# `_constraint_category_result`; Close + Follow-up and reorder build their dict
+# inline in `_constraints_close_follow_up` / `_constraint_categories_reorder`,
+# so the two builders below restate those four- and three-key dicts over the
+# same `_constraint_payload` and nothing else.
+#
+# **The raw wire is deliberately the unsafe one.** Every receipt below carries
+# an idempotency key, a request digest, a client context and a correlation
+# identifier, and every record carries its `principal_id`, because that is what
+# `asdict` publishes. A fixture with those fields blanked would let a decoder
+# that passed them through look clean; this one makes the strip assertion in
+# `constraints.authoring.decode.test.ts` a claim about the real bytes.
+#
+# Each fixture is the APPLIED shape. NO_OP and REPLAYED differ only in values
+# (the disposition, the receipt's outcome and versions), not in keys, so the
+# Vitest suite derives them from these same committed bytes.
+
+AUTHORING_PRINCIPAL_ID: Final = "prn_aaaaaaaa11111111aaaaaaaa11111111"
+AUTHORING_SUCCESSOR_ID: Final = "cst_bbbbbbbb22222222"
+AUTHORING_SECOND_CATEGORY_ID: Final = "ccat_bbbbbbbb22222222"
+AUTHORING_CORRELATION_ID: Final = "corr_aaaaaaaa11111111"
+AUTHORING_CREATED_AT: Final = datetime(2026, 8, 1, 9, 0, 0, tzinfo=UTC)
+
+
+def _authoring_constraint(**changes: object) -> ProjectConstraint:
+    """A published, IDENTIFIED Constraint at version 2; `changes` moves it on."""
+    base = ProjectConstraint(
+        constraint_id=CONSTRAINT_ID,
+        principal_id=AUTHORING_PRINCIPAL_ID,
+        lifecycle_state=ConstraintLifecycleState.IDENTIFIED,
+        origin=ConstraintOrigin.PRODUCT,
+        created_at=AUTHORING_CREATED_AT,
+        updated_at=AT,
+        version=2,
+        project_id=CONSTRAINT_PROJECT_ID,
+        category_id=CONSTRAINT_CATEGORY_ID,
+        constraint_code="2.01",
+        description="Synthetic access constraint",
+        date_identified=date(2026, 8, 1),
+        due_date=date(2026, 8, 16),
+        reference="RFI-014",
+        current_update="Awaiting gate keys",
+        bic=(
+            PartyRef(kind=PartyKind.PRINCIPAL),
+            PartyRef(kind=PartyKind.ENTITY, entity_id="ent_aaaaaaaa11111111", label="Pat"),
+        ),
+        responsible=(PartyRef(kind=PartyKind.UNRESOLVED, label="Steel subcontractor"),),
+        published_at=AT,
+    )
+    return replace(base, **changes)
+
+
+def _authoring_receipt(
+    record: ProjectConstraint,
+    operation: ConstraintMutationOperation,
+    *,
+    before_version: int,
+    history_suffix: str = "aaaaaaaa11111111",
+    idempotency_key: str = "parity-constraint-authoring-1",
+) -> ConstraintHistoryEntry:
+    """The APPLIED receipt that moved `record` from `before_version` to its version."""
+    return ConstraintHistoryEntry(
+        history_id=f"chst_{history_suffix}",
+        principal_id=AUTHORING_PRINCIPAL_ID,
+        constraint_id=record.constraint_id,
+        operation=operation,
+        actor=ConstraintMutationActor.PRINCIPAL,
+        outcome=ConstraintMutationOutcome.APPLIED,
+        before_version=before_version,
+        after_version=record.version,
+        occurred_at=AT,
+        recorded_at=AT,
+        project_id=record.project_id,
+        revision_id=f"crev_{history_suffix}",
+        idempotency_key=idempotency_key,
+        request_digest=DIGEST,
+        client_context="web",
+        correlation_id=AUTHORING_CORRELATION_ID,
+    )
+
+
+def _authoring_result(
+    record: ProjectConstraint, operation: ConstraintMutationOperation, *, before_version: int
+) -> dict[str, Any]:
+    return ApplicationService._constraint_mutation_result(
+        ConstraintMutationResult(
+            disposition=ConstraintMutationDisposition.APPLIED,
+            record=record,
+            receipt=_authoring_receipt(record, operation, before_version=before_version),
+        )
+    )
+
+
+def _constraints_create() -> dict[str, Any]:
+    draft = _authoring_constraint(
+        lifecycle_state=ConstraintLifecycleState.DRAFT,
+        version=1,
+        constraint_code=None,
+        published_at=None,
+        reference=None,
+        current_update=None,
+    )
+    return _authoring_result(draft, ConstraintMutationOperation.CREATE, before_version=0)
+
+
+def _constraints_create_published() -> dict[str, Any]:
+    # The *publication* receipt, the second of the composite's two writes.
+    return _authoring_result(
+        _authoring_constraint(), ConstraintMutationOperation.PUBLISH, before_version=1
+    )
+
+
+def _constraints_update() -> dict[str, Any]:
+    return _authoring_result(
+        _authoring_constraint(version=3, current_update="Gate keys issued"),
+        ConstraintMutationOperation.UPDATE,
+        before_version=2,
+    )
+
+
+def _constraints_publish() -> dict[str, Any]:
+    return _authoring_result(
+        _authoring_constraint(), ConstraintMutationOperation.PUBLISH, before_version=1
+    )
+
+
+def _constraints_transition() -> dict[str, Any]:
+    return _authoring_result(
+        _authoring_constraint(lifecycle_state=ConstraintLifecycleState.IN_PROGRESS, version=3),
+        ConstraintMutationOperation.TRANSITION,
+        before_version=2,
+    )
+
+
+def _closed_constraint() -> ProjectConstraint:
+    return _authoring_constraint(
+        lifecycle_state=ConstraintLifecycleState.CLOSED,
+        version=4,
+        completion_date=date(2026, 8, 9),
+        closure_commentary="Keys issued to the steel crew",
+    )
+
+
+def _constraints_close() -> dict[str, Any]:
+    return _authoring_result(
+        _closed_constraint(), ConstraintMutationOperation.CLOSE, before_version=3
+    )
+
+
+def _constraints_close_follow_up() -> dict[str, Any]:
+    """`_constraints_close_follow_up`'s own six-key dict, over the same serialiser."""
+    predecessor = _closed_constraint()
+    successor = _authoring_constraint(
+        constraint_id=AUTHORING_SUCCESSOR_ID,
+        constraint_code="2.02",
+        description="Synthetic follow-up constraint",
+        date_identified=date(2026, 8, 9),
+        due_date=date(2026, 8, 23),
+        reference=None,
+        current_update=None,
+    )
+    result = ConstraintFollowUpResult(
+        disposition=ConstraintMutationDisposition.APPLIED,
+        predecessor=predecessor,
+        successor=successor,
+        predecessor_receipt=_authoring_receipt(
+            predecessor, ConstraintMutationOperation.CLOSE, before_version=3
+        ),
+        successor_receipt=_authoring_receipt(
+            successor,
+            ConstraintMutationOperation.PUBLISH,
+            before_version=1,
+            history_suffix="bbbbbbbb22222222",
+            idempotency_key="parity-constraint-authoring-successor",
+        ),
+        relationship_id="crel_aaaaaaaa11111111",
+    )
+    return {
+        "disposition": result.disposition.value,
+        "predecessor": _constraint_payload(result.predecessor),
+        "successor": _constraint_payload(result.successor),
+        "predecessor_receipt": _constraint_payload(result.predecessor_receipt),
+        "successor_receipt": _constraint_payload(result.successor_receipt),
+        "relationship_id": result.relationship_id,
+    }
+
+
+def _constraints_void() -> dict[str, Any]:
+    return _authoring_result(
+        _authoring_constraint(
+            lifecycle_state=ConstraintLifecycleState.VOID,
+            version=3,
+            voided_date=date(2026, 8, 9),
+            void_reason="Duplicate of 2.03",
+        ),
+        ConstraintMutationOperation.VOID,
+        before_version=2,
+    )
+
+
+def _constraints_reopen() -> dict[str, Any]:
+    return _authoring_result(
+        _authoring_constraint(version=5), ConstraintMutationOperation.REOPEN, before_version=4
+    )
+
+
+def _authoring_category(**changes: object) -> ConstraintCategory:
+    """A domain Category. It has no `version`: the receipt is where that lives."""
+    base = ConstraintCategory(
+        category_id=CONSTRAINT_CATEGORY_ID,
+        principal_id=AUTHORING_PRINCIPAL_ID,
+        project_id=CONSTRAINT_PROJECT_ID,
+        prefix="2",
+        title="Site access",
+        state=ConstraintCategoryState.ACTIVE,
+        created_at=AUTHORING_CREATED_AT,
+        updated_at=AT,
+        description="Access, egress and laydown",
+        display_order=0,
+        prefix_locked_at=None,
+    )
+    return replace(base, **changes)
+
+
+def _category_receipt(
+    category: ConstraintCategory,
+    operation: ConstraintCategoryMutationOperation,
+    *,
+    before_version: int,
+    history_suffix: str = "aaaaaaaa11111111",
+    idempotency_key: str | None = "parity-category-authoring-1",
+) -> ConstraintCategoryHistoryEntry:
+    return ConstraintCategoryHistoryEntry(
+        history_id=f"cchst_{history_suffix}",
+        principal_id=AUTHORING_PRINCIPAL_ID,
+        project_id=category.project_id,
+        category_id=category.category_id,
+        operation=operation,
+        actor=ConstraintMutationActor.PRINCIPAL,
+        outcome=ConstraintMutationOutcome.APPLIED,
+        before_version=before_version,
+        after_version=before_version + 1,
+        occurred_at=AT,
+        recorded_at=AT,
+        idempotency_key=idempotency_key,
+        request_digest=DIGEST,
+        client_context="web",
+        correlation_id=AUTHORING_CORRELATION_ID,
+    )
+
+
+def _category_result(
+    category: ConstraintCategory,
+    operation: ConstraintCategoryMutationOperation,
+    *,
+    before_version: int,
+) -> dict[str, Any]:
+    return ApplicationService._constraint_category_result(
+        ConstraintCategoryMutationResult(
+            disposition=ConstraintMutationDisposition.APPLIED,
+            record=category,
+            receipt=_category_receipt(category, operation, before_version=before_version),
+        )
+    )
+
+
+def _constraint_categories_create() -> dict[str, Any]:
+    return _category_result(
+        _authoring_category(), ConstraintCategoryMutationOperation.CREATE, before_version=0
+    )
+
+
+def _constraint_categories_update() -> dict[str, Any]:
+    return _category_result(
+        _authoring_category(title="Site access and laydown", prefix_locked_at=AT),
+        ConstraintCategoryMutationOperation.UPDATE,
+        before_version=1,
+    )
+
+
+def _constraint_categories_deactivate() -> dict[str, Any]:
+    # `deactivate_category` records `UPDATE`: a Category has no deactivate operation.
+    return _category_result(
+        _authoring_category(state=ConstraintCategoryState.INACTIVE),
+        ConstraintCategoryMutationOperation.UPDATE,
+        before_version=2,
+    )
+
+
+def _constraint_categories_reorder() -> dict[str, Any]:
+    """`_constraint_categories_reorder`'s own three-key dict, over the same serialiser.
+
+    Two Categories, so positional alignment is a property the fixture can show.
+    `display_order` is the position `reorder_categories` writes (`enumerate`,
+    zero-based), and the caller's key sits on the first receipt only, as it does
+    there.
+    """
+    first = _authoring_category(
+        category_id=AUTHORING_SECOND_CATEGORY_ID, prefix="1", title="Power", display_order=0
+    )
+    second = _authoring_category(display_order=1)
+    result = ConstraintCategoryReorderResult(
+        disposition=ConstraintMutationDisposition.APPLIED,
+        records=(first, second),
+        receipts=(
+            _category_receipt(
+                first,
+                ConstraintCategoryMutationOperation.UPDATE,
+                before_version=1,
+                history_suffix="bbbbbbbb22222222",
+                idempotency_key="parity-category-reorder-1",
+            ),
+            _category_receipt(
+                second,
+                ConstraintCategoryMutationOperation.UPDATE,
+                before_version=3,
+                history_suffix="cccccccc33333333",
+                idempotency_key=None,
+            ),
+        ),
+    )
+    return {
+        "disposition": result.disposition.value,
+        "categories": _constraint_payload(result.records),
+        "receipts": _constraint_payload(result.receipts),
+    }
+
+
 def test_committed_python_fixtures_match_live_model_dumps() -> None:
     """A live Python dump still equals the bytes Vitest decodes, parsed as JSON."""
     # `PC-CM-RUN01-WP07` wired `constraints.create_published`, the last name
-    # Run 01 declared without a handler, so the remainder is empty. Browser
-    # transport for it is a later package: `web/src/contracts/gateway.json`
-    # does not declare it, and
+    # Run 01 declared without a handler, so the remainder is empty. `R01-WP09`
+    # then admitted it and the other twelve Constraint authoring capabilities
+    # to `web/src/contracts/gateway.json`, and
     # `test_live_python_payloads_cover_every_gateway_capability` ties that
     # declaration to a live Python dump rather than to a belief about one, so
     # the fixtures below still cover exactly the gateway's own set.

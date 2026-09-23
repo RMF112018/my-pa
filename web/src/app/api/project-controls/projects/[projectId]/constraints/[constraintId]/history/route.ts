@@ -7,27 +7,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { workGet } from "@/lib/api/work-route";
 import {
+  constraintNotFound,
   HISTORY_FIELDS,
   invalidPathIdentifier,
   isConstraintId,
   isProjectId,
   NO_FIELDS,
 } from "@/app/api/project-controls/constraint-requests";
-
-function notFound(): NextResponse {
-  const response = NextResponse.json(
-    {
-      error: {
-        errorClass: "not_found",
-        code: "not_found",
-        message: "Constraint was not found",
-      },
-    },
-    { status: 404 },
-  );
-  response.headers.set("cache-control", "private, no-store");
-  return response;
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -75,7 +61,7 @@ export async function GET(
     !isRecord(answer.constraint) ||
     answer.constraint.projectId !== projectId
   ) {
-    return notFound();
+    return constraintNotFound();
   }
   return workGet(request, "constraint-history", "constraints.history", HISTORY_FIELDS, {
     constraint_id: constraintId,

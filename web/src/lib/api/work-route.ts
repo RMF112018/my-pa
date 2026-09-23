@@ -1,15 +1,47 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { backendDisclosure, invokeGateway, transportLimitations, type GatewayCapability } from "@/lib/api/gateway";
+import {
+  backendDisclosure,
+  invokeGateway,
+  transportLimitations,
+  type GatewayCapability,
+  type GatewayOutcome,
+} from "@/lib/api/gateway";
+import type { CapabilityResults } from "@/lib/api/decode";
 import { requirePrincipal, readCleanBody } from "@/lib/api/guard";
 import { gatewayRefusal, notImplemented, resolveServing } from "@/lib/api/serving";
 import type { PrincipalSession } from "@/contracts/identity";
+import type { ErrorEnvelope } from "@/contracts/envelope";
 import { admitBrowserMutation } from "@/lib/http/mutation-admission";
 import { WEB_LIMITATIONS } from "@/lib/diagnostics/safe-detail";
 
 export type WorkField = {
   readonly gateway: string;
-  readonly type: "string" | "integer" | "boolean" | "string-array" | "mutation-array";
+  readonly type:
+    | "string"
+    | "integer"
+    | "boolean"
+    | "string-array"
+    | "mutation-array"
+    | "party-ref-array"
+    | "integer-array";
   readonly maxItems?: number;
+  /**
+   * The longest `string` this field admits, in UTF-16 code units.
+   *
+   * Omitted, a string is unbounded here exactly as before; the backend command
+   * still owns its own shape. Present only where a write contract fixes a
+   * transport ceiling (a Constraint-plane `idempotencyKey` is at most 128).
+   */
+  readonly maxLength?: number;
+  /**
+   * The smallest `integer` this field admits.
+   *
+   * Omitted, any safe integer passes as before — the existing Task, Commitment
+   * and settings maps never set it, so their behaviour is unchanged. The
+   * Constraint authoring maps set `0` on `expectedVersion`/`displayOrder`, which
+   * is the `>= 0` the backend commands check with `type(value) is int`.
+   */
+  readonly minimum?: number;
   /**
    * The closed vocabulary this field's value must be a member of.
    *
@@ -131,12 +163,113 @@ function isBoundedMutationArray(value: unknown, maximum: number): value is Recor
   });
 }
 
+/**
+ * The three keys a browser PartyRef may carry, in the browser's spelling.
+ *
+ * Deliberately not a generic object passthrough: an object with any other key
+ * is refused rather than forwarded or silently trimmed, so `entity_id` (the
+ * gateway spelling) is as unknown here as `principalId` would be.
+ */
+const PARTY_REF_KEYS: ReadonlySet<string> = new Set(["kind", "entityId", "label"]);
+
+/** The gateway spelling one admitted PartyRef is serialized to. */
+type GatewayPartyRef = {
+  readonly kind: "principal" | "entity" | "unresolved";
+  readonly entity_id: string | null;
+  readonly label: string | null;
+};
+
+function isNonBlank(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+/**
+ * One browser PartyRef as the gateway document, or the reason it is refused.
+ *
+ * The kind rules are `PartyRef.__post_init__`'s, stated at the transport so a
+ * malformed party is a `400` naming the browser field rather than a gateway
+ * round trip: a `principal` carries neither identity nor label, an `entity`
+ * names an identity and may carry presentation wording, an `unresolved` party
+ * *is* its non-blank wording and names no identity. `null` and absent are one
+ * answer for an optional member, as they are to the Python normalizer, which
+ * reads both through `Mapping.get`.
+ *
+ * Text is never trimmed or rewritten. `trim()` is consulted only to refuse a
+ * label that is all whitespace; the label that travels is the one that arrived,
+ * byte for byte. The serialized shape always carries all three keys, with
+ * `null` for an absent member, which is what the backend's party digest reads.
+ */
+function partyRef(item: unknown): GatewayPartyRef | string {
+  if (!isRecord(item)) return "must contain only party objects";
+  if (Object.keys(item).some((key) => !PARTY_REF_KEYS.has(key))) {
+    return "contains a party with an unknown key";
+  }
+  const { kind } = item;
+  const entityId = item.entityId ?? null;
+  const label = item.label ?? null;
+  if (label !== null && !isNonBlank(label)) {
+    return "contains a party whose label is not non-blank text";
+  }
+  if (kind === "principal") {
+    if (entityId !== null || label !== null) {
+      return "contains a principal party carrying an entityId or label";
+    }
+    return { kind, entity_id: null, label: null };
+  }
+  if (kind === "entity") {
+    if (!isNonBlank(entityId)) return "contains an entity party without an entityId";
+    return { kind, entity_id: entityId, label };
+  }
+  if (kind === "unresolved") {
+    if (entityId !== null) return "contains an unresolved party carrying an entityId";
+    if (label === null) return "contains an unresolved party without a label";
+    return { kind, entity_id: null, label };
+  }
+  return "contains a party of an unknown kind";
+}
+
+/**
+ * A bounded PartyRef array, in order and with duplicates kept.
+ *
+ * Order is meaningful (the first BIC is the one a Register row leads with) and
+ * a duplicate is the backend's to accept or refuse, so neither is normalized
+ * away here. An empty array is valid transport: whether a Constraint is
+ * complete enough to publish is the domain's decision.
+ */
+function partyRefArray(value: unknown, maximum: number): GatewayPartyRef[] | string {
+  if (!Array.isArray(value) || value.length > maximum) {
+    return `must be an array of at most ${maximum} parties`;
+  }
+  const parties: GatewayPartyRef[] = [];
+  for (const item of value) {
+    const party = partyRef(item);
+    if (typeof party === "string") return party;
+    parties.push(party);
+  }
+  return parties;
+}
+
+/** A bounded array of safe non-negative integers, in order and with duplicates kept. */
+function isBoundedIntegerArray(value: unknown, maximum: number): value is number[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= maximum &&
+    value.every((item) => typeof item === "number" && Number.isSafeInteger(item) && item >= 0)
+  );
+}
+
 function parseField(browserName: string, value: unknown, field: WorkField, input: InputKind):
   | { readonly ok: true; readonly gateway: string; readonly value: unknown }
   | { readonly ok: false; readonly response: NextResponse } {
   const { gateway, type, values } = field;
   if (type === "string") {
     if (typeof value === "string") {
+      if (field.maxLength !== undefined && value.length > field.maxLength) {
+        return {
+          ok: false,
+          response: invalid(`${browserName} must be at most ${field.maxLength} characters`),
+        };
+      }
       if (values && !values.includes(value)) {
         return { ok: false, response: invalid(`${browserName} is not an accepted value`) };
       }
@@ -145,14 +278,24 @@ function parseField(browserName: string, value: unknown, field: WorkField, input
     return { ok: false, response: invalid(`${browserName} must be a string`) };
   }
   if (type === "integer") {
+    const { minimum } = field;
+    let integer: number | undefined;
     if (typeof value === "number" && Number.isSafeInteger(value)) {
-      return { ok: true, gateway, value };
-    }
-    if (input === "query" && typeof value === "string" && /^(0|[1-9]\d*)$/.test(value)) {
+      integer = value;
+    } else if (input === "query" && typeof value === "string" && /^(0|[1-9]\d*)$/.test(value)) {
       const parsed = Number(value);
-      if (Number.isSafeInteger(parsed)) return { ok: true, gateway, value: parsed };
+      if (Number.isSafeInteger(parsed)) integer = parsed;
     }
-    return { ok: false, response: invalid(`${browserName} must be an integer`) };
+    if (integer === undefined) {
+      return { ok: false, response: invalid(`${browserName} must be an integer`) };
+    }
+    if (minimum !== undefined && integer < minimum) {
+      return {
+        ok: false,
+        response: invalid(`${browserName} must be an integer of at least ${minimum}`),
+      };
+    }
+    return { ok: true, gateway, value: integer };
   }
   if (type === "boolean") {
     if (typeof value === "boolean") return { ok: true, gateway, value };
@@ -171,6 +314,22 @@ function parseField(browserName: string, value: unknown, field: WorkField, input
     return {
       ok: false,
       response: invalid(`${browserName} must be an array of at most ${maximum} strings`),
+    };
+  }
+  if (type === "party-ref-array") {
+    const parties = partyRefArray(value, maximum);
+    if (typeof parties === "string") {
+      return { ok: false, response: invalid(`${browserName} ${parties}`) };
+    }
+    return { ok: true, gateway, value: parties };
+  }
+  if (type === "integer-array") {
+    if (isBoundedIntegerArray(value, maximum)) return { ok: true, gateway, value };
+    return {
+      ok: false,
+      response: invalid(
+        `${browserName} must be an array of at most ${maximum} non-negative integers`,
+      ),
     };
   }
   if (isBoundedMutationArray(value, maximum)) return { ok: true, gateway, value };
@@ -242,16 +401,71 @@ function publicResult(result: Record<string, unknown>) {
   ) as Record<string, unknown>;
 }
 
+/**
+ * What a pre-dispatch admission check is handed, and all it is handed.
+ *
+ * `principal` is the session-derived Principal the mutation itself will carry —
+ * the same object, not a second resolution — and `read` is bound to it, so an
+ * admission check cannot address the gateway as anyone else. `payload` is the
+ * final gateway payload (the mapped body with the route's fixed fields merged
+ * over it), exactly what would be dispatched. `refuse` renders a gateway
+ * refusal the way this module renders the mutation's own, so a refused
+ * preflight is indistinguishable in shape from a refused mutation.
+ */
+export type AdmissionContext = {
+  readonly principal: PrincipalSession;
+  readonly payload: Readonly<Record<string, unknown>>;
+  readonly read: <C extends GatewayCapability>(
+    capability: C,
+    payload: Record<string, unknown>,
+  ) => Promise<GatewayOutcome<CapabilityResults[C]>>;
+  readonly refuse: (status: number, error: ErrorEnvelope) => NextResponse;
+};
+
+/**
+ * The two optional hooks a write route may add, and no others.
+ *
+ * - `validate` is a closed cross-field check over the mapped payload (gateway
+ *   spelling), run after every field has parsed and before anything else. A
+ *   string return is a `400 invalid_request` carrying that message. It exists
+ *   for rules no single field can state, such as a reorder's two arrays having
+ *   one length.
+ * - `admit` runs after `validate`, once the serving provider is known to be the
+ *   backend, and immediately before the mutation capability is invoked. `null`
+ *   proceeds; a response is returned as the answer, `private, no-store`, and the
+ *   mutation is never dispatched.
+ *
+ * Neither can alter the payload: both see it read-only, and what is dispatched
+ * is what was mapped.
+ */
+export type WorkPostOptions = {
+  readonly validate?: (payload: Readonly<Record<string, unknown>>) => string | null;
+  readonly admit?: (context: AdmissionContext) => Promise<NextResponse | null>;
+};
+
 async function dispatch(
   principal: PrincipalSession,
   scope: string,
   capability: GatewayCapability,
   payload: Record<string, unknown>,
+  admit?: WorkPostOptions["admit"],
 ) {
   const serving = resolveServing();
   if (serving.kind === "refused") return serving.response;
   if (serving.kind === "synthetic") {
     return notImplemented(scope, WEB_LIMITATIONS.syntheticNoWork);
+  }
+  if (admit) {
+    // Only a backend-served request is admitted: a build that will not dispatch
+    // has already answered above, and a preflight read there would spend a
+    // gateway call on a request that was never going to reach one.
+    const refusal = await admit({
+      principal,
+      payload,
+      read: (read, readPayload) => invokeGateway(principal, read, readPayload),
+      refuse: (status, error) => gatewayRefusal(scope, status, error),
+    });
+    if (refusal) return refusal;
   }
   const outcome = await invokeGateway(principal, capability, payload);
   if (!outcome.ok) {
@@ -314,6 +528,7 @@ export async function workPost(
   capability: GatewayCapability,
   fields: FieldMap,
   fixed: Record<string, unknown> = {},
+  options: WorkPostOptions = {},
 ) {
   const blocked = admitBrowserMutation(request);
   if (blocked) return noStore(blocked as NextResponse);
@@ -323,5 +538,15 @@ export async function workPost(
   if (!parsed.ok) return noStore(parsed.response);
   const result = mapped(parsed.body, fields, "body");
   if (!result.ok) return noStore(result.response);
-  return noStore(await dispatch(guard.principal, scope, capability, { ...result.payload, ...fixed }));
+  const refused = options.validate?.(result.payload) ?? null;
+  if (refused !== null) return noStore(invalid(refused));
+  return noStore(
+    await dispatch(
+      guard.principal,
+      scope,
+      capability,
+      { ...result.payload, ...fixed },
+      options.admit,
+    ),
+  );
 }

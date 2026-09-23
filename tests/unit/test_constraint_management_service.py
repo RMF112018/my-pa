@@ -14,7 +14,9 @@ Every identifier, prefix, label and date here is synthetic.
 
 from __future__ import annotations
 
+import ast
 import copy
+import inspect
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
@@ -25,6 +27,7 @@ import pytest
 
 from my_pa.application.constraint_management import (
     ConstraintCategoryNotFoundError,
+    ConstraintCategoryReorderResult,
     ConstraintCategoryVersionConflictError,
     ConstraintFollowUpResult,
     ConstraintIdempotencyConflictError,
@@ -1578,6 +1581,129 @@ def test_a_reorder_replays_on_the_same_key_and_digest() -> None:
     assert again.disposition is ConstraintMutationDisposition.REPLAYED
     assert [record.category_id for record in again.records] == order
     assert len(world.state.category_history) == len(first.receipts) + 2
+
+
+# PC-CM-WP07-CARRIED-REORDER-DIGEST: `expected_versions` is part of a reorder's
+# request identity. Before R01-WP09 the digest held only the Project and the
+# order, so a same-key retry that changed an expected version replayed.
+
+
+def _keyed_reorder_world() -> tuple[_World, list[str]]:
+    """A Project with three version-1 Categories, identifiers sorted."""
+    world = _world()
+    for prefix, title in (("PRO", "Procurement"), ("PER", "Permitting")):
+        world.service.create_category(
+            principal_id=PRINCIPAL_A,
+            project_id=PROJECT_A,
+            prefix=prefix,
+            title=title,
+            actor=ConstraintMutationActor.PRINCIPAL,
+        )
+    ids = sorted(
+        category_id for (owner, category_id) in world.state.categories if owner == PRINCIPAL_A
+    )
+    return world, ids
+
+
+def _display_orders(world: _World) -> dict[str, int]:
+    return {
+        category_id: record.category.display_order
+        for (owner, category_id), record in world.state.categories.items()
+        if owner == PRINCIPAL_A
+    }
+
+
+def _keyed_reorder(
+    world: _World, order: list[str], versions: Mapping[str, int]
+) -> ConstraintCategoryReorderResult:
+    return world.service.reorder_categories(
+        principal_id=PRINCIPAL_A,
+        project_id=PROJECT_A,
+        ordered_category_ids=order,
+        expected_versions=versions,
+        actor=ConstraintMutationActor.PRINCIPAL,
+        idempotency_key="wp09-reorder-key-0001",
+    )
+
+
+def test_a_reorder_key_reused_with_a_changed_expected_version_conflicts_and_writes_nothing() -> (
+    None
+):
+    world, ids = _keyed_reorder_world()
+    order = list(reversed(ids))
+    _keyed_reorder(world, order, dict.fromkeys(ids, 1))
+    orders, history = _display_orders(world), len(world.state.category_history)
+    changed = {**dict.fromkeys(ids, 1), ids[1]: 2}
+    with pytest.raises(ConstraintIdempotencyConflictError):
+        _keyed_reorder(world, order, changed)
+    assert _display_orders(world) == orders
+    assert len(world.state.category_history) == history
+
+
+def test_a_reorder_key_reused_with_a_changed_order_conflicts() -> None:
+    world, ids = _keyed_reorder_world()
+    _keyed_reorder(world, list(reversed(ids)), dict.fromkeys(ids, 1))
+    orders, history = _display_orders(world), len(world.state.category_history)
+    with pytest.raises(ConstraintIdempotencyConflictError):
+        _keyed_reorder(world, ids, dict.fromkeys(ids, 1))
+    assert _display_orders(world) == orders
+    assert len(world.state.category_history) == history
+
+
+def test_the_expected_versions_mappings_insertion_order_is_not_request_identity() -> None:
+    """The same `{id: version}` pairs, built in two orders, are one request."""
+    world, ids = _keyed_reorder_world()
+    order = list(reversed(ids))
+    versions = [1, 1, 1]
+    forwards = dict(zip(ids, versions, strict=True))
+    backwards = dict(zip(reversed(ids), reversed(versions), strict=True))
+    assert forwards == backwards and list(forwards) != list(backwards)
+    _keyed_reorder(world, order, forwards)
+    again = _keyed_reorder(world, order, backwards)
+    assert again.disposition is ConstraintMutationDisposition.REPLAYED
+
+
+def test_a_stale_member_version_on_a_keyed_reorder_changes_no_display_order() -> None:
+    world, ids = _keyed_reorder_world()
+    orders, history = _display_orders(world), len(world.state.category_history)
+    with pytest.raises(ConstraintCategoryVersionConflictError):
+        _keyed_reorder(world, list(reversed(ids)), {**dict.fromkeys(ids, 1), ids[2]: 99})
+    assert _display_orders(world) == orders
+    assert all(
+        entry.outcome is ConstraintMutationOutcome.REJECTED
+        for _, entry in world.state.category_history[history:]
+    )
+
+
+def test_every_authoring_digest_carries_its_optimistic_concurrency_input() -> None:
+    """No public method may take `expected_version(s)` and leave it out of `_digest`.
+
+    Private `_mutate`/`_mutate_category` also take `expected_version`, but they
+    receive the digest their public caller computed, so the rule binds where
+    the digest is built. The reorder omission this guards against is the one
+    PC-CM-WP07-CARRIED-REORDER-DIGEST recorded.
+    """
+    guarded = {"expected_version", "expected_versions"}
+    tree = ast.parse(inspect.getsource(ConstraintManagementService))
+    checked: dict[str, str] = {}
+    for method in ast.walk(tree):
+        if not isinstance(method, ast.FunctionDef) or method.name.startswith("_"):
+            continue
+        parameters = {arg.arg for arg in (*method.args.args, *method.args.kwonlyargs)}
+        for name in parameters & guarded:
+            digested = {
+                keyword.arg
+                for call in ast.walk(method)
+                if isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Name)
+                and call.func.id == "_digest"
+                for keyword in call.keywords
+            }
+            assert name in digested, f"{method.name} leaves {name} out of its request digest"
+            checked[method.name] = name
+    # A walk that matched nothing would pass every assertion above.
+    assert len(checked) == 10
+    assert checked["reorder_categories"] == "expected_versions"
 
 
 # --- Close + Follow-up -------------------------------------------------------

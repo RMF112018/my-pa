@@ -182,7 +182,7 @@ from my_pa.application.entity_reenrichment import (
 from my_pa.application.goodnotes_orchestrator import rollout_stage_permits
 from my_pa.application.native_sources import NativeSourceController
 from my_pa.application.producer_origin import ProducerOrigin, ProducerOriginRegistry
-from my_pa.application.service import ApplicationService
+from my_pa.application.service import ApplicationCompositionState, ApplicationService
 from my_pa.application.session_service_auth import (
     SYNTHETIC_CATALOGUE,
     SessionServiceError,
@@ -252,6 +252,7 @@ __all__ = [
     "Authenticator",
     "GatewayRuntime",
     "RemoteClientAuthenticator",
+    "application_composition_state",
     "build_gateway_runtime",
     "entra_authenticator",
     "local_principal",
@@ -302,6 +303,27 @@ def local_principal() -> Principal:
         principal_id=capture_principal_id(LOCAL_OPERATOR_UUID),
         kind=PrincipalKind.OPERATOR,
         authenticated=True,
+    )
+
+
+def application_composition_state(settings: Settings) -> ApplicationCompositionState:
+    """The composition gates `available_capabilities` would apply for `settings`.
+
+    Matches `build_gateway_runtime`: managed documents exist only when a managed
+    root is configured; Entra mode withholds producer origins; Constraint
+    management is always composed.
+    """
+    entra = settings.auth_mode is AuthMode.ENTRA
+    principal = None if entra else local_principal()
+    return ApplicationCompositionState(
+        managed_documents=bool(settings.managed_document_root.strip()),
+        relationship_intelligence=settings.relationship_intelligence_enabled,
+        relationship_intelligence_writes=settings.relationship_intelligence_writes_enabled,
+        relationship_memory=settings.relationship_memory_enabled,
+        producer_origins_registered=relationship_producer_origins(principal).has_registrations,
+        relationship_identity_correction=settings.relationship_identity_correction_enabled,
+        goodnotes_pull=settings.goodnotes_pull_enabled,
+        constraints=True,
     )
 
 

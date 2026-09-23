@@ -89,34 +89,101 @@ and the exact noninteractive privilege for each proposed operation have been
 proved. A successful `sudo -n` check for one command grants no general file,
 Git, Docker, or protected-configuration authority. There is no checked-in
 transfer helper or preapproved landing path. Establish a fresh exclusive
-owner-only landing directory, transfer only the fourteen inventoried members,
-then create a distinct, fresh root-owned mode-0700 versioned artifact directory
-under an authenticated protected NAS parent. Copy only verified regular files
-into that new directory as root-owned mode-0400 files. Refuse an existing
-destination, links, extra members, ownership/mode drift, or a path into the
-running checkout. Read every staged member back on the NAS and match its
-SHA-256 and size to the local inventory before any image load. Do not invent a
-literal transfer command or root destination until the target's writable
-landing path, parent ownership, and exact `sudo -n` command set are verified.
-Do not transfer repository dirt, protected configuration, credentials, session
-tokens, database dumps, or personal data with the package.
+owner-only landing directory and transfer **only the source bundle** from the
+closed local fourteen-member inventory. Read that one regular file back on
+the NAS and match its SHA-256 and size to the local inventory; refuse links,
+an existing destination, extra members, or ownership/mode drift. Verify the
+bundle on the NAS and require its advertised `HEAD` to equal the exact build
+commit. The local authenticated `origin/main` re-fetch, closed inventory, byte
+readback, and Git bundle verification together bind this initial transport;
+the bundle or its checksum alone does not authenticate the repository or
+authorize NAS execution. Do not invent a literal transfer command or root
+destination until the target's writable landing path, protected parent
+ownership, and exact `sudo -n` command set are verified. Do not transfer
+repository dirt, protected configuration, credentials, session tokens,
+database dumps, or personal data.
 
-Verify the source bundle on the NAS, then clone it without checkout into a new
-exclusive root-owned mode-0700 versioned source directory and detach at the
-exact build commit.
+Clone that verified bundle without checkout into a new exclusive root-owned
+mode-0700 versioned source directory and detach at the exact build commit.
 Require `HEAD`, `HEAD^{tree}`, and an empty porcelain status to equal the
 candidate identities. The source directory must not pre-exist, and no link or
 path may resolve into the prior checkout. Preserve the prior checkout and its
-exact path as part of the rollback set; do not fetch into it, overwrite it, or
-reuse it for the new gates. From this point onward, invoke every `ops/nas`
-script by its absolute path inside the new verified checkout and use that
-checkout as the working directory. Stop before any operator/image/admission
-mutation if the bundle, clone, commit, tree, cleanliness, ownership, or path
-identity differs. The only exceptions are verification, quiescence, and the
-pre-migration backup and receipt verification for the still-running old
-runtime: perform those old-identity and data-safety gates from the preserved
-clean old checkout bound to the old manifest and admissions. Every
-candidate/new-runtime gate must run from the new checkout.
+exact path as part of the rollback set; do not fetch into it or overwrite it.
+Before transferring any other candidate member, invoke the fixed-purpose
+preserved-runtime check `ops/nas/preserved-runtime-env-preflight.py` from the
+verified new checkout through the verified `/usr/bin/python3` Python 3.8 path
+and bounded noninteractive privilege. Bind its non-secret expected commit/tree arguments
+to the freshly fetched build identity. Its fixed CLI is:
+
+```sh
+sudo -n /usr/bin/python3 /absolute/new/verified/checkout/ops/nas/preserved-runtime-env-preflight.py NEW_COMMIT NEW_TREE /absolute/preserved/old/checkout
+```
+
+Use authenticated absolute paths and exact hashes, never these placeholders.
+The only arguments are the expected new commit/tree and old checkout path.
+The helper resolves the old manifest, canonical protected admissions, and
+versioned old production/NAS/web environment files internally; no new
+candidate manifest or operator admission exists on the NAS at this point.
+Before executing any old-checkout wrapper, the helper must verify the exact
+root-owned old source, canonical old manifest and operator admission, live
+Docker engine and admitted operator image/platform/labels, and the old
+candidate, metadata, and archive bytes/config binding. It must also verify
+the fixed Git, Docker, and Compose tools and their trusted path chains, the
+Docker socket, and each dedicated mount source and destination. Then run the
+authoritative pre-source gate baked into that exact admitted **old** operator
+image with no network, a read-only filesystem, dropped capabilities, and
+fixed read-only `/run/my-pa-input/` mounts. The helper creates one labeled,
+transaction-bound ephemeral gate container, starts and waits for that exact
+container, and removes only its verified CID. Require gate exit status zero
+and a fresh Docker daemon check proving that exact CID and name are absent
+before any old lifecycle script runs or preflight can PASS. A host CLI timeout
+alone cannot prove the container stopped. The host Python 3.8 helper
+establishes this bootstrap trust; it does not reimplement or bypass the
+baked-in gate. The Docker socket retains API authority regardless of mount
+mode, so the fixed invocation, trusted image, and bounded privilege remain
+essential.
+
+Only after that PASS may the helper select the old versioned environment
+files in memory without changing canonical configuration, compare their
+rendered/admitted/live identity, run the preserved checkout's exact old
+lifecycle and running-identity gates, and verify the selected mode is `smoke`.
+It must check the full static ingress-manifest shape and live proxy
+publication as an early screen. The later full ingress, Tailscale, and public
+route/traffic gates remain mandatory. Report only bounded gate outcomes and
+non-secret identities; do not print protected environment values or unbounded
+gate output. Apart from the bounded ephemeral gate-container lifecycle, this
+pre-transfer check must not load images, switch admissions/configuration,
+stop/start application services, or mutate PostgreSQL or firewall state. A
+Docker daemon outage, ambiguous container creation, or unverified cleanup is
+a stop: keep the other thirteen members off the NAS, preserve the old runtime,
+and report only the sanitized non-secret transaction identity for operator
+recovery. Never remove a foreign container. An uncatchable host `SIGKILL` can
+prevent cleanup; verify the exact transaction container is absent before any
+resume. A preflight PASS grants no deployment, writer-stopping, or
+protected-configuration mutation authority.
+On any refusal, preserve the old runtime and admissions, stop, and keep the
+other thirteen members off the NAS.
+
+Only after that preflight passes, re-fetch `origin/main` and require the same
+build commit/tree again. Transfer the remaining thirteen inventoried members
+into the exclusive landing area. Create a distinct, fresh root-owned
+mode-0700 versioned artifact directory under the authenticated protected NAS
+parent and copy only verified regular files into it as root-owned mode-0400
+files. Refuse existing destinations, links, extra members, ownership/mode
+drift, or a path into the running checkout. Read all fourteen staged members
+back on the NAS and match each SHA-256 and size to the local inventory before
+any image load. Repeat the complete old lifecycle and running-identity gates
+and the live-main check at the later mutation boundaries below; the early
+preflight is not a substitute for them.
+
+From this point onward, invoke every candidate/new-runtime `ops/nas` script
+by its absolute path inside the new verified checkout and use that checkout
+as the working directory. Stop before any operator/image/admission mutation
+if the bundle, clone, commit, tree, cleanliness, ownership, staged member, or
+path identity differs. Verification, quiescence, and the pre-migration backup
+and receipt verification for the still-running old runtime continue to use
+the preserved clean old checkout bound to the old manifest and admissions as
+specified below.
 
 Preserve the previous package, source checkout, deployable manifest, runtime admission, resolved Compose identity, and service-state inventory as the non-destructive rollback candidate. Do not overwrite evidence, source, or admission files; use new exclusive paths.
 
@@ -126,8 +193,10 @@ command lines, or copying them to evidence. A content change requires separate
 protected-configuration mutation authority. Missing, linked, over-permissive,
 placeholder, or identity-inconsistent inputs are blockers. Leave the old
 operator, runtime, and PostgreSQL bootstrap admissions, image manifest, image
-references, Compose selection, and environment selected while checking the
-old runtime and quiescing writers in sections 4–5. The new operator admission
+references, and Compose selection in place while checking the old runtime and
+quiescing writers in sections 4–5. Select the old versioned environment files
+only in process memory for those old-checkout gates; do not change canonical
+configuration. The new operator admission
 and candidate-load boundary follows quiescence in section 5; do not run new
 checkout Python gates through an older operator admission.
 

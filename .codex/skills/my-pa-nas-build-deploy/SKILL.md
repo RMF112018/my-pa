@@ -42,6 +42,16 @@ Read [references/workflow.md](references/workflow.md) before any build or NAS ac
 - every `ops/nas/*.sh` script that will be invoked.
 
 The checked-in scripts are authoritative over copied commands, remembered hashes, and historical transcripts. Never carry forward a stored migration head, commit, tree, image ID, engine ID, archive digest, admission digest, network ID, bridge name, temporary path, or session token.
+For an existing smoke upgrade, inventory the closed fourteen-member package
+locally and transfer only its verified source bundle first. Clone it into a new
+clean root-owned checkout. Before the other thirteen members transfer, the
+fixed `ops/nas/preserved-runtime-env-preflight.py` must authenticate the old
+admission/source/manifest/engine/operator artifacts and run the authoritative
+pre-source gate baked into the exact admitted **old** operator image before any
+old-checkout wrapper. Host Python 3.8 does not replace that gate. A refusal
+preserves the old runtime and stops transfer; a PASS does not authorize
+deployment or bypass the later full old-runtime, ingress, live-main, or
+point-of-action gates. Follow the exact order in the workflow.
 For a pre-migration backup of a preserved older runtime, use the current
 checkout's documented preserved-runtime mode. That mode keeps every old
 runtime, PostgreSQL resource, and admission gate in the preserved checkout but

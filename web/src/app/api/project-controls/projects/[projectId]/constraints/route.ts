@@ -11,10 +11,17 @@
  * `workGet` supplies everything else: the Principal from the opaque session SID
  * (never the browser), `cache-control: private, no-store`, the closed field map,
  * and the fail-closed decode of the gateway's success.
+ *
+ * `POST` (R01-WP09) creates a Constraint directly in its published state through
+ * `constraints.create_published`. The Project is the path segment's and never
+ * the body's; everything else — Origin admission, the session Principal, the
+ * clean body, the closed field map, the decode — is `workPost`'s, so this
+ * handler is a path guard and one call. A Draft is created at `…/drafts`.
  */
 import { NextResponse, type NextRequest } from "next/server";
-import { workGet } from "@/lib/api/work-route";
+import { workGet, workPost } from "@/lib/api/work-route";
 import {
+  CONSTRAINT_CREATE_PUBLISHED_FIELDS,
   invalidPathIdentifier,
   isProjectId,
   REGISTER_FIELDS,
@@ -35,4 +42,19 @@ export async function GET(
     : workGet(request, "constraint-register", "constraints.list", REGISTER_FIELDS, {
         project_id: projectId,
       });
+}
+
+export async function POST(
+  request: NextRequest,
+  context: { params: Promise<{ projectId: string }> },
+): Promise<NextResponse> {
+  const { projectId } = await context.params;
+  if (!isProjectId(projectId)) return invalidPathIdentifier("projectId");
+  return workPost(
+    request,
+    "constraint-create-published",
+    "constraints.create_published",
+    CONSTRAINT_CREATE_PUBLISHED_FIELDS,
+    { project_id: projectId },
+  );
 }

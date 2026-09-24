@@ -496,13 +496,46 @@ test.describe("WP-POSTUX-05 Close pending lock and sheet focus", () => {
     const survivor = `E2E sheet restore survivor ${marker}`;
     await page.goto(`/work?view=unscheduled&q=${encodeURIComponent(marker)}`);
     await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
+    await expect(page.getByText("No matching unscheduled tasks")).toBeVisible();
+
+    // Hold the first post-create list refresh so the new row is absent when
+    // Create settles. The marker filter must survive until the row arrives.
+    let releaseList: () => void = () => {};
+    const heldList = new Promise<void>((resolve) => { releaseList = resolve; });
+    let held = false;
+    await page.route(
+      (url) => url.pathname === "/api/tasks" && url.searchParams.get("q") === marker,
+      async (route) => {
+        if (!held) {
+          held = true;
+          await heldList;
+        }
+        await route.continue();
+      },
+    );
 
     await page.getByRole("button", { name: "New task" }).click();
     await page.getByTestId("task-create-sheet").getByLabel("Title").fill(survivor);
     await page.getByTestId("task-create-sheet").getByRole("button", { name: "Create", exact: true }).click();
-    await createdTaskAppearsInWork(page, survivor);
+    try {
+      await waitForCreateSettled(page, survivor);
+      await expect.poll(() => held, { message: "the post-create list response was delayed" }).toBe(true);
+    } finally {
+      releaseList();
+    }
+    await expect(page.getByRole("textbox", { name: "Search tasks" })).toHaveValue(marker);
+    await expect(page.getByRole("link", { name: new RegExp(survivor) })).toBeVisible();
 
-    const { sheet } = await createAndOpen(page, doomed);
+    await page.getByRole("button", { name: "New task" }).click();
+    await page.getByTestId("task-create-sheet").getByLabel("Title").fill(doomed);
+    await page.getByTestId("task-create-sheet").getByRole("button", { name: "Create", exact: true }).click();
+    await waitForCreateSettled(page, doomed);
+    await expect(page.getByRole("textbox", { name: "Search tasks" })).toHaveValue(marker);
+    const doomedTrigger = page.getByRole("link", { name: new RegExp(doomed) });
+    await expect(doomedTrigger).toBeVisible();
+    await doomedTrigger.click();
+    const sheet = page.getByTestId("task-compact-sheet");
+    await expect(sheet.getByTestId("task-summary")).toBeVisible();
     await sheet.getByTestId("task-close-control").getByRole("button", { name: "Close Task", exact: true }).click();
     await sheet.getByRole("alertdialog").getByRole("button", { name: "Confirm Closed" }).click();
     await expect(sheet.getByTestId("task-terminal-summary")).toHaveText("This task is closed.");

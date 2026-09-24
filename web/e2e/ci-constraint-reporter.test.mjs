@@ -91,6 +91,7 @@ test("the exact three declared cases produce only their static IDs and categorie
 
 test("the checked-in line allowlists contain exactly the current assertion call sites", () => {
   const specLines = readFileSync(spec, "utf8").split("\n");
+  assert.match(specLines[113], /expect\(answer\.status/);
   const declared = [...reporterSource.matchAll(/declarationLine: (\d+),/g)].map((match) => Number(match[1]));
   assert.deepEqual(declared, cases.map((entry) => entry.declarationLine));
   const allowlists = [...reporterSource.matchAll(/assertionLines: new Set\(\[([\s\S]*?)\]\)/g)]
@@ -104,7 +105,38 @@ test("the checked-in line allowlists contain exactly the current assertion call 
         ? [offset + 1]
         : [],
     );
-    assert.deepEqual(allowlists[index], actual);
+    assert.deepEqual(allowlists[index], [114, ...actual]);
+  }
+});
+
+test("shared expectSafe line 114 yields only static bytes for each case", () => {
+  const hostile = "SYNTHETIC_PRIVATE_PAYLOAD\n::error::injected";
+  for (const entry of cases) {
+    const output = capture(() => new ConstraintCiReporter().onTestEnd(
+      testCase(entry, { id: hostile, annotations: [{ description: hostile }] }),
+      result(entry, {
+        errors: [{ location: { file: spec, line: 114 }, message: hostile, stack: hostile, snippet: hostile }],
+        stdout: [hostile],
+        stderr: [hostile],
+        attachments: [{ name: hostile, body: hostile }],
+      }),
+    ));
+    assert.equal(
+      output,
+      `::error file=web/e2e/constraints-mutations.spec.ts,line=114,title=${entry.id}::category=${entry.category}\n`,
+    );
+    assert.equal(output.includes(hostile), false);
+  }
+});
+
+test("other expectSafe helper lines remain unknown for every case", () => {
+  for (const entry of cases) {
+    for (const line of [115, 124]) {
+      assert.equal(capture(() => new ConstraintCiReporter().onTestEnd(
+        testCase(entry),
+        result(entry, { errors: [{ location: { file: spec, line } }] }),
+      )), "");
+    }
   }
 });
 

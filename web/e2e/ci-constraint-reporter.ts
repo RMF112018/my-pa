@@ -13,7 +13,7 @@ const CASES = [
     title: "the Constraint authoring journey writes through the BFF to PostgreSQL",
     declarationLine: 170,
     assertionLines: new Set([
-      181, 183, 184, 185, 194, 196, 197, 198, 207, 216, 218, 230, 232, 243, 244,
+      114, 181, 183, 184, 185, 194, 196, 197, 198, 207, 216, 218, 230, 232, 243, 244,
       245, 248, 249, 250, 252, 253, 254, 259, 260, 261, 264, 265, 269, 272,
       280, 281, 293, 297, 298, 299, 300, 304, 306, 307, 308, 309, 310,
       311, 312, 313, 322, 324, 325, 333, 334, 335, 348, 350, 351, 353,
@@ -26,7 +26,7 @@ const CASES = [
     title: "a record addressed through another owned Project is not found and not changed",
     declarationLine: 393,
     assertionLines: new Set([
-      397, 398, 403, 404, 412, 413, 422, 423, 426, 427, 435, 443, 444, 446,
+      114, 397, 398, 403, 404, 412, 413, 422, 423, 426, 427, 435, 443, 444, 446,
     ]),
   },
   {
@@ -34,7 +34,7 @@ const CASES = [
     category: "request-validation",
     title: "an undeclared or Principal-naming body field is refused before a write",
     declarationLine: 449,
-    assertionLines: new Set([457, 458, 467, 470, 474, 476]),
+    assertionLines: new Set([114, 457, 458, 467, 470, 474, 476]),
   },
 ] as const;
 

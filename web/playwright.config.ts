@@ -93,11 +93,13 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: 0,
   reporter:
-    process.env.CI && process.env.CI_RESPONSIVE_DIAGNOSTIC === "1"
-      ? [["list"], ["html", { open: "never" }], ["./e2e/ci-responsive-reporter.ts"]]
-      : process.env.CI
-        ? [["list"], ["html", { open: "never" }]]
-        : [["list"]],
+    process.env.CI && process.env.CI_CONSTRAINT_DIAGNOSTIC === "1"
+      ? [["list"], ["html", { open: "never" }], ["./e2e/ci-constraint-reporter.ts"]]
+      : process.env.CI && process.env.CI_RESPONSIVE_DIAGNOSTIC === "1"
+        ? [["list"], ["html", { open: "never" }], ["./e2e/ci-responsive-reporter.ts"]]
+        : process.env.CI
+          ? [["list"], ["html", { open: "never" }]]
+          : [["list"]],
   timeout: 90_000,
   expect: { timeout: 10_000 },
   use: {

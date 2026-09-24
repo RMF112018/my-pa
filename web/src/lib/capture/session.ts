@@ -32,8 +32,22 @@
  */
 import type { CaptureKind, CaptureProjectId, FrozenCaptureIntent } from "@/lib/capture/contract";
 
-/** Which of the two note forms is on screen. Each keeps its own draft. */
-export type CaptureForm = "quick_note" | "conversation_log";
+/**
+ * Which Capture type is on screen.
+ *
+ * `"constraint"` (R02-WP10 Phase 7) is the fourth Capture type. It shares this
+ * session's one Project context (`PC-CM-CAPTURE-AC-004`/`-005`) exactly as
+ * `"quick_note"` and `"conversation_log"` already do, and switching to or from
+ * it leaves `noteDraft`/`conversationDraft` untouched, the same isolation the
+ * two note forms already have from each other (`PC-CM-CAPTURE-AC-024`). It
+ * carries no draft field of its own here: unlike the two note kinds, a
+ * Constraint capture is never frozen into a `FrozenCaptureIntent` and never
+ * submitted through `/api/capture` (`PC-CM-CAPTURE-AC-003`) — its own fields,
+ * dirty state and submission run entirely inside `CaptureConstraintForm`,
+ * through `ConstraintMutationCoordinator`, so `activeDraft`/
+ * `freezeCaptureIntent` below are never called for it.
+ */
+export type CaptureForm = "quick_note" | "conversation_log" | "constraint";
 
 /** Which overlay currently owns the screen. There is never more than one. */
 export type CaptureModalOwner = "capture" | "task" | "none";

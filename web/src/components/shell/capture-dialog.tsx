@@ -46,15 +46,20 @@
  *   screen must never do is imply a hold it did not perform.
  *
  * **The chooser in front of all of this is a router, not a capture.** Capture
- * opens on three choices — Create Task, Quick note, Conversation log. The two
- * note kinds enter the data-entry branch below with that kind already selected,
- * and every downstream behavior — the single field, the attempt key, the six
- * outcomes above, the offline hold — is exactly what it was before the chooser
- * existed. Create Task is the one choice that is *not* a capture: it mints no
- * attempt key, issues no `/api/capture` request and never touches the offline
- * queue. It reports the choice to the shell through `onCreateTask`, and the
- * shell closes this dialog before opening the canonical Task sheet, so a Task
- * started from here can never be replayed as a note on reconnect.
+ * opens on four choices — Create Task, Quick note, Conversation log, Constraint
+ * (R02-WP10 Phase 7, `PC-CM-CAPTURE-AC-001`). The two note kinds enter the
+ * data-entry branch below with that kind already selected, and every
+ * downstream behavior — the single field, the attempt key, the six outcomes
+ * above, the offline hold — is exactly what it was before the chooser existed.
+ * Create Task is the one choice that is *not* a capture: it mints no attempt
+ * key, issues no `/api/capture` request and never touches the offline queue.
+ * It reports the choice to the shell through `onCreateTask`, and the shell
+ * closes this dialog before opening the canonical Task sheet, so a Task
+ * started from here can never be replayed as a note on reconnect. Constraint
+ * is the other non-note branch (`PC-CM-CAPTURE-AC-002`/`-003`): it renders
+ * `CaptureConstraintForm` in place of the field below, and it is never routed
+ * through `/api/capture` or the offline queue either — its own create runs
+ * through `ConstraintMutationCoordinator`, entirely inside that component.
  *
  * **Enrichment state is not among them**, and its absence is deliberate. The save
  * is durable before any processing runs and no capability this tier can call
@@ -68,6 +73,7 @@ import { Button } from "@/components/ui/button";
 import { WhenDiagnostics } from "@/components/diagnostics/diagnostics-provider";
 import { TextField } from "@/components/ui/field";
 import { CaptureProjectSelector } from "@/components/capture/capture-project-selector";
+import { CaptureConstraintForm } from "@/components/capture/capture-constraint-form";
 import { apiPost } from "@/lib/api/client";
 import { verifyCaptureReceipt } from "@/lib/capture/receipt";
 import { freezeCaptureIntent, type CaptureSessionEvent, type CaptureSessionState } from "@/lib/capture/session";
@@ -112,7 +118,7 @@ function notHeldReason(error: unknown): string {
   return "This device could not hold the note.";
 }
 
-/** The two source classes a person may author. Quick note unless they say otherwise. */
+/** The two note source classes a person may author. Quick note unless they say otherwise. */
 const CAPTURE_KINDS = [
   { value: "quick_note", label: "Quick note" },
   { value: "conversation_log", label: "Conversation log" },
@@ -121,11 +127,23 @@ const CAPTURE_KINDS = [
 type CaptureKind = (typeof CAPTURE_KINDS)[number]["value"];
 
 /**
+ * The fourth chooser entry (R02-WP10 Phase 7). Deliberately not folded into
+ * {@link CAPTURE_KINDS}: that array also drives the note/conversation radio
+ * group inside the entry stage, which Constraint has no part of — it renders
+ * `CaptureConstraintForm` in full instead of that field.
+ */
+const CAPTURE_CONSTRAINT_CHOICE = { value: "constraint", label: "Constraint" } as const;
+
+/** Every chooser value, note kinds and Constraint alike. */
+type ChooserKind = CaptureKind | typeof CAPTURE_CONSTRAINT_CHOICE.value;
+
+/**
  * Which half of the dialog is showing.
  *
  * `choose` is the router — no field, no attempt key, no request, nothing to
- * queue. `entry` is the unchanged capture surface, reached only by picking one
- * of the two note kinds.
+ * queue. `entry` is either the unchanged note capture surface (Quick note /
+ * Conversation log) or, for Constraint, `CaptureConstraintForm` in its place —
+ * reached only by picking one of the four chooser entries.
  */
 type Stage = "choose" | "entry";
 
@@ -203,7 +221,9 @@ export function CaptureDialog({
   // The draft, the kind and the Project all live in the shell's experience.
   // This component reads them and dispatches; it stores none of them, so a close
   // and reopen resumes what the shell still holds rather than a stale local copy.
-  const kind: CaptureKind = session.form;
+  const kind: ChooserKind = session.form;
+  // Only meaningful for the two note kinds; the Constraint branch below never
+  // reads it (its own fields live inside `CaptureConstraintForm`).
   const text = kind === "quick_note" ? session.noteDraft : session.conversationDraft;
   const projectId = session.projectId;
 
@@ -235,8 +255,12 @@ export function CaptureDialog({
     return () => clearTimeout(t);
   }, [open, stage]);
 
-  /** Enter the unchanged capture branch with the chosen kind already selected. */
-  function chooseKind(chosen: CaptureKind) {
+  /**
+   * Enter the entry stage with the chosen kind already selected — the
+   * unchanged note capture branch for the two note kinds, `CaptureConstraintForm`
+   * for Constraint.
+   */
+  function chooseKind(chosen: ChooserKind) {
     dispatch({ type: "select_form", form: chosen });
     setStage("entry");
   }
@@ -390,7 +414,31 @@ export function CaptureDialog({
               {option.label}
             </Button>
           ))}
+          <Button
+            variant="ghost"
+            data-testid={`capture-choice-${CAPTURE_CONSTRAINT_CHOICE.value}`}
+            onClick={() => chooseKind(CAPTURE_CONSTRAINT_CHOICE.value)}
+          >
+            {CAPTURE_CONSTRAINT_CHOICE.label}
+          </Button>
         </div>
+      </Dialog>
+    );
+  }
+
+  // Constraint is a distinct branch (`PC-CM-CAPTURE-AC-003`): its own form,
+  // never the note field/attempt-key/offline-hold machinery below, which the
+  // two note kinds still share unchanged.
+  if (kind === "constraint") {
+    return (
+      <Dialog open={open} onClose={onClose} title="Capture">
+        <CaptureConstraintForm
+          principalId={principalId}
+          session={session}
+          dispatch={dispatch}
+          onClose={onClose}
+          onBack={() => setStage("choose")}
+        />
       </Dialog>
     );
   }

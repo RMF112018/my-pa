@@ -14,6 +14,7 @@ import {
   CAPTURE_PROJECT_LABEL,
   CAPTURE_PROJECT_MAX_VISITED_CURSORS,
   CAPTURE_PROJECT_PAGE_BOUND,
+  CAPTURE_PROJECT_REQUIRED_SUFFIX,
   CAPTURE_PROJECT_UNAVAILABLE,
   CaptureProjectSelector,
 } from "@/components/capture/capture-project-selector";
@@ -126,6 +127,46 @@ describe("the label and the explicit No Project choice", () => {
     await waitFor(() => expect(within(select).getByText("Project 3")).toBeInTheDocument());
     await user.selectOptions(select, ALL[3]!.projectId);
     expect(onChange).toHaveBeenCalledWith(ALL[3]!.projectId);
+  });
+});
+
+/**
+ * R02-WP10 Phase 7: `required`/`placeholderLabel` are additive, opt-in props
+ * (`PC-CM-CAPTURE-PROJECT-AC-002` — required for Constraint, still optional
+ * for Note/Conversation log/Task). Every test above renders without them and
+ * is unaffected; these two prove the new behavior when a caller opts in.
+ */
+describe("the additive `required`/`placeholderLabel` props (Constraint only)", () => {
+  it("defaults to the unmarked label and No Project as the empty choice", async () => {
+    renderSelector();
+    const select = await screen.findByTestId("capture-project-select");
+    expect(screen.getByText(CAPTURE_PROJECT_LABEL, { selector: "label" })).toBeInTheDocument();
+    expect(within(select).getByText(CAPTURE_NO_PROJECT_LABEL)).toBeInTheDocument();
+  });
+
+  it("appends the required suffix and swaps the empty option's text when asked", async () => {
+    renderSelector({ required: true, placeholderLabel: "Select a Project" });
+    const select = await screen.findByTestId("capture-project-select");
+    expect(screen.getByText(CAPTURE_PROJECT_REQUIRED_SUFFIX.trim())).toBeInTheDocument();
+    expect(select).toHaveAttribute("aria-required", "true");
+    expect(within(select).getByText("Select a Project")).toBeInTheDocument();
+    expect(within(select).queryByText(CAPTURE_NO_PROJECT_LABEL)).toBeNull();
+    // Never the native `required` attribute — the caller owns its own
+    // validation path, exactly as `task-create-sheet.tsx` does for Title.
+    expect(select).not.toHaveAttribute("required");
+  });
+
+  it("still reports the empty choice as null even when required", async () => {
+    const user = userEvent.setup();
+    const { onChange } = renderSelector({
+      required: true,
+      placeholderLabel: "Select a Project",
+      value: ALL[0]!.projectId,
+    });
+    const select = await screen.findByTestId("capture-project-select");
+    await waitFor(() => expect(within(select).getByText("Project 0")).toBeInTheDocument());
+    await user.selectOptions(select, "");
+    expect(onChange).toHaveBeenCalledWith(null);
   });
 });
 

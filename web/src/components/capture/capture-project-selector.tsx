@@ -45,6 +45,13 @@ export const CAPTURE_NO_PROJECT_LABEL = "No Project";
 export const CAPTURE_PROJECT_UNAVAILABLE = "Project unavailable — selection retained";
 export const CAPTURE_PROJECT_PAGE_BOUND =
   "No more Project pages can be loaded here. Your selection is unchanged.";
+/**
+ * R02-WP10 Phase 7: appended to the label when a caller marks the picker
+ * `required` (Constraint — `PC-CM-CAPTURE-PROJECT-AC-002`). Every existing
+ * caller (Note, Conversation log, Task) leaves `required` unset, so their
+ * label is exactly {@link CAPTURE_PROJECT_LABEL}, unchanged.
+ */
+export const CAPTURE_PROJECT_REQUIRED_SUFFIX = " (required)";
 
 interface ProjectOption {
   readonly projectId: string;
@@ -80,6 +87,8 @@ export function CaptureProjectSelector({
   principalId,
   sessionEpoch,
   id,
+  required,
+  placeholderLabel,
 }: {
   readonly value: string | null;
   readonly onChange: (value: string | null) => void;
@@ -87,6 +96,26 @@ export function CaptureProjectSelector({
   readonly principalId: string;
   readonly sessionEpoch: number;
   readonly id: string;
+  /**
+   * R02-WP10 Phase 7, additive: marks this picker as a required field for the
+   * caller's own submit-time validation (Constraint — `PC-CM-CAPTURE-PROJECT-
+   * AC-002`, "required for Constraint"). Adds the visible " (required)" label
+   * suffix and `aria-required`. It never adds the native `required` attribute
+   * and never removes the empty option — this control still reports an
+   * explicit "nothing chosen yet" exactly as it always has, and the caller
+   * enforces the requirement itself, the same way `task-create-sheet.tsx`
+   * enforces Title without native constraint validation. Defaults to `false`,
+   * so every existing caller (Note, Conversation log, Task) is unaffected.
+   */
+  readonly required?: boolean;
+  /**
+   * R02-WP10 Phase 7, additive: overrides the empty option's text. Note,
+   * Conversation log and Task keep {@link CAPTURE_NO_PROJECT_LABEL} ("No
+   * Project" is a real, valid choice for them); Constraint, which has no valid
+   * "No Project" choice, passes a placeholder such as "Select a Project"
+   * instead. Defaults to {@link CAPTURE_NO_PROJECT_LABEL}.
+   */
+  readonly placeholderLabel?: string;
 }) {
   const [options, setOptions] = useState<readonly ProjectOption[]>([]);
   const [selectedOption, setSelectedOption] = useState<ProjectOption | null>(null);
@@ -219,16 +248,20 @@ export function CaptureProjectSelector({
     <div className="flex flex-col gap-1" data-testid="capture-project-selector">
       <label htmlFor={id} className="text-sm font-medium text-text-primary">
         {CAPTURE_PROJECT_LABEL}
+        {required ? (
+          <span className="font-normal text-muted">{CAPTURE_PROJECT_REQUIRED_SUFFIX}</span>
+        ) : null}
       </label>
       <Select
         id={id}
         value={value ?? ""}
         disabled={disabled}
+        aria-required={required || undefined}
         data-testid="capture-project-select"
         onChange={(event) => onChange(event.target.value === "" ? null : event.target.value)}
         className="min-h-11 text-text-primary disabled:opacity-60"
       >
-        <option value="">{CAPTURE_NO_PROJECT_LABEL}</option>
+        <option value="">{placeholderLabel ?? CAPTURE_NO_PROJECT_LABEL}</option>
         {offered.map((option) => (
           <option key={option.projectId} value={option.projectId}>
             {option.name}

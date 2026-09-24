@@ -127,6 +127,49 @@ describe("the two forms keep separate drafts", () => {
   });
 });
 
+/**
+ * R02-WP10 Phase 7 — `"constraint"` is the fourth `CaptureForm` member
+ * (`PC-CM-CAPTURE-AC-024`: type switching keeps each type's dirty state
+ * isolated). It carries no draft field of its own in this session state — a
+ * Constraint capture's own fields live entirely inside `CaptureConstraintForm`
+ * and are never frozen into a `FrozenCaptureIntent` (`PC-CM-CAPTURE-AC-003`)
+ * — so what this proves is the same isolation Note/Conversation already have
+ * from each other, extended to the third kind: switching to and from
+ * `"constraint"` leaves both note drafts, and the shared Project context,
+ * exactly as they were.
+ */
+describe("Constraint is a third form, isolated from the two notes' drafts", () => {
+  it("is accepted by select_form, and switching to it disturbs neither note draft", () => {
+    let state = typed(open(PROJECT_A), "a quick note");
+    state = captureSessionReducer(state, { type: "select_form", form: "conversation_log" });
+    state = typed(state, "a conversation");
+
+    state = captureSessionReducer(state, { type: "select_form", form: "constraint" });
+    expect(state.form).toBe("constraint");
+    expect(state.noteDraft).toBe("a quick note");
+    expect(state.conversationDraft).toBe("a conversation");
+    // The one shared Project context, unaffected by the switch
+    // (`PC-CM-CAPTURE-AC-004`/`-005`).
+    expect(state.projectId).toBe(PROJECT_A);
+  });
+
+  it("switching away from constraint back to a note leaves that note's draft untouched", () => {
+    let state = typed(open(PROJECT_A), "a quick note");
+    state = captureSessionReducer(state, { type: "select_form", form: "constraint" });
+    state = captureSessionReducer(state, { type: "select_form", form: "quick_note" });
+    expect(state.form).toBe("quick_note");
+    expect(state.noteDraft).toBe("a quick note");
+  });
+
+  it("keeps the shared Project selection across a switch into and out of Constraint", () => {
+    let state = open(PROJECT_A);
+    state = captureSessionReducer(state, { type: "select_form", form: "constraint" });
+    state = captureSessionReducer(state, { type: "select_project", projectId: PROJECT_B });
+    state = captureSessionReducer(state, { type: "select_form", form: "quick_note" });
+    expect(state.projectId).toBe(PROJECT_B);
+  });
+});
+
 describe("Capture to Task and back", () => {
   it("suspends rather than ends the experience, keeping context and drafts", () => {
     let state = typed(open(PROJECT_A), "synthetic note");

@@ -52,6 +52,22 @@ import { useReducer, type ComponentProps } from "react";
 import { contentSha256 } from "@/lib/capture/receipt";
 import { CaptureDialog } from "@/components/shell/capture-dialog";
 import { beginCaptureExperience, captureSessionReducer } from "@/lib/capture/session";
+import { ConstraintRuntimeProvider } from "@/components/project-controls/constraint-runtime-provider";
+import { ProjectScopeProvider } from "@/components/shell/project-scope-provider";
+import { MutationFeedbackProvider } from "@/components/ui/mutation-feedback";
+
+// R02-WP10 Phase 7: `CaptureConstraintForm`, mounted for the Constraint
+// branch below, reaches its runtime through `useConstraintRuntime()` /
+// `useMutationFeedback()`. This harness wraps the same real provider stack
+// `AppShell` mounts (`ConstraintRuntimeProvider` under `ProjectScopeProvider`
+// and `MutationFeedbackProvider`) so this file exercises the real wiring
+// rather than a stub of it. Every pre-existing (note/conversation) test below
+// never reaches that branch and is unaffected.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+  usePathname: () => "/today",
+}));
+
 /**
  * The dialog no longer owns its draft, kind or Project — the shell does. This
  * harness is that owner, so these tests exercise the real reducer rather than a
@@ -68,7 +84,15 @@ function CaptureHarness(
       projectId: null,
     }),
   );
-  return <CaptureDialog {...props} session={session} dispatch={dispatch} />;
+  return (
+    <ProjectScopeProvider principalId={props.principalId} sessionEpoch="capture-test-binding">
+      <MutationFeedbackProvider>
+        <ConstraintRuntimeProvider principalId={props.principalId} sessionEpoch="capture-test-binding">
+          <CaptureDialog {...props} session={session} dispatch={dispatch} />
+        </ConstraintRuntimeProvider>
+      </MutationFeedbackProvider>
+    </ProjectScopeProvider>
+  );
 }
 
 
@@ -459,17 +483,47 @@ describe("one activation is one capture", () => {
 });
 
 describe("the chooser in front of capture", () => {
-  it("offers exactly Create Task, Quick note and Conversation log", async () => {
+  it("offers exactly Create Task, Quick note, Conversation log and Constraint", async () => {
     render(<CaptureHarness open onClose={() => {}} principalId={PRINCIPAL_ID} />);
     const chooser = await screen.findByTestId("capture-chooser");
     expect(within(chooser).getAllByRole("button").map((b) => b.textContent)).toEqual([
       "Create Task",
       "Quick note",
       "Conversation log",
+      "Constraint",
     ]);
     // The chooser is a router, not a capture: no field and nothing to save yet.
     expect(screen.queryByTestId("capture-field")).toBeNull();
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+  });
+
+  it("takes Constraint into its own form, never the note field or /api/capture", async () => {
+    const spy = respond({ projects: [], nextCursor: null });
+    const user = userEvent.setup();
+    render(<CaptureHarness open onClose={() => {}} principalId={PRINCIPAL_ID} />);
+    await user.click(await screen.findByTestId("capture-choice-constraint"));
+
+    expect(await screen.findByTestId("capture-constraint-save")).toBeInTheDocument();
+    expect(screen.queryByTestId("capture-field")).toBeNull();
+    expect(
+      spy.mock.calls.some(
+        ([input, init]) =>
+          String(input).startsWith("/api/capture") &&
+          String((init as RequestInit | undefined)?.method).toUpperCase() === "POST",
+      ),
+    ).toBe(false);
+  });
+
+  it("lets a person back out of Constraint and choose again", async () => {
+    respond({ projects: [], nextCursor: null });
+    const user = userEvent.setup();
+    render(<CaptureHarness open onClose={() => {}} principalId={PRINCIPAL_ID} />);
+    await user.click(await screen.findByTestId("capture-choice-constraint"));
+    await screen.findByTestId("capture-constraint-save");
+
+    await user.click(screen.getByTestId("capture-entry-back"));
+    expect(await screen.findByTestId("capture-chooser")).toBeInTheDocument();
+    expect(screen.queryByTestId("capture-constraint-save")).toBeNull();
   });
 
   it("takes Quick note into the unchanged capture branch with that kind selected", async () => {

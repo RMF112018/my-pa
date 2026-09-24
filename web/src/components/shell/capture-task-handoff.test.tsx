@@ -93,12 +93,13 @@ function captureCalls(fetchSpy: { readonly mock: { readonly calls: readonly unkn
 }
 
 describe("the Capture chooser", () => {
-  it("offers exactly Create Task, Quick note and Conversation log", async () => {
+  it("offers exactly Create Task, Quick note, Conversation log and Constraint", async () => {
     const { chooser } = await openCapture();
     expect(within(chooser).getAllByRole("button").map((button) => button.textContent)).toEqual([
       "Create Task",
       "Quick note",
       "Conversation log",
+      "Constraint",
     ]);
   });
 

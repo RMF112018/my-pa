@@ -1,7 +1,7 @@
 """Replace the all-history grant uniqueness with an unrevoked partial index.
 
 Revision ID: 7a5c4e9d2b61
-Revises: e6a4c2f91b73
+Revises: 6f6ead27d122
 Create Date: 2026-09-23
 
 The legacy `one_remote_capability_grant` UNIQUE constraint spans every grant
@@ -19,7 +19,7 @@ from alembic import op
 from sqlalchemy import text
 
 revision: str = "7a5c4e9d2b61"
-down_revision: str | None = "e6a4c2f91b73"
+down_revision: str | None = "6f6ead27d122"
 branch_labels: str | None = None
 depends_on: str | None = None
 

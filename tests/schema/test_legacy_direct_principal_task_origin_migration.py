@@ -166,10 +166,11 @@ def _origin_rows(engine: Engine) -> dict[str, tuple[str, str | None]]:
 
 
 def test_the_revision_is_in_the_chain() -> None:
-    """Unique head is `6f6ead27d122`, directly on `e6a4c2f91b73`."""
+    """Sole head is `7a5c4e9d2b61`, additive on this revision."""
     script = ScriptDirectory.from_config(_config())
     assert len(list(script.get_heads())) == 1
-    assert script.get_heads() == [REVISION]
+    assert script.get_heads() == ["7a5c4e9d2b61"]
+    assert script.get_revision("7a5c4e9d2b61").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 
 

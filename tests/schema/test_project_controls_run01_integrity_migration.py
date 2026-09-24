@@ -42,10 +42,11 @@ from my_pa.infrastructure.persistence.tables import (
 ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "e6a4c2f91b73"
 PREVIOUS: Final = "c4f1a8e52d90"
-#: The chain head this revision's test runs against. `6f6ead27d122` (CCA-005 /
-#: WP-TUX-01 legacy direct-Principal origin reconciliation) is additive on
+#: The chain head this revision's test runs against. `7a5c4e9d2b61` (remote
+#: grant unrevoked identity) is additive on `6f6ead27d122` (CCA-005 / WP-TUX-01
+#: legacy direct-Principal origin reconciliation), which is additive on
 #: `REVISION`, so `REVISION` is no longer the head.
-HEAD: Final = "6f6ead27d122"
+HEAD: Final = "7a5c4e9d2b61"
 MIGRATION: Final = (
     ROOT / "migrations" / "versions" / "20260914_e6a4c2f91b73_project_controls_run01_integrity.py"
 )

@@ -28,7 +28,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "7a5c4e9d2b61"
 CURRENT_HEAD: Final = "7a5c4e9d2b61"
-PREVIOUS: Final = "e6a4c2f91b73"
+PREVIOUS: Final = "6f6ead27d122"
 MIGRATION: Final = (
     ROOT / "migrations/versions/20260923_7a5c4e9d2b61_remote_grant_unrevoked_identity.py"
 )

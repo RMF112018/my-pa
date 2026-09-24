@@ -24,6 +24,7 @@ import { InspectorSelectionProvider } from "@/components/shell/inspector-selecti
 import { useShellPreferences } from "@/components/shell/shell-preferences";
 import { TaskRuntimeProvider } from "@/components/work/task-runtime-provider";
 import { TaskCreateSheet } from "@/components/tasks/task-create-sheet";
+import { ConstraintRuntimeProvider } from "@/components/project-controls/constraint-runtime-provider";
 import { ProjectScopeProvider, useProjectScope } from "@/components/shell/project-scope-provider";
 import type { ResolvedProjectScope } from "@/lib/project-scope/resolver";
 import {
@@ -59,7 +60,9 @@ export function AppShell({
       initialResolution={initialProjectScope}
     >
       <TaskRuntimeProvider principalId={principal.principalId} sessionEpoch={sessionEpoch}>
-        <AppShellBody principal={principal}>{children}</AppShellBody>
+        <ConstraintRuntimeProvider principalId={principal.principalId} sessionEpoch={sessionEpoch}>
+          <AppShellBody principal={principal}>{children}</AppShellBody>
+        </ConstraintRuntimeProvider>
       </TaskRuntimeProvider>
     </ProjectScopeProvider>
   );

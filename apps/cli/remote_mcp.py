@@ -81,6 +81,10 @@ _EXTRA_ACTIVE_CODES: frozenset[ChatLLMConditionCode] = frozenset(
 class ProfileConvergenceError(RuntimeError):
     """Post-mutation or blocker verification failed; the apply must roll back."""
 
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
 
 class ProfileApplyError(RuntimeError):
     """Apply failed and the transaction rolled back; carries the rollback JSON."""

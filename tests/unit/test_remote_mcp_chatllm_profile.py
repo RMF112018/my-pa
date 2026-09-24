@@ -10,7 +10,7 @@ from uuid import UUID
 
 import pytest
 from apps.cli import remote_mcp as command
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import StaticPool
@@ -31,6 +31,7 @@ from my_pa.domain.identity.operation import (
 from my_pa.infrastructure.persistence.remote_identity import (
     REMOTE_IDENTITY_METADATA,
     RemoteIdentityRepository,
+    remote_capability_grants,
     remote_clients,
     remote_security_controls,
 )
@@ -499,3 +500,112 @@ def test_transaction_rollback_on_apply_failure() -> None:
         assert len(rows_after) == 1
         assert rows_after[0].id == finite_id
         assert rows_after[0].expires_at is not None
+
+
+def test_profile_apply_internal_failure_exits_three(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+) -> None:
+    with _cli(monkeypatch):
+
+        def fail_grant(self: RemoteIdentityRepository, **kwargs: object) -> UUID:
+            raise RuntimeError("injected grant failure")
+
+        monkeypatch.setattr(RemoteIdentityRepository, "grant", fail_grant)
+        assert command.main([*_profile_args("profile-apply"), "--apply"]) == 3
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["applied"] is False
+        assert payload["committed"] is False
+        assert payload["converged"] is False
+        assert payload["rolled_back"] is True
+        assert payload["failure"] == "unexpected RuntimeError"
+
+
+@pytest.mark.parametrize(
+    ("mutate", "blocker"),
+    [
+        ("disabled", "CLIENT_DISABLED"),
+        ("revoked", "CLIENT_REVOKED"),
+        ("expired", "CLIENT_EXPIRED"),
+        ("scope_unregistered", "SCOPE_NOT_REGISTERED"),
+        ("scope_unsupported", "SCOPE_UNSUPPORTED"),
+        ("resource", "RESOURCE_MISMATCH"),
+        ("gateway", "GATEWAY_DISABLED"),
+        ("allowlist", "CLIENT_NOT_ALLOWLISTED"),
+    ],
+)
+def test_each_eligibility_gap_blocks_before_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+    mutate: str,
+    blocker: str,
+) -> None:
+    settings = _settings()
+    if mutate == "scope_unsupported":
+        settings = Settings(
+            database_url=settings.database_url,
+            oauth_audience=RESOURCE,
+            oauth_scopes="other.read",
+            mcp_chatllm_gateway_enabled=True,
+            mcp_chatllm_gateway_oauth_client_ids=CLIENT_ID,
+        )
+    elif mutate == "gateway":
+        settings = Settings(
+            database_url=settings.database_url,
+            oauth_audience=RESOURCE,
+            oauth_scopes=SCOPE,
+            mcp_chatllm_gateway_enabled=False,
+            mcp_chatllm_gateway_oauth_client_ids=CLIENT_ID,
+        )
+    elif mutate == "allowlist":
+        settings = Settings(
+            database_url=settings.database_url,
+            oauth_audience=RESOURCE,
+            oauth_scopes=SCOPE,
+            mcp_chatllm_gateway_enabled=True,
+            mcp_chatllm_gateway_oauth_client_ids="some-other-client",
+        )
+    with _cli(monkeypatch) as engine:
+        values: dict[str, object] = {}
+        if mutate == "disabled":
+            values["enabled"] = False
+        elif mutate == "revoked":
+            values["revoked_at"] = WHEN
+        elif mutate == "expired":
+            values["expires_at"] = EXPIRED_AT
+        elif mutate == "scope_unregistered":
+            values["registered_scopes"] = "other.read"
+        if values:
+            with engine.begin() as connection:
+                connection.execute(
+                    remote_clients.update()
+                    .where(remote_clients.c.oauth_client_id == CLIENT_ID)
+                    .values(**values)
+                )
+        monkeypatch.setattr(command, "load_settings", lambda: settings)
+        monkeypatch.setattr(engine, "dispose", lambda: None)
+        resource = "https://other.example/mcp" if mutate == "resource" else RESOURCE
+        assert (
+            command.main(
+                [
+                    "profile-apply",
+                    "--oauth-client-id",
+                    CLIENT_ID,
+                    "--scope",
+                    SCOPE,
+                    "--resource",
+                    resource,
+                    "--profile-version",
+                    PROFILE_VERSION,
+                    "--apply",
+                ]
+            )
+            == 1
+        )
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["applied"] is False
+        assert blocker in payload["eligibility"]["blockers"]
+        with engine.connect() as connection:
+            count = connection.execute(
+                select(func.count()).select_from(remote_capability_grants)
+            ).scalar_one()
+        assert count == 0

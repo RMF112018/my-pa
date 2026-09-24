@@ -257,7 +257,10 @@ def _eligibility(
             blockers.append("CLIENT_DISABLED")
         if client.revoked_at is not None:
             blockers.append("CLIENT_REVOKED")
-        if client.expires_at is not None and client.expires_at <= now:
+        expires_at = client.expires_at
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        if expires_at is not None and expires_at <= now:
             blockers.append("CLIENT_EXPIRED")
         if scope not in set(client.registered_scopes.split()):
             blockers.append("SCOPE_NOT_REGISTERED")

@@ -134,7 +134,7 @@ None of these steps turns production on by existing in this document. Marked
 steps require a separate operator decision.
 
 1. Merge the reviewed pull request.
-2. Migrate a **disposable** database to head `2fe4e13fb449`. A production-shaped
+2. Migrate a **disposable** database to head `7a5c4e9d2b61`. A production-shaped
    database migrate is **operator-only**.
 3. Deploy with `context.prepare` / `context.feedback` **not** granted remotely.
    Image cutover is **operator-only**.
@@ -158,9 +158,11 @@ steps require a separate operator decision.
      --apply
    ```
 
-   Confirm the plan's `pre.counts.add` set is application-data only, Run 01
-   names appear as `DESIRED_NOT_IMPLEMENTED` conditions rather than grant
-   failures, and no `UNEXPECTED_CONTROL_PLANE_AUTHORITY` condition is present.
+   Confirm the plan's `pre.counts.add` set is application-data only.
+   `project_controls.configure`, `project_controls.status`, and
+   `constraints.create_published` are implemented, so a missing grant is
+   `MISSING_CANONICAL` and an add, not `DESIRED_NOT_IMPLEMENTED`. No
+   `UNEXPECTED_CONTROL_PLANE_AUTHORITY` condition is present.
    Task writes additionally require
    `set-client-writes --writes-enabled`, `control --remote-enabled
    --writes-enabled`, and process `MY_PA_REMOTE_WRITES_ENABLED=true`. Reconnect

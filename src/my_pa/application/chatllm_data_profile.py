@@ -597,7 +597,7 @@ def plan_profile_state(
                 )
             )
 
-        if durable_canonical and not extra_active and not expired_wrong_write:
+        if durable_canonical:
             conditions.append(
                 _condition(
                     capability.value,
@@ -636,7 +636,7 @@ def plan_profile_state(
                 )
             )
             continue
-        if expired_canonical and not extra_active:
+        if expired_canonical:
             record = expired_canonical[0]
             conditions.append(
                 _condition(
@@ -654,7 +654,7 @@ def plan_profile_state(
                 )
             )
             continue
-        if revoked_canonical and not extra_active and not expired_canonical:
+        if revoked_canonical and not expired_canonical:
             conditions.append(
                 _condition(
                     capability.value,

@@ -35,15 +35,107 @@ import type {
   ProjectState,
   SituationState,
 } from "@/contracts/views";
+import type { PrincipalSession } from "@/contracts/identity";
 import {
   diagnosticError,
   diagnosticLimitations,
 } from "@/lib/diagnostics/presentation";
 import { serverDiagnosticsEnabled } from "@/lib/diagnostics/server";
+import { PROJECT_SCOPE_COOKIE, parseProjectScopePreference } from "@/lib/project-scope/preference";
+import { ALL_PROJECTS, type ProjectScope } from "@/lib/project-scope/scope";
+import { constraintsRoute } from "@/app/(app)/work/projects/[projectId]/constraints/constraint-url-state";
+
+/** The canonical portfolio-wide Constraint route (`work/constraints/page.tsx`). */
+const PORTFOLIO_CONSTRAINTS_ROUTE = "/work/constraints";
 
 const BLURB =
   "Situations gather what matters about a project, relationship, or topic into one purposeful " +
   "view. Each references records it does not own, and only accepted records appear.";
+
+/**
+ * The Constraints panel's data, read once, server-side, from a real backend
+ * aggregate — never a client-side scan of a fetched list.
+ *
+ * A `PROJECT`-scope read is one Project's own `constraints.overview`
+ * (`totalOpen`/`needsAttention`, both counted on that Project's own
+ * calendar). An `ALL_PROJECTS`-scope read is `constraints.portfolio_overview`
+ * — deliberately *not* summed into one cross-Project total (each entry is
+ * counted on its own Project's calendar, and the portfolio capability itself
+ * carries no roll-up member for exactly that reason); what this panel shows
+ * instead is a count of Projects, which is safe to count regardless of which
+ * calendar each one is on.
+ */
+type ConstraintsPanelData =
+  | { readonly kind: "project"; readonly projectId: string; readonly totalOpen: number; readonly needsAttention: number }
+  | { readonly kind: "portfolio"; readonly projectsWithOpen: number; readonly needsAttentionProjects: number }
+  | { readonly kind: "unavailable" };
+
+async function readConstraintsPanelData(
+  principal: PrincipalSession,
+  scope: ProjectScope,
+): Promise<ConstraintsPanelData> {
+  if (scope.kind === "PROJECT") {
+    const outcome = await invokeGateway(principal, "constraints.overview", { project_id: scope.projectId });
+    if (!outcome.ok) return { kind: "unavailable" };
+    return {
+      kind: "project",
+      projectId: scope.projectId,
+      totalOpen: outcome.result.overview.totalOpen,
+      needsAttention: outcome.result.overview.needsAttention,
+    };
+  }
+  const outcome = await invokeGateway(principal, "constraints.portfolio_overview", {});
+  if (!outcome.ok) return { kind: "unavailable" };
+  const projects = outcome.result.overview.projects;
+  return {
+    kind: "portfolio",
+    projectsWithOpen: projects.filter((project) => project.totalOpen > 0).length,
+    needsAttentionProjects: projects.filter((project) => project.needsAttention > 0).length,
+  };
+}
+
+/**
+ * The command center's one Constraints tile.
+ *
+ * `PC-CM-SCOPE-AC-021`: it routes to the exact-Project Constraints route when
+ * the current scope names one Project, and to the portfolio Constraints route
+ * otherwise — the same scope-aware destination `project-picker.tsx` already
+ * lands a scope switch on. `PC-CM-SCOPE-AC-020`: this is the one panel on this
+ * page carrying a backend-aggregated figure; Situations and Projects above
+ * remain the plain, unaggregated lists they already were.
+ */
+function ConstraintsPanel({ data }: { data: ConstraintsPanelData }) {
+  if (data.kind === "unavailable") {
+    return (
+      <SurfaceState
+        kind="unavailable"
+        title="Constraints could not be read"
+        testId="work-constraints-unavailable"
+      />
+    );
+  }
+  const href = data.kind === "project" ? constraintsRoute(data.projectId) : PORTFOLIO_CONSTRAINTS_ROUTE;
+  return (
+    <Link
+      href={href}
+      data-testid="work-constraints-panel"
+      className="block rounded-xl border border-moss-slate/10 bg-surface p-4 hover:border-moss-green"
+    >
+      <h2 className="font-semibold text-moss-slate">Constraints</h2>
+      {data.kind === "project" ? (
+        <p className="mt-2 text-sm text-moss-slate">
+          {data.totalOpen} open
+          {data.needsAttention > 0 ? `, ${data.needsAttention} needing attention` : ""}
+        </p>
+      ) : (
+        <p className="mt-2 text-sm text-moss-slate">
+          {data.projectsWithOpen} Project{data.projectsWithOpen === 1 ? "" : "s"} with open Constraints
+          {data.needsAttentionProjects > 0 ? `, ${data.needsAttentionProjects} needing attention` : ""}
+        </p>
+      )}
+    </Link>
+  );
+}
 
 function ContinuityWorkspacePanel({ data }: { data: ContinuityWorkspace }) {
   const groups = [
@@ -108,6 +200,7 @@ export async function WorkPage() {
   if (!principal) redirect("/sign-in");
 
   const heading = <PageHeader headingId="work-heading" title="Situations" description={BLURB} />;
+  const projectScope: ProjectScope = parseProjectScopePreference(cookieStore.get(PROJECT_SCOPE_COOKIE)?.value) ?? ALL_PROJECTS;
 
   if (syntheticDataEnabled()) {
     const personId = syntheticPersonId(principal);
@@ -131,9 +224,10 @@ export async function WorkPage() {
     );
   }
 
-  const [situationsOutcome, projectsOutcome] = await Promise.all([
+  const [situationsOutcome, projectsOutcome, constraintsPanelData] = await Promise.all([
     invokeGateway(principal, "continuity.situations"),
     invokeGateway(principal, "continuity.projects"),
+    readConstraintsPanelData(principal, projectScope),
   ]);
 
   const situationsAnswer = surfaceAnswer(
@@ -159,6 +253,7 @@ export async function WorkPage() {
     return (
       <section aria-labelledby="work-heading" className="mx-auto max-w-2xl">
         {heading}
+        <ConstraintsPanel data={constraintsPanelData} />
         <SurfaceState
           kind="unavailable"
           title="Situations could not be read"
@@ -179,6 +274,7 @@ export async function WorkPage() {
   return (
     <section aria-labelledby="work-heading" className="mx-auto max-w-2xl">
       {heading}
+      <ConstraintsPanel data={constraintsPanelData} />
       {degraded ? (
         <DegradedBanner
           scope="this board"

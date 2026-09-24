@@ -52,7 +52,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "f7a2c9d51e64"
-CURRENT_HEAD: Final = "e6a4c2f91b73"
+CURRENT_HEAD: Final = "6f6ead27d122"
 CAPTURE_LABELS: Final = "c1a8e4d70b29"
 WP_TUX_01: Final = "de5ec1c65857"
 WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
@@ -77,6 +77,9 @@ CURRENT_HEAD_MIGRATION: Final = (
     MIGRATIONS / "20260913_c4f1a8e52d90_admit_continuity_projects_update_and_close.py"
 )
 RUN01_MIGRATION: Final = MIGRATIONS / "20260914_e6a4c2f91b73_project_controls_run01_integrity.py"
+CCA005_MIGRATION: Final = (
+    MIGRATIONS / "20260922_6f6ead27d122_reconcile_legacy_direct_principal_task_origin.py"
+)
 WP_MCP_PROJ_02_MIGRATION: Final = (
     MIGRATIONS / "20260913_b3e9d7a41c25_admit_continuity_projects_read.py"
 )
@@ -137,8 +140,6 @@ CONSTRAINT_TABLES: Final[frozenset[str]] = frozenset(
 #: Fixed and written out, so the recurrence guard below is a bounded check over a
 #: named list rather than a repository-wide scan.
 HEAD_PIN_FILES: Final[tuple[str, ...]] = (
-    "tests/architecture/test_capture_project_binding.py",
-    "tests/architecture/test_constraint_read_plane_boundaries.py",
     "tests/database/test_cli_auth.py",
     "tests/database/test_entities_graph_vocabulary_migration.py",
     "tests/database/test_legacy_entity_backfill_migration.py",
@@ -151,7 +152,6 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_constraint_sync_migration.py",
     "tests/schema/test_continuity_projects_mutation_migration.py",
     "tests/schema/test_continuity_projects_read_capability_migration.py",
-    "tests/schema/test_extraction_schema_migration.py",
     "tests/schema/test_goodnotes_browser_contract_migration.py",
     "tests/schema/test_goodnotes_client_resume_migration.py",
     "tests/schema/test_goodnotes_content_and_durable_note_stages.py",
@@ -165,17 +165,13 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_goodnotes_promotion_receipt_migration.py",
     "tests/schema/test_goodnotes_pull_migration.py",
     "tests/schema/test_goodnotes_semantic_proposal_migration.py",
+    "tests/schema/test_legacy_direct_principal_task_origin_migration.py",
     "tests/schema/test_oauth_refresh_migration.py",
     "tests/schema/test_project_controls_run01_integrity_migration.py",
     "tests/schema/test_project_version_and_entity_bridge_migration.py",
     "tests/schema/test_webauthn_auth_persistence_migration.py",
     "tests/schema/test_work_task_commitment_migration.py",
     "tests/unit/test_cli_auth.py",
-    # PC-CM-RUN01-WP05 (`b43e9b0a`) added this module and it names the head; the
-    # list is checked against the tree by
-    # `test_the_head_pin_list_is_the_files_that_actually_pin_the_head`, which
-    # this entry is what satisfies.
-    "tests/unit/test_project_controls_settings_history.py",
 )
 
 #: The constant names those files use for the chain's head.
@@ -253,7 +249,8 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == "c4f1a8e52d90"
+    assert script.get_revision(CURRENT_HEAD).down_revision == "e6a4c2f91b73"
+    assert script.get_revision("e6a4c2f91b73").down_revision == "c4f1a8e52d90"
     assert script.get_revision("c4f1a8e52d90").down_revision == WP_MCP_PROJ_02
     assert script.get_revision(WP_MCP_PROJ_02).down_revision == WP_MCP_PROJ_01
     assert script.get_revision(WP_MCP_PROJ_01).down_revision == WP_TUX_01
@@ -264,7 +261,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 106
+    assert len(list(MIGRATIONS.glob("*.py"))) == 107
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -402,6 +399,7 @@ def test_no_historical_revision_was_edited() -> None:
         pytest.skip("no merge base available in this checkout")
     touched = {line for line in changed.stdout.splitlines() if line.strip()}
     assert touched <= {
+        CCA005_MIGRATION.relative_to(ROOT).as_posix(),
         RUN01_MIGRATION.relative_to(ROOT).as_posix(),
         CURRENT_HEAD_MIGRATION.relative_to(ROOT).as_posix(),
         WP_MCP_PROJ_02_MIGRATION.relative_to(ROOT).as_posix(),

@@ -35,6 +35,7 @@ PRINCIPAL: Final = "prn_aaaaaaaa11111111"
 TASK_EVIDENCE: Final = "tsk_aaaaaaaa11111111"
 TASK_DIRECT: Final = "tsk_bbbbbbbb22222222"
 ORIGIN: Final = "cap_aaaaaaaa11111111"
+REVIEW_DECISION: Final = "rdec_aaaaaaaa11111111"
 WHEN: Final = "2026-09-11 12:00:00+00"
 
 
@@ -92,19 +93,26 @@ def _constraint_names(engine: Engine, table: str) -> set[str]:
 
 
 def _seed_legacy_task(connection: Connection, *, task_id: str, closed: bool = False) -> None:
-    """Insert a pre-WP-TUX-01 task row at the capture_labels head shape."""
+    """Insert a pre-WP-TUX-01 review-accepted evidence task.
+
+    Acceptance is `review`, with the review decision the accepted-task CHECK
+    requires. That is a legitimate evidence origin: CCA-005 rewrites only
+    `acceptance_kind = 'direct_principal'` rows that the WP-TUX-01 backfill
+    left citing evidence, and this citation must survive that correction.
+    """
     connection.execute(
         text(
             """
             INSERT INTO knowledge.tasks (
               task_id, principal_id, title, state, evidence_state,
               origin_evidence_ref, opened_at, closed_at, closure_evidence_ref,
-              acceptance_kind, created_at, updated_at, lifecycle_state, version
+              acceptance_kind, accepted_by_review_decision_id,
+              created_at, updated_at, lifecycle_state, version
             ) VALUES (
               :task_id, :principal_id, 'Seeded task',
               :state, 'accepted', :origin,
               :when, :closed_at, :closure,
-              'direct_principal', :when, :when, :lifecycle, 1
+              'review', :review_decision, :when, :when, :lifecycle, 1
             )
             """
         ),
@@ -112,6 +120,7 @@ def _seed_legacy_task(connection: Connection, *, task_id: str, closed: bool = Fa
             "task_id": task_id,
             "principal_id": PRINCIPAL,
             "origin": ORIGIN,
+            "review_decision": REVIEW_DECISION,
             "when": WHEN,
             "state": "closed" if closed else "open",
             "lifecycle": "completed" if closed else "open",

@@ -193,6 +193,54 @@ export async function readRegister(projectId: string, state: ConstraintUrlState,
     : response;
 }
 
+/** One bounded page of the cross-Project portfolio Register, plus its own omitted-Project count. */
+export interface ConstraintPortfolioListPage {
+  readonly entries: readonly ConstraintListEntry[];
+  readonly isTruncated: boolean;
+  readonly nextCursor: string | null;
+  /**
+   * How many owned Projects this *read* could not count — a row-level list's
+   * own truncation/disclosure fact, distinct from `constraints.portfolio_overview`'s
+   * own `omittedProjects` (a different read, at a different instant, over a
+   * different query). Never conflated with it by a caller.
+   */
+  readonly omittedProjects: number;
+}
+
+/**
+ * `GET /api/project-controls/portfolio/constraints` — the cross-Project
+ * Register (`constraints.portfolio_list`, or `constraints.portfolio_search`
+ * when `state.search` is non-empty; the route branches on `q` exactly as the
+ * exact-Project Register's own route does). Every row is the identical
+ * `WireListEntry` shape `readRegister` already decodes — a portfolio row is a
+ * Register row, not a second projection of it — reusing `listEntry()`
+ * unchanged, including the `projectName` it now carries (added to the shared
+ * `WireListEntry`/`ConstraintListEntry` contract for this corrective). There
+ * is no Project segment in this path: the Project set is derived server-side
+ * from the Principal, and this function never enumerates Projects itself.
+ */
+export async function readPortfolioRegister(
+  state: ConstraintUrlState,
+  cursor: string | null,
+  signal: AbortSignal,
+): Promise<LiveResult<ConstraintPortfolioListPage>> {
+  const response = await read<{ readonly constraints: readonly WireListEntry[]; readonly omittedProjects: number }>(
+    `/api/project-controls/portfolio/constraints?${registerQuery(state, cursor)}`,
+    signal,
+  );
+  return response.ok
+    ? {
+        ...response,
+        value: {
+          entries: response.value.constraints.map((item) => listEntry(item, state.group)),
+          isTruncated: response.disclosure.truncated,
+          nextCursor: response.disclosure.nextCursor ?? null,
+          omittedProjects: response.value.omittedProjects,
+        },
+      }
+    : response;
+}
+
 /**
  * Project a freshly-read canonical detail down into the Register's row shape.
  *

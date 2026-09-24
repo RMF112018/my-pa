@@ -29,7 +29,7 @@
  * while a reorder is in flight, so a second Move cannot race the first; the
  * visible order only becomes the new order once the dispatch confirms.
  */
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ConstraintCategory } from "@/contracts/constraints";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -405,11 +405,33 @@ function CategoryCreateDialog({
 }) {
   const runtime = useConstraintRuntime();
   const feedback = useMutationFeedback();
+  const [surfaceId] = useState(() => `category-create:${crypto.randomUUID()}`);
   const [prefix, setPrefix] = useState("");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Unsaved `prefix`/`title`/`description` input reported to the runtime, the
+  // same `useConstraintRuntime().mutationCoordinator` call pattern
+  // `constraint-authoring.tsx` already uses — this is what makes the §5a
+  // scope-switch soft block (confirm-discard) actually fire for a mid-edit
+  // Category create, same as it already does for Constraint authoring.
+  const dirty = prefix.trim().length > 0 || title.trim().length > 0 || description.trim().length > 0;
+  useEffect(() => {
+    runtime.mutationCoordinator.reportDirtyState(surfaceId, dirty);
+  }, [dirty, runtime, surfaceId]);
+  useEffect(() => {
+    const coordinator = runtime.mutationCoordinator;
+    return () => coordinator.clearDirtyState(surfaceId);
+    // Unmount-only cleanup — see `constraint-authoring.tsx`'s identical effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function close() {
+    runtime.mutationCoordinator.clearDirtyState(surfaceId);
+    onClose();
+  }
 
   async function submit() {
     if (pending || prefix.trim().length === 0 || title.trim().length === 0) return;
@@ -449,6 +471,7 @@ function CategoryCreateDialog({
       return;
     }
     if (outcome.state.phase === "confirmed") {
+      runtime.mutationCoordinator.clearDirtyState(surfaceId);
       setPrefix("");
       setTitle("");
       setDescription("");
@@ -460,7 +483,7 @@ function CategoryCreateDialog({
   }
 
   return (
-    <Dialog open={open} onClose={onClose} title="New Category">
+    <Dialog open={open} onClose={close} title="New Category">
       <div className="grid gap-3">
         <label className="grid gap-1 text-sm">
           Prefix
@@ -483,7 +506,7 @@ function CategoryCreateDialog({
           <Button size="sm" disabled={pending} data-testid="category-form-submit" onClick={() => void submit()}>
             {pending ? "Creating…" : "Create"}
           </Button>
-          <Button size="sm" variant="ghost" onClick={onClose} data-testid="category-form-cancel">
+          <Button size="sm" variant="ghost" onClick={close} data-testid="category-form-cancel">
             Cancel
           </Button>
         </div>
@@ -505,6 +528,7 @@ function CategoryEditDialog({
 }) {
   const runtime = useConstraintRuntime();
   const feedback = useMutationFeedback();
+  const [surfaceId] = useState(() => `category-edit:${crypto.randomUUID()}`);
   const [title, setTitle] = useState(category?.title ?? "");
   const [description, setDescription] = useState(category?.description ?? "");
   const [pending, setPending] = useState(false);
@@ -518,6 +542,25 @@ function CategoryEditDialog({
     setTitle(category?.title ?? "");
     setDescription(category?.description ?? "");
     setError(null);
+  }
+
+  // Unsaved edits — differing from the category's own stored values, not
+  // merely non-empty (an untouched edit form is never dirty) — reported the
+  // same way `constraint-authoring.tsx` reports its own. See
+  // `CategoryCreateDialog`'s identical pair of effects above.
+  const dirty = title !== (category?.title ?? "") || description !== (category?.description ?? "");
+  useEffect(() => {
+    runtime.mutationCoordinator.reportDirtyState(surfaceId, dirty);
+  }, [dirty, runtime, surfaceId]);
+  useEffect(() => {
+    const coordinator = runtime.mutationCoordinator;
+    return () => coordinator.clearDirtyState(surfaceId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function close() {
+    runtime.mutationCoordinator.clearDirtyState(surfaceId);
+    onClose();
   }
 
   if (category === null) return null;
@@ -560,6 +603,7 @@ function CategoryEditDialog({
       return;
     }
     if (outcome.state.phase === "confirmed") {
+      runtime.mutationCoordinator.clearDirtyState(surfaceId);
       await onUpdated();
       return;
     }
@@ -568,7 +612,7 @@ function CategoryEditDialog({
   }
 
   return (
-    <Dialog open onClose={onClose} title={`Edit ${category.title}`}>
+    <Dialog open onClose={close} title={`Edit ${category.title}`}>
       <div className="grid gap-3">
         <p className="text-sm text-muted" data-testid="category-edit-prefix">
           Prefix: {category.prefix}
@@ -591,7 +635,7 @@ function CategoryEditDialog({
           <Button size="sm" disabled={pending} data-testid="category-edit-submit" onClick={() => void submit()}>
             {pending ? "Saving…" : "Save"}
           </Button>
-          <Button size="sm" variant="ghost" onClick={onClose} data-testid="category-edit-cancel">
+          <Button size="sm" variant="ghost" onClick={close} data-testid="category-edit-cancel">
             Cancel
           </Button>
         </div>

@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ConstraintCategory } from "@/contracts/constraints";
-import { ConstraintRuntimeProvider } from "@/components/project-controls/constraint-runtime-provider";
+import { ConstraintRuntimeProvider, useConstraintRuntime } from "@/components/project-controls/constraint-runtime-provider";
 import { ProjectScopeProvider } from "@/components/shell/project-scope-provider";
 import { MutationFeedbackProvider } from "@/components/ui/mutation-feedback";
 import type { ResolvedProjectScope } from "@/lib/project-scope/resolver";
@@ -41,16 +41,50 @@ const ALL_PROJECTS_RESOLUTION: ResolvedProjectScope = {
   normalized: false,
 };
 
+/**
+ * Exercises the same `useConstraintRuntime().canSwitchScope()` barrier
+ * `ProjectPicker` calls for the real §5a scope-switch guard (see
+ * `constraint-runtime-provider.tsx`): with no dirty surface it resolves
+ * `true` synchronously (no dialog); with a dirty surface it opens the same
+ * "Discard unsaved changes?" `Sheet` the provider itself owns
+ * (`constraint-scope-discard-confirm`/`-cancel`). This is a black-box probe
+ * of whatever the mounted dialogs have reported via
+ * `reportDirtyState`/`clearDirtyState` — it asserts nothing about their
+ * internals, only what the runtime barrier itself would do.
+ */
+function DirtyProbe() {
+  const runtime = useConstraintRuntime();
+  return (
+    <button type="button" data-testid="dirty-probe" onClick={() => void runtime.canSwitchScope()}>
+      probe scope switch
+    </button>
+  );
+}
+
 function Harness({ children }: { readonly children: ReactNode }) {
   return (
     <ProjectScopeProvider principalId="prn_aaaaaaaa11111111" sessionEpoch="session:a" initialResolution={ALL_PROJECTS_RESOLUTION}>
       <MutationFeedbackProvider>
         <ConstraintRuntimeProvider principalId="prn_aaaaaaaa11111111" sessionEpoch="session:a">
+          <DirtyProbe />
           {children}
         </ConstraintRuntimeProvider>
       </MutationFeedbackProvider>
     </ProjectScopeProvider>
   );
+}
+
+/** Clicks the probe and reports whether the discard-confirm barrier opened. */
+async function probeIsDirty(user: ReturnType<typeof userEvent.setup>): Promise<boolean> {
+  await user.click(screen.getByTestId("dirty-probe"));
+  const prompt = screen.queryByTestId("constraint-scope-discard-confirm");
+  if (prompt) {
+    // Resolve it without actually discarding anything, so the probe itself
+    // never changes the state under test.
+    await user.click(screen.getByTestId("constraint-scope-discard-cancel"));
+    return true;
+  }
+  return false;
 }
 
 const PROJECT_ID = "prj_aaaaaaaa11111111";
@@ -177,5 +211,67 @@ describe("ConstraintCategoryAdmin", () => {
     const firstKey = writes.reorderCategories.mock.calls[0][1].idempotencyKey;
     const secondKey = writes.reorderCategories.mock.calls[1][1].idempotencyKey;
     expect(secondKey).not.toBe(firstKey);
+  });
+
+  it("reports the New Category form's unsaved state to the runtime's scope-switch barrier, and clears it on Cancel", async () => {
+    const user = userEvent.setup();
+    render(
+      <Harness>
+        <ConstraintCategoryAdmin open projectId={PROJECT_ID} categories={[CATEGORY_A]} onClose={() => undefined} onChanged={() => undefined} />
+      </Harness>,
+    );
+    await user.click(screen.getByTestId("category-create"));
+    // Untouched: not dirty yet.
+    expect(await probeIsDirty(user)).toBe(false);
+
+    await user.type(screen.getByTestId("category-form-title"), "Environmental");
+    expect(await probeIsDirty(user)).toBe(true);
+
+    await user.click(screen.getByTestId("category-form-cancel"));
+    expect(await probeIsDirty(user)).toBe(false);
+  });
+
+  it("reports the New Category form's unsaved state to the runtime's scope-switch barrier, and clears it on a confirmed Create", async () => {
+    const user = userEvent.setup();
+    writes.createCategory.mockResolvedValue({
+      shape: "backend",
+      disposition: "applied",
+      category: { ...CATEGORY_A, categoryId: "ccat_cccccccc33333333", prefix: "3", title: "Environmental" },
+      receipt: { historyId: "cchst_new", projectId: PROJECT_ID, categoryId: "ccat_cccccccc33333333", operation: "create", actor: "PRINCIPAL", outcome: "APPLIED", beforeVersion: 0, afterVersion: 1, occurredAt: "2026-01-02T00:00:00Z", safeFailureReason: null },
+      disclosure: { scope: "constraint-category-create", coverage: "complete", freshnessAt: "2026-01-02T00:00:00Z", authority: "accepted", limitations: [], truncated: false },
+    });
+    render(
+      <Harness>
+        <ConstraintCategoryAdmin open projectId={PROJECT_ID} categories={[CATEGORY_A]} onClose={() => undefined} onChanged={() => undefined} />
+      </Harness>,
+    );
+    await user.click(screen.getByTestId("category-create"));
+    await user.type(screen.getByTestId("category-form-prefix"), "3");
+    await user.type(screen.getByTestId("category-form-title"), "Environmental");
+    expect(await probeIsDirty(user)).toBe(true);
+
+    writes.readCategories.mockResolvedValue(ok([CATEGORY_A]));
+    await user.click(screen.getByTestId("category-form-submit"));
+    await waitFor(() => expect(writes.createCategory).toHaveBeenCalledTimes(1));
+    expect(await probeIsDirty(user)).toBe(false);
+  });
+
+  it("reports the Edit Category form's unsaved state to the runtime's scope-switch barrier, and clears it on Cancel", async () => {
+    const user = userEvent.setup();
+    render(
+      <Harness>
+        <ConstraintCategoryAdmin open projectId={PROJECT_ID} categories={[CATEGORY_A]} onClose={() => undefined} onChanged={() => undefined} />
+      </Harness>,
+    );
+    await user.click(screen.getByTestId(`category-edit-${CATEGORY_A.categoryId}`));
+    // Pre-filled from the stored Category, so not dirty until actually changed.
+    expect(await probeIsDirty(user)).toBe(false);
+
+    await user.clear(screen.getByTestId("category-edit-title"));
+    await user.type(screen.getByTestId("category-edit-title"), "Design (revised)");
+    expect(await probeIsDirty(user)).toBe(true);
+
+    await user.click(screen.getByTestId("category-edit-cancel"));
+    expect(await probeIsDirty(user)).toBe(false);
   });
 });

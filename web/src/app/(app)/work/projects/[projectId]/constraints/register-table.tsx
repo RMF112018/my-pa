@@ -116,8 +116,6 @@ function toRequestParties(parties: readonly ConstraintPartyRef[]): readonly Requ
 }
 
 export interface RegisterTableProps {
-  /** Needed only to re-read a row's canonical Current Update before it is inline-edited. */
-  readonly projectId: string;
   readonly entries: readonly ConstraintListEntry[];
   readonly state: ConstraintUrlState;
   readonly viewport: ConstraintViewport;
@@ -127,6 +125,14 @@ export interface RegisterTableProps {
   readonly onTriggerMount?: (constraintId: string, node: HTMLButtonElement | null) => void;
   /** Present only for the live workspace; absent (the synthetic fixture path) renders read-only exactly as before. */
   readonly onInlineEdit?: OnInlineEdit;
+  /**
+   * The cross-Project portfolio Register's own column, added by the
+   * corrective: each row visibly carries the owning Project's name (plan
+   * §6.2, "each row/card visibly carries Project name"). Absent (the default)
+   * for the exact-Project Register, which already carries Project identity
+   * from its route and does not repeat it per row.
+   */
+  readonly showProjectColumn?: boolean;
 }
 
 interface Column {
@@ -150,18 +156,26 @@ const COLUMNS: readonly Column[] = [
   { key: "category", label: "Category", tablet: false },
 ];
 
+/** Portfolio scope only (`showProjectColumn`) — plan §6.2's "visibly carries Project name". */
+const PROJECT_COLUMN: Column = { key: "project", label: "Project", tablet: true };
+
 /**
  * The columns this state shows.
  *
  * Category is dropped when the Register is already grouped by Category, because
  * repeating the group's own identity in every one of its rows spends the widest
- * column on the one fact the reader already has (`CM-FE-AC-027`).
+ * column on the one fact the reader already has (`CM-FE-AC-027`). The Project
+ * column is inserted right after Code — the identity a portfolio reader needs
+ * first — only when the caller asks for it; the exact-Project Register never
+ * sees it (`showProjectColumn` defaults to `false`).
  */
 export function visibleColumns(
   state: ConstraintUrlState,
   viewport: ConstraintViewport,
+  showProjectColumn = false,
 ): readonly Column[] {
-  return COLUMNS.filter((column) => {
+  const source = showProjectColumn ? [COLUMNS[0]!, PROJECT_COLUMN, ...COLUMNS.slice(1)] : COLUMNS;
+  return source.filter((column) => {
     if (column.key === "category" && state.group === "category") return false;
     if (viewport === "tablet") return column.tablet;
     return true;
@@ -195,6 +209,8 @@ function StateChips({ entry }: { entry: ConstraintListEntry }) {
 
 function readOnlyCellContent(entry: ConstraintListEntry, key: string) {
   switch (key) {
+    case "project":
+      return entry.projectName ?? entry.projectId ?? "Not recorded";
     case "description":
       return entry.description ?? "Not recorded";
     case "status":
@@ -236,7 +252,6 @@ function readOnlyCellContent(entry: ConstraintListEntry, key: string) {
  * optimistic state can never both claim to be current at once.
  */
 function RegisterRow({
-  projectId,
   entry,
   state,
   viewport,
@@ -245,7 +260,6 @@ function RegisterRow({
   onInlineEdit,
   columns,
 }: {
-  readonly projectId: string;
   readonly entry: ConstraintListEntry;
   readonly state: ConstraintUrlState;
   readonly viewport: ConstraintViewport;
@@ -280,7 +294,11 @@ function RegisterRow({
   }
 
   const terminal = localEntry.status !== null && TERMINAL_CONSTRAINT_LIFECYCLES.includes(localEntry.status);
-  const editable = onInlineEdit !== undefined && !terminal;
+  // Each row's own `projectId` (never a page-level prop) is what the Current
+  // Update re-read below dispatches against — the one thing that lets this
+  // same component serve the portfolio Register's multi-Project rows without
+  // a second copy of itself.
+  const editable = onInlineEdit !== undefined && !terminal && entry.projectId !== null;
   const statusEditable = editable && localEntry.status !== null && ACTIVE_STATES.includes(localEntry.status);
 
   async function commit(
@@ -343,7 +361,7 @@ function RegisterRow({
                             setUpdateReadFailed(false);
                             setUpdateDraft("");
                             const controller = new AbortController();
-                            void readDetail(projectId, entry.constraintId, controller.signal).then((result) => {
+                            void readDetail(entry.projectId as string, entry.constraintId, controller.signal).then((result) => {
                               if (result.ok) {
                                 setUpdateDraft(result.value.currentUpdate ?? "");
                                 setUpdateReady(true);
@@ -520,7 +538,6 @@ function RegisterRow({
 }
 
 export function RegisterTable({
-  projectId,
   entries,
   state,
   viewport,
@@ -529,8 +546,9 @@ export function RegisterTable({
   onSort,
   onTriggerMount,
   onInlineEdit,
+  showProjectColumn = false,
 }: RegisterTableProps) {
-  const columns = visibleColumns(state, viewport);
+  const columns = visibleColumns(state, viewport, showProjectColumn);
   return (
     <div className="overflow-x-auto">
       <table className="w-full border-collapse text-left text-sm" data-testid="register-table">
@@ -567,7 +585,6 @@ export function RegisterTable({
           {entries.map((entry) => (
             <RegisterRow
               key={entry.constraintId}
-              projectId={projectId}
               entry={entry}
               state={state}
               viewport={viewport}
@@ -595,11 +612,14 @@ export function RegisterCardList({
   state,
   onSelect,
   onTriggerMount,
+  showProject = false,
 }: {
   readonly entries: readonly ConstraintListEntry[];
   readonly state: ConstraintUrlState;
   readonly onSelect: (constraintId: string) => void;
   readonly onTriggerMount?: (constraintId: string, node: HTMLButtonElement | null) => void;
+  /** The portfolio Register's own field — see `RegisterTableProps.showProjectColumn`. */
+  readonly showProject?: boolean;
 }) {
   return (
     <ul className="grid gap-2" data-testid="register-card-list">
@@ -622,6 +642,11 @@ export function RegisterCardList({
             </button>
             <Badge tone={lifecycleTone(entry.status)}>{lifecycleLabel(entry.status)}</Badge>
           </div>
+          {showProject ? (
+            <p className="mt-1 text-xs font-medium text-moss-slate" data-testid={`register-card-project-${entry.constraintId}`}>
+              {entry.projectName ?? entry.projectId ?? "Not recorded"}
+            </p>
+          ) : null}
           <p className="mt-1 text-sm text-moss-slate">{entry.description ?? "Not recorded"}</p>
           <dl className="mt-2 grid grid-cols-2 gap-1 text-xs text-muted">
             <dt>Ball in Court</dt>

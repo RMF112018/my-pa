@@ -90,7 +90,8 @@ const LIFECYCLES: readonly ConstraintLifecycle[] = [
 ];
 
 export interface ConstraintsRegisterProps {
-  readonly projectId: string;
+  /** Required only for the synthetic-fixture query path; the live portfolio Register (`livePage` always set) passes none. */
+  readonly projectId?: string;
   readonly entries: readonly ConstraintListEntry[];
   readonly categories: readonly ConstraintCategory[];
   readonly partyOptions: readonly ConstraintPartyRef[];
@@ -109,6 +110,15 @@ export interface ConstraintsRegisterProps {
   readonly readOnly?: boolean;
   /** Present only for the live workspace; wires the Register's bounded inline edit. */
   readonly onInlineEdit?: OnInlineEdit;
+  /**
+   * The cross-Project portfolio Register's own mode (plan §6.1/§6.2):
+   * shows a Project column/line per row, omits the Category filter and
+   * "Category" grouping (Categories are Project-owned vocabulary with no
+   * cross-Project meaning), and adjusts the "empty, not filtered" wording.
+   * Category *administration* never lives here regardless — this component
+   * has never had a Category-admin entry point of its own.
+   */
+  readonly portfolioScope?: boolean;
 }
 
 export function ConstraintsRegister({
@@ -130,6 +140,7 @@ export function ConstraintsRegister({
   onLoadMore,
   readOnly = false,
   onInlineEdit,
+  portfolioScope = false,
 }: ConstraintsRegisterProps) {
   /**
    * How far the reader has continued, as a cursor and not a page number.
@@ -148,7 +159,7 @@ export function ConstraintsRegister({
     let cursor: string | null = null;
     const wanted = cursors.length;
     for (let index = 0; index <= wanted; index += 1) {
-      const page = queryRegisterPage(entries, state, projectId, cursor);
+      const page = queryRegisterPage(entries, state, projectId ?? "", cursor);
       pages.push(page);
       cursor = page.nextCursor;
       if (cursor === null) break;
@@ -205,6 +216,10 @@ export function ConstraintsRegister({
   }
 
   const filtered = hasActiveFilters(state);
+  // Categories are Project-owned vocabulary; portfolio scope offers neither
+  // the filter nor "Category" as a grouping (plan §6.2, "no unqualified
+  // Category filter in portfolio scope").
+  const groupings = portfolioScope ? GROUPINGS.filter((grouping) => grouping.value !== "category") : GROUPINGS;
 
   return (
     <section aria-label="Constraint Register" className="grid gap-3">
@@ -277,22 +292,24 @@ export function ConstraintsRegister({
                 ))}
               </Select>
             </label>
-            <label className="grid gap-1 text-sm">
-              Category
-              <Select
-                value={state.categoryId ?? ""}
-                data-testid="register-filter-category"
-                onChange={(event) => update({ categoryId: event.target.value || null })}
-              >
-                <option value="">Any Category</option>
-                {categories.map((category) => (
-                  <option key={category.categoryId} value={category.categoryId}>
-                    {category.title}
-                    {category.state === "ACTIVE" ? "" : " (inactive)"}
-                  </option>
-                ))}
-              </Select>
-            </label>
+            {!portfolioScope ? (
+              <label className="grid gap-1 text-sm">
+                Category
+                <Select
+                  value={state.categoryId ?? ""}
+                  data-testid="register-filter-category"
+                  onChange={(event) => update({ categoryId: event.target.value || null })}
+                >
+                  <option value="">Any Category</option>
+                  {categories.map((category) => (
+                    <option key={category.categoryId} value={category.categoryId}>
+                      {category.title}
+                      {category.state === "ACTIVE" ? "" : " (inactive)"}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+            ) : null}
             {/*
               Party filters offer only options with a stable server reference,
               plus the whole Unresolved bucket. An unresolved party has no
@@ -373,7 +390,7 @@ export function ConstraintsRegister({
             data-testid="register-group"
             onChange={(event) => update({ group: event.target.value as ConstraintGrouping })}
           >
-            {GROUPINGS.map((grouping) => (
+            {groupings.map((grouping) => (
               <option key={grouping.value} value={grouping.value}>
                 {grouping.label}
               </option>
@@ -415,7 +432,7 @@ export function ConstraintsRegister({
             </Badge>
           ))}
           {state.status ? <Badge tone="neutral">{lifecycleLabel(state.status)}</Badge> : null}
-          {state.categoryId ? (
+          {!portfolioScope && state.categoryId ? (
             <Badge tone="neutral">
               {categoryTitles.get(state.categoryId) ?? "Category not in this Project"}
             </Badge>
@@ -469,8 +486,12 @@ export function ConstraintsRegister({
         ) : (
           <SurfaceState
             kind="empty"
-            title="This Project holds no Constraints"
-            detail="The read succeeded and this Project's Constraint Register is empty."
+            title={portfolioScope ? "You own no Constraints across your Projects" : "This Project holds no Constraints"}
+            detail={
+              portfolioScope
+                ? "The read succeeded. No Constraints were found across the Projects you own."
+                : "The read succeeded and this Project's Constraint Register is empty."
+            }
             testId="register-empty-project"
           >
             {!readOnly && onNewConstraint ? <Button size="sm" variant="secondary" onClick={onNewConstraint}>
@@ -497,10 +518,10 @@ export function ConstraintsRegister({
                   state={state}
                   onSelect={onSelect}
                   onTriggerMount={onTriggerMount}
+                  showProject={portfolioScope}
                 />
               ) : (
                 <RegisterTable
-                  projectId={projectId}
                   entries={group.entries}
                   state={state}
                   viewport={viewport}
@@ -508,6 +529,7 @@ export function ConstraintsRegister({
                   onSelect={onSelect}
                   onTriggerMount={onTriggerMount}
                   onInlineEdit={onInlineEdit}
+                  showProjectColumn={portfolioScope}
                   onSort={(sort) =>
                     update(
                       sort === state.sort

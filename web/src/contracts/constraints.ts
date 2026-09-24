@@ -190,6 +190,16 @@ export interface ConstraintSyncSummary {
 export interface ConstraintListEntry {
   readonly constraintId: string;
   readonly projectId: string | null;
+  /**
+   * The owning Project's name — present (non-null) only on a portfolio row
+   * (`constraints.portfolio_list`/`portfolio_search`), where the backend
+   * requires it; always absent on an exact-Project Register row, which
+   * already has Project identity from the route it was read under. Optional
+   * so every existing exact-Project construction of this type (fixtures,
+   * `listEntry()`, `detailToListEntry()`) is unaffected — R02-WP10 corrective,
+   * portfolio Constraint Register.
+   */
+  readonly projectName?: string | null;
   readonly constraintCode: string | null;
   readonly description: string | null;
   readonly category: ConstraintCategoryRef | null;

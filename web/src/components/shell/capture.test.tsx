@@ -320,6 +320,109 @@ describe("a refusal", () => {
   });
 });
 
+/**
+ * `PC-CM-CAPTURE-PROJECT-AC-011` corrective (Manager ruling, Drive
+ * Artifact 23 §9/§11): a durable Note/Conversation save shows the Project
+ * name, resolved from the *persisted receipt's own* `projectId` — never
+ * from the picker. `verifyCaptureReceipt` already requires the receipt's
+ * `projectId` to exactly equal what was sent before a save is ever shown as
+ * durable at all, so a receipt/picker *mismatch at save time* cannot occur
+ * here (unlike Quick Constraint's async create). What can be told apart is
+ * whether the shown name tracks the *persisted* value afterwards or drifts
+ * with a *later* picker change — the dialog does not close or reset on a
+ * durable save, so the Project selector stays live right under the
+ * confirmation. That is what this test exercises.
+ */
+describe("a durable save's Project name is the persisted receipt's, never the picker's", () => {
+  const NOTE_PROJECT_A = "prj_aaaaaaaa11111111";
+  const NOTE_PROJECT_B = "prj_bbbbbbbb22222222";
+
+  function respondPersistedWithProjects() {
+    return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const path = String(input);
+      if (path.startsWith("/api/capture")) {
+        const sent = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        return new Response(
+          JSON.stringify({
+            shape: "backend",
+            status: "persisted",
+            captureKind: sent.captureKind,
+            created: true,
+            receipt: {
+              receiptId: "rcpt_aaaaaaaa11111111",
+              captureId: "cap_aaaaaaaa11111111",
+              versionId: "capver_aaaaaaaa11111111",
+              versionNumber: 1,
+              idempotencyKey: sent.idempotencyKey,
+              contentSha256: await contentSha256(String(sent.text ?? "")),
+              principalId: PRINCIPAL_ID,
+              issuedAt: "2026-09-22T12:00:00Z",
+              projectId: sent.projectId ?? null,
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (path.startsWith("/api/projects/")) {
+        const id = path.slice("/api/projects/".length);
+        const name =
+          id === NOTE_PROJECT_A ? "Harbor Migration" : id === NOTE_PROJECT_B ? "North Tower" : null;
+        return name
+          ? new Response(JSON.stringify({ project: { name } }), { status: 200 })
+          : new Response("{}", { status: 404 });
+      }
+      return new Response(
+        JSON.stringify({
+          projects: [
+            { projectId: NOTE_PROJECT_A, name: "Harbor Migration" },
+            { projectId: NOTE_PROJECT_B, name: "North Tower" },
+          ],
+          nextCursor: null,
+        }),
+        { status: 200 },
+      );
+    });
+  }
+
+  it("keeps showing the receipt's Project name after the picker is changed post-save", async () => {
+    respondPersistedWithProjects();
+    const user = await enterNoteEntry();
+    const select = await screen.findByTestId("capture-project-select");
+    await waitFor(() => expect(within(select).getByText("Harbor Migration")).toBeInTheDocument());
+    await user.selectOptions(select, NOTE_PROJECT_A);
+    await user.type(screen.getByTestId("capture-field"), NOTE);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    const status = await screen.findByTestId("capture-durable");
+    await waitFor(() =>
+      expect(within(status).getByTestId("capture-durable-project")).toHaveTextContent(
+        "Harbor Migration",
+      ),
+    );
+
+    // The picker is still live under a durable save (the dialog does not
+    // close or reset on success) — changing it must not relabel what was
+    // actually persisted.
+    await user.selectOptions(select, NOTE_PROJECT_B);
+    expect(within(status).getByTestId("capture-durable-project")).toHaveTextContent(
+      "Harbor Migration",
+    );
+    expect(within(status).getByTestId("capture-durable-project")).not.toHaveTextContent(
+      "North Tower",
+    );
+  });
+
+  it("shows no Project line when the persisted receipt carries no Project", async () => {
+    respondPersistedWithProjects();
+    const user = await enterNoteEntry();
+    await user.type(screen.getByTestId("capture-field"), NOTE);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await screen.findByTestId("capture-durable");
+    expect(screen.queryByTestId("capture-durable-project")).toBeNull();
+  });
+});
+
 describe("an unreachable backend", () => {
   it("is a different state from a refusal, and retries the same attempt", async () => {
     const spy = respond(

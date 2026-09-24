@@ -74,7 +74,8 @@ import { WhenDiagnostics } from "@/components/diagnostics/diagnostics-provider";
 import { TextField } from "@/components/ui/field";
 import { CaptureProjectSelector } from "@/components/capture/capture-project-selector";
 import { CaptureConstraintForm } from "@/components/capture/capture-constraint-form";
-import { apiPost } from "@/lib/api/client";
+import { useProjectScope } from "@/components/shell/project-scope-provider";
+import { apiGet, apiPost } from "@/lib/api/client";
 import { verifyCaptureReceipt } from "@/lib/capture/receipt";
 import { freezeCaptureIntent, type CaptureSessionEvent, type CaptureSessionState } from "@/lib/capture/session";
 import { CaptureQueueProtocolError } from "@/lib/offline/capture-intent-codec";
@@ -161,7 +162,18 @@ interface CaptureAck {
 type Outcome =
   | { readonly kind: "idle" }
   | { readonly kind: "saving" }
-  | { readonly kind: "durable"; readonly receiptId: string | null; readonly created: boolean }
+  | {
+      readonly kind: "durable";
+      readonly receiptId: string | null;
+      readonly created: boolean;
+      /**
+       * The persisted receipt's own `projectId` (`PC-CM-CAPTURE-PROJECT-AC-011`
+       * corrective) — the authoritative association, never the picker's
+       * pre-submit value. `null` means no Project was ever part of this
+       * capture, not that resolution failed.
+       */
+      readonly projectId: string | null;
+    }
   | { readonly kind: "acknowledged"; readonly receiptId: string | null }
   | { readonly kind: "refused"; readonly reason: string }
   | { readonly kind: "unavailable"; readonly reason: string }
@@ -226,6 +238,70 @@ export function CaptureDialog({
   // reads it (its own fields live inside `CaptureConstraintForm`).
   const text = kind === "quick_note" ? session.noteDraft : session.conversationDraft;
   const projectId = session.projectId;
+
+  const projectScope = useProjectScope();
+  /**
+   * `PC-CM-CAPTURE-PROJECT-AC-011` (corrective): a durable Note/Conversation
+   * save's Project name, resolved from the **persisted receipt's own**
+   * `projectId` (`ack.receipt.projectId`, already decoded by
+   * `lib/capture/receipt.ts`) — never from `projectId` above (the pre-submit
+   * picker/session value). A `null` receipt Project is the legitimate,
+   * common "no Project was ever part of this capture" case
+   * (Note/Conversation are Project-optional, `PC-CM-CAPTURE-AC-006`) and
+   * shows nothing, exactly as before this fix — it is not a resolution
+   * failure. Same two Manager-acceptable sources, and the same
+   * self-cancelling-effect pitfall avoided the same way (a ref guard, not a
+   * state dependency), as `capture-constraint-form.tsx`'s own success
+   * Project-name resolution.
+   */
+  const durableProjectId = outcome.kind === "durable" ? outcome.projectId : null;
+  const fastPathDurableProjectName =
+    durableProjectId !== null &&
+    projectScope.resolution.scope.kind === "PROJECT" &&
+    projectScope.resolution.scope.projectId === durableProjectId
+      ? (projectScope.resolution.project?.name ?? null)
+      : null;
+  const [fetchedDurableProjectName, setFetchedDurableProjectName] = useState<{
+    readonly id: string;
+    readonly status: "resolving" | "named" | "unavailable";
+    readonly name?: string;
+  } | null>(null);
+  const durableFetchedForIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (durableProjectId === null) return;
+    if (fastPathDurableProjectName !== null) return;
+    if (durableFetchedForIdRef.current === durableProjectId) return;
+    durableFetchedForIdRef.current = durableProjectId;
+    let cancelled = false;
+    void (async () => {
+      setFetchedDurableProjectName({ id: durableProjectId, status: "resolving" });
+      let result: Awaited<ReturnType<typeof apiGet<{ project?: { name?: unknown } }>>>;
+      try {
+        result = await apiGet<{ project?: { name?: unknown } }>(
+          { hasSession: true },
+          `/api/projects/${encodeURIComponent(durableProjectId)}`,
+        );
+      } catch {
+        if (!cancelled) setFetchedDurableProjectName({ id: durableProjectId, status: "unavailable" });
+        return;
+      }
+      if (cancelled) return;
+      const name = result.ok && typeof result.data?.project?.name === "string" ? result.data.project.name : null;
+      setFetchedDurableProjectName(
+        name !== null
+          ? { id: durableProjectId, status: "named", name }
+          : { id: durableProjectId, status: "unavailable" },
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [durableProjectId, fastPathDurableProjectName]);
+  const resolvedDurableProjectName =
+    fastPathDurableProjectName ??
+    (fetchedDurableProjectName?.id === durableProjectId && fetchedDurableProjectName.status === "named"
+      ? fetchedDurableProjectName.name
+      : null);
 
   // A newly opened dialog starts at the chooser, with no prior outcome showing.
   useEffect(() => {
@@ -327,6 +403,7 @@ export function CaptureDialog({
           kind: "durable",
           receiptId: verdict.ack.receipt.receiptId,
           created: verdict.ack.created,
+          projectId: verdict.ack.receipt.projectId,
         });
         dispatch({ type: "result", experienceId, sessionEpoch: epoch, outcome: "persisted" });
         attemptKeyRef.current = null;
@@ -491,6 +568,14 @@ export function CaptureDialog({
             {outcome.created
               ? "Saved. Your note is stored and will appear in Review."
               : "Already saved — the original receipt was returned. Nothing was stored twice."}
+            {/* `PC-CM-CAPTURE-PROJECT-AC-011` corrective: shown only once the
+                persisted receipt's own Project id resolves to a name — never
+                merely because the picker held one before submission. A null
+                receipt Project (no association was ever part of this
+                capture) renders nothing here, same as before this fix. */}
+            {outcome.projectId !== null && resolvedDurableProjectName ? (
+              <span data-testid="capture-durable-project"> — filed against {resolvedDurableProjectName}</span>
+            ) : null}
             {/* WP07: the storage outcome above is product truth. The receipt
                 identifier is the technical receipt for it. */}
             <WhenDiagnostics>

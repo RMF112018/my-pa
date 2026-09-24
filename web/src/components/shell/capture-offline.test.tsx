@@ -43,10 +43,20 @@ afterEach(() => {
 import { useReducer, type ComponentProps } from "react";
 import { CaptureDialog } from "@/components/shell/capture-dialog";
 import { beginCaptureExperience, captureSessionReducer } from "@/lib/capture/session";
+import { ProjectScopeProvider } from "@/components/shell/project-scope-provider";
 /**
  * The dialog no longer owns its draft, kind or Project — the shell does. This
  * harness is that owner, so these tests exercise the real reducer rather than a
  * stub of it.
+ *
+ * R02-WP10 Phase 7 corrective (`PC-CM-CAPTURE-PROJECT-AC-011`): `CaptureDialog`
+ * now reaches `useProjectScope()` unconditionally, to resolve a durable Note/
+ * Conversation save's Project name from the persisted receipt (never the
+ * picker). Wrapped here with the real `ProjectScopeProvider` — the same
+ * provider `AppShell` already mounts above `CaptureDialog` in production —
+ * so this harness matches that context instead of a stub of it. No test
+ * below exercises Project resolution itself; this wrapper exists so the
+ * component can render at all.
  */
 function CaptureHarness(
   props: Omit<ComponentProps<typeof CaptureDialog>, "session" | "dispatch">,
@@ -59,7 +69,11 @@ function CaptureHarness(
       projectId: null,
     }),
   );
-  return <CaptureDialog {...props} session={session} dispatch={dispatch} />;
+  return (
+    <ProjectScopeProvider principalId={props.principalId} sessionEpoch="capture-test-binding">
+      <CaptureDialog {...props} session={session} dispatch={dispatch} />
+    </ProjectScopeProvider>
+  );
 }
 
 import { openOfflineDatabase } from "@/lib/offline/db";

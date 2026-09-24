@@ -73,12 +73,14 @@ import { WhenDiagnostics } from "@/components/diagnostics/diagnostics-provider";
 import { CaptureProjectSelector } from "@/components/capture/capture-project-selector";
 import { apiGet, apiPost } from "@/lib/api/client";
 import { useConstraintRuntime } from "@/components/project-controls/constraint-runtime-provider";
+import { useProjectScope } from "@/components/shell/project-scope-provider";
 import { useMutationFeedback } from "@/components/ui/mutation-feedback";
 import {
   mintCreateIntentLockKey,
   type ConstraintMutateOutcome,
 } from "@/lib/constraint/mutation-coordinator";
 import { buildConstraintQueryKey } from "@/lib/constraint/query-key";
+import { decodeConstraintsCreatePublished } from "@/lib/api/decode/capabilities/constraints.create_published";
 import type { CaptureSessionEvent, CaptureSessionState } from "@/lib/capture/session";
 
 /** The fixed confirmation for discarding an unsent, dirty Quick Constraint. */
@@ -143,7 +145,14 @@ function readActiveCategories(body: unknown): readonly CategoryOption[] {
   return options;
 }
 
-/** The authoritative fields the create response's record carries, projected. */
+/**
+ * The authoritative fields the create response's record carries, projected.
+ *
+ * `projectId` is the record's own persisted Project association — the
+ * authoritative source `PC-CM-CAPTURE-PROJECT-AC-011` requires for the
+ * success screen's Project name (§2 of the corrective dispatch), never the
+ * pre-submit picker/session value.
+ */
 interface ConfirmedConstraintSummary {
   readonly constraintId: string;
   readonly constraintCode: string | null;
@@ -151,21 +160,35 @@ interface ConfirmedConstraintSummary {
   readonly lifecycleState: string | null;
   readonly dateIdentified: string | null;
   readonly dueDate: string | null;
+  readonly projectId: string | null;
 }
 
+/**
+ * Decode the raw create response through the existing, already-tested
+ * `decodeConstraintsCreatePublished` rather than hand-reading field names.
+ *
+ * The raw wire response is the gateway's own snake_case JSON, passed straight
+ * through by `workPost`'s `publicResult` (which strips only the Principal
+ * identity, never case-converts) — `postConstraint` below never touches it.
+ * Reading `r.constraintId`/`r.projectId` etc. directly off that raw object, as
+ * an earlier revision of this file did, is always `undefined`: real fields
+ * are `constraint_id`/`project_id`. Decoding is what performs the
+ * snake_case→camelCase projection (and validates every field's shape) in one
+ * motion — a malformed/unexpected response fails decode cleanly rather than
+ * silently returning `null` for every field.
+ */
 function readConfirmedSummary(result: unknown): ConfirmedConstraintSummary | null {
-  if (!result || typeof result !== "object") return null;
-  const record = (result as { constraint?: unknown }).constraint;
-  if (!record || typeof record !== "object") return null;
-  const r = record as Record<string, unknown>;
-  if (typeof r.constraintId !== "string") return null;
+  const decoded = decodeConstraintsCreatePublished(result);
+  if (!decoded.ok) return null;
+  const record = decoded.value.constraint;
   return {
-    constraintId: r.constraintId,
-    constraintCode: typeof r.constraintCode === "string" ? r.constraintCode : null,
-    description: typeof r.description === "string" ? r.description : null,
-    lifecycleState: typeof r.lifecycleState === "string" ? r.lifecycleState : null,
-    dateIdentified: typeof r.dateIdentified === "string" ? r.dateIdentified : null,
-    dueDate: typeof r.dueDate === "string" ? r.dueDate : null,
+    constraintId: record.constraintId,
+    constraintCode: record.constraintCode,
+    description: record.description,
+    lifecycleState: record.lifecycleState,
+    dateIdentified: record.dateIdentified,
+    dueDate: record.dueDate,
+    projectId: record.projectId,
   };
 }
 
@@ -204,6 +227,7 @@ export function CaptureConstraintForm({
   const runtime = useConstraintRuntime();
   const feedback = useMutationFeedback();
   const router = useRouter();
+  const projectScope = useProjectScope();
 
   const baseId = useId();
   const projectFieldId = `${baseId}-project`;
@@ -317,6 +341,75 @@ export function CaptureConstraintForm({
       cancelled = true;
     };
   }, [projectId]);
+
+  /**
+   * `PC-CM-CAPTURE-PROJECT-AC-011`: the success screen's Project name,
+   * resolved from the **persisted** Project id the authoritative create
+   * response carries (`outcome.record.projectId`, decoded above) — never from
+   * `projectId` (the pre-submit picker/session value, which this block
+   * deliberately never reads). Two Manager-acceptable sources: a fast path
+   * through `useProjectScope()`'s already-authorized canonical name when its
+   * current resolution happens to be that exact Project, and the same exact
+   * `/api/projects/[id]` read `capture-project-selector.tsx` itself already
+   * uses for a name not on its loaded page — used here whenever the fast path
+   * doesn't apply, which is the common case (Quick Capture can file against a
+   * Project other than the current global scope).
+   */
+  const successProjectId = outcome.kind === "success" ? outcome.record.projectId : null;
+  const fastPathProjectName =
+    successProjectId !== null &&
+    projectScope.resolution.scope.kind === "PROJECT" &&
+    projectScope.resolution.scope.projectId === successProjectId
+      ? (projectScope.resolution.project?.name ?? null)
+      : null;
+  const [fetchedProjectName, setFetchedProjectName] = useState<{
+    readonly id: string;
+    readonly status: "resolving" | "named" | "unavailable";
+    readonly name?: string;
+  } | null>(null);
+  // Which id this instance has already started (or finished) fetching a name
+  // for — a ref, deliberately not in the effect's own dependency array. The
+  // effect's first action sets `fetchedProjectName`, and if that state were a
+  // dependency, setting it would re-run the effect and invoke this run's own
+  // cleanup, marking the in-flight fetch `cancelled` before it ever resolves
+  // (a self-cancelling effect). A ref read/written only inside the effect
+  // avoids that without duplicate-fetching the same id.
+  const fetchedForIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (successProjectId === null) return;
+    if (fastPathProjectName !== null) return;
+    if (fetchedForIdRef.current === successProjectId) return;
+    fetchedForIdRef.current = successProjectId;
+    let cancelled = false;
+    void (async () => {
+      setFetchedProjectName({ id: successProjectId, status: "resolving" });
+      let result: Awaited<ReturnType<typeof apiGet<{ project?: { name?: unknown } }>>>;
+      try {
+        result = await apiGet<{ project?: { name?: unknown } }>(
+          { hasSession: true },
+          `/api/projects/${encodeURIComponent(successProjectId)}`,
+        );
+      } catch {
+        if (!cancelled) setFetchedProjectName({ id: successProjectId, status: "unavailable" });
+        return;
+      }
+      if (cancelled) return;
+      const name = result.ok && typeof result.data?.project?.name === "string" ? result.data.project.name : null;
+      setFetchedProjectName(
+        name !== null
+          ? { id: successProjectId, status: "named", name }
+          : { id: successProjectId, status: "unavailable" },
+      );
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [successProjectId, fastPathProjectName]);
+  const resolvedSuccessProjectName =
+    fastPathProjectName ??
+    (fetchedProjectName?.id === successProjectId && fetchedProjectName.status === "named"
+      ? fetchedProjectName.name
+      : null);
 
   // Report/clear this surface's dirty (unsaved authored) state with the
   // shared coordinator — the §5a Project-scope switch barrier
@@ -622,6 +715,14 @@ export function CaptureConstraintForm({
             : "Filed."}
         </p>
         <dl className="flex flex-col gap-1 text-sm text-text-primary">
+          {outcome.record.projectId !== null ? (
+            <div className="flex justify-between gap-2">
+              <dt className="text-muted">Project</dt>
+              <dd className="text-right" data-testid="capture-constraint-success-project">
+                {resolvedSuccessProjectName ?? "—"}
+              </dd>
+            </div>
+          ) : null}
           <div className="flex justify-between gap-2">
             <dt className="text-muted">Description</dt>
             <dd className="text-right">{outcome.record.description ?? "—"}</dd>

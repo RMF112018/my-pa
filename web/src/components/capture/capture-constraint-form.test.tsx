@@ -88,47 +88,60 @@ function categoriesBody(projectId: string) {
   };
 }
 
-function confirmedBody(overrides: Record<string, unknown> = {}) {
+/**
+ * The real backend response shape: the gateway's own snake_case JSON,
+ * unconverted end to end (`workPost` → `publicResult` strips only the
+ * Principal identity, never case-converts — confirmed directly against
+ * `work-route.ts`). Field names here are exactly `RECORD_KEYS`/`RECEIPT_KEYS`
+ * in `_constraint-authoring-helpers.ts`'s `decodeConstraintMutationRecord`/
+ * `decodeConstraintMutationReceipt` — not a guess, and not the camelCase
+ * shape an earlier revision of this fixture mistakenly used (which matched
+ * the implementation's own bug rather than the real wire contract, so it
+ * could not have caught it).
+ */
+function confirmedBody({
+  projectId = PROJECT_A,
+  constraintId = CONSTRAINT_ID,
+}: { readonly projectId?: string; readonly constraintId?: string } = {}) {
   return {
     shape: "backend",
     disposition: "applied",
     constraint: {
-      constraintId: CONSTRAINT_ID,
-      lifecycleState: "identified",
+      constraint_id: constraintId,
+      lifecycle_state: "identified",
       origin: "product",
-      createdAt: "2026-09-24T12:00:00Z",
-      updatedAt: "2026-09-24T12:00:00Z",
+      created_at: "2026-09-24T12:00:00Z",
+      updated_at: "2026-09-24T12:00:00Z",
       version: 1,
-      projectId: PROJECT_A,
-      categoryId: CATEGORY_A,
-      constraintCode: "1.1",
+      project_id: projectId,
+      category_id: CATEGORY_A,
+      constraint_code: "1.1",
       description: "synthetic constraint description",
-      dateIdentified: "2026-09-24",
-      dueDate: "2026-10-08",
+      date_identified: "2026-09-24",
+      due_date: "2026-10-08",
       reference: null,
-      currentUpdate: null,
+      current_update: null,
       bic: [],
       responsible: [],
-      completionDate: null,
-      closureCommentary: null,
-      voidedDate: null,
-      voidReason: null,
-      recordQuality: "normal",
-      publishedAt: "2026-09-24T12:00:00Z",
-      ...overrides,
+      completion_date: null,
+      closure_commentary: null,
+      voided_date: null,
+      void_reason: null,
+      record_quality: "normal",
+      published_at: "2026-09-24T12:00:00Z",
     },
     receipt: {
-      historyId: "chist_aaaaaaaa11111111",
-      constraintId: CONSTRAINT_ID,
+      history_id: "chst_aaaaaaaa11111111",
+      constraint_id: constraintId,
       operation: "create",
       actor: "principal",
       outcome: "applied",
-      beforeVersion: 0,
-      afterVersion: 1,
-      occurredAt: "2026-09-24T12:00:00Z",
-      projectId: PROJECT_A,
-      revisionId: null,
-      safeFailureReason: null,
+      before_version: 0,
+      after_version: 1,
+      occurred_at: "2026-09-24T12:00:00Z",
+      project_id: projectId,
+      revision_id: null,
+      safe_failure_reason: null,
     },
     disclosure: {},
   };
@@ -370,6 +383,49 @@ describe("Project change clears Category and Details options", () => {
     await waitFor(() => expect(screen.getByTestId("capture-constraint-category")).toHaveValue(""));
     expect(screen.getByTestId("capture-constraint-bic")).toHaveValue("me");
     expect(screen.getByTestId("capture-constraint-status")).toHaveValue("identified");
+  });
+});
+
+describe("the success Project name comes from the persisted response, not the picker", () => {
+  /**
+   * `PC-CM-CAPTURE-PROJECT-AC-011` (corrective, Manager ruling, Drive
+   * Artifact 23 §9/§11): a browser success state MUST NOT claim a Project
+   * association merely because the picker held one before submission. The
+   * picker/session is left at Project A throughout; the stubbed create
+   * response decodes to Project B's id — a different Project, with a
+   * visibly different name ("North Tower" vs. "Harbor Migration") — so a
+   * success screen reading the picker instead of the decoded response would
+   * fail this assertion, not pass it by coincidence.
+   */
+  it("shows the response's Project name, never the picker's, when they differ", async () => {
+    stubFetch({ postResponses: [{ body: confirmedBody({ projectId: PROJECT_B }), status: 200 }] });
+    const user = userEvent.setup();
+    render(<Harness projectId={PROJECT_A} />);
+    await fillRequired(user);
+    await user.click(screen.getByTestId("capture-constraint-save"));
+
+    const projectRow = await screen.findByTestId("capture-constraint-success-project");
+    await waitFor(() => expect(projectRow).toHaveTextContent("North Tower"));
+    expect(projectRow).not.toHaveTextContent("Harbor Migration");
+  });
+
+  it("shows no Project row when the persisted record carries no Project", async () => {
+    const base = confirmedBody();
+    const noProjectBody = {
+      ...base,
+      constraint: { ...base.constraint, project_id: null, category_id: null },
+      // The decoder refuses a receipt naming a different Project than its
+      // record, so both must agree — still null, together.
+      receipt: { ...base.receipt, project_id: null },
+    };
+    stubFetch({ postResponses: [{ body: noProjectBody, status: 200 }] });
+    const user = userEvent.setup();
+    render(<Harness />);
+    await fillRequired(user);
+    await user.click(screen.getByTestId("capture-constraint-save"));
+
+    await screen.findByTestId("capture-constraint-success");
+    expect(screen.queryByTestId("capture-constraint-success-project")).toBeNull();
   });
 });
 

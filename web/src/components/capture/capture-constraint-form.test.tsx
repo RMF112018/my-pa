@@ -23,11 +23,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useReducer } from "react";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { CaptureConstraintForm } from "@/components/capture/capture-constraint-form";
 import { beginCaptureExperience, captureSessionReducer } from "@/lib/capture/session";
 import { ConstraintRuntimeProvider } from "@/components/project-controls/constraint-runtime-provider";
 import { ProjectScopeProvider } from "@/components/shell/project-scope-provider";
 import { MutationFeedbackProvider } from "@/components/ui/mutation-feedback";
+// Test-only: decoding the committed Python fixture through the real,
+// server-only decoder to derive a mechanically-authoritative pinned
+// response body (see `realBffCreatePublishedBody` below). Never imported
+// by `capture-constraint-form.tsx` itself — that file reads the already-
+// decoded, camelCase response directly (`invokeGateway` decodes it
+// server-side, before the browser ever sees it; see that file's own
+// `readConfirmedSummary` doc comment).
+import { decodeConstraintsCreatePublished } from "@/lib/api/decode/capabilities/constraints.create_published";
 
 const { diagnostics } = vi.hoisted(() => ({ diagnostics: { enabled: false } }));
 vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) => {
@@ -89,15 +99,22 @@ function categoriesBody(projectId: string) {
 }
 
 /**
- * The real backend response shape: the gateway's own snake_case JSON,
- * unconverted end to end (`workPost` → `publicResult` strips only the
- * Principal identity, never case-converts — confirmed directly against
- * `work-route.ts`). Field names here are exactly `RECORD_KEYS`/`RECEIPT_KEYS`
- * in `_constraint-authoring-helpers.ts`'s `decodeConstraintMutationRecord`/
- * `decodeConstraintMutationReceipt` — not a guess, and not the camelCase
- * shape an earlier revision of this fixture mistakenly used (which matched
- * the implementation's own bug rather than the real wire contract, so it
- * could not have caught it).
+ * The real backend response shape: already camelCase, already decoded.
+ *
+ * `POST /api/project-controls/projects/[projectId]/constraints` → `workPost`
+ * → `dispatch()` → `invokeGateway()` (`web/src/lib/api/gateway.ts`) calls
+ * `decodeCapability("constraints.create_published", outcome.result)`
+ * **server-side**, before the route handler ever sees the result —
+ * `constraints.create_published` is registered in `DECODERS` against exactly
+ * `decodeConstraintsCreatePublished`. `dispatch()` sends that already-
+ * decoded shape straight to the browser (`publicResult` only strips the
+ * Principal identity, never case-converts it back to snake_case). This is
+ * confirmed directly and independently below, in
+ * `realBffCreatePublishedBody()` — which derives the same shape
+ * mechanically, from the real decoder's own output — and is the same shape
+ * `constraint-routes.test.ts`'s `it.each(ROWS)("%s", ...)` (R01-WP09)
+ * already asserts end to end through the real route handler for all
+ * thirteen authoring routes, including this one.
  */
 function confirmedBody({
   projectId = PROJECT_A,
@@ -107,44 +124,73 @@ function confirmedBody({
     shape: "backend",
     disposition: "applied",
     constraint: {
-      constraint_id: constraintId,
-      lifecycle_state: "identified",
+      constraintId,
+      lifecycleState: "identified",
       origin: "product",
-      created_at: "2026-09-24T12:00:00Z",
-      updated_at: "2026-09-24T12:00:00Z",
+      createdAt: "2026-09-24T12:00:00Z",
+      updatedAt: "2026-09-24T12:00:00Z",
       version: 1,
-      project_id: projectId,
-      category_id: CATEGORY_A,
-      constraint_code: "1.1",
+      projectId,
+      categoryId: CATEGORY_A,
+      constraintCode: "1.1",
       description: "synthetic constraint description",
-      date_identified: "2026-09-24",
-      due_date: "2026-10-08",
+      dateIdentified: "2026-09-24",
+      dueDate: "2026-10-08",
       reference: null,
-      current_update: null,
+      currentUpdate: null,
       bic: [],
       responsible: [],
-      completion_date: null,
-      closure_commentary: null,
-      voided_date: null,
-      void_reason: null,
-      record_quality: "normal",
-      published_at: "2026-09-24T12:00:00Z",
+      completionDate: null,
+      closureCommentary: null,
+      voidedDate: null,
+      voidReason: null,
+      recordQuality: "normal",
+      publishedAt: "2026-09-24T12:00:00Z",
     },
     receipt: {
-      history_id: "chst_aaaaaaaa11111111",
-      constraint_id: constraintId,
+      historyId: "chst_aaaaaaaa11111111",
+      constraintId,
       operation: "create",
       actor: "principal",
       outcome: "applied",
-      before_version: 0,
-      after_version: 1,
-      occurred_at: "2026-09-24T12:00:00Z",
-      project_id: projectId,
-      revision_id: null,
-      safe_failure_reason: null,
+      beforeVersion: 0,
+      afterVersion: 1,
+      occurredAt: "2026-09-24T12:00:00Z",
+      projectId,
+      revisionId: null,
+      safeFailureReason: null,
     },
     disclosure: {},
   };
+}
+
+/**
+ * Pins the real BFF wire shape — mechanically, not hand-typed.
+ *
+ * Decodes the same committed Python fixture (`src/lib/api/decode/fixtures/
+ * python/success.json`, the shared, campaign-wide ground truth for what the
+ * gateway actually sends) through the real, production
+ * `decodeConstraintsCreatePublished`, the exact function `invokeGateway`
+ * calls server-side. The result is therefore the real, authoritative
+ * camelCase shape this component's `readConfirmedSummary()` must handle —
+ * not a fixture that merely happens to agree with the implementation. If the
+ * committed Python fixture or the decoder's output shape ever drifts, this
+ * fails here rather than silently.
+ */
+function realBffCreatePublishedBody(): Record<string, unknown> {
+  const python = JSON.parse(
+    readFileSync(
+      join(process.cwd(), "src/lib/api/decode/fixtures/python/success.json"),
+      "utf8",
+    ),
+  ) as Record<string, unknown>;
+  const decoded = decodeConstraintsCreatePublished(python["constraints.create_published"]);
+  if (!decoded.ok) {
+    throw new Error(
+      "the committed Python fixture for constraints.create_published no longer decodes — update this pin",
+    );
+  }
+  return { shape: "backend", ...decoded.value, disclosure: {} };
 }
 
 interface FetchPlan {
@@ -413,10 +459,10 @@ describe("the success Project name comes from the persisted response, not the pi
     const base = confirmedBody();
     const noProjectBody = {
       ...base,
-      constraint: { ...base.constraint, project_id: null, category_id: null },
-      // The decoder refuses a receipt naming a different Project than its
-      // record, so both must agree — still null, together.
-      receipt: { ...base.receipt, project_id: null },
+      constraint: { ...base.constraint, projectId: null, categoryId: null },
+      // The real backend's receipt and record always agree on Project; kept
+      // consistent here too, still null, together.
+      receipt: { ...base.receipt, projectId: null },
     };
     stubFetch({ postResponses: [{ body: noProjectBody, status: 200 }] });
     const user = userEvent.setup();
@@ -426,6 +472,32 @@ describe("the success Project name comes from the persisted response, not the pi
 
     await screen.findByTestId("capture-constraint-success");
     expect(screen.queryByTestId("capture-constraint-success-project")).toBeNull();
+  });
+});
+
+/**
+ * Pins the real BFF wire shape end to end (corrective-2): `postConstraint()`/
+ * `readConfirmedSummary()` must read the response **directly** — the real
+ * shape `invokeGateway`/`decodeCapability` already produces server-side —
+ * and must never re-decode it client-side (that decoder expects raw
+ * snake_case and fails unconditionally against this already-camelCase
+ * shape, which is exactly the regression this test exists to catch).
+ */
+describe("the create response is read as the real BFF sends it, never re-decoded", () => {
+  it("renders success from the exact shape the real decodeConstraintsCreatePublished produces", async () => {
+    const body = realBffCreatePublishedBody();
+    stubFetch({ postResponses: [{ body, status: 200 }] });
+    const user = userEvent.setup();
+    render(<Harness />);
+    await fillRequired(user);
+    await user.click(screen.getByTestId("capture-constraint-save"));
+
+    // The committed Python fixture's own Code — proving this reads the real,
+    // decoder-produced shape rather than a hand-typed stand-in for it.
+    const success = await screen.findByTestId("capture-constraint-success");
+    expect(success).toHaveTextContent("2.01");
+    expect(screen.queryByTestId("capture-constraint-refused")).toBeNull();
+    expect(screen.queryByTestId("capture-constraint-unavailable")).toBeNull();
   });
 });
 

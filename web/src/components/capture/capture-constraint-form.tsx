@@ -80,7 +80,6 @@ import {
   type ConstraintMutateOutcome,
 } from "@/lib/constraint/mutation-coordinator";
 import { buildConstraintQueryKey } from "@/lib/constraint/query-key";
-import { decodeConstraintsCreatePublished } from "@/lib/api/decode/capabilities/constraints.create_published";
 import type { CaptureSessionEvent, CaptureSessionState } from "@/lib/capture/session";
 
 /** The fixed confirmation for discarding an unsent, dirty Quick Constraint. */
@@ -164,31 +163,43 @@ interface ConfirmedConstraintSummary {
 }
 
 /**
- * Decode the raw create response through the existing, already-tested
- * `decodeConstraintsCreatePublished` rather than hand-reading field names.
+ * Read the create response's record directly — camelCase, no re-decode.
  *
- * The raw wire response is the gateway's own snake_case JSON, passed straight
- * through by `workPost`'s `publicResult` (which strips only the Principal
- * identity, never case-converts) — `postConstraint` below never touches it.
- * Reading `r.constraintId`/`r.projectId` etc. directly off that raw object, as
- * an earlier revision of this file did, is always `undefined`: real fields
- * are `constraint_id`/`project_id`. Decoding is what performs the
- * snake_case→camelCase projection (and validates every field's shape) in one
- * motion — a malformed/unexpected response fails decode cleanly rather than
- * silently returning `null` for every field.
+ * `postConstraint` below posts to `POST /api/project-controls/projects/
+ * [projectId]/constraints`, a `workPost` route. `workPost` → `dispatch()` →
+ * `invokeGateway()` (`web/src/lib/api/gateway.ts`) already calls
+ * `decodeCapability("constraints.create_published", outcome.result)`
+ * **server-side**, before the route handler ever sees the result —
+ * `constraints.create_published` is registered in `DECODERS` against exactly
+ * `decodeConstraintsCreatePublished`. `dispatch()` then sends that already-
+ * decoded, camelCase, invariant-checked `{disposition, constraint, receipt}`
+ * shape straight to the browser (`publicResult` only strips the Principal
+ * identity, never case-converts it back). So what this function receives
+ * here already has `constraint.constraintId`/`constraint.projectId`/etc. —
+ * a **second** client-side call to `decodeConstraintsCreatePublished` (a
+ * corrective-2 revert: this file briefly did that) fails unconditionally
+ * against this real shape, because that decoder expects raw snake_case
+ * (`decodeConstraintMutationRecord` reads `record.constraint_id`, which does
+ * not exist on an already-camelCase object) — `GatewayIsServerOnlyError`
+ * is exactly why that decoder is only meant to run inside `gateway.ts`,
+ * never here. This function stays a plain, permissive shape check: a
+ * response this tier cannot recognise is `null` (never shown as success,
+ * `PC-CM-CAPTURE-AC-019`), but a well-formed one is read directly.
  */
 function readConfirmedSummary(result: unknown): ConfirmedConstraintSummary | null {
-  const decoded = decodeConstraintsCreatePublished(result);
-  if (!decoded.ok) return null;
-  const record = decoded.value.constraint;
+  if (!result || typeof result !== "object") return null;
+  const record = (result as { constraint?: unknown }).constraint;
+  if (!record || typeof record !== "object") return null;
+  const r = record as Record<string, unknown>;
+  if (typeof r.constraintId !== "string") return null;
   return {
-    constraintId: record.constraintId,
-    constraintCode: record.constraintCode,
-    description: record.description,
-    lifecycleState: record.lifecycleState,
-    dateIdentified: record.dateIdentified,
-    dueDate: record.dueDate,
-    projectId: record.projectId,
+    constraintId: r.constraintId,
+    constraintCode: typeof r.constraintCode === "string" ? r.constraintCode : null,
+    description: typeof r.description === "string" ? r.description : null,
+    lifecycleState: typeof r.lifecycleState === "string" ? r.lifecycleState : null,
+    dateIdentified: typeof r.dateIdentified === "string" ? r.dateIdentified : null,
+    dueDate: typeof r.dueDate === "string" ? r.dueDate : null,
+    projectId: typeof r.projectId === "string" ? r.projectId : null,
   };
 }
 

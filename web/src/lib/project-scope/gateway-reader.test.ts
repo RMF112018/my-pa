@@ -18,6 +18,7 @@ const PRINCIPAL = {
 
 const PROJECT = {
   project_id: "prj_aaaaaaaa11111111",
+  name: "Bridge Rollout",
   state: "active" as const,
   version: 5,
 };
@@ -36,6 +37,18 @@ describe("canonicalGatewayProjectReader", () => {
       project_id: PROJECT.project_id,
     });
     expect(invokeGateway.mock.calls[0]![2]).not.toHaveProperty("principal_id");
+  });
+
+  it("carries the canonical name through scopeRecord() unchanged", async () => {
+    const named = { ...PROJECT, name: "Harbor Migration" };
+    invokeGateway.mockResolvedValue({ ok: true, result: named, disclosure: {} });
+    const read = await canonicalGatewayProjectReader(PRINCIPAL, invokeGateway).readProject(
+      named.project_id,
+    );
+    expect(read).toEqual({ kind: "found", project: named });
+    if (read.kind === "found") {
+      expect(read.project.name).toBe("Harbor Migration");
+    }
   });
 
   it.each([404, 403])("does not expose missing/foreign detail for status %s", async (status) => {

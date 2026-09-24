@@ -7,6 +7,7 @@ export type CanonicalProjectState = "active" | "on_hold" | "closed";
 /** Fields scope consumes from the canonical exact Project read; no parallel Project model. */
 export interface CanonicalProjectScopeRecord {
   readonly project_id: string;
+  readonly name: string;
   readonly state: CanonicalProjectState;
   readonly version: number;
 }

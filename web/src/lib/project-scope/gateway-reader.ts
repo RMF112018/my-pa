@@ -43,11 +43,13 @@ export interface ProjectCapabilityInvoker {
 
 function scopeRecord(project: {
   readonly project_id: string;
+  readonly name: string;
   readonly state: "active" | "on_hold" | "closed";
   readonly version: number;
 }): CanonicalProjectScopeRecord {
   return {
     project_id: project.project_id,
+    name: project.name,
     state: project.state,
     version: project.version,
   };

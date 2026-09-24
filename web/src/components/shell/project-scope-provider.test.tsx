@@ -17,7 +17,7 @@ const PRINCIPAL_B = "prn_bbbbbbbb22222222";
 const PROJECT_V1: ResolvedProjectScope = {
   scope: { kind: "PROJECT", projectId: PROJECT },
   source: "deep_link",
-  project: { project_id: PROJECT, state: "active", version: 1 },
+  project: { project_id: PROJECT, name: "Original Project", state: "active", version: 1 },
   normalized: false,
 };
 
@@ -138,7 +138,7 @@ describe("Project Scope provider", () => {
     const replacement: ResolvedProjectScope = {
       ...PROJECT_V1,
       scope: { kind: "PROJECT", projectId: OTHER_PROJECT },
-      project: { project_id: OTHER_PROJECT, state: "active", version: 4 },
+      project: { project_id: OTHER_PROJECT, name: "Other Project", state: "active", version: 4 },
     };
     rerender(
       <ProjectScopeProvider

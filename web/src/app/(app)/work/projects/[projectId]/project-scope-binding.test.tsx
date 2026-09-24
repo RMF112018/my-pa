@@ -26,13 +26,13 @@ describe("ProjectRouteScopeBinding", () => {
     const resolution = {
       scope: { kind: "PROJECT", projectId: "prj_aaaaaaaa11111111" },
       source: "deep_link",
-      project: { project_id: "prj_aaaaaaaa11111111", state: "active", version: 3 },
+      project: { project_id: "prj_aaaaaaaa11111111", name: "Linked Project", state: "active", version: 3 },
       normalized: false,
     } as const;
     const fallbackResolution = {
       scope: { kind: "PROJECT", projectId: "prj_bbbbbbbb22222222" },
       source: "preference",
-      project: { project_id: "prj_bbbbbbbb22222222", state: "on_hold", version: 6 },
+      project: { project_id: "prj_bbbbbbbb22222222", name: "Saved Project", state: "on_hold", version: 6 },
       normalized: false,
     } as const;
     expect(

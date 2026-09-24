@@ -29,6 +29,7 @@ import type {
   ConstraintListEntry,
   ConstraintView,
 } from "@/contracts/constraints";
+import { TERMINAL_CONSTRAINT_LIFECYCLES } from "@/contracts/constraints";
 import { safeHref } from "@/lib/http/safe-href";
 import { Badge } from "@/components/ui/badge";
 import { WhenDiagnostics } from "@/components/diagnostics/diagnostics-provider";
@@ -50,7 +51,13 @@ import {
 } from "./presentation";
 import { safeDiagnostic } from "@/lib/diagnostics/safe-detail";
 
-/** The lifecycle operations this feature offers. All fixture-only. */
+/**
+ * The lifecycle operations this feature offers.
+ *
+ * Shared by the synthetic fixture surfaces (`constraint-lifecycle.tsx`) and
+ * the live ones (`constraint-authoring.tsx` for `edit`/`publish`,
+ * `constraint-direct-actions.tsx`'s `DirectAction` for the other five).
+ */
 export type ConstraintLifecycleAction =
   | "publish"
   | "edit"
@@ -195,7 +202,7 @@ export function ConstraintInspector({
               </Button>
             </>
           ) : null}
-          {!readOnly && summary.status === "CLOSED" ? (
+          {!readOnly && summary.status !== null && TERMINAL_CONSTRAINT_LIFECYCLES.includes(summary.status) ? (
             <Button size="sm" variant="secondary" onClick={() => onLifecycleAction("reopen")} data-testid="inspector-reopen">
               Reopen
             </Button>

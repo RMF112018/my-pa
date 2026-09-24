@@ -370,12 +370,21 @@ describe("the fixture boundary holds", () => {
     expect(page).not.toMatch(/\bfetch\(/);
   });
 
-  it("wires live reads only through the same-origin Constraint BFF client", () => {
+  it("wires live reads and writes only through the same-origin Constraint BFF client", () => {
     const client = text(join(SRC, "app/(app)/work/projects/[projectId]/constraints/constraint-live.ts"));
     expect(client).toMatch(/\/api\/project-controls\/projects\//);
     expect(client).toMatch(/cache: "no-store"/);
+    expect(client).toMatch(/credentials: "same-origin"/);
     expect(client).not.toMatch(/lib\/fixtures/);
-    expect(client).not.toMatch(/method: "POST"|method: "PATCH"|method: "DELETE"/);
+    // R02-WP10 Phase 6: this file now also dispatches the thirteen live
+    // authoring/lifecycle/category writes (`constraint-authoring.tsx`/
+    // `constraint-direct-actions.tsx`/`constraint-category-admin.tsx`/
+    // `register-table.tsx`'s inline edit), so `POST`/`PATCH` are expected
+    // here — the same-origin path, `no-store` caching and `same-origin`
+    // credentials asserted above are what actually guard this describe
+    // block's fixture/trust boundary; forbidding a browser HTTP method
+    // string was never that boundary itself.
+    expect(client).not.toMatch(/method: "DELETE"/);
   });
 });
 

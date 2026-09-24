@@ -56,14 +56,56 @@ const reads = vi.hoisted(() => ({
   projects: vi.fn(), overview: vi.fn(), categories: vi.fn(), register: vi.fn(), detail: vi.fn(), history: vi.fn(),
 }));
 
-vi.mock("./constraint-live", () => ({
-  readProjects: reads.projects,
-  readOverview: reads.overview,
-  readCategories: reads.categories,
-  readRegister: reads.register,
-  readDetail: reads.detail,
-  readHistory: reads.history,
+/**
+ * Every mutation write `constraint-authoring.tsx`/`constraint-direct-
+ * actions.tsx`/`constraint-category-admin.tsx`/`register-table.tsx`'s inline
+ * edit dispatch through. `readProjects`/…/`readHistory` above are the reads
+ * this file already stubbed; everything else — `detailToListEntry`,
+ * `mintIdempotencyKey`, `registerQuery`, … — passes through as the real
+ * implementation via `importOriginal`, so only network-touching functions are
+ * ever replaced.
+ */
+const writes = vi.hoisted(() => ({
+  createDraft: vi.fn(),
+  createPublished: vi.fn(),
+  updateConstraint: vi.fn(),
+  publishConstraint: vi.fn(),
+  transitionConstraint: vi.fn(),
+  closeConstraint: vi.fn(),
+  closeFollowUpConstraint: vi.fn(),
+  voidConstraint: vi.fn(),
+  reopenConstraint: vi.fn(),
+  createCategory: vi.fn(),
+  updateCategory: vi.fn(),
+  deactivateCategory: vi.fn(),
+  reorderCategories: vi.fn(),
 }));
+
+vi.mock("./constraint-live", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./constraint-live")>();
+  return {
+    ...actual,
+    readProjects: reads.projects,
+    readOverview: reads.overview,
+    readCategories: reads.categories,
+    readRegister: reads.register,
+    readDetail: reads.detail,
+    readHistory: reads.history,
+    createDraft: writes.createDraft,
+    createPublished: writes.createPublished,
+    updateConstraint: writes.updateConstraint,
+    publishConstraint: writes.publishConstraint,
+    transitionConstraint: writes.transitionConstraint,
+    closeConstraint: writes.closeConstraint,
+    closeFollowUpConstraint: writes.closeFollowUpConstraint,
+    voidConstraint: writes.voidConstraint,
+    reopenConstraint: writes.reopenConstraint,
+    createCategory: writes.createCategory,
+    updateCategory: writes.updateCategory,
+    deactivateCategory: writes.deactivateCategory,
+    reorderCategories: writes.reorderCategories,
+  };
+});
 
 import { AppShell } from "@/components/shell/app-shell";
 import { syntheticConstraintWorkspace } from "@/lib/fixtures/constraints";
@@ -102,6 +144,7 @@ beforeEach(() => {
   reads.register.mockResolvedValue(ok({ entries: fixture.entries.slice(0, 2), isTruncated: false, nextCursor: null, totalCount: null }));
   reads.detail.mockImplementation(async (_project: string, id: string) => ok(fixture.details[id]));
   reads.history.mockImplementation(async (_project: string, id: string) => ok({ entries: fixture.history[id] ?? [], nextCursor: null }));
+  for (const write of Object.values(writes)) write.mockReset();
 });
 
 afterEach(() => {
@@ -180,16 +223,18 @@ describe("the live read-only workspace", () => {
     expect(screen.getByTestId("overview-loading")).toBeVisible();
   });
 
-  it("renders server rows without mutation controls and loads selected detail independently", async () => {
+  it("renders server rows with live mutation controls and loads selected detail independently", async () => {
     const user = userEvent.setup();
     mount("view=register&group=none");
     const table = await screen.findByTestId("register-table");
     expect(within(table).getAllByRole("row").length).toBeGreaterThan(1);
-    expect(screen.queryByTestId("register-new-constraint")).toBeNull();
+    // Phase 6: this workspace is no longer read-only — New Constraint and the
+    // Inspector's Edit action are both live now.
+    expect(screen.getByTestId("register-new-constraint")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: fixture.entries[0].constraintCode ?? "Draft (Code not issued)" }));
     await waitFor(() => expect(reads.detail).toHaveBeenCalled());
     expect(await screen.findByTestId("constraint-inspector")).toBeInTheDocument();
-    expect(screen.queryByTestId("inspector-edit")).toBeNull();
+    expect(screen.getByTestId("inspector-edit")).toBeInTheDocument();
   });
 
   it("preserves an initial deep-linked selection", async () => {
@@ -652,5 +697,126 @@ describe("the live read-only workspace", () => {
 
     await waitFor(() => expect(screen.queryByTestId("inspector-history-hst_stale_continuation")).toBeNull());
     expect(screen.getByTestId("inspector-history-hst_current_selection")).toBeVisible();
+  });
+});
+
+/**
+ * Phase 6 — the live authoring/lifecycle/category surfaces this workspace now
+ * wires in. `register-table.tsx`, `constraints-register.tsx` and
+ * `constraint-inspector.tsx` have no dedicated test file of their own (per
+ * the dispatch); their live behaviour is exercised here, integration-style,
+ * exactly as the read-only behaviour above already was.
+ */
+describe("live authoring, lifecycle and category surfaces", () => {
+  function mutationAnswer(constraintId: string, overrides: Record<string, unknown> = {}) {
+    return {
+      shape: "backend",
+      disposition: "applied",
+      constraint: {
+        constraintId,
+        lifecycleState: "identified",
+        origin: "product",
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-02T00:00:00Z",
+        version: 2,
+        projectId: "prj_syn_0001",
+        categoryId: "cat_syn_0001",
+        constraintCode: null,
+        description: "Draft description",
+        dateIdentified: null,
+        dueDate: null,
+        reference: null,
+        currentUpdate: null,
+        bic: [],
+        responsible: [],
+        completionDate: null,
+        closureCommentary: null,
+        voidedDate: null,
+        voidReason: null,
+        recordQuality: "NORMAL",
+        publishedAt: null,
+      },
+      receipt: {
+        historyId: "chst_00000001",
+        constraintId,
+        operation: "CREATE",
+        actor: "PRINCIPAL",
+        outcome: "APPLIED",
+        beforeVersion: 0,
+        afterVersion: 1,
+        occurredAt: "2026-01-02T00:00:00Z",
+        projectId: "prj_syn_0001",
+        revisionId: null,
+        safeFailureReason: null,
+      },
+      disclosure: complete,
+      ...overrides,
+    };
+  }
+
+  it("opens the live Create surface from New Constraint and dispatches a Draft save", async () => {
+    const user = userEvent.setup();
+    writes.createDraft.mockResolvedValue(mutationAnswer("cst_syn_9999"));
+    mount("view=register&group=none");
+    await user.click(await screen.findByTestId("register-new-constraint"));
+    expect(await screen.findByTestId("authoring-code")).toBeInTheDocument();
+    await user.click(screen.getByTestId("authoring-save-draft"));
+    await waitFor(() => expect(writes.createDraft).toHaveBeenCalled());
+    expect(writes.createDraft.mock.calls[0][0]).toBe("prj_syn_0001");
+    await waitFor(() => expect(screen.queryByTestId("authoring-code")).toBeNull());
+  });
+
+  it("edits Status inline on an open row without opening the Inspector", async () => {
+    const user = userEvent.setup();
+    const id = fixture.entries[0].constraintId;
+    writes.transitionConstraint.mockResolvedValue(mutationAnswer(id));
+    mount("view=register&group=none");
+    const select = await screen.findByTestId(`register-inline-status-${id}`);
+    await user.selectOptions(select, "PENDING");
+    await waitFor(() => expect(writes.transitionConstraint).toHaveBeenCalled());
+    expect(writes.transitionConstraint.mock.calls[0][0]).toBe("prj_syn_0001");
+    expect(writes.transitionConstraint.mock.calls[0][1]).toBe(id);
+    expect(writes.transitionConstraint.mock.calls[0][2]).toMatchObject({ toState: "pending" });
+    // Confirmed writes never leave the row optimistic-only: the replacement
+    // is the freshly re-read canonical row.
+    await waitFor(() => expect(reads.detail).toHaveBeenCalledWith("prj_syn_0001", id, expect.any(AbortSignal)));
+    expect(screen.queryByTestId(`register-inline-status-error-${id}`)).toBeNull();
+  });
+
+  it("rolls an inline edit back and reports why on a failed write", async () => {
+    const user = userEvent.setup();
+    const id = fixture.entries[0].constraintId;
+    writes.transitionConstraint.mockRejectedValue({ status: 500, code: "backend_error", message: "The write failed." });
+    mount("view=register&group=none");
+    const select = await screen.findByTestId(`register-inline-status-${id}`);
+    await user.selectOptions(select, "PENDING");
+    expect(await screen.findByTestId(`register-inline-status-error-${id}`)).toHaveTextContent("The write failed.");
+    // Rolled back to the value the row held before the edit.
+    expect(screen.getByTestId(`register-inline-status-${id}`)).toHaveValue(fixture.entries[0].status);
+  });
+
+  it("opens Category administration from the Categories button", async () => {
+    const user = userEvent.setup();
+    mount();
+    await user.click(await screen.findByTestId("open-categories"));
+    const table = await screen.findByTestId("category-table");
+    expect(within(table).getByText(fixture.categories[0].title)).toBeInTheDocument();
+  });
+
+  it("dispatches a direct Close action from the Inspector, never optimistically", async () => {
+    const user = userEvent.setup();
+    const id = fixture.entries[0].constraintId;
+    writes.closeConstraint.mockResolvedValue(mutationAnswer(id, { constraint: { ...mutationAnswer(id).constraint, lifecycleState: "closed" } }));
+    mount("view=register&group=none");
+    await screen.findByTestId("register-table");
+    await user.click(screen.getByRole("button", { name: fixture.entries[0].constraintCode ?? "Draft (Code not issued)" }));
+    await screen.findByTestId("constraint-inspector");
+    await user.click(screen.getByTestId("inspector-close"));
+    const confirm = await screen.findByTestId("direct-action-confirm");
+    // Nothing changed yet — the dialog is still open and the write has not settled.
+    expect(writes.closeConstraint).not.toHaveBeenCalled();
+    await user.click(confirm);
+    await waitFor(() => expect(writes.closeConstraint).toHaveBeenCalled());
+    expect(writes.closeConstraint.mock.calls[0][1]).toBe(id);
   });
 });

@@ -27,11 +27,43 @@
  * **Nothing in this file computes a state.** Urgency words come from
  * `isOverdue`/`isDueSoon`; the status word comes from `status`; the attention
  * marker comes from `needsAttention`. There is no date arithmetic here.
+ *
+ * **Inline edit is bounded, and it is the eligible four fields only
+ * (`PC-CM-FE-AC-050`/`051`/`052`).** Status, Due Date, Ball in Court and
+ * Current Update — nothing else — can be changed from the Register, each
+ * through its own small, independently-committing control; there is no
+ * full-row edit mode, and Code, Project, Category are never inline-editable.
+ * A terminal row (`CLOSED`/`VOID`) offers none of the four: a terminal record
+ * changes only through `constraint-direct-actions.tsx`'s guarded Reopen.
+ *
+ * **Optimistic, with a real rollback (`PC-CM-FE-AC-054`).** The edited value
+ * is shown the instant a commit is sent; if the write does not confirm, the
+ * cell reverts to the value it held before the edit and shows why. A row only
+ * *leaves* the `open` scope once a decoded success actually said so
+ * (`PC-CM-FE-AC-067`) — this file never removes a row from view on an
+ * optimistic guess.
+ *
+ * **A caller, never this file, performs the write.** `onInlineEdit` is the one
+ * seam: it is handed the field and the new value and returns whether the
+ * write confirmed and, on success, the freshly re-read row
+ * (`constraint-live.ts`'s `detailToListEntry`) to replace the optimistic one
+ * with — so what ends up on screen is always backend-derived, never a locally
+ * recomputed guess (`PC-CM-FE-AC-059`).
  */
-import type { ConstraintListEntry } from "@/contracts/constraints";
+import { useState } from "react";
+import type { ConstraintListEntry, ConstraintPartyRef } from "@/contracts/constraints";
+import { TERMINAL_CONSTRAINT_LIFECYCLES, type ConstraintLifecycle } from "@/contracts/constraints";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { ConstraintUrlState } from "./constraint-url-state";
 import type { ConstraintViewport } from "./use-viewport";
+import { ConstraintPartySelector, type RequestPartyRef } from "./constraint-party-selector";
+import { multilineCommitHandler } from "./constraint-lifecycle";
+import { readDetail } from "./constraint-live";
 import {
   codeLabel,
   dateLabel,
@@ -48,7 +80,44 @@ export function rowTriggerId(constraintId: string): string {
   return `constraint-row-trigger-${constraintId}`;
 }
 
+/** The exact four fields the Register may edit inline. Nothing else. */
+export type InlineEditableField = "status" | "due" | "bic" | "currentUpdate";
+
+/** `status`/`due`/`currentUpdate` carry a `string`; `bic` carries the wire party array. */
+export type InlineEditValue = string | readonly RequestPartyRef[];
+
+export interface InlineEditRequest {
+  readonly constraintId: string;
+  readonly field: InlineEditableField;
+  readonly value: InlineEditValue;
+  readonly expectedVersion: number;
+}
+
+export interface InlineEditResult {
+  readonly ok: boolean;
+  /** On success: the freshly re-read row. Absent means the caller will refresh separately. */
+  readonly entry?: ConstraintListEntry;
+  /** On failure: a safe, already-governed message. */
+  readonly message?: string;
+}
+
+export type OnInlineEdit = (request: InlineEditRequest) => Promise<InlineEditResult>;
+
+const ACTIVE_STATES: readonly ConstraintLifecycle[] = ["IDENTIFIED", "PENDING", "IN_PROGRESS", "ON_HOLD"];
+
+function toRequestParties(parties: readonly ConstraintPartyRef[]): readonly RequestPartyRef[] {
+  return parties.map((party) => {
+    if (party.kind === "PRINCIPAL") return { kind: "principal" as const };
+    if (party.kind === "ENTITY") {
+      return { kind: "entity" as const, entityId: party.entityId ?? party.partyRefId ?? undefined, label: party.displayLabel };
+    }
+    return { kind: "unresolved" as const, label: party.displayLabel };
+  });
+}
+
 export interface RegisterTableProps {
+  /** Needed only to re-read a row's canonical Current Update before it is inline-edited. */
+  readonly projectId: string;
   readonly entries: readonly ConstraintListEntry[];
   readonly state: ConstraintUrlState;
   readonly viewport: ConstraintViewport;
@@ -56,6 +125,8 @@ export interface RegisterTableProps {
   readonly onSelect: (constraintId: string) => void;
   readonly onSort: (sort: ConstraintUrlState["sort"]) => void;
   readonly onTriggerMount?: (constraintId: string, node: HTMLButtonElement | null) => void;
+  /** Present only for the live workspace; absent (the synthetic fixture path) renders read-only exactly as before. */
+  readonly onInlineEdit?: OnInlineEdit;
 }
 
 interface Column {
@@ -122,14 +193,12 @@ function StateChips({ entry }: { entry: ConstraintListEntry }) {
   );
 }
 
-function cellContent(entry: ConstraintListEntry, key: string) {
+function readOnlyCellContent(entry: ConstraintListEntry, key: string) {
   switch (key) {
     case "description":
       return entry.description ?? "Not recorded";
     case "status":
-      return (
-        <Badge tone={lifecycleTone(entry.status)}>{lifecycleLabel(entry.status)}</Badge>
-      );
+      return <Badge tone={lifecycleTone(entry.status)}>{lifecycleLabel(entry.status)}</Badge>;
     case "daysOpen":
       return entry.daysElapsed === null ? "Not recorded" : String(entry.daysElapsed);
     case "bic":
@@ -155,7 +224,303 @@ function cellContent(entry: ConstraintListEntry, key: string) {
   }
 }
 
+/**
+ * One Register row, with its own bounded inline-edit state.
+ *
+ * `localEntry` mirrors the incoming `entry` prop and is what every cell
+ * renders from. A commit sets it optimistically before the write confirms
+ * (`PC-CM-FE-AC-054`'s optimistic half); a failure restores the value the row
+ * held immediately before that edit (the rollback half); a confirmed edit that
+ * returned a freshly re-read row adopts it outright, so a genuinely fresher
+ * prop (the parent's own subsequent Register refresh) and this row's own
+ * optimistic state can never both claim to be current at once.
+ */
+function RegisterRow({
+  projectId,
+  entry,
+  state,
+  viewport,
+  onSelect,
+  onTriggerMount,
+  onInlineEdit,
+  columns,
+}: {
+  readonly projectId: string;
+  readonly entry: ConstraintListEntry;
+  readonly state: ConstraintUrlState;
+  readonly viewport: ConstraintViewport;
+  readonly onSelect: (constraintId: string) => void;
+  readonly onTriggerMount?: (constraintId: string, node: HTMLButtonElement | null) => void;
+  readonly onInlineEdit?: OnInlineEdit;
+  readonly columns: readonly Column[];
+}) {
+  const [localEntry, setLocalEntry] = useState(entry);
+  const [errors, setErrors] = useState<Partial<Record<InlineEditableField, string>>>({});
+  const [pendingField, setPendingField] = useState<InlineEditableField | null>(null);
+  const [updateOpen, setUpdateOpen] = useState(false);
+  // The Register row carries no `currentUpdate` field (it is a detail-only
+  // member of `ConstraintView`, not `ConstraintListEntry`), so opening this
+  // editor reads the canonical current text first — a blank starting point
+  // would let a save silently replace existing narrative content with
+  // whatever was typed, which is exactly the silent-overwrite this build
+  // never does. `updateReady` gates Save until that read has resolved.
+  const [updateDraft, setUpdateDraft] = useState("");
+  const [updateReady, setUpdateReady] = useState(false);
+  const [updateReadFailed, setUpdateReadFailed] = useState(false);
+  const [bicDraft, setBicDraft] = useState<readonly RequestPartyRef[]>(() => toRequestParties(entry.bic));
+
+  // Adopt a fresher `entry` prop (a full Register refresh, or this row's own
+  // confirmed edit flowing back down) whenever its identity changes; an
+  // in-flight optimistic edit is never overwritten by a stale re-render of
+  // the same `entry` object.
+  const [trackedId, setTrackedId] = useState(entry);
+  if (trackedId !== entry) {
+    setTrackedId(entry);
+    setLocalEntry(entry);
+  }
+
+  const terminal = localEntry.status !== null && TERMINAL_CONSTRAINT_LIFECYCLES.includes(localEntry.status);
+  const editable = onInlineEdit !== undefined && !terminal;
+  const statusEditable = editable && localEntry.status !== null && ACTIVE_STATES.includes(localEntry.status);
+
+  async function commit(
+    field: InlineEditableField,
+    value: InlineEditValue,
+    optimisticPatch: Partial<ConstraintListEntry>,
+  ) {
+    if (!onInlineEdit) return;
+    const before = localEntry;
+    setLocalEntry({ ...localEntry, ...optimisticPatch });
+    setPendingField(field);
+    setErrors((current) => ({ ...current, [field]: undefined }));
+    const result = await onInlineEdit({
+      constraintId: entry.constraintId,
+      field,
+      value,
+      expectedVersion: before.version,
+    });
+    setPendingField(null);
+    if (!result.ok) {
+      setLocalEntry(before);
+      setErrors((current) => ({ ...current, [field]: result.message ?? "The change was not saved." }));
+      return;
+    }
+    if (result.entry) setLocalEntry(result.entry);
+  }
+
+  return (
+    <>
+      <tr
+        data-testid={`register-row-${entry.constraintId}`}
+        data-selected={state.selectedConstraintId === entry.constraintId || undefined}
+        className="border-b border-border-subtle data-[selected]:bg-surface-subtle"
+      >
+        {columns.map((column) => {
+          if (column.key === "code") {
+            return (
+              <th key={column.key} scope="row" className="px-2 py-2 font-normal align-top">
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    id={rowTriggerId(entry.constraintId)}
+                    ref={(node) => onTriggerMount?.(entry.constraintId, node)}
+                    onClick={() => onSelect(entry.constraintId)}
+                    className="inline-flex min-h-11 items-center rounded text-left font-medium text-moss-green underline"
+                  >
+                    {codeLabel(localEntry.constraintCode)}
+                  </button>
+                  {editable ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      data-testid={`register-inline-current-update-toggle-${entry.constraintId}`}
+                      aria-expanded={updateOpen}
+                      onClick={() => {
+                        setUpdateOpen((open) => {
+                          const next = !open;
+                          if (next) {
+                            setUpdateReady(false);
+                            setUpdateReadFailed(false);
+                            setUpdateDraft("");
+                            const controller = new AbortController();
+                            void readDetail(projectId, entry.constraintId, controller.signal).then((result) => {
+                              if (result.ok) {
+                                setUpdateDraft(result.value.currentUpdate ?? "");
+                                setUpdateReady(true);
+                              } else {
+                                setUpdateReadFailed(true);
+                              }
+                            });
+                          }
+                          return next;
+                        });
+                      }}
+                    >
+                      Update
+                    </Button>
+                  ) : null}
+                </div>
+                {viewport === "tablet" ? (
+                  <span className="mt-1 block text-xs text-muted">
+                    {localEntry.daysElapsed === null
+                      ? "Days open not recorded"
+                      : `${localEntry.daysElapsed} days open`}
+                    {localEntry.reference === null ? "" : ` · ${localEntry.reference}`}
+                  </span>
+                ) : null}
+              </th>
+            );
+          }
+          if (column.key === "status" && statusEditable) {
+            return (
+              <td key={column.key} className="px-2 py-2 align-top">
+                <Select
+                  value={localEntry.status ?? ""}
+                  aria-label={`Status for ${codeLabel(localEntry.constraintCode)}`}
+                  data-testid={`register-inline-status-${entry.constraintId}`}
+                  disabled={pendingField === "status"}
+                  onChange={(event) => {
+                    const next = event.target.value as ConstraintLifecycle;
+                    void commit("status", next.toLowerCase(), { status: next });
+                  }}
+                >
+                  {ACTIVE_STATES.map((option) => (
+                    <option key={option} value={option}>
+                      {lifecycleLabel(option)}
+                    </option>
+                  ))}
+                </Select>
+                {errors.status ? (
+                  <p role="alert" className="mt-1 text-xs text-moss-coral-strong" data-testid={`register-inline-status-error-${entry.constraintId}`}>
+                    {errors.status}
+                  </p>
+                ) : null}
+              </td>
+            );
+          }
+          if (column.key === "due" && editable) {
+            return (
+              <td key={column.key} className="px-2 py-2 align-top">
+                <div className="flex flex-wrap items-center gap-1">
+                  <Input
+                    type="date"
+                    value={localEntry.dueDate ?? ""}
+                    aria-label={`Due date for ${codeLabel(localEntry.constraintCode)}`}
+                    data-testid={`register-inline-due-${entry.constraintId}`}
+                    disabled={pendingField === "due"}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      if (next.length === 0) return;
+                      void commit("due", next, { dueDate: next });
+                    }}
+                  />
+                  <StateChips entry={localEntry} />
+                </div>
+                {errors.due ? (
+                  <p role="alert" className="mt-1 text-xs text-moss-coral-strong" data-testid={`register-inline-due-error-${entry.constraintId}`}>
+                    {errors.due}
+                  </p>
+                ) : null}
+              </td>
+            );
+          }
+          if (column.key === "bic" && editable) {
+            return (
+              <td key={column.key} className="px-2 py-2 align-top">
+                <Popover
+                  onOpenChange={(open) => {
+                    if (open) setBicDraft(toRequestParties(localEntry.bic));
+                  }}
+                >
+                  <PopoverTrigger asChild>
+                    <Button size="sm" variant="ghost" data-testid={`register-inline-bic-toggle-${entry.constraintId}`}>
+                      {partyLabel(localEntry.bic)}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent aria-label="Edit Ball in Court" className="grid w-72 gap-2">
+                    <ConstraintPartySelector
+                      label="Ball in Court"
+                      value={bicDraft}
+                      onChange={setBicDraft}
+                      testIdPrefix={`register-inline-bic-${entry.constraintId}`}
+                    />
+                    <Button
+                      size="sm"
+                      disabled={pendingField === "bic"}
+                      data-testid={`register-inline-bic-save-${entry.constraintId}`}
+                      onClick={() => void commit("bic", bicDraft, {})}
+                    >
+                      Save
+                    </Button>
+                  </PopoverContent>
+                </Popover>
+                {errors.bic ? (
+                  <p role="alert" className="mt-1 text-xs text-moss-coral-strong" data-testid={`register-inline-bic-error-${entry.constraintId}`}>
+                    {errors.bic}
+                  </p>
+                ) : null}
+              </td>
+            );
+          }
+          return (
+            <td key={column.key} className="px-2 py-2 align-top">
+              {readOnlyCellContent(localEntry, column.key)}
+            </td>
+          );
+        })}
+      </tr>
+      {updateOpen ? (
+        <tr data-testid={`register-inline-current-update-row-${entry.constraintId}`}>
+          <td colSpan={columns.length} className="px-2 pb-2">
+            {!updateReady && !updateReadFailed ? (
+              <p role="status" className="text-sm text-muted" data-testid={`register-inline-current-update-loading-${entry.constraintId}`}>
+                Reading the current text…
+              </p>
+            ) : updateReadFailed ? (
+              <p role="alert" className="text-sm text-moss-coral-strong" data-testid={`register-inline-current-update-read-failed-${entry.constraintId}`}>
+                The current text could not be read, so it cannot be safely replaced here. Open the
+                full record to edit it.
+              </p>
+            ) : (
+              <>
+                <label className="grid gap-1 text-sm">
+                  Current Update
+                  <Textarea
+                    value={updateDraft}
+                    data-testid={`register-inline-current-update-${entry.constraintId}`}
+                    onChange={(event) => setUpdateDraft(event.target.value)}
+                    onKeyDown={multilineCommitHandler(() => void commit("currentUpdate", updateDraft, {}))}
+                  />
+                </label>
+                {errors.currentUpdate ? (
+                  <p role="alert" className="mt-1 text-xs text-moss-coral-strong" data-testid={`register-inline-current-update-error-${entry.constraintId}`}>
+                    {errors.currentUpdate}
+                  </p>
+                ) : null}
+                <div className="mt-1 flex gap-2">
+                  <Button
+                    size="sm"
+                    disabled={pendingField === "currentUpdate"}
+                    data-testid={`register-inline-current-update-save-${entry.constraintId}`}
+                    onClick={() => void commit("currentUpdate", updateDraft, {})}
+                  >
+                    {pendingField === "currentUpdate" ? "Saving…" : "Save"}
+                  </Button>
+                  <Button size="sm" variant="ghost" data-testid={`register-inline-current-update-cancel-${entry.constraintId}`} onClick={() => setUpdateOpen(false)}>
+                    Cancel
+                  </Button>
+                </div>
+              </>
+            )}
+          </td>
+        </tr>
+      ) : null}
+    </>
+  );
+}
+
 export function RegisterTable({
+  projectId,
   entries,
   state,
   viewport,
@@ -163,6 +528,7 @@ export function RegisterTable({
   onSelect,
   onSort,
   onTriggerMount,
+  onInlineEdit,
 }: RegisterTableProps) {
   const columns = visibleColumns(state, viewport);
   return (
@@ -199,40 +565,17 @@ export function RegisterTable({
         </thead>
         <tbody>
           {entries.map((entry) => (
-            <tr
+            <RegisterRow
               key={entry.constraintId}
-              data-testid={`register-row-${entry.constraintId}`}
-              data-selected={state.selectedConstraintId === entry.constraintId || undefined}
-              className="border-b border-border-subtle data-[selected]:bg-surface-subtle"
-            >
-              {columns.map((column) =>
-                column.key === "code" ? (
-                  <th key={column.key} scope="row" className="px-2 py-2 font-normal align-top">
-                    <button
-                      type="button"
-                      id={rowTriggerId(entry.constraintId)}
-                      ref={(node) => onTriggerMount?.(entry.constraintId, node)}
-                      onClick={() => onSelect(entry.constraintId)}
-                      className="inline-flex min-h-11 items-center rounded text-left font-medium text-moss-green underline"
-                    >
-                      {codeLabel(entry.constraintCode)}
-                    </button>
-                    {viewport === "tablet" ? (
-                      <span className="mt-1 block text-xs text-muted">
-                        {entry.daysElapsed === null
-                          ? "Days open not recorded"
-                          : `${entry.daysElapsed} days open`}
-                        {entry.reference === null ? "" : ` · ${entry.reference}`}
-                      </span>
-                    ) : null}
-                  </th>
-                ) : (
-                  <td key={column.key} className="px-2 py-2 align-top">
-                    {cellContent(entry, column.key)}
-                  </td>
-                ),
-              )}
-            </tr>
+              projectId={projectId}
+              entry={entry}
+              state={state}
+              viewport={viewport}
+              onSelect={onSelect}
+              onTriggerMount={onTriggerMount}
+              onInlineEdit={onInlineEdit}
+              columns={columns}
+            />
           ))}
         </tbody>
       </table>

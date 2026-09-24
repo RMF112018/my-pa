@@ -30,21 +30,33 @@ import {
   type ConstraintUrlState,
 } from "./constraint-url-state";
 import {
+  detailToListEntry,
+  mintIdempotencyKey,
   readCategories,
   readDetail,
   readHistory,
   readOverview,
   readProjects,
   readRegister,
+  transitionConstraint,
+  updateConstraint,
   type LiveConstraintHistoryEntry,
   type LiveConstraintView,
   type LiveFailure,
+  type LiveMutationFailure,
 } from "./constraint-live";
 import { ConstraintsOverview } from "./constraints-overview";
 import { ConstraintsRegister } from "./constraints-register";
-import { ConstraintInspector, inspectorTitle } from "./constraint-inspector";
+import { ConstraintInspector, inspectorTitle, type ConstraintLifecycleAction } from "./constraint-inspector";
 import { useConstraintViewport } from "./use-viewport";
 import { safeDiagnostic, safeLimitations } from "@/lib/diagnostics/safe-detail";
+import { useConstraintRuntime } from "@/components/project-controls/constraint-runtime-provider";
+import { useMutationFeedback } from "@/components/ui/mutation-feedback";
+import { constraintLockKey } from "@/lib/constraint/mutation-coordinator";
+import { ConstraintAuthoring } from "./constraint-authoring";
+import { ConstraintDirectActions, type DirectAction } from "./constraint-direct-actions";
+import { ConstraintCategoryAdmin } from "./constraint-category-admin";
+import type { InlineEditRequest, InlineEditResult } from "./register-table";
 
 interface Props {
   readonly projectId: string;
@@ -63,6 +75,11 @@ function LiveConstraintsWorkspaceInner({ projectId, initialState }: Props) {
   const searchParams = useSearchParams();
   const viewport = useConstraintViewport();
   const { setSelection, shellSelection } = useInspectorSelection();
+  const runtime = useConstraintRuntime();
+  const feedback = useMutationFeedback();
+  const [authoring, setAuthoring] = useState<{ readonly mode: "create" | "edit" } | null>(null);
+  const [directAction, setDirectAction] = useState<DirectAction | null>(null);
+  const [categoriesOpen, setCategoriesOpen] = useState(false);
   const state = useMemo(
     () => (searchParams === null ? initialState : parseConstraintUrlSearchParams(searchParams)),
     [searchParams, initialState],
@@ -362,6 +379,110 @@ function LiveConstraintsWorkspaceInner({ projectId, initialState }: Props) {
     [navigate, state],
   );
 
+  /** Bumps the summary/register/detail effects' shared retry key, forcing a re-read from the backend. */
+  const refreshAfterMutation = useCallback(() => setRetry((value) => value + 1), []);
+
+  const handleLifecycleAction = useCallback((action: ConstraintLifecycleAction) => {
+    if (action === "edit" || action === "publish") {
+      // Both open the same live edit surface; the Publish button inside it
+      // is what dispatches `constraints.publish` for an existing Draft.
+      setAuthoring({ mode: "edit" });
+      return;
+    }
+    setDirectAction(action as DirectAction);
+  }, []);
+
+  /**
+   * The Register's one inline-edit seam (`register-table.tsx`'s `OnInlineEdit`).
+   *
+   * Status dispatches `constraints.transition`; Due/BIC/Current Update
+   * dispatch `constraints.update` — two different capabilities, chosen by
+   * `field`, never one generic "patch" call. On a confirmed write this reads
+   * the record's canonical detail fresh and returns it as the replacement row
+   * (`PC-CM-FE-AC-059`) rather than a locally recomputed guess; if that
+   * follow-up read itself fails, the whole Register/Overview is refreshed
+   * instead so nothing stale is left pinned in place.
+   */
+  const handleInlineEdit = useCallback(
+    async (edit: InlineEditRequest): Promise<InlineEditResult> => {
+      const isTransition = edit.field === "status";
+      const idempotencyKey = mintIdempotencyKey();
+      const request: Record<string, unknown> =
+        edit.field === "status"
+          ? { toState: edit.value }
+          : edit.field === "due"
+            ? { dueDate: edit.value }
+            : edit.field === "bic"
+              ? { bic: edit.value }
+              : { currentUpdate: edit.value };
+
+      const outcome = await runtime.mutationCoordinator.mutate({
+        kind: isTransition ? "constraintTransition" : "constraintUpdate",
+        lockRequest: { kind: "constraint-record", key: constraintLockKey(edit.constraintId) },
+        idempotencyKey,
+        expectedVersion: edit.expectedVersion,
+        request,
+        epoch: runtime.scopeEpoch,
+        isCurrentEpoch: runtime.isCurrentEpoch,
+        dispatch: async ({ request: dispatchRequest, idempotencyKey: key, expectedVersion }) => {
+          const body: Record<string, unknown> = {
+            ...(dispatchRequest as Record<string, unknown>),
+            idempotencyKey: key,
+            expectedVersion,
+          };
+          return isTransition
+            ? transitionConstraint(projectId, edit.constraintId, body)
+            : updateConstraint(projectId, edit.constraintId, body);
+        },
+        hooks: {
+          feedback: async (_result, phase) => {
+            if (phase === "confirmed") {
+              feedback.publish({ eventId: `register-inline-${idempotencyKey}`, kind: "success", message: "The change was saved." });
+            } else if (phase === "conflict") {
+              feedback.publish({
+                eventId: `register-inline-${idempotencyKey}-conflict`,
+                kind: "conflict",
+                message: "This row changed since it was read.",
+              });
+            } else if (phase === "failed" || phase === "ambiguous") {
+              feedback.publish({ eventId: `register-inline-${idempotencyKey}-failed`, kind: "error", message: "The change was not saved." });
+            }
+          },
+        },
+      });
+
+      if (outcome.refused) {
+        return { ok: false, message: "This row is already being written to. Wait for that write to finish." };
+      }
+      if (outcome.state.phase === "conflict") {
+        return { ok: false, message: "This row changed since it was read. Open it to see the current state." };
+      }
+      if (outcome.state.phase === "ambiguous") {
+        return { ok: false, message: "The change's outcome could not be confirmed. Open the record to check it." };
+      }
+      if (outcome.state.phase !== "confirmed") {
+        const failure = outcome.state.error as LiveMutationFailure | undefined;
+        return { ok: false, message: failure?.message ?? "The change was not saved." };
+      }
+
+      const controller = new AbortController();
+      const detailResult = await readDetail(projectId, edit.constraintId, controller.signal);
+      if (!detailResult.ok) {
+        refreshAfterMutation();
+        return { ok: true };
+      }
+      const priorGroupKeys =
+        visiblePage.entries.find((item) => item.constraintId === edit.constraintId)?.groupKeys ?? [];
+      const freshEntry = detailToListEntry(detailResult.value, priorGroupKeys);
+      setPage((prior) => ({
+        ...prior,
+        entries: prior.entries.map((item) => (item.constraintId === freshEntry.constraintId ? freshEntry : item)),
+      }));
+      return { ok: true, entry: freshEntry };
+    },
+    [feedback, projectId, refreshAfterMutation, runtime, visiblePage.entries],
+  );
+
   const inspectorRender = useCallback(
     () => (
       <ConstraintInspector
@@ -375,12 +496,12 @@ function LiveConstraintsWorkspaceInner({ projectId, initialState }: Props) {
         onLoadMoreHistory={loadMoreHistory}
         onClose={closeDetail}
         onNavigateToConstraint={selectConstraint}
-        onLifecycleAction={() => undefined}
-        readOnly
+        onLifecycleAction={handleLifecycleAction}
       />
     ),
     [
       closeDetail,
+      handleLifecycleAction,
       visibleDetail,
       visibleHistory,
       visibleHistoryCursor,
@@ -443,6 +564,9 @@ function LiveConstraintsWorkspaceInner({ projectId, initialState }: Props) {
             {projects.map((project) => <option key={project.projectId} value={project.projectId}>{project.name}</option>)}
           </Select>
         </label>
+        <Button size="sm" variant="secondary" data-testid="open-categories" onClick={() => setCategoriesOpen(true)}>
+          Categories
+        </Button>
       </div>
       <Tabs value={state.view} onValueChange={(view: string) => navigate({ ...state, view: view as ConstraintUrlState["view"] })}>
         <TabsList aria-label="Constraint workspace">
@@ -485,16 +609,58 @@ function LiveConstraintsWorkspaceInner({ projectId, initialState }: Props) {
             onStateChange={navigate}
             onSelect={selectConstraint}
             onTriggerMount={attachRowTrigger}
+            onNewConstraint={() => setAuthoring({ mode: "create" })}
+            onInlineEdit={handleInlineEdit}
             livePage={visiblePage}
             loading={visibleRegisterLoading}
             failure={visibleRegisterFailure}
             disclosure={visibleRegisterDisclosure}
             onRetry={() => setRetry((value) => value + 1)}
             onLoadMore={loadMore}
-            readOnly
           />
         </TabsContent>
       </Tabs>
+      {authoring ? (
+        <ConstraintAuthoring
+          // Remounted per record/mode so its internal form state can never
+          // carry over from whatever this dialog last showed.
+          key={`${authoring.mode}:${authoring.mode === "edit" ? (selected?.constraintId ?? "none") : "new"}`}
+          mode={authoring.mode}
+          open
+          projectId={projectId}
+          categories={visibleCategories}
+          entry={authoring.mode === "edit" ? selected : null}
+          detail={authoring.mode === "edit" ? (visibleDetail ?? null) : null}
+          onClose={() => setAuthoring(null)}
+          onCreated={(constraintId) => {
+            setAuthoring(null);
+            refreshAfterMutation();
+            selectConstraint(constraintId);
+          }}
+          onUpdated={() => {
+            setAuthoring(null);
+            refreshAfterMutation();
+          }}
+        />
+      ) : null}
+      <ConstraintDirectActions
+        action={directAction}
+        projectId={projectId}
+        entry={selected}
+        expectedVersion={visibleDetail?.version ?? selected?.version}
+        onClose={() => setDirectAction(null)}
+        onCompleted={({ successorId }) => {
+          refreshAfterMutation();
+          if (successorId) selectConstraint(successorId);
+        }}
+      />
+      <ConstraintCategoryAdmin
+        open={categoriesOpen}
+        projectId={projectId}
+        categories={visibleCategories}
+        onClose={() => setCategoriesOpen(false)}
+        onChanged={refreshAfterMutation}
+      />
     </div>
   );
 }

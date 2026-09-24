@@ -44,7 +44,7 @@ import type { ConstraintUrlState } from "./constraint-url-state";
 import { clearedFilters, hasActiveFilters, listRegisterState, searchRegisterState } from "./constraint-url-state";
 import type { LiveFailure } from "./constraint-live";
 import { groupRegisterEntries, queryRegisterPage, REGISTER_PAGE_SIZE } from "./register-query";
-import { RegisterCardList, RegisterTable } from "./register-table";
+import { RegisterCardList, RegisterTable, type OnInlineEdit } from "./register-table";
 import type { ConstraintViewport } from "./use-viewport";
 import { lifecycleLabel, syncLabel } from "./presentation";
 import { safeDiagnostic, safeLimitations } from "@/lib/diagnostics/safe-detail";
@@ -107,6 +107,8 @@ export interface ConstraintsRegisterProps {
   readonly onRetry?: () => void;
   readonly onLoadMore?: () => void;
   readonly readOnly?: boolean;
+  /** Present only for the live workspace; wires the Register's bounded inline edit. */
+  readonly onInlineEdit?: OnInlineEdit;
 }
 
 export function ConstraintsRegister({
@@ -127,6 +129,7 @@ export function ConstraintsRegister({
   onRetry,
   onLoadMore,
   readOnly = false,
+  onInlineEdit,
 }: ConstraintsRegisterProps) {
   /**
    * How far the reader has continued, as a cursor and not a page number.
@@ -497,12 +500,14 @@ export function ConstraintsRegister({
                 />
               ) : (
                 <RegisterTable
+                  projectId={projectId}
                   entries={group.entries}
                   state={state}
                   viewport={viewport}
                   caption={`${group.label} — Constraint Register`}
                   onSelect={onSelect}
                   onTriggerMount={onTriggerMount}
+                  onInlineEdit={onInlineEdit}
                   onSort={(sort) =>
                     update(
                       sort === state.sort

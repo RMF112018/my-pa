@@ -672,7 +672,12 @@ from my_pa.domain.search.query import (
     label_for_media_type,
 )
 from my_pa.domain.situation.continuity import CommitmentWorkView
-from my_pa.domain.situation.situation import Project, ProjectEntityLinkageState, Situation
+from my_pa.domain.situation.situation import (
+    Project,
+    ProjectEntityLinkageState,
+    ProjectState,
+    Situation,
+)
 from my_pa.domain.source.enrollment import (
     MAX_ENROLLMENT_BYTES,
     MAX_ENROLLMENT_DEPTH,
@@ -2875,6 +2880,48 @@ def _constraint_payload(value: object) -> object:
     if isinstance(value, datetime | date):
         return value.isoformat()
     return value
+
+
+def _decorate_portfolio_rows(
+    payload: object, project_names: Mapping[str, str]
+) -> list[dict[str, Any]]:
+    """Add each row's `project_name` to an already-serialized portfolio page.
+
+    PC-CM-RUN01-WP06/Phase 0. A post-processing step over `_constraint_payload`'s
+    own output, never a change to `_constraint_payload` itself: that serializer
+    is shared with exact-Project reads (`tests/architecture/...` and this
+    package's own contract keep it free of any field an exact-Project response
+    must never carry), and `project_name` is portfolio-only.
+
+    Every row here was built from the same `project_ids` `_portfolio_projects`
+    returned for this same read, and `project_names` is keyed from that same
+    call, so a row naming a Project absent from the mapping is an
+    internal-consistency bug, not a caller-facing condition -- it fails loudly
+    (`InternalError`) rather than silently omitting the field.
+    """
+    if not isinstance(payload, list):
+        raise InternalError()
+    decorated: list[dict[str, Any]] = []
+    for row in payload:
+        if not isinstance(row, dict):
+            raise InternalError()
+        project_id = row.get("project_id")
+        if not isinstance(project_id, str) or project_id not in project_names:
+            raise InternalError()
+        decorated.append({**row, "project_name": project_names[project_id]})
+    return decorated
+
+
+def _decorate_portfolio_overview_payload(
+    payload: object, project_names: Mapping[str, str]
+) -> dict[str, Any]:
+    """`_decorate_portfolio_rows`, for the nested `projects` list an overview carries."""
+    if not isinstance(payload, dict):
+        raise InternalError()
+    return {
+        **payload,
+        "projects": _decorate_portfolio_rows(payload.get("projects"), project_names),
+    }
 
 
 def _project_controls_settings_payload(
@@ -9639,8 +9686,9 @@ class ApplicationService:
 
     def _portfolio_projects(
         self, work: ConstraintManagementUnitOfWork, principal_id: str
-    ) -> tuple[tuple[str, ...], bool]:
-        """The Projects one portfolio read spans, and whether the cap cut them short.
+    ) -> tuple[tuple[str, ...], bool, Mapping[str, str]]:
+        """The Projects one portfolio read spans, whether the cap cut them short,
+        and each spanned Project's name.
 
         PC-CM-RUN01-WP06. **This is where a portfolio's Project set is decided,
         and it is decided by the canonical Principal-scoped `ProjectRepository`
@@ -9651,6 +9699,11 @@ class ApplicationService:
         caller names a Project on these three commands, so there is nothing to
         compare and nothing to probe: the set is read, never supplied.
 
+        `state=ProjectState.ACTIVE` narrows the spanned set to Projects the
+        Principal currently has open: an on-hold or closed Project does not
+        contribute rows to a portfolio read, though it remains reachable by its
+        own exact-Project read.
+
         One statement, and `MAX_PORTFOLIO_PROJECTS + 1` rows of it. The extra row
         is the same honest-bound device `_continuity_projects` uses: its presence
         is what says the Principal owns more Projects than one portfolio read
@@ -9660,17 +9713,27 @@ class ApplicationService:
         are unreachable from any page, which `_portfolio_truncation` below
         discloses as a standing truncation whose reason names the Project bound.
 
+        `project_names` maps each spanned Project's id to its name, built from
+        the same already-authorized rows this statement already fetched -- no
+        second query. It lets the read handlers decorate each row/entry with
+        the Project it belongs to, without a browser-side join and without a
+        second trip through the canonical repository.
+
         The bound is the defining technical requirement of this package: a
         portfolio read must not degrade into per-Project work, and its statement
         count must be constant in the number of Projects. This method issues one
         statement regardless of how many Projects come back, and the read service
         below it issues a fixed number more.
         """
-        found = work.projects.list_projects(principal_id, limit=MAX_PORTFOLIO_PROJECTS + 1)
+        found = work.projects.list_projects(
+            principal_id, limit=MAX_PORTFOLIO_PROJECTS + 1, state=ProjectState.ACTIVE
+        )
         truncated = len(found) > MAX_PORTFOLIO_PROJECTS
+        spanned = found[:MAX_PORTFOLIO_PROJECTS]
         return (
-            tuple(project.project_id for project in found[:MAX_PORTFOLIO_PROJECTS]),
+            tuple(project.project_id for project in spanned),
             truncated,
+            MappingProxyType({project.project_id: project.name for project in spanned}),
         )
 
     @staticmethod
@@ -9798,7 +9861,7 @@ class ApplicationService:
         with _constraint_translated():
             query = self._constraint_query(command)
         with _translated(), _constraint_translated(), self._constraint_work() as work:
-            project_ids, projects_truncated = self._portfolio_projects(
+            project_ids, projects_truncated, project_names = self._portfolio_projects(
                 work, authorization.principal.principal_id
             )
             portfolio = self._constraint_reads.list_portfolio_constraints(
@@ -9816,7 +9879,9 @@ class ApplicationService:
         )
         return _Result(
             payload={
-                "constraints": _constraint_payload(portfolio.page.entries),
+                "constraints": _decorate_portfolio_rows(
+                    _constraint_payload(portfolio.page.entries), project_names
+                ),
                 "omitted_projects": portfolio.omitted_projects,
             },
             disclosure=unenrolled_disclosure(
@@ -9846,7 +9911,7 @@ class ApplicationService:
         with _constraint_translated():
             query = self._constraint_query(command, search_text=command.query)
         with _translated(), _constraint_translated(), self._constraint_work() as work:
-            project_ids, projects_truncated = self._portfolio_projects(
+            project_ids, projects_truncated, project_names = self._portfolio_projects(
                 work, authorization.principal.principal_id
             )
             portfolio = self._constraint_reads.list_portfolio_constraints(
@@ -9864,7 +9929,9 @@ class ApplicationService:
         )
         return _Result(
             payload={
-                "constraints": _constraint_payload(portfolio.page.entries),
+                "constraints": _decorate_portfolio_rows(
+                    _constraint_payload(portfolio.page.entries), project_names
+                ),
                 "omitted_projects": portfolio.omitted_projects,
             },
             disclosure=unenrolled_disclosure(
@@ -9901,7 +9968,7 @@ class ApplicationService:
         """
         del unit_of_work
         with _translated(), _constraint_translated(), self._constraint_work() as work:
-            project_ids, projects_truncated = self._portfolio_projects(
+            project_ids, projects_truncated, project_names = self._portfolio_projects(
                 work, authorization.principal.principal_id
             )
             overview = self._constraint_reads.read_portfolio_overview(
@@ -9917,7 +9984,11 @@ class ApplicationService:
             omitted_projects=overview.omitted_projects,
         )
         return _Result(
-            payload={"overview": _constraint_payload(overview)},
+            payload={
+                "overview": _decorate_portfolio_overview_payload(
+                    _constraint_payload(overview), project_names
+                )
+            },
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=_CONSTRAINT_TRUST_BASIS,

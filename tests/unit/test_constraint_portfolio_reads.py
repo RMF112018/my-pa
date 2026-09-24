@@ -22,15 +22,23 @@ Every identifier, code and description below is synthetic.
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import fields
 from datetime import UTC, date, datetime
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from my_pa.application.constraints import ConstraintReadService
-from my_pa.application.errors import ConflictError, InvalidRequestError
+from my_pa.application.errors import ConflictError, InternalError, InvalidRequestError
+from my_pa.application.service import (
+    MAX_PORTFOLIO_PROJECTS,
+    ApplicationService,
+    _decorate_portfolio_overview_payload,
+    _decorate_portfolio_rows,
+)
 from my_pa.domain.project_controls.category import ConstraintCategoryState
 from my_pa.domain.project_controls.constraint import (
     ConstraintLifecycleState,
@@ -54,6 +62,8 @@ from my_pa.domain.project_controls.read_models import (
     ProjectCalendar,
 )
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
+from my_pa.domain.situation.situation import Project, ProjectState
+from tests.conftest import DEFAULT_LIMITS
 
 SERVICE = ConstraintReadService()
 
@@ -885,3 +895,223 @@ def test_a_rejected_portfolio_cursor_is_refused_before_any_row_is_read() -> None
 def test_an_over_length_portfolio_cursor_is_refused_before_it_is_decoded() -> None:
     with pytest.raises(ConstraintCursorError):
         ConstraintListQuery(cursor="a" * 4096)
+
+
+# --- Phase 0: `_portfolio_projects` ACTIVE-only scope and `project_name` -----
+#
+# IMPL-1-PHASE0. `ApplicationService._portfolio_projects` is the seam that
+# decides which Projects one portfolio read spans and, from the same
+# already-authorized rows, carries the name each of them has onto its own
+# rows. It is exercised directly here against a minimal fake of the one port
+# method it calls (`ProjectRepository.list_projects`) -- the property under
+# test is entirely this method's own and does not depend on the read service
+# tested above, which never sees a Project's state or name at all.
+
+PORTFOLIO_PRINCIPAL = "prn_portfolioact1"
+FOREIGN_PRINCIPAL = "prn_portfolioact2"
+
+PROJECT_ACTIVE = "prj_portfolioact1"
+PROJECT_ON_HOLD = "prj_portfolioact2"
+PROJECT_CLOSED = "prj_portfolioact3"
+PROJECT_FOREIGN_ACTIVE = "prj_portfolioact4"
+
+
+class _FakeProjectRepository:
+    """Enough of `ProjectRepository` for `_portfolio_projects`: one method.
+
+    Filters by `principal_id` and, when supplied, by `state` -- the only two
+    keyword arguments `_portfolio_projects` actually passes -- and applies
+    `limit` last, the same order the canonical repository's own statement
+    applies them in.
+    """
+
+    def __init__(self, projects: Sequence[Project]) -> None:
+        self._projects = tuple(projects)
+
+    def list_projects(
+        self,
+        principal_id: str,
+        *,
+        after: str | None = None,
+        state: ProjectState | None = None,
+        query: str | None = None,
+        exact_name: str | None = None,
+        limit: int | None = None,
+    ) -> tuple[Project, ...]:
+        del after, query, exact_name
+        rows = [project for project in self._projects if project.principal_id == principal_id]
+        if state is not None:
+            rows = [project for project in rows if project.state is state]
+        rows.sort(key=lambda project: (project.created_at, project.project_id), reverse=True)
+        return tuple(rows if limit is None else rows[:limit])
+
+
+def _active_scope_project(
+    project_id: str,
+    *,
+    name: str,
+    state: ProjectState = ProjectState.ACTIVE,
+    principal_id: str = PORTFOLIO_PRINCIPAL,
+) -> Project:
+    return Project(
+        project_id=project_id,
+        principal_id=principal_id,
+        name=name,
+        state=state,
+        opened_at=T0,
+        created_at=T0,
+        updated_at=T0,
+        closed_at=T0 if state is ProjectState.CLOSED else None,
+    )
+
+
+def _project_work(*projects: Project) -> SimpleNamespace:
+    return SimpleNamespace(projects=_FakeProjectRepository(projects))
+
+
+#: `_portfolio_projects` reads only `work.projects` -- `unit_of_work` and
+#: `limits` are never touched by it, so an `ApplicationService` constructed
+#: with a `unit_of_work` factory that fails if called is still a faithful
+#: instance to call the method on directly.
+_APP = ApplicationService(
+    unit_of_work=lambda: (_ for _ in ()).throw(AssertionError("not used by _portfolio_projects")),
+    limits=DEFAULT_LIMITS,
+)
+
+
+def test_an_active_project_contributes_to_the_portfolio_scope() -> None:
+    work = _project_work(_active_scope_project(PROJECT_ACTIVE, name="Active Tower"))
+    project_ids, truncated, project_names = _APP._portfolio_projects(work, PORTFOLIO_PRINCIPAL)
+    assert project_ids == (PROJECT_ACTIVE,)
+    assert truncated is False
+    assert dict(project_names) == {PROJECT_ACTIVE: "Active Tower"}
+
+
+def test_an_on_hold_project_does_not_contribute_to_the_portfolio_scope() -> None:
+    """The behaviour change: today every owned Project contributes regardless of state."""
+    work = _project_work(
+        _active_scope_project(PROJECT_ACTIVE, name="Active Tower"),
+        _active_scope_project(PROJECT_ON_HOLD, name="Paused Annex", state=ProjectState.ON_HOLD),
+    )
+    project_ids, _truncated, project_names = _APP._portfolio_projects(work, PORTFOLIO_PRINCIPAL)
+    assert project_ids == (PROJECT_ACTIVE,)
+    assert PROJECT_ON_HOLD not in project_ids
+    assert PROJECT_ON_HOLD not in project_names
+
+
+def test_a_closed_project_does_not_contribute_to_the_portfolio_scope() -> None:
+    work = _project_work(
+        _active_scope_project(PROJECT_ACTIVE, name="Active Tower"),
+        _active_scope_project(PROJECT_CLOSED, name="Finished Wing", state=ProjectState.CLOSED),
+    )
+    project_ids, _truncated, project_names = _APP._portfolio_projects(work, PORTFOLIO_PRINCIPAL)
+    assert project_ids == (PROJECT_ACTIVE,)
+    assert PROJECT_CLOSED not in project_ids
+    assert PROJECT_CLOSED not in project_names
+
+
+def test_on_hold_and_closed_projects_are_both_excluded_from_one_scope() -> None:
+    work = _project_work(
+        _active_scope_project(PROJECT_ACTIVE, name="Active Tower"),
+        _active_scope_project(PROJECT_ON_HOLD, name="Paused Annex", state=ProjectState.ON_HOLD),
+        _active_scope_project(PROJECT_CLOSED, name="Finished Wing", state=ProjectState.CLOSED),
+    )
+    project_ids, _truncated, project_names = _APP._portfolio_projects(work, PORTFOLIO_PRINCIPAL)
+    assert project_ids == (PROJECT_ACTIVE,)
+    assert dict(project_names) == {PROJECT_ACTIVE: "Active Tower"}
+
+
+def test_a_project_a_foreign_principal_owns_never_contributes_even_when_active() -> None:
+    """A regression, not new behaviour: partition scoping is the canonical repository's."""
+    work = _project_work(
+        _active_scope_project(PROJECT_ACTIVE, name="Active Tower"),
+        _active_scope_project(
+            PROJECT_FOREIGN_ACTIVE,
+            name="Someone Else's Tower",
+            principal_id=FOREIGN_PRINCIPAL,
+        ),
+    )
+    project_ids, _truncated, project_names = _APP._portfolio_projects(work, PORTFOLIO_PRINCIPAL)
+    assert project_ids == (PROJECT_ACTIVE,)
+    assert PROJECT_FOREIGN_ACTIVE not in project_names
+
+
+def test_project_names_names_only_the_projects_inside_the_cap() -> None:
+    """The extra, cap-detecting row is never named: it is not part of the spanned set."""
+    projects = [
+        _active_scope_project(f"prj_portfoliocap{index:03d}", name=f"Tower {index}")
+        for index in range(MAX_PORTFOLIO_PROJECTS + 1)
+    ]
+    work = _project_work(*projects)
+    project_ids, truncated, project_names = _APP._portfolio_projects(work, PORTFOLIO_PRINCIPAL)
+    assert truncated is True
+    assert len(project_ids) == MAX_PORTFOLIO_PROJECTS
+    assert set(project_names) == set(project_ids)
+
+
+# --- Phase 0: decorating an already-serialized portfolio payload -------------
+
+
+def test_decorate_portfolio_rows_adds_project_name_per_row() -> None:
+    payload: list[dict[str, Any]] = [
+        {"constraint_id": "cst_pfrowa001", "project_id": PROJECT_ACTIVE},
+        {"constraint_id": "cst_pfrowb002", "project_id": PROJECT_ON_HOLD},
+    ]
+    decorated = _decorate_portfolio_rows(
+        payload, {PROJECT_ACTIVE: "Active Tower", PROJECT_ON_HOLD: "Paused Annex"}
+    )
+    assert decorated[0]["project_name"] == "Active Tower"
+    assert decorated[1]["project_name"] == "Paused Annex"
+    # Decoration builds new dicts; the serialized payload it was handed is untouched.
+    assert "project_name" not in payload[0]
+    assert "project_name" not in payload[1]
+
+
+def test_decorate_portfolio_rows_fails_loudly_on_a_row_naming_an_unmapped_project() -> None:
+    """An internal-consistency invariant (§3), not a caller-facing condition.
+
+    `_portfolio_projects` is the sole source of both the Project set a
+    portfolio read spans and the mapping this decorates rows from, so a row
+    naming a Project absent from that mapping can only mean the two have come
+    apart -- which fails loudly rather than silently dropping the field.
+    """
+    payload: list[dict[str, Any]] = [
+        {"constraint_id": "cst_pfrowa001", "project_id": PROJECT_ACTIVE}
+    ]
+    with pytest.raises(InternalError):
+        _decorate_portfolio_rows(payload, {})
+
+
+def test_decorate_portfolio_overview_payload_decorates_the_nested_projects_list() -> None:
+    payload: dict[str, Any] = {
+        "projects": [{"project_id": PROJECT_ACTIVE, "total_open": 3}],
+        "as_of": "2026-09-15T03:30:00+00:00",
+        "omitted_projects": 0,
+    }
+    decorated = _decorate_portfolio_overview_payload(payload, {PROJECT_ACTIVE: "Active Tower"})
+    assert decorated["projects"][0]["project_name"] == "Active Tower"
+    assert decorated["as_of"] == payload["as_of"]
+    assert decorated["omitted_projects"] == 0
+
+
+# --- Phase 0: exact-Project responses never carry `project_name` -------------
+
+
+def test_exact_project_handlers_never_reach_a_portfolio_decorator() -> None:
+    """A static guard beside the behavioural one the database tier proves.
+
+    `_decorate_portfolio_rows`/`_decorate_portfolio_overview_payload` are named
+    nowhere in the four exact-Project handler bodies -- the decoration is a
+    portfolio-only post-processing step over `_constraint_payload`'s own
+    output (§3), and an exact-Project handler that reached for either would be
+    the leak this guard exists to catch before a fixture would have to.
+    """
+    for method in (
+        ApplicationService._constraints_read,
+        ApplicationService._constraints_list,
+        ApplicationService._constraints_search,
+        ApplicationService._constraints_overview,
+    ):
+        source = inspect.getsource(method)
+        assert "_decorate_portfolio_rows" not in source
+        assert "_decorate_portfolio_overview_payload" not in source

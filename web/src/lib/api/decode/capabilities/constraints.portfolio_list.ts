@@ -12,6 +12,11 @@
  * `omittedProjects` is the one thing the *result* carries about being partial:
  * how many owned Projects had no usable Constraint calendar and were therefore
  * left out. It is a count and never an identity.
+ *
+ * Every row's `projectName` is required to be a non-null string —
+ * `decodeConstraintPortfolioPage` enforces that, via
+ * `requirePortfolioProjectName`, even though the shared `ConstraintListEntry`
+ * type leaves it nullable for the exact-Project Register that never sends it.
  */
 import type { Decoder } from "../types";
 import {

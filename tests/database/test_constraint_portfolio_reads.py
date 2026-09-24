@@ -67,8 +67,11 @@ from sqlalchemy.engine import Connection
 
 from my_pa.application.commands import (
     Command,
+    ListConstraints,
     ListPortfolioConstraints,
+    ReadConstraintOverview,
     ReadPortfolioConstraintOverview,
+    SearchPortfolioConstraints,
 )
 from my_pa.application.constraints import ConstraintReadService
 from my_pa.application.disclosure import Limitation
@@ -164,17 +167,25 @@ def _constraint_id(ordinal: int) -> str:
     return f"cst_pf{ordinal:08d}"
 
 
-def _seed_project(connection: Connection, principal: str, project: str) -> None:
+def _seed_project(
+    connection: Connection,
+    principal: str,
+    project: str,
+    *,
+    state: str = "active",
+    name: str = "Sample Project",
+) -> None:
     connection.execute(
         insert(projects).values(
             project_id=project,
             principal_id=principal,
-            name="Sample Project",
-            state="active",
+            name=name,
+            state=state,
             participants=[],
             opened_at=T0,
             created_at=T0,
             updated_at=T0,
+            closed_at=T0 if state == "closed" else None,
         )
     )
 
@@ -1494,3 +1505,247 @@ def test_a_search_over_a_portfolio_costs_the_same_six_statements(
                 ),
             )
         assert len(statements) == PORTFOLIO_LIST_STATEMENTS
+
+
+# --- Phase 0: ACTIVE-only Project scope and `project_name` (IMPL-1-PHASE0) ---
+#
+# `_portfolio_projects` is what decides which Projects one portfolio read
+# spans and, from the same statement, the name each of them carries onto its
+# own rows. Both are proved here through the composed `ApplicationService`
+# against real SQL, because neither is visible to the read service the rest of
+# this module exercises directly: the read service takes a Project set and a
+# name mapping as given, and never asks the Project repository anything.
+
+
+def _seed_state_project(
+    connection: Connection,
+    repository: SqlConstraintManagementRepository,
+    *,
+    principal: str,
+    project: str,
+    name: str,
+    state: str,
+    category: str,
+    prefix: str,
+    constraint_id: str,
+) -> None:
+    """One Project in the given lifecycle state, configured and holding one row."""
+    _seed_project(connection, principal, project, state=state, name=name)
+    repository.insert_project_settings(principal, _settings(principal, project, ZONE_EAST))
+    repository.insert_category(principal, _category(category, principal, project, prefix))
+    repository.insert_constraint(
+        principal,
+        _constraint(
+            constraint_id=constraint_id,
+            principal_id=principal,
+            project_id=project,
+            category_id=category,
+            constraint_code="1.001",
+        ),
+    )
+
+
+def _seed_active_on_hold_and_closed_committed(engine: Engine, *, tag: str) -> dict[str, str]:
+    """One ACTIVE, one ON_HOLD and one CLOSED Project, each holding one row.
+
+    Committed, for the reason `_seed_committed` states: a composed invocation
+    opens its own transaction and cannot see rows a still-open one is holding.
+    """
+    active = _project_id(tag, 1)
+    on_hold = _project_id(tag, 2)
+    closed = _project_id(tag, 3)
+    with engine.begin() as connection:
+        repository = SqlConstraintManagementRepository(connection)
+        _seed_state_project(
+            connection,
+            repository,
+            principal=PRINCIPAL_A,
+            project=active,
+            name="Active Tower",
+            state="active",
+            category=_category_id(tag, 1),
+            prefix="ACT",
+            constraint_id=_constraint_id(9001),
+        )
+        _seed_state_project(
+            connection,
+            repository,
+            principal=PRINCIPAL_A,
+            project=on_hold,
+            name="Paused Annex",
+            state="on_hold",
+            category=_category_id(tag, 2),
+            prefix="ONH",
+            constraint_id=_constraint_id(9002),
+        )
+        _seed_state_project(
+            connection,
+            repository,
+            principal=PRINCIPAL_A,
+            project=closed,
+            name="Finished Wing",
+            state="closed",
+            category=_category_id(tag, 3),
+            prefix="CLD",
+            constraint_id=_constraint_id(9003),
+        )
+    return {"active": active, "on_hold": on_hold, "closed": closed}
+
+
+def test_an_on_hold_project_contributes_nothing_to_a_composed_portfolio_list(
+    migrated_engine: Engine, cloned_database_url: str
+) -> None:
+    """The behaviour change, proved through the real transport.
+
+    Today every owned Project contributes to a portfolio read regardless of
+    state; after Phase 0, an on-hold Project's row is absent from the page.
+    """
+    ids = _seed_active_on_hold_and_closed_committed(migrated_engine, tag="sa")
+    with _composed(migrated_engine, cloned_database_url) as service:
+        envelope = _invoke(service, ListPortfolioConstraints())
+    project_ids = {row["project_id"] for row in _result(envelope)["constraints"]}
+    assert ids["active"] in project_ids
+    assert ids["on_hold"] not in project_ids
+    assert ids["closed"] not in project_ids
+
+
+def test_a_closed_project_contributes_nothing_to_a_composed_portfolio_search(
+    migrated_engine: Engine, cloned_database_url: str
+) -> None:
+    ids = _seed_active_on_hold_and_closed_committed(migrated_engine, tag="sb")
+    with _composed(migrated_engine, cloned_database_url) as service:
+        envelope = _invoke(service, SearchPortfolioConstraints(query="switchgear"))
+    project_ids = {row["project_id"] for row in _result(envelope)["constraints"]}
+    assert ids["active"] in project_ids
+    assert ids["on_hold"] not in project_ids
+    assert ids["closed"] not in project_ids
+
+
+def test_an_on_hold_or_closed_project_is_excluded_from_the_composed_portfolio_overview(
+    migrated_engine: Engine, cloned_database_url: str
+) -> None:
+    ids = _seed_active_on_hold_and_closed_committed(migrated_engine, tag="sc")
+    with _composed(migrated_engine, cloned_database_url) as service:
+        envelope = _invoke(service, ReadPortfolioConstraintOverview())
+    project_ids = {row["project_id"] for row in _result(envelope)["overview"]["projects"]}
+    assert project_ids == {ids["active"]}
+
+
+def test_an_on_hold_project_remains_reachable_by_its_own_exact_project_read(
+    migrated_engine: Engine, cloned_database_url: str
+) -> None:
+    """Excluded from the portfolio, and still reachable named directly (§1).
+
+    The Phase-0 narrowing is `_portfolio_projects`'s own; `_require_constraint_
+    project` -- the exact-Project seam -- asks only whether the Project is this
+    Principal's, never its lifecycle state.
+    """
+    ids = _seed_active_on_hold_and_closed_committed(migrated_engine, tag="sd")
+    with _composed(migrated_engine, cloned_database_url) as service:
+        envelope = _invoke(service, ListConstraints(project_id=ids["on_hold"]))
+    assert envelope.error is None, envelope.error
+    rows = _result(envelope)["constraints"]
+    assert [row["project_id"] for row in rows] == [ids["on_hold"]]
+
+
+def test_a_closed_project_remains_reachable_by_its_own_exact_project_read(
+    migrated_engine: Engine, cloned_database_url: str
+) -> None:
+    ids = _seed_active_on_hold_and_closed_committed(migrated_engine, tag="se")
+    with _composed(migrated_engine, cloned_database_url) as service:
+        envelope = _invoke(service, ListConstraints(project_id=ids["closed"]))
+    assert envelope.error is None, envelope.error
+    rows = _result(envelope)["constraints"]
+    assert [row["project_id"] for row in rows] == [ids["closed"]]
+
+
+def _seed_named_active_portfolio_committed(engine: Engine, *, tag: str) -> dict[str, str]:
+    """Two ACTIVE Projects with distinct names, each holding one row.
+
+    Distinct names, rather than the shared `"Sample Project"` `_seed_project`
+    otherwise defaults to, so a decoration bug that mixed rows up across
+    Projects -- or that named every row from one Project -- is representable
+    and not merely "some name is present".
+    """
+    first = _project_id(tag, 1)
+    second = _project_id(tag, 2)
+    with engine.begin() as connection:
+        repository = SqlConstraintManagementRepository(connection)
+        _seed_state_project(
+            connection,
+            repository,
+            principal=PRINCIPAL_A,
+            project=first,
+            name="Riverside Build-Out",
+            state="active",
+            category=_category_id(tag, 1),
+            prefix="PF1",
+            constraint_id=_constraint_id(9101),
+        )
+        _seed_state_project(
+            connection,
+            repository,
+            principal=PRINCIPAL_A,
+            project=second,
+            name="Harbor Fit-Out",
+            state="active",
+            category=_category_id(tag, 2),
+            prefix="PF2",
+            constraint_id=_constraint_id(9102),
+        )
+    return {"first": first, "second": second}
+
+
+def test_every_portfolio_list_row_carries_the_owning_projects_name(
+    migrated_engine: Engine, cloned_database_url: str
+) -> None:
+    ids = _seed_named_active_portfolio_committed(migrated_engine, tag="pn")
+    with _composed(migrated_engine, cloned_database_url) as service:
+        envelope = _invoke(service, ListPortfolioConstraints())
+    by_project = {row["project_id"]: row for row in _result(envelope)["constraints"]}
+    assert by_project[ids["first"]]["project_name"] == "Riverside Build-Out"
+    assert by_project[ids["second"]]["project_name"] == "Harbor Fit-Out"
+
+
+def test_every_portfolio_search_row_carries_the_owning_projects_name(
+    migrated_engine: Engine, cloned_database_url: str
+) -> None:
+    ids = _seed_named_active_portfolio_committed(migrated_engine, tag="ps")
+    with _composed(migrated_engine, cloned_database_url) as service:
+        envelope = _invoke(service, SearchPortfolioConstraints(query="switchgear"))
+    by_project = {row["project_id"]: row for row in _result(envelope)["constraints"]}
+    assert by_project[ids["first"]]["project_name"] == "Riverside Build-Out"
+    assert by_project[ids["second"]]["project_name"] == "Harbor Fit-Out"
+
+
+def test_every_portfolio_overview_entry_carries_the_owning_projects_name(
+    migrated_engine: Engine, cloned_database_url: str
+) -> None:
+    ids = _seed_named_active_portfolio_committed(migrated_engine, tag="po")
+    with _composed(migrated_engine, cloned_database_url) as service:
+        envelope = _invoke(service, ReadPortfolioConstraintOverview())
+    by_project = {row["project_id"]: row for row in _result(envelope)["overview"]["projects"]}
+    assert by_project[ids["first"]]["project_name"] == "Riverside Build-Out"
+    assert by_project[ids["second"]]["project_name"] == "Harbor Fit-Out"
+
+
+def test_an_exact_project_response_never_carries_project_name_anywhere(
+    migrated_engine: Engine, cloned_database_url: str
+) -> None:
+    """The negative half of the Phase-0 gate: the wire shape stays byte-identical.
+
+    `constraints.list` and `constraints.overview` are exercised for a Project
+    that *is* named on a portfolio read (`ids["first"]`), so an absence here
+    is not merely because nothing ever set the field for this Project -- the
+    same Project's row carries `project_name` on the portfolio path and must
+    not on this one.
+    """
+    ids = _seed_named_active_portfolio_committed(migrated_engine, tag="ep")
+    with _composed(migrated_engine, cloned_database_url) as service:
+        list_envelope = _invoke(service, ListConstraints(project_id=ids["first"]))
+        overview_envelope = _invoke(service, ReadConstraintOverview(project_id=ids["first"]))
+    for envelope in (list_envelope, overview_envelope):
+        assert envelope.error is None, envelope.error
+        rendered = envelope.model_dump_json()
+        assert "project_name" not in rendered
+        assert "projectName" not in rendered

@@ -26,6 +26,7 @@ import {
   decodeItems,
   fail,
   oneOf,
+  optionalNullableString,
   pick,
   requiredBoolean,
   requiredInt,
@@ -286,6 +287,16 @@ export function decodeSyncHealth(input: unknown): DecodeResult<ConstraintSyncHea
 export interface ConstraintListEntry {
   readonly constraintId: string;
   readonly projectId: string | null;
+  /**
+   * The owning Project's name, on a portfolio row only.
+   *
+   * `null` on the exact-Project Register (`decodeConstraintPage`), which never
+   * carries it — a Project is already named by the request there. A portfolio
+   * row (`decodeConstraintPortfolioPage`) requires this to be a non-null
+   * string; that stricter reading is enforced there and not by this shared
+   * type, which stays nullable because it also decodes the exact-Project page.
+   */
+  readonly projectName: string | null;
   readonly constraintCode: string | null;
   readonly description: string | null;
   readonly category: ConstraintCategoryRef | null;
@@ -310,6 +321,7 @@ export interface ConstraintListEntry {
 const LIST_ENTRY_KEYS = [
   "constraint_id",
   "project_id",
+  "project_name",
   "constraint_code",
   "description",
   "category",
@@ -341,6 +353,10 @@ export function decodeConstraintListEntry(
   if (!constraintId.ok) return constraintId;
   const projectId = requiredNullableString(record.project_id);
   if (!projectId.ok) return projectId;
+  // Optional: absent (exact-Project Register) and `null` both decode to `null`.
+  // `decodeConstraintPortfolioPage` is where a portfolio row requires a string.
+  const projectName = optionalNullableString(record.project_name);
+  if (!projectName.ok) return projectName;
   // Text, always. `2.01` and `2.1` are two Codes, and a number cannot hold both.
   const constraintCode = requiredNullableString(record.constraint_code);
   if (!constraintCode.ok) return constraintCode;
@@ -385,6 +401,7 @@ export function decodeConstraintListEntry(
   return ok({
     constraintId: constraintId.value,
     projectId: projectId.value,
+    projectName: projectName.value,
     constraintCode: constraintCode.value,
     description: description.value,
     category: category.value,
@@ -823,6 +840,15 @@ export function decodeConstraintCategory(
  */
 export interface ConstraintOverview {
   readonly projectId: string;
+  /**
+   * The owning Project's name, on a portfolio overview entry only.
+   *
+   * `null` on the exact-Project overview (`constraints.overview`), which
+   * never carries it. `constraints.portfolio_overview.ts` requires this to be
+   * a non-null string for each entry; this shared type stays nullable because
+   * it also decodes the exact-Project overview.
+   */
+  readonly projectName: string | null;
   readonly projectToday: string;
   readonly projectTimezone: string;
   readonly totalOpen: number;
@@ -850,6 +876,7 @@ export const FORBIDDEN_OVERVIEW_ALIASES = [
 
 const OVERVIEW_KEYS = [
   "project_id",
+  "project_name",
   "project_today",
   "project_timezone",
   "total_open",
@@ -882,6 +909,10 @@ export function decodeConstraintOverview(
   const known = record.value;
   const projectId = requiredString(known.project_id);
   if (!projectId.ok) return projectId;
+  // Optional: absent (exact-Project overview) and `null` both decode to
+  // `null`. `constraints.portfolio_overview.ts` requires a string per entry.
+  const projectName = optionalNullableString(known.project_name);
+  if (!projectName.ok) return projectName;
   const projectToday = requiredString(known.project_today);
   if (!projectToday.ok) return projectToday;
   const projectTimezone = requiredString(known.project_timezone);
@@ -916,6 +947,7 @@ export function decodeConstraintOverview(
   if (!asOf.ok) return asOf;
   return ok({
     projectId: projectId.value,
+    projectName: projectName.value,
     projectToday: projectToday.value,
     projectTimezone: projectTimezone.value,
     totalOpen: totalOpen.value,
@@ -973,13 +1005,34 @@ export function decodeOmittedProjects(value: unknown): DecodeResult<number> {
 }
 
 /**
+ * Requires a portfolio row/entry's `projectName` to be a non-null string.
+ *
+ * `projectName` is optional on `ConstraintListEntry` and `ConstraintOverview`
+ * because both shapes also decode an exact-Project read, which never sends
+ * the field and must never be required to. The portfolio paths alone require
+ * it, and this is where that stricter reading is enforced — once, for both
+ * the Register rows (`decodeConstraintPortfolioPage`) and the Overview
+ * entries (`constraints.portfolio_overview.ts`).
+ */
+export function requirePortfolioProjectName<T extends { readonly projectName: string | null }>(
+  entry: T,
+): DecodeResult<T> {
+  if (entry.projectName === null) {
+    return fail("a portfolio row or entry did not carry its owning Project's name");
+  }
+  return ok(entry);
+}
+
+/**
  * One portfolio Register page as both portfolio list capabilities return it.
  *
  * The rows are the exact `constraints.list` shape and are decoded by the
  * Register's own guard, so this is not a second projection of them. What a
- * portfolio adds is `omitted_projects`: truncation and the next cursor stay
- * the gateway *disclosure*'s and nothing here reconstructs them, but the count
- * of Projects that could not contribute is the result's own and is required.
+ * portfolio adds is `omitted_projects` and a required `projectName` per row
+ * (`requirePortfolioProjectName`): truncation and the next cursor stay the
+ * gateway *disclosure*'s and nothing here reconstructs them, but the count of
+ * Projects that could not contribute, and the name of the Project each row
+ * belongs to, are the result's own and are required.
  */
 export function decodeConstraintPortfolioPage(input: unknown): DecodeResult<{
   readonly constraints: readonly ConstraintListEntry[];
@@ -988,7 +1041,11 @@ export function decodeConstraintPortfolioPage(input: unknown): DecodeResult<{
   const known = pick(input, ["constraints", "omitted_projects"]);
   if (!known.ok) return known;
   if (known.value.constraints === undefined) return fail("a required array was omitted");
-  const constraints = decodeItems(known.value.constraints, decodeConstraintListEntry);
+  const constraints = decodeItems(known.value.constraints, (item) => {
+    const entry = decodeConstraintListEntry(item);
+    if (!entry.ok) return entry;
+    return requirePortfolioProjectName(entry.value);
+  });
   if (!constraints.ok) return constraints;
   const omittedProjects = decodeOmittedProjects(known.value.omitted_projects);
   if (!omittedProjects.ok) return omittedProjects;

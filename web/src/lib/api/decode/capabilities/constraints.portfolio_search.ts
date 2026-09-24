@@ -4,7 +4,8 @@
  * Decoded by the guard the portfolio Register already uses, for the reason
  * `constraints.search` states: a search result that decoded differently would
  * be a second answer about the same records. A narrowed portfolio is no less
- * partial than an unnarrowed one, so `omittedProjects` is required here too.
+ * partial than an unnarrowed one, so `omittedProjects` is required here too —
+ * and so is a non-null `projectName` per row, enforced the same way.
  */
 import type { Decoder } from "../types";
 import {

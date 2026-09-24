@@ -5,7 +5,9 @@
  * the single-Project overview returns and decoded by that same guard — so
  * `averageOpenAgeBusinessDays` and `syncHealth` remain the canonical names here
  * too, and a payload carrying `averageOpenAge` or `synchronizationHealth` is
- * malformed rather than mapped.
+ * malformed rather than mapped. `projectName` is optional on that shared shape
+ * (the single-Project overview never sends it), and `requirePortfolioProjectName`
+ * is where this capability requires it to be a non-null string on every entry.
  *
  * There is deliberately **no** portfolio-wide roll-up member, and none is
  * computed here. Each Project's counts are taken against its own calendar, so a
@@ -27,6 +29,7 @@ import type { Decoder } from "../types";
 import {
   decodeConstraintOverview,
   decodeOmittedProjects,
+  requirePortfolioProjectName,
   type ConstraintOverview,
 } from "./_constraint-helpers";
 import { decodeItems, fail, pick, requiredString } from "./_read-helpers";
@@ -50,7 +53,11 @@ export const decodeConstraintsPortfolioOverview: Decoder<
   const known = pick(outer.value.overview, ["projects", "as_of", "omitted_projects"]);
   if (!known.ok) return known;
   if (known.value.projects === undefined) return fail("a required array was omitted");
-  const projects = decodeItems(known.value.projects, decodeConstraintOverview);
+  const projects = decodeItems(known.value.projects, (item) => {
+    const entry = decodeConstraintOverview(item);
+    if (!entry.ok) return entry;
+    return requirePortfolioProjectName(entry.value);
+  });
   if (!projects.ok) return projects;
   const asOf = requiredString(known.value.as_of);
   if (!asOf.ok) return asOf;

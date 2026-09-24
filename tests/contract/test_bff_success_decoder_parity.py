@@ -42,6 +42,8 @@ from my_pa.application.service import (
     _HANDLERS,
     ApplicationService,
     _constraint_payload,
+    _decorate_portfolio_overview_payload,
+    _decorate_portfolio_rows,
     _project_controls_configuration_payload,
     _project_controls_status_payload,
 )
@@ -1809,23 +1811,41 @@ def _constraint_portfolio_entries() -> tuple[ConstraintListEntry, ...]:
 #: omitted one is a count and nothing else, which is the whole property.
 PORTFOLIO_OMITTED_PROJECTS: Final = 1
 
+#: IMPL-1-PHASE0. The name each of the two contributing Projects carries onto
+#: its own rows/entries, exactly as `ApplicationService._portfolio_projects`
+#: would build it from the canonical `ProjectRepository` read. Two distinct
+#: names, not one repeated, so a fixture that decorated every row from one
+#: Project would be representable and not merely "some name is present".
+PORTFOLIO_PROJECT_NAMES: Final[dict[str, str]] = {
+    CONSTRAINT_PROJECT_ID: "Synthetic Access Project",
+    PORTFOLIO_SECOND_PROJECT_ID: "Synthetic Switchgear Project",
+}
+
 
 def _constraints_portfolio_list() -> dict[str, Any]:
     return {
-        "constraints": _constraint_dump(_constraint_portfolio_entries()),
+        "constraints": _decorate_portfolio_rows(
+            _constraint_dump(_constraint_portfolio_entries()), PORTFOLIO_PROJECT_NAMES
+        ),
         "omitted_projects": PORTFOLIO_OMITTED_PROJECTS,
     }
 
 
 def _constraints_portfolio_search() -> dict[str, Any]:
     return {
-        "constraints": _constraint_dump(_constraint_portfolio_entries()),
+        "constraints": _decorate_portfolio_rows(
+            _constraint_dump(_constraint_portfolio_entries()), PORTFOLIO_PROJECT_NAMES
+        ),
         "omitted_projects": PORTFOLIO_OMITTED_PROJECTS,
     }
 
 
 def _constraints_portfolio_overview() -> dict[str, Any]:
-    return {"overview": _constraint_dump(_constraint_portfolio_overview())}
+    return {
+        "overview": _decorate_portfolio_overview_payload(
+            _constraint_dump(_constraint_portfolio_overview()), PORTFOLIO_PROJECT_NAMES
+        )
+    }
 
 
 # --- Project Controls settings (PC-CM-RUN01-WP05) ----------------------------

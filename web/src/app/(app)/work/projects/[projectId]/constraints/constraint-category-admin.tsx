@@ -209,7 +209,21 @@ export function ConstraintCategoryAdmin({
     void commitReorder(conflict.proposedOrder);
   }
 
+  // `CategoryCreateDialog`/`CategoryEditDialog` are each their own native
+  // `.showModal()` `<dialog>` (`ui/dialog.tsx`), and are rendered as DOM
+  // *siblings* of this component's own `<Dialog>` here — deliberately never
+  // as its React/DOM children. A `<dialog>` nested *inside* another open
+  // modal `<dialog>` is real, live-confirmed browser behavior this campaign
+  // hit directly: closing the inner one (`.close()`, on a confirmed Category
+  // create) also fires `cancel`+`close` on the *outer* one, closing this
+  // whole admin overlay too — reproduced live, and confirmed via a
+  // `console.trace` on this component's own `onClose`, which fired from that
+  // exact sequence with no React-state cause of its own. Two independent
+  // modal dialogs must not be DOM-nested merely because one is authored
+  // inside the other's JSX; siblings avoids the browser behavior entirely,
+  // with no change to either dialog's own props or behavior otherwise.
   return (
+    <>
     <Dialog open={open} onClose={onClose} title="Constraint Categories">
       <div className="grid gap-3">
         <Badge tone="green">Live write</Badge>
@@ -317,6 +331,7 @@ export function ConstraintCategoryAdmin({
           </Button>
         </div>
       </div>
+    </Dialog>
       <CategoryCreateDialog
         open={createOpen}
         projectId={projectId}
@@ -338,7 +353,7 @@ export function ConstraintCategoryAdmin({
           onChanged();
         }}
       />
-    </Dialog>
+    </>
   );
 }
 

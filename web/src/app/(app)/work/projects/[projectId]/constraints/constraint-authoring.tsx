@@ -135,11 +135,40 @@ export function ConstraintAuthoring({
   const [toState, setToState] = useState<"identified" | "pending" | "in_progress" | "on_hold">("identified");
   const [pending, setPending] = useState<"draft" | "publish" | "publishDraft" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A node inside `<Dialog>`'s own native `<dialog>` subtree (the top layer
+  // `.showModal()` opens), passed as the BIC/Responsible popovers' portal
+  // container so their content renders inside the dialog's own top layer
+  // instead of escaping to `document.body` — see `popover.tsx`'s doc
+  // comment. Held in state (not read from a ref during render, which
+  // `react-hooks/refs` now forbids) via a callback ref, the same pattern
+  // `live-constraints-workspace.tsx`'s `attachRegisterHeading`/
+  // `attachProjectSelector` already use.
+  const [contentNode, setContentNode] = useState<HTMLDivElement | null>(null);
+  const attachContent = useCallback((node: HTMLDivElement | null) => {
+    setContentNode(node);
+  }, []);
 
   const currentCategory = categories.find((category) => category.categoryId === categoryId) ?? null;
   const categoryInactive = currentCategory !== null && currentCategory.state !== "ACTIVE";
-  const isDraftEdit = mode === "edit" && entry?.status === "DRAFT";
+  // The Register's list-row `entry` only ever carries the "open" scope (the
+  // four active states — Draft is its own separate scope), so a Draft this
+  // dialog itself just saved never appears there: `entry` stays `null` even
+  // though `detail` (the Inspector's own already-loaded canonical read) is at
+  // that same moment showing the Draft correctly. Fall back to `detail`'s own
+  // status whenever the Register row isn't loaded, rather than treating a
+  // missing `entry` as "not a Draft".
+  const effectiveStatus = entry?.status ?? detail?.status ?? null;
+  const isDraftEdit = mode === "edit" && effectiveStatus === "DRAFT";
   const isLegacyDraftCategoryIssue = isDraftEdit && categoryInactive;
+  // Same fallback, for the same reason, extended to this record's own
+  // identity: `isDraftEdit` becoming reachable with `entry === null` (a
+  // just-saved Draft outside the Register's loaded "open" scope) means every
+  // other `entry`-only read in this component's own `submit()` — the lock
+  // key, the dispatch URL, the post-confirm re-read — must fall back to
+  // `detail`'s own `constraintId` too, or Publish/Save now render and are
+  // clickable in exactly the state that makes them throw (`entry!.constraintId`
+  // on a `null` entry) instead of dispatching.
+  const effectiveId = entry?.constraintId ?? detail?.constraintId ?? null;
 
   function markDirty(dirty: boolean) {
     if (dirty) runtime.mutationCoordinator.reportDirtyState(surfaceId, true);
@@ -187,6 +216,15 @@ export function ConstraintAuthoring({
 
   async function submit(action: "draft" | "publish" | "publishDraft") {
     if (pending) return;
+    if (mode === "edit" && effectiveId === null) {
+      // Defensive: edit mode always implies some loaded identity (entry or
+      // detail) by construction of how this dialog is opened. If neither is
+      // present, fail loudly and safely here rather than dispatching a
+      // request with no target id — before any pending/focus-capture side
+      // effect, so nothing is left dangling on this early return.
+      setError("This record could not be identified. Close and reopen it before trying again.");
+      return;
+    }
     const willPublish = action === "publish" || action === "publishDraft";
     if (willPublish) {
       if (categoryId === "") {
@@ -224,8 +262,8 @@ export function ConstraintAuthoring({
     const outcome = await runtime.mutationCoordinator.mutate({
       kind: action === "publishDraft" ? "constraintPublish" : mode === "edit" ? "constraintUpdate" : "constraintCreate",
       lockRequest:
-        mode === "edit" && entry
-          ? { kind: "constraint-record", key: constraintLockKey(entry.constraintId) }
+        mode === "edit" && effectiveId !== null
+          ? { kind: "constraint-record", key: constraintLockKey(effectiveId) }
           : { kind: "create-intent", key: createIntentKey },
       idempotencyKey,
       expectedVersion: mode === "edit" ? (detail?.version ?? entry?.version) : undefined,
@@ -237,9 +275,11 @@ export function ConstraintAuthoring({
         const body: Record<string, unknown> = { ...(dispatchRequest as Record<string, unknown>), idempotencyKey: key };
         if (mode === "edit") {
           if (expectedVersion !== undefined) body.expectedVersion = expectedVersion;
+          // `effectiveId` was already required non-null by the guard at the
+          // top of `submit()` for `mode === "edit"`.
           return action === "publishDraft"
-            ? publishConstraint(projectId, entry!.constraintId, body)
-            : updateConstraint(projectId, entry!.constraintId, body);
+            ? publishConstraint(projectId, effectiveId as string, body)
+            : updateConstraint(projectId, effectiveId as string, body);
         }
         return action === "draft" ? createDraft(projectId, body) : createPublished(projectId, body);
       },
@@ -282,10 +322,10 @@ export function ConstraintAuthoring({
           runtime.focusReturn.resolve(focusToken.tokenId);
         },
         fetchCurrent:
-          mode === "edit" && entry
+          mode === "edit" && effectiveId !== null
             ? async () => {
                 const controller = new AbortController();
-                const result = await readDetail(projectId, entry.constraintId, controller.signal);
+                const result = await readDetail(projectId, effectiveId, controller.signal);
                 return result.ok ? result.value : undefined;
               }
             : undefined,
@@ -323,16 +363,16 @@ export function ConstraintAuthoring({
       onClose={close}
       title={mode === "create" ? "New Constraint" : `Edit ${codeLabel(entry?.constraintCode ?? null)}`}
     >
-      <div className="grid gap-3">
+      <div className="grid gap-3" ref={attachContent}>
         <p className="text-sm text-muted" data-testid="authoring-code">
           Constraint Code:{" "}
           {mode === "create"
             ? DRAFT_CODE_LABEL
-            : entry?.status === "DRAFT"
+            : effectiveStatus === "DRAFT"
               ? DRAFT_CODE_LABEL
               : codeLabel(entry?.constraintCode ?? null)}
         </p>
-        {mode === "edit" && entry?.status === "DRAFT" ? (
+        {mode === "edit" && effectiveStatus === "DRAFT" ? (
           <p className="text-xs text-muted" data-testid="authoring-draft-identity">
             This Draft is identified by its id and version, never a Code, until it is published.
           </p>
@@ -412,12 +452,14 @@ export function ConstraintAuthoring({
           value={bic}
           onChange={(next) => onFieldChange(setBic)(next)}
           testIdPrefix="authoring-bic"
+          portalContainer={contentNode}
         />
         <ConstraintPartySelector
           label="Responsible party"
           value={responsible}
           onChange={(next) => onFieldChange(setResponsible)(next)}
           testIdPrefix="authoring-responsible"
+          portalContainer={contentNode}
         />
         {mode === "create" || isDraftEdit ? (
           <label className="grid gap-1 text-sm">

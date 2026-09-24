@@ -58,6 +58,14 @@ export interface ConstraintPartySelectorProps {
   /** Stable prefix for every `data-testid` this instance renders. */
   readonly testIdPrefix: string;
   readonly disabled?: boolean;
+  /**
+   * Forwarded to the popover's own `PopoverContent` `container` prop — see
+   * that file's doc comment. A caller mounted inside a native `<dialog>`
+   * (e.g. `ConstraintAuthoring`) passes a node from within that dialog's own
+   * subtree so the Add-party popover stays inside the dialog's top layer.
+   * Optional; omitting it keeps Radix's own default (`document.body`).
+   */
+  readonly portalContainer?: Element | DocumentFragment | null;
 }
 
 export function ConstraintPartySelector({
@@ -67,6 +75,7 @@ export function ConstraintPartySelector({
   principalLabel = "Me",
   testIdPrefix,
   disabled = false,
+  portalContainer,
 }: ConstraintPartySelectorProps) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<readonly EntityHit[]>([]);
@@ -160,7 +169,7 @@ export function ConstraintPartySelector({
               Add {label}
             </Button>
           </PopoverTrigger>
-          <PopoverContent aria-label={`Add ${label}`} className="grid w-72 gap-2">
+          <PopoverContent aria-label={`Add ${label}`} className="grid w-72 gap-2" container={portalContainer}>
             <Button
               type="button"
               size="sm"

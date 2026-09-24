@@ -17,7 +17,7 @@ vi.mock("@/components/diagnostics/diagnostics-provider", async (importOriginal) 
       diagnostics.enabled ? children : null,
   };
 });
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { PrincipalSession } from "@/contracts/identity";
 
@@ -701,6 +701,162 @@ describe("the live read-only workspace", () => {
 });
 
 /**
+ * R02-WP10 corrective (Phase 8 real-stack E2E gaps) — three findings whose
+ * mechanism lives in this file: foreground revalidation, the disabled New
+ * Constraint entry point during a failed read, and the authoring dialog's
+ * DOM-node stability across open/close.
+ */
+describe("corrective: foreground revalidation, degraded write entry points, and authoring node stability", () => {
+  it("[PC-CM-UX-AC-018] re-reads the Register, Overview and Categories on window focus, not only on mount", async () => {
+    mount("view=register&group=none");
+    await screen.findByTestId("register-table");
+    const registerBefore = reads.register.mock.calls.length;
+    const overviewBefore = reads.overview.mock.calls.length;
+    const categoriesBefore = reads.categories.mock.calls.length;
+    expect(registerBefore).toBeGreaterThan(0);
+
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    await waitFor(() => expect(reads.register.mock.calls.length).toBeGreaterThan(registerBefore));
+    expect(reads.overview.mock.calls.length).toBeGreaterThan(overviewBefore);
+    expect(reads.categories.mock.calls.length).toBeGreaterThan(categoriesBefore);
+  });
+
+  it("[regression: out-of-order foreground reads] a slower, earlier-started revalidation can never overwrite a faster, later-started one", async () => {
+    // Surfaced live: `useForegroundRevalidation`'s "interval" trigger only
+    // dedupes against another "interval" tick already in flight — a real
+    // window `focus` firing while one revalidation is still pending starts a
+    // second, fully concurrent read. Both share the same register/summary
+    // identity (identity only changes on a Project/scope change), so an
+    // identity-only guard cannot tell them apart, and without a stronger
+    // guard whichever call *resolves* last wins even if it *started* first —
+    // a stale read issued a moment before a Category was deactivated can
+    // land after, and silently revert it back to active in the UI.
+    mount("view=register&group=none");
+    await screen.findByTestId("register-table");
+    await waitFor(() => expect(reads.categories.mock.calls.length).toBeGreaterThan(0));
+
+    const freshCategories = fixture.categories.map((category) =>
+      category.categoryId === "cat_syn_0001" ? { ...category, state: "INACTIVE" as const } : category,
+    );
+    const resolvers: Array<(value: ReturnType<typeof ok<typeof fixture.categories>>) => void> = [];
+    reads.categories.mockImplementation(
+      () => new Promise((resolve) => { resolvers.push(resolve); }),
+    );
+
+    // Two overlapping foreground reads.
+    await act(async () => { window.dispatchEvent(new Event("focus")); });
+    await act(async () => { window.dispatchEvent(new Event("focus")); });
+    await waitFor(() => expect(resolvers.length).toBe(2));
+
+    // The call started *second* resolves *first*, with the fresh,
+    // post-deactivation list; the call started *first* straggles in
+    // afterwards with the stale, pre-deactivation list.
+    await act(async () => { resolvers[1](ok(freshCategories)); });
+    await act(async () => { resolvers[0](ok(fixture.categories)); });
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId("register-new-constraint"));
+    const select = await screen.findByTestId("authoring-category");
+    expect(within(select).getByRole("option", { name: /Design information/ })).toBeDisabled();
+  });
+
+  it("[finding 4 E2E gap] states a failed Categories read on the Register tab, not only on Overview", async () => {
+    // The message used to live inside the Overview tab's own `TabsContent`,
+    // so it was silently unreachable from the Register tab — confirmed live
+    // via `project-controls-run02-degraded.spec.ts`'s own "a malformed
+    // Category list answer..." test, which opens directly on
+    // `?view=register` and never found it. Category data backs the
+    // Register's own filter/grouping and the authoring dialog's Category
+    // picker too, not only the Overview tab.
+    reads.categories.mockResolvedValue({
+      ok: false,
+      error: { status: 503, code: "transport_unavailable", message: "Categories unavailable" },
+    });
+    mount("view=register&group=none");
+    await screen.findByTestId("register-table");
+    expect(await screen.findByText(/Categories could not be read/)).toBeVisible();
+  });
+
+  it("[finding: degraded write entry points] omits New Constraint entirely while the Register read has failed, rather than offering a form that can only fail", async () => {
+    reads.register.mockResolvedValue({
+      ok: false,
+      error: { status: 503, code: "transport_unavailable", message: "The read plane could not be reached." },
+    });
+    mount("view=register&group=none");
+    await screen.findByTestId("register-unavailable");
+    // Not merely disabled: this named E2E fixture's own contract is
+    // `toHaveCount(0)` — "there is no dialog here that could go on to fail a
+    // write silently or optimistically" (the button's own new doc comment).
+    expect(screen.queryByTestId("register-new-constraint")).toBeNull();
+  });
+
+  it("[PC-CM-UX-AC-020] closing runs a real update (the native dialog's own `open` attribute clears) rather than an unmount that skips it", async () => {
+    const user = userEvent.setup();
+    mount("view=register&group=none");
+    const button = await screen.findByTestId("register-new-constraint");
+    await user.click(button);
+    await screen.findByTestId("authoring-description");
+    // The nearest `<dialog>` ancestor — `ui/dialog.tsx`'s own element,
+    // toggled by its `useEffect` on `[open]`. Captured now, while open, so
+    // it can be checked below by reference, independent of whether it is
+    // still attached to the document at that point.
+    const dialogNode = screen.getByTestId("authoring-description").closest("dialog");
+    expect(dialogNode).not.toBeNull();
+    expect(dialogNode).toHaveAttribute("open");
+    await user.click(screen.getByTestId("authoring-cancel"));
+    // The decisive check: `Dialog`'s own `useEffect` (reacting to `open`
+    // going `true → false`) only ever runs its `removeAttribute("open")`
+    // call (jsdom's `showModal`-less fallback — see that file's own
+    // comment) as part of an *update* to a component instance that is
+    // still mounted; a *replacement* (unmount-old, mount-new, or an
+    // outright removal — the pre-fix conditional-unmount shape, and
+    // equally what an undeferred unmount alongside the state change would
+    // reproduce) never runs that component's effect at all, so the
+    // captured node's own `open` attribute would still be sitting there,
+    // stale, on a now-detached node — checked on the captured *reference*
+    // itself, so this holds regardless of whether that node is still in
+    // the document at this exact instant. This is the same mechanism the
+    // real browser's own built-in invoker-focus-restore depends on: it
+    // only ever fires as part of a real `.close()`/attribute-clearing
+    // update on a still-attached node, never as a side effect of the node
+    // simply being torn out of the tree.
+    expect(dialogNode).not.toHaveAttribute("open");
+    expect(screen.getByTestId("register-new-constraint")).toBe(button);
+    // Eventually (the deferred unmount — see `authoringMounted`'s own doc
+    // comment) it is actually removed from the DOM too, not merely hidden
+    // forever — matching every existing close-time expectation elsewhere
+    // (this file's own other tests, and `project-controls-run02.spec.ts`'s
+    // own `createPublishedConstraint()` helper's `toHaveCount(0)`).
+    await waitFor(() => expect(screen.queryByTestId("authoring-description")).toBeNull());
+    expect(screen.getByTestId("register-new-constraint")).toBe(button);
+  });
+
+  it("[finding: 320px overflow] the Project-selector label can shrink within the identity row rather than forcing it wide", async () => {
+    mount();
+    await screen.findByTestId("project-context");
+    /*
+      jsdom computes no breakpoints and no layout, so the actual 320px
+      overflow this finding names cannot be measured here (that is what
+      `project-controls-run02-responsive.spec.ts`'s `[RUN02-RESPONSIVE]`
+      sentinel is for). The class gate is the assertion available at this
+      level: without `min-w-0`, a flex item whose own content (here, the
+      `<select>`'s widest option — an arbitrarily long Project name) is wider
+      than the row does not shrink below that content width even once
+      wrapped onto its own line, and overflows the viewport regardless of
+      `flex-wrap` on the row. `<select>` itself already carries
+      `min-w-0 max-w-full` (`components/ui/select.tsx`); this asserts the
+      ancestor that lets that take effect.
+    */
+    const projectLabel = screen.getByText("Project", { selector: "label > span" }).closest("label");
+    expect(projectLabel).not.toBeNull();
+    expect(Array.from(projectLabel?.classList ?? [])).toContain("min-w-0");
+  });
+});
+
+/**
  * Phase 6 — the live authoring/lifecycle/category surfaces this workspace now
  * wires in. `register-table.tsx`, `constraints-register.tsx` and
  * `constraint-inspector.tsx` have no dedicated test file of their own (per
@@ -763,6 +919,11 @@ describe("live authoring, lifecycle and category surfaces", () => {
     await user.click(screen.getByTestId("authoring-save-draft"));
     await waitFor(() => expect(writes.createDraft).toHaveBeenCalled());
     expect(writes.createDraft.mock.calls[0][0]).toBe("prj_syn_0001");
+    // A confirmed Save Draft closes the dialog (`onCreated`/`onClose` both
+    // call `closeAuthoring`); its own deferred unmount (see
+    // `authoringMounted`'s doc comment) removes it from the DOM shortly
+    // after, not merely hides it — matching `project-controls-run02.spec.ts`'s
+    // own `createPublishedConstraint()` helper's `toHaveCount(0)`.
     await waitFor(() => expect(screen.queryByTestId("authoring-code")).toBeNull());
   });
 
@@ -793,6 +954,25 @@ describe("live authoring, lifecycle and category surfaces", () => {
     expect(await screen.findByTestId(`register-inline-status-error-${id}`)).toHaveTextContent("The write failed.");
     // Rolled back to the value the row held before the edit.
     expect(screen.getByTestId(`register-inline-status-${id}`)).toHaveValue(fixture.entries[0].status);
+  });
+
+  it("[finding 11] keeps the attempted Due date in the editor on a failed (rate-limited) write, rather than reverting it", async () => {
+    const id = fixture.entries[0].constraintId;
+    writes.updateConstraint.mockRejectedValue({ status: 429, code: "rate_limited", message: "Too many attempts. Wait and try again." });
+    mount("view=register&group=none");
+    const dateInput = await screen.findByTestId(`register-inline-due-${id}`);
+    const original = fixture.entries[0].dueDate ?? "";
+    const attempted = "2027-03-01";
+    expect(attempted).not.toBe(original);
+    fireEvent.change(dateInput, { target: { value: attempted } });
+    expect(await screen.findByTestId(`register-inline-due-error-${id}`)).toHaveTextContent(
+      "Too many attempts. Wait and try again.",
+    );
+    // Unlike Status (which does roll all the way back — see the test above,
+    // an established, separate contract), the attempted date must survive a
+    // failed mutation so the reader can retry or correct it, not lose it.
+    expect(dateInput).toHaveValue(attempted);
+    expect(dateInput).not.toHaveValue(original);
   });
 
   it("opens Category administration from the Categories button", async () => {

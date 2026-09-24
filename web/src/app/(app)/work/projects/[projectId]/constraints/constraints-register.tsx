@@ -250,9 +250,26 @@ export function ConstraintsRegister({
             onChange={(event) => update({ search: event.target.value }, { replace: true })}
           />
         </label>
-        {!readOnly && onNewConstraint ? <Button size="sm" onClick={onNewConstraint} data-testid="register-new-constraint">
-          New Constraint
-        </Button> : null}
+        {/*
+          Not merely `disabled` — omitted entirely when the Register's own
+          read has fully failed. `project-controls-run02-degraded.spec.ts`'s
+          own "a dead gateway blocks every write entry point..." test (the
+          named test for this fix) asserts `toHaveCount(0)`, with its own
+          comment stating the intent directly: "there is no dialog here that
+          could go on to fail a write silently or optimistically" — a
+          `disabled` button would still exist as a would-be entry point,
+          just an inert one; a failed read means there is nothing here to
+          attach a New Constraint action to at all.
+        */}
+        {!readOnly && onNewConstraint && failure === null ? (
+          <Button
+            size="sm"
+            onClick={onNewConstraint}
+            data-testid="register-new-constraint"
+          >
+            New Constraint
+          </Button>
+        ) : null}
       </div>
 
       <div role="group" aria-label="Quick filters" className="flex flex-wrap gap-1">

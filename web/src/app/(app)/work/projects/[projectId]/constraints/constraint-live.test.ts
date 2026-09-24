@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONSTRAINT_URL_STATE, searchRegisterState } from "./constraint-url-state";
-import { readDetail, readHistory, readRegister, registerQuery } from "./constraint-live";
+import {
+  readCategories,
+  readDetail,
+  readHistory,
+  readOverview,
+  readRegister,
+  registerQuery,
+} from "./constraint-live";
 
 const disclosure = {
   scope: "constraint-register",
@@ -168,5 +175,81 @@ describe("live Constraint adaptation", () => {
     );
     expect(history.ok).toBe(true);
     if (history.ok) expect(history.value.entries[0]).not.toHaveProperty("provenance");
+  });
+});
+
+/**
+ * Finding 7 (R02-WP10 corrective): `response.ok` is derived purely from HTTP
+ * status plus `shape === "backend"` — never from whether the body's own
+ * fields are actually the shape each reader is about to use. A malformed
+ * HTTP-200 body must fail closed as an ordinary `{ok: false}` read failure,
+ * the same shape a genuinely failed HTTP response already produces —
+ * never an uncaught, synchronous `TypeError` that never becomes any terminal
+ * state (confirmed live: `constraints.map is not a function`). Each case
+ * below asserts BOTH that the promise resolves (does not throw / reject)
+ * AND that it resolves to `{ok: false}` — a naive `try { ... } catch` around
+ * only the network call would still leave the second half failing.
+ */
+function malformed200(body: unknown) {
+  return vi.fn(
+    async () =>
+      new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } }),
+  );
+}
+
+describe("live Constraint readers fail closed on a malformed HTTP-200 body", () => {
+  it("readRegister: `constraints` is not an array", async () => {
+    vi.stubGlobal("fetch", malformed200({ shape: "backend", constraints: "not-an-array", disclosure }));
+    await expect(
+      readRegister("prj_aaaaaaaa11111111", DEFAULT_CONSTRAINT_URL_STATE, null, new AbortController().signal),
+    ).resolves.toMatchObject({ ok: false, error: { code: "malformed_response" } });
+  });
+
+  it("readRegister: `constraints` field is missing entirely", async () => {
+    vi.stubGlobal("fetch", malformed200({ shape: "backend", disclosure }));
+    await expect(
+      readRegister("prj_aaaaaaaa11111111", DEFAULT_CONSTRAINT_URL_STATE, null, new AbortController().signal),
+    ).resolves.toMatchObject({ ok: false, error: { code: "malformed_response" } });
+  });
+
+  it("readCategories: `categories` is not an array", async () => {
+    vi.stubGlobal("fetch", malformed200({ shape: "backend", categories: { not: "an array" }, disclosure }));
+    await expect(readCategories("prj_aaaaaaaa11111111", new AbortController().signal)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "malformed_response" },
+    });
+  });
+
+  it("readOverview: `overview` is missing `syncHealth`", async () => {
+    vi.stubGlobal(
+      "fetch",
+      malformed200({ shape: "backend", overview: { projectId: "prj_aaaaaaaa11111111" }, disclosure }),
+    );
+    await expect(readOverview("prj_aaaaaaaa11111111", new AbortController().signal)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "malformed_response" },
+    });
+  });
+
+  it("readOverview: `overview` field is not an object at all", async () => {
+    vi.stubGlobal("fetch", malformed200({ shape: "backend", overview: null, disclosure }));
+    await expect(readOverview("prj_aaaaaaaa11111111", new AbortController().signal)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "malformed_response" },
+    });
+  });
+
+  it("readDetail: `constraint` is not an object", async () => {
+    vi.stubGlobal("fetch", malformed200({ shape: "backend", constraint: "not-an-object", disclosure }));
+    await expect(
+      readDetail("prj_aaaaaaaa11111111", "cst_aaaaaaaa11111111", new AbortController().signal),
+    ).resolves.toMatchObject({ ok: false, error: { code: "malformed_response" } });
+  });
+
+  it("readHistory: `history` is not an array", async () => {
+    vi.stubGlobal("fetch", malformed200({ shape: "backend", history: "nope", disclosure }));
+    await expect(
+      readHistory("prj_aaaaaaaa11111111", "cst_aaaaaaaa11111111", null, new AbortController().signal),
+    ).resolves.toMatchObject({ ok: false, error: { code: "malformed_response" } });
   });
 });

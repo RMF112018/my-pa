@@ -57,10 +57,138 @@ import { ConstraintAuthoring } from "./constraint-authoring";
 import { ConstraintDirectActions, type DirectAction } from "./constraint-direct-actions";
 import { ConstraintCategoryAdmin } from "./constraint-category-admin";
 import type { InlineEditRequest, InlineEditResult } from "./register-table";
+import {
+  useForegroundRevalidation,
+  type ForegroundQuerySnapshot,
+  type ForegroundReadCoordinator,
+  type ForegroundReadResult,
+} from "@/lib/task/use-foreground-revalidation";
 
 interface Props {
   readonly projectId: string;
   readonly initialState: ConstraintUrlState;
+}
+
+/** `useForegroundRevalidation`'s own read-result shape, for this surface's revalidation. */
+interface ConstraintForegroundResult extends ForegroundReadResult {
+  readonly outcome: "applied" | "failed";
+  readonly error?: LiveFailure;
+}
+
+interface ConstraintForegroundEntry {
+  freshness: ForegroundQuerySnapshot<void>["freshness"];
+  lastSuccessfulAt: number | null;
+  readonly listeners: Set<(snapshot: ForegroundQuerySnapshot<void>) => void>;
+}
+
+/**
+ * The smallest coordinator that satisfies `useForegroundRevalidation`'s seam
+ * for this surface (`[PC-CM-UX-AC-018]`) — the repository's one shared
+ * foreground-freshness policy (5s cadence; immediate on focus, visibility,
+ * online; suspended while hidden/offline; 5→10→30s backoff; 401/403 suspend),
+ * reused exactly as Task/Today/Pulse already do, never a second one authored
+ * here. Unlike `PulseReadCoordinator` (`today-pulse-surface.tsx`), this
+ * coordinator holds no confirmed payload and does no in-flight dedupe of its
+ * own: this file's own `readRegister`/`readOverview`/`readCategories` effects
+ * already own de-duplication, abort and ordering for the data itself (their
+ * own `generation`/identity-gate state, unchanged by this fix) — the one
+ * thing missing was ever being asked to run again on focus/visibility/online
+ * at all. This coordinator exists only to satisfy the hook's structural seam
+ * and track the freshness/backoff bookkeeping the hook itself needs; the
+ * actual re-read and state application happens in `revalidateConstraints`
+ * below, which is this surface's own `fetcher`.
+ */
+class ConstraintForegroundCoordinator
+  implements
+    ForegroundReadCoordinator<
+      void,
+      string,
+      () => Promise<ConstraintForegroundResult>,
+      ConstraintForegroundResult,
+      ForegroundQuerySnapshot<void>
+    >
+{
+  private readonly entries = new Map<string, ConstraintForegroundEntry>();
+
+  private ensure(key: string): ConstraintForegroundEntry {
+    const existing = this.entries.get(key);
+    if (existing) return existing;
+    const created: ConstraintForegroundEntry = { freshness: "idle", lastSuccessfulAt: null, listeners: new Set() };
+    this.entries.set(key, created);
+    return created;
+  }
+
+  private snapshot(entry: ConstraintForegroundEntry): ForegroundQuerySnapshot<void> {
+    return { freshness: entry.freshness, lastConfirmed: undefined, lastSuccessfulAt: entry.lastSuccessfulAt };
+  }
+
+  private emit(entry: ConstraintForegroundEntry): void {
+    const snapshot = this.snapshot(entry);
+    for (const listener of Array.from(entry.listeners)) listener(snapshot);
+  }
+
+  retain(key: string): ForegroundQuerySnapshot<void> {
+    return this.snapshot(this.ensure(key));
+  }
+
+  release(): void {
+    // Nothing owned per-subscriber; entries are cheap and keyed by query
+    // identity, which already changes (and is naturally abandoned) on
+    // Project/query switch.
+  }
+
+  subscribe(key: string, listener: (snapshot: ForegroundQuerySnapshot<void>) => void): () => void {
+    const entry = this.ensure(key);
+    entry.listeners.add(listener);
+    listener(this.snapshot(entry));
+    return () => {
+      entry.listeners.delete(listener);
+    };
+  }
+
+  getSnapshot(key: string): ForegroundQuerySnapshot<void> | undefined {
+    const entry = this.entries.get(key);
+    return entry ? this.snapshot(entry) : undefined;
+  }
+
+  async read(key: string, fetcher: () => Promise<ConstraintForegroundResult>): Promise<ConstraintForegroundResult> {
+    const entry = this.ensure(key);
+    entry.freshness = "loading";
+    this.emit(entry);
+    const result = await fetcher();
+    entry.freshness = result.outcome === "applied" ? "fresh" : "stale";
+    if (result.outcome === "applied") entry.lastSuccessfulAt = Date.now();
+    this.emit(entry);
+    return result;
+  }
+
+  markFresh(key: string): void {
+    const entry = this.ensure(key);
+    entry.freshness = "fresh";
+    this.emit(entry);
+  }
+
+  markStale(key: string): void {
+    const entry = this.ensure(key);
+    entry.freshness = "stale";
+    this.emit(entry);
+  }
+
+  markSuspended(key: string): void {
+    const entry = this.ensure(key);
+    entry.freshness = "suspended";
+    this.emit(entry);
+  }
+
+  applyConfirmed(key: string): ForegroundQuerySnapshot<void> {
+    // Never called here: this surface's mutation confirmations already go
+    // through `refreshAfterMutation`, unrelated to foreground revalidation.
+    return this.snapshot(this.ensure(key));
+  }
+
+  raiseMutationBarrier(): number {
+    return 0;
+  }
 }
 
 const EMPTY_PAGE: ConstraintListPage = {
@@ -78,6 +206,63 @@ function LiveConstraintsWorkspaceInner({ projectId, initialState }: Props) {
   const runtime = useConstraintRuntime();
   const feedback = useMutationFeedback();
   const [authoring, setAuthoring] = useState<{ readonly mode: "create" | "edit" } | null>(null);
+  // [PC-CM-UX-AC-020] `authoringKey` bumps only when the authoring dialog is
+  // *opened* (`openAuthoring` below), never when it closes. A genuinely new
+  // session (a different record, or a fresh "New Constraint") still gets a
+  // clean remount (form state can never carry over, unchanged from before),
+  // but *closing* no longer remounts the component immediately.
+  //
+  // Closing used to unmount `<ConstraintAuthoring>` in the very same render
+  // that cleared `authoring` (`{authoring ? <.../> : null}`), tearing the
+  // still-open native `<dialog>` element out of the DOM without ever calling
+  // `.close()` on it — `ui/dialog.tsx`'s own close effect never got the
+  // chance to run, since React had already discarded the fiber — so the
+  // browser's built-in invoker-focus-restore, which fires only as part of an
+  // actual `.close()` call, never ran either, stranding focus on
+  // `document.body`. Confirmed reproducible via two independent close paths
+  // (a completed mutation, and a plain Escape with no mutation at all).
+  //
+  // The fix keeps the *identity* stable across a close (so `Dialog`'s own
+  // effect sees a real `open: true → false` transition on a still-attached
+  // node and calls the real `.close()`), but still removes the node from the
+  // DOM once closed — not by unmounting in the same render, but one tick
+  // later, via `authoringMounted`. `closeAuthoring` clears `authoring`
+  // (`open` flips to `false`, `Dialog`'s effect runs synchronously and calls
+  // `dialog.close()` — the browser's own focus restoration is itself
+  // synchronous, completing inside that same call) and defers
+  // `setAuthoringMounted(false)` to the next macrotask, strictly after that
+  // effect has already run. This keeps `register-new-constraint`'s own node
+  // identity stable through the transition (fixing the focus bug) while
+  // still leaving the DOM exactly as every existing close-time assertion —
+  // this component's own tests, and `project-controls-run02.spec.ts`'s own
+  // `createPublishedConstraint()` helper's `toHaveCount(0)` — already
+  // expect: gone shortly after close, not merely hidden forever.
+  const [authoringKey, setAuthoringKey] = useState(0);
+  const [authoringMounted, setAuthoringMounted] = useState(false);
+  const authoringUnmountTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const openAuthoring = useCallback((mode: "create" | "edit") => {
+    if (authoringUnmountTimer.current !== null) {
+      clearTimeout(authoringUnmountTimer.current);
+      authoringUnmountTimer.current = null;
+    }
+    setAuthoringKey((key) => key + 1);
+    setAuthoringMounted(true);
+    setAuthoring({ mode });
+  }, []);
+  const closeAuthoring = useCallback(() => {
+    setAuthoring(null);
+    if (authoringUnmountTimer.current !== null) clearTimeout(authoringUnmountTimer.current);
+    authoringUnmountTimer.current = setTimeout(() => {
+      authoringUnmountTimer.current = null;
+      setAuthoringMounted(false);
+    }, 0);
+  }, []);
+  useEffect(
+    () => () => {
+      if (authoringUnmountTimer.current !== null) clearTimeout(authoringUnmountTimer.current);
+    },
+    [],
+  );
   const [directAction, setDirectAction] = useState<DirectAction | null>(null);
   const [categoriesOpen, setCategoriesOpen] = useState(false);
   const state = useMemo(
@@ -86,6 +271,13 @@ function LiveConstraintsWorkspaceInner({ projectId, initialState }: Props) {
   );
   const queryKey = serializeConstraintUrlState({ ...state, selectedConstraintId: null });
   const generation = useRef(0);
+  // Shared with `revalidateConstraints` below (`[PC-CM-UX-AC-018]`) so a
+  // background foreground-revalidation read and *this* effect's own
+  // identity/retry-triggered read can never race each other: whichever one
+  // most recently bumped this counter is the only one allowed to apply its
+  // result to `overview`/`categories`, regardless of which one's network
+  // response actually resolves first.
+  const summaryGeneration = useRef(0);
   const historyGeneration = useRef(0);
   const historyPageController = useRef<AbortController | null>(null);
   const pendingRegisterFocus = useRef(false);
@@ -193,6 +385,7 @@ function LiveConstraintsWorkspaceInner({ projectId, initialState }: Props) {
 
   useEffect(() => {
     const controller = new AbortController();
+    const current = ++summaryGeneration.current;
     void Promise.resolve().then(() => {
       if (controller.signal.aborted) return;
       setSummaryStateIdentity(summaryIdentity);
@@ -203,7 +396,7 @@ function LiveConstraintsWorkspaceInner({ projectId, initialState }: Props) {
       setCategoriesFailure(null);
     });
     void readOverview(projectId, controller.signal).then((result) => {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || current !== summaryGeneration.current) return;
       if (result.ok) {
         setOverview(result.value);
         setOverviewDisclosure(result.disclosure);
@@ -211,7 +404,7 @@ function LiveConstraintsWorkspaceInner({ projectId, initialState }: Props) {
       else setOverviewFailure(result.error);
     });
     void readCategories(projectId, controller.signal).then((result) => {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || current !== summaryGeneration.current) return;
       if (result.ok) setCategories(result.value.filter((item) => item.projectId === projectId));
       else setCategoriesFailure(result.error);
     });
@@ -230,8 +423,26 @@ function LiveConstraintsWorkspaceInner({ projectId, initialState }: Props) {
       setRegisterDisclosure(null);
     });
     void readRegister(projectId, state, null, controller.signal).then((result) => {
+      // `setRegisterLoading(false)` runs whenever *this* fetch settles
+      // without having been aborted — even when its own data is then
+      // discarded as stale below: `generation` is now shared with
+      // `revalidateConstraints`'s own background reads (`[PC-CM-UX-AC-018]`),
+      // so a mount-time foreground poll racing this effect's own initial
+      // load can legitimately supersede it (by generation) before it
+      // resolves, without this effect's own cleanup ever running (no
+      // identity/query change happened — nothing aborted `controller`). If
+      // this callback bailed out on a generation mismatch before clearing
+      // "loading" too, it would stay stuck `true` forever whenever that
+      // happens — the superseding read never touches this flag,
+      // deliberately, so it never flashes the workspace back to "loading"
+      // on an ordinary background poll (see that hook's own call site
+      // comment). This is deliberately gated on `aborted`, not on
+      // `generation`: an aborted, genuinely superseded fetch (a real
+      // Project/scope change, this effect's own cleanup already ran) must
+      // still leave "loading" alone — the new effect run's own fetch, for
+      // the *new* identity, owns clearing it next.
+      if (!controller.signal.aborted) setRegisterLoading(false);
       if (current !== generation.current) return;
-      setRegisterLoading(false);
       if (!result.ok) {
         setRegisterFailure(result.error);
         return;
@@ -382,15 +593,122 @@ function LiveConstraintsWorkspaceInner({ projectId, initialState }: Props) {
   /** Bumps the summary/register/detail effects' shared retry key, forcing a re-read from the backend. */
   const refreshAfterMutation = useCallback(() => setRetry((value) => value + 1), []);
 
+  // --- [PC-CM-UX-AC-018] foreground revalidation ---------------------------
+  //
+  // A silent background re-read, not a `retry` bump: `retry` deliberately
+  // resets Register/Overview/Category state to loading/empty first (correct
+  // for a person-initiated Retry after a failure, or a just-confirmed
+  // mutation), which would otherwise flash the whole workspace to "loading"
+  // on every 5s poll / window focus — exactly what a foreground revalidation
+  // must not do. This reads fresh data the same way the initial effects do
+  // and applies it directly to the same state setters, guarded by the same
+  // identity comparison those effects already use, so a slow background read
+  // can never clobber a newer navigation's state.
+  const registerIdentityRef = useRef(registerIdentity);
+  const summaryIdentityRef = useRef(summaryIdentity);
+  useEffect(() => {
+    registerIdentityRef.current = registerIdentity;
+  }, [registerIdentity]);
+  useEffect(() => {
+    summaryIdentityRef.current = summaryIdentity;
+  }, [summaryIdentity]);
+
+  // `useForegroundRevalidation`'s own "interval" trigger only dedupes
+  // against another "interval" tick already in flight — a "focus"/"online"
+  // trigger (a real window focus, or reconnect) is allowed to start a
+  // second, fully concurrent `revalidateConstraints()` call while an earlier
+  // one is still pending, and this same fetcher runs *alongside*, entirely
+  // uncoordinated with, the identity/`retry`-triggered effects above (the
+  // register effect and the overview/categories effect) that read the exact
+  // same data into the exact same state. All of these calls share the same
+  // register/summary identity (identity only changes on a scope/Project
+  // change, never between two ordinary polls or a Retry), so an
+  // identity-only guard cannot tell any of them apart from one another —
+  // without a stronger guard, whichever call happens to *resolve* last wins,
+  // even when it *started* first or is already stale. This surfaced live as
+  // exactly that: a just-deactivated Category's `authoring-category` option
+  // flickering back to enabled once a straggling, earlier-started read (be
+  // it another foreground poll, or the pre-existing `retry`-bump effect's
+  // own read) finally landed after a fresher one had already applied.
+  //
+  // Fixed by having this fetcher participate in the *same* generation
+  // counters those sibling effects already own and check
+  // (`generation` — register; `summaryGeneration` — overview/categories),
+  // rather than a separate counter of its own: every one of these
+  // read-triggering mechanisms — a Project/scope change, a Retry, a
+  // foreground poll — bumps the same counter its own kind of read is gated
+  // on, so whichever one most recently *started* is the only one ever
+  // allowed to apply its result, regardless of which resolves first and
+  // regardless of which mechanism started it.
+  const revalidateConstraints = useCallback(async (): Promise<ConstraintForegroundResult> => {
+    const controller = new AbortController();
+    const requestRegisterIdentity = registerIdentity;
+    const requestSummaryIdentity = summaryIdentity;
+    const myRegisterGen = ++generation.current;
+    const mySummaryGen = ++summaryGeneration.current;
+    const [registerResult, overviewResult, categoriesResult] = await Promise.all([
+      readRegister(projectId, state, null, controller.signal),
+      readOverview(projectId, controller.signal),
+      readCategories(projectId, controller.signal),
+    ]);
+    const isLatestRegister = myRegisterGen === generation.current;
+    const isLatestSummary = mySummaryGen === summaryGeneration.current;
+
+    if (
+      isLatestRegister &&
+      requestRegisterIdentity === registerIdentityRef.current
+    ) {
+      if (registerResult.ok) {
+        setPage(registerResult.value);
+        setRegisterDisclosure(registerResult.disclosure);
+        setRegisterFailure(null);
+      } else {
+        setRegisterFailure(registerResult.error);
+      }
+    }
+    if (
+      isLatestSummary &&
+      requestSummaryIdentity === summaryIdentityRef.current
+    ) {
+      if (overviewResult.ok) {
+        setOverview(overviewResult.value);
+        setOverviewDisclosure(overviewResult.disclosure);
+        setOverviewFailure(null);
+      } else {
+        setOverviewFailure(overviewResult.error);
+      }
+      if (categoriesResult.ok) {
+        setCategories(categoriesResult.value.filter((item) => item.projectId === projectId));
+        setCategoriesFailure(null);
+      } else {
+        setCategoriesFailure(categoriesResult.error);
+      }
+    }
+
+    const failed = [registerResult, overviewResult, categoriesResult].find(
+      (result): result is { ok: false; error: LiveFailure } => !result.ok,
+    );
+    return failed ? { outcome: "failed", error: failed.error } : { outcome: "applied" };
+  }, [projectId, registerIdentity, state, summaryIdentity]);
+
+  const [foregroundCoordinator] = useState(() => new ConstraintForegroundCoordinator());
+  useForegroundRevalidation<void, string, () => Promise<ConstraintForegroundResult>, ConstraintForegroundResult, ForegroundQuerySnapshot<void>>({
+    queryId: `constraints:${projectId}`,
+    queryKey: `constraints:${projectId}`,
+    enabled: true,
+    coordinator: foregroundCoordinator,
+    fetcher: revalidateConstraints,
+  });
+
   const handleLifecycleAction = useCallback((action: ConstraintLifecycleAction) => {
     if (action === "edit" || action === "publish") {
       // Both open the same live edit surface; the Publish button inside it
       // is what dispatches `constraints.publish` for an existing Draft.
-      setAuthoring({ mode: "edit" });
+      openAuthoring("edit");
       return;
     }
     setDirectAction(action as DirectAction);
-  }, []);
+  }, [openAuthoring]);
 
   /**
    * The Register's one inline-edit seam (`register-table.tsx`'s `OnInlineEdit`).
@@ -545,7 +863,17 @@ function LiveConstraintsWorkspaceInner({ projectId, initialState }: Props) {
       <div className="flex flex-wrap items-center gap-2 text-sm" data-testid="project-context">
         <Badge tone="neutral">Project {projectId}</Badge>
         <Badge tone="green">Live read plane</Badge>
-        <label className="ml-auto flex items-center gap-1">
+        {/*
+          `min-w-0`: without it, this flex item's own preferred width is
+          driven by the `<select>`'s widest `<option>` text (a Project name,
+          unbounded length) even once it has wrapped onto its own row at a
+          narrow width — a flex item does not shrink below its content's
+          intrinsic min-content size by default, wrapping alone does not fix
+          that, and `<select>` itself already carries `min-w-0 max-w-full`
+          (`components/ui/select.tsx`) precisely so an ancestor that also
+          opts in can let it shrink. This is that ancestor.
+        */}
+        <label className="ml-auto flex min-w-0 items-center gap-1">
           <span className="text-muted">Project</span>
           <Select
             key={projectId}
@@ -568,6 +896,18 @@ function LiveConstraintsWorkspaceInner({ projectId, initialState }: Props) {
           Categories
         </Button>
       </div>
+      {/*
+        Moved here from inside the Overview tab's own `TabsContent`: Category
+        data backs the Register's own filter/grouping and the "New
+        Constraint" dialog's Category picker just as much as it backs the
+        Overview tab, so a failed Categories read must be stated regardless
+        of which tab happens to be selected — the old placement meant this
+        notice was silently unreachable from the Register tab entirely
+        (confirmed live: `project-controls-run02-degraded.spec.ts`'s own
+        "a malformed Category list answer..." test opens directly on
+        `?view=register` and never finds it).
+      */}
+      {visibleCategoriesFailure ? <p role="alert" className="text-sm text-moss-coral-strong">Categories could not be read.</p> : null}
       <Tabs value={state.view} onValueChange={(view: string) => navigate({ ...state, view: view as ConstraintUrlState["view"] })}>
         <TabsList aria-label="Constraint workspace">
           <TabsTrigger value="overview" data-testid="tab-overview">Overview</TabsTrigger>
@@ -595,7 +935,6 @@ function LiveConstraintsWorkspaceInner({ projectId, initialState }: Props) {
             />
             </>
           )}
-          {visibleCategoriesFailure ? <p role="alert" className="mt-2 text-sm text-moss-coral-strong">Categories could not be read.</p> : null}
         </TabsContent>
         <TabsContent value="register" className="mt-4">
           <h2 ref={attachRegisterHeading} tabIndex={-1} className="sr-only" data-testid="register-heading">Register</h2>
@@ -609,7 +948,7 @@ function LiveConstraintsWorkspaceInner({ projectId, initialState }: Props) {
             onStateChange={navigate}
             onSelect={selectConstraint}
             onTriggerMount={attachRowTrigger}
-            onNewConstraint={() => setAuthoring({ mode: "create" })}
+            onNewConstraint={() => openAuthoring("create")}
             onInlineEdit={handleInlineEdit}
             livePage={visiblePage}
             loading={visibleRegisterLoading}
@@ -620,25 +959,28 @@ function LiveConstraintsWorkspaceInner({ projectId, initialState }: Props) {
           />
         </TabsContent>
       </Tabs>
-      {authoring ? (
+      {authoringMounted ? (
         <ConstraintAuthoring
-          // Remounted per record/mode so its internal form state can never
-          // carry over from whatever this dialog last showed.
-          key={`${authoring.mode}:${authoring.mode === "edit" ? (selected?.constraintId ?? "none") : "new"}`}
-          mode={authoring.mode}
-          open
+          // Bumped only on open (see `openAuthoring`), never on close — a
+          // genuinely new session still gets a clean remount (form state
+          // can never carry over), but closing updates this same instance
+          // in place first (see `authoringMounted`'s own doc comment above)
+          // instead of unmounting it in the same render.
+          key={authoringKey}
+          mode={authoring?.mode ?? "create"}
+          open={authoring !== null}
           projectId={projectId}
           categories={visibleCategories}
-          entry={authoring.mode === "edit" ? selected : null}
-          detail={authoring.mode === "edit" ? (visibleDetail ?? null) : null}
-          onClose={() => setAuthoring(null)}
+          entry={authoring?.mode === "edit" ? selected : null}
+          detail={authoring?.mode === "edit" ? (visibleDetail ?? null) : null}
+          onClose={closeAuthoring}
           onCreated={(constraintId) => {
-            setAuthoring(null);
+            closeAuthoring();
             refreshAfterMutation();
             selectConstraint(constraintId);
           }}
           onUpdated={() => {
-            setAuthoring(null);
+            closeAuthoring();
             refreshAfterMutation();
           }}
         />

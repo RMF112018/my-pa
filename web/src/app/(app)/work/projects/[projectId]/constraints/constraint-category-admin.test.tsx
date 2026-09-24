@@ -274,4 +274,71 @@ describe("ConstraintCategoryAdmin", () => {
     await user.click(screen.getByTestId("category-edit-cancel"));
     expect(await probeIsDirty(user)).toBe(false);
   });
+
+  describe("the outer admin dialog is never closed by a nested dialog's own lifecycle (finding 8)", () => {
+    it("renders New Category's own <dialog> as a DOM sibling, never a descendant, of the admin's own <dialog>", async () => {
+      const user = userEvent.setup();
+      render(
+        <Harness>
+          <ConstraintCategoryAdmin open projectId={PROJECT_ID} categories={[CATEGORY_A]} onClose={() => undefined} onChanged={() => undefined} />
+        </Harness>,
+      );
+      await user.click(screen.getByTestId("category-create"));
+      const adminDialog = document.querySelector('dialog[aria-label="Constraint Categories"]');
+      const createDialog = document.querySelector('dialog[aria-label="New Category"]');
+      expect(adminDialog).not.toBeNull();
+      expect(createDialog).not.toBeNull();
+      // The real, live-confirmed browser behavior this fix avoids only fires
+      // for a *nested* modal `<dialog>` — closing an inner one nested inside
+      // an outer one also closed the outer one, with no React-state cause of
+      // its own (see `constraint-category-admin.tsx`'s own doc comment).
+      // jsdom implements neither `showModal()`'s real top-layer semantics nor
+      // that specific browser behavior, so it cannot reproduce the bug
+      // itself (that is what `project-controls-run02.spec.ts`'s
+      // `[PC-CM-FE-AC-089]`/`[...AC-049][...AC-085]` E2E tests are for) —
+      // but it can, and does, prove the structural precondition the fix
+      // actually changed: the two dialogs are siblings, not nested.
+      expect(adminDialog?.contains(createDialog)).toBe(false);
+    });
+
+    it("keeps the admin dialog open (never calls its own onClose) through a confirmed Category create", async () => {
+      const user = userEvent.setup();
+      const onClose = vi.fn();
+      writes.createCategory.mockResolvedValue({
+        shape: "backend",
+        disposition: "applied",
+        category: { ...CATEGORY_A, categoryId: "ccat_cccccccc33333333", prefix: "3", title: "Environmental" },
+        receipt: {
+          historyId: "cchst_new2",
+          projectId: PROJECT_ID,
+          categoryId: "ccat_cccccccc33333333",
+          operation: "create",
+          actor: "PRINCIPAL",
+          outcome: "APPLIED",
+          beforeVersion: 0,
+          afterVersion: 1,
+          occurredAt: "2026-01-02T00:00:00Z",
+          safeFailureReason: null,
+        },
+        disclosure: { scope: "constraint-category-create", coverage: "complete", freshnessAt: "2026-01-02T00:00:00Z", authority: "accepted", limitations: [], truncated: false },
+      });
+      writes.readCategories.mockResolvedValue(ok([CATEGORY_A]));
+      render(
+        <Harness>
+          <ConstraintCategoryAdmin open projectId={PROJECT_ID} categories={[CATEGORY_A]} onClose={onClose} onChanged={() => undefined} />
+        </Harness>,
+      );
+      await user.click(screen.getByTestId("category-create"));
+      await user.type(screen.getByTestId("category-form-prefix"), "3");
+      await user.type(screen.getByTestId("category-form-title"), "Environmental");
+      await user.click(screen.getByTestId("category-form-submit"));
+      await waitFor(() => expect(writes.createCategory).toHaveBeenCalledTimes(1));
+      // The sub-dialog closes (its own onClose/onCreated path)...
+      await waitFor(() => expect(screen.getByTestId("category-form-prefix")).not.toBeVisible());
+      // ...but the admin's own onClose was never called, and its own dialog
+      // is still present and open.
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByRole("dialog", { name: "Constraint Categories" })).toBeInTheDocument();
+    });
+  });
 });

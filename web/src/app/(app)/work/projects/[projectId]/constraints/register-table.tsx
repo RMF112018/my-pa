@@ -319,7 +319,19 @@ function RegisterRow({
     });
     setPendingField(null);
     if (!result.ok) {
-      setLocalEntry(before);
+      // Status rolls all the way back to the pre-edit value on a failed
+      // mutation — an established, separately-tested contract
+      // (`live-constraints-workspace.test.tsx`'s "Rolled back to the value
+      // the row held before the edit") — left unchanged here. The Due-date
+      // editor is different: its `<Input type="date">` reads directly off
+      // `localEntry.dueDate`, so reverting the whole row here was also
+      // reverting the *editor's own displayed value* back to the
+      // last-confirmed server date, losing the reader's attempted edit on a
+      // failure (e.g. a 429) rather than leaving it in place to retry or
+      // correct — the same "never lose what was attempted" guarantee BIC/
+      // Current Update already keep by construction (their own drafts live
+      // in separate state this rollback never touches).
+      if (field !== "due") setLocalEntry(before);
       setErrors((current) => ({ ...current, [field]: result.message ?? "The change was not saved." }));
       return;
     }

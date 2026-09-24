@@ -68,6 +68,27 @@ async function read<T>(path: string, signal: AbortSignal): Promise<LiveResult<T>
   }
 }
 
+/**
+ * `response.ok` is derived purely from HTTP status plus `shape === "backend"`
+ * — it says nothing about whether the body's own fields are the shape this
+ * file's transforms expect. A malformed-but-HTTP-200 body (a genuinely
+ * possible backend defect, not merely a hypothetical) must fail closed as an
+ * ordinary read failure, not throw synchronously inside an async reader
+ * (which surfaces nowhere — never a caught "failed" outcome, never any
+ * terminal UI state at all). This is a minimal defensive shape check — the
+ * expected top-level field is actually the array/object kind a reader is
+ * about to use — not a second decode; decoding already happened server-side.
+ */
+const MALFORMED_READ_FAILURE: LiveFailure = {
+  status: 200,
+  code: "malformed_response",
+  message: "The response could not be read as expected. Try again.",
+};
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 const upper = <T extends string>(value: string): T => value.toUpperCase() as T;
 
 function party(value: WirePartyRef): ConstraintPartyRef {
@@ -165,32 +186,41 @@ const root = (projectId: string) => `/api/project-controls/projects/${encodeURIC
 
 export async function readProjects(signal: AbortSignal): Promise<LiveResult<readonly BackendProject[]>> {
   const response = await read<{ readonly projects: readonly BackendProject[] }>("/api/projects", signal);
-  return response.ok ? { ...response, value: response.value.projects } : response;
+  if (!response.ok) return response;
+  if (!Array.isArray(response.value.projects)) return { ok: false, error: MALFORMED_READ_FAILURE };
+  return { ...response, value: response.value.projects };
 }
 
 export async function readOverview(projectId: string, signal: AbortSignal): Promise<LiveResult<ConstraintOverview>> {
   const response = await read<{ readonly overview: WireOverview }>(`${root(projectId)}/constraints/overview`, signal);
-  return response.ok ? { ...response, value: overview(response.value.overview) } : response;
+  if (!response.ok) return response;
+  const raw = response.value.overview;
+  if (!isPlainObject(raw) || !isPlainObject(raw.syncHealth) || typeof raw.syncHealth.state !== "string") {
+    return { ok: false, error: MALFORMED_READ_FAILURE };
+  }
+  return { ...response, value: overview(raw as unknown as WireOverview) };
 }
 
 export async function readCategories(projectId: string, signal: AbortSignal): Promise<LiveResult<readonly ConstraintCategory[]>> {
   const response = await read<{ readonly categories: readonly WireCategory[] }>(`${root(projectId)}/constraint-categories?state=active&state=inactive&state=archived`, signal);
-  return response.ok ? { ...response, value: response.value.categories.map(category) } : response;
+  if (!response.ok) return response;
+  if (!Array.isArray(response.value.categories)) return { ok: false, error: MALFORMED_READ_FAILURE };
+  return { ...response, value: response.value.categories.map(category) };
 }
 
 export async function readRegister(projectId: string, state: ConstraintUrlState, cursor: string | null, signal: AbortSignal): Promise<LiveResult<ConstraintListPage>> {
   const response = await read<{ readonly constraints: readonly WireListEntry[] }>(`${root(projectId)}/constraints?${registerQuery(state, cursor)}`, signal);
-  return response.ok
-    ? {
-        ...response,
-        value: {
-          entries: response.value.constraints.map((item) => listEntry(item, state.group)),
-          isTruncated: response.disclosure.truncated,
-          nextCursor: response.disclosure.nextCursor ?? null,
-          totalCount: null,
-        },
-      }
-    : response;
+  if (!response.ok) return response;
+  if (!Array.isArray(response.value.constraints)) return { ok: false, error: MALFORMED_READ_FAILURE };
+  return {
+    ...response,
+    value: {
+      entries: response.value.constraints.map((item) => listEntry(item, state.group)),
+      isTruncated: response.disclosure.truncated,
+      nextCursor: response.disclosure.nextCursor ?? null,
+      totalCount: null,
+    },
+  };
 }
 
 /** One bounded page of the cross-Project portfolio Register, plus its own omitted-Project count. */
@@ -228,17 +258,17 @@ export async function readPortfolioRegister(
     `/api/project-controls/portfolio/constraints?${registerQuery(state, cursor)}`,
     signal,
   );
-  return response.ok
-    ? {
-        ...response,
-        value: {
-          entries: response.value.constraints.map((item) => listEntry(item, state.group)),
-          isTruncated: response.disclosure.truncated,
-          nextCursor: response.disclosure.nextCursor ?? null,
-          omittedProjects: response.value.omittedProjects,
-        },
-      }
-    : response;
+  if (!response.ok) return response;
+  if (!Array.isArray(response.value.constraints)) return { ok: false, error: MALFORMED_READ_FAILURE };
+  return {
+    ...response,
+    value: {
+      entries: response.value.constraints.map((item) => listEntry(item, state.group)),
+      isTruncated: response.disclosure.truncated,
+      nextCursor: response.disclosure.nextCursor ?? null,
+      omittedProjects: response.value.omittedProjects,
+    },
+  };
 }
 
 /**
@@ -286,10 +316,12 @@ export function detailToListEntry(
 export async function readDetail(projectId: string, constraintId: string, signal: AbortSignal): Promise<LiveResult<LiveConstraintView>> {
   const response = await read<{ readonly constraint: WireView }>(`${root(projectId)}/constraints/${encodeURIComponent(constraintId)}`, signal);
   if (!response.ok) return response;
-  if (response.value.constraint.projectId !== projectId) {
+  const raw = response.value.constraint;
+  if (!isPlainObject(raw)) return { ok: false, error: MALFORMED_READ_FAILURE };
+  if (raw.projectId !== projectId) {
     return { ok: false, error: { status: 404, code: "constraint_not_in_project", message: "That Constraint was not returned for this Project." } };
   }
-  const value = detail(response.value.constraint);
+  const value = detail(raw as unknown as WireView);
   return { ...response, value };
 }
 
@@ -297,9 +329,9 @@ export async function readHistory(projectId: string, constraintId: string, curso
   const query = new URLSearchParams({ pageSize: "50" });
   if (cursor !== null) query.set("cursor", cursor);
   const response = await read<{ readonly history: readonly WireHistoryEntry[] }>(`${root(projectId)}/constraints/${encodeURIComponent(constraintId)}/history?${query}`, signal);
-  return response.ok
-    ? { ...response, value: { entries: response.value.history.map(history), nextCursor: response.disclosure.nextCursor ?? null } }
-    : response;
+  if (!response.ok) return response;
+  if (!Array.isArray(response.value.history)) return { ok: false, error: MALFORMED_READ_FAILURE };
+  return { ...response, value: { entries: response.value.history.map(history), nextCursor: response.disclosure.nextCursor ?? null } };
 }
 
 // --- R02-WP10 Phase 6: authoring / lifecycle / category mutation writes -----

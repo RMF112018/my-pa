@@ -223,11 +223,11 @@ test("only the Constraint CI command enables the extra reporter; default reporte
     else process.env.CI_CONSTRAINT_DIAGNOSTIC = constraint;
     if (responsive === undefined) delete process.env.CI_RESPONSIVE_DIAGNOSTIC;
     else process.env.CI_RESPONSIVE_DIAGNOSTIC = responsive;
-    const module = new Module(configFile);
-    module.filename = configFile;
-    module.paths = Module._nodeModulePaths(web);
-    module._compile(compiledConfig, configFile);
-    return module.exports.default.reporter;
+    const configModule = new Module(configFile);
+    configModule.filename = configFile;
+    configModule.paths = Module._nodeModulePaths(web);
+    configModule._compile(compiledConfig, configFile);
+    return configModule.exports.default.reporter;
   }
   try {
     assert.deepEqual(reporters(undefined, "1", undefined), [["list"]]);

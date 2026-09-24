@@ -74,7 +74,7 @@ MIGRATION: Final = (
     MIGRATIONS / "20260907_f7a2c9d51e64_admit_the_constraint_authoring_capabilities.py"
 )
 CURRENT_HEAD_MIGRATION: Final = (
-    MIGRATIONS / "20260913_c4f1a8e52d90_admit_continuity_projects_update_and_close.py"
+    MIGRATIONS / "20260923_7a5c4e9d2b61_remote_grant_unrevoked_identity.py"
 )
 RUN01_MIGRATION: Final = MIGRATIONS / "20260914_e6a4c2f91b73_project_controls_run01_integrity.py"
 CCA005_MIGRATION: Final = (
@@ -169,6 +169,7 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_oauth_refresh_migration.py",
     "tests/schema/test_project_controls_run01_integrity_migration.py",
     "tests/schema/test_project_version_and_entity_bridge_migration.py",
+    "tests/schema/test_remote_capability_grant_identity_migration.py",
     "tests/schema/test_webauthn_auth_persistence_migration.py",
     "tests/schema/test_work_task_commitment_migration.py",
     "tests/unit/test_cli_auth.py",

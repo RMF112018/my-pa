@@ -15,7 +15,7 @@ rewritten: duplicate unrevoked identities refuse the upgrade.
 
 from __future__ import annotations
 
-from alembic import op
+from alembic import context, op
 from sqlalchemy import text
 
 revision: str = "7a5c4e9d2b61"
@@ -29,23 +29,26 @@ _IDENTITY_COLUMNS = (
 
 
 def upgrade() -> None:
-    connection = op.get_bind()
-    duplicates = connection.execute(
-        text(
-            "SELECT remote_client_id, external_scope, capability, capability_version, "
-            "purpose, resource, count(*) AS n "
-            "FROM identity.remote_capability_grants "
-            "WHERE revoked_at IS NULL "
-            "GROUP BY remote_client_id, external_scope, capability, capability_version, "
-            "purpose, resource "
-            "HAVING count(*) > 1"
-        )
-    ).all()
-    if duplicates:
-        raise RuntimeError(
-            "migration refused: duplicate unrevoked remote capability grants require "
-            "explicit operator resolution"
-        )
+    # Offline `--sql` mode has no connection, so the duplicate guard cannot run.
+    # The DDL below is still emitted. Online upgrades keep the refusal.
+    if not context.is_offline_mode():
+        connection = op.get_bind()
+        duplicates = connection.execute(
+            text(
+                "SELECT remote_client_id, external_scope, capability, capability_version, "
+                "purpose, resource, count(*) AS n "
+                "FROM identity.remote_capability_grants "
+                "WHERE revoked_at IS NULL "
+                "GROUP BY remote_client_id, external_scope, capability, capability_version, "
+                "purpose, resource "
+                "HAVING count(*) > 1"
+            )
+        ).all()
+        if duplicates:
+            raise RuntimeError(
+                "migration refused: duplicate unrevoked remote capability grants require "
+                "explicit operator resolution"
+            )
     op.execute(
         "ALTER TABLE identity.remote_capability_grants DROP CONSTRAINT one_remote_capability_grant"
     )
@@ -57,23 +60,25 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    connection = op.get_bind()
-    duplicates = connection.execute(
-        text(
-            "SELECT remote_client_id, external_scope, capability, capability_version, "
-            "purpose, resource, count(*) AS n "
-            "FROM identity.remote_capability_grants "
-            "WHERE purpose IS NOT NULL "
-            "GROUP BY remote_client_id, external_scope, capability, capability_version, "
-            "purpose, resource "
-            "HAVING count(*) > 1"
-        )
-    ).all()
-    if duplicates:
-        raise RuntimeError(
-            "migration refused: duplicate all-history grant identities require "
-            "explicit operator resolution"
-        )
+    # Same offline split as upgrade(): the duplicate guard needs a connection.
+    if not context.is_offline_mode():
+        connection = op.get_bind()
+        duplicates = connection.execute(
+            text(
+                "SELECT remote_client_id, external_scope, capability, capability_version, "
+                "purpose, resource, count(*) AS n "
+                "FROM identity.remote_capability_grants "
+                "WHERE purpose IS NOT NULL "
+                "GROUP BY remote_client_id, external_scope, capability, capability_version, "
+                "purpose, resource "
+                "HAVING count(*) > 1"
+            )
+        ).all()
+        if duplicates:
+            raise RuntimeError(
+                "migration refused: duplicate all-history grant identities require "
+                "explicit operator resolution"
+            )
     op.execute("DROP INDEX identity.uq_remote_capability_grants_unrevoked_identity")
     op.execute(
         "ALTER TABLE identity.remote_capability_grants "

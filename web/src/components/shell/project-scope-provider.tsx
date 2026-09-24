@@ -126,3 +126,19 @@ export function useProjectScope(): ProjectScopeContextValue {
   if (!value) throw new Error("useProjectScope is only valid inside ProjectScopeProvider");
   return value;
 }
+
+/**
+ * The Project Picker's collapsed display value for one resolution: the exact
+ * canonical name for a Project scope, `"All Projects"` otherwise.
+ *
+ * Reads a single `resolution` snapshot only. `resolution.scope` and
+ * `resolution.project` are always replaced together by `applyResolution`
+ * (`ProjectScopeOwner` above never sets one without the other), so this can
+ * never observe the previous Project's name paired with the new scope, or
+ * vice versa, while a scope change is in flight — there is no intermediate
+ * state to read, only the accepted one and the one that preceded it.
+ */
+export function projectScopeLabel(resolution: ResolvedProjectScope): string {
+  if (resolution.scope.kind === "ALL_PROJECTS") return "All Projects";
+  return resolution.project?.name ?? resolution.scope.projectId;
+}

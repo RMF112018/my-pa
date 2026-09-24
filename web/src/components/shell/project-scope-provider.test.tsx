@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useState } from "react";
 import {
   ProjectScopeProvider,
+  projectScopeLabel,
   useProjectScope,
 } from "@/components/shell/project-scope-provider";
 import type { ResolvedProjectScope } from "@/lib/project-scope/resolver";
@@ -32,6 +33,7 @@ function Harness() {
         {resolution.scope.kind === "PROJECT" ? resolution.scope.projectId : "all"}
       </output>
       <output data-testid="version">{resolution.project?.version ?? "none"}</output>
+      <output data-testid="name">{resolution.project?.name ?? "none"}</output>
       <output data-testid="epoch">{epoch}</output>
       <output data-testid="local">{local}</output>
       <output data-testid="current">{String(isCurrentEpoch(epoch))}</output>
@@ -70,6 +72,42 @@ function Harness() {
 
 afterEach(cleanup);
 
+describe("projectScopeLabel", () => {
+  it("is the exact canonical name for a resolved Project scope", () => {
+    expect(projectScopeLabel(PROJECT_V1)).toBe("Original Project");
+  });
+
+  it("is All Projects for ALL_PROJECTS, including a normalized fallback", () => {
+    expect(
+      projectScopeLabel({
+        scope: { kind: "ALL_PROJECTS" },
+        source: "default",
+        project: null,
+        normalized: false,
+      }),
+    ).toBe("All Projects");
+    expect(
+      projectScopeLabel({
+        scope: { kind: "ALL_PROJECTS" },
+        source: "deep_link",
+        project: null,
+        normalized: true,
+      }),
+    ).toBe("All Projects");
+  });
+
+  it("falls back to the Project id if a PROJECT scope somehow carries no canonical record", () => {
+    expect(
+      projectScopeLabel({
+        scope: { kind: "PROJECT", projectId: PROJECT },
+        source: "preference",
+        project: null,
+        normalized: false,
+      }),
+    ).toBe(PROJECT);
+  });
+});
+
 describe("Project Scope provider", () => {
   it("increments a monotonic epoch without broadly remounting authenticated shell state", async () => {
     const user = userEvent.setup();
@@ -88,6 +126,7 @@ describe("Project Scope provider", () => {
     expect(screen.getByTestId("local")).toHaveTextContent("1");
     expect(screen.getByTestId("current")).toHaveTextContent("true");
     expect(screen.getByTestId("initial-current")).toHaveTextContent("false");
+    expect(screen.getByTestId("name")).toHaveTextContent("Original Project");
   });
 
   it("does not advance for the same scope/version but does for a new canonical version", async () => {

@@ -244,6 +244,7 @@ jobs:
           MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/webauthn.spec.ts e2e/auth-public.spec.ts e2e/browser-security.spec.ts e2e/work-mutations.spec.ts e2e/review-decisions.spec.ts e2e/journeys.spec.ts e2e/reports-contract.spec.ts e2e/people-contract.spec.ts e2e/intelligence-journey.spec.ts e2e/search-contract.spec.ts e2e/goodnotes.spec.ts e2e/canvas.spec.ts e2e/system.spec.ts e2e/diagnostics-visibility.spec.ts e2e/constraints-read-plane.spec.ts e2e/project-controls-settings.spec.ts e2e/capture-project.spec.ts e2e/capture-task-project.spec.ts --project=desktop
       - name: Run the Constraint authoring real-stack desktop e2e
         env:
+          CI_CONSTRAINT_DIAGNOSTIC: "1"
           MYPA_E2E_PYTHON: python
           MYPA_E2E_ADMIN_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/postgres
           MYPA_E2E_DATABASE_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/my_pa_wp13_e2e
@@ -255,6 +256,7 @@ jobs:
           # the step above asserts exact seed counts; never merge the two lists.
           python_bin="$(command -v python)"
           test -x "${python_bin}"
+          node --test e2e/ci-constraint-reporter.test.mjs
           MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/constraints-mutations.spec.ts --project=desktop
 
   accessibility:

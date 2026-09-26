@@ -32,14 +32,17 @@ classifiers = [
 #                     resolve. Raised to the number the dependency graph
 #                     actually requires rather than to a round one.
 #   SQLAlchemy        Core engine, connection pool, and dialect. The floor is
-#                     2.0.32: this project declares mypy>=1.11, and SQLAlchemy
-#                     2.0.32 is the first release whose internal typing was
-#                     made compatible with mypy 1.11. The Work read plane also
-#                     relies on typed Core function, case, label, ordering, and
-#                     row expressions, so 2.0.20's earlier typing surface is no
-#                     longer an honest checked floor. This remains above the
-#                     prior 2.0.20 floor where PostgreSQL `insert` gained its
-#                     typed return. Removal path: raw psycopg.
+#                     2.0.32: that release is the first whose internal typing
+#                     matched the mypy 1.11 era, and the Work read plane relies
+#                     on typed Core function, case, label, ordering, and row
+#                     expressions, so 2.0.20 is not an honest checked floor.
+#                     The ceiling is <2.1. SQLAlchemy 2.1.0 renders the lexical
+#                     search EXPLAIN cast bind as `:name::VARCHAR`, which
+#                     PostgreSQL rejects, and 2.1.1 fails bare mypy 2.3.1
+#                     (121 errors). 2.0.54 remains the maintained 2.0 line.
+#                     Removal path: raw psycopg. A later 2.1 project must fix
+#                     the EXPLAIN text and the Select typing before widening
+#                     this range.
 #   psycopg[binary]   the PostgreSQL driver SQLAlchemy's `postgresql+psycopg`
 #                     dialect requires. 3.2 is the floor for the current
 #                     `psycopg.rows`/pipeline behaviour. `[binary]` ships a
@@ -191,7 +194,7 @@ classifiers = [
 dependencies = [
   "pydantic>=2.12,<3",
   "PyJWT[crypto]>=2.10.1,<3",
-  "SQLAlchemy>=2.0.32,<3",
+  "SQLAlchemy>=2.0.32,<2.1",
   # 3.2.1, not 3.2: psycopg 3.2.0's own `binary` extra requires
   # `psycopg-binary==3.2.0.dev1`, which was never published to PyPI, so
   # `psycopg[binary]==3.2` cannot resolve on CPython -- the marker is
@@ -207,7 +210,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["mypy>=1.11", "pytest>=8.2", "ruff>=0.6"]
+# mypy 1.11.0 fails this tree on PEP 695, and 1.20.2 still reports one
+# unreachable error under SQLAlchemy 2.0.51. 2.3.1 is the first measured
+# clean mypy. validate and dependency-floor both install the newest mypy.
+dev = ["mypy>=2.3.1", "pytest>=8.2", "ruff>=0.6"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

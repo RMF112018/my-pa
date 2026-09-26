@@ -11,24 +11,106 @@ that approval, or its absence, from a running container or this document.
 Hostname throughout: `pa.bobby-fetting.me`. Canonical origin:
 `https://pa.bobby-fetting.me`. WebAuthn RP ID: `pa.bobby-fetting.me`.
 
-**Dated observation, not an admission (2026-09-23 UTC).** A bounded read-only
-`ssh bf-nas` observation with strict host-key checking reached
-`TheLakeHouseNAS`. Docker reported a linux/x86_64 engine with ID
-`dae23744-d1a7-4a18-85bb-8be28855fe4e`, project
-`my-pa-nas-contract`, and eight running containers: the canonical six plus
-`public-proxy` and `frontend-cloudflared`. The six canonical restart policies
-were `no`, consistent with smoke Compose, but the selected/admitted lifecycle
-mode was not authenticated. The clean root-owned mode-0700 checkout at
-`/volume1/my-pa/runtime-f0f7869e-smoke-20260914T151915Z` had HEAD
-`f0f7869e92e3acd3c3503658a121be8a4a28be0a` and tree
-`45d0e89ab91c8610df2114835e875a7a55d5cbef`, matching running app source
-labels. The observed proxy RepoDigest was
-`caddy@sha256:98eb57d882ccd5213d1688764db10c1ca2c58a1ca3a6717a3411ad798f7a423a`;
-it is not approval for a future candidate. `/volume1/my-pa/deployment` was
-absent. Active image-manifest and admission paths, Compose authority, backup
-and database revision, DNS/public reachability, and activation approval were
-not established. Reauthenticate all of them at the next action boundary; do
-not carry this snapshot forward as current state.
+**Dated observation, not a gate admission (2026-09-26 UTC).** A read-only
+`ssh bf-nas` check reached `TheLakeHouseNAS`. `https://pa.bobby-fetting.me/`
+is served by the 2026-09-24 package, not by a later `origin/main`. Reauthenticate
+before the next action; do not treat this snapshot as a future image selection.
+
+Public route, verified by container identity plus an unauthenticated
+`GET /api/health`:
+
+- `frontend-cloudflared` ingress is `hostname: pa.bobby-fetting.me` →
+  `service: http://public-proxy:8080`, then `http_status:404`. The tunnel
+  image is `cloudflare/cloudflared:2026.7.3`. That container has no `sh`, so
+  read the mounted config on the host; `docker exec sh` fails.
+- `public-proxy` reverse-proxies to `web:3000` and accepts only host
+  `pa.bobby-fetting.me`.
+- `web` is on `my-pa-nas-contract_browser-origin` and
+  `my-pa-nas-contract_ingress-plane`. Its image is
+  `sha256:6f19619c20e3f6a1f9d11efd510af1b7a71cffb817a6584149392ef481c1f20e`,
+  revision `cf17f7f27cb6463817e470b06f306baa10f697c2`, tree
+  `6a6f79cd38b5180ff46c77c1641fc4cea95d8287`, built `2026-09-24T12:46:39Z`.
+  `MYPA_CANONICAL_ORIGIN` is `https://pa.bobby-fetting.me`.
+- Gateway and both workers use app image
+  `sha256:108456a288c20c847e2694dab379aa6420e953909bc4d7b62bae2454a413eb01`
+  with the same revision. The gateway healthcheck was `healthy`.
+- The public response was `{"ok":true,"status":"live"}` with `via: 1.1 Caddy`
+  and `server: cloudflare`. That web check does **not** prove the gateway
+  migration probe. `apps/cli/health.py` is the probe that refuses a database
+  not at the repository head.
+
+`origin/main` later moved to `141758b93d8fccf5b571536ee41099685f2f95cf`
+(Constraint desktop end-to-end reporter and frontend CI only). That commit is
+not in the running images.
+
+**Executed upgrade, 2026-09-24 UTC, with named deviations.** The package was
+built by `ops/nas/build-candidates.sh` from a clean detached checkout of
+then-current `origin/main` (`cf17f7f2` / `6a6f79cd`). The NAS accepted the
+Git bundle by `tar` over `ssh -o BatchMode=yes`. macOS `rsync` rejected
+`--info`, and the NAS SSH server refused the `scp` subsystem. The checkout
+is `/volume1/my-pa/runtime-cf17f7f2-prod-20260924` (root, mode `0700`).
+Archives are root-owned mode `0400` under
+`/volume1/my-pa/artifacts/cf17f7f2-20260924`.
+
+`bootstrap-operator-runtime.sh` admitted the new operator image and the
+canonical operator admission was switched to that source. `load-candidates.sh`
+then failed. The failure is Synology path compatibility, not a bad image or
+Compose file:
+
+- `ops/nas/container-python.sh` walks trusted paths and refuses a symlink.
+  The error returned was `trusted path contains a symbolic link`.
+- On this NAS, `/var/run` → `../run` (so `/var/run/docker.sock` fails first).
+  `/usr/local/bin/docker`, `/usr/local/bin/docker-compose`, and `/usr/bin/git`
+  are also symlinks into DSM packages and fail the same class of check.
+- `load-candidates.sh` hides that stderr and prints `NAS tooling requires
+  Python 3.12 or newer with tomllib` for any wrapper failure. Host Python is
+  3.8.15. Do not treat that sentence as the cause.
+
+Because the loader could not run, these gates were **not** executed:
+`load-candidates.sh`, deployable image-manifest admission,
+`/etc/my-pa/image-manifest.toml` update (it still described `f0f7869e`),
+runtime-admission and PostgreSQL-bootstrap regeneration, preserved-runtime
+`backup.sh`, `migrate.sh`, `start.sh`, firewall `plan`/`check`, writer
+quiescence, and scratch restore. Do not describe this cutover as a gated
+admission.
+
+What did run, under explicit operator instruction to deploy the package:
+
+- `docker load` of `app.tar` and `web.tar` only. Inspected IDs matched the
+  candidate manifest. PostgreSQL
+  `sha256:1edc8e87e53194e0cc8006c4e9df9b626c6c72cb43ad3385f0f34af7922065b1`
+  and Caddy
+  `sha256:af555904a0961945f16bb323a501457b13a4f7e9bde969b145b97da80b38ecbe`
+  already matched the candidate, so those archives were not loaded and those
+  containers were not recreated. The private proxy stayed on its previous
+  container.
+- Versioned `production.cf17f7f2.env` and `web.cf17f7f2.env` replaced only
+  app/web image IDs, `MYPA_SOURCE_COMMIT`, `MYPA_SOURCE_TREE`, and
+  `MY_PA_WEB_ENV_FILE`. No secret was printed.
+- `docker compose` used both `ops/nas/compose.example.yml` and
+  `ops/nas/compose.public-browser.example.yml`, profiles
+  `nas-01-contract-only` and `public-browser-edge`, and `--no-build --pull never`,
+  for `gateway`, both workers, `web`, `public-proxy`, and
+  `frontend-cloudflared`. PostgreSQL stayed the same container.
+  `start.sh` alone would recreate `web` without `browser-origin`, which drops
+  it off this public proxy. The overlay is what keeps
+  `https://pa.bobby-fetting.me/` on the new web container. Recreating the
+  edge containers did not change the tunnel image or the Caddy upstream.
+- Gateway health then reported revision `e6a4c2f91b73` and head
+  `6f6ead27d122`: the database was not at the migration head and could not
+  serve the build. Public `/api/health` was already `live`. A custom-format
+  `pg_dump` as role `postgres` failed because that role does not exist; the
+  cluster role is `my_pa` (`POSTGRES_USER` / `POSTGRES_DB`). The dump is
+  `/volume1/my-pa/backups/pre-cf17f7f2-20260924T125757Z.dump`
+  (3,734,716 bytes, SHA-256
+  `58de69b7b92b97ffeca61be14fc2e6cfedf1644f5af2974acf924a233f419639`).
+  `alembic upgrade head` inside the new gateway container applied
+  `6f6ead27d122`. Its downgrade is a no-op. The gateway healthcheck then
+  became `healthy`.
+
+Do not repeat the ungated load, Compose, or Alembic steps unless the operator
+explicitly accepts those deviations again. The next gated attempt still stops
+at `container-python.sh` until the symlink contract matches this NAS.
 
 ## PREPARE / GATED UPGRADE
 
@@ -108,8 +190,16 @@ restart or image replacement from changing live public traffic.
    and rollback-safe atomic switch of *only* that canonical operator admission
    must pass before `load-candidates.sh`; the old image manifest, runtime and
    PostgreSQL bootstrap admissions, Compose selection, and protected values
-   remain old. Load/admit all four runtime images against the live engine and
-   issue the new deployable image manifest. Verify that the preserved old
+   remain old. Before `load-candidates.sh`, run the new checkout's
+   `container-python.sh` directly and keep its stderr. On this NAS it exits
+   `trusted path contains a symbolic link` because `/var/run` is a symlink and
+   the Docker and Git binaries are DSM package symlinks.
+   `load-candidates.sh` rewrites every such failure as a Python 3.12 error.
+   That is not image or Compose failure, and host Python 3.8 is not the
+   defect. Stop there; do not `docker load` around it unless the operator
+   explicitly accepts the deviations in the 2026-09-24 observation above.
+   When the wrapper does accept the paths, load/admit all four runtime images
+   and issue the new deployable image manifest. Verify that the preserved old
    checkout is reachable to the new operator wrapper for the later backup, or
    stop. See the workflow for the exact ordering and failure recovery.
 5. **Prospective configuration.** Generate new runtime and PostgreSQL
@@ -154,14 +244,23 @@ restart or image replacement from changing live public traffic.
    original PostgreSQL container ID and
    resource gate to survive, then six exact services, `ops/nas/health.sh`,
    repository-derived migration head, and restoration of only previously
-   running compatible dependents. Do not alter existing `public-proxy` or
-   `frontend-cloudflared` state as part of this smoke upgrade, but do not call
-   the upgrade private-only for that reason.
+   running compatible dependents. `start.sh` does not apply
+   `compose.public-browser.example.yml`, so the recreated `web` service is
+   not on `browser-origin`. While `https://pa.bobby-fetting.me/` is routed
+   `public-proxy` → `web:3000` on that network, apply the public overlay to
+   `web` in the same recreation or the public route no longer reaches the new
+   container. Do not change tunnel credentials, DNS, or the Caddy upstream as
+   part of that attachment, and do not call the upgrade private-only.
 8. **Post-start transport smoke and stop boundary.** Check the private web health
    response (`{ ok: true, status: "live" }` in production passkey mode), exact
    `node server.js` process, full source commit/tree, absent browser Entra/MSAL
-   variables, and private proxy refusal of machine-internal `/v1/*`. This is
-   transport/configuration evidence, not production WebAuthn sign-in. The
+   variables, and private proxy refusal of machine-internal `/v1/*`. The same
+   JSON from `https://pa.bobby-fetting.me/api/health` proves only that the
+   public web process answered through Caddy and Cloudflare. It does not prove
+   `apps/cli/health.py` or the gateway healthcheck. Require the gateway probe
+   to report the repository-derived Alembic head before calling the upgrade
+   ready. This is transport/configuration evidence, not production WebAuthn
+   sign-in. The
    canonical-origin procedure in
    [`auth-runtime-validation.md`](auth-runtime-validation.md) requires valid TLS,
    the exact RP ID, and separate activation authority. Do not change DNS,

@@ -105,6 +105,7 @@ from my_pa.contracts.ports import (
     ManagedByteStore,
     ManagedDocumentRepository,
     ManagedWriteRequest,
+    MeetingRepository,
     MemoryDetail,
     MemoryListingFacts,
     MemoryPage,
@@ -8689,6 +8690,11 @@ class FakeUnitOfWork(UnitOfWork):
     def entities(self) -> EntitiesRepository:
         """The relationship-intelligence entity plane over this `World`."""
         return _Entities(self._world)
+
+    @property
+    def meetings(self) -> MeetingRepository:
+        """Placeholder only (WP-MTG-02, plan D-10/D-31); the working fake is WP-MTG-04's."""
+        raise NotImplementedError("Meeting in-memory fake is WP04-owned")
 
     @property
     def identity_history(self) -> object:

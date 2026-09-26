@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Collection, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from hashlib import sha256
@@ -50,6 +50,14 @@ from types import TracebackType
 from typing import Any, ClassVar, Protocol
 
 from my_pa.contracts.v1.disclosure import Disclosure
+from my_pa.contracts.v1.meetings import (
+    MeetingHistoryView,
+    MeetingListEntry,
+    MeetingNoteView,
+    MeetingSeriesHistoryView,
+    MeetingSeriesView,
+    MeetingView,
+)
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.audit.events import AuditEvent
 from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS, ProposalState
@@ -93,6 +101,12 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesReviewCase,
     GoodNotesSemanticProposal,
     GoodNotesSemanticReviewCase,
+)
+from my_pa.domain.meeting.model import (
+    MeetingListRequest,
+    MeetingSearchRequest,
+    MeetingStatus,
+    NormalizedAttendee,
 )
 from my_pa.domain.policy.decision import validate_policy_version
 from my_pa.domain.project_controls.category import ConstraintCategory, ConstraintCategoryState
@@ -334,6 +348,15 @@ __all__ = [
     "ManagedByteStore",
     "ManagedDocumentRepository",
     "ManagedWriteRequest",
+    "MeetingAttachmentRecord",
+    "MeetingAttendeeRecord",
+    "MeetingCursorAnchor",
+    "MeetingEntityState",
+    "MeetingListPage",
+    "MeetingNoteRecord",
+    "MeetingRecord",
+    "MeetingRepository",
+    "MeetingWriteRequestRecord",
     "Operation",
     "OperationQueue",
     "PortError",
@@ -4959,6 +4982,21 @@ class UnitOfWork(ABC):
         """
 
     @property
+    @abstractmethod
+    def meetings(self) -> MeetingRepository:
+        """The Meeting records rows, inside this transaction (WP-MTG-02).
+
+        On the general unit of work rather than a Meeting-specific one: a
+        Meeting write reserves its request, locks its parent, writes its
+        children, history and note, and completes its request in the one
+        transaction `ApplicationService.invoke` already owns, so any failure
+        rolls every one of those rows back together.
+
+        `principal_id` remains a parameter on every method of the port and is
+        the authenticated caller's partition, never a caller-supplied field.
+        """
+
+    @property
     def identity_history(self) -> object:
         """The optional Principal-scoped identity-history read projection.
 
@@ -7150,4 +7188,385 @@ class ConstraintManagementUnitOfWork(ABC):
         re-version a Project; the Situation plane remains the only writer of
         Project state. What a Constraint service is entitled to is the lock and
         the ownership answer it returns.
+        """
+
+
+# --- WP-MTG-02 Meeting records ports -----------------------------------------
+#
+# The values below cross the Meeting port. None of them carries a `principal_id`:
+# the Principal is a parameter on every `MeetingRepository` method, taken from
+# the authenticated request, and the repository stamps it on every write and
+# constrains every read by it (plan D-23/D-24). Reads answer in the public
+# `contracts.v1.meetings` views, so the application and the transports see one
+# shape of a Meeting.
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingWriteRequestRecord:
+    """One durable `meeting_write_requests` row, as the arbitration reads it.
+
+    `completed_at is None` is an incomplete reservation, which names no result.
+    A completed row names what the original write produced and carries its
+    immutable receipt, so a replay can answer with the original receipt beside
+    the current aggregate (package section 35.7). A completed
+    `meetings.create`/`meetings.update` row carries its Meeting receipt; a
+    completed `meetings.series.update` row carries its series receipt; a create
+    that also created its series carries both.
+    """
+
+    capability: str
+    request_digest: str
+    created_at: datetime
+    completed_at: datetime | None = None
+    meeting_id: str | None = None
+    meeting_series_id: str | None = None
+    meeting_history_id: str | None = None
+    meeting_series_history_id: str | None = None
+    result_version: int | None = None
+    meeting_receipt: MeetingHistoryView | None = None
+    series_receipt: MeetingSeriesHistoryView | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingRecord:
+    """The scalar state of one Meeting occurrence, exactly as it is written.
+
+    `meeting_series_id` and `created_at` are written by `insert_meeting` only;
+    `update_meeting` never rewrites either (a Meeting's series is immutable
+    after create in v1).
+    """
+
+    meeting_id: str
+    meeting_series_id: str | None
+    title: str
+    start_at: datetime
+    end_at: datetime | None
+    timezone_name: str
+    status: MeetingStatus
+    cancelled_at: datetime | None
+    location_text: str | None
+    virtual_meeting_url: str | None
+    description: str | None
+    project_id: str | None
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingAttendeeRecord:
+    """One active attendee relationship to insert: its minted id and snapshot."""
+
+    attendee_id: str
+    attendee: NormalizedAttendee
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingAttachmentRecord:
+    """One active Meeting-to-ManagedDocument relationship to insert."""
+
+    attachment_id: str
+    document_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingNoteRecord:
+    """One immutable full-body note version to insert.
+
+    `supersedes_note_version_id` is `None` exactly for `version_number == 1`;
+    `meeting_history_id` is the receipt of the write that created it.
+    """
+
+    note_version_id: str
+    meeting_id: str
+    version_number: int
+    supersedes_note_version_id: str | None
+    content_markdown: str
+    content_sha256: str
+    meeting_history_id: str
+    recorded_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingEntityState:
+    """What an attendee Entity reference validates against, read under `FOR SHARE`."""
+
+    entity_id: str
+    entity_type: str
+    status: str
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingCursorAnchor:
+    """The keyset position of a resolved `after` anchor."""
+
+    start_at: datetime
+    meeting_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class MeetingListPage:
+    """One bounded page of Meeting list rows, and whether another page follows."""
+
+    entries: tuple[MeetingListEntry, ...]
+    has_more: bool
+
+
+class MeetingRepository(ABC):
+    """The Meeting records tables, on the general unit of work's connection.
+
+    The operation set is exactly package section 35.10's: reserve, read and
+    complete a write request; lock a Meeting or MeetingSeries parent `FOR
+    UPDATE`; lock referenced Person Entities `FOR SHARE` in ascending id order;
+    read Project, ManagedDocument and existing-series references without any row
+    lock; write the parent, its attendee and attachment relations, its immutable
+    history and note versions; and read, list and search. No method locks a child
+    row, a Project or a ManagedDocument.
+
+    Absent and foreign rows are indistinguishable: every read and every lock is
+    constrained to `principal_id`, so another Principal's row answers exactly as
+    a missing one does.
+    """
+
+    # --- write-request arbitration ---------------------------------------
+
+    @abstractmethod
+    def reserve_write_request(
+        self,
+        principal_id: str,
+        capability: str,
+        idempotency_key: str,
+        request_digest: str,
+        *,
+        created_at: datetime,
+    ) -> MeetingWriteRequestRecord | None:
+        """Reserve first use of the key, or answer with the durable winner.
+
+        `None`: this transaction now owns the incomplete reservation. A record:
+        the same digest already completed, so the caller replays it. A different
+        digest raises `MeetingIdempotencyConflictError`; the same digest still
+        incomplete after the competing transaction ended raises
+        `RepositoryFailureError`. No raw `IntegrityError` escapes.
+        """
+
+    @abstractmethod
+    def read_write_request(
+        self, principal_id: str, capability: str, idempotency_key: str
+    ) -> MeetingWriteRequestRecord | None:
+        """The durable request row for this key, or `None`. Nonlocking."""
+
+    @abstractmethod
+    def complete_write_request(
+        self,
+        principal_id: str,
+        capability: str,
+        idempotency_key: str,
+        *,
+        request_digest: str,
+        meeting_id: str | None,
+        meeting_series_id: str | None,
+        meeting_history_id: str | None,
+        meeting_series_history_id: str | None,
+        result_version: int,
+        completed_at: datetime,
+    ) -> None:
+        """Complete this transaction's own incomplete reservation, exactly once.
+
+        Raises `RepositoryFailureError` when no incomplete reservation with this
+        digest exists in this transaction's view.
+        """
+
+    # --- parent locks and reference reads ---------------------------------
+
+    @abstractmethod
+    def lock_meeting_for_update(self, principal_id: str, meeting_id: str) -> MeetingView | None:
+        """`SELECT … FOR UPDATE` the Meeting row, then read its current view.
+
+        Only the Meeting row is locked; children, series title and note head are
+        read afterwards, under that lock, without row locks of their own.
+        """
+
+    @abstractmethod
+    def lock_series_for_update(
+        self, principal_id: str, meeting_series_id: str
+    ) -> MeetingSeriesView | None:
+        """`SELECT … FOR UPDATE` the MeetingSeries row. No occurrence is locked."""
+
+    @abstractmethod
+    def read_owned_series(
+        self, principal_id: str, meeting_series_id: str
+    ) -> MeetingSeriesView | None:
+        """The MeetingSeries, read without a lock (occurrence create)."""
+
+    @abstractmethod
+    def share_lock_person_entities(
+        self, principal_id: str, entity_ids: Collection[str]
+    ) -> tuple[MeetingEntityState, ...]:
+        """`SELECT … FOR SHARE` the named Entities, in ascending `entity_id` order.
+
+        Returns the rows found in this Principal's partition, ascending; an
+        absent or foreign id is simply missing. The caller validates PERSON and
+        ACTIVE. An empty request issues no statement.
+        """
+
+    @abstractmethod
+    def project_is_owned(self, principal_id: str, project_id: str) -> bool:
+        """Whether this Principal owns the Project, in any state. Nonlocking."""
+
+    @abstractmethod
+    def owned_managed_documents(
+        self, principal_id: str, document_ids: Collection[str]
+    ) -> Mapping[str, DocumentState]:
+        """The current state of each named document this Principal owns. Nonlocking.
+
+        An absent or foreign document has no key. An empty request issues no
+        statement.
+        """
+
+    # --- writes ------------------------------------------------------------
+
+    @abstractmethod
+    def insert_series(self, principal_id: str, series: MeetingSeriesView) -> None:
+        """Insert one new MeetingSeries row."""
+
+    @abstractmethod
+    def update_series_title(
+        self,
+        principal_id: str,
+        meeting_series_id: str,
+        *,
+        title: str,
+        version: int,
+        updated_at: datetime,
+    ) -> None:
+        """Rewrite the locked series' title and version. No occurrence changes."""
+
+    @abstractmethod
+    def insert_series_history(
+        self,
+        principal_id: str,
+        receipt: MeetingSeriesHistoryView,
+        *,
+        idempotency_key: str,
+        request_digest: str,
+    ) -> None:
+        """Insert one immutable MeetingSeries receipt."""
+
+    @abstractmethod
+    def insert_meeting(self, principal_id: str, meeting: MeetingRecord) -> None:
+        """Insert one new Meeting occurrence row."""
+
+    @abstractmethod
+    def update_meeting(self, principal_id: str, meeting: MeetingRecord) -> None:
+        """Rewrite the locked Meeting's mutable scalar state.
+
+        Never rewrites `meeting_series_id` or `created_at`. Raises
+        `RepositoryFailureError` when the row is not in this partition.
+        """
+
+    @abstractmethod
+    def retire_attendees(
+        self,
+        principal_id: str,
+        meeting_id: str,
+        attendee_ids: Collection[str],
+        *,
+        removed_at: datetime,
+    ) -> int:
+        """Stamp `removed_at` on the named active attendees; the count retired."""
+
+    @abstractmethod
+    def insert_attendees(
+        self,
+        principal_id: str,
+        meeting_id: str,
+        attendees: Sequence[MeetingAttendeeRecord],
+        *,
+        added_at: datetime,
+    ) -> None:
+        """Insert active attendee relationships, in the order given."""
+
+    @abstractmethod
+    def retire_attachments(
+        self,
+        principal_id: str,
+        meeting_id: str,
+        attachment_ids: Collection[str],
+        *,
+        removed_at: datetime,
+    ) -> int:
+        """Stamp `removed_at` on the named active attachments; the count retired.
+
+        Only the relation is retired: the ManagedDocument is never touched.
+        """
+
+    @abstractmethod
+    def insert_attachments(
+        self,
+        principal_id: str,
+        meeting_id: str,
+        attachments: Sequence[MeetingAttachmentRecord],
+        *,
+        added_at: datetime,
+    ) -> None:
+        """Insert active attachment relationships, in the order given."""
+
+    @abstractmethod
+    def insert_meeting_history(
+        self,
+        principal_id: str,
+        receipt: MeetingHistoryView,
+        *,
+        meeting_series_id: str | None,
+        idempotency_key: str,
+        request_digest: str,
+    ) -> None:
+        """Insert one immutable Meeting receipt."""
+
+    @abstractmethod
+    def insert_note_version(self, principal_id: str, note: MeetingNoteRecord) -> None:
+        """Insert one immutable note version."""
+
+    # --- reads -------------------------------------------------------------
+
+    @abstractmethod
+    def current_note(self, principal_id: str, meeting_id: str) -> MeetingNoteView | None:
+        """The Meeting's current note head: the version no other supersedes."""
+
+    @abstractmethod
+    def read_meeting(self, principal_id: str, meeting_id: str) -> MeetingView | None:
+        """The Meeting's full current view, or `None` when absent or foreign."""
+
+    @abstractmethod
+    def list_meetings(
+        self, principal_id: str, request: MeetingListRequest, *, now: datetime
+    ) -> MeetingListPage:
+        """One keyset page over `(start_at, meeting_id)` under the request's filters.
+
+        An `after` anchor is resolved through `resolve_cursor_anchor`.
+        """
+
+    @abstractmethod
+    def search_meetings(
+        self, principal_id: str, request: MeetingSearchRequest, *, now: datetime
+    ) -> MeetingListPage:
+        """One keyset page of Meetings matching the query under the filters.
+
+        The query matches the core text, the series title, or the current note
+        only; attendee names and emails are never searched lexically.
+        """
+
+    @abstractmethod
+    def resolve_cursor_anchor(
+        self,
+        principal_id: str,
+        request: MeetingListRequest,
+        *,
+        now: datetime,
+        query: str | None = None,
+    ) -> MeetingCursorAnchor:
+        """The keyset position of `request.after` under the identical filters.
+
+        Raises `MeetingCursorError` when the anchor is absent, foreign, or
+        outside the filter set (and, with `query`, outside the match set).
         """

@@ -77,6 +77,7 @@ from my_pa.contracts.ports import (
     KnowledgeRecord,
     KnowledgeRepository,
     ManagedDocumentRepository,
+    MeetingRepository,
     Operation,
     OperationQueue,
     ProjectRepository,
@@ -178,6 +179,7 @@ from my_pa.infrastructure.persistence.knowledge import (
     scope_beyond_enrollment,
 )
 from my_pa.infrastructure.persistence.managed_documents import SqlManagedDocumentRepository
+from my_pa.infrastructure.persistence.meetings import SqlMeetingRepository
 from my_pa.infrastructure.persistence.principal_scope import capture_context
 from my_pa.infrastructure.persistence.registry import (
     UnknownSourceError,
@@ -1231,6 +1233,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def entities(self) -> EntitiesRepository:
         """The generalized entity rows, on this transaction's connection."""
         return SqlEntityRepository(self._open)
+
+    @property
+    def meetings(self) -> MeetingRepository:
+        """The Meeting records rows, on this transaction's connection (WP-MTG-02)."""
+        return SqlMeetingRepository(self._open)
 
     @property
     def identity_history(self) -> SqlIdentityHistoryQuery:

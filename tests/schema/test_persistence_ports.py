@@ -52,6 +52,7 @@ from my_pa.infrastructure.persistence.extraction import (
     record_outcome,
 )
 from my_pa.infrastructure.persistence.jobs import enqueue_job
+from my_pa.infrastructure.persistence.meetings import SqlMeetingRepository
 from my_pa.infrastructure.persistence.registry import observe_object, register_source
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
@@ -378,6 +379,35 @@ def test_a_repository_is_unavailable_outside_a_transaction(engine: Engine) -> No
     work, _ = unit_of_work(engine)
     with pytest.raises(RuntimeError, match="not inside a transaction"):
         _ = work.sources
+
+
+def test_the_unit_of_work_declares_the_meeting_repository() -> None:
+    """WP-MTG-02: `meetings` is an abstract property of the general unit of work.
+
+    Abstract, not a refusing default: every unit of work must say what it does
+    with the Meeting plane, which is what made the five direct subclasses
+    (plan D-10) each state it explicitly.
+    """
+    assert "meetings" in UnitOfWork.__abstractmethods__
+    assert isinstance(UnitOfWork.__dict__["meetings"], property)
+
+
+def test_the_unit_of_work_serves_the_meeting_repository_on_its_connection(
+    engine: Engine,
+) -> None:
+    """WP-MTG-02: a fresh repository per access, bound to the open transaction."""
+    work, _ = unit_of_work(engine)
+    with pytest.raises(RuntimeError, match="not inside a transaction"):
+        _ = work.meetings
+    with work as opened:
+        repository = opened.meetings
+        assert isinstance(repository, SqlMeetingRepository)
+        assert (
+            repository.read_meeting(
+                issue_identifier(IdKind.PRINCIPAL), issue_identifier(IdKind.MEETING)
+            )
+            is None
+        )
 
 
 def test_a_broken_read_becomes_a_port_failure_and_carries_no_statement(

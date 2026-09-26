@@ -24,6 +24,7 @@ from my_pa.contracts.ports import (
     GoodNotesSemanticRepository,
     KnowledgeRepository,
     ManagedDocumentRepository,
+    MeetingRepository,
     OperationQueue,
     PortError,
     ProjectRepository,
@@ -218,6 +219,10 @@ class GsqsB0EvaluationUnitOfWork(UnitOfWork):
     @property
     def entities(self) -> EntitiesRepository:
         return cast(EntitiesRepository, self._unused)
+
+    @property
+    def meetings(self) -> MeetingRepository:
+        return cast(MeetingRepository, self._unused)
 
     @property
     def context_runs(self) -> ContextRunRepository:

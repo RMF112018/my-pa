@@ -13,11 +13,11 @@ from my_pa.application.errors import (
     SafeDetail,
     problem_detail,
 )
-from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.application.service import (
     _classified_publish_error,
     _constraint_mutation_translated,
 )
+from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.project_controls.constraint import (
     ConstraintFieldKey,
@@ -39,9 +39,8 @@ def _public(error: Exception) -> str:
 
 
 def test_lifecycle_error_stays_lifecycle_state() -> None:
-    with pytest.raises(InvalidRequestError) as caught:
-        with _constraint_mutation_translated():
-            raise ConstraintLifecycleError("constraint_lifecycle_move_prohibited", "no")
+    with pytest.raises(InvalidRequestError) as caught, _constraint_mutation_translated():
+        raise ConstraintLifecycleError("constraint_lifecycle_move_prohibited", "no")
     assert caught.value.safe_details == (SafeDetail.LIFECYCLE_STATE,)
     _public(caught.value)
 
@@ -133,7 +132,9 @@ def test_three_families_are_constraints_and_sync_stays_out_of_that_filter() -> N
             "tasks.list",
         }
     )
-    catalog = json.loads(render_describe({"feature": "constraints", "limit": 25}, allowed_canonical=allowed))
+    catalog = json.loads(
+        render_describe({"feature": "constraints", "limit": 25}, allowed_canonical=allowed)
+    )
     names = {row["capability"] for row in catalog["items"]}
     assert names == {
         "constraints.publish",

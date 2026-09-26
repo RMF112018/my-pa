@@ -63,22 +63,38 @@ administrator. The machine-readable policy is
 `src/my_pa/domain/identity/chatllm_capability_policy.py` at profile version
 `chatllm-data-v2`. Do not grant every `Capability` enum member.
 
-On the current head, the derived **effective** ChatLLM catalog is 147 names
-when documents, relationship intelligence (with writes), relationship memory,
-and constraints are composed. The policy-data target is 153 names: those 147
-plus the six unimplemented Run-01 Project Controls names, which remain
-`not_implemented` and must not be treated as grant failures until handlers
-exist. `gsqs.start` / `gsqs.status` stay omitted pending a separate
-reclassification. Report-cycle writes (`reports.begin_cycle`,
-`reports.commit`, `reports.record_run_state`) are ChatLLM `DATA_REQUIRED` /
-full-data eligible. `continuity.tasks.create` is
-compatibility-only; use Work `tasks.create`. Identity correction, source
+On the current head, the derived **effective** ChatLLM catalog is the
+intersection of the implemented capability set, the composed planes, and the
+ChatLLM data-management classification; the `profile-*` commands derive it
+from the same `application_composition_state` the gateway serves, so
+"available" and "remotely reachable" are one decision. `gsqs.start` /
+`gsqs.status` stay omitted pending a separate reclassification. Report-cycle
+writes (`reports.begin_cycle`, `reports.commit`, `reports.record_run_state`)
+are ChatLLM `DATA_REQUIRED` / full-data eligible. `continuity.tasks.create`
+is compatibility-only; use Work `tasks.create`. Identity correction, source
 enrollment, GoodNotes pull, and `constraint_sync.*` are control-plane
 exclusions.
 
 Dedicated ChatLLM **required data grants** use `expires_at = NULL`. OAuth
 access and refresh tokens remain finite (ADR-009). Client revoke, per-client
 writes, and the global remote-write kill switch remain independent.
+
+The three `profile-*` commands emit the `chatllm-profile-cli-v1` JSON
+contract: top-level keys `schema_version, command, profile_version, target,
+eligibility, gates, pre, post, applied, committed, converged, rolled_back,
+failure`, with the client, resource, and existing grant rows named only by
+`sha256:` fingerprints. `profile-diff` and `profile-plan` never mutate and
+exit `0` only when the profile is converged (healthy and apply-eligible),
+`1` otherwise, and `2` for an unresolvable selector, an unsupported profile
+version, or invalid usage. `profile-apply` is atomic: it locks the client
+row, re-reads grants, mutates in REVOKE then RENEW then ADD phase order, and
+re-reads and recomputes before committing; unless the post-apply state has no
+blockers, no pending revoke/renew/add, exactly one canonical durable active
+grant per desired capability, and no extra profile-owned active grant, the
+transaction rolls back and the CLI emits a rollback document
+(`rolled_back=true`, exit `1` for convergence failures, `3` for unexpected
+database/internal errors). Success JSON is printed only after commit, and
+`applied=true` implies `committed=true` and `converged=true`.
 
 Inspect and (operator-gated) reconcile with:
 
@@ -118,7 +134,7 @@ None of these steps turns production on by existing in this document. Marked
 steps require a separate operator decision.
 
 1. Merge the reviewed pull request.
-2. Migrate a **disposable** database to head `2fe4e13fb449`. A production-shaped
+2. Migrate a **disposable** database to head `7a5c4e9d2b61`. A production-shaped
    database migrate is **operator-only**.
 3. Deploy with `context.prepare` / `context.feedback` **not** granted remotely.
    Image cutover is **operator-only**.
@@ -142,13 +158,17 @@ steps require a separate operator decision.
      --apply
    ```
 
-   Confirm the plan's `add` set is application-data only, Run 01 names are
-   `policy_required_not_implemented` rather than grant failures, and
-   `unexpected_control_plane` is empty. Task writes additionally require
+   Confirm the plan's `pre.counts.add` set is application-data only.
+   `project_controls.configure`, `project_controls.status`, and
+   `constraints.create_published` are implemented, so a missing grant is
+   `MISSING_CANONICAL` and an add, not `DESIRED_NOT_IMPLEMENTED`. No
+   `UNEXPECTED_CONTROL_PLANE_AUTHORITY` condition is present.
+   Task writes additionally require
    `set-client-writes --writes-enabled`, `control --remote-enabled
    --writes-enabled`, and process `MY_PA_REMOTE_WRITES_ENABLED=true`. Reconnect
    ChatLLM after applying so it reloads `tools/list` / `my_pa.describe`.
-   Attestation: effective catalog equals the derived desired set.
+   Attestation: `profile-apply` exits `0` with `converged=true` and the
+   effective catalog equals the derived desired set.
 7. Inspect `tools/list` and confirm the `context.prepare` / `context.feedback`
    descriptions carry the operating contract.
 8. Confirm ChatLLM instructions match the contract above (embed the contract in

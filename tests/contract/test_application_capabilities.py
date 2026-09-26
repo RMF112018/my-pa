@@ -1941,6 +1941,49 @@ def test_an_uncomposed_constraint_plane_refuses_the_request_it_withholds(
     assert envelope.error.code is ErrorCode.UNSUPPORTED
 
 
+def test_derive_available_capabilities_matches_the_service_answer(scene: Scene) -> None:
+    from my_pa.application.service import ApplicationCompositionState, derive_available_capabilities
+
+    service = build_service(scene.world, scene.providers)
+    derived = derive_available_capabilities(
+        frozenset(_HANDLERS),
+        ApplicationCompositionState(
+            managed_documents=True,
+            relationship_intelligence=True,
+            relationship_intelligence_writes=True,
+            relationship_memory=True,
+            producer_origins_registered=True,
+            relationship_identity_correction=True,
+            goodnotes_pull=False,
+            constraints=True,
+        ),
+    )
+    assert derived == service.available_capabilities
+
+
+def test_derive_available_capabilities_withholds_producer_names_without_origins() -> None:
+    from my_pa.application.service import (
+        _PRODUCER_CAPABILITIES,
+        ApplicationCompositionState,
+        derive_available_capabilities,
+    )
+
+    derived = derive_available_capabilities(
+        frozenset(_HANDLERS),
+        ApplicationCompositionState(
+            managed_documents=True,
+            relationship_intelligence=True,
+            relationship_intelligence_writes=True,
+            relationship_memory=True,
+            producer_origins_registered=False,
+            relationship_identity_correction=True,
+            goodnotes_pull=True,
+            constraints=True,
+        ),
+    )
+    assert derived.isdisjoint(_PRODUCER_CAPABILITIES)
+
+
 def test_availability_is_derived_from_the_dispatch_table_and_not_from_a_constant(
     scene: Scene,
 ) -> None:

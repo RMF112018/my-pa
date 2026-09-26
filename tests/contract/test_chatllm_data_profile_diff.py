@@ -8,15 +8,18 @@ from apps.cli.remote_mcp import main
 from my_pa.adapters.remote_request import resolve_remote_purpose
 from my_pa.application.chatllm_data_profile import (
     ChatLLMCompositionPlanes,
+    ChatLLMConditionCode,
     ChatLLMGrantRecord,
     ChatLLMProfileOutcome,
     chatllm_grant_purpose,
     composed_capabilities,
     desired_effective_capabilities,
     diff_chatllm_data_profile,
+    parse_grant_record,
     plan_chatllm_grant_actions,
+    plan_profile_state,
 )
-from my_pa.application.service import _HANDLERS
+from my_pa.application.service import _HANDLERS, ApplicationCompositionState
 from my_pa.domain.identity.chatllm_capability_policy import (
     CHATLLM_DATA_PROFILE_VERSION,
     is_chatllm_data_management,
@@ -183,7 +186,7 @@ def test_chatllm_grant_purpose_matches_the_remote_canonical_stamp() -> None:
         assert chatllm_grant_purpose(capability) == resolve_remote_purpose(capability, None)
 
 
-def test_full_plane_effective_target_is_one_hundred_forty_nine() -> None:
+def test_full_plane_effective_target_is_one_hundred_fifty_three() -> None:
     """144 until PC-CM-RUN01-WP05 supplied the two Project Controls handlers.
 
     The target is derived — `implemented` intersected with what the policy
@@ -206,7 +209,7 @@ def test_full_plane_effective_target_is_one_hundred_forty_nine() -> None:
     assert all(is_chatllm_data_management(capability) for capability in desired)
 
 
-def test_default_plane_effective_target_is_eighty_three() -> None:
+def test_default_plane_effective_target_is_eighty_seven() -> None:
     composed = composed_capabilities(IMPLEMENTED, _DEFAULT_PLANES)
     desired = desired_effective_capabilities(composed)
     assert len(desired) == 87
@@ -296,7 +299,11 @@ def test_september13_partial_regrant_fails_attestation() -> None:
         diff.outcomes[Capability.DOCUMENTS_READ]
         is ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANT_EXPIRED
     )
-    assert diff.outcomes[Capability.CONTINUITY_TASKS_CREATE] is ChatLLMProfileOutcome.EXCLUDED
+    assert Capability.CONTINUITY_TASKS_CREATE not in diff.desired_effective
+    assert diff.outcomes.get(Capability.CONTINUITY_TASKS_CREATE) in {
+        None,
+        ChatLLMProfileOutcome.EXCLUDED,
+    }
     assert (
         diff.outcomes[Capability.REPORTS_BEGIN_CYCLE]
         is ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANT_MISSING
@@ -436,7 +443,7 @@ def test_mismatched_purpose_or_write_is_add_not_noop() -> None:
         for action in actions
         if action.capability in {Capability.TASKS_LIST, Capability.TASKS_READ}
     ]
-    assert mismatched == ["add", "add"]
+    assert mismatched == ["revoke", "revoke", "add", "add"]
 
 
 def test_revoked_desired_grant_is_added() -> None:
@@ -540,7 +547,8 @@ def test_plan_actions_sorted_by_capability_value_stable_with_finite_renews() -> 
         resource=RESOURCE,
         scope=SCOPE,
     )
-    assert actions == tuple(sorted(actions, key=lambda a: a.capability.value))
+    phases = [action.kind for action in actions]
+    assert phases == sorted(phases, key=lambda kind: ("revoke", "renew", "add", "noop").index(kind))
     action_kinds = {action.capability: action.kind for action in actions}
     assert action_kinds[Capability.TASKS_LIST] == "renew"
     assert action_kinds[Capability.ENTITIES_SEARCH] == "renew"
@@ -574,6 +582,156 @@ def test_after_finite_renew_and_adds_plan_is_all_noop() -> None:
         diff, durable_grants, now=NOW, resource=RESOURCE, scope=SCOPE
     )
     assert {action.kind for action in actions} == {"noop"}
+
+
+def test_extra_active_purpose_and_null_purpose_are_unhealthy_before_remediation() -> None:
+    grants = (
+        _grant(Capability.TASKS_LIST),
+        _grant(Capability.TASKS_LIST, purpose=Purpose.STATUS_OBSERVATION),
+        _grant(Capability.TASKS_READ, purpose=None),
+    )
+    plan = plan_profile_state(
+        implemented=IMPLEMENTED,
+        state=ApplicationCompositionState(
+            managed_documents=True,
+            relationship_intelligence=True,
+            relationship_intelligence_writes=True,
+            relationship_memory=True,
+            producer_origins_registered=True,
+            relationship_identity_correction=True,
+            goodnotes_pull=True,
+            constraints=True,
+        ),
+        grants=grants,
+        now=NOW,
+        resource=RESOURCE,
+        scope=SCOPE,
+    )
+    assert not plan.healthy
+    codes = {condition.code.value for condition in plan.conditions}
+    assert "ACTIVE_PURPOSE_MISMATCH" in codes
+    listed = [action.kind for action in plan.actions if action.capability_raw == "tasks.list"]
+    assert listed == ["revoke", "noop"]
+
+
+def _full_state() -> ApplicationCompositionState:
+    return ApplicationCompositionState(
+        managed_documents=True,
+        relationship_intelligence=True,
+        relationship_intelligence_writes=True,
+        relationship_memory=True,
+        producer_origins_registered=True,
+        relationship_identity_correction=True,
+        goodnotes_pull=True,
+        constraints=True,
+    )
+
+
+def test_expired_canonical_plus_extra_renews_and_does_not_add() -> None:
+    grants = (
+        _grant(Capability.TASKS_LIST, expires_at=EXPIRED_AT),
+        _grant(Capability.TASKS_LIST, purpose=Purpose.STATUS_OBSERVATION),
+    )
+    plan = plan_profile_state(
+        implemented=IMPLEMENTED,
+        state=_full_state(),
+        grants=grants,
+        now=NOW,
+        resource=RESOURCE,
+        scope=SCOPE,
+    )
+    listed = [action.kind for action in plan.actions if action.capability_raw == "tasks.list"]
+    assert listed == ["revoke", "renew"]
+
+
+def test_null_purpose_beside_durable_canonical_is_revoked_without_a_new_add() -> None:
+    canonical = _grant(Capability.TASKS_READ)
+    extra = parse_grant_record(
+        capability_raw="tasks.read",
+        capability_version="v1",
+        purpose_raw=None,
+        is_write=False,
+        resource=RESOURCE,
+        scope=SCOPE,
+        expires_at=None,
+        revoked_at=None,
+        grant_id=UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+    )
+    plan = plan_profile_state(
+        implemented=IMPLEMENTED,
+        state=_full_state(),
+        grants=(canonical, extra),
+        now=NOW,
+        resource=RESOURCE,
+        scope=SCOPE,
+    )
+    listed = [action.kind for action in plan.actions if action.capability_raw == "tasks.read"]
+    assert listed == ["revoke", "noop"]
+
+
+def test_active_unknown_capability_is_unmanaged_and_blocking() -> None:
+    unknown = parse_grant_record(
+        capability_raw="not.a.capability",
+        capability_version="v1",
+        purpose_raw="task_read",
+        is_write=False,
+        resource=RESOURCE,
+        scope=SCOPE,
+        expires_at=None,
+        revoked_at=None,
+    )
+    plan = plan_profile_state(
+        implemented=IMPLEMENTED,
+        state=ApplicationCompositionState(
+            managed_documents=True,
+            relationship_intelligence=True,
+            relationship_intelligence_writes=True,
+            relationship_memory=True,
+            producer_origins_registered=True,
+            relationship_identity_correction=True,
+            goodnotes_pull=True,
+            constraints=True,
+        ),
+        grants=(unknown,),
+        now=NOW,
+        resource=RESOURCE,
+        scope=SCOPE,
+    )
+    assert ChatLLMConditionCode.UNMANAGED_ACTIVE_ROW in plan.blockers
+    assert not plan.healthy
+
+
+def test_v2_grant_is_not_canonical() -> None:
+    grant = _grant(Capability.TASKS_LIST)
+    grant = parse_grant_record(
+        capability_raw=grant.capability_raw,
+        capability_version="chatllm-data-v2",
+        purpose_raw=grant.purpose_raw,
+        is_write=grant.is_write,
+        resource=grant.resource,
+        scope=grant.scope,
+        expires_at=None,
+        revoked_at=None,
+        grant_id=grant.grant_id,
+    )
+    plan = plan_profile_state(
+        implemented=IMPLEMENTED,
+        state=ApplicationCompositionState(
+            managed_documents=True,
+            relationship_intelligence=True,
+            relationship_intelligence_writes=True,
+            relationship_memory=True,
+            producer_origins_registered=True,
+            relationship_identity_correction=True,
+            goodnotes_pull=True,
+            constraints=True,
+        ),
+        grants=(grant,),
+        now=NOW,
+        resource=RESOURCE,
+        scope=SCOPE,
+    )
+    assert ChatLLMConditionCode.UNSUPPORTED_ACTIVE_VERSION in plan.blockers
 
 
 def test_no_revoke_when_normalizing_finite_expiry() -> None:

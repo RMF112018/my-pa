@@ -52,7 +52,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "f7a2c9d51e64"
-CURRENT_HEAD: Final = "6f6ead27d122"
+CURRENT_HEAD: Final = "7a5c4e9d2b61"
 CAPTURE_LABELS: Final = "c1a8e4d70b29"
 WP_TUX_01: Final = "de5ec1c65857"
 WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
@@ -74,7 +74,7 @@ MIGRATION: Final = (
     MIGRATIONS / "20260907_f7a2c9d51e64_admit_the_constraint_authoring_capabilities.py"
 )
 CURRENT_HEAD_MIGRATION: Final = (
-    MIGRATIONS / "20260913_c4f1a8e52d90_admit_continuity_projects_update_and_close.py"
+    MIGRATIONS / "20260923_7a5c4e9d2b61_remote_grant_unrevoked_identity.py"
 )
 RUN01_MIGRATION: Final = MIGRATIONS / "20260914_e6a4c2f91b73_project_controls_run01_integrity.py"
 CCA005_MIGRATION: Final = (
@@ -169,6 +169,7 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_oauth_refresh_migration.py",
     "tests/schema/test_project_controls_run01_integrity_migration.py",
     "tests/schema/test_project_version_and_entity_bridge_migration.py",
+    "tests/schema/test_remote_capability_grant_identity_migration.py",
     "tests/schema/test_webauthn_auth_persistence_migration.py",
     "tests/schema/test_work_task_commitment_migration.py",
     "tests/unit/test_cli_auth.py",
@@ -249,7 +250,8 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == "e6a4c2f91b73"
+    assert script.get_revision(CURRENT_HEAD).down_revision == "6f6ead27d122"
+    assert script.get_revision("6f6ead27d122").down_revision == "e6a4c2f91b73"
     assert script.get_revision("e6a4c2f91b73").down_revision == "c4f1a8e52d90"
     assert script.get_revision("c4f1a8e52d90").down_revision == WP_MCP_PROJ_02
     assert script.get_revision(WP_MCP_PROJ_02).down_revision == WP_MCP_PROJ_01
@@ -261,7 +263,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 107
+    assert len(list(MIGRATIONS.glob("*.py"))) == 108
 
 
 # ---- the freeze -------------------------------------------------------------

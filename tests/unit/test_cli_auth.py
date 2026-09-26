@@ -30,7 +30,7 @@ from my_pa.domain.identity.auth_state import AuthStateKind, AuthStateReason
 from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID
 
 DSN = "postgresql+psycopg://operator@db.invalid:5432/somewhere"
-HEAD = "6f6ead27d122"
+HEAD = "7a5c4e9d2b61"
 DSN_SHAPED = re.compile(r"[a-z0-9+]+://\S+", re.IGNORECASE)
 STATUS_KEYS = frozenset({"state", "reason", "grant", "expires"})
 SECRET_KEYS = frozenset(

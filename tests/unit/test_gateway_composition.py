@@ -19,8 +19,13 @@ from collections.abc import Iterator
 
 import pytest
 
-from my_pa.bootstrap.gateway import GatewayRuntime, build_gateway_runtime, local_principal
-from my_pa.bootstrap.settings import DATABASE_URL_SCHEME, Settings
+from my_pa.bootstrap.gateway import (
+    GatewayRuntime,
+    application_composition_state,
+    build_gateway_runtime,
+    local_principal,
+)
+from my_pa.bootstrap.settings import DATABASE_URL_SCHEME, AuthMode, Settings
 from my_pa.domain.identity.principal import PrincipalKind
 from my_pa.infrastructure.persistence.task_management import SqlAlchemyTaskManagementUnitOfWork
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
@@ -74,6 +79,27 @@ def test_the_process_acts_as_one_authenticated_local_operator(runtime: GatewayRu
     assert runtime.principal.kind is PrincipalKind.OPERATOR
     assert runtime.principal.authenticated is True
     assert runtime.principal.principal_id.startswith("prn_")
+
+
+def test_application_composition_state_matches_local_operator_runtime() -> None:
+    settings = Settings(database_url=A_URL)
+    state = application_composition_state(settings)
+    assert state.managed_documents is False
+    assert state.constraints is True
+    assert state.producer_origins_registered is True
+
+
+def test_application_composition_state_withholds_producer_origins_in_entra_mode() -> None:
+    settings = Settings(
+        database_url=A_URL,
+        auth_mode=AuthMode.ENTRA,
+        entra_tenant_id="synthetic-tenant",
+        entra_client_id="synthetic-client",
+        entra_issuer="https://example.invalid/synthetic/v2.0",
+        entra_jwks_uri="https://example.invalid/synthetic/keys",
+    )
+    state = application_composition_state(settings)
+    assert state.producer_origins_registered is False
 
 
 def test_two_runs_are_one_principal(runtime: GatewayRuntime) -> None:

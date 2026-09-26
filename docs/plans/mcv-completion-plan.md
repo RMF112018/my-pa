@@ -74,9 +74,9 @@ is not a defect.
 
 ## 3. What is implemented
 
-Three hundred and fifty-two Python modules under `src/my_pa` and five hundred and eighty test modules —
+Three hundred and fifty-two Python modules under `src/my_pa` and five hundred and eighty-one test modules —
 
-**Current-tree remeasurement (CCA-005 / WP-TUX-01, rebased onto `origin/main` `57f3f92d`):** the two commands below count 352 source modules and 580 test modules on this tree. This change adds `tests/schema/test_legacy_direct_principal_task_origin_migration.py` and no source module under `src/my_pa`. The prior 579-module measurement remains below as historical evidence for the PR #286 tree.
+**Current-tree remeasurement (CCA-005 / WP-TUX-01, rebased onto `origin/main` `57f3f92d`):** the two commands below count 352 source modules and 581 test modules on this tree. This change adds `tests/schema/test_legacy_direct_principal_task_origin_migration.py` and no source module under `src/my_pa`. The prior 579-module measurement remains below as historical evidence for the PR #286 tree.
 
 **Historical PR #286 remeasurement (head `49fbfb0`, 2026-09-23):** the two commands below count 352 source modules and 579 test modules on this tree. PR #286 adds `tests/architecture/test_nas_preserved_runtime_env_preflight.py` and no source module under `src/my_pa`. The prior 578-module merged-tree measurement remains below as historical evidence for its own tree.
 

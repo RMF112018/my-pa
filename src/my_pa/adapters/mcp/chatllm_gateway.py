@@ -59,6 +59,9 @@ _FEATURE_BY_FAMILY: Final[Mapping[str, str]] = {
     "relationship_memory": "people",
     "reports": "reports",
     "goodnotes": "goodnotes",
+    "constraints": "constraints",
+    "constraint_categories": "constraints",
+    "project_controls": "constraints",
 }
 
 _WRAPPER_SCHEMA: Final[dict[str, Any]] = {

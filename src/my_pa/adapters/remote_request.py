@@ -142,6 +142,21 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # caller could not name one and could not call the tool at all. The
         # `gsqs.start` line above states the same arrangement in the same words.
         Capability.PROJECT_CONTROLS_CONFIGURE,
+        # Version-bearing constraint authoring. The stamp includes
+        # `expected_version` or `expected_versions`, so a later edit hashes
+        # differently. The three creates stay out: an identical retry must not
+        # collapse into one record. These names are not server-replay ledger
+        # capabilities, and `idempotentHint` stays false.
+        Capability.CONSTRAINTS_PUBLISH,
+        Capability.CONSTRAINTS_UPDATE,
+        Capability.CONSTRAINTS_TRANSITION,
+        Capability.CONSTRAINTS_CLOSE,
+        Capability.CONSTRAINTS_CLOSE_FOLLOW_UP,
+        Capability.CONSTRAINTS_VOID,
+        Capability.CONSTRAINTS_REOPEN,
+        Capability.CONSTRAINT_CATEGORIES_UPDATE,
+        Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
+        Capability.CONSTRAINT_CATEGORIES_REORDER,
         # Report writes require `idempotency_key` on the command. ChatLLM cannot
         # send the key (`REMOTE_OWNED_PAYLOAD_FIELDS`) and the command cannot
         # omit it, so the server stamps it.

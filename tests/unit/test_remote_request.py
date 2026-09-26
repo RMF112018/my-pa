@@ -11,10 +11,12 @@ from my_pa.adapters.mcp.remote import _WRITE_PURPOSES
 from my_pa.adapters.mcp.tools import input_schema_for
 from my_pa.adapters.remote_request import (
     _IDEMPOTENT_REMOTE_CAPABILITIES,
+    _SERVER_REPLAY_REMOTE_CAPABILITIES,
     CANONICAL_REMOTE_PURPOSES,
     REMOTE_OWNED_PAYLOAD_FIELDS,
     SERVER_OWNED_REMOTE_FIELDS,
     compose_remote_arguments,
+    is_server_replay_capability,
     remote_tool_schema,
     resolve_remote_purpose,
 )
@@ -256,6 +258,92 @@ def test_every_write_purpose_is_classified_as_a_remote_write() -> None:
     } <= set(_WRITE_PURPOSES)
     assert Purpose.TASK_AUTHORING in _WRITE_PURPOSES
     assert Purpose.COMMITMENT_AUTHORING in _WRITE_PURPOSES
+
+
+_VERSIONED_CONSTRAINT_STAMPS = frozenset(
+    {
+        Capability.CONSTRAINTS_PUBLISH,
+        Capability.CONSTRAINTS_UPDATE,
+        Capability.CONSTRAINTS_TRANSITION,
+        Capability.CONSTRAINTS_CLOSE,
+        Capability.CONSTRAINTS_CLOSE_FOLLOW_UP,
+        Capability.CONSTRAINTS_VOID,
+        Capability.CONSTRAINTS_REOPEN,
+        Capability.CONSTRAINT_CATEGORIES_UPDATE,
+        Capability.CONSTRAINT_CATEGORIES_DEACTIVATE,
+        Capability.CONSTRAINT_CATEGORIES_REORDER,
+    }
+)
+
+
+def test_versioned_constraint_writes_are_stamped_and_creates_are_not() -> None:
+    assert _VERSIONED_CONSTRAINT_STAMPS <= _IDEMPOTENT_REMOTE_CAPABILITIES
+    assert Capability.PROJECT_CONTROLS_CONFIGURE in _IDEMPOTENT_REMOTE_CAPABILITIES
+    assert {
+        Capability.CONSTRAINTS_CREATE,
+        Capability.CONSTRAINTS_CREATE_PUBLISHED,
+        Capability.CONSTRAINT_CATEGORIES_CREATE,
+    }.isdisjoint(_IDEMPOTENT_REMOTE_CAPABILITIES)
+    assert _VERSIONED_CONSTRAINT_STAMPS.isdisjoint(_SERVER_REPLAY_REMOTE_CAPABILITIES)
+    assert all(not is_server_replay_capability(name) for name in _VERSIONED_CONSTRAINT_STAMPS)
+
+    def stamp(payload: dict[str, object]) -> str:
+        composed = compose_remote_arguments(
+            capability_name=Capability.CONSTRAINTS_PUBLISH.value,
+            arguments={"payload": payload},
+            principal=PRINCIPAL,
+            grants=None,
+            clock=lambda: FROZEN,
+            issue_id=_issue,
+        )
+        key = composed["payload"]["idempotency_key"]
+        assert key.startswith("idk_") and len(key) == 4 + 32
+        return key
+
+    first = stamp({"constraint_id": "con_synthetic", "expected_version": 1})
+    assert stamp({"constraint_id": "con_synthetic", "expected_version": 1}) == first
+    assert stamp({"constraint_id": "con_synthetic", "expected_version": 2}) != first
+    reorder_a = compose_remote_arguments(
+        capability_name=Capability.CONSTRAINT_CATEGORIES_REORDER.value,
+        arguments={"payload": {"expected_versions": {"cat_a": 1, "cat_b": 1}}},
+        principal=PRINCIPAL,
+        grants=None,
+        clock=lambda: FROZEN,
+        issue_id=_issue,
+    )["payload"]["idempotency_key"]
+    reorder_b = compose_remote_arguments(
+        capability_name=Capability.CONSTRAINT_CATEGORIES_REORDER.value,
+        arguments={"payload": {"expected_versions": {"cat_a": 1, "cat_b": 2}}},
+        principal=PRINCIPAL,
+        grants=None,
+        clock=lambda: FROZEN,
+        issue_id=_issue,
+    )["payload"]["idempotency_key"]
+    assert reorder_a != reorder_b
+    created = compose_remote_arguments(
+        capability_name=Capability.CONSTRAINTS_CREATE.value,
+        arguments={"payload": {"project_id": "prj_synthetic"}},
+        principal=PRINCIPAL,
+        grants=None,
+        clock=lambda: FROZEN,
+        issue_id=_issue,
+    )
+    assert "idempotency_key" not in created["payload"]
+    with pytest.raises(InvalidRequestError):
+        compose_remote_arguments(
+            capability_name=Capability.CONSTRAINTS_PUBLISH.value,
+            arguments={
+                "payload": {
+                    "constraint_id": "con_synthetic",
+                    "expected_version": 1,
+                    "idempotency_key": "caller-key",
+                }
+            },
+            principal=PRINCIPAL,
+            grants=None,
+            clock=lambda: FROZEN,
+            issue_id=_issue,
+        )
 
 
 def test_task_and_commitment_writes_are_stamped_remotely() -> None:

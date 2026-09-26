@@ -572,6 +572,7 @@ from my_pa.domain.policy.decision import POLICY_VERSION
 from my_pa.domain.project_controls.business_time import ProjectTimezoneError
 from my_pa.domain.project_controls.category import ConstraintCategoryError
 from my_pa.domain.project_controls.constraint import (
+    ConstraintFieldKey,
     ConstraintInvariantError,
     ConstraintLifecycleError,
     ConstraintLifecycleState,
@@ -3032,6 +3033,39 @@ _CONSTRAINT_UPDATE_FIELDS: Final[tuple[str, ...]] = (
     "category_id",
 )
 
+_PUBLISH_FIELD_DETAILS: Final[Mapping[ConstraintFieldKey, SafeDetail]] = {
+    ConstraintFieldKey.PROJECT_ID: SafeDetail.PROJECT_ID,
+    ConstraintFieldKey.CATEGORY_ID: SafeDetail.CATEGORY_ID,
+    ConstraintFieldKey.DESCRIPTION: SafeDetail.DESCRIPTION,
+    ConstraintFieldKey.DATE_IDENTIFIED: SafeDetail.DATE_IDENTIFIED,
+    ConstraintFieldKey.DUE_DATE: SafeDetail.DUE_DATE,
+    ConstraintFieldKey.BIC: SafeDetail.BIC,
+}
+
+
+def _classified_publish_error(error: ConstraintPublishError) -> ApplicationError:
+    """Public classification of one publish refusal. Never the exception text."""
+    code = error.code
+    if code in {"constraint_publish_not_draft", "constraint_publish_state_not_active"}:
+        return InvalidRequestError(SafeDetail.LIFECYCLE_STATE)
+    if code == "constraint_publish_incomplete":
+        details = [SafeDetail.CONSTRAINT_PUBLISH_INCOMPLETE]
+        for field in error.missing_fields:
+            token = _PUBLISH_FIELD_DETAILS.get(field)
+            if token is None:
+                return InternalError()
+            details.append(token)
+        if len(details) > 16:
+            return InternalError()
+        return InvalidRequestError(*details)
+    if code == "constraint_publish_category_not_active":
+        return InvalidRequestError(SafeDetail.CONSTRAINT_PUBLISH_CATEGORY_INACTIVE)
+    if code == "constraint_publish_quality_not_normal":
+        return InvalidRequestError(SafeDetail.CONSTRAINT_PUBLISH_QUALITY)
+    if code == "constraint_publish_category_partition_mismatch":
+        return InvalidRequestError(SafeDetail.SELECTOR)
+    return InternalError()
+
 
 @contextmanager
 def _constraint_mutation_translated() -> Iterator[None]:
@@ -3112,8 +3146,10 @@ def _constraint_mutation_translated() -> Iterator[None]:
         failure = UnavailableError(SafeDetail.PROJECT_ID)
     except (ConstraintPartyError, PartyRefError):
         failure = InvalidRequestError(SafeDetail.SELECTOR)
-    except (ConstraintLifecycleError, ConstraintPublishError):
+    except ConstraintLifecycleError:
         failure = InvalidRequestError(SafeDetail.LIFECYCLE_STATE)
+    except ConstraintPublishError as error:
+        failure = _classified_publish_error(error)
     except (
         ConstraintOperationError,
         ConstraintReorderError,

@@ -207,6 +207,17 @@ def test_contract_prefixes_are_stable() -> None:
         "csyc",
         # PC-CM-IMP-WP11: one append-only conflict-resolution receipt.
         "csyrh",
+        # WP-MTG-01: the Meeting records plane -- an occurrence, its series, an
+        # attendee and an attachment relationship, the two history receipts,
+        # and one immutable note version. `mtg` and `mser` cross the wire on
+        # every `meetings.*` answer.
+        "mtg",
+        "mser",
+        "matt",
+        "matc",
+        "mhst",
+        "mnote",
+        "mshst",
     }
 
 

@@ -424,6 +424,24 @@ class IdKind(StrEnum):
     CONSTRAINT_SYNC_RUN = "csyr"
     CONSTRAINT_SYNC_CONFLICT = "csyc"
     CONSTRAINT_SYNC_RESOLUTION = "csyrh"
+    #: WP-MTG-01: the Meeting records plane (package sections 34.8, 35.5). Seven
+    #: prefixes, one per table that issues an identity: an occurrence, its
+    #: series, an attendee relationship, an attachment relationship, the two
+    #: append-only history receipts, and one immutable note version. None
+    #: reuses a Task, Commitment, Project or managed-document prefix: a Meeting
+    #: is none of those, and a stored reference has to say which record it
+    #: names. `meeting_write_requests` has no prefix -- its identity is the
+    #: capability-scoped composite request key. Checked against every prior
+    #: member of this enum before use (a grep of each quoted value over this
+    #: file, and the uniqueness assertion in `tests/unit/test_identifiers.py`):
+    #: `mtg`/`mser`/`matt`/`matc`/`mhst`/`mnote`/`mshst` collide with none.
+    MEETING = "mtg"
+    MEETING_SERIES = "mser"
+    MEETING_ATTENDEE = "matt"
+    MEETING_ATTACHMENT = "matc"
+    MEETING_HISTORY = "mhst"
+    MEETING_NOTE_VERSION = "mnote"
+    MEETING_SERIES_HISTORY = "mshst"
 
 
 class InvalidIdentifierError(ValueError):

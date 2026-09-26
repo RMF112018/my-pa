@@ -79,6 +79,15 @@ export MY_PA_NAS_OPERATOR_ADMISSION=/etc/my-pa/operator-runtime.toml
 export MY_PA_NAS_PYTHON="$PWD/ops/nas/container-python.sh"
 ```
 
+On TheLakeHouseNAS, do not treat a failed `container-python.sh` as a Python
+version problem. The wrapper refuses a symlink on a trusted path. `/var/run`
+is a symlink, and `/usr/local/bin/docker`, `/usr/local/bin/docker-compose`,
+and `/usr/bin/git` are DSM package symlinks. `load-candidates.sh` hides that
+stderr behind `NAS tooling requires Python 3.12 or newer with tomllib`. Host
+Python remains 3.8 and cannot replace the wrapper. The 2026-09-24 public
+cutover and its deviations are recorded in
+[`production-frontend-deployment.md`](production-frontend-deployment.md).
+
 The operator container is removed after every invocation, has no network, uses
 a read-only root filesystem, drops all capabilities, and is not part of the
 persistent Compose topology. Its attached standard input preserves checked-in

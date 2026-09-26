@@ -75,6 +75,35 @@ Some runbooks preserve chronological evidence and superseded statements. Use
 their explicit current-state corrections and current executable contracts; do
 not treat an older transcript or scaffold-era description as present truth.
 
+## Synology operator-wrapper compatibility
+
+`ops/runbooks/production-frontend-deployment.md` is the home for the dated
+serving observation and the 2026-09-24 deviations. Read it before claiming
+what `https://pa.bobby-fetting.me/` runs.
+
+Before `load-candidates.sh`, invoke the new checkout's `container-python.sh`
+directly and keep its stderr. On TheLakeHouseNAS that wrapper exits
+`trusted path contains a symbolic link`: `/var/run` is a symlink, and
+`/usr/local/bin/docker`, `/usr/local/bin/docker-compose`, and `/usr/bin/git`
+are DSM package symlinks. `load-candidates.sh` discards that stderr and
+reports `NAS tooling requires Python 3.12 or newer with tomllib` for any
+wrapper failure. Host Python 3.8 is not the defect, and the candidate images
+are not the defect. Stop. Do not `docker load`, Compose-recreate, or run
+Alembic around the refusal unless the operator explicitly accepts the named
+deviations already recorded in that runbook. The 2026-09-24 cutover did not
+admit a deployable image manifest.
+
+`start.sh` does not attach `web` to `browser-origin`. While the public route
+is Cloudflare → `public-proxy:8080` → `web:3000` on that network, a base-file
+recreation drops the new web container off the public route. The public
+overlay must be applied to `web` without changing tunnel credentials, DNS, or
+the Caddy upstream.
+
+`GET /api/health` returning `{"ok":true,"status":"live"}` is the web process
+only. Gateway readiness is `apps/cli/health.py`, which refuses when the
+database revision is not the repository Alembic head. On this cluster
+`pg_dump` as role `postgres` fails; the role is `my_pa`.
+
 For a build-only request, stop after workflow section 2 and report the
 non-deployable candidate identities; do not connect to or mutate a NAS. The NAS
 phases apply only when deployment is in scope and authorized.
@@ -83,6 +112,6 @@ objective outside this smoke-upgrade skill; never infer that authority.
 
 ## Completion standard
 
-Claim success only when the exact current `origin/main` commit/tree built the transferred package; the live NAS admitted the same byte identities; required backup, scratch restore, quiescence, migration, firewall, lifecycle, and health gates passed; pilot-only diagnostics were recorded as inapplicable to smoke mode; previously running compatible dependent services were restored; and a sanitized receipt records every identity and command result.
+Claim success only when the exact current `origin/main` commit/tree built the transferred package; the live NAS admitted the same byte identities; required backup, scratch restore, quiescence, migration, firewall, lifecycle, and health gates passed; the gateway probe, not only public `/api/health`, shows the repository Alembic head; pilot-only diagnostics were recorded as inapplicable to smoke mode; previously running compatible dependent services were restored; and a sanitized receipt records every identity and command result. A public route that answers `live` is not that claim. The 2026-09-24 cutover is a recorded deviation, not a completed admission.
 
-If a required gate fails or identity drifts, preserve evidence, keep or return the system to the last verified safe state, and stop. Never improvise around a fail-closed gate.
+If a required gate fails or identity drifts, preserve evidence, keep or return the system to the last verified safe state, and stop. A `container-python.sh` symlink refusal is that stop. Never improvise around a fail-closed gate.

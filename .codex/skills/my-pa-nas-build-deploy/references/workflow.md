@@ -289,7 +289,20 @@ generic `sudo -n` or an unverified remote path is insufficient authority.
 Keep the old runtime and PostgreSQL bootstrap admissions, image manifest,
 image references, Compose selection, and protected environment unchanged
 while old containers remain selected. With the newly canonical operator
-identity, run the new checkout's `load-candidates.sh` against the verified
+identity, invoke the new checkout's `ops/nas/container-python.sh` directly
+before `load-candidates.sh` and retain its stderr. On TheLakeHouseNAS the
+wrapper exits `trusted path contains a symbolic link` because `/var/run` is a
+symlink and `/usr/local/bin/docker`, `/usr/local/bin/docker-compose`, and
+`/usr/bin/git` are DSM package symlinks. `load-candidates.sh` hides that
+stderr and prints `NAS tooling requires Python 3.12 or newer with tomllib`
+for any wrapper failure; host Python 3.8 is not the cause, and neither is the
+candidate archive. Stop, restore the preserved operator admission if it was
+switched, and leave the old stack selected. The 2026-09-24 production
+cutover recorded in `ops/runbooks/production-frontend-deployment.md` loaded
+app and web archives outside this loader and did not issue a deployable
+manifest. Do not repeat that deviation unless the operator explicitly accepts
+it again. When the wrapper accepts the trusted paths, run the new checkout's
+`load-candidates.sh` against the verified
 candidate. This mutates the Docker image store, not the running stack: the
 script checks all four runtime archives and metadata before loading, binds
 exact loaded IDs to the live engine, and writes a new exclusive deployable
@@ -412,7 +425,7 @@ If a first start is intentionally preparing a previously absent ingress network,
 
 After every apparently successful `start.sh` and before health completion or any writer restoration, re-read the live PostgreSQL container ID and require it to equal the pre-start admitted ID. Run the verified new checkout's `postgres_gate.py` against the existing resource artifact with `--live --container-id` set to that exact live ID. Any ID or resource-gate mismatch means unexpected recreation: stop only the five application services, keep every writer stopped, preserve the data directory and evidence, and hand off to the separate provisioning/resource-readmission objective without operating on the replacement container.
 
-Then require all six canonical services running with exact project/service/image labels, `ops/nas/health.sh` passing, and PostgreSQL at the repository-derived migration head. Health is readiness, not full operational acceptance.
+Then require all six canonical services running with exact project/service/image labels, `ops/nas/health.sh` passing, and PostgreSQL at the repository-derived migration head. `ops/nas/start.sh` uses only the base Compose file, so `web` is not attached to `browser-origin`. When the authenticated public route is `frontend-cloudflared` → `public-proxy:8080` → `web:3000` on that network, apply `ops/nas/compose.public-browser.example.yml` to `web` before calling the public route updated. Do not change tunnel credentials, DNS, or the Caddy upstream to do that. Health is readiness, not full operational acceptance. Public `GET /api/health` returning `{"ok":true,"status":"live"}` is the web process through Caddy and Cloudflare; require `apps/cli/health.py` as well, because that probe refuses a database that is not at the repository head. On this cluster the PostgreSQL role is `my_pa`, not `postgres`.
 
 Do not run `ops/nas/diagnostics.sh` in this smoke-only workflow: the script
 requires admitted pilot identity and authorized protected diagnostic inputs.

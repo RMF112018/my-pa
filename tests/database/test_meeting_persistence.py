@@ -23,9 +23,12 @@ import hashlib
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, Final
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import Engine, event, func, insert, inspect, literal_column, select, text
 from sqlalchemy.dialects.postgresql import REGCONFIG
 from sqlalchemy.engine import Connection
@@ -66,6 +69,7 @@ from my_pa.domain.meeting.model import (
     note_content_sha256,
 )
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.meetings import (
     SqlMeetingRepository,
     _core_document,
@@ -416,6 +420,59 @@ def test_managed_documents_are_identified_within_their_owner(engine: Engine) -> 
         "name": "a_managed_document_is_identified_within_its_owner",
         "column_names": ["document_id", "owner_principal_id"],
     } in [{"name": u["name"], "column_names": u["column_names"]} for u in uniques]
+
+
+#: The merged revision that creates `managed_documents`, and the owner-scoped
+#: unique the Meeting revision (WP-MTG-04) adds to it.
+MANAGED_DOCUMENT_REVISION: Final = "4c7b2e91d8a5"
+OWNER_UNIQUE: Final = "a_managed_document_is_identified_within_its_owner"
+ROOT: Final = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.migration_edge
+def test_the_owner_unique_is_absent_at_the_managed_document_revision(
+    empty_database_url: str,
+) -> None:
+    """Review F-01 / D-48: the historical revision keeps meaning what it merged as.
+
+    `4c7b2e91d8a5` copies the live `managed_documents` declaration, which now
+    carries the Meeting target unique. Its freeze-out keeps that unique out of
+    the revision, so a fresh database upgraded only to it has the PK and the two
+    identifier CHECKs and nothing else; the Meeting revision adds the unique
+    unconditionally, and WP-MTG-04 proves it present at head.
+    """
+    command.upgrade(Config(str(ROOT / "alembic.ini")), MANAGED_DOCUMENT_REVISION)
+    engine = create_database_engine(empty_database_url)
+    try:
+        with engine.connect() as connection:
+            version = connection.execute(
+                text("SELECT version_num FROM alembic_version")
+            ).scalar_one()
+            constraints = set(
+                connection.execute(
+                    text(
+                        "SELECT c.conname FROM pg_constraint c "
+                        "JOIN pg_class t ON t.oid = c.conrelid "
+                        "JOIN pg_namespace n ON n.oid = t.relnamespace "
+                        "WHERE n.nspname = :schema AND t.relname = 'managed_documents'"
+                    ),
+                    {"schema": SCHEMA},
+                ).scalars()
+            )
+            relation = connection.execute(
+                text(
+                    "SELECT count(*) FROM pg_class c "
+                    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    "WHERE n.nspname = :schema AND c.relname = :name"
+                ),
+                {"schema": SCHEMA, "name": OWNER_UNIQUE},
+            ).scalar_one()
+    finally:
+        engine.dispose()
+    assert version == MANAGED_DOCUMENT_REVISION
+    assert "managed_documents_pkey" in constraints
+    assert OWNER_UNIQUE not in constraints
+    assert relation == 0
 
 
 def test_there_is_no_duplicate_descending_meeting_btree(engine: Engine) -> None:

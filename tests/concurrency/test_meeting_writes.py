@@ -29,7 +29,6 @@ Every identity here is synthetic.
 
 from __future__ import annotations
 
-import threading
 import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -567,98 +566,102 @@ def test_person_entities_are_share_locked_in_ascending_id_order(
 def test_two_writers_naming_the_same_entities_in_opposite_orders_do_not_deadlock(
     engine: Engine, stage: Stage
 ) -> None:
-    """AC-043: parent first, then sorted Person FOR SHARE, then children -- no cycle."""
+    """AC-043: parent first, then sorted Person FOR SHARE, then children -- no cycle.
+
+    Review F-02: two Meeting writers alone cannot deadlock, because `FOR SHARE`
+    locks are mutually compatible, so a test of only those would pass with
+    unsorted locking too. The opposite-order party here is therefore a
+    conflicting one: an Entity writer taking `FOR UPDATE` in ascending id order,
+    as every sorted-order writer does. It holds the lower Entity first; the
+    Meeting writer names the Entities upper-first and blocks. With the sorted
+    lock order the Meeting writer holds nothing yet, so the Entity writer's
+    `FOR UPDATE` of the upper row is granted at once and both finish. With the
+    order violated the Meeting writer already share-holds the upper row, the
+    Entity writer waits on it, and PostgreSQL reports a deadlock -- which fails
+    this test from whichever side it is raised on.
+    """
     principal = stage.principal_id
-    first = _committed_meeting(engine, principal)
-    with engine.begin() as connection:
-        repository = SqlMeetingRepository(connection)
-        repository.reserve_write_request(
-            principal, MEETINGS_CREATE_NAME, "seed-2", DIGEST, created_at=T0
-        )
-        second, _ = _create_through(repository, principal, "seed-2", DIGEST)
-    both_locked = threading.Barrier(2, timeout=JOIN_TIMEOUT_SECONDS)
+    meeting = _committed_meeting(engine, principal)
 
-    def writer(meeting_id: str, order: list[str], key: str) -> int:
-        def work(repository: SqlMeetingRepository) -> int:
-            assert (
-                repository.reserve_write_request(
-                    principal, MEETINGS_UPDATE_NAME, key, DIGEST, created_at=T0
+    def meeting_writer(repository: SqlMeetingRepository) -> int:
+        key = "opposite-order"
+        assert (
+            repository.reserve_write_request(
+                principal, MEETINGS_UPDATE_NAME, key, DIGEST, created_at=T0
+            )
+            is None
+        )
+        view = repository.lock_meeting_for_update(principal, meeting.meeting_id)
+        assert view is not None
+        order = [stage.upper_entity_id, stage.lower_entity_id]
+        locked = repository.share_lock_person_entities(principal, order)
+        assert [state.entity_id for state in locked] == sorted(order)
+        repository.insert_attendees(
+            principal,
+            meeting.meeting_id,
+            [
+                MeetingAttendeeRecord(
+                    attendee_id=issue_identifier(IdKind.MEETING_ATTENDEE),
+                    attendee=NormalizedAttendee(
+                        display_name=None,
+                        email_normalized=None,
+                        entity_id=entity_id,
+                        is_organizer=False,
+                        response_status=AttendeeResponseStatus.UNKNOWN,
+                    ),
                 )
-                is None
-            )
-            view = repository.lock_meeting_for_update(principal, meeting_id)
-            assert view is not None
-            locked = repository.share_lock_person_entities(principal, order)
-            assert [state.entity_id for state in locked] == sorted(order)
-            both_locked.wait()
-            repository.insert_attendees(
-                principal,
-                meeting_id,
-                [
-                    MeetingAttendeeRecord(
-                        attendee_id=issue_identifier(IdKind.MEETING_ATTENDEE),
-                        attendee=NormalizedAttendee(
-                            display_name=None,
-                            email_normalized=None,
-                            entity_id=entity_id,
-                            is_organizer=False,
-                            response_status=AttendeeResponseStatus.UNKNOWN,
-                        ),
-                    )
-                    for entity_id in sorted(order)
-                ],
-                added_at=T0,
-            )
-            receipt = _receipt(meeting_id, update=True, before=1, after=2)
-            repository.update_meeting(principal, _meeting(meeting_id, version=2))
-            repository.insert_meeting_history(
-                principal,
-                receipt,
-                meeting_series_id=None,
-                idempotency_key=key,
-                request_digest=DIGEST,
-            )
-            repository.complete_write_request(
-                principal,
-                MEETINGS_UPDATE_NAME,
-                key,
-                request_digest=DIGEST,
-                meeting_id=meeting_id,
-                meeting_series_id=None,
-                meeting_history_id=receipt.history_id,
-                meeting_series_history_id=None,
-                result_version=2,
-                completed_at=T0,
-            )
-            return 2
-
-        return _in_own_transaction(engine, work)
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        forward = pool.submit(
-            writer,
-            first.meeting_id,
-            [stage.lower_entity_id, stage.upper_entity_id],
-            "forward",
+                for entity_id in sorted(order)
+            ],
+            added_at=T0,
         )
-        backward = pool.submit(
-            writer,
-            second.meeting_id,
-            [stage.upper_entity_id, stage.lower_entity_id],
-            "backward",
+        receipt = _receipt(meeting.meeting_id, update=True, before=1, after=2)
+        repository.update_meeting(principal, _meeting(meeting.meeting_id, version=2))
+        repository.insert_meeting_history(
+            principal,
+            receipt,
+            meeting_series_id=None,
+            idempotency_key=key,
+            request_digest=DIGEST,
         )
-        assert forward.result(timeout=JOIN_TIMEOUT_SECONDS) == 2
-        assert backward.result(timeout=JOIN_TIMEOUT_SECONDS) == 2
+        repository.complete_write_request(
+            principal,
+            MEETINGS_UPDATE_NAME,
+            key,
+            request_digest=DIGEST,
+            meeting_id=meeting.meeting_id,
+            meeting_series_id=None,
+            meeting_history_id=receipt.history_id,
+            meeting_series_history_id=None,
+            result_version=2,
+            completed_at=T0,
+        )
+        return 2
+
+    def lock_entity(connection: Connection, entity_id: str) -> None:
+        connection.execute(
+            select(entities.c.entity_id).where(entities.c.entity_id == entity_id).with_for_update()
+        ).one()
+
+    with engine.connect() as entity_writer, ThreadPoolExecutor(max_workers=1) as pool:
+        transaction = entity_writer.begin()
+        _lock_timeout(entity_writer)
+        # Ascending: the lower Entity first.
+        lock_entity(entity_writer, stage.lower_entity_id)
+        waiter: Future[int] = pool.submit(_in_own_transaction, engine, meeting_writer)
+        _wait_until_blocked(engine, waiter)
+        # Then the upper Entity. Granted at once only if the Meeting writer, which
+        # named it first, did not lock it before blocking on the lower one.
+        lock_entity(entity_writer, stage.upper_entity_id)
+        transaction.commit()
+        assert waiter.result(timeout=JOIN_TIMEOUT_SECONDS) == 2
 
     with engine.connect() as connection:
-        repository = SqlMeetingRepository(connection)
-        for meeting_id in (first.meeting_id, second.meeting_id):
-            view = repository.read_meeting(principal, meeting_id)
-            assert view is not None
-            assert view.version == 2
-            assert sorted(a.entity_id or "" for a in view.attendees) == sorted(
-                [stage.lower_entity_id, stage.upper_entity_id]
-            )
+        view = SqlMeetingRepository(connection).read_meeting(principal, meeting.meeting_id)
+    assert view is not None
+    assert view.version == 2
+    assert sorted(a.entity_id or "" for a in view.attendees) == sorted(
+        [stage.lower_entity_id, stage.upper_entity_id]
+    )
 
 
 def test_an_incomplete_reservation_committed_by_its_owner_is_an_internal_failure(

@@ -282,7 +282,7 @@ def _fixture(tmp_path):
             "ReadonlyRootfs": True,
             "Tmpfs": {"/tmp": "rw,nosuid,nodev,noexec,size=16m"},  # noqa: S108
             "CapDrop": ["ALL"],
-            "SecurityOpt": ["no-new-privileges"],
+            "SecurityOpt": ["no-new-privileges:true"],
             "Privileged": False,
             "AutoRemove": False,
             "Restart": "no",
@@ -754,6 +754,33 @@ def test_baked_gate_identity_drift_never_starts_or_deletes_foreign_container(tmp
         GATE.verify(new, NEW_COMMIT, NEW_TREE, old, **paths)
     assert not any(argv[:2] == [GATE.DOCKER, "start"] for argv, _cwd, _env in calls)
     assert not any(argv[:2] == [GATE.DOCKER, "rm"] for argv, _cwd, _env in calls)
+    assert real_runner.gate_state["status"] == "created"
+
+
+@pytest.mark.parametrize(
+    "security_options",
+    [[], ["no-new-privileges:false"], ["no-new-privileges:true", "apparmor:unconfined"]],
+    ids=["missing", "false", "extra"],
+)
+def test_baked_gate_security_options_drift_refuses_without_start_or_removal(
+    tmp_path, security_options
+):
+    new, old, paths, calls, *_ = _fixture(tmp_path)
+    real_runner = paths["runner"]
+
+    def drifted(argv, **kwargs):
+        if argv[:3] == [GATE.DOCKER, "container", "inspect"]:
+            data = _decode_gate_projection(real_runner(argv, **kwargs))
+            data["SecurityOpt"] = security_options
+            return _encode_gate_projection(data)
+        return real_runner(argv, **kwargs)
+
+    paths["runner"] = drifted
+    with pytest.raises(GATE.RefusalError):
+        GATE.verify(new, NEW_COMMIT, NEW_TREE, old, **paths)
+    assert not any(argv[:2] == [GATE.DOCKER, "start"] for argv, _cwd, _env in calls)
+    assert not any(argv[:2] == [GATE.DOCKER, "rm"] for argv, _cwd, _env in calls)
+    assert not any(argv == [str(old / "ops/nas/status.sh")] for argv, _cwd, _env in calls)
     assert real_runner.gate_state["status"] == "created"
 
 

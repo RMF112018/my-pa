@@ -76,9 +76,9 @@ All three transports call one function — `adapters.normalization.normalize` �
 and none of them can build a request value of its own. A request that HTTP
 refuses, MCP and the CLI refuse, with the same code, the same message, the same
 `safe_details`, and the same audit event. That is `SPEC-AC-001`, and
-The public vocabulary declares one hundred and seventy-two capabilities.
+The public vocabulary declares one hundred and seventy-eight capabilities.
 `tests/contract/test_transport_parity.py` distinguishes that vocabulary from
-the one hundred and seventy-two command-backed names and holds positive request
+the one hundred and seventy-eight command-backed names and holds positive request
 and response parity over the latter set. Its
 separate unwired contract is vacuous now that no declared name is left without one,
 without an MCP tool or command schema, while the generic HTTP/CLI name path
@@ -187,15 +187,15 @@ one declared capability, `tools`, and nothing else.
 ## The tool list
 
 `tools/list` returns the tools **this process can serve**, and that is not the
-same as the tools this build implements. The build declares **172** capability
-names; 172 have application commands/handlers and no declared name is left without one.
+same as the tools this build implements. The build declares **178** capability
+names; 178 have application commands/handlers and no declared name is left without one.
 The measured application composition with GoodNotes pull enabled has
-**102 application-available capabilities**: 172 implemented handlers less the six
+**108 application-available capabilities**: 178 implemented handlers less the six
 `documents.`, fifty-five `entities.`, and nine `relationship_memory.` handlers
 whose composition gates remain off. A local stdio MCP session has no authenticated
 client identity, so it additionally withholds the three client-bound GoodNotes
-pull operations and publishes **99 tools**. An authenticated MCP client against
-that same 102-capability application composition sees all 102. These figures are
+pull operations and publishes **105 tools**. An authenticated MCP client against
+that same 108-capability application composition sees all 108. These figures are
 derived in `test_current_state_docs_derive_the_default_capability_split` from a
 real `ApplicationService` and `published_tools`, not from a second list.
 
@@ -204,8 +204,8 @@ configured**, and nothing else gates them. There is no default location and no
 inference: with the variable unset the composition root builds no managed byte
 store, `capabilities.get` omits those names, `tools/list` omits those tools, and
 a `tools/call` naming one is refused `unsupported`. Set the variable and the
-same application composition serves 108 capabilities; its unauthenticated local
-stdio MCP publication serves 105. The remaining composition-gated names are the
+same application composition serves 114 capabilities; its unauthenticated local
+stdio MCP publication serves 111. The remaining composition-gated names are the
 fifty-five `entities.` names, which `D-RI-20`
 gates behind `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` on exactly the same terms
 — and whose thirty-eight writes need
@@ -213,7 +213,7 @@ gates behind `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` on exactly the same terms
 the plane switch alone still withholds its write half — and the nine
 `relationship_memory.` names, which need the plane variable *and*
 `MY_PA_RELATIONSHIP_MEMORY_ENABLED`; a fully composed authenticated child publishes
-all 172 implemented tools, every declared name now having a handler. An operator who expects `documents.create`
+all 178 implemented tools, every declared name now having a handler. An operator who expects `documents.create`
 on the list and does not find it should look at that variable first — it is the
 only thing that decides it. (Pointing the plane at real storage is `EXT-10` and
 remains operator-gated; `docs/operations/mcv-limitations.md` section 13 states
@@ -222,10 +222,10 @@ the same gating and the plane's limits.)
 Measured against a real child process — `.venv/bin/python apps/gateway.py mcp`
 — by
 `tests/contract/test_mcp_transport.py::test_a_real_child_process_publishes_only_what_it_was_composed_with`
-(unconfigured local stdio: 99, with the three authenticated-client capabilities
+(unconfigured local stdio: 105, with the three authenticated-client capabilities
 absent) and
 `::test_a_child_with_a_managed_root_publishes_every_locally_available_capability`
-(fully feature-composed local stdio: 169, again excluding exactly those three).
+(fully feature-composed local stdio: 175, again excluding exactly those three).
 
 **Current-state correction (2026-09-08):** earlier snapshots in this section
 mixed declared capability totals, application availability, feature-gated
@@ -268,8 +268,8 @@ that names it again is refused.
 ## Calling a tool
 
 **Current-state correction (2026-08-28):** the tool list is derived from all
-**166** implemented capability commands from the **172** declared names, and the schema has
-**one hundred seven** revisions at head `6f6ead27d122` (`6f6ead27d122` is additive on `e6a4c2f91b73` for CCA-005 WP-TUX-01 legacy direct-Principal origin reconciliation; `e6a4c2f91b73` is additive on `c4f1a8e52d90` for R01-WP03 integrity; `c4f1a8e52d90` is additive on `b3e9d7a41c25` for WP-MCP-PROJ-03 continuity.projects.update/close and project_history; `b3e9d7a41c25` is additive on `9f2c8a1d4e70` for WP-MCP-PROJ-02 continuity.projects.read and the Project list keyset index; `9f2c8a1d4e70` is additive on `de5ec1c65857` for WP-MCP-PROJ-01 Project.version and the Continuity Project↔Entity bridge; `de5ec1c65857` is additive on `c1a8e4d70b29` for WP-TUX-01 task origin/closure/comments; `c1a8e4d70b29` is additive on `b8e4d6f20a11` for append-only `knowledge.capture_labels`; `b8e4d6f20a11` is additive on `f7a2c9d51e64` for the bounded Constraint synchronization backend; `f7a2c9d51e64` is additive on `4e9a1c7b2d60` and widens the two frozen `audit_events` closed sets to admit the twelve Constraint Management authoring capabilities together with the single `constraint_authoring` purpose, and no Constraint synchronisation vocabulary (PC-CM-IMP-WP07); `4e9a1c7b2d60` is additive on `c5b71e0a8d43` and normalizes account identity plus one-time digest-backed auth grants targeting the fixed local operator; `c5b71e0a8d43` is additive on `a1c9e4b72f80` and admits the six Constraint Management read capabilities `constraints.read`, `constraints.list`, `constraints.search`, `constraints.history`, `constraints.overview`, and `constraint_categories.list` together with the single `constraint_read` purpose, and no Constraint authoring or synchronisation vocabulary (PC-CM-IMP-WP04); `a1c9e4b72f80` is additive on `2774329487be` and admits `goodnotes.notebooks.list`, `goodnotes.pages.list`, `goodnotes.runs.list`, `goodnotes.read`, `goodnotes.search`, and `goodnotes.correct` together with `goodnotes_browse`, `goodnotes_read`, and `goodnotes_correction`; `2774329487be` is additive on `e8f2a6c9d104` and adds the fourteen-table Constraint-management plane (PC-CM-IMP-WP02); `e8f2a6c9d104` is additive on `d4e8b1c7a902` and adds immutable GoodNotes client lease policy and client-scoped attempt/completion uniqueness; `d4e8b1c7a902` is additive on `a4d8e31b2c90` and adds the Principal-partitioned canvas workspace overlay; `6a2f9d1c4b80` is additive on `c3f8a1d07e94` and adds five Principal-partitioned, content-free GoodNotes pull and semantic-review ledger tables while admitting `goodnotes.pull`, `goodnotes.complete`, and `goodnotes.status` to the frozen audit vocabulary; `c3f8a1d07e94` admits `entities.graph` on `b8e4d1a6c073`; corrected 2026-09-03 from
+**178** implemented capability commands from the **178** declared names, and the schema has
+**one hundred eight** revisions at head `7d9a450dfd07` (`7d9a450dfd07` is additive on `6f6ead27d122` for WP-MTG-04 Meeting records; `6f6ead27d122` is additive on `e6a4c2f91b73` for CCA-005 WP-TUX-01 legacy direct-Principal origin reconciliation; `e6a4c2f91b73` is additive on `c4f1a8e52d90` for R01-WP03 integrity; `c4f1a8e52d90` is additive on `b3e9d7a41c25` for WP-MCP-PROJ-03 continuity.projects.update/close and project_history; `b3e9d7a41c25` is additive on `9f2c8a1d4e70` for WP-MCP-PROJ-02 continuity.projects.read and the Project list keyset index; `9f2c8a1d4e70` is additive on `de5ec1c65857` for WP-MCP-PROJ-01 Project.version and the Continuity Project↔Entity bridge; `de5ec1c65857` is additive on `c1a8e4d70b29` for WP-TUX-01 task origin/closure/comments; `c1a8e4d70b29` is additive on `b8e4d6f20a11` for append-only `knowledge.capture_labels`; `b8e4d6f20a11` is additive on `f7a2c9d51e64` for the bounded Constraint synchronization backend; `f7a2c9d51e64` is additive on `4e9a1c7b2d60` and widens the two frozen `audit_events` closed sets to admit the twelve Constraint Management authoring capabilities together with the single `constraint_authoring` purpose, and no Constraint synchronisation vocabulary (PC-CM-IMP-WP07); `4e9a1c7b2d60` is additive on `c5b71e0a8d43` and normalizes account identity plus one-time digest-backed auth grants targeting the fixed local operator; `c5b71e0a8d43` is additive on `a1c9e4b72f80` and admits the six Constraint Management read capabilities `constraints.read`, `constraints.list`, `constraints.search`, `constraints.history`, `constraints.overview`, and `constraint_categories.list` together with the single `constraint_read` purpose, and no Constraint authoring or synchronisation vocabulary (PC-CM-IMP-WP04); `a1c9e4b72f80` is additive on `2774329487be` and admits `goodnotes.notebooks.list`, `goodnotes.pages.list`, `goodnotes.runs.list`, `goodnotes.read`, `goodnotes.search`, and `goodnotes.correct` together with `goodnotes_browse`, `goodnotes_read`, and `goodnotes_correction`; `2774329487be` is additive on `e8f2a6c9d104` and adds the fourteen-table Constraint-management plane (PC-CM-IMP-WP02); `e8f2a6c9d104` is additive on `d4e8b1c7a902` and adds immutable GoodNotes client lease policy and client-scoped attempt/completion uniqueness; `d4e8b1c7a902` is additive on `a4d8e31b2c90` and adds the Principal-partitioned canvas workspace overlay; `6a2f9d1c4b80` is additive on `c3f8a1d07e94` and adds five Principal-partitioned, content-free GoodNotes pull and semantic-review ledger tables while admitting `goodnotes.pull`, `goodnotes.complete`, and `goodnotes.status` to the frozen audit vocabulary; `c3f8a1d07e94` admits `entities.graph` on `b8e4d1a6c073`; corrected 2026-09-03 from
 eighty-eight at `16f05c46b8c3`, on which `b8e4d1a6c073` is additive and
 backfills one `display`-typed `entity_names` row per active `entities` row --
 `display_value` from `entities.display_name`, `normalized_value` from
@@ -395,6 +395,147 @@ none to carry.
 Arguments larger than the transport ceiling are refused the same way, and the
 oversized value is not echoed. The ceiling is the HTTP transport's own constant,
 imported rather than restated, so all three transports enforce one number.
+
+## Meeting records (WP-MTG-01 through WP-MTG-06)
+
+Meeting records are product-owned application data: a Meeting is written only
+through the `meetings.` capabilities, never mirrored from or written back to a
+calendar provider, and nothing here synchronizes with one. The six `meetings.`
+names are core — they belong to none of the three composition-gated families,
+need no environment variable, and are therefore in the default application
+composition and in every MCP publication that composition produces.
+
+**The contract, by capability.**
+
+| Capability | Purpose | Write | What it does |
+|---|---|---|---|
+| `meetings.create` | `meeting_authoring` | yes, additive | a standalone occurrence, the first occurrence of a new titled series, or a further occurrence of an existing series |
+| `meetings.update` | `meeting_authoring` | yes | scalar fields, reschedule, cancel or reinstate, attendee replacement, attachment add/remove, note append/replace, Project association |
+| `meetings.series.update` | `meeting_authoring` | yes | the series title only; no occurrence title changes |
+| `meetings.read` | `meeting_read` | no | the full Meeting: attendees, attachments, current note, description and link |
+| `meetings.list` | `meeting_read` | no | keyset-paged triage rows inside the caller's partition |
+| `meetings.search` | `meeting_read` | no | bounded lexical search; note text matches only the current note version |
+
+- **Every write carries an idempotency key; updates also carry
+  `expected_version`.** The same key with the same request replays the original
+  receipt beside the Meeting's current state; the same key with a different
+  request is an idempotency conflict; a stale `expected_version` conflicts and
+  writes nothing. Reservation, parent lock, child rows, the immutable history
+  receipt, the note version and request completion commit in the one unit of
+  work `ApplicationService.invoke` opened, or none of them does.
+- **There is no delete.** Cancellation is reversible and keeps the Meeting's
+  identity. A series is a titled grouping of explicitly created occurrences: there
+  is no recurrence rule and nothing is expanded. A start is an aware instant with
+  its IANA zone retained; a naive time is refused.
+- **Minimization.** A `meetings.list` or `meetings.search` row has no
+  description, virtual link, attendee identity or email, and no note body; only
+  `meetings.read` on a named Meeting returns them. An absent Meeting and another
+  Principal's Meeting answer the same `not_found`. Errors carry field tokens from
+  the fixed `SafeDetail` vocabulary and never the rejected value, the query text,
+  or a database detail.
+- **References stay in their own planes.** An attendee is a snapshot with an
+  optional link to an active Person Entity, and a Meeting write never creates or
+  merges an Entity. An attachment is a reference to a ManagedDocument the same
+  Principal owns; attaching or detaching never changes the document.
+- **Over the remote MCP path** the adapter stamps a content-addressed
+  `idempotency_key` on `meetings.create`, `meetings.update` and
+  `meetings.series.update`, refuses a caller-supplied one, and never stamps a
+  read; no Meeting capability is server-replayed. The compact ChatLLM profile
+  (`my_pa.describe`, `my_pa.read`, `my_pa.write`) exposes a `meetings` feature
+  family, and each Meeting capability appears in it only for an authenticated
+  client whose grants, purpose, capability version and write gates admit it.
+- **Desired ChatLLM profile.** The repository's ChatLLM data profile is
+  `chatllm-data-v3`, which classifies the six `meetings.` names as
+  `DATA_REQUIRED`: reads under `meeting_read`, writes under `meeting_authoring`.
+  That is repository desire only. Whether any deployed client holds those
+  grants is a runtime fact this document does not state.
+
+Evidence: `src/my_pa/application/meetings.py`,
+`src/my_pa/contracts/v1/meetings.py`, `tests/contract/test_meeting_mcp.py`,
+`tests/contract/test_meeting_contracts.py`,
+`tests/database/test_meeting_application.py`,
+`tests/unit/test_remote_request.py`, `tests/contract/test_chatllm_mcp_gateway.py`
+and `tests/contract/test_chatllm_data_profile_diff.py`. The limits are
+`docs/operations/mcv-limitations.md` section 14.
+
+## Read-only Meeting commissioning procedure
+
+**Implementation completion implies no deployment, no migration apply, no
+profile apply, no grant mutation, no OAuth change and no write-gate change.**
+Merged code, a green CI run and a passed exact-head review establish repository
+truth only. Each of those actions needs its own separate operator
+authorization, and nothing in this runbook grants one.
+
+**Eight layers, kept separate.** A Meeting capability being usable by a remote
+client is eight separate facts, and repository work can prove only the first
+three, and those only as repository truth:
+
+| # | Layer | What repository work can prove | Runtime status |
+|---|---|---|---|
+| 1 | Implemented handler | `_HANDLERS` parity and handler tests | repository truth |
+| 2 | Composed | default and full composition tests | deployed composition unknown |
+| 3 | Desired by the ChatLLM profile | policy and profile-diff tests | deployed profile version unknown |
+| 4 | Durable grant present | nothing | unknown |
+| 5 | Grant active | nothing | unknown |
+| 6 | Remotely visible | test-only remote publication | unknown |
+| 7 | Process, global and client write gates open | gate-logic tests only | unknown |
+| 8 | Runtime invocation succeeds | synthetic tests on disposable databases | unknown |
+
+"Unknown" means unknown until runtime evidence is recorded: repository truth, CI
+and this runbook are not evidence for layers 4 to 8, or for the deployed state of
+layers 2 and 3.
+
+The procedure, in order. Steps marked **[separate operator authority]** are not
+read-only and are never implied by implementation completion; every other step
+only observes.
+
+1. Reauthenticate the deployed image or commit and the deployed database's
+   Alembic revision. At this repository head the chain's single head is
+   `7d9a450dfd07`; the deployed database's revision is whatever it reports.
+2. **[separate operator authority]** Apply the migration to the intended
+   persistent environment.
+3. Check health and readiness without exposing data.
+4. Run read-only `profile-diff` and `profile-plan` for the exact OAuth client,
+   resource and scope.
+5. Verify that the six `meetings.` names are in the deployed process's composed
+   set.
+6. Verify that `my_pa.describe` with `feature` `meetings` lists them for the exact
+   authenticated client only.
+7. Verify each grant row's `capability_version`, purpose, `is_write`, resource,
+   scope and active or revoked state against the profile policy.
+8. Observe the process, global and client write-gate state. Never enable a gate
+   to make validation pass.
+9. **[separate operator authority]** Run `profile-apply` or any other grant
+   mutation, and only if step 4 or step 7 found drift.
+10. **[separate operator authority]** With synthetic, non-personal data, run one
+    Meeting create, read, list, search, update and series-title update through the
+    same remote MCP path ChatLLM uses.
+11. Confirm that an idempotent retry creates no duplicate.
+12. Confirm the cross-scope negative cases and that failures are sanitized.
+13. Record the deployed SHA, migration head, active profile version,
+    `capability_version`, describe evidence, grant convergence, write-gate state
+    and the results.
+
+The observing commands for steps 1, 3 and 4, run against the deployed commit's
+tree and configuration:
+
+```bash
+python -m alembic heads
+python apps/cli/health.py
+python apps/cli/remote_mcp.py profile-diff \
+  --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v3
+python apps/cli/remote_mcp.py profile-plan \
+  --oauth-client-id "$OAUTH_CLIENT_ID" --scope my-pa.read \
+  --resource "$OAUTH_AUDIENCE" --profile-version chatllm-data-v3
+```
+
+`apps/cli/health.py` answers `not_at_head` for a database below `7d9a450dfd07`,
+and that answer does not authorize step 2. `profile-plan` lists what an apply
+would change and changes nothing. `profile-apply`, `grant`, `revoke-grant`,
+`control` and `set-client-writes` are mutations and belong only to steps 2 and 9
+under their own authorization. `ops/runbooks/managed-knowledge-context.md` covers
+the ChatLLM profile in general.
 
 ## Stopping it
 

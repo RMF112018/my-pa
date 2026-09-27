@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from datetime import UTC, datetime
+from typing import Any, Final
 
 import httpx2
 import pytest
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
+from sqlalchemy import create_engine
 from tests.conftest import Scene, build_service
 
 from my_pa.adapters.mcp.chatllm_gateway import (
@@ -16,8 +20,16 @@ from my_pa.adapters.mcp.chatllm_gateway import (
     OPERATOR_TOOL,
     READ_TOOL,
     WRITE_TOOL,
+    facade_kind,
+    facade_tool_names,
+    feature_label,
+    prepare_compact_call,
 )
-from my_pa.adapters.mcp.remote import RemoteAccessContext, create_remote_mcp_app
+from my_pa.adapters.mcp.remote import (
+    RemoteAccessContext,
+    create_remote_mcp_app,
+    remote_tool_names,
+)
 from my_pa.adapters.mcp.server import published_tools
 from my_pa.adapters.mcp.tools import TOOLS
 from my_pa.adapters.remote_request import (
@@ -25,8 +37,15 @@ from my_pa.adapters.remote_request import (
     SERVER_OWNED_REMOTE_FIELDS,
     remote_tool_schema,
 )
+from my_pa.application.errors import InvalidRequestError
 from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.infrastructure.persistence.remote_identity import (
+    REMOTE_IDENTITY_METADATA,
+    RemoteIdentityRepository,
+    remote_security_controls,
+)
 
 RESOURCE = "https://mcp.example.invalid/mcp"
 ISSUER = "https://mcp.example.invalid"
@@ -352,3 +371,374 @@ def test_full_process_still_publishes_canonical_tools_when_compact_off(scene: Sc
     names = {tool.name for tool in published_tools(service)}
     assert DESCRIBE_TOOL not in names
     assert Capability.CAPABILITIES_GET.value in names
+
+
+# ------------------------------------------------------------------ WP-MTG-06
+#
+# The `meetings` family on the compact profile. Every identity, grant and
+# write-gate row below lives in a throwaway in-memory SQLite identity store
+# built per test; nothing here reads or mutates a live profile, grant or gate.
+
+MEETING_READS: Final = (
+    Capability.MEETINGS_READ,
+    Capability.MEETINGS_LIST,
+    Capability.MEETINGS_SEARCH,
+)
+MEETING_WRITES: Final = (
+    Capability.MEETINGS_CREATE,
+    Capability.MEETINGS_UPDATE,
+    Capability.MEETINGS_SERIES_UPDATE,
+)
+MEETINGS: Final = frozenset((*MEETING_READS, *MEETING_WRITES))
+_WHEN: Final = datetime(2026, 9, 27, 12, tzinfo=UTC)
+_SCOPE: Final = "my-pa.read"
+_CLIENT_ID: Final = "synthetic-meetings-client"
+_OTHER_CLIENT_ID: Final = "synthetic-other-client"
+_CREATE: Final[dict[str, Any]] = {
+    "title": "Synthetic compact meeting",
+    "start_at": "2026-09-28T13:00:00Z",
+    "timezone_name": "UTC",
+}
+
+
+def _exact_grants() -> tuple[tuple[Capability, Purpose, bool], ...]:
+    return (
+        *((capability, Purpose.MEETING_READ, False) for capability in MEETING_READS),
+        *((capability, Purpose.MEETING_AUTHORING, True) for capability in MEETING_WRITES),
+    )
+
+
+@contextmanager
+def _identity(
+    *,
+    global_writes: bool,
+    client_writes: bool,
+    grants: tuple[tuple[Capability, Purpose, bool], ...],
+    other_client_grants: tuple[tuple[Capability, Purpose, bool], ...] = (),
+) -> Iterator[RemoteIdentityRepository]:
+    engine = create_engine("sqlite://")
+    with engine.begin() as connection:
+        connection.exec_driver_sql("ATTACH DATABASE ':memory:' AS identity")
+        REMOTE_IDENTITY_METADATA.create_all(connection)
+        connection.execute(
+            remote_security_controls.insert().values(
+                singleton=True, remote_enabled=True, writes_enabled=global_writes, updated_at=_WHEN
+            )
+        )
+        repository = RemoteIdentityRepository(connection)
+        for oauth_client_id, rows, writes in (
+            (_CLIENT_ID, grants, client_writes),
+            (_OTHER_CLIENT_ID, other_client_grants, True),
+        ):
+            client = repository.register_client(
+                oauth_client_id=oauth_client_id,
+                client_name=oauth_client_id,
+                redirect_uris='["https://client.example.invalid/callback"]',
+                registered_scopes=_SCOPE,
+                now=_WHEN,
+                writes_enabled=writes,
+            )
+            for capability, purpose, is_write in rows:
+                repository.grant(
+                    remote_client_id=client,
+                    external_scope=_SCOPE,
+                    capability=capability,
+                    purpose=purpose,
+                    resource=RESOURCE,
+                    is_write=is_write,
+                    now=_WHEN,
+                )
+        yield repository
+
+
+def _resolved_app(
+    scene: Scene,
+    repository: RemoteIdentityRepository,
+    *,
+    process_writes: bool,
+    oauth_client_id: str = _CLIENT_ID,
+) -> object:
+    """The composition root's resolution (`apps/gateway.py`), over the synthetic store."""
+    service = build_service(scene.world, scene.providers)
+    resolution = repository.authenticate(
+        oauth_client_id=oauth_client_id,
+        token_scopes=frozenset({_SCOPE}),
+        resource=RESOURCE,
+        now=_WHEN,
+    )
+    assert resolution is not None
+    capabilities = frozenset(capability.value for capability in resolution.capabilities)
+    if not resolution.write_allowed:
+        capabilities &= remote_tool_names(service, writes_enabled=False)
+    context = RemoteAccessContext(
+        principal=scene.principal,
+        authenticated_client_id=oauth_client_id,
+        allowed_capabilities=capabilities,
+        capability_purposes=resolution.capability_purposes,
+        compact_publication=True,
+    )
+    return create_remote_mcp_app(
+        service,
+        resolve_access=lambda _authorization: context,
+        allowed_hosts=("testserver",),
+        remote_enabled=True,
+        writes_enabled=process_writes,
+        resource=RESOURCE,
+        authorization_servers=(ISSUER,),
+        scopes=frozenset({_SCOPE}),
+    )
+
+
+def _body(result: object) -> dict[str, Any]:
+    return json.loads(result.content[0].text)  # type: ignore[attr-defined]
+
+
+async def _discover(session: ClientSession) -> tuple[set[str], list[str], object]:
+    names = {tool.name for tool in (await session.list_tools()).tools}
+    described = await session.call_tool(DESCRIBE_TOOL, {"feature": "meetings"})
+    items = [str(item["capability"]) for item in _body(described)["items"]]
+    written = await session.call_tool(
+        WRITE_TOOL,
+        {"capability": Capability.MEETINGS_CREATE.value, "arguments": {"payload": _CREATE}},
+    )
+    return names, items, written
+
+
+def test_meeting_facade_kind_and_feature_label() -> None:
+    """Reads route to `my_pa.read`, the three writes to `my_pa.write` (plan D-06)."""
+    for capability in MEETING_READS:
+        assert facade_kind(capability) == "read"
+    for capability in MEETING_WRITES:
+        assert facade_kind(capability) == "write"
+    for capability in MEETINGS:
+        assert feature_label(capability.value) == "meetings"
+    everything = frozenset(capability.value for capability in MEETINGS)
+    assert facade_tool_names(everything) == {DESCRIBE_TOOL, READ_TOOL, WRITE_TOOL}
+
+
+@pytest.mark.parametrize("capability", sorted(MEETINGS), ids=lambda c: c.value)
+def test_a_meeting_capability_on_the_wrong_wrapper_is_refused(capability: Capability) -> None:
+    allowed = frozenset(item.value for item in MEETINGS)
+    wrapper = {"capability": capability.value, "arguments": {"payload": {}}}
+    right = WRITE_TOOL if capability in MEETING_WRITES else READ_TOOL
+    wrong = READ_TOOL if capability in MEETING_WRITES else WRITE_TOOL
+    assert prepare_compact_call(right, wrapper, allowed_canonical=allowed)[0] == capability.value
+    with pytest.raises(InvalidRequestError):
+        prepare_compact_call(wrong, wrapper, allowed_canonical=allowed)
+    with pytest.raises(InvalidRequestError):
+        prepare_compact_call(OPERATOR_TOOL, wrapper, allowed_canonical=allowed)
+
+
+@pytest.mark.anyio
+async def test_the_wrong_wrapper_is_refused_over_the_transport(scene: Scene) -> None:
+    before = dict(scene.world.meetings)
+
+    async def exercise(session: ClientSession) -> tuple[object, object]:
+        write_as_read = await session.call_tool(
+            READ_TOOL,
+            {"capability": Capability.MEETINGS_CREATE.value, "arguments": {"payload": _CREATE}},
+        )
+        read_as_write = await session.call_tool(
+            WRITE_TOOL,
+            {
+                "capability": Capability.MEETINGS_READ.value,
+                "arguments": {"payload": {"meeting_id": scene.meeting_id}},
+            },
+        )
+        return write_as_read, read_as_write
+
+    with _identity(global_writes=True, client_writes=True, grants=_exact_grants()) as repository:
+        app = _resolved_app(scene, repository, process_writes=True)
+        write_as_read, read_as_write = await _session(app, exercise)
+    for refused in (write_as_read, read_as_write):
+        assert refused.is_error is True  # type: ignore[attr-defined]
+        assert _body(refused)["code"] == "invalid_request"
+    assert scene.world.meetings == before
+
+
+@pytest.mark.anyio
+async def test_all_gates_and_exact_grants_publish_the_meeting_family_and_write(
+    scene: Scene,
+) -> None:
+    before = len(scene.world.meetings)
+
+    async def exercise(session: ClientSession) -> tuple[object, ...]:
+        names, items, written = await _discover(session)
+        replayed = await session.call_tool(
+            WRITE_TOOL,
+            {
+                "capability": Capability.MEETINGS_CREATE.value,
+                "arguments": {"payload": dict(reversed(list(_CREATE.items())))},
+            },
+        )
+        looked_up = await session.call_tool(
+            DESCRIBE_TOOL, {"capability": Capability.MEETINGS_CREATE.value}
+        )
+        return names, items, written, replayed, looked_up
+
+    with _identity(global_writes=True, client_writes=True, grants=_exact_grants()) as repository:
+        app = _resolved_app(scene, repository, process_writes=True)
+        names, items, written, replayed, looked_up = await _session(app, exercise)
+    assert names == {DESCRIBE_TOOL, READ_TOOL, WRITE_TOOL}
+    assert sorted(items) == sorted(capability.value for capability in MEETINGS)
+    assert written.is_error is False, written  # type: ignore[attr-defined]
+    assert replayed.is_error is False, replayed  # type: ignore[attr-defined]
+    first, second = _body(written)["result"], _body(replayed)["result"]
+    # Reordered object keys stamp the same server key, so the retry is a replay
+    # of the one Meeting rather than a second one.
+    assert first["meeting"]["meeting_id"] == second["meeting"]["meeting_id"]
+    assert len(scene.world.meetings) == before + 1
+    lookup = _body(looked_up)
+    assert lookup["item"] == {
+        "capability": Capability.MEETINGS_CREATE.value,
+        "kind": "write",
+        "feature": "meetings",
+        "summary": lookup["item"]["summary"],
+        "destructive": False,
+        "idempotent": False,
+    }
+    payload_schema = lookup["input_schema"]["properties"]["payload"]
+    assert REMOTE_OWNED_PAYLOAD_FIELDS.isdisjoint(payload_schema["properties"])
+    assert SERVER_OWNED_REMOTE_FIELDS.isdisjoint(lookup["input_schema"]["properties"])
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("process_writes", "global_writes", "client_writes"),
+    [
+        (False, True, True),
+        (True, False, True),
+        (True, True, False),
+        (False, False, False),
+    ],
+    ids=["process-off", "global-off", "client-off", "all-off"],
+)
+async def test_a_meeting_write_needs_the_process_global_and_client_gates(
+    scene: Scene, *, process_writes: bool, global_writes: bool, client_writes: bool
+) -> None:
+    before = dict(scene.world.meetings)
+    with _identity(
+        global_writes=global_writes, client_writes=client_writes, grants=_exact_grants()
+    ) as repository:
+        app = _resolved_app(scene, repository, process_writes=process_writes)
+        names, items, written = await _session(app, _discover)
+    assert names == {DESCRIBE_TOOL, READ_TOOL}
+    assert sorted(items) == sorted(capability.value for capability in MEETING_READS)
+    assert written.is_error is True  # type: ignore[attr-defined]
+    assert _body(written)["code"] == "unsupported"
+    assert scene.world.meetings == before
+
+
+@pytest.mark.anyio
+async def test_a_meeting_write_needs_its_own_exact_write_grant(scene: Scene) -> None:
+    """Another Meeting write's grant, or a read-purpose grant, is not this one's."""
+    before = dict(scene.world.meetings)
+    reads = tuple(row for row in _exact_grants() if row[0] in MEETING_READS)
+    sibling = (*reads, (Capability.MEETINGS_UPDATE, Purpose.MEETING_AUTHORING, True))
+    wrong_purpose = (*reads, (Capability.MEETINGS_CREATE, Purpose.MEETING_READ, True))
+
+    with _identity(global_writes=True, client_writes=True, grants=sibling) as repository:
+        app = _resolved_app(scene, repository, process_writes=True)
+        names, items, written = await _session(app, _discover)
+    assert names == {DESCRIBE_TOOL, READ_TOOL, WRITE_TOOL}
+    assert Capability.MEETINGS_CREATE.value not in items
+    assert Capability.MEETINGS_UPDATE.value in items
+    assert _body(written)["code"] == "unsupported"
+
+    with _identity(global_writes=True, client_writes=True, grants=wrong_purpose) as repository:
+        app = _resolved_app(scene, repository, process_writes=True)
+        _, _, misgranted = await _session(app, _discover)
+    assert misgranted.is_error is True  # type: ignore[attr-defined]
+    assert _body(misgranted)["code"] == "unsupported"
+    assert scene.world.meetings == before
+
+
+@pytest.mark.anyio
+async def test_describe_lists_only_the_authenticated_clients_meeting_names(scene: Scene) -> None:
+    """Two clients in one store: each sees its own grants and nothing of the other's."""
+    other_rows = ((Capability.MEETINGS_SEARCH, Purpose.MEETING_READ, False),)
+
+    async def exercise(session: ClientSession) -> tuple[list[str], object]:
+        described = await session.call_tool(DESCRIBE_TOOL, {"feature": "meetings"})
+        withheld = await session.call_tool(
+            DESCRIBE_TOOL, {"capability": Capability.MEETINGS_READ.value}
+        )
+        return [str(item["capability"]) for item in _body(described)["items"]], withheld
+
+    with _identity(
+        global_writes=True,
+        client_writes=True,
+        grants=_exact_grants(),
+        other_client_grants=other_rows,
+    ) as repository:
+        own = _resolved_app(scene, repository, process_writes=True)
+        other = _resolved_app(
+            scene, repository, process_writes=True, oauth_client_id=_OTHER_CLIENT_ID
+        )
+        own_items, own_lookup = await _session(own, exercise)
+        other_items, other_lookup = await _session(other, exercise)
+    assert sorted(own_items) == sorted(capability.value for capability in MEETINGS)
+    assert _body(own_lookup)["item"]["capability"] == Capability.MEETINGS_READ.value
+    assert other_items == [Capability.MEETINGS_SEARCH.value]
+    assert other_lookup.is_error is True  # type: ignore[attr-defined]
+    assert _body(other_lookup)["code"] == "unsupported"
+
+
+@pytest.mark.anyio
+async def test_a_denied_meeting_write_is_denied_after_authority_change_and_says_nothing(
+    scene: Scene,
+) -> None:
+    """A policy denial past every gate: fixed code, fixed retry, no detail, no write."""
+    marker = "MARKERCOMPACTMEETINGDENIAL"
+    before = dict(scene.world.meetings)
+    unauthenticated = Principal(
+        principal_id=scene.principal.principal_id,
+        kind=scene.principal.kind,
+        authenticated=False,
+    )
+    grants = frozenset((capability, purpose) for capability, purpose, _ in _exact_grants())
+    app = create_remote_mcp_app(
+        build_service(scene.world, scene.providers),
+        resolve_access=lambda _authorization: RemoteAccessContext(
+            principal=unauthenticated,
+            allowed_capabilities=frozenset(capability.value for capability in MEETINGS),
+            capability_purposes=grants,
+            compact_publication=True,
+        ),
+        allowed_hosts=("testserver",),
+        remote_enabled=True,
+        writes_enabled=True,
+        resource=RESOURCE,
+        authorization_servers=(ISSUER,),
+        scopes=frozenset({_SCOPE}),
+    )
+
+    async def exercise(session: ClientSession) -> object:
+        return await session.call_tool(
+            WRITE_TOOL,
+            {
+                "capability": Capability.MEETINGS_CREATE.value,
+                "arguments": {
+                    "payload": {
+                        **_CREATE,
+                        "title": marker,
+                        "description": marker,
+                        "location_text": marker,
+                        "virtual_meeting_url": "https://meet.example.invalid/" + marker,
+                        "attendees": [{"display_name": marker, "email": "x@example.invalid"}],
+                    }
+                },
+            },
+        )
+
+    denied = await _session(app, exercise)
+    assert denied.is_error is True  # type: ignore[attr-defined]
+    text = denied.content[0].text  # type: ignore[attr-defined]
+    error = json.loads(text)["error"]
+    assert error["code"] == "denied"
+    assert error["retry"] == "after_authority_change"
+    assert error["safe_details"] == []
+    assert json.loads(text)["result"] is None
+    assert marker not in text
+    assert "example.invalid" not in text
+    assert scene.world.meetings == before

@@ -411,6 +411,14 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.CONSTRAINT_SYNC_APPLY, Purpose.CONSTRAINT_SYNC_AUTHORING),
         (Capability.CONSTRAINT_SYNC_ACKNOWLEDGE, Purpose.CONSTRAINT_SYNC_AUTHORING),
         (Capability.CONSTRAINT_SYNC_RESOLVE, Purpose.CONSTRAINT_SYNC_AUTHORING),
+        # WP-MTG-04's Meeting records plane: the three reads under `meeting_read`
+        # and the three writes under `meeting_authoring`, and neither under both.
+        (Capability.MEETINGS_READ, Purpose.MEETING_READ),
+        (Capability.MEETINGS_LIST, Purpose.MEETING_READ),
+        (Capability.MEETINGS_SEARCH, Purpose.MEETING_READ),
+        (Capability.MEETINGS_CREATE, Purpose.MEETING_AUTHORING),
+        (Capability.MEETINGS_UPDATE, Purpose.MEETING_AUTHORING),
+        (Capability.MEETINGS_SERIES_UPDATE, Purpose.MEETING_AUTHORING),
     }
 )
 
@@ -483,9 +491,11 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # plane's read/authoring separation now rests on. Run 01 adds four read
     # pairs and two authoring pairs without adding a purpose. WP11 adds seven sync pairs,
     # split between its read and authoring purposes, without widening the canonical grants.
-    # Unioned: 172 capabilities, 45 purposes, 174 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 174
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 174 == 7566
+    # WP-MTG-04 adds six Meeting names and the `meeting_read`/`meeting_authoring`
+    # purpose pair, each name mapped to exactly one of the pair, so six pairs.
+    # Unioned: 178 capabilities, 47 purposes, 180 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 180
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 180 == 8186
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

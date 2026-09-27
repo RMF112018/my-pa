@@ -327,6 +327,23 @@ EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
         ("constraint_sync.conflicts", "target_id"),
         ("constraint_sync.apply", "target_id"),
         ("constraint_sync.acknowledge", "target_id"),
+        # WP-MTG-04's Meeting fields, whose names package section 35.8 fixes.
+        # `sort_direction` is which way the `(start_at, meeting_id)` keyset runs
+        # (`asc`/`desc`), exempt on the `direction` precedent above. `location_text`
+        # is a human description of where people meet, bounded text stored as
+        # data; nothing resolves it. `virtual_meeting_url` is an https meeting
+        # link the caller records for people to open: it is validated as a
+        # credential-free https URL and stored and returned verbatim, and nothing
+        # on the server dereferences, fetches, opens or resolves it -- it names no
+        # file, root, store or source this process reaches. Renaming any of the
+        # three to dodge the scan would put the wire out of step with the frozen
+        # contract and the columns.
+        ("meetings.create", "location_text"),
+        ("meetings.create", "virtual_meeting_url"),
+        ("meetings.update", "location_text"),
+        ("meetings.update", "virtual_meeting_url"),
+        ("meetings.list", "sort_direction"),
+        ("meetings.search", "sort_direction"),
     }
 )
 
@@ -625,8 +642,10 @@ def test_the_location_scan_would_catch_one() -> None:
     # `WP-RI-B-05`'s expected target version -- an integer record version whose
     # name trips the scan on "target" -- and WP-01's settled-ambiguity target
     # Entity, an opaque `ent_` identifier that apply refuses outside that
-    # ambiguity's own `allowed_target_entity_ids`.
-    assert len(EXEMPT_PROPERTIES) == 14
+    # ambiguity's own `allowed_target_entity_ids`. Plus WP-MTG-04's six Meeting
+    # fields (operator ruling B1): `location_text`/`virtual_meeting_url` on
+    # create and update, `sort_direction` on list and search.
+    assert len(EXEMPT_PROPERTIES) == 20
     for tool_name, property_name in EXEMPT_PROPERTIES:
         tool = next(entry for entry in TOOLS if entry.name == tool_name)
         assert property_name in set(_schema_property_names(tool.input_schema))

@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import StrEnum
@@ -96,6 +96,38 @@ from my_pa.domain.intelligence.catalog import (
     ProducerRunState,
     ResolverSetId,
     SourceLaneId,
+)
+from my_pa.domain.meeting.model import (
+    DEFAULT_MEETING_PAGE_SIZE,
+    MAX_ATTENDEE_DISPLAY_NAME_CHARACTERS,
+    MAX_ATTENDEE_EMAIL_CHARACTERS,
+    MAX_MEETING_ATTACHMENTS,
+    MAX_MEETING_ATTENDEES,
+    MAX_MEETING_CLEAR_FIELDS,
+    MAX_MEETING_DESCRIPTION_CHARACTERS,
+    MAX_MEETING_IDEMPOTENCY_KEY_CHARACTERS,
+    MAX_MEETING_LOCATION_CHARACTERS,
+    MAX_MEETING_NOTES_CHARACTERS,
+    MAX_MEETING_PAGE_SIZE,
+    MAX_MEETING_QUERY_CHARACTERS,
+    MAX_MEETING_TITLE_CHARACTERS,
+    MAX_TIMEZONE_NAME_CHARACTERS,
+    MAX_VIRTUAL_MEETING_URL_CHARACTERS,
+    MIN_MEETING_IDEMPOTENCY_KEY_CHARACTERS,
+    AttendeeResponseStatus,
+    MeetingClearField,
+    MeetingCreateRequest,
+    MeetingError,
+    MeetingListRequest,
+    MeetingNotesMode,
+    MeetingSearchRequest,
+    MeetingSeriesUpdateRequest,
+    MeetingSortDirection,
+    MeetingStatus,
+    MeetingTimeScope,
+    MeetingUpdateRequest,
+    NormalizedAttendee,
+    normalize_attendee,
 )
 from my_pa.domain.project_controls.category import ConstraintCategoryState
 from my_pa.domain.project_controls.constraint import (
@@ -9762,6 +9794,700 @@ class ReadProjectControlsStatus:
         _identifier(self.project_id, IdKind.PROJECT, SafeDetail.PROJECT_ID)
 
 
+# --- the Meeting records plane (WP-MTG-04) ------------------------------------
+#
+# Six commands over the product-owned Meeting plane. Each validates what is
+# decidable without state and nothing else, and the rule it applies is WP-MTG-01's
+# rather than a copy of it: `__post_init__` checks the type of every
+# caller-supplied field first, refuses text that cannot be stored (below), and then
+# *constructs the domain request value* -- `MeetingCreateRequest` and its
+# siblings -- whose own validation is the Meeting rule set. A domain refusal
+# carries a `MeetingErrorField` token whose value is a `SafeDetail` value, so the
+# translation is a lookup and never a new token. The handler rebuilds the same
+# value from the same fields; nothing a command decides can disagree with what
+# the application executes.
+#
+# **Text that cannot be stored is refused here (review finding R3-03).** A
+# caller string carrying NUL, or a lone surrogate that has no UTF-8 encoding,
+# passes every WP-MTG-01 bound -- they are code-point counts -- and then fails
+# twice downstream: `meeting_request_digest` raises `UnicodeEncodeError` while
+# serializing the canonical UTF-8 document, and PostgreSQL refuses the value on
+# insert. Neither is a `PortError`, so either would reach the caller as
+# `internal_error` about a request only they can correct. The refusal is the one
+# `_bounded_token` already applies to NUL, extended to the encoding the digest and
+# the database both require, applied to every Meeting caller string before the
+# domain value, the digest or a statement sees it. It rewrites nothing: an
+# accepted string is stored exactly as sent (package section 35.6).
+#
+# **Two domain token choices are carried as documented, not remapped (WP-MTG-01
+# review F-02).** A `time_scope` or `sort_direction` value outside its closed
+# vocabulary is refused by `MeetingListRequest` under `start_at` and `cursor`
+# respectively: `time_scope` narrows the list by `start_at` against the request
+# clock, and `sort_direction` orients the `(start_at, meeting_id)` keyset the
+# cursor walks, so each token names the field the refused selector governs. Both
+# are reachable only by a caller that ignored the published enum, both stay
+# inside the section 35.16 token set, and no `SafeDetail` is added for them.
+
+
+def _storable_text(value: object, detail: SafeDetail) -> str:
+    """A caller string that can be digested and stored, or a refusal naming `detail`.
+
+    Type first, then content: a non-string, a string containing NUL, and a string
+    with no UTF-8 encoding (a lone surrogate) are refused. The value is returned
+    unchanged and never reaches a message.
+    """
+    if not isinstance(value, str) or "\x00" in value:
+        raise InvalidRequestError(detail)
+    encodable = True
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        encodable = False
+    if not encodable:
+        raise InvalidRequestError(detail)
+    return value
+
+
+def _optional_storable_text(value: object, detail: SafeDetail) -> str | None:
+    return None if value is None else _storable_text(value, detail)
+
+
+def _meeting_value[ValueT](build: Callable[[], ValueT]) -> ValueT:
+    """The WP-MTG-01 request value `build` constructs, or its token as a refusal.
+
+    Raised outside the handler, as everywhere in this module, so the domain error
+    is not left in `__context__`.
+    """
+    refused = SafeDetail.MUTATIONS
+    try:
+        return build()
+    except MeetingError as error:
+        refused = SafeDetail(error.field.value)
+    raise InvalidRequestError(refused)
+
+
+#: The attendee object's admitted keys (package section 35.8). A document naming
+#: anything else is refused rather than silently narrowed.
+_MEETING_ATTENDEE_KEYS: Final[frozenset[str]] = frozenset(
+    {"display_name", "email", "entity_id", "is_organizer", "response_status"}
+)
+
+
+def _meeting_attendees(value: object) -> tuple[NormalizedAttendee, ...]:
+    """A caller's attendee array as normalized WP-MTG-01 attendees.
+
+    Shape and storable text here; every attendee rule (trim, the EMAIL
+    normalizer, the identity signals, the closed response vocabulary) is
+    `normalize_attendee`'s, and the set rules are `validate_attendee_set`'s, which
+    the request value applies.
+    """
+    if not isinstance(value, tuple) or len(value) > MAX_MEETING_ATTENDEES:
+        raise InvalidRequestError(SafeDetail.ATTENDEES)
+    attendees: list[NormalizedAttendee] = []
+    for item in value:
+        if not isinstance(item, Mapping) or not set(item) <= _MEETING_ATTENDEE_KEYS:
+            raise InvalidRequestError(SafeDetail.ATTENDEES)
+        _optional_storable_text(item.get("display_name"), SafeDetail.ATTENDEES)
+        _optional_storable_text(item.get("email"), SafeDetail.ATTENDEES)
+        attendees.append(_meeting_attendee(dict(item)))
+    return tuple(attendees)
+
+
+def _meeting_attendee(document: dict[str, object]) -> NormalizedAttendee:
+    return _meeting_value(lambda: normalize_attendee(**document))
+
+
+def _meeting_identifiers(value: object, detail: SafeDetail) -> tuple[str, ...]:
+    """An identifier array as the tuple the request value sorts and validates."""
+    if not isinstance(value, tuple):
+        raise InvalidRequestError(detail)
+    identifiers: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise InvalidRequestError(detail)
+        identifiers.append(item)
+    return tuple(identifiers)
+
+
+def _meeting_expected_version(value: object) -> int:
+    if type(value) is not int or value < 1:
+        raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+    return value
+
+
+def _meeting_id_schema(kind: IdKind, description: str) -> dict[str, object]:
+    """The published identifier grammar for one Meeting-plane identifier kind."""
+    return {
+        "type": "string",
+        "pattern": f"^{kind.value}_[A-Za-z0-9]{{8,64}}$",
+        "description": description,
+    }
+
+
+def _meeting_title_schema(description: str) -> dict[str, object]:
+    return {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": MAX_MEETING_TITLE_CHARACTERS,
+        "description": description,
+    }
+
+
+_MEETING_IDEMPOTENCY_KEY_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "string",
+        "minLength": MIN_MEETING_IDEMPOTENCY_KEY_CHARACTERS,
+        "maxLength": MAX_MEETING_IDEMPOTENCY_KEY_CHARACTERS,
+        "description": (
+            "Caller-chosen replay key on the canonical contract, 1..128 characters. "
+            "The same key with the same request replays the original receipt and "
+            "the current state; the same key with a different request is conflict. "
+            "Remote MCP stamps this field so a model does not invent one."
+        ),
+    }
+)
+
+_MEETING_EXPECTED_VERSION_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "integer",
+        "minimum": 1,
+        "description": "The version you last read. A stale value is conflict and writes nothing.",
+    }
+)
+
+_MEETING_ATTENDEE_ITEM_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "display_name": {"type": "string", "maxLength": MAX_ATTENDEE_DISPLAY_NAME_CHARACTERS},
+            "email": {"type": "string", "maxLength": MAX_ATTENDEE_EMAIL_CHARACTERS},
+            "entity_id": _meeting_id_schema(
+                IdKind.ENTITY, "An existing ACTIVE Person Entity of yours; never created."
+            ),
+            "is_organizer": {"type": "boolean", "default": False},
+            "response_status": {
+                "type": "string",
+                "enum": [member.value for member in AttendeeResponseStatus],
+                "default": AttendeeResponseStatus.UNKNOWN.value,
+            },
+        },
+        # At least one identity signal. `anyOf`, not `oneOf`: JSON Schema's
+        # `oneOf` means *exactly one*, and an attendee with both a name and an
+        # email is legal (package sections 19.2 and 34.10).
+        "anyOf": [
+            {"required": ["display_name"]},
+            {"required": ["email"]},
+            {"required": ["entity_id"]},
+        ],
+    }
+)
+
+
+def _meeting_attendees_schema(description: str) -> dict[str, object]:
+    return {
+        "type": "array",
+        "maxItems": MAX_MEETING_ATTENDEES,
+        "uniqueItems": True,
+        "items": dict(_MEETING_ATTENDEE_ITEM_SCHEMA),
+        "description": description,
+    }
+
+
+def _meeting_document_ids_schema(description: str) -> dict[str, object]:
+    return {
+        "type": "array",
+        "maxItems": MAX_MEETING_ATTACHMENTS,
+        "uniqueItems": True,
+        "items": _meeting_id_schema(IdKind.MANAGED_DOCUMENT, "A ManagedDocument of yours."),
+        "description": description,
+    }
+
+
+#: The scalar overlays `meetings.create` and `meetings.update` share.
+_MEETING_SCALAR_SCHEMAS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+    {
+        "title": _meeting_title_schema("The Meeting title, stored exactly as sent."),
+        "start_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": (
+                "An offset-aware RFC 3339 instant; stored in UTC. A naive time is refused."
+            ),
+        },
+        "end_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "An offset-aware RFC 3339 instant, not before start_at.",
+        },
+        "timezone_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": MAX_TIMEZONE_NAME_CHARACTERS,
+            "description": "An IANA zone name retained as display context.",
+        },
+        "location_text": {"type": "string", "maxLength": MAX_MEETING_LOCATION_CHARACTERS},
+        "virtual_meeting_url": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": MAX_VIRTUAL_MEETING_URL_CHARACTERS,
+            "format": "uri",
+            "description": "An https link without credentials, stored exactly as sent.",
+        },
+        "description": {"type": "string", "maxLength": MAX_MEETING_DESCRIPTION_CHARACTERS},
+        "project_id": _meeting_id_schema(
+            IdKind.PROJECT, "A Project of yours, in any state; absent and foreign are not_found."
+        ),
+        "notes_markdown": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": MAX_MEETING_NOTES_CHARACTERS,
+            "description": "Meeting notes as Markdown text, stored as data.",
+        },
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CreateMeeting:
+    """`meetings.create`: record one Meeting, standalone or in a new or existing series.
+
+    The series selector is exactly one of three states: neither
+    `meeting_series_id` nor `series_title` (a standalone Meeting, no series is
+    fabricated), `series_title` alone (a new series and its first occurrence, one
+    request identity), or `meeting_series_id` alone (an occurrence of an existing
+    series, which is read and never changed). Both is invalid_request. Attendees
+    are snapshots: an email never creates a contact, and an `entity_id` must name
+    an existing ACTIVE Person Entity of yours. Attachments name ManagedDocuments of
+    yours and never copy their bytes. The same `idempotency_key` with the same
+    request replays the original receipt; with a different request it is conflict.
+
+    The principal is not here. Authority comes from authenticated context.
+    """
+
+    capability: ClassVar[Capability] = Capability.MEETINGS_CREATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            **_MEETING_SCALAR_SCHEMAS,
+            "idempotency_key": _MEETING_IDEMPOTENCY_KEY_SCHEMA,
+            "meeting_series_id": _meeting_id_schema(
+                IdKind.MEETING_SERIES,
+                "An existing series of yours; this Meeting becomes one of its occurrences.",
+            ),
+            "series_title": _meeting_title_schema(
+                "Create a new series with this title, and this Meeting as its first occurrence."
+            ),
+            "attendees": _meeting_attendees_schema(
+                "Attendee snapshots; at most one organizer; duplicates are invalid_request."
+            ),
+            "attachment_document_ids": _meeting_document_ids_schema(
+                "ManagedDocuments to attach; ACTIVE and ARCHIVED documents are eligible."
+            ),
+            # The three legal series-selector states (package section 35.8).
+            "oneOf": [
+                {
+                    "not": {
+                        "anyOf": [
+                            {"required": ["meeting_series_id"]},
+                            {"required": ["series_title"]},
+                        ]
+                    }
+                },
+                {"required": ["series_title"], "not": {"required": ["meeting_series_id"]}},
+                {"required": ["meeting_series_id"], "not": {"required": ["series_title"]}},
+            ],
+        }
+    )
+
+    title: str = field(repr=False)
+    start_at: datetime
+    timezone_name: str
+    idempotency_key: str
+    end_at: datetime | None = None
+    meeting_series_id: str | None = None
+    series_title: str | None = field(default=None, repr=False)
+    location_text: str | None = field(default=None, repr=False)
+    virtual_meeting_url: str | None = field(default=None, repr=False)
+    description: str | None = field(default=None, repr=False)
+    project_id: str | None = None
+    attendees: tuple[dict[str, object], ...] = field(default=(), repr=False)
+    attachment_document_ids: tuple[str, ...] = ()
+    notes_markdown: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _idempotency_key(self.idempotency_key)
+        _storable_text(self.idempotency_key, SafeDetail.IDEMPOTENCY_KEY)
+        _storable_text(self.title, SafeDetail.TITLE)
+        _storable_text(self.timezone_name, SafeDetail.TIMEZONE_NAME)
+        _optional_storable_text(self.series_title, SafeDetail.TITLE)
+        _optional_storable_text(self.location_text, SafeDetail.LOCATION_TEXT)
+        _optional_storable_text(self.virtual_meeting_url, SafeDetail.VIRTUAL_MEETING_URL)
+        _optional_storable_text(self.description, SafeDetail.DESCRIPTION)
+        _optional_storable_text(self.notes_markdown, SafeDetail.NOTES)
+        self.meeting_request()
+
+    def meeting_request(self) -> MeetingCreateRequest:
+        """The normalized WP-MTG-01 request this command states."""
+        attendees = _meeting_attendees(self.attendees)
+        documents = _meeting_identifiers(self.attachment_document_ids, SafeDetail.DOCUMENT_ID)
+        return _meeting_value(
+            lambda: MeetingCreateRequest(
+                title=self.title,
+                start_at=self.start_at,
+                timezone_name=self.timezone_name,
+                end_at=self.end_at,
+                meeting_series_id=self.meeting_series_id,
+                series_title=self.series_title,
+                location_text=self.location_text,
+                virtual_meeting_url=self.virtual_meeting_url,
+                description=self.description,
+                project_id=self.project_id,
+                attendees=attendees,
+                attachment_document_ids=documents,
+                notes_markdown=self.notes_markdown,
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReadMeeting:
+    """`meetings.read`: one Meeting of yours, with attendees, attachments and current note.
+
+    A Meeting another Principal holds is answered exactly as an absent one:
+    not_found.
+    """
+
+    capability: ClassVar[Capability] = Capability.MEETINGS_READ
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {"meeting_id": _meeting_id_schema(IdKind.MEETING, "The Meeting to read.")}
+    )
+
+    meeting_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.meeting_id, IdKind.MEETING, SafeDetail.MEETING_ID)
+
+
+#: The structured filters `meetings.list` and `meetings.search` share.
+_MEETING_FILTER_SCHEMAS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+    {
+        "meeting_series_id": _meeting_id_schema(IdKind.MEETING_SERIES, "Only this series."),
+        "project_id": _meeting_id_schema(IdKind.PROJECT, "Only Meetings about this Project."),
+        "start_at_from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Inclusive lower bound on start_at.",
+        },
+        "start_at_before": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Exclusive upper bound on start_at; must be after start_at_from.",
+        },
+        "attendee_entity_id": _meeting_id_schema(
+            IdKind.ENTITY, "Only Meetings this Entity actively attends."
+        ),
+        "attendee_email": {
+            "type": "string",
+            "maxLength": MAX_ATTENDEE_EMAIL_CHARACTERS,
+            "description": "Only Meetings with this attendee email (normalized server-side).",
+        },
+        "time_scope": {"default": MeetingTimeScope.ALL.value},
+        "sort_direction": {"default": MeetingSortDirection.ASC.value},
+        "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": MAX_MEETING_PAGE_SIZE,
+            "description": "Optional page bound; omit for the server default.",
+        },
+        "after": _meeting_id_schema(
+            IdKind.MEETING,
+            "Keyset cursor: the meeting_id of the last row on the previous page, "
+            "under the same filters.",
+        ),
+    }
+)
+
+
+def _meeting_list_request(command: ListMeetings | SearchMeetings) -> MeetingListRequest:
+    """The normalized WP-MTG-01 filter set a list or search command states."""
+    return _meeting_value(
+        lambda: MeetingListRequest(
+            meeting_series_id=command.meeting_series_id,
+            project_id=command.project_id,
+            start_at_from=command.start_at_from,
+            start_at_before=command.start_at_before,
+            attendee_entity_id=command.attendee_entity_id,
+            attendee_email=command.attendee_email,
+            status=command.status,
+            time_scope=command.time_scope,
+            sort_direction=command.sort_direction,
+            page_size=(
+                DEFAULT_MEETING_PAGE_SIZE if command.page_size is None else command.page_size
+            ),
+            after=command.after,
+        )
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ListMeetings:
+    """`meetings.list`: one bounded keyset page of your Meetings under structured filters.
+
+    Filters combine with AND. Rows are ordered by `(start_at, meeting_id)` in the
+    requested direction and carry no description, virtual link, attendee identity
+    or note body. `after` must name a Meeting inside the same filters, otherwise
+    invalid_request.
+    """
+
+    capability: ClassVar[Capability] = Capability.MEETINGS_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = _MEETING_FILTER_SCHEMAS
+
+    meeting_series_id: str | None = None
+    project_id: str | None = None
+    start_at_from: datetime | None = None
+    start_at_before: datetime | None = None
+    attendee_entity_id: str | None = None
+    attendee_email: str | None = field(default=None, repr=False)
+    status: MeetingStatus | None = None
+    time_scope: MeetingTimeScope = MeetingTimeScope.ALL
+    sort_direction: MeetingSortDirection = MeetingSortDirection.ASC
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _optional_storable_text(self.attendee_email, SafeDetail.ATTENDEES)
+        self.meeting_request()
+
+    def meeting_request(self) -> MeetingListRequest:
+        """The normalized WP-MTG-01 filter set this command states."""
+        return _meeting_list_request(self)
+
+
+@dataclass(frozen=True, slots=True)
+class SearchMeetings:
+    """`meetings.search`: one bounded keyset page of your Meetings matching a query.
+
+    The query matches the Meeting title, description and location, its series
+    title, and its current note only; attendee names and emails are never searched
+    lexically. The `meetings.list` filters apply, and the order is the same
+    `(start_at, meeting_id)` keyset.
+    """
+
+    capability: ClassVar[Capability] = Capability.MEETINGS_SEARCH
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            **_MEETING_FILTER_SCHEMAS,
+            "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": MAX_MEETING_QUERY_CHARACTERS,
+                "description": "The lexical query; never echoed into an error.",
+            },
+        }
+    )
+
+    query: str = field(repr=False)
+    meeting_series_id: str | None = None
+    project_id: str | None = None
+    start_at_from: datetime | None = None
+    start_at_before: datetime | None = None
+    attendee_entity_id: str | None = None
+    attendee_email: str | None = field(default=None, repr=False)
+    status: MeetingStatus | None = None
+    time_scope: MeetingTimeScope = MeetingTimeScope.ALL
+    sort_direction: MeetingSortDirection = MeetingSortDirection.ASC
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.query, str):
+            raise InvalidRequestError(SafeDetail.QUERY)
+        # The search plane's own rule (`domain.search.query`), which refuses
+        # control, surrogate and private-use characters as well as the bound.
+        _bounded_query(self.query, SafeDetail.QUERY)
+        _optional_storable_text(self.attendee_email, SafeDetail.ATTENDEES)
+        self.meeting_request()
+
+    def meeting_request(self) -> MeetingSearchRequest:
+        """The normalized WP-MTG-01 search request this command states."""
+        filters = _meeting_list_request(self)
+        return _meeting_value(lambda: MeetingSearchRequest(query=self.query, filters=filters))
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateMeeting:
+    """`meetings.update`: patch one Meeting's details, attendees, attachments and notes.
+
+    Omitted means unchanged; a clear is only ever a `clear_fields` member, never
+    null. `attendees_replace` replaces the active attendee set (an empty array
+    clears it). Attachments are added and removed as relations; the documents are
+    never touched. `notes_mode` and `notes_markdown` come together. Series
+    membership cannot change here: `meeting_series_id` and `series_title` are not
+    fields. A request that changes nothing records a no_op receipt; a stale
+    `expected_version` is conflict and writes nothing.
+
+    The principal is not here. Authority comes from authenticated context.
+    """
+
+    capability: ClassVar[Capability] = Capability.MEETINGS_UPDATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            **_MEETING_SCALAR_SCHEMAS,
+            "meeting_id": _meeting_id_schema(IdKind.MEETING, "The Meeting to update."),
+            "expected_version": _MEETING_EXPECTED_VERSION_SCHEMA,
+            "idempotency_key": _MEETING_IDEMPOTENCY_KEY_SCHEMA,
+            "clear_fields": {
+                "uniqueItems": True,
+                "maxItems": MAX_MEETING_CLEAR_FIELDS,
+                "description": "Fields to clear to empty. An explicit clear wins over a value.",
+            },
+            "attendees_replace": _meeting_attendees_schema(
+                "Replace the active attendee set; an empty array clears it."
+            ),
+            "attachment_add_document_ids": _meeting_document_ids_schema(
+                "ManagedDocuments to attach; one already attached is invalid_request."
+            ),
+            "attachment_remove_ids": {
+                "type": "array",
+                "maxItems": MAX_MEETING_ATTACHMENTS,
+                "uniqueItems": True,
+                "items": _meeting_id_schema(IdKind.MEETING_ATTACHMENT, "An active attachment."),
+                "description": "Attachment relations to detach; the documents are unchanged.",
+            },
+            "notes_mode": {"description": "append adds to the current note; replace rewrites it."},
+            "allOf": [
+                {"if": {"required": ["notes_mode"]}, "then": {"required": ["notes_markdown"]}},
+                {"if": {"required": ["notes_markdown"]}, "then": {"required": ["notes_mode"]}},
+                {
+                    "if": {"required": ["project_id"]},
+                    "then": {
+                        "properties": {
+                            "clear_fields": {
+                                "not": {"contains": {"const": MeetingClearField.PROJECT_ID.value}}
+                            }
+                        }
+                    },
+                },
+            ],
+        }
+    )
+
+    meeting_id: str
+    expected_version: int
+    idempotency_key: str
+    title: str | None = field(default=None, repr=False)
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+    timezone_name: str | None = None
+    status: MeetingStatus | None = None
+    location_text: str | None = field(default=None, repr=False)
+    virtual_meeting_url: str | None = field(default=None, repr=False)
+    description: str | None = field(default=None, repr=False)
+    project_id: str | None = None
+    clear_fields: tuple[MeetingClearField, ...] = ()
+    attendees_replace: tuple[dict[str, object], ...] | None = field(default=None, repr=False)
+    attachment_add_document_ids: tuple[str, ...] = ()
+    attachment_remove_ids: tuple[str, ...] = ()
+    notes_mode: MeetingNotesMode | None = None
+    notes_markdown: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _identifier(self.meeting_id, IdKind.MEETING, SafeDetail.MEETING_ID)
+        _meeting_expected_version(self.expected_version)
+        _idempotency_key(self.idempotency_key)
+        _storable_text(self.idempotency_key, SafeDetail.IDEMPOTENCY_KEY)
+        _optional_storable_text(self.title, SafeDetail.TITLE)
+        _optional_storable_text(self.timezone_name, SafeDetail.TIMEZONE_NAME)
+        _optional_storable_text(self.location_text, SafeDetail.LOCATION_TEXT)
+        _optional_storable_text(self.virtual_meeting_url, SafeDetail.VIRTUAL_MEETING_URL)
+        _optional_storable_text(self.description, SafeDetail.DESCRIPTION)
+        _optional_storable_text(self.notes_markdown, SafeDetail.NOTES)
+        if not isinstance(self.clear_fields, tuple):
+            raise InvalidRequestError(SafeDetail.CLEAR_FIELDS)
+        if self.status is not None and not isinstance(self.status, MeetingStatus):
+            raise InvalidRequestError(SafeDetail.STATUS)
+        if self.notes_mode is not None and not isinstance(self.notes_mode, MeetingNotesMode):
+            raise InvalidRequestError(SafeDetail.NOTES)
+        self.meeting_request()
+
+    def meeting_request(self) -> MeetingUpdateRequest:
+        """The normalized WP-MTG-01 request this command states."""
+        attendees = (
+            None if self.attendees_replace is None else _meeting_attendees(self.attendees_replace)
+        )
+        added = _meeting_identifiers(self.attachment_add_document_ids, SafeDetail.DOCUMENT_ID)
+        removed = _meeting_identifiers(self.attachment_remove_ids, SafeDetail.ATTACHMENT_ID)
+        return _meeting_value(
+            lambda: MeetingUpdateRequest(
+                meeting_id=self.meeting_id,
+                title=self.title,
+                start_at=self.start_at,
+                end_at=self.end_at,
+                timezone_name=self.timezone_name,
+                status=self.status,
+                location_text=self.location_text,
+                virtual_meeting_url=self.virtual_meeting_url,
+                description=self.description,
+                project_id=self.project_id,
+                clear_fields=self.clear_fields,
+                attendees_replace=attendees,
+                attachment_add_document_ids=added,
+                attachment_remove_ids=removed,
+                notes_mode=self.notes_mode,
+                notes_markdown=self.notes_markdown,
+            )
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateMeetingSeries:
+    """`meetings.series.update`: retitle one MeetingSeries of yours; occurrences keep theirs.
+
+    No occurrence is locked or rewritten; each keeps its own title. The same title
+    records a no_op receipt; a stale `expected_version` is conflict and writes
+    nothing.
+
+    The principal is not here. Authority comes from authenticated context.
+    """
+
+    capability: ClassVar[Capability] = Capability.MEETINGS_SERIES_UPDATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
+        {
+            "meeting_series_id": _meeting_id_schema(IdKind.MEETING_SERIES, "The series."),
+            "expected_version": _MEETING_EXPECTED_VERSION_SCHEMA,
+            "idempotency_key": _MEETING_IDEMPOTENCY_KEY_SCHEMA,
+            "title": _meeting_title_schema("The new series title, stored exactly as sent."),
+        }
+    )
+
+    meeting_series_id: str
+    expected_version: int
+    idempotency_key: str
+    title: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        _identifier(self.meeting_series_id, IdKind.MEETING_SERIES, SafeDetail.MEETING_SERIES_ID)
+        _meeting_expected_version(self.expected_version)
+        _idempotency_key(self.idempotency_key)
+        _storable_text(self.idempotency_key, SafeDetail.IDEMPOTENCY_KEY)
+        _storable_text(self.title, SafeDetail.TITLE)
+        self.meeting_request()
+
+    def meeting_request(self) -> MeetingSeriesUpdateRequest:
+        """The normalized WP-MTG-01 request this command states."""
+        return _meeting_value(
+            lambda: MeetingSeriesUpdateRequest(
+                meeting_series_id=self.meeting_series_id, title=self.title
+            )
+        )
+
+
 type Command = (
     GetCapabilities
     | ListSources
@@ -9935,6 +10661,12 @@ type Command = (
     | ReorderConstraintCategories
     | ConfigureProjectControls
     | ReadProjectControlsStatus
+    | CreateMeeting
+    | ReadMeeting
+    | ListMeetings
+    | SearchMeetings
+    | UpdateMeeting
+    | UpdateMeetingSeries
 )
 
 

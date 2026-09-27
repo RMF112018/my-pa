@@ -326,6 +326,19 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
         Capability.PROJECT_CONTROLS_CONFIGURE,
         Capability.PROJECT_CONTROLS_STATUS,
+        # The six Meeting records names (WP-MTG-04) are scopeless for the reason
+        # the Constraint plane above is: a Meeting, its series, attendees,
+        # attachments, receipts and note versions are ADR-003 product-owned rows
+        # in the acting Principal's own partition, carrying no `source_id` and no
+        # `enrollment_id` a scope could be compared against. Scopeless is not
+        # ungated -- capability, purpose and the Principal's partition still
+        # decide every one of them.
+        Capability.MEETINGS_CREATE,
+        Capability.MEETINGS_READ,
+        Capability.MEETINGS_LIST,
+        Capability.MEETINGS_SEARCH,
+        Capability.MEETINGS_UPDATE,
+        Capability.MEETINGS_SERIES_UPDATE,
         # `context.feedback` names a ranking preference, not a source. The rows
         # it writes belong to the acting Principal's partition and carry no
         # `enrollment_id` and no grant a scope could be compared against.

@@ -885,6 +885,31 @@ class Capability(StrEnum):
     CONSTRAINT_SYNC_APPLY = "constraint_sync.apply"
     CONSTRAINT_SYNC_ACKNOWLEDGE = "constraint_sync.acknowledge"
     CONSTRAINT_SYNC_RESOLVE = "constraint_sync.resolve"
+    #: Meeting records (WP-MTG-04). Six canonical names over the product-owned
+    #: Meeting plane (ADR-003): three reads and three writes. The reads map to
+    #: `Purpose.MEETING_READ` and to nothing else and the writes to
+    #: `Purpose.MEETING_AUTHORING` and to nothing else, so a grant issued to read
+    #: a Principal's Meetings cannot change one.
+    #:
+    #: **Only `meetings.create` is additive.** It inserts a new Meeting (and, for
+    #: a new series, a new MeetingSeries) and reaches no existing row: an
+    #: occurrence of an existing series reads that series without locking or
+    #: versioning it. `meetings.update` rewrites a Meeting's scalars and retires
+    #: and replaces its child relations, and `meetings.series.update` retitles a
+    #: series that already existed, so both are destructive in the sense
+    #: `is_destructive_capability` reads.
+    #:
+    #: None is operator-only: Meeting authoring is ordinary Principal work in the
+    #: Principal's own partition and widens no scope a later request is evaluated
+    #: against. The values equal the WP-MTG-01 name constants
+    #: (`domain.meeting.model.MEETINGS_*_NAME`, plan D-21), which the Meeting
+    #: revision's frozen `meeting_write_requests.capability` CHECK also names.
+    MEETINGS_CREATE = "meetings.create"
+    MEETINGS_READ = "meetings.read"
+    MEETINGS_LIST = "meetings.list"
+    MEETINGS_SEARCH = "meetings.search"
+    MEETINGS_UPDATE = "meetings.update"
+    MEETINGS_SERIES_UPDATE = "meetings.series.update"
 
 
 class NativeSourceCapability(StrEnum):
@@ -1382,6 +1407,15 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.CONSTRAINT_SYNC_APPLY: frozenset({Purpose.CONSTRAINT_SYNC_AUTHORING}),
         Capability.CONSTRAINT_SYNC_ACKNOWLEDGE: frozenset({Purpose.CONSTRAINT_SYNC_AUTHORING}),
         Capability.CONSTRAINT_SYNC_RESOLVE: frozenset({Purpose.CONSTRAINT_SYNC_AUTHORING}),
+        # Meeting records (WP-MTG-04): each name maps to exactly one purpose of
+        # the plane's read/authoring pair and never to both, which is the
+        # read/authoring separation `purpose.py` states for the pair.
+        Capability.MEETINGS_READ: frozenset({Purpose.MEETING_READ}),
+        Capability.MEETINGS_LIST: frozenset({Purpose.MEETING_READ}),
+        Capability.MEETINGS_SEARCH: frozenset({Purpose.MEETING_READ}),
+        Capability.MEETINGS_CREATE: frozenset({Purpose.MEETING_AUTHORING}),
+        Capability.MEETINGS_UPDATE: frozenset({Purpose.MEETING_AUTHORING}),
+        Capability.MEETINGS_SERIES_UPDATE: frozenset({Purpose.MEETING_AUTHORING}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),
@@ -1521,6 +1555,12 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.CONSTRAINT_SYNC_APPLY,
         Capability.CONSTRAINT_SYNC_ACKNOWLEDGE,
         Capability.CONSTRAINT_SYNC_RESOLVE,
+        # WP-MTG-04. The three Meeting writes change product-owned state; the
+        # three Meeting reads are deliberately absent, which keeps their
+        # generated MCP tools annotated `read_only_hint`.
+        Capability.MEETINGS_CREATE,
+        Capability.MEETINGS_UPDATE,
+        Capability.MEETINGS_SERIES_UPDATE,
     }
 )
 
@@ -1605,6 +1645,12 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # `destructive_hint=False` annotation that contradicts the transaction.
         Capability.CONSTRAINTS_CREATE,
         Capability.CONSTRAINT_CATEGORIES_CREATE,
+        # WP-MTG-04: `meetings.create` only. It inserts a Meeting (and, for a new
+        # series, the series) with its first receipt and reaches no existing
+        # row; an existing series is read without a lock or a version change.
+        # `meetings.update` and `meetings.series.update` are deliberately
+        # absent: each rewrites a row that already existed.
+        Capability.MEETINGS_CREATE,
     }
 )
 

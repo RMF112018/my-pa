@@ -105,8 +105,8 @@ def test_the_authoring_purpose_exists_and_is_the_only_one_added() -> None:
 
 def test_the_two_vocabularies_are_the_sizes_this_package_states() -> None:
     """The counts the census documents and the migration are written against."""
-    assert len(Capability) == 172
-    assert len(Purpose) == 45
+    assert len(Capability) == 178
+    assert len(Purpose) == 47
 
 
 def test_no_public_migration_capability_exists() -> None:

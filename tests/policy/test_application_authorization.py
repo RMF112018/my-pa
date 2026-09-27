@@ -85,6 +85,7 @@ from my_pa.application.commands import (
     CreateEntityProposal,
     CreateEntityRelationship,
     CreateManagedDocument,
+    CreateMeeting,
     CreateProject,
     CreatePublishedConstraint,
     CreateRelationshipMemory,
@@ -138,6 +139,7 @@ from my_pa.application.commands import (
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
+    ListMeetings,
     ListPortfolioConstraints,
     ListProjects,
     ListRelationshipMemories,
@@ -168,6 +170,7 @@ from my_pa.application.commands import (
     ReadIntelligenceArtifact,
     ReadKnowledge,
     ReadManagedDocument,
+    ReadMeeting,
     ReadPortfolioConstraintOverview,
     ReadProject,
     ReadProjectControlsStatus,
@@ -206,6 +209,7 @@ from my_pa.application.commands import (
     SearchGoodNotes,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
+    SearchMeetings,
     SearchPortfolioConstraints,
     SearchRelationshipMemories,
     SearchTasks,
@@ -221,6 +225,8 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateMeeting,
+    UpdateMeetingSeries,
     UpdateProject,
     UpdateTask,
     VoidConstraint,
@@ -1115,6 +1121,30 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             idempotency_key="policy-entities-resolve",
             reason="there is not enough identity evidence yet",
         ),
+        # WP-MTG-04 (plan D-32c). Well-formed and naming the scene's staged
+        # series-bound Meeting, on the same terms as every row here: the only
+        # thing wrong in a denial test must be the authority.
+        Capability.MEETINGS_CREATE: CreateMeeting(
+            title="A policy meeting",
+            start_at=WHEN,
+            timezone_name="UTC",
+            idempotency_key="policy-meetings-create",
+        ),
+        Capability.MEETINGS_READ: ReadMeeting(meeting_id=scene.meeting_id),
+        Capability.MEETINGS_LIST: ListMeetings(),
+        Capability.MEETINGS_SEARCH: SearchMeetings(query="synthetic"),
+        Capability.MEETINGS_UPDATE: UpdateMeeting(
+            meeting_id=scene.meeting_id,
+            expected_version=1,
+            idempotency_key="policy-meetings-update",
+            title="A policy meeting, retitled",
+        ),
+        Capability.MEETINGS_SERIES_UPDATE: UpdateMeetingSeries(
+            meeting_series_id=scene.meeting_series_id,
+            expected_version=1,
+            idempotency_key="policy-meetings-series-update",
+            title="A policy meeting series, retitled",
+        ),
     }
 
 
@@ -1527,6 +1557,14 @@ SCOPED_CAPABILITIES = [
         Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
         Capability.PROJECT_CONTROLS_CONFIGURE,
         Capability.PROJECT_CONTROLS_STATUS,
+        # WP-MTG-04's six Meeting names: ADR-003 product-owned rows of the acting
+        # Principal's own partition, in `domain.policy.decision._SCOPELESS`.
+        Capability.MEETINGS_CREATE,
+        Capability.MEETINGS_READ,
+        Capability.MEETINGS_LIST,
+        Capability.MEETINGS_SEARCH,
+        Capability.MEETINGS_UPDATE,
+        Capability.MEETINGS_SERIES_UPDATE,
     }
 ]
 
@@ -1790,6 +1828,13 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.CONSTRAINTS_PORTFOLIO_OVERVIEW,
         Capability.PROJECT_CONTROLS_CONFIGURE,
         Capability.PROJECT_CONTROLS_STATUS,
+        # WP-MTG-04: the six Meeting names carry no source scope either.
+        Capability.MEETINGS_CREATE,
+        Capability.MEETINGS_READ,
+        Capability.MEETINGS_LIST,
+        Capability.MEETINGS_SEARCH,
+        Capability.MEETINGS_UPDATE,
+        Capability.MEETINGS_SERIES_UPDATE,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

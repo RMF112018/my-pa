@@ -119,6 +119,7 @@ from my_pa.application.commands import (
     CreateEntityProposal,
     CreateEntityRelationship,
     CreateManagedDocument,
+    CreateMeeting,
     CreateProject,
     CreatePublishedConstraint,
     CreateRelationshipMemory,
@@ -172,6 +173,7 @@ from my_pa.application.commands import (
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
+    ListMeetings,
     ListPortfolioConstraints,
     ListProjects,
     ListRelationshipMemories,
@@ -202,6 +204,7 @@ from my_pa.application.commands import (
     ReadIntelligenceArtifact,
     ReadKnowledge,
     ReadManagedDocument,
+    ReadMeeting,
     ReadPortfolioConstraintOverview,
     ReadProject,
     ReadProjectControlsStatus,
@@ -241,6 +244,7 @@ from my_pa.application.commands import (
     SearchGoodNotes,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
+    SearchMeetings,
     SearchPortfolioConstraints,
     SearchRelationshipMemories,
     SearchTasks,
@@ -256,6 +260,8 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateMeeting,
+    UpdateMeetingSeries,
     UpdateProject,
     UpdateTask,
     VoidConstraint,
@@ -1424,6 +1430,29 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "expected_version": 1,
             "idempotency_key": "http-memory-restore-0001",
         },
+        # WP-MTG-04: the six Meeting names, over the scene's staged series-bound
+        # Meeting (plan D-31).
+        Capability.MEETINGS_CREATE: {
+            "title": "A synthetic HTTP meeting",
+            "start_at": "2026-08-03T09:00:00Z",
+            "timezone_name": "UTC",
+            "idempotency_key": "http-meetings-create-0001",
+        },
+        Capability.MEETINGS_READ: {"meeting_id": scene.meeting_id},
+        Capability.MEETINGS_LIST: {"page_size": 10},
+        Capability.MEETINGS_SEARCH: {"query": "synthetic", "page_size": 10},
+        Capability.MEETINGS_UPDATE: {
+            "meeting_id": scene.meeting_id,
+            "expected_version": 1,
+            "idempotency_key": "http-meetings-update-0001",
+            "title": "A synthetic meeting, retitled",
+        },
+        Capability.MEETINGS_SERIES_UPDATE: {
+            "meeting_series_id": scene.meeting_series_id,
+            "expected_version": 1,
+            "idempotency_key": "http-meetings-series-update-0001",
+            "title": "A synthetic meeting series, retitled",
+        },
     }
 
 
@@ -2351,6 +2380,27 @@ def commands_for(
             expected_version=1,
             idempotency_key="http-memory-restore-0001",
         ),
+        Capability.MEETINGS_CREATE: CreateMeeting(
+            title="A synthetic HTTP meeting",
+            start_at=datetime(2026, 8, 3, 9, tzinfo=UTC),
+            timezone_name="UTC",
+            idempotency_key="http-meetings-create-0001",
+        ),
+        Capability.MEETINGS_READ: ReadMeeting(meeting_id=scene.meeting_id),
+        Capability.MEETINGS_LIST: ListMeetings(page_size=10),
+        Capability.MEETINGS_SEARCH: SearchMeetings(query="synthetic", page_size=10),
+        Capability.MEETINGS_UPDATE: UpdateMeeting(
+            meeting_id=scene.meeting_id,
+            expected_version=1,
+            idempotency_key="http-meetings-update-0001",
+            title="A synthetic meeting, retitled",
+        ),
+        Capability.MEETINGS_SERIES_UPDATE: UpdateMeetingSeries(
+            meeting_series_id=scene.meeting_series_id,
+            expected_version=1,
+            idempotency_key="http-meetings-series-update-0001",
+            title="A synthetic meeting series, retitled",
+        ),
     }
 
 
@@ -2474,7 +2524,7 @@ def test_handler_unwired_capabilities_return_the_canonical_http_problem(
     capability: Capability, scene: Scene, wire: Wire
 ) -> None:
     assert set(Capability) - set(_HANDLERS) == _UNIMPLEMENTED_CAPABILITIES
-    assert len(HANDLER_CAPABILITIES) == 172
+    assert len(HANDLER_CAPABILITIES) == 178
     reply = wire.send(capability.value, document_for(capability, scene, {}))
     problem = ProblemDetail.model_validate(reply.document())
     assert reply.status == 501

@@ -158,6 +158,7 @@ from my_pa.application.commands import (
     CreateEntityRelationship,
     CreateManagedDocument,
     CreateManagedDocumentCommand,
+    CreateMeeting,
     CreateProject,
     CreatePublishedConstraint,
     CreateRelationshipMemory,
@@ -212,6 +213,7 @@ from my_pa.application.commands import (
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListManagedDocumentsCommand,
+    ListMeetings,
     ListPortfolioConstraints,
     ListProjects,
     ListRelationshipMemories,
@@ -243,6 +245,7 @@ from my_pa.application.commands import (
     ReadKnowledge,
     ReadManagedDocument,
     ReadManagedDocumentCommand,
+    ReadMeeting,
     ReadPortfolioConstraintOverview,
     ReadProject,
     ReadProjectControlsStatus,
@@ -284,6 +287,7 @@ from my_pa.application.commands import (
     SearchGoodNotes,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
+    SearchMeetings,
     SearchPortfolioConstraints,
     SearchRelationshipMemories,
     SearchTasks,
@@ -299,6 +303,8 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateMeeting,
+    UpdateMeetingSeries,
     UpdateProject,
     UpdateTask,
     VoidConstraint,
@@ -451,6 +457,11 @@ from my_pa.application.intelligence import (
     search_artifacts,
 )
 from my_pa.application.managed_documents import ManagedDocumentService
+from my_pa.application.meetings import (
+    MeetingApplication,
+    MeetingSeriesWriteResult,
+    MeetingWriteResult,
+)
 from my_pa.application.model_gate import BoundedModelGate
 from my_pa.application.producer_origin import ProducerOriginError, ProducerOriginRegistry
 from my_pa.application.relationship_memory import (
@@ -482,6 +493,7 @@ from my_pa.contracts.ports import (
     EvidenceUnavailableError,
     GoodNotesPullRepositoryConflictError,
     ManagedByteStore,
+    MeetingListPage,
     MemoryDetail,
     MemoryListingFacts,
     MemoryPage,
@@ -568,6 +580,16 @@ from my_pa.domain.goodnotes.models import GoodNotesReviewCase, GoodNotesSemantic
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.meeting.model import (
+    MAX_MEETING_PAGE_SIZE,
+    MeetingCursorError,
+    MeetingError,
+    MeetingIdempotencyConflictError,
+    MeetingInvalidRequestError,
+    MeetingNotFoundError,
+    MeetingStaleVersionError,
+    MeetingUnavailableError,
+)
 from my_pa.domain.policy.decision import POLICY_VERSION
 from my_pa.domain.project_controls.business_time import ProjectTimezoneError
 from my_pa.domain.project_controls.category import ConstraintCategoryError
@@ -2791,6 +2813,92 @@ def _namespace_or_refuse(named: str | None) -> ExternalIdentifierNamespace | Non
         raise InvalidRequestError(SafeDetail.SELECTOR) from None
 
 
+#: A Meeting is an ADR-003 product-owned record in this Principal's own
+#: partition, read through no configured source and no enrollment, so the basis
+#: is the partition exactly as the Constraint and task planes' is (WP-MTG-04).
+_MEETING_TRUST_BASIS: Final = ("principal_partition",)
+
+
+@contextmanager
+def _meeting_translated() -> Iterator[None]:
+    """Classify the closed domain Meeting error family as public errors (plan D-20).
+
+    The translation table is package section 35.16's, and every token is a
+    lookup: each `MeetingErrorField` value is a `SafeDetail` value, so a refusal
+    names the field the domain named and nothing else -- never a title, an
+    email, a note, a link, a query or a rejected value, none of which a Meeting
+    error carries. Absent and foreign references are one `not_found`, a stale
+    `expected_version` and a key bound to a different request are `conflict`
+    under their outcome tokens, and a cursor outside the Principal or the filter
+    set is `invalid_request` naming `cursor`, never a conflict.
+
+    Used *inside* `_translated`, which is what turns the repository's
+    `RepositoryFailureError` -- an impossible internal state, never a refusal a
+    caller could correct -- into `internal_error` (WP-MTG-03 review R3-04). The
+    `raise` is outside the handlers, as everywhere in this module.
+    """
+    failure: ApplicationError | None = None
+    try:
+        yield
+    except MeetingStaleVersionError:
+        failure = ConflictError(SafeDetail.STALE_VERSION)
+    except MeetingIdempotencyConflictError:
+        failure = ConflictError(SafeDetail.IDEMPOTENCY_CONFLICT)
+    except MeetingCursorError:
+        failure = InvalidRequestError(SafeDetail.CURSOR)
+    except MeetingNotFoundError as error:
+        failure = NotFoundError(SafeDetail(error.field.value))
+    except MeetingUnavailableError as error:
+        failure = UnavailableError(SafeDetail(error.field.value))
+    except MeetingInvalidRequestError as error:
+        failure = InvalidRequestError(SafeDetail(error.field.value))
+    except MeetingError as error:
+        # The family's base, named so a sibling a later revision of the domain
+        # adds is refused as a bad request rather than escaping as
+        # `internal_error`.
+        failure = InvalidRequestError(SafeDetail(error.field.value))
+    if failure is not None:
+        raise failure
+
+
+def _meeting_write_payload(
+    unit_of_work: UnitOfWork, principal_id: str, written: MeetingWriteResult
+) -> dict[str, Any]:
+    """What `meetings.create` and `meetings.update` answer (package section 19).
+
+    `meeting` is the current view and `history` the immutable receipt of the
+    original write -- on a replay, the original receipt beside the current state
+    (section 35.7). `series` is the Meeting's current series, read without a lock
+    in the same transaction, or `null` for a standalone Meeting; `series_history`
+    is the series receipt only a create that also created its series carries,
+    because one request identity names both receipts (section 34.14).
+    """
+    series_id = written.meeting.meeting_series_id
+    series = (
+        None
+        if series_id is None
+        else unit_of_work.meetings.read_owned_series(principal_id, series_id)
+    )
+    return {
+        "meeting": written.meeting.to_canonical_dict(),
+        "history": written.receipt.to_canonical_dict(),
+        "series": None if series is None else series.to_canonical_dict(),
+        "series_history": (
+            None if written.series_receipt is None else written.series_receipt.to_canonical_dict()
+        ),
+        "replayed": written.replayed,
+    }
+
+
+def _meeting_series_write_payload(written: MeetingSeriesWriteResult) -> dict[str, Any]:
+    """What `meetings.series.update` answers: the current series and its receipt."""
+    return {
+        "series": written.series.to_canonical_dict(),
+        "history": written.receipt.to_canonical_dict(),
+        "replayed": written.replayed,
+    }
+
+
 _TASK_TRUST_BASIS: Final = ("principal_partition",)
 _COMMITMENT_TRUST_BASIS: Final = ("product_owned_commitment",)
 #: A Constraint is a Project control this Principal's own partition holds, read
@@ -3457,6 +3565,14 @@ class ApplicationService:
         #: would say it held something.
         self._managed = ManagedDocumentService()
         self._memory = RelationshipMemoryService()
+        #: WP-MTG-03's Meeting use cases, held for the reason `_managed` and
+        #: `_memory` are: stateless, no clock and no transaction of its own. Every
+        #: Meeting handler hands it the unit of work `invoke` already opened, so
+        #: its reservation, locks, writes, receipts and completion commit or roll
+        #: back with that one transaction. Meeting is core: no switch and no
+        #: composition condition withholds it, so `available_capabilities` has no
+        #: Meeting branch.
+        self._meetings = MeetingApplication()
         #: WP-RI-A-02's entity authoring service, held for the reason the two
         #: above are: it is stateless and takes its port as an argument.
         self._entity_authoring = EntityAuthoringService()
@@ -11478,6 +11594,140 @@ class ApplicationService:
 
     # ---- shared helpers ----------------------------------------------------
 
+    # ---- the Meeting records plane (WP-MTG-04) -----------------------------
+    #
+    # Six handlers over WP-MTG-03's `MeetingApplication`, in the shape every
+    # plane here uses: the command states the normalized WP-MTG-01 request value,
+    # the handler passes it with the Principal authorization already resolved and
+    # the unit of work `invoke` already opened, and presents what comes back. No
+    # Meeting rule is restated here -- digest, reservation, lock order, replay,
+    # no-op and reference validation all stay in the application, the repository
+    # and the domain. Every call runs inside `_translated` (a port failure is
+    # `internal_error` or `unavailable`) and `_meeting_translated` (the domain
+    # family's section 35.16 table).
+
+    def _meetings_create(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: CreateMeeting
+    ) -> _Result:
+        """`meetings.create`: one Meeting, standalone or in a new or existing series."""
+        principal_id = authorization.principal.principal_id
+        with _translated(), _meeting_translated():
+            written = self._meetings.create_meeting(
+                unit_of_work,
+                principal_id,
+                command.meeting_request(),
+                command.idempotency_key,
+                authorization.at,
+            )
+            payload = _meeting_write_payload(unit_of_work, principal_id, written)
+        return _Result(
+            payload=payload,
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MEETING_TRUST_BASIS),
+        )
+
+    def _meetings_read(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadMeeting
+    ) -> _Result:
+        """`meetings.read`: one Meeting, or the same `not_found` as absence."""
+        with _translated(), _meeting_translated():
+            view = self._meetings.read_meeting(
+                unit_of_work, authorization.principal.principal_id, command.meeting_id
+            )
+        return _Result(
+            payload={"meeting": view.to_canonical_dict()},
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MEETING_TRUST_BASIS),
+        )
+
+    def _meetings_list(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListMeetings
+    ) -> _Result:
+        """`meetings.list`: one bounded keyset page under the structured filters."""
+        request = replace(
+            command.meeting_request(), page_size=self._meeting_page_size(command.page_size)
+        )
+        with _translated(), _meeting_translated():
+            page = self._meetings.list_meetings(
+                unit_of_work, authorization.principal.principal_id, request, authorization.at
+            )
+        return self._meeting_page(authorization, page)
+
+    def _meetings_search(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: SearchMeetings
+    ) -> _Result:
+        """`meetings.search`: one bounded keyset page of Meetings matching the query."""
+        stated = command.meeting_request()
+        request = replace(
+            stated,
+            filters=replace(stated.filters, page_size=self._meeting_page_size(command.page_size)),
+        )
+        with _translated(), _meeting_translated():
+            page = self._meetings.search_meetings(
+                unit_of_work, authorization.principal.principal_id, request, authorization.at
+            )
+        return self._meeting_page(authorization, page)
+
+    def _meetings_update(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: UpdateMeeting
+    ) -> _Result:
+        """`meetings.update`: one versioned patch of a Meeting and its children."""
+        principal_id = authorization.principal.principal_id
+        with _translated(), _meeting_translated():
+            written = self._meetings.update_meeting(
+                unit_of_work,
+                principal_id,
+                command.meeting_request(),
+                command.expected_version,
+                command.idempotency_key,
+                authorization.at,
+            )
+            payload = _meeting_write_payload(unit_of_work, principal_id, written)
+        return _Result(
+            payload=payload,
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MEETING_TRUST_BASIS),
+        )
+
+    def _meetings_series_update(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: UpdateMeetingSeries,
+    ) -> _Result:
+        """`meetings.series.update`: retitle one series; no occurrence changes."""
+        with _translated(), _meeting_translated():
+            written = self._meetings.update_meeting_series(
+                unit_of_work,
+                authorization.principal.principal_id,
+                command.meeting_request(),
+                command.expected_version,
+                command.idempotency_key,
+                authorization.at,
+            )
+        return _Result(
+            payload=_meeting_series_write_payload(written),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MEETING_TRUST_BASIS),
+        )
+
+    def _meeting_page_size(self, requested: int | None) -> int:
+        """The effective page bound: the published limit, never above the plane's 100."""
+        return min(self._page_size(requested), MAX_MEETING_PAGE_SIZE)
+
+    @staticmethod
+    def _meeting_page(authorization: Authorization, page: MeetingListPage) -> _Result:
+        """A list or search page, with its truncation read off the page itself."""
+        entries = page.entries
+        return _Result(
+            payload={"meetings": [entry.to_canonical_dict() for entry in entries]},
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_MEETING_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=page.has_more,
+                    reason="page_size_reached" if page.has_more else None,
+                    next_cursor=entries[-1].meeting_id if page.has_more and entries else None,
+                ),
+            ),
+        )
+
     def _page_size(self, requested: int | None) -> int:
         """The page size to use: the caller's, bounded by the published maximum."""
         if requested is None:
@@ -13068,6 +13318,12 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.RELATIONSHIP_MEMORY_ARCHIVE: ApplicationService._relationship_memory_archive,
         Capability.RELATIONSHIP_MEMORY_RESTORE: ApplicationService._relationship_memory_restore,
         Capability.RELATIONSHIP_MEMORY_PROPOSE: ApplicationService._relationship_memory_propose,
+        Capability.MEETINGS_CREATE: ApplicationService._meetings_create,
+        Capability.MEETINGS_READ: ApplicationService._meetings_read,
+        Capability.MEETINGS_LIST: ApplicationService._meetings_list,
+        Capability.MEETINGS_SEARCH: ApplicationService._meetings_search,
+        Capability.MEETINGS_UPDATE: ApplicationService._meetings_update,
+        Capability.MEETINGS_SERIES_UPDATE: ApplicationService._meetings_series_update,
     }
 )
 

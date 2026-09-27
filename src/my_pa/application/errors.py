@@ -437,6 +437,32 @@ class SafeDetail(StrEnum):
     AFFILIATION_TYPE_CODE = "affiliation_type_code"
     ORGANIZATION_ENTITY_ID = "organization_entity_id"
     JOB_TITLE = "job_title"
+    #: The Meeting records plane (WP-MTG-04, package section 35.16). Field
+    #: *names* only, as every member here is: `NOTES` says the note content was
+    #: refused and never carries a word of it, and `VIRTUAL_MEETING_URL` says the
+    #: link was refused without echoing it. `DESCRIPTION` is not redeclared: the
+    #: Constraint publish block above already names that field, and one token has
+    #: one meaning. `TITLE`, `STATUS`, `DOCUMENT_ID`, `PROJECT_ID`, `ENTITY_ID`,
+    #: `EXPECTED_VERSION`, `IDEMPOTENCY_KEY`, `CURSOR`, `QUERY`, `PAGE_SIZE`,
+    #: `MUTATIONS`, `STALE_VERSION` and `IDEMPOTENCY_CONFLICT` are reused for the
+    #: same reason. Each value equals a `domain.meeting.model.MeetingErrorField`
+    #: value, so the Meeting error translation is a lookup and never a new token.
+    MEETING_ID = "meeting_id"
+    MEETING_SERIES_ID = "meeting_series_id"
+    ATTENDEES = "attendees"
+    ATTENDEE_ID = "attendee_id"
+    ATTACHMENT_ID = "attachment_id"
+    TIMEZONE_NAME = "timezone_name"
+    START_AT = "start_at"
+    END_AT = "end_at"
+    VIRTUAL_MEETING_URL = "virtual_meeting_url"
+    NOTES = "notes"
+    SERIES_SELECTOR = "series_selector"
+    DUPLICATE_ATTENDEE = "duplicate_attendee"
+    ORGANIZER = "organizer"
+    LOCATION_TEXT = "location_text"
+    RESPONSE_STATUS = "response_status"
+    CLEAR_FIELDS = "clear_fields"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

@@ -315,6 +315,15 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "constraint_sync_runs",
         "constraint_sync_baselines",
         "constraint_sync_conflicts",
+        # WP-MTG-04. The Meeting records revision stacks its eight tables.
+        "meeting_series",
+        "meetings",
+        "meeting_attendees",
+        "meeting_attachments",
+        "meeting_history",
+        "meeting_note_versions",
+        "meeting_series_history",
+        "meeting_write_requests",
     }
 )
 

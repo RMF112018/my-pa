@@ -28,8 +28,8 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with one hundred and seventy-two capabilities and
-forty-five purposes now declared in the domain. If this reddens, the freeze has been undone
+emits what it emitted on the day it merged, with one hundred and seventy-eight capabilities and
+forty-seven purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
 
@@ -415,6 +415,13 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "entities.affiliations.create",
         "entities.affiliations.end",
         "entities.affiliations.revise",
+        # WP-MTG-04's six Meeting records names, widened by the Meeting revision.
+        "meetings.create",
+        "meetings.list",
+        "meetings.read",
+        "meetings.search",
+        "meetings.series.update",
+        "meetings.update",
     }
 )
 
@@ -1181,6 +1188,13 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             # `knowledge.task_comments` using the same trigger pattern as
             # `capture_labels`; name it so the equality stays an equality.
             "task_comments_are_append_only",
+            # WP-MTG-04. The Meeting records revision installs its three
+            # append-only ledgers and the write-request complete-once transition,
+            # each over its own function; name them so the equality stays one.
+            "meeting_history_rows_are_append_only",
+            "meeting_note_versions_are_append_only",
+            "meeting_series_history_rows_are_append_only",
+            "meeting_write_requests_complete_once",
         }
         for name in ("a_proposal_cites_at_least_one_span", "a_span_link_leaves_its_proposal_cited"):
             assert "CONSTRAINT TRIGGER" in triggers[name]

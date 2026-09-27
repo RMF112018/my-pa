@@ -311,6 +311,15 @@ def test_downgrading_one_step_removes_exactly_this_table_and_restores_the_origin
         "project_entity_links",
         # WP-MCP-PROJ-03. `c4f1a8e52d90` stacks `project_history`.
         "project_history",
+        # WP-MTG-04. The Meeting records revision stacks its eight tables.
+        "meeting_series",
+        "meetings",
+        "meeting_attendees",
+        "meeting_attachments",
+        "meeting_history",
+        "meeting_note_versions",
+        "meeting_series_history",
+        "meeting_write_requests",
     }
     # The rest of the entity plane survives the downgrade of this revision alone.
     assert {

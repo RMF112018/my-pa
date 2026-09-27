@@ -14,6 +14,7 @@ from my_pa.domain.identity.operation import (
     is_write_capability,
     permitted_purposes,
 )
+from my_pa.domain.identity.purpose import Purpose
 
 _RUN01 = frozenset(
     {
@@ -53,19 +54,37 @@ _REPORT_WRITES = frozenset(
         Capability.REPORTS_RECORD_RUN_STATE,
     }
 )
+#: Meeting Records WP-MTG-05. All six are `DATA_REQUIRED` on the core plane
+#: (no feature flag), which is why the profile identity moved to
+#: `chatllm-data-v3`: the new catalog must not be applied under v2.
+_MEETING_READS = frozenset(
+    {
+        Capability.MEETINGS_READ,
+        Capability.MEETINGS_LIST,
+        Capability.MEETINGS_SEARCH,
+    }
+)
+_MEETING_WRITES = frozenset(
+    {
+        Capability.MEETINGS_CREATE,
+        Capability.MEETINGS_UPDATE,
+        Capability.MEETINGS_SERIES_UPDATE,
+    }
+)
+_MEETINGS = _MEETING_READS | _MEETING_WRITES
 
 
 def test_policy_covers_every_public_capability_exactly_once() -> None:
     assert set(CHATLLM_CAPABILITY_POLICY) == set(Capability)
-    assert len(CHATLLM_CAPABILITY_POLICY) == 172
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v2"
+    assert len(CHATLLM_CAPABILITY_POLICY) == 178
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v3"
 
 
 def test_classification_counts_match_the_approved_plan() -> None:
     counts = dict.fromkeys(ChatLLMCapabilityClass, 0)
     for policy in CHATLLM_CAPABILITY_POLICY.values():
         counts[policy.classification] += 1
-    assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 63
+    assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 69
     assert counts[ChatLLMCapabilityClass.DATA_CONDITIONAL] == 90
     assert counts[ChatLLMCapabilityClass.COMPATIBILITY_ONLY] == 2
     assert counts[ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED] == 15
@@ -120,6 +139,27 @@ def test_report_authoring_writes_are_data_required() -> None:
         assert is_chatllm_data_management(capability)
         assert policy.composition_prerequisite is ChatLLMCompositionPrerequisite.ALWAYS
         assert policy.exclusion_rationale is None
+
+
+def test_the_six_meeting_capabilities_are_data_required_on_the_core_plane() -> None:
+    assert len(_MEETINGS) == 6
+    named = {capability for capability in Capability if capability.value.startswith("meetings.")}
+    assert named == _MEETINGS
+    for capability in _MEETINGS:
+        policy = CHATLLM_CAPABILITY_POLICY[capability]
+        assert policy.classification is ChatLLMCapabilityClass.DATA_REQUIRED
+        assert is_chatllm_data_management(capability)
+        assert policy.family == "meetings"
+        assert policy.composition_prerequisite is ChatLLMCompositionPrerequisite.ALWAYS
+        assert policy.compatibility_replacement is None
+        assert policy.exclusion_rationale is None
+        assert capability in _HANDLERS
+    for capability in _MEETING_READS:
+        assert permitted_purposes(capability) == frozenset({Purpose.MEETING_READ})
+        assert not is_write_capability(capability)
+    for capability in _MEETING_WRITES:
+        assert permitted_purposes(capability) == frozenset({Purpose.MEETING_AUTHORING})
+        assert is_write_capability(capability)
 
 
 def test_continuity_tasks_create_names_the_work_plane_replacement() -> None:

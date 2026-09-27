@@ -477,6 +477,21 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     "b3e9d7a41c25": frozenset(),
     "c4f1a8e52d90": frozenset({"project_history"}),
     "e6a4c2f91b73": frozenset({"constraint_project_settings_history"}),
+    # WP-MTG-04's Meeting records plane: series, occurrences, attendee and
+    # attachment relations, the two receipt ledgers, note versions and the
+    # write-request arbitration ledger.
+    "7d9a450dfd07": frozenset(
+        {
+            "meeting_series",
+            "meetings",
+            "meeting_attendees",
+            "meeting_attachments",
+            "meeting_history",
+            "meeting_note_versions",
+            "meeting_series_history",
+            "meeting_write_requests",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

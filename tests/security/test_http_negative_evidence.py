@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the generic route parses all one hundred and seventy-two declared names,
+  ends: the generic route parses all one hundred and seventy-eight declared names,
   but only the one hundred and sixty-six command-backed names can execute; none
   mutates a source, and every executable capability driven over the wire is
   shown to have called only the three read-only provider methods;
@@ -1255,6 +1255,29 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "expected_version": 1,
             "idempotency_key": "wire-memory-restore-0001",
         },
+        # WP-MTG-04: the six Meeting names, over the scene's staged series-bound
+        # Meeting (plan D-31).
+        Capability.MEETINGS_CREATE: {
+            "title": "A wire meeting",
+            "start_at": "2026-08-03T09:00:00Z",
+            "timezone_name": "UTC",
+            "idempotency_key": "wire-meetings-create-0001",
+        },
+        Capability.MEETINGS_READ: {"meeting_id": marked.meeting_id},
+        Capability.MEETINGS_LIST: {"page_size": 10},
+        Capability.MEETINGS_SEARCH: {"query": MARKER_QUERY},
+        Capability.MEETINGS_UPDATE: {
+            "meeting_id": marked.meeting_id,
+            "expected_version": 1,
+            "idempotency_key": "wire-meetings-update-0001",
+            "title": "A wire meeting, retitled",
+        },
+        Capability.MEETINGS_SERIES_UPDATE: {
+            "meeting_series_id": marked.meeting_series_id,
+            "expected_version": 1,
+            "idempotency_key": "wire-meetings-series-update-0001",
+            "title": "A wire meeting series, retitled",
+        },
     }
 
 
@@ -1905,6 +1928,16 @@ SCOPED_CAPABILITIES = [
         # Project's Constraint calendar is its owner's own and names no source.
         Capability.PROJECT_CONTROLS_CONFIGURE,
         Capability.PROJECT_CONTROLS_STATUS,
+        # WP-MTG-04's six Meeting names, on the identical reading and in
+        # `domain.policy.decision._SCOPELESS`: a Meeting, its series, attendees and
+        # attachments are ADR-003 product-owned rows of the acting Principal's own
+        # partition and name no `src_...` or `enr_...`.
+        Capability.MEETINGS_CREATE,
+        Capability.MEETINGS_READ,
+        Capability.MEETINGS_LIST,
+        Capability.MEETINGS_SEARCH,
+        Capability.MEETINGS_UPDATE,
+        Capability.MEETINGS_SERIES_UPDATE,
     }
 ]
 
@@ -2175,6 +2208,22 @@ CONSTRAINT_AUTHORING_EXEMPTION = frozenset(
     }
 )
 
+#: WP-MTG-04's three Meeting writes the substring proxy refuses --
+#: `meetings.create`, `meetings.update` and `meetings.series.update` -- on
+#: exactly the reading `CONSTRAINT_AUTHORING_EXEMPTION` is exempt under (plan
+#: D-32a). They write ADR-003 product-owned Meeting records in the acting
+#: Principal's own partition, never a source-system mutation: the Meeting plane
+#: reaches no source provider and no enrollment at all, so the property the proxy
+#: stands for holds structurally. The three Meeting reads carry no listed verb and
+#: are checked by it unchanged.
+MEETING_AUTHORING_EXEMPTION = frozenset(
+    {
+        Capability.MEETINGS_CREATE,
+        Capability.MEETINGS_UPDATE,
+        Capability.MEETINGS_SERIES_UPDATE,
+    }
+)
+
 
 def test_the_transport_routes_no_mutating_capability() -> None:
     """One route, one method, and no name that mutates a *source*.
@@ -2222,6 +2271,7 @@ def test_the_transport_routes_no_mutating_capability() -> None:
         | ENTITY_RECORD_FAMILY_EXEMPTION
         | CANVAS_WORKSPACE_EXEMPTION
         | CONSTRAINT_AUTHORING_EXEMPTION
+        | MEETING_AUTHORING_EXEMPTION
     )
     checked = [c for c in _BUILDERS if c not in exempt]
     assert len(checked) == len(IMPLEMENTED_CAPABILITIES) - len(exempt)

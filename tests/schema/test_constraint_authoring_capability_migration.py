@@ -52,7 +52,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "f7a2c9d51e64"
-CURRENT_HEAD: Final = "6f6ead27d122"
+CURRENT_HEAD: Final = "7d9a450dfd07"
 CAPTURE_LABELS: Final = "c1a8e4d70b29"
 WP_TUX_01: Final = "de5ec1c65857"
 WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
@@ -79,6 +79,18 @@ CURRENT_HEAD_MIGRATION: Final = (
 RUN01_MIGRATION: Final = MIGRATIONS / "20260914_e6a4c2f91b73_project_controls_run01_integrity.py"
 CCA005_MIGRATION: Final = (
     MIGRATIONS / "20260922_6f6ead27d122_reconcile_legacy_direct_principal_task_origin.py"
+)
+#: WP-MTG-04's additive head (`7d9a450dfd07`, Meeting records), registered as
+#: this branch's additive head on the `CCA005_MIGRATION` precedent (#278).
+MEETING_RECORDS_MIGRATION: Final = MIGRATIONS / "20260927_7d9a450dfd07_meeting_records.py"
+#: The one sanctioned edit to a historical revision (operator ruling
+#: OPERATOR_RULING_WP04_A_to_E.md section E). Like D-48, the Meeting-records
+#: work freezes `a_managed_document_is_identified_within_its_owner` out of
+#: `4c7b2e91d8a5`: that revision no longer creates the owner unique, and the
+#: Meeting revision `7d9a450dfd07` adds it unconditionally. Exactly this path is
+#: exempt; an edit to any other historical revision still fails the guard below.
+SANCTIONED_HISTORICAL_EDIT: Final = (
+    MIGRATIONS / "20260811_4c7b2e91d8a5_create_the_managed_document_tables.py"
 )
 WP_MCP_PROJ_02_MIGRATION: Final = (
     MIGRATIONS / "20260913_b3e9d7a41c25_admit_continuity_projects_read.py"
@@ -152,6 +164,7 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_constraint_sync_migration.py",
     "tests/schema/test_continuity_projects_mutation_migration.py",
     "tests/schema/test_continuity_projects_read_capability_migration.py",
+    "tests/schema/test_extraction_schema_migration.py",
     "tests/schema/test_goodnotes_browser_contract_migration.py",
     "tests/schema/test_goodnotes_client_resume_migration.py",
     "tests/schema/test_goodnotes_content_and_durable_note_stages.py",
@@ -166,6 +179,7 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_goodnotes_pull_migration.py",
     "tests/schema/test_goodnotes_semantic_proposal_migration.py",
     "tests/schema/test_legacy_direct_principal_task_origin_migration.py",
+    "tests/schema/test_meeting_records_migration.py",
     "tests/schema/test_oauth_refresh_migration.py",
     "tests/schema/test_project_controls_run01_integrity_migration.py",
     "tests/schema/test_project_version_and_entity_bridge_migration.py",
@@ -249,7 +263,8 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == "e6a4c2f91b73"
+    assert script.get_revision(CURRENT_HEAD).down_revision == "6f6ead27d122"
+    assert script.get_revision("6f6ead27d122").down_revision == "e6a4c2f91b73"
     assert script.get_revision("e6a4c2f91b73").down_revision == "c4f1a8e52d90"
     assert script.get_revision("c4f1a8e52d90").down_revision == WP_MCP_PROJ_02
     assert script.get_revision(WP_MCP_PROJ_02).down_revision == WP_MCP_PROJ_01
@@ -261,7 +276,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 107
+    assert len(list(MIGRATIONS.glob("*.py"))) == 108
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -404,6 +419,10 @@ def test_no_historical_revision_was_edited() -> None:
         CURRENT_HEAD_MIGRATION.relative_to(ROOT).as_posix(),
         WP_MCP_PROJ_02_MIGRATION.relative_to(ROOT).as_posix(),
         WP_MCP_PROJ_01_MIGRATION.relative_to(ROOT).as_posix(),
+        MEETING_RECORDS_MIGRATION.relative_to(ROOT).as_posix(),
+        # Not an additive head: the one sanctioned historical edit (see
+        # `SANCTIONED_HISTORICAL_EDIT`; operator ruling section E).
+        SANCTIONED_HISTORICAL_EDIT.relative_to(ROOT).as_posix(),
     }, f"a revision other than this branch's additive heads changed: {sorted(touched)}"
 
 

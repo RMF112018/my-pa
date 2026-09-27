@@ -372,3 +372,16 @@ class Purpose(StrEnum):
     CONSTRAINT_AUTHORING = "constraint_authoring"
     CONSTRAINT_SYNC_READ = "constraint_sync_read"
     CONSTRAINT_SYNC_AUTHORING = "constraint_sync_authoring"
+    # Meeting records (WP-MTG-04). One read/authoring pair, on `D-91`: would
+    # reuse widen the grant? Every candidate would. `continuity_authoring` and
+    # `capture_review` are the Project/Situation plane, `document_read` is managed
+    # custody and `entity_read` is identity; a Meeting's attendees, attachments,
+    # immutable receipts and note versions are rows none of those grants reaches,
+    # and admitting Meeting writes under any of them would let a grant issued for
+    # that plane also reschedule, cancel or annotate a Meeting. Reading and
+    # writing are separated on the capture plane's own split: a grant issued to
+    # list or search a Principal's Meetings must not also change one, so
+    # `operation.py` maps `meetings.read`/`list`/`search` to `meeting_read` only
+    # and `meetings.create`/`update`/`series.update` to `meeting_authoring` only.
+    MEETING_READ = "meeting_read"
+    MEETING_AUTHORING = "meeting_authoring"

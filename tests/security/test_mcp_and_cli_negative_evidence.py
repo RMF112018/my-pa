@@ -532,6 +532,16 @@ SCOPED_CAPABILITIES = [
         # Project's Constraint calendar is its owner's own and names no source.
         Capability.PROJECT_CONTROLS_CONFIGURE,
         Capability.PROJECT_CONTROLS_STATUS,
+        # WP-MTG-04's six Meeting names, on the identical reading and in
+        # `domain.policy.decision._SCOPELESS`: a Meeting, its series, attendees and
+        # attachments are ADR-003 product-owned rows of the acting Principal's own
+        # partition and name no `src_...` or `enr_...`.
+        Capability.MEETINGS_CREATE,
+        Capability.MEETINGS_READ,
+        Capability.MEETINGS_LIST,
+        Capability.MEETINGS_SEARCH,
+        Capability.MEETINGS_UPDATE,
+        Capability.MEETINGS_SERIES_UPDATE,
     }
 ]
 
@@ -867,6 +877,22 @@ CONSTRAINT_AUTHORING_EXEMPTION = frozenset(
     }
 )
 
+#: WP-MTG-04's three Meeting writes the substring proxy refuses --
+#: `meetings.create`, `meetings.update` and `meetings.series.update` -- on
+#: exactly the reading `CONSTRAINT_AUTHORING_EXEMPTION` is exempt under (plan
+#: D-32a). They write ADR-003 product-owned Meeting records in the acting
+#: Principal's own partition, never a source-system mutation: the Meeting plane
+#: reaches no source provider and no enrollment at all, so the property the proxy
+#: stands for holds structurally. The three Meeting reads carry no listed verb and
+#: are checked by it unchanged.
+MEETING_AUTHORING_EXEMPTION = frozenset(
+    {
+        Capability.MEETINGS_CREATE,
+        Capability.MEETINGS_UPDATE,
+        Capability.MEETINGS_SERIES_UPDATE,
+    }
+)
+
 
 def test_neither_transport_routes_a_mutating_capability() -> None:
     """The tool list and the CLI's positional, and no name that mutates a *source*.
@@ -896,6 +922,7 @@ def test_neither_transport_routes_a_mutating_capability() -> None:
         | ENTITY_RECORD_FAMILY_EXEMPTION
         | CANVAS_WORKSPACE_EXEMPTION
         | CONSTRAINT_AUTHORING_EXEMPTION
+        | MEETING_AUTHORING_EXEMPTION
     )
     checked = [c for c in IMPLEMENTED_CAPABILITIES if c not in exempt]
     assert len(checked) == len(IMPLEMENTED_CAPABILITIES) - len(exempt)

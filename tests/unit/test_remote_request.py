@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import get_args
+from typing import Any, get_args
 
 import pytest
 
 from my_pa.adapters.mcp.remote import _WRITE_PURPOSES
 from my_pa.adapters.mcp.tools import input_schema_for
+from my_pa.adapters.normalization import normalize
 from my_pa.adapters.remote_request import (
     _IDEMPOTENT_REMOTE_CAPABILITIES,
     _SERVER_REPLAY_REMOTE_CAPABILITIES,
@@ -810,3 +811,187 @@ def test_no_entity_write_publishes_a_field_the_server_owns() -> None:
         payload = schema["properties"]["payload"]
         assert not REMOTE_OWNED_PAYLOAD_FIELDS & set(payload.get("properties", {}))
         assert "idempotency_key" not in payload.get("required", [])
+
+
+# ------------------------------------------------------------------ WP-MTG-06
+
+MEETING_READS: frozenset[Capability] = frozenset(
+    {Capability.MEETINGS_READ, Capability.MEETINGS_LIST, Capability.MEETINGS_SEARCH}
+)
+MEETING_WRITES: frozenset[Capability] = frozenset(
+    {Capability.MEETINGS_CREATE, Capability.MEETINGS_UPDATE, Capability.MEETINGS_SERIES_UPDATE}
+)
+_MEETING_WRITE_PAYLOADS: dict[Capability, dict[str, Any]] = {
+    Capability.MEETINGS_CREATE: {
+        "title": "Synthetic remote meeting",
+        "start_at": "2026-09-28T13:00:00Z",
+        "timezone_name": "UTC",
+        "attendees": [
+            {"display_name": "Synthetic Organizer", "is_organizer": True},
+            {"email": "attendee@example.invalid"},
+        ],
+    },
+    Capability.MEETINGS_UPDATE: {
+        "meeting_id": "mtg_syntheticremote0001",
+        "expected_version": 1,
+        "title": "Synthetic retitle",
+        "attendees_replace": [
+            {"display_name": "Synthetic Organizer", "is_organizer": True},
+            {"email": "attendee@example.invalid"},
+        ],
+    },
+    Capability.MEETINGS_SERIES_UPDATE: {
+        "meeting_series_id": "mser_syntheticremote0001",
+        "expected_version": 2,
+        "title": "Synthetic series retitle",
+    },
+}
+_MEETING_ARRAY_FIELDS: dict[Capability, str] = {
+    Capability.MEETINGS_CREATE: "attendees",
+    Capability.MEETINGS_UPDATE: "attendees_replace",
+}
+
+
+def _meeting_compose(capability: Capability, payload: dict[str, Any]) -> dict[str, Any]:
+    return compose_remote_arguments(
+        capability_name=capability.value,
+        arguments={"payload": payload},
+        principal=PRINCIPAL,
+        grants=frozenset({(capability, Purpose.MEETING_AUTHORING)}),
+        clock=lambda: FROZEN,
+        issue_id=_issue,
+    )
+
+
+def test_the_three_meeting_writes_are_keyed_and_never_server_replayed() -> None:
+    """Plan WP-MTG-06: the generic keyed set, not the canonical request ledger."""
+    assert MEETING_WRITES <= _IDEMPOTENT_REMOTE_CAPABILITIES
+    assert not (MEETING_READS | MEETING_WRITES) & _SERVER_REPLAY_REMOTE_CAPABILITIES
+    for capability in MEETING_READS | MEETING_WRITES:
+        assert not is_server_replay_capability(capability)
+    assert not MEETING_READS & _IDEMPOTENT_REMOTE_CAPABILITIES
+
+
+@pytest.mark.parametrize("capability", sorted(MEETING_WRITES), ids=lambda c: c.value)
+def test_a_meeting_write_refuses_a_caller_supplied_idempotency_key(
+    capability: Capability,
+) -> None:
+    with pytest.raises(InvalidRequestError):
+        compose_remote_arguments(
+            capability_name=capability.value,
+            arguments={
+                "payload": {**_MEETING_WRITE_PAYLOADS[capability], "idempotency_key": "forged"}
+            },
+            principal=PRINCIPAL,
+            grants=None,
+            clock=lambda: FROZEN,
+            issue_id=_issue,
+        )
+
+
+@pytest.mark.parametrize("capability", sorted(MEETING_WRITES), ids=lambda c: c.value)
+def test_a_meeting_write_is_stamped_with_a_content_addressed_key(capability: Capability) -> None:
+    """Identical raw arguments give the identical key; object-key order does not matter."""
+    payload = _MEETING_WRITE_PAYLOADS[capability]
+    composed = _meeting_compose(capability, dict(payload))
+    key = composed["payload"]["idempotency_key"]
+    assert isinstance(key, str) and key.startswith("idk_") and len(key) == 36
+    assert composed["purpose"] == Purpose.MEETING_AUTHORING.value
+    # The request identity is the issued one: no Meeting write is a ledger replay.
+    assert composed["request_id"] == _issue(None)
+    assert _meeting_compose(capability, dict(payload))["payload"]["idempotency_key"] == key
+    reordered = dict(reversed(list(payload.items())))
+    assert list(reordered) != list(payload)
+    assert _meeting_compose(capability, reordered)["payload"]["idempotency_key"] == key
+    other_principal = compose_remote_arguments(
+        capability_name=capability.value,
+        arguments={"payload": dict(payload)},
+        principal=Principal(
+            principal_id="prn_00000000000000000000000000000002",
+            kind=PrincipalKind.OPERATOR,
+            authenticated=True,
+        ),
+        grants=None,
+        clock=lambda: FROZEN,
+        issue_id=_issue,
+    )
+    assert other_principal["payload"]["idempotency_key"] != key
+    different = _meeting_compose(capability, {**payload, "title": "A different title"})
+    assert different["payload"]["idempotency_key"] != key
+    # The stamped document is one the canonical boundary accepts as it stands.
+    metadata, command = normalize(capability.value, composed)
+    assert metadata.purpose is Purpose.MEETING_AUTHORING
+    assert command.idempotency_key == key
+
+
+@pytest.mark.parametrize("capability", sorted(_MEETING_ARRAY_FIELDS), ids=lambda c: c.value)
+def test_reordering_nested_object_keys_keeps_the_key_and_reordering_an_array_changes_it(
+    capability: Capability,
+) -> None:
+    """Package section 35.9: the documented v1 behavior, and no Meeting-only normalizer.
+
+    Sorted object keys reach into every nested object, so an attendee whose keys
+    arrive in another order stamps the same key. Array order is preserved, so the
+    same attendees in another order stamp a *different* key even though Meeting
+    normalization would call the two requests equal; the application digest, not
+    this key, is what decides same-request on the canonical path.
+    """
+    field = _MEETING_ARRAY_FIELDS[capability]
+    payload = _MEETING_WRITE_PAYLOADS[capability]
+    attendees = payload[field]
+    assert isinstance(attendees, list)
+    key = _meeting_compose(capability, dict(payload))["payload"]["idempotency_key"]
+    inner_reordered = [dict(reversed(list(item.items()))) for item in attendees]
+    assert [list(item) for item in inner_reordered] != [list(item) for item in attendees]
+    same = _meeting_compose(capability, {**payload, field: inner_reordered})
+    assert same["payload"]["idempotency_key"] == key
+    swapped = _meeting_compose(capability, {**payload, field: list(reversed(attendees))})
+    assert swapped["payload"]["idempotency_key"] != key
+
+
+@pytest.mark.parametrize("capability", sorted(MEETING_READS), ids=lambda c: c.value)
+def test_a_meeting_read_is_never_stamped(capability: Capability) -> None:
+    composed = compose_remote_arguments(
+        capability_name=capability.value,
+        arguments={"payload": {"query": "synthetic"}}
+        if capability is Capability.MEETINGS_SEARCH
+        else {"payload": {}},
+        principal=PRINCIPAL,
+        grants=frozenset({(capability, Purpose.MEETING_READ)}),
+        clock=lambda: FROZEN,
+        issue_id=_issue,
+    )
+    assert "idempotency_key" not in composed["payload"]
+    assert composed["purpose"] == Purpose.MEETING_READ.value
+    assert composed["request_id"] == _issue(None)
+
+
+@pytest.mark.parametrize(
+    "capability", sorted(MEETING_READS | MEETING_WRITES), ids=lambda c: c.value
+)
+def test_a_meeting_purpose_resolves_by_single_purpose_derivation(capability: Capability) -> None:
+    """Plan D-19: exactly one permitted purpose, so no canonical entry exists or is read."""
+    expected = Purpose.MEETING_AUTHORING if capability in MEETING_WRITES else Purpose.MEETING_READ
+    assert permitted_purposes(capability) == frozenset({expected})
+    assert capability not in CANONICAL_REMOTE_PURPOSES
+    assert resolve_remote_purpose(capability, None) is expected
+    assert resolve_remote_purpose(capability, frozenset({(capability, None)})) is expected
+    assert resolve_remote_purpose(capability, frozenset({(capability, expected)})) is expected
+    other = next(iter(frozenset({Purpose.MEETING_READ, Purpose.MEETING_AUTHORING}) - {expected}))
+    with pytest.raises(UnsupportedError):
+        resolve_remote_purpose(capability, frozenset({(capability, other)}))
+    with pytest.raises(UnsupportedError):
+        resolve_remote_purpose(capability, frozenset())
+
+
+def test_the_meeting_writes_are_among_the_domain_only_remote_write_schemas() -> None:
+    """`test_remote_write_schemas_are_domain_only` sweeps these three, checked here."""
+    assert set(_remote_write_capabilities()) >= MEETING_WRITES
+    assert not MEETING_READS & set(_remote_write_capabilities())
+    commands = {member.capability: member for member in get_args(Command.__value__)}
+    for capability in MEETING_WRITES:
+        schema = remote_tool_schema(input_schema_for(commands[capability]))
+        assert SERVER_OWNED_REMOTE_FIELDS.isdisjoint(schema["properties"])
+        payload = schema["properties"]["payload"]
+        assert REMOTE_OWNED_PAYLOAD_FIELDS.isdisjoint(payload["properties"])
+        assert "idempotency_key" not in payload["required"]

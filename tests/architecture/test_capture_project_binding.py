@@ -15,7 +15,7 @@ from my_pa.infrastructure.persistence import capture, capture_search
 from my_pa.infrastructure.persistence.tables import captures
 
 ROOT: Final = Path(__file__).resolve().parents[2]
-TABLES_SHA256: Final = "49dc4fe963a4434a9d955ab2cf60e79d7c83b3c1ad04b2495451857467fef2f0"
+TABLES_SHA256: Final = "da4df7a6e79cdf544a07f37068d88bdb51a17f2f3c6ddc826b68af0f64bc524d"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"

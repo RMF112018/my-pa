@@ -137,7 +137,7 @@ a README and nothing else.
 
 The operator commands and transport entry point share this directory, and the split is
 the reason they sit together rather than a reason to separate them. The public
-vocabulary contains one hundred and seventy-two capabilities. `invoke.py`
+vocabulary contains one hundred and seventy-eight capabilities. `invoke.py`
 accepts any of those names, but only the one hundred and sixty-six command-backed
 names normalize and invoke;
 the six Run 01 names return the canonical unsupported response until their

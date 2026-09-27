@@ -82,6 +82,7 @@ from my_pa.application.commands import (
     CreateEntityProposal,
     CreateEntityRelationship,
     CreateManagedDocument,
+    CreateMeeting,
     CreateProject,
     CreatePublishedConstraint,
     CreateRelationshipMemory,
@@ -135,6 +136,7 @@ from my_pa.application.commands import (
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
+    ListMeetings,
     ListPortfolioConstraints,
     ListProjects,
     ListRelationshipMemories,
@@ -165,6 +167,7 @@ from my_pa.application.commands import (
     ReadIntelligenceArtifact,
     ReadKnowledge,
     ReadManagedDocument,
+    ReadMeeting,
     ReadPortfolioConstraintOverview,
     ReadProject,
     ReadProjectControlsStatus,
@@ -203,6 +206,7 @@ from my_pa.application.commands import (
     SearchGoodNotes,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
+    SearchMeetings,
     SearchPortfolioConstraints,
     SearchRelationshipMemories,
     SearchTasks,
@@ -218,6 +222,8 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateMeeting,
+    UpdateMeetingSeries,
     UpdateProject,
     UpdateTask,
     VoidConstraint,
@@ -597,6 +603,18 @@ def _requested_scope(
             | MergeEntities()
             | PreviewEntitySplit()
             | SplitEntity()
+            # The six Meeting records names (WP-MTG-04) name a Meeting, a series,
+            # a Project, Person Entities and ManagedDocuments of the acting
+            # Principal's own partition and never a configured source -- ADR-003
+            # product-owned records, exactly as a Relationship Memory above is --
+            # so the empty set is a measurement here, and
+            # `domain.policy.decision._SCOPELESS` is where it is read as one.
+            | CreateMeeting()
+            | ReadMeeting()
+            | ListMeetings()
+            | SearchMeetings()
+            | UpdateMeeting()
+            | UpdateMeetingSeries()
         ):
             return frozenset()
         case CreateCapture():

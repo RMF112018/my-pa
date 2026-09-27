@@ -15,7 +15,7 @@ from typing import Final
 
 from my_pa.domain.identity.operation import Capability
 
-CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v2"
+CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v3"
 
 
 class ChatLLMCapabilityClass(StrEnum):
@@ -86,6 +86,12 @@ _DATA_REQUIRED: Final[frozenset[Capability]] = frozenset(
         Capability.KNOWLEDGE_READ,
         Capability.KNOWLEDGE_REVEAL,
         Capability.KNOWLEDGE_SEARCH,
+        Capability.MEETINGS_CREATE,
+        Capability.MEETINGS_LIST,
+        Capability.MEETINGS_READ,
+        Capability.MEETINGS_SEARCH,
+        Capability.MEETINGS_SERIES_UPDATE,
+        Capability.MEETINGS_UPDATE,
         Capability.REPORTS_BEGIN_CYCLE,
         Capability.REPORTS_COMMIT,
         Capability.REPORTS_LATEST,

@@ -175,6 +175,27 @@ from my_pa.domain.intelligence.catalog import (
     ProducerRunState,
     ProvenanceRelation,
 )
+from my_pa.domain.meeting.model import (
+    MAX_ATTENDEE_DISPLAY_NAME_CHARACTERS,
+    MAX_ATTENDEE_EMAIL_CHARACTERS,
+    MAX_MEETING_DESCRIPTION_CHARACTERS,
+    MAX_MEETING_IDEMPOTENCY_KEY_CHARACTERS,
+    MAX_MEETING_LOCATION_CHARACTERS,
+    MAX_MEETING_NOTES_CHARACTERS,
+    MAX_MEETING_TITLE_CHARACTERS,
+    MAX_TIMEZONE_NAME_CHARACTERS,
+    MAX_VIRTUAL_MEETING_URL_CHARACTERS,
+    MEETING_WRITE_CAPABILITY_NAMES,
+    MEETINGS_CREATE_NAME,
+    MEETINGS_SERIES_UPDATE_NAME,
+    MEETINGS_UPDATE_NAME,
+    MIN_MEETING_IDEMPOTENCY_KEY_CHARACTERS,
+    AttendeeResponseStatus,
+    MeetingActor,
+    MeetingHistoryAction,
+    MeetingOutcome,
+    MeetingStatus,
+)
 from my_pa.domain.native_sources import (
     LiveActivationGateState,
     NativeRunKind,
@@ -7462,6 +7483,15 @@ managed_documents = Table(
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     _is_identifier("document_id", IdKind.MANAGED_DOCUMENT),
     _is_identifier("owner_principal_id", IdKind.PRINCIPAL),
+    # WP-MTG-02: the target a Meeting attachment's composite
+    # `(document_id, principal_id)` reference points at, so a Meeting can only
+    # ever name a document its own Principal owns. `document_id` is already the
+    # primary key, so this admits no identity the table did not already admit.
+    UniqueConstraint(
+        "document_id",
+        "owner_principal_id",
+        name="a_managed_document_is_identified_within_its_owner",
+    ),
     Index("managed_documents_by_owner", "owner_principal_id", "created_at"),
 )
 
@@ -13000,5 +13030,630 @@ constraint_sync_resolution_history = Table(
         "principal_id",
         "sync_conflict_id",
         "created_at",
+    ),
+)
+
+# --- WP-MTG-02: Meeting records ----------------------------------------------
+#
+# Eight tables, declared in foreign-key dependency order: series, occurrences,
+# attendee and attachment relations, the two immutable history ledgers, the
+# immutable note versions, and the write-request arbitration ledger. Every one
+# carries `principal_id`, and every reference between two of them -- and from
+# them to `projects`, `entities` and `managed_documents` -- is a composite that
+# includes it, so a row can only ever point at a row of its own Principal.
+#
+# The append-only and complete-once triggers are deliberately not here: a
+# trigger is not table metadata, and the Meeting revision creates them.
+
+#: Every Meeting-plane `idempotency_key`: 1..128 characters (package section
+#: 35.6/35.7, plan D-16). One definition for the three tables that store one.
+_MEETING_KEY_BOUND: Final = (
+    f"length(idempotency_key) BETWEEN {MIN_MEETING_IDEMPOTENCY_KEY_CHARACTERS} "
+    f"AND {MAX_MEETING_IDEMPOTENCY_KEY_CHARACTERS}"
+)
+
+#: A SHA-256 digest as the Meeting plane stores it: 64 lowercase hex characters.
+_MEETING_DIGEST: Final = "^[0-9a-f]{64}$"
+
+
+def _meeting_title_bound(column: str, *, name: str) -> CheckConstraint:
+    """A nonblank title of at most `MAX_MEETING_TITLE_CHARACTERS` characters."""
+    return CheckConstraint(
+        f"length({column}) BETWEEN 1 AND {MAX_MEETING_TITLE_CHARACTERS} "
+        f"AND length(trim({column})) > 0",
+        name=name,
+    )
+
+
+def _meeting_receipt_versions(prefix: str) -> tuple[CheckConstraint, ...]:
+    """The version transition a Meeting or MeetingSeries receipt may record.
+
+    Create is 0 -> 1 and applied; an applied update advances by exactly one; a
+    no-op update leaves the version where it was. The same rule the receipt
+    views enforce, restated here so the server refuses what the view refuses.
+    """
+    return (
+        CheckConstraint("before_version >= 0", name=f"{prefix}_before_version_is_non_negative"),
+        CheckConstraint("after_version >= 1", name=f"{prefix}_after_version_is_positive"),
+        CheckConstraint(
+            "action <> 'create' "
+            "OR (before_version = 0 AND after_version = 1 AND outcome = 'applied')",
+            name=f"{prefix}_create_is_version_zero_to_one",
+        ),
+        CheckConstraint(
+            "action <> 'update' OR outcome <> 'applied' "
+            "OR (before_version >= 1 AND after_version = before_version + 1)",
+            name=f"{prefix}_applied_update_advances_one_version",
+        ),
+        CheckConstraint(
+            "outcome <> 'no_op' "
+            "OR (action = 'update' AND before_version >= 1 AND after_version = before_version)",
+            name=f"{prefix}_no_op_changes_no_version",
+        ),
+    )
+
+
+meeting_series = Table(
+    "meeting_series",
+    METADATA,
+    Column("meeting_series_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("version", Integer, nullable=False, server_default=text("1")),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("meeting_series_id", IdKind.MEETING_SERIES),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _meeting_title_bound("title", name="a_meeting_series_title_is_bounded"),
+    CheckConstraint("version >= 1", name="a_meeting_series_version_is_positive"),
+    UniqueConstraint(
+        "meeting_series_id",
+        "principal_id",
+        name="a_meeting_series_is_identified_within_its_principal",
+    ),
+    Index(
+        "meeting_series_by_principal_updated_at",
+        "principal_id",
+        text("updated_at DESC"),
+        "meeting_series_id",
+    ),
+    Index(
+        "meeting_series_title_text",
+        text("to_tsvector('simple', coalesce(title, ''))"),
+        postgresql_using="gin",
+    ),
+)
+
+meetings = Table(
+    "meetings",
+    METADATA,
+    Column("meeting_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("meeting_series_id", Text),
+    Column("title", Text, nullable=False),
+    Column("start_at", DateTime(timezone=True), nullable=False),
+    Column("end_at", DateTime(timezone=True)),
+    Column("timezone_name", Text, nullable=False),
+    Column("status", Text, nullable=False, server_default=text("'scheduled'")),
+    Column("cancelled_at", DateTime(timezone=True)),
+    Column("location_text", Text),
+    Column("virtual_meeting_url", Text),
+    Column("description", Text),
+    Column("project_id", Text),
+    Column("version", Integer, nullable=False, server_default=text("1")),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("meeting_id", IdKind.MEETING),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("meeting_series_id", IdKind.MEETING_SERIES),
+    _is_identifier("project_id", IdKind.PROJECT),
+    _meeting_title_bound("title", name="a_meeting_title_is_bounded"),
+    CheckConstraint(
+        f"length(timezone_name) BETWEEN 1 AND {MAX_TIMEZONE_NAME_CHARACTERS} "
+        "AND length(trim(timezone_name)) > 0",
+        name="a_meeting_timezone_name_is_bounded",
+    ),
+    _one_of("status", MeetingStatus, name="a_meeting_status_is_known"),
+    CheckConstraint(
+        "end_at IS NULL OR end_at >= start_at",
+        name="a_meeting_does_not_end_before_it_starts",
+    ),
+    CheckConstraint(
+        "(status = 'cancelled') = (cancelled_at IS NOT NULL)",
+        name="a_cancelled_meeting_records_when_it_was_cancelled",
+    ),
+    CheckConstraint(
+        f"location_text IS NULL OR length(location_text) <= {MAX_MEETING_LOCATION_CHARACTERS}",
+        name="a_meeting_location_is_bounded",
+    ),
+    CheckConstraint(
+        "virtual_meeting_url IS NULL OR length(virtual_meeting_url) "
+        f"BETWEEN 1 AND {MAX_VIRTUAL_MEETING_URL_CHARACTERS}",
+        name="a_meeting_virtual_url_is_bounded",
+    ),
+    CheckConstraint(
+        f"description IS NULL OR length(description) <= {MAX_MEETING_DESCRIPTION_CHARACTERS}",
+        name="a_meeting_description_is_bounded",
+    ),
+    CheckConstraint("version >= 1", name="a_meeting_version_is_positive"),
+    UniqueConstraint(
+        "meeting_id",
+        "principal_id",
+        name="a_meeting_is_identified_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["meeting_series_id", "principal_id"],
+        [f"{SCHEMA}.meeting_series.meeting_series_id", f"{SCHEMA}.meeting_series.principal_id"],
+        ondelete="RESTRICT",
+        name="a_meeting_belongs_to_a_series_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["project_id", "principal_id"],
+        [f"{SCHEMA}.projects.project_id", f"{SCHEMA}.projects.principal_id"],
+        ondelete="RESTRICT",
+        name="a_meeting_names_a_project_of_its_principal",
+    ),
+    Index("meetings_by_principal_start", "principal_id", "start_at", "meeting_id"),
+    Index(
+        "meetings_by_principal_series_start",
+        "principal_id",
+        "meeting_series_id",
+        "start_at",
+        "meeting_id",
+    ),
+    Index(
+        "meetings_by_principal_project_start",
+        "principal_id",
+        "project_id",
+        "start_at",
+        "meeting_id",
+    ),
+    Index(
+        "meetings_by_principal_status_start",
+        "principal_id",
+        "status",
+        "start_at",
+        "meeting_id",
+    ),
+    Index(
+        "meetings_core_text",
+        text(
+            "to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(description, '') "
+            "|| ' ' || coalesce(location_text, ''))"
+        ),
+        postgresql_using="gin",
+    ),
+)
+
+meeting_attendees = Table(
+    "meeting_attendees",
+    METADATA,
+    Column("attendee_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("meeting_id", Text, nullable=False),
+    Column("entity_id", Text),
+    Column("display_name", Text),
+    Column("email_normalized", Text),
+    Column("is_organizer", Boolean, nullable=False, server_default=text("false")),
+    Column("response_status", Text, nullable=False, server_default=text("'unknown'")),
+    Column("added_at", DateTime(timezone=True), nullable=False),
+    Column("removed_at", DateTime(timezone=True)),
+    _is_identifier("attendee_id", IdKind.MEETING_ATTENDEE),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("meeting_id", IdKind.MEETING),
+    _is_identifier("entity_id", IdKind.ENTITY),
+    CheckConstraint(
+        "entity_id IS NOT NULL OR display_name IS NOT NULL OR email_normalized IS NOT NULL",
+        name="a_meeting_attendee_carries_an_identity_signal",
+    ),
+    CheckConstraint(
+        "display_name IS NULL OR length(display_name) "
+        f"BETWEEN 1 AND {MAX_ATTENDEE_DISPLAY_NAME_CHARACTERS}",
+        name="a_meeting_attendee_display_name_is_bounded",
+    ),
+    CheckConstraint(
+        "email_normalized IS NULL OR length(email_normalized) "
+        f"BETWEEN 1 AND {MAX_ATTENDEE_EMAIL_CHARACTERS}",
+        name="a_meeting_attendee_email_is_bounded",
+    ),
+    _one_of(
+        "response_status",
+        AttendeeResponseStatus,
+        name="a_meeting_attendee_response_status_is_known",
+    ),
+    CheckConstraint(
+        "removed_at IS NULL OR removed_at >= added_at",
+        name="a_meeting_attendee_is_not_removed_before_it_is_added",
+    ),
+    ForeignKeyConstraint(
+        ["meeting_id", "principal_id"],
+        [f"{SCHEMA}.meetings.meeting_id", f"{SCHEMA}.meetings.principal_id"],
+        ondelete="RESTRICT",
+        name="a_meeting_attendee_belongs_to_a_meeting_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="RESTRICT",
+        name="a_meeting_attendee_names_an_entity_of_its_principal",
+    ),
+    Index(
+        "meeting_attendees_one_active_entity",
+        "principal_id",
+        "meeting_id",
+        "entity_id",
+        unique=True,
+        postgresql_where=text("removed_at IS NULL AND entity_id IS NOT NULL"),
+    ),
+    Index(
+        "meeting_attendees_one_active_email",
+        "principal_id",
+        "meeting_id",
+        "email_normalized",
+        unique=True,
+        postgresql_where=text("removed_at IS NULL AND email_normalized IS NOT NULL"),
+    ),
+    Index(
+        "meeting_attendees_one_active_organizer",
+        "principal_id",
+        "meeting_id",
+        unique=True,
+        postgresql_where=text("removed_at IS NULL AND is_organizer"),
+    ),
+    Index(
+        "meeting_attendees_active_by_meeting",
+        "principal_id",
+        "meeting_id",
+        postgresql_where=text("removed_at IS NULL"),
+    ),
+    Index(
+        "meeting_attendees_active_by_email",
+        "principal_id",
+        "email_normalized",
+        "meeting_id",
+        postgresql_where=text("removed_at IS NULL AND email_normalized IS NOT NULL"),
+    ),
+    Index(
+        "meeting_attendees_active_by_entity",
+        "principal_id",
+        "entity_id",
+        "meeting_id",
+        postgresql_where=text("removed_at IS NULL AND entity_id IS NOT NULL"),
+    ),
+)
+
+#: No binary, title or media snapshot column: the ManagedDocument keeps custody
+#: of its bytes and metadata, and a read projects them at read time.
+meeting_attachments = Table(
+    "meeting_attachments",
+    METADATA,
+    Column("attachment_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("meeting_id", Text, nullable=False),
+    Column("document_id", Text, nullable=False),
+    Column("added_at", DateTime(timezone=True), nullable=False),
+    Column("removed_at", DateTime(timezone=True)),
+    _is_identifier("attachment_id", IdKind.MEETING_ATTACHMENT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("meeting_id", IdKind.MEETING),
+    _is_identifier("document_id", IdKind.MANAGED_DOCUMENT),
+    CheckConstraint(
+        "removed_at IS NULL OR removed_at >= added_at",
+        name="a_meeting_attachment_is_not_removed_before_it_is_added",
+    ),
+    ForeignKeyConstraint(
+        ["meeting_id", "principal_id"],
+        [f"{SCHEMA}.meetings.meeting_id", f"{SCHEMA}.meetings.principal_id"],
+        ondelete="RESTRICT",
+        name="a_meeting_attachment_belongs_to_a_meeting_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["document_id", "principal_id"],
+        [
+            f"{SCHEMA}.managed_documents.document_id",
+            f"{SCHEMA}.managed_documents.owner_principal_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_meeting_attachment_names_a_document_of_its_principal",
+    ),
+    Index(
+        "meeting_attachments_one_active_document",
+        "principal_id",
+        "meeting_id",
+        "document_id",
+        unique=True,
+        postgresql_where=text("removed_at IS NULL"),
+    ),
+    Index(
+        "meeting_attachments_active_by_meeting",
+        "principal_id",
+        "meeting_id",
+        postgresql_where=text("removed_at IS NULL"),
+    ),
+)
+
+#: The idempotency key and request digest are audit fields here, never the
+#: arbitration authority: `meeting_write_requests` arbitrates, which is why this
+#: table carries no unique over the key (package section 34.7).
+meeting_history = Table(
+    "meeting_history",
+    METADATA,
+    Column("history_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("meeting_id", Text, nullable=False),
+    Column("meeting_series_id", Text),
+    Column("action", Text, nullable=False),
+    Column("actor", Text, nullable=False),
+    Column("outcome", Text, nullable=False),
+    Column("before_version", Integer, nullable=False),
+    Column("after_version", Integer, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("request_digest", Text, nullable=False),
+    Column("occurred_at", DateTime(timezone=True), nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("history_id", IdKind.MEETING_HISTORY),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("meeting_id", IdKind.MEETING),
+    _is_identifier("meeting_series_id", IdKind.MEETING_SERIES),
+    _one_of("action", MeetingHistoryAction, name="a_meeting_history_action_is_known"),
+    _one_of("actor", MeetingActor, name="a_meeting_history_actor_is_known"),
+    _one_of("outcome", MeetingOutcome, name="a_meeting_history_outcome_is_known"),
+    *_meeting_receipt_versions("a_meeting_history"),
+    CheckConstraint(_MEETING_KEY_BOUND, name="a_meeting_history_key_is_bounded"),
+    CheckConstraint(
+        f"request_digest ~ '{_MEETING_DIGEST}'",
+        name="a_meeting_history_digest_is_sha256",
+    ),
+    UniqueConstraint(
+        "history_id",
+        "meeting_id",
+        "principal_id",
+        name="a_meeting_history_is_identified_within_its_meeting",
+    ),
+    ForeignKeyConstraint(
+        ["meeting_id", "principal_id"],
+        [f"{SCHEMA}.meetings.meeting_id", f"{SCHEMA}.meetings.principal_id"],
+        ondelete="RESTRICT",
+        name="a_meeting_history_belongs_to_a_meeting_of_its_principal",
+    ),
+    Index(
+        "meeting_history_by_principal_meeting",
+        "principal_id",
+        "meeting_id",
+        "recorded_at",
+        "history_id",
+    ),
+)
+
+#: A chain, not a tree: `supersedes_note_version_id` is unique, so two versions
+#: cannot name one predecessor. The current note is the one version of a Meeting
+#: that no other version supersedes.
+meeting_note_versions = Table(
+    "meeting_note_versions",
+    METADATA,
+    Column("note_version_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("meeting_id", Text, nullable=False),
+    Column("version_number", Integer, nullable=False),
+    Column("supersedes_note_version_id", Text),
+    Column("content_markdown", Text, nullable=False),
+    Column("content_sha256", Text, nullable=False),
+    Column("meeting_history_id", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("note_version_id", IdKind.MEETING_NOTE_VERSION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("meeting_id", IdKind.MEETING),
+    _is_identifier("supersedes_note_version_id", IdKind.MEETING_NOTE_VERSION),
+    _is_identifier("meeting_history_id", IdKind.MEETING_HISTORY),
+    CheckConstraint("version_number >= 1", name="a_meeting_note_version_number_is_positive"),
+    CheckConstraint(
+        "(version_number = 1) = (supersedes_note_version_id IS NULL)",
+        name="only_the_first_meeting_note_supersedes_nothing",
+    ),
+    CheckConstraint(
+        f"length(content_markdown) BETWEEN 1 AND {MAX_MEETING_NOTES_CHARACTERS}",
+        name="a_meeting_note_body_is_bounded",
+    ),
+    CheckConstraint(
+        f"content_sha256 ~ '{_MEETING_DIGEST}'",
+        name="a_meeting_note_digest_is_sha256",
+    ),
+    UniqueConstraint(
+        "note_version_id",
+        "meeting_id",
+        "principal_id",
+        name="a_meeting_note_is_identified_within_its_meeting",
+    ),
+    UniqueConstraint(
+        "meeting_id",
+        "version_number",
+        name="one_meeting_note_version_number_per_meeting",
+    ),
+    UniqueConstraint(
+        "supersedes_note_version_id",
+        name="a_meeting_note_version_is_superseded_once",
+    ),
+    ForeignKeyConstraint(
+        ["meeting_id", "principal_id"],
+        [f"{SCHEMA}.meetings.meeting_id", f"{SCHEMA}.meetings.principal_id"],
+        ondelete="RESTRICT",
+        name="a_meeting_note_belongs_to_a_meeting_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["supersedes_note_version_id", "meeting_id", "principal_id"],
+        [
+            f"{SCHEMA}.meeting_note_versions.note_version_id",
+            f"{SCHEMA}.meeting_note_versions.meeting_id",
+            f"{SCHEMA}.meeting_note_versions.principal_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_meeting_note_supersedes_a_note_of_its_meeting",
+    ),
+    ForeignKeyConstraint(
+        ["meeting_history_id", "meeting_id", "principal_id"],
+        [
+            f"{SCHEMA}.meeting_history.history_id",
+            f"{SCHEMA}.meeting_history.meeting_id",
+            f"{SCHEMA}.meeting_history.principal_id",
+        ],
+        ondelete="RESTRICT",
+        name="a_meeting_note_names_a_receipt_of_its_meeting",
+    ),
+    Index(
+        "meeting_note_versions_by_principal_meeting",
+        "principal_id",
+        "meeting_id",
+        text("version_number DESC"),
+    ),
+    Index(
+        "meeting_note_versions_text",
+        text("to_tsvector('simple', content_markdown)"),
+        postgresql_using="gin",
+    ),
+)
+
+meeting_series_history = Table(
+    "meeting_series_history",
+    METADATA,
+    Column("series_history_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("meeting_series_id", Text, nullable=False),
+    Column("action", Text, nullable=False),
+    Column("actor", Text, nullable=False),
+    Column("outcome", Text, nullable=False),
+    Column("before_version", Integer, nullable=False),
+    Column("after_version", Integer, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("request_digest", Text, nullable=False),
+    Column("occurred_at", DateTime(timezone=True), nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("series_history_id", IdKind.MEETING_SERIES_HISTORY),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("meeting_series_id", IdKind.MEETING_SERIES),
+    _one_of("action", MeetingHistoryAction, name="a_meeting_series_history_action_is_known"),
+    _one_of("actor", MeetingActor, name="a_meeting_series_history_actor_is_known"),
+    _one_of("outcome", MeetingOutcome, name="a_meeting_series_history_outcome_is_known"),
+    *_meeting_receipt_versions("a_meeting_series_history"),
+    CheckConstraint(_MEETING_KEY_BOUND, name="a_meeting_series_history_key_is_bounded"),
+    CheckConstraint(
+        f"request_digest ~ '{_MEETING_DIGEST}'",
+        name="a_meeting_series_history_digest_is_sha256",
+    ),
+    UniqueConstraint(
+        "series_history_id",
+        "meeting_series_id",
+        "principal_id",
+        name="a_meeting_series_history_is_identified_within_its_series",
+    ),
+    ForeignKeyConstraint(
+        ["meeting_series_id", "principal_id"],
+        [f"{SCHEMA}.meeting_series.meeting_series_id", f"{SCHEMA}.meeting_series.principal_id"],
+        ondelete="RESTRICT",
+        name="a_meeting_series_history_belongs_to_a_series_of_its_principal",
+    ),
+    Index(
+        "meeting_series_history_by_principal_series",
+        "principal_id",
+        "meeting_series_id",
+        "recorded_at",
+        "series_history_id",
+    ),
+)
+
+#: One row per first use of `(principal_id, capability, idempotency_key)`, and
+#: the row whose primary key *is* the Meeting write arbitration (package section
+#: 35.7). Inserted incomplete at the start of the request transaction and
+#: completed once, in the same transaction, with the identity of what the write
+#: produced. The complete-once trigger lives in the Meeting revision.
+meeting_write_requests = Table(
+    "meeting_write_requests",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("capability", Text, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("request_digest", Text, nullable=False),
+    Column("meeting_id", Text),
+    Column("meeting_series_id", Text),
+    Column("meeting_history_id", Text),
+    Column("meeting_series_history_id", Text),
+    Column("result_version", Integer),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("completed_at", DateTime(timezone=True)),
+    PrimaryKeyConstraint(
+        "principal_id",
+        "capability",
+        "idempotency_key",
+        name="meeting_write_requests_pkey",
+    ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("meeting_id", IdKind.MEETING),
+    _is_identifier("meeting_series_id", IdKind.MEETING_SERIES),
+    _is_identifier("meeting_history_id", IdKind.MEETING_HISTORY),
+    _is_identifier("meeting_series_history_id", IdKind.MEETING_SERIES_HISTORY),
+    _one_of(
+        "capability",
+        frozenset(MEETING_WRITE_CAPABILITY_NAMES),
+        name="a_meeting_write_request_capability_is_known",
+    ),
+    CheckConstraint(_MEETING_KEY_BOUND, name="a_meeting_write_request_key_is_bounded"),
+    CheckConstraint(
+        f"request_digest ~ '{_MEETING_DIGEST}'",
+        name="a_meeting_write_request_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "result_version IS NULL OR result_version >= 1",
+        name="a_meeting_write_request_result_version_is_positive",
+    ),
+    CheckConstraint(
+        "completed_at IS NOT NULL OR (meeting_id IS NULL AND meeting_series_id IS NULL "
+        "AND meeting_history_id IS NULL AND meeting_series_history_id IS NULL "
+        "AND result_version IS NULL)",
+        name="an_incomplete_meeting_write_request_names_no_result",
+    ),
+    CheckConstraint(
+        f"completed_at IS NULL OR capability <> '{MEETINGS_CREATE_NAME}' "
+        "OR (meeting_id IS NOT NULL AND meeting_history_id IS NOT NULL "
+        "AND result_version IS NOT NULL)",
+        name="a_completed_meeting_create_names_its_result",
+    ),
+    CheckConstraint(
+        f"completed_at IS NULL OR capability <> '{MEETINGS_UPDATE_NAME}' "
+        "OR (meeting_id IS NOT NULL AND meeting_history_id IS NOT NULL "
+        "AND result_version IS NOT NULL AND meeting_series_history_id IS NULL)",
+        name="a_completed_meeting_update_names_its_result",
+    ),
+    CheckConstraint(
+        f"completed_at IS NULL OR capability <> '{MEETINGS_SERIES_UPDATE_NAME}' "
+        "OR (meeting_series_id IS NOT NULL AND meeting_series_history_id IS NOT NULL "
+        "AND result_version IS NOT NULL AND meeting_id IS NULL AND meeting_history_id IS NULL)",
+        name="a_completed_meeting_series_update_names_its_result",
+    ),
+    ForeignKeyConstraint(
+        ["meeting_id", "principal_id"],
+        [f"{SCHEMA}.meetings.meeting_id", f"{SCHEMA}.meetings.principal_id"],
+        name="a_meeting_write_request_names_a_meeting_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["meeting_series_id", "principal_id"],
+        [f"{SCHEMA}.meeting_series.meeting_series_id", f"{SCHEMA}.meeting_series.principal_id"],
+        name="a_meeting_write_request_names_a_series_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["meeting_history_id", "meeting_id", "principal_id"],
+        [
+            f"{SCHEMA}.meeting_history.history_id",
+            f"{SCHEMA}.meeting_history.meeting_id",
+            f"{SCHEMA}.meeting_history.principal_id",
+        ],
+        name="a_meeting_write_request_names_a_receipt_of_its_meeting",
+    ),
+    ForeignKeyConstraint(
+        ["meeting_series_history_id", "meeting_series_id", "principal_id"],
+        [
+            f"{SCHEMA}.meeting_series_history.series_history_id",
+            f"{SCHEMA}.meeting_series_history.meeting_series_id",
+            f"{SCHEMA}.meeting_series_history.principal_id",
+        ],
+        name="a_meeting_write_request_names_a_receipt_of_its_series",
     ),
 )

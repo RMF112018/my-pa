@@ -58,6 +58,7 @@ from my_pa.contracts.ports import (
     KnowledgeRecord,
     KnowledgeRepository,
     ManagedDocumentRepository,
+    MeetingRepository,
     OperationQueue,
     ProjectRepository,
     PulseRepository,
@@ -270,6 +271,10 @@ class _FailsAfterTheWork(UnitOfWork):
     @property
     def entities(self) -> EntitiesRepository:
         return self._inner.entities
+
+    @property
+    def meetings(self) -> MeetingRepository:
+        return self._inner.meetings
 
     @property
     def audit(self) -> AuditSink:

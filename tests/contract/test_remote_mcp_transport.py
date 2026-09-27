@@ -577,6 +577,11 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         # PC-CM-RUN01-WP05. Stating a Project's calendar moves a settings version
         # and writes a receipt; reading whether one is stated does neither.
         Capability.PROJECT_CONTROLS_CONFIGURE,
+        # WP-MTG-04 (plan D-32b). The three Meeting writes; the three reads stay
+        # read-only.
+        Capability.MEETINGS_CREATE,
+        Capability.MEETINGS_UPDATE,
+        Capability.MEETINGS_SERIES_UPDATE,
     }
     destructive_writes = {
         Capability.CAPTURE_REVISE,
@@ -669,6 +674,12 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         # with it. It is in `_WRITE_CAPABILITIES` and deliberately not in
         # `_ADDITIVE_WRITE_CAPABILITIES`, which holds only the two `create`s.
         Capability.PROJECT_CONTROLS_CONFIGURE,
+        # WP-MTG-04 (plan D-32b). Not additive: `meetings.update` rewrites a
+        # Meeting and retires its child relations, and `meetings.series.update`
+        # retitles an existing series. `meetings.create` is the plane's one
+        # additive write and is deliberately absent here.
+        Capability.MEETINGS_UPDATE,
+        Capability.MEETINGS_SERIES_UPDATE,
     }
     for capability in Capability:
         tool = tools.get(capability.value)

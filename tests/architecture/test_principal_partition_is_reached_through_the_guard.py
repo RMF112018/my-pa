@@ -139,6 +139,12 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # goes through `partition_criterion` or `principal_bound_values`, so it
         # is registered statement-level below rather than per-module.
         "infrastructure/persistence/entity.py",
+        # WP-MTG-02's Meeting records plane, in the `constraints.py` shape: every
+        # SELECT and UPDATE composes `_mine` over `partition_criterion`, every
+        # INSERT composes `_bound` over `principal_bound_values`, and every
+        # correlated predicate between two tables composes
+        # `matching_partition_criterion`. No hand-written partition comparison.
+        "infrastructure/persistence/meetings.py",
         "infrastructure/persistence/write_requests.py",
         # The same plane's governed write path (`WP-RI-A-02`), separated from the
         # module above because a guarded write is a transaction rather than a
@@ -413,6 +419,12 @@ PER_MODULE_ONLY: Final = {
         "insert composes `principal_bound_values` through `_bound`, so the "
         "authenticated Principal is stamped rather than taken from the record. "
         "The module has not yet joined a dedicated statement-level scanner."
+    ),
+    "infrastructure/persistence/meetings.py": (
+        "every SELECT/UPDATE composes `_mine` over `partition_criterion`, every "
+        "INSERT composes `_bound` over `principal_bound_values`, correlated "
+        "Meeting-table predicates use `matching_partition_criterion`; not yet in "
+        "a dedicated statement-level scanner."
     ),
     "infrastructure/persistence/continuity_read.py": (
         "one helper applies partition_criterion to every read-model table; the "

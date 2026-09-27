@@ -8,6 +8,7 @@ from apps.cli.remote_mcp import main
 from my_pa.adapters.remote_request import resolve_remote_purpose
 from my_pa.application.chatllm_data_profile import (
     ChatLLMCompositionPlanes,
+    ChatLLMGrantAction,
     ChatLLMGrantRecord,
     ChatLLMProfileOutcome,
     chatllm_grant_purpose,
@@ -146,6 +147,26 @@ _SEPTEMBER13_EXPIRED = frozenset(
 )
 
 
+#: Meeting Records WP-MTG-05: the six Meeting capabilities and the single
+#: purpose each one is granted under.
+_MEETING_PURPOSES = {
+    Capability.MEETINGS_READ: Purpose.MEETING_READ,
+    Capability.MEETINGS_LIST: Purpose.MEETING_READ,
+    Capability.MEETINGS_SEARCH: Purpose.MEETING_READ,
+    Capability.MEETINGS_CREATE: Purpose.MEETING_AUTHORING,
+    Capability.MEETINGS_UPDATE: Purpose.MEETING_AUTHORING,
+    Capability.MEETINGS_SERIES_UPDATE: Purpose.MEETING_AUTHORING,
+}
+_MEETINGS = frozenset(_MEETING_PURPOSES)
+_MEETING_WRITES = frozenset(
+    {
+        Capability.MEETINGS_CREATE,
+        Capability.MEETINGS_UPDATE,
+        Capability.MEETINGS_SERIES_UPDATE,
+    }
+)
+
+
 def _grant(
     capability: Capability,
     *,
@@ -153,6 +174,8 @@ def _grant(
     revoked_at: datetime | None = None,
     purpose: Purpose | None = None,
     is_write: bool | None = None,
+    resource: str = RESOURCE,
+    scope: str = SCOPE,
 ) -> ChatLLMGrantRecord:
     from my_pa.application.chatllm_data_profile import chatllm_grant_purpose
 
@@ -160,8 +183,8 @@ def _grant(
         capability=capability,
         purpose=chatllm_grant_purpose(capability) if purpose is None else purpose,
         is_write=is_write_capability(capability) if is_write is None else is_write,
-        resource=RESOURCE,
-        scope=SCOPE,
+        resource=resource,
+        scope=scope,
         expires_at=expires_at,
         revoked_at=revoked_at,
         grant_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
@@ -193,10 +216,12 @@ def test_full_plane_effective_target_is_one_hundred_forty_nine() -> None:
     disjoint paths; the figure below was re-measured on the merged tree rather
     than summed from the two branches' deltas. PC-CM-RUN01-WP07's
     `constraints.create_published` moved it by one more, on the same reading.
+    Meeting Records WP-MTG-05 moved it by six (the `DATA_REQUIRED` Meeting
+    capabilities), re-measured from the live derivation.
     """
     composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
     desired = desired_effective_capabilities(composed)
-    assert len(desired) == 153
+    assert len(desired) == 159
     assert Capability.PROJECT_CONTROLS_CONFIGURE in desired
     assert Capability.PROJECT_CONTROLS_STATUS in desired
     assert Capability.REPORTS_BEGIN_CYCLE in desired
@@ -209,7 +234,10 @@ def test_full_plane_effective_target_is_one_hundred_forty_nine() -> None:
 def test_default_plane_effective_target_is_eighty_three() -> None:
     composed = composed_capabilities(IMPLEMENTED, _DEFAULT_PLANES)
     desired = desired_effective_capabilities(composed)
-    assert len(desired) == 87
+    # The six Meeting capabilities need no plane flag, so they are in the
+    # default-plane target too (re-measured from the live derivation).
+    assert len(desired) == 93
+    assert desired >= _MEETINGS
     assert Capability.DOCUMENTS_READ not in desired
     assert Capability.ENTITIES_SEARCH not in desired
     assert Capability.CONSTRAINTS_LIST in desired
@@ -404,7 +432,7 @@ def test_no_path_grants_every_capability_enum_member() -> None:
     assert Capability.SOURCES_ENROLL not in desired
     assert Capability.GSQS_START not in desired
     assert Capability.CONTINUITY_TASKS_CREATE not in desired
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v2"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v3"
 
 
 def test_mismatched_purpose_or_write_is_add_not_noop() -> None:
@@ -602,3 +630,126 @@ def test_no_revoke_when_normalizing_finite_expiry() -> None:
     action_kinds = {action.kind for action in actions}
     assert "revoke" not in action_kinds
     assert action_kinds == {"renew"}
+
+
+def _meeting_plan(
+    grants: tuple[ChatLLMGrantRecord, ...],
+) -> tuple[dict[Capability, ChatLLMProfileOutcome], dict[Capability, ChatLLMGrantAction]]:
+    composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
+    diff = diff_chatllm_data_profile(
+        implemented=IMPLEMENTED,
+        composed=composed,
+        grants=grants,
+        now=NOW,
+        resource=RESOURCE,
+        scope=SCOPE,
+    )
+    actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
+    return (
+        {capability: diff.outcomes[capability] for capability in _MEETINGS},
+        {action.capability: action for action in actions if action.capability in _MEETINGS},
+    )
+
+
+def test_desired_meeting_grants_carry_the_exact_purpose_and_write_flag() -> None:
+    """WP-MTG-05: the generic derivation requests all six with exact fields."""
+    for planes in (_FULL_PLANES, _DEFAULT_PLANES):
+        composed = composed_capabilities(IMPLEMENTED, planes)
+        assert desired_effective_capabilities(composed) >= _MEETINGS
+    for capability, purpose in _MEETING_PURPOSES.items():
+        assert chatllm_grant_purpose(capability) is purpose
+        assert resolve_remote_purpose(capability, None) is purpose
+    outcomes, actions = _meeting_plan(())
+    assert set(outcomes.values()) == {ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANT_MISSING}
+    assert set(actions) == _MEETINGS
+    for capability, action in actions.items():
+        assert action.kind == "add"
+        assert action.purpose is _MEETING_PURPOSES[capability]
+        assert action.is_write is (capability in _MEETING_WRITES)
+        assert action.grant_id is None
+    assert {capability for capability, action in actions.items() if action.is_write} == (
+        _MEETING_WRITES
+    )
+
+
+def test_a_v2_converged_client_plans_exactly_the_six_meeting_adds() -> None:
+    """A client converged on the v2 catalog needs exactly the six Meeting grants."""
+    composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
+    desired = desired_effective_capabilities(composed)
+    grants = tuple(_grant(capability) for capability in desired - _MEETINGS)
+    diff = diff_chatllm_data_profile(
+        implemented=IMPLEMENTED,
+        composed=composed,
+        grants=grants,
+        now=NOW,
+        resource=RESOURCE,
+        scope=SCOPE,
+    )
+    assert not diff.is_healthy()
+    assert diff.profile_version == "chatllm-data-v3"
+    assert diff.add == _MEETINGS
+    assert diff.renew == frozenset()
+    actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
+    assert {action.capability for action in actions if action.kind != "noop"} == _MEETINGS
+    assert {action.kind for action in actions if action.capability in _MEETINGS} == {"add"}
+
+
+def test_mismatched_meeting_grants_plan_as_add() -> None:
+    """Wrong purpose, write flag, resource or scope never satisfies a Meeting grant."""
+    wrong_purpose = {
+        Purpose.MEETING_READ: Purpose.MEETING_AUTHORING,
+        Purpose.MEETING_AUTHORING: Purpose.MEETING_READ,
+    }
+    mismatched: tuple[tuple[ChatLLMGrantRecord, ...], ...] = (
+        tuple(
+            _grant(capability, purpose=wrong_purpose[purpose])
+            for capability, purpose in _MEETING_PURPOSES.items()
+        ),
+        tuple(
+            _grant(capability, is_write=not is_write_capability(capability))
+            for capability in _MEETINGS
+        ),
+    )
+    for grants in mismatched:
+        outcomes, actions = _meeting_plan(grants)
+        assert set(outcomes.values()) == {
+            ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANT_MISMATCHED
+        }
+        assert set(actions) == _MEETINGS
+        assert {action.kind for action in actions.values()} == {"add"}
+    elsewhere: tuple[tuple[ChatLLMGrantRecord, ...], ...] = (
+        tuple(_grant(capability, resource="https://other.example/mcp") for capability in _MEETINGS),
+        tuple(_grant(capability, scope="my-pa.other") for capability in _MEETINGS),
+    )
+    for grants in elsewhere:
+        outcomes, actions = _meeting_plan(grants)
+        assert set(outcomes.values()) == {ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANT_MISSING}
+        assert set(actions) == _MEETINGS
+        assert {action.kind for action in actions.values()} == {"add"}
+    revoked = tuple(_grant(capability, revoked_at=EXPIRED_AT) for capability in _MEETINGS)
+    outcomes, actions = _meeting_plan(revoked)
+    assert set(outcomes.values()) == {ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANT_REVOKED}
+    assert {action.kind for action in actions.values()} == {"add"}
+
+
+def test_a_converged_profile_with_meeting_grants_is_a_noop() -> None:
+    composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
+    desired = desired_effective_capabilities(composed)
+    assert desired >= _MEETINGS
+    grants = tuple(_grant(capability) for capability in desired)
+    diff = diff_chatllm_data_profile(
+        implemented=IMPLEMENTED,
+        composed=composed,
+        grants=grants,
+        now=NOW,
+        resource=RESOURCE,
+        scope=SCOPE,
+    )
+    assert diff.is_healthy()
+    assert diff.add == frozenset()
+    assert diff.renew == frozenset()
+    for capability in _MEETINGS:
+        assert diff.outcomes[capability] is ChatLLMProfileOutcome.IMPLEMENTED_COMPOSED_GRANTED
+    actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
+    assert {action.kind for action in actions} == {"noop"}
+    assert {action.capability for action in actions} >= _MEETINGS

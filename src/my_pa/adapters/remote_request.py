@@ -212,6 +212,22 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_AFFILIATIONS_CREATE,
         Capability.ENTITIES_AFFILIATIONS_REVISE,
         Capability.ENTITIES_AFFILIATIONS_END,
+        # WP-MTG-06. The three Meeting writes each carry the `idempotency_key`
+        # their command requires and `meeting_write_requests
+        # (principal_id, capability, idempotency_key)` arbitrates, so a remote
+        # caller that cannot supply one (`REMOTE_OWNED_PAYLOAD_FIELDS`) still
+        # gets a replay rather than a second write when its response is lost.
+        # The key is this set's generic one over the raw remote arguments --
+        # sorted object keys, array order preserved -- and no Meeting-only
+        # normalizer exists: reordered attendees may stamp a different key, and
+        # the application's semantic request digest stays the authoritative
+        # same-key/same-request discriminator. They are deliberately **not** in
+        # `_SERVER_REPLAY_REMOTE_CAPABILITIES`, which is for writes with no key
+        # field at all, and `meetings.read`/`list`/`search` stay out because a
+        # read has no field to stamp.
+        Capability.MEETINGS_CREATE,
+        Capability.MEETINGS_UPDATE,
+        Capability.MEETINGS_SERIES_UPDATE,
         # **No keyless proposal or identity-correction write is here, and the reason is this set's
         # mechanism rather than a judgement about how replayable they are.**
         # Membership makes `compose_remote_arguments` derive a key and *insert it

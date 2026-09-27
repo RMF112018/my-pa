@@ -60,6 +60,10 @@ _WRITE_PURPOSES: Final = frozenset(
         # reason every other read purpose does.
         Purpose.CONSTRAINT_AUTHORING,
         Purpose.CONSTRAINT_SYNC_AUTHORING,
+        # WP-MTG-04 (plan D-06). Without it the three Meeting writes would be
+        # classified remote reads -- routed to `my_pa.read` and not write-gated.
+        # `meeting_read` stays out, for the reason every read purpose does.
+        Purpose.MEETING_AUTHORING,
         Purpose.CONTEXT_PREFERENCE,
         Purpose.GOODNOTES_PROPOSAL,
         Purpose.REPORT_AUTHORING,

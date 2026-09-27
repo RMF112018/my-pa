@@ -92,6 +92,7 @@ from my_pa.application.commands import (
     CreateEntityProposal,
     CreateEntityRelationship,
     CreateManagedDocument,
+    CreateMeeting,
     CreateProject,
     CreatePublishedConstraint,
     CreateRelationshipMemory,
@@ -145,6 +146,7 @@ from my_pa.application.commands import (
     ListGoodNotesRuns,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
+    ListMeetings,
     ListPortfolioConstraints,
     ListProjects,
     ListRelationshipMemories,
@@ -175,6 +177,7 @@ from my_pa.application.commands import (
     ReadIntelligenceArtifact,
     ReadKnowledge,
     ReadManagedDocument,
+    ReadMeeting,
     ReadPortfolioConstraintOverview,
     ReadProject,
     ReadProjectControlsStatus,
@@ -214,6 +217,7 @@ from my_pa.application.commands import (
     SearchGoodNotes,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
+    SearchMeetings,
     SearchPortfolioConstraints,
     SearchRelationshipMemories,
     SearchTasks,
@@ -229,6 +233,8 @@ from my_pa.application.commands import (
     UpdateConstraint,
     UpdateConstraintCategory,
     UpdateEntity,
+    UpdateMeeting,
+    UpdateMeetingSeries,
     UpdateProject,
     UpdateTask,
     VoidConstraint,
@@ -255,6 +261,13 @@ from my_pa.domain.intelligence.catalog import (
     ProducerRunState,
     ResolverSetId,
     SourceLaneId,
+)
+from my_pa.domain.meeting.model import (
+    MeetingClearField,
+    MeetingNotesMode,
+    MeetingSortDirection,
+    MeetingStatus,
+    MeetingTimeScope,
 )
 from my_pa.domain.project_controls.category import ConstraintCategoryState
 from my_pa.domain.project_controls.constraint import (
@@ -2279,6 +2292,99 @@ def _resolve_constraint_sync_conflict(payload: Mapping[str, Any]) -> Command:
     return ResolveConstraintSyncConflict(**_constraint_sync(payload))
 
 
+# --- the Meeting records plane (WP-MTG-04) ------------------------------------
+#
+# Shape conversion and nothing else, exactly as the Constraint builders above:
+# an RFC 3339 string is not a `datetime`, a JSON array is not a tuple, and a JSON
+# string is not a `MeetingStatus`. A value that does not convert is left exactly
+# as it arrived, so the command refuses it under its own field token rather than
+# this module refusing it under a plane's. Nothing here validates, trims,
+# normalizes an email or decides a series selector: those are WP-MTG-01's rules,
+# applied by the command through the domain request value.
+
+#: The single-valued closed vocabularies a Meeting request may carry.
+_MEETING_VOCABULARIES: Final[Mapping[str, type[StrEnum]]] = MappingProxyType(
+    {
+        "status": MeetingStatus,
+        "time_scope": MeetingTimeScope,
+        "sort_direction": MeetingSortDirection,
+        "notes_mode": MeetingNotesMode,
+    }
+)
+
+#: Every Meeting instant a request may carry.
+_MEETING_INSTANTS: Final[tuple[str, ...]] = (
+    "start_at",
+    "end_at",
+    "start_at_from",
+    "start_at_before",
+)
+
+#: The arrays a Meeting request carries, converted to the tuples the commands
+#: declare. Attendee objects stay objects: `normalize_attendee` reads them.
+_MEETING_SEQUENCES: Final[tuple[str, ...]] = (
+    "attendees",
+    "attendees_replace",
+    "attachment_document_ids",
+    "attachment_add_document_ids",
+    "attachment_remove_ids",
+)
+
+
+def _meeting_instant(value: object) -> object:
+    """One RFC 3339 string as a `datetime`, or exactly what arrived."""
+    if not isinstance(value, str):
+        return value
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return value
+
+
+def _meeting_shapes(payload: Mapping[str, Any]) -> dict[str, Any]:
+    converted = dict(payload)
+    for name, vocabulary in _MEETING_VOCABULARIES.items():
+        if name in converted:
+            converted[name] = _entity_member(converted[name], vocabulary)
+    for name in _MEETING_INSTANTS:
+        if name in converted:
+            converted[name] = _meeting_instant(converted[name])
+    for name in _MEETING_SEQUENCES:
+        supplied = converted.get(name)
+        if isinstance(supplied, list):
+            converted[name] = tuple(supplied)
+    clears = converted.get("clear_fields")
+    if isinstance(clears, list):
+        converted["clear_fields"] = tuple(
+            _entity_member(entry, MeetingClearField) for entry in clears
+        )
+    return converted
+
+
+def _create_meeting(payload: Mapping[str, Any]) -> Command:
+    return CreateMeeting(**_meeting_shapes(payload))
+
+
+def _read_meeting(payload: Mapping[str, Any]) -> Command:
+    return ReadMeeting(**payload)
+
+
+def _list_meetings(payload: Mapping[str, Any]) -> Command:
+    return ListMeetings(**_meeting_shapes(payload))
+
+
+def _search_meetings(payload: Mapping[str, Any]) -> Command:
+    return SearchMeetings(**_meeting_shapes(payload))
+
+
+def _update_meeting(payload: Mapping[str, Any]) -> Command:
+    return UpdateMeeting(**_meeting_shapes(payload))
+
+
+def _update_meeting_series(payload: Mapping[str, Any]) -> Command:
+    return UpdateMeetingSeries(**_meeting_shapes(payload))
+
+
 _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = MappingProxyType(
     {
         Capability.CAPABILITIES_GET: _get_capabilities,
@@ -2453,6 +2559,12 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.RELATIONSHIP_MEMORY_ARCHIVE: _archive_relationship_memory,
         Capability.RELATIONSHIP_MEMORY_RESTORE: _restore_relationship_memory,
         Capability.RELATIONSHIP_MEMORY_PROPOSE: _propose_relationship_memory,
+        Capability.MEETINGS_CREATE: _create_meeting,
+        Capability.MEETINGS_READ: _read_meeting,
+        Capability.MEETINGS_LIST: _list_meetings,
+        Capability.MEETINGS_SEARCH: _search_meetings,
+        Capability.MEETINGS_UPDATE: _update_meeting,
+        Capability.MEETINGS_SERIES_UPDATE: _update_meeting_series,
     }
 )
 

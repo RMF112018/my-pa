@@ -50,7 +50,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "c5b71e0a8d43"
 PREVIOUS: Final = "a1c9e4b72f80"
-CURRENT_HEAD: Final = "6f6ead27d122"
+CURRENT_HEAD: Final = "7d9a450dfd07"
 CAPTURE_LABELS: Final = "c1a8e4d70b29"
 WP_TUX_01: Final = "de5ec1c65857"
 WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
@@ -64,6 +64,15 @@ MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20260906_c5b71e0a8d43_admit_the_constraint_read_capabilities.py"
 PREVIOUS_MIGRATION: Final = (
     MIGRATIONS / "20260906_a1c9e4b72f80_admit_goodnotes_browser_contracts.py"
+)
+#: The one sanctioned edit to a historical revision (operator ruling
+#: OPERATOR_RULING_WP04_A_to_E.md section E). Like D-48, the Meeting-records
+#: work freezes `a_managed_document_is_identified_within_its_owner` out of
+#: `4c7b2e91d8a5`: that revision no longer creates the owner unique, and the
+#: Meeting revision `7d9a450dfd07` adds it unconditionally. Exactly this path is
+#: exempt; an edit to any other historical revision still fails the guard below.
+SANCTIONED_HISTORICAL_EDIT: Final = (
+    MIGRATIONS / "20260811_4c7b2e91d8a5_create_the_managed_document_tables.py"
 )
 
 ADMITTED_CAPABILITIES: Final[tuple[str, ...]] = (
@@ -175,7 +184,8 @@ def test_revision_sits_on_the_single_head_chain() -> None:
     # head is no longer its direct child. The path from head down to this
     # revision is asserted link by link rather than loosened to mere
     # reachability, which would be the weaker claim.
-    assert script.get_revision(CURRENT_HEAD).down_revision == "e6a4c2f91b73"
+    assert script.get_revision(CURRENT_HEAD).down_revision == "6f6ead27d122"
+    assert script.get_revision("6f6ead27d122").down_revision == "e6a4c2f91b73"
     assert script.get_revision("e6a4c2f91b73").down_revision == "c4f1a8e52d90"
     assert script.get_revision("c4f1a8e52d90").down_revision == WP_MCP_PROJ_02
     assert script.get_revision(WP_MCP_PROJ_02).down_revision == WP_MCP_PROJ_01
@@ -296,6 +306,7 @@ def test_no_historical_revision_was_edited() -> None:
         pytest.skip("no merge base available in this checkout")
     historical = {line for line in listed.stdout.splitlines() if line.strip()}
     edited_historical = touched & historical
+    edited_historical -= {SANCTIONED_HISTORICAL_EDIT.relative_to(ROOT).as_posix()}
     assert not edited_historical, f"a historical revision was edited: {sorted(edited_historical)}"
 
 

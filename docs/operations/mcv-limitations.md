@@ -569,6 +569,53 @@ Evidence: `src/my_pa/adapters/mcp/server.py`, `src/my_pa/adapters/mcp/tools.py`,
 `tests/security/test_mcp_surface_controls.py`,
 `tests/security/test_mcp_and_cli_negative_evidence.py`.
 
+## 14. Meeting records are product-owned, unsynchronized, and not commissioned
+
+**Product-owned, with no provider behind them.** A Meeting exists because a
+caller wrote it through `meetings.create`; nothing imports one from a calendar,
+nothing writes one back, and there is no provider identifier on any Meeting row.
+Provider synchronization, if it ever comes, needs its own identity mapping and
+its own package. A Meeting write also creates nothing in another plane: it opens
+no Task, Conversation or capture, and it never creates or merges an Entity.
+
+**No recurrence and no delete.** A series is a titled grouping of occurrences
+that were each created explicitly; there is no recurrence rule, nothing is
+expanded, and retitling a series changes no occurrence's title. Cancellation is
+reversible and there is no deleted state.
+
+**Minimized reads, and one bounded search.** List and search rows carry triage
+fields only; attendee identity and email, virtual links, descriptions and note
+bodies need `meetings.read` on a named Meeting. Search matches the current note
+version and never a superseded one. Listings page by keyset cursor at a bounded
+page size, and a cursor from another partition or filter is refused.
+
+**Idempotency keys are content-addressed over the raw remote arguments.**
+Reordering an object's keys keeps the key; reordering an array, such as the
+attendee list, gives a different key and so a distinct request. That is the
+documented v1 behavior, not a normalization this package performs.
+
+**Nothing here is commissioned.** The migration `7d9a450dfd07` is proven on
+disposable databases only. The ChatLLM data profile `chatllm-data-v3` is
+repository desire. Whether any persistent database carries the Meeting tables,
+whether any client holds Meeting grants, and whether any write gate admits a
+Meeting write are runtime facts that no repository evidence establishes. The
+read-only procedure that would establish them, and the steps that need separate
+operator authority, are in `ops/runbooks/mcp-and-cli-operations.md`.
+
+Evidence: `src/my_pa/domain/meeting/model.py`, `src/my_pa/application/meetings.py`,
+`src/my_pa/contracts/v1/meetings.py`,
+`migrations/versions/20260927_7d9a450dfd07_meeting_records.py`,
+`tests/contract/test_meeting_contracts.py::test_list_rows_exclude_pii_links_description_and_notes`,
+`tests/database/test_meeting_application.py::test_meeting_writes_touch_no_task_conversation_or_capture`,
+`tests/database/test_meeting_application.py::test_a_snapshot_attendee_creates_no_entity`,
+`tests/database/test_meeting_application.py::test_a_series_retitle_leaves_every_occurrence_untouched`,
+`tests/database/test_meeting_application.py::test_search_matches_the_current_note_head_only`,
+`tests/database/test_meeting_application.py::test_a_cursor_outside_the_partition_or_filter_is_refused`,
+`tests/unit/test_remote_request.py::test_the_three_meeting_writes_are_keyed_and_never_server_replayed`,
+`tests/unit/test_remote_request.py::test_reordering_nested_object_keys_keeps_the_key_and_reordering_an_array_changes_it`,
+`tests/contract/test_chatllm_data_profile_diff.py::test_a_v2_converged_client_plans_exactly_the_six_meeting_adds`,
+`tests/schema/test_meeting_records_migration.py::test_the_revision_is_the_single_head_directly_on_the_previous_head`.
+
 ---
 
 New implementation must use the neutral `my_pa` / `MY_PA_` namespace. Legacy

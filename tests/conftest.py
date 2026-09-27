@@ -105,6 +105,15 @@ from my_pa.contracts.ports import (
     ManagedByteStore,
     ManagedDocumentRepository,
     ManagedWriteRequest,
+    MeetingAttachmentRecord,
+    MeetingAttendeeRecord,
+    MeetingCursorAnchor,
+    MeetingEntityState,
+    MeetingListPage,
+    MeetingNoteRecord,
+    MeetingRecord,
+    MeetingRepository,
+    MeetingWriteRequestRecord,
     MemoryDetail,
     MemoryListingFacts,
     MemoryPage,
@@ -119,6 +128,7 @@ from my_pa.contracts.ports import (
     RelationshipMemoryProposalRepository,
     RelationshipMemoryRepository,
     RelationshipWriteRequest,
+    RepositoryFailureError,
     ReviewDecisionRequest,
     ReviewRepository,
     SearchOutcome,
@@ -144,6 +154,16 @@ from my_pa.contracts.v1.disclosure import (
     Trust,
 )
 from my_pa.contracts.v1.envelope import RequestMetadata
+from my_pa.contracts.v1.meetings import (
+    MeetingAttachmentView,
+    MeetingAttendeeView,
+    MeetingHistoryView,
+    MeetingListEntry,
+    MeetingNoteView,
+    MeetingSeriesHistoryView,
+    MeetingSeriesView,
+    MeetingView,
+)
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.audit.events import AuditEvent
 from my_pa.domain.capture.errors import CaptureConflictError
@@ -217,6 +237,17 @@ from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.identity.user_account import CallerSuppliedPrincipalError
+from my_pa.domain.meeting.model import (
+    MeetingAttachmentAvailability,
+    MeetingCursorError,
+    MeetingIdempotencyConflictError,
+    MeetingListRequest,
+    MeetingSearchRequest,
+    MeetingSortDirection,
+    MeetingStatus,
+    MeetingTimeScope,
+    NormalizedAttendee,
+)
 from my_pa.domain.project_controls.category import ConstraintCategory, ConstraintCategoryState
 from my_pa.domain.project_controls.constraint import (
     ConstraintLifecycleState,
@@ -611,6 +642,28 @@ class _MemorySubmission:
 
 
 @dataclass
+class _MeetingAttendeeRow:
+    """One stored attendee relation; `removed_at` is its only mutable column."""
+
+    attendee_id: str
+    meeting_id: str
+    attendee: NormalizedAttendee
+    added_at: datetime
+    removed_at: datetime | None = None
+
+
+@dataclass
+class _MeetingAttachmentRow:
+    """One stored attachment relation; `removed_at` is its only mutable column."""
+
+    attachment_id: str
+    meeting_id: str
+    document_id: str
+    added_at: datetime
+    removed_at: datetime | None = None
+
+
+@dataclass
 class World:
     """Everything the fake repositories know, in one mutable place."""
 
@@ -923,6 +976,25 @@ class World:
     relationship_memory_versions: list[RelationshipMemoryVersion] = field(default_factory=list)
     relationship_memory_links: list[MemoryContextLink] = field(default_factory=list)
     relationship_memory_keys: dict[tuple[str, str], _MemorySubmission] = field(default_factory=dict)
+    #: WP-MTG-04's Meeting records plane (plan D-31), keyed by the pair the real
+    #: statements are partitioned by -- `(principal_id, id)` -- so another
+    #: Principal's row is answered exactly as an absent one. The write-request
+    #: ledger is keyed by its primary key `(principal_id, capability,
+    #: idempotency_key)`. Test infrastructure only: every Meeting claim that
+    #: rests on the database (locks, triggers, keys, FTS) is proved against a
+    #: real server in `tests/database`, `tests/concurrency` and the E-nn scenarios.
+    meeting_series: dict[tuple[str, str], MeetingSeriesView] = field(default_factory=dict)
+    meetings: dict[tuple[str, str], MeetingRecord] = field(default_factory=dict)
+    meeting_attendees: dict[tuple[str, str], _MeetingAttendeeRow] = field(default_factory=dict)
+    meeting_attachments: dict[tuple[str, str], _MeetingAttachmentRow] = field(default_factory=dict)
+    meeting_history: dict[tuple[str, str], MeetingHistoryView] = field(default_factory=dict)
+    meeting_note_versions: dict[tuple[str, str], MeetingNoteRecord] = field(default_factory=dict)
+    meeting_series_history: dict[tuple[str, str], MeetingSeriesHistoryView] = field(
+        default_factory=dict
+    )
+    meeting_write_requests: dict[tuple[str, str, str], MeetingWriteRequestRecord] = field(
+        default_factory=dict
+    )
     commits: int = 0
     rollbacks: int = 0
     #: Port failures a test wants raised, keyed by the method that should raise.
@@ -8571,6 +8643,524 @@ class _GoodNotesDurableNotes:
         return occurrence, revision
 
 
+class _Meetings:
+    """The Meeting records plane over the `World` (WP-MTG-04, plan D-31).
+
+    Structural rather than a subclass of `MeetingRepository`, for the reason
+    `_ConstraintReads` gives: what `MeetingApplication` takes is shape, and
+    reaching a method this class does not carry raises, so a gap is a loud
+    failure rather than a silent empty answer.
+
+    It mirrors `SqlMeetingRepository` at the level the transport sweeps
+    exercise and no further: the partition predicate written out on every read;
+    write-request reservation and completion keyed `(principal_id, capability,
+    idempotency_key)` with same-digest replay and different-digest conflict; the
+    inserts and retires; `read_meeting`'s view assembly (organizer first, then
+    attendee id); and list/search ordered by `(start_at, meeting_id)` with a
+    cursor anchor resolved in the same partition and filters. **Search is a
+    case-insensitive substring match over title, description, location, series
+    title and the current note, standing in for PostgreSQL full-text search.**
+    Nothing here decides a Meeting rule -- digest, replay, no-op, version gate
+    and reference validation are `application.meetings`'s -- and no lock is
+    taken, because a single-threaded in-memory world has nothing to lock. It is
+    not database evidence for any acceptance criterion.
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def __getattr__(self, name: str) -> object:
+        raise NotImplementedError(f"the synthetic Meeting plane does not implement {name}")
+
+    # --- write-request arbitration ------------------------------------------
+
+    def reserve_write_request(
+        self,
+        principal_id: str,
+        capability: str,
+        idempotency_key: str,
+        request_digest: str,
+        *,
+        created_at: datetime,
+    ) -> MeetingWriteRequestRecord | None:
+        key = (principal_id, capability, idempotency_key)
+        held = self._world.meeting_write_requests.get(key)
+        if held is None:
+            self._world.meeting_write_requests[key] = MeetingWriteRequestRecord(
+                capability=capability, request_digest=request_digest, created_at=created_at
+            )
+            return None
+        if held.request_digest != request_digest:
+            raise MeetingIdempotencyConflictError()
+        if held.completed_at is None:
+            raise RepositoryFailureError("an incomplete meeting write request is held")
+        return held
+
+    def read_write_request(
+        self, principal_id: str, capability: str, idempotency_key: str
+    ) -> MeetingWriteRequestRecord | None:
+        return self._world.meeting_write_requests.get((principal_id, capability, idempotency_key))
+
+    def complete_write_request(
+        self,
+        principal_id: str,
+        capability: str,
+        idempotency_key: str,
+        *,
+        request_digest: str,
+        meeting_id: str | None,
+        meeting_series_id: str | None,
+        meeting_history_id: str | None,
+        meeting_series_history_id: str | None,
+        result_version: int,
+        completed_at: datetime,
+    ) -> None:
+        key = (principal_id, capability, idempotency_key)
+        held = self._world.meeting_write_requests.get(key)
+        if held is None or held.completed_at is not None or held.request_digest != request_digest:
+            raise RepositoryFailureError("no incomplete meeting write request to complete")
+        self._world.meeting_write_requests[key] = replace(
+            held,
+            completed_at=completed_at,
+            meeting_id=meeting_id,
+            meeting_series_id=meeting_series_id,
+            meeting_history_id=meeting_history_id,
+            meeting_series_history_id=meeting_series_history_id,
+            result_version=result_version,
+            meeting_receipt=(
+                None
+                if meeting_history_id is None
+                else self._world.meeting_history[(principal_id, meeting_history_id)]
+            ),
+            series_receipt=(
+                None
+                if meeting_series_history_id is None
+                else self._world.meeting_series_history[(principal_id, meeting_series_history_id)]
+            ),
+        )
+
+    # --- parent reads and reference reads -------------------------------------
+
+    def lock_meeting_for_update(self, principal_id: str, meeting_id: str) -> MeetingView | None:
+        return self.read_meeting(principal_id, meeting_id)
+
+    def lock_series_for_update(
+        self, principal_id: str, meeting_series_id: str
+    ) -> MeetingSeriesView | None:
+        return self.read_owned_series(principal_id, meeting_series_id)
+
+    def read_owned_series(
+        self, principal_id: str, meeting_series_id: str
+    ) -> MeetingSeriesView | None:
+        return self._world.meeting_series.get((principal_id, meeting_series_id))
+
+    def share_lock_person_entities(
+        self, principal_id: str, entity_ids: Iterable[str]
+    ) -> tuple[MeetingEntityState, ...]:
+        wanted = set(entity_ids)
+        return tuple(
+            MeetingEntityState(
+                entity_id=entity.entity_id,
+                entity_type=entity.entity_type.value,
+                status=entity.status.value,
+            )
+            for entity in sorted(self._world.entities, key=lambda row: row.entity_id)
+            if entity.principal_id == principal_id and entity.entity_id in wanted
+        )
+
+    def project_is_owned(self, principal_id: str, project_id: str) -> bool:
+        return any(
+            project.project_id == project_id and project.principal_id == principal_id
+            for project in (*self._world.projects, *self._world.constraint_projects)
+        )
+
+    def owned_managed_documents(
+        self, principal_id: str, document_ids: Iterable[str]
+    ) -> dict[str, DocumentState]:
+        wanted = set(document_ids)
+        owned = {
+            row.document_id
+            for row in self._world.managed_versions
+            if row.owner_principal_id == principal_id and row.document_id in wanted
+        }
+        return {
+            document_id: self._world.managed_states.get(document_id, DocumentState.ACTIVE)
+            for document_id in owned
+        }
+
+    # --- writes ----------------------------------------------------------------
+
+    def insert_series(self, principal_id: str, series: MeetingSeriesView) -> None:
+        self._world.meeting_series[(principal_id, series.meeting_series_id)] = series
+
+    def update_series_title(
+        self,
+        principal_id: str,
+        meeting_series_id: str,
+        *,
+        title: str,
+        version: int,
+        updated_at: datetime,
+    ) -> None:
+        key = (principal_id, meeting_series_id)
+        self._world.meeting_series[key] = self._world.meeting_series[key].model_copy(
+            update={"title": title, "version": version, "updated_at": updated_at}
+        )
+
+    def insert_series_history(
+        self,
+        principal_id: str,
+        receipt: MeetingSeriesHistoryView,
+        *,
+        idempotency_key: str,
+        request_digest: str,
+    ) -> None:
+        del idempotency_key, request_digest
+        self._world.meeting_series_history[(principal_id, receipt.series_history_id)] = receipt
+
+    def insert_meeting(self, principal_id: str, meeting: MeetingRecord) -> None:
+        self._world.meetings[(principal_id, meeting.meeting_id)] = meeting
+
+    def update_meeting(self, principal_id: str, meeting: MeetingRecord) -> None:
+        key = (principal_id, meeting.meeting_id)
+        stored = self._world.meetings.get(key)
+        if stored is None:
+            raise RepositoryFailureError("no meeting to update in this partition")
+        self._world.meetings[key] = replace(
+            meeting, meeting_series_id=stored.meeting_series_id, created_at=stored.created_at
+        )
+
+    def retire_attendees(
+        self,
+        principal_id: str,
+        meeting_id: str,
+        attendee_ids: Iterable[str],
+        *,
+        removed_at: datetime,
+    ) -> int:
+        retired = 0
+        for attendee_id in attendee_ids:
+            row = self._world.meeting_attendees.get((principal_id, attendee_id))
+            if row is not None and row.meeting_id == meeting_id and row.removed_at is None:
+                row.removed_at = removed_at
+                retired += 1
+        return retired
+
+    def insert_attendees(
+        self,
+        principal_id: str,
+        meeting_id: str,
+        attendees: Iterable[MeetingAttendeeRecord],
+        *,
+        added_at: datetime,
+    ) -> None:
+        for record in attendees:
+            self._world.meeting_attendees[(principal_id, record.attendee_id)] = _MeetingAttendeeRow(
+                attendee_id=record.attendee_id,
+                meeting_id=meeting_id,
+                attendee=record.attendee,
+                added_at=added_at,
+            )
+
+    def retire_attachments(
+        self,
+        principal_id: str,
+        meeting_id: str,
+        attachment_ids: Iterable[str],
+        *,
+        removed_at: datetime,
+    ) -> int:
+        retired = 0
+        for attachment_id in attachment_ids:
+            row = self._world.meeting_attachments.get((principal_id, attachment_id))
+            if row is not None and row.meeting_id == meeting_id and row.removed_at is None:
+                row.removed_at = removed_at
+                retired += 1
+        return retired
+
+    def insert_attachments(
+        self,
+        principal_id: str,
+        meeting_id: str,
+        attachments: Iterable[MeetingAttachmentRecord],
+        *,
+        added_at: datetime,
+    ) -> None:
+        for record in attachments:
+            self._world.meeting_attachments[(principal_id, record.attachment_id)] = (
+                _MeetingAttachmentRow(
+                    attachment_id=record.attachment_id,
+                    meeting_id=meeting_id,
+                    document_id=record.document_id,
+                    added_at=added_at,
+                )
+            )
+
+    def insert_meeting_history(
+        self,
+        principal_id: str,
+        receipt: MeetingHistoryView,
+        *,
+        meeting_series_id: str | None,
+        idempotency_key: str,
+        request_digest: str,
+    ) -> None:
+        del meeting_series_id, idempotency_key, request_digest
+        self._world.meeting_history[(principal_id, receipt.history_id)] = receipt
+
+    def insert_note_version(self, principal_id: str, note: MeetingNoteRecord) -> None:
+        self._world.meeting_note_versions[(principal_id, note.note_version_id)] = note
+
+    # --- reads -------------------------------------------------------------------
+
+    def current_note(self, principal_id: str, meeting_id: str) -> MeetingNoteView | None:
+        notes = [
+            note
+            for (owner, _), note in self._world.meeting_note_versions.items()
+            if owner == principal_id and note.meeting_id == meeting_id
+        ]
+        superseded = {note.supersedes_note_version_id for note in notes}
+        heads = [note for note in notes if note.note_version_id not in superseded]
+        if not heads:
+            return None
+        head = heads[0]
+        return MeetingNoteView(
+            note_version_id=head.note_version_id,
+            version_number=head.version_number,
+            body_markdown=head.content_markdown,
+            recorded_at=head.recorded_at,
+        )
+
+    def read_meeting(self, principal_id: str, meeting_id: str) -> MeetingView | None:
+        record = self._world.meetings.get((principal_id, meeting_id))
+        if record is None:
+            return None
+        return MeetingView(
+            meeting_id=record.meeting_id,
+            meeting_series_id=record.meeting_series_id,
+            series_title=self._series_title(principal_id, record.meeting_series_id),
+            title=record.title,
+            status=record.status,
+            start_at=record.start_at,
+            end_at=record.end_at,
+            timezone_name=record.timezone_name,
+            location_text=record.location_text,
+            virtual_meeting_url=record.virtual_meeting_url,
+            description=record.description,
+            project_id=record.project_id,
+            version=record.version,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+            cancelled_at=record.cancelled_at,
+            attendees=tuple(
+                MeetingAttendeeView(
+                    attendee_id=row.attendee_id,
+                    entity_id=row.attendee.entity_id,
+                    display_name=row.attendee.display_name,
+                    email=row.attendee.email_normalized,
+                    is_organizer=row.attendee.is_organizer,
+                    response_status=row.attendee.response_status,
+                    added_at=row.added_at,
+                )
+                for row in self._active_attendees(principal_id, meeting_id)
+            ),
+            attachments=tuple(
+                self._attachment_view(principal_id, row)
+                for row in self._active_attachments(principal_id, meeting_id)
+            ),
+            notes=self.current_note(principal_id, meeting_id),
+        )
+
+    def list_meetings(
+        self, principal_id: str, request: MeetingListRequest, *, now: datetime
+    ) -> MeetingListPage:
+        return self._page(principal_id, request, now=now, query=None)
+
+    def search_meetings(
+        self, principal_id: str, request: MeetingSearchRequest, *, now: datetime
+    ) -> MeetingListPage:
+        return self._page(principal_id, request.filters, now=now, query=request.query)
+
+    def resolve_cursor_anchor(
+        self,
+        principal_id: str,
+        request: MeetingListRequest,
+        *,
+        now: datetime,
+        query: str | None = None,
+    ) -> MeetingCursorAnchor:
+        for record in self._selected(principal_id, request, now=now, query=query):
+            if record.meeting_id == request.after:
+                return MeetingCursorAnchor(start_at=record.start_at, meeting_id=record.meeting_id)
+        raise MeetingCursorError()
+
+    # --- helpers -------------------------------------------------------------------
+
+    def _series_title(self, principal_id: str, meeting_series_id: str | None) -> str | None:
+        if meeting_series_id is None:
+            return None
+        series = self._world.meeting_series.get((principal_id, meeting_series_id))
+        return None if series is None else series.title
+
+    def _active_attendees(self, principal_id: str, meeting_id: str) -> list[_MeetingAttendeeRow]:
+        rows = [
+            row
+            for (owner, _), row in self._world.meeting_attendees.items()
+            if owner == principal_id and row.meeting_id == meeting_id and row.removed_at is None
+        ]
+        return sorted(rows, key=lambda row: (not row.attendee.is_organizer, row.attendee_id))
+
+    def _active_attachments(
+        self, principal_id: str, meeting_id: str
+    ) -> list[_MeetingAttachmentRow]:
+        rows = [
+            row
+            for (owner, _), row in self._world.meeting_attachments.items()
+            if owner == principal_id and row.meeting_id == meeting_id and row.removed_at is None
+        ]
+        return sorted(rows, key=lambda row: row.attachment_id)
+
+    def _attachment_view(
+        self, principal_id: str, row: _MeetingAttachmentRow
+    ) -> MeetingAttachmentView:
+        versions = sorted(
+            (
+                version
+                for version in self._world.managed_versions
+                if version.document_id == row.document_id
+                and version.owner_principal_id == principal_id
+            ),
+            key=lambda version: version.version_number,
+        )
+        if not versions:
+            return MeetingAttachmentView(
+                attachment_id=row.attachment_id,
+                document_id=row.document_id,
+                availability=MeetingAttachmentAvailability.UNAVAILABLE,
+                added_at=row.added_at,
+            )
+        state = self._world.managed_states.get(row.document_id, DocumentState.ACTIVE)
+        return MeetingAttachmentView(
+            attachment_id=row.attachment_id,
+            document_id=row.document_id,
+            availability=(
+                MeetingAttachmentAvailability.ARCHIVED
+                if state is DocumentState.ARCHIVED
+                else MeetingAttachmentAvailability.ACTIVE
+            ),
+            title=versions[-1].title,
+            media_type=versions[-1].media_type,
+            added_at=row.added_at,
+        )
+
+    def _matches(self, principal_id: str, record: MeetingRecord, query: str) -> bool:
+        note = self.current_note(principal_id, record.meeting_id)
+        corpus = (
+            record.title,
+            record.description,
+            record.location_text,
+            self._series_title(principal_id, record.meeting_series_id),
+            None if note is None else note.body_markdown,
+        )
+        wanted = query.casefold()
+        return any(text is not None and wanted in text.casefold() for text in corpus)
+
+    def _selected(
+        self,
+        principal_id: str,
+        request: MeetingListRequest,
+        *,
+        now: datetime,
+        query: str | None,
+    ) -> list[MeetingRecord]:
+        selected: list[MeetingRecord] = []
+        for (owner, _), record in self._world.meetings.items():
+            if owner != principal_id:
+                continue
+            if (
+                request.meeting_series_id is not None
+                and record.meeting_series_id != request.meeting_series_id
+            ):
+                continue
+            if request.project_id is not None and record.project_id != request.project_id:
+                continue
+            if request.start_at_from is not None and record.start_at < request.start_at_from:
+                continue
+            if request.start_at_before is not None and record.start_at >= request.start_at_before:
+                continue
+            if request.status is not None and record.status is not MeetingStatus(request.status):
+                continue
+            settled = record.start_at if record.end_at is None else record.end_at
+            scope = MeetingTimeScope(request.time_scope)
+            if scope is MeetingTimeScope.UPCOMING and settled < now:
+                continue
+            if scope is MeetingTimeScope.PAST and settled >= now:
+                continue
+            attendees = self._active_attendees(principal_id, record.meeting_id)
+            if request.attendee_entity_id is not None and not any(
+                row.attendee.entity_id == request.attendee_entity_id for row in attendees
+            ):
+                continue
+            if request.attendee_email is not None and not any(
+                row.attendee.email_normalized == request.attendee_email for row in attendees
+            ):
+                continue
+            if query is not None and not self._matches(principal_id, record, query):
+                continue
+            selected.append(record)
+        return selected
+
+    def _page(
+        self,
+        principal_id: str,
+        request: MeetingListRequest,
+        *,
+        now: datetime,
+        query: str | None,
+    ) -> MeetingListPage:
+        ascending = MeetingSortDirection(request.sort_direction) is MeetingSortDirection.ASC
+        records = sorted(
+            self._selected(principal_id, request, now=now, query=query),
+            key=lambda record: (record.start_at, record.meeting_id),
+            reverse=not ascending,
+        )
+        if request.after is not None:
+            anchor = self.resolve_cursor_anchor(principal_id, request, now=now, query=query)
+            boundary = (anchor.start_at, anchor.meeting_id)
+            records = [
+                record
+                for record in records
+                if (
+                    (record.start_at, record.meeting_id) > boundary
+                    if ascending
+                    else (record.start_at, record.meeting_id) < boundary
+                )
+            ]
+        page = records[: request.page_size]
+        return MeetingListPage(
+            entries=tuple(
+                MeetingListEntry(
+                    meeting_id=record.meeting_id,
+                    meeting_series_id=record.meeting_series_id,
+                    series_title=self._series_title(principal_id, record.meeting_series_id),
+                    title=record.title,
+                    status=record.status,
+                    start_at=record.start_at,
+                    end_at=record.end_at,
+                    timezone_name=record.timezone_name,
+                    location_text=record.location_text,
+                    project_id=record.project_id,
+                    version=record.version,
+                    attendee_count=len(self._active_attendees(principal_id, record.meeting_id)),
+                    attachment_count=len(self._active_attachments(principal_id, record.meeting_id)),
+                    updated_at=record.updated_at,
+                )
+                for record in page
+            ),
+            has_more=len(records) > request.page_size,
+        )
+
+
 class FakeUnitOfWork(UnitOfWork):
     """One transaction over a `World`, counting how it ended."""
 
@@ -8689,6 +9279,11 @@ class FakeUnitOfWork(UnitOfWork):
     def entities(self) -> EntitiesRepository:
         """The relationship-intelligence entity plane over this `World`."""
         return _Entities(self._world)
+
+    @property
+    def meetings(self) -> MeetingRepository:
+        """The Meeting records plane over this `World` (WP-MTG-04, plan D-31)."""
+        return cast("MeetingRepository", _Meetings(self._world))
 
     @property
     def identity_history(self) -> object:
@@ -9168,6 +9763,40 @@ class Scene:
                 completion_date=WHEN.date(),
                 published_at=WHEN,
             )
+        )
+        # WP-MTG-04's synthetic Meeting plane (plan D-31): one series-bound
+        # Meeting with fixed identifiers, seeded for the reason the Constraint
+        # plane above is -- every sweep that quantifies over `Capability` needs a
+        # well-formed request for each Meeting name, and a `not_found` standing in
+        # for an answer would prove nothing. Fixed rather than minted so a payload
+        # table and a command table built from two scenes name the same records.
+        self.meeting_series_id = make_identifier(IdKind.MEETING_SERIES, "scenemeetingseries01")
+        self.meeting_id = make_identifier(IdKind.MEETING, "scenemeeting00000001")
+        world.meeting_series[(self.principal.principal_id, self.meeting_series_id)] = (
+            MeetingSeriesView(
+                meeting_series_id=self.meeting_series_id,
+                title="A synthetic meeting series",
+                version=1,
+                created_at=WHEN,
+                updated_at=WHEN,
+            )
+        )
+        world.meetings[(self.principal.principal_id, self.meeting_id)] = MeetingRecord(
+            meeting_id=self.meeting_id,
+            meeting_series_id=self.meeting_series_id,
+            title="A synthetic meeting",
+            start_at=WHEN,
+            end_at=None,
+            timezone_name="UTC",
+            status=MeetingStatus.SCHEDULED,
+            cancelled_at=None,
+            location_text=None,
+            virtual_meeting_url=None,
+            description=None,
+            project_id=None,
+            version=1,
+            created_at=WHEN,
+            updated_at=WHEN,
         )
 
 

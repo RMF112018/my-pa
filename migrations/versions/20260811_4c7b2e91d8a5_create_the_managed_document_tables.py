@@ -97,6 +97,34 @@ _IMMUTABLE_TABLES: Final = (
 )
 
 
+#: The Meeting records owner-scoped unique, frozen out of this revision.
+#:
+#: WP-MTG-02 adds `a_managed_document_is_identified_within_its_owner`
+#: (`UNIQUE (document_id, owner_principal_id)`) to the live `managed_documents`
+#: declaration, as the target of the Meeting attachment's composite
+#: same-Principal foreign key. The constraint is installed by the Meeting records
+#: revision (WP-MTG-04, not yet authored) with an unconditional `ADD CONSTRAINT`.
+#: This revision copies the *live* declaration, so without the subtraction below
+#: it would emit that unique too -- retroactively changing what an
+#: already-merged revision means, which is the `D-48` hazard, and making the
+#: Meeting revision's `ADD CONSTRAINT` fail on a duplicate relation on every
+#: fresh upgrade while databases migrated before the change lack it. Same
+#: discipline as `7e5a1fb93d62`'s `_freeze_out_wp04_queue_principal`: a local
+#: subtraction on a throwaway copy, never on the shared declaration.
+_MEETING_OWNER_UNIQUE_TABLE: Final = "managed_documents"
+_MEETING_OWNER_UNIQUE: Final = "a_managed_document_is_identified_within_its_owner"
+
+
+def _freeze_out_meeting_owner_unique(copy: Table) -> None:
+    """Remove the Meeting revision's owner-scoped unique from one copied table in place."""
+    if copy.name != _MEETING_OWNER_UNIQUE_TABLE:
+        return
+    for constraint in [
+        candidate for candidate in copy.constraints if candidate.name == _MEETING_OWNER_UNIQUE
+    ]:
+        copy.constraints.discard(constraint)
+
+
 def _historical_wp27_tables() -> list[Table]:
     """The five tables as this revision emits them, with the two sets frozen.
 
@@ -111,6 +139,7 @@ def _historical_wp27_tables() -> list[Table]:
     frozen = MetaData(schema=SCHEMA)
     copies = [table.to_metadata(frozen) for table in _TABLES]
     for copy in copies:
+        _freeze_out_meeting_owner_unique(copy)
         replacements = _FROZEN.get(copy.name, {})
         for constraint in [
             candidate for candidate in copy.constraints if candidate.name in replacements

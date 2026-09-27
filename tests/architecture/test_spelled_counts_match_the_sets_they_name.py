@@ -466,15 +466,22 @@ _ORDINAL_UNITS = (
     "hundred-sixty-fifth",
     "hundred-sixty-sixth",
     "hundred-sixty-seventh",
-    # R01-WP03 admits six declared names and takes the public set to one hundred
-    # and seventy-two. The green-half plant indexes the next ordinal, so keep
-    # this table dense through one hundred and seventy-third.
+    # R01-WP03 admitted six declared names and took the public set to one hundred
+    # and seventy-two; WP-MTG-04's six Meeting records names take it to one
+    # hundred and seventy-eight. The green-half plant indexes the next ordinal,
+    # so keep this table dense through one hundred and seventy-ninth.
     "hundred-sixty-eighth",
     "hundred-sixty-ninth",
     "hundred-seventieth",
     "hundred-seventy-first",
     "hundred-seventy-second",
     "hundred-seventy-third",
+    "hundred-seventy-fourth",
+    "hundred-seventy-fifth",
+    "hundred-seventy-sixth",
+    "hundred-seventy-seventh",
+    "hundred-seventy-eighth",
+    "hundred-seventy-ninth",
 )
 
 

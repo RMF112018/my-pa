@@ -44,10 +44,11 @@ and `replayed=True`. No response body is ever stored.
 **A same-field set and clear: the clear wins.** `MeetingUpdateRequest` accepts
 `end_at`, `location_text`, `virtual_meeting_url` or `description` together with
 the same field in `clear_fields` (only the `project_id` pair is refused, which
-is all section 19.6/34.17/35.8 say). Section 34.x states "Explicit clear_fields
-means clear" without condition, so an explicit clear always leaves the field
-NULL; the supplied value is still part of the request digest. WP-MTG-01 review
-finding F-01 records this as an open semantic point.
+is all section 19.6/34.17/35.8 say). Sections 34 and 35 are silent on the
+other four pairs, so the rule rests on the post-WP03 operator ruling R3-02,
+which accepts clear-wins: an explicit clear always leaves the field NULL, and
+the supplied value is still part of the request digest (WP-MTG-01 review
+finding F-01, now resolved by that ruling).
 
 The history-bearing results carry their receipt as `receipt`, and the methods
 are named `*_meeting(s)`, so no Meeting symbol shares a name with the
@@ -867,7 +868,7 @@ def _updated_record(
     """The Meeting's scalar state after the patch, and whether it differs.
 
     Omitted means unchanged; a `clear_fields` member means NULL, and wins over
-    a value supplied for the same field (module docstring, F-01). Series
+    a value supplied for the same field (module docstring, ruling R3-02). Series
     membership, identity and creation time are carried over unchanged.
     """
     clears = frozenset(request.clear_fields)

@@ -22,15 +22,16 @@ from __future__ import annotations
 
 import hashlib
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
-from typing import Final
+from typing import ClassVar, Final, Literal
 
 import pytest
 from sqlalchemy import Engine, Table, func, insert, select, text
 from sqlalchemy.engine import Connection, RowMapping
+from sqlalchemy.exc import OperationalError
 
 from my_pa.application.meetings import (
     MeetingApplication,
@@ -38,9 +39,17 @@ from my_pa.application.meetings import (
     MeetingWriteResult,
     meeting_request_digest,
 )
-from my_pa.contracts.ports import MeetingNoteRecord, MeetingRepository, UnitOfWork
+from my_pa.contracts.ports import (
+    MeetingAttendeeRecord,
+    MeetingEntityState,
+    MeetingNoteRecord,
+    MeetingRecord,
+    MeetingRepository,
+    UnitOfWork,
+)
 from my_pa.contracts.v1.meetings import MeetingView
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.documents.managed import DocumentState
 from my_pa.domain.meeting.model import (
     MEETINGS_CREATE_NAME,
     MEETINGS_SERIES_UPDATE_NAME,
@@ -1725,3 +1734,194 @@ def test_a_series_retitle_serializes_on_the_series_row(harness: Harness, stage: 
     )
     with pytest.raises(MeetingStaleVersionError):
         future.result()
+
+
+# ------------------------------------------------ AC-043 lock footprint (R3-01)
+
+#: PostgreSQL's `lock_not_available`, raised by a `NOWAIT` probe that would wait.
+LOCK_NOT_AVAILABLE: Final = "55P03"
+
+
+class _RecordingRepository(SqlMeetingRepository):
+    """The production repository, logging each lock and reference read in call order.
+
+    Each test gets its own subclass, and so its own `calls`, from
+    `_recording_unit_of_work`; every override delegates unchanged, so the
+    transaction takes exactly the production locks.
+    """
+
+    calls: ClassVar[list[tuple[str, tuple[str, ...]]]]
+
+    def _log(self, name: str, *values: str) -> None:
+        type(self).calls.append((name, values))
+
+    def lock_meeting_for_update(self, principal_id: str, meeting_id: str) -> MeetingView | None:
+        self._log("lock_meeting_for_update", meeting_id)
+        return super().lock_meeting_for_update(principal_id, meeting_id)
+
+    def project_is_owned(self, principal_id: str, project_id: str) -> bool:
+        self._log("project_is_owned", project_id)
+        return super().project_is_owned(principal_id, project_id)
+
+    def owned_managed_documents(
+        self, principal_id: str, document_ids: Collection[str]
+    ) -> Mapping[str, DocumentState]:
+        self._log("owned_managed_documents", *document_ids)
+        return super().owned_managed_documents(principal_id, document_ids)
+
+    def share_lock_person_entities(
+        self, principal_id: str, entity_ids: Collection[str]
+    ) -> tuple[MeetingEntityState, ...]:
+        self._log("share_lock_person_entities", *entity_ids)
+        return super().share_lock_person_entities(principal_id, entity_ids)
+
+    def insert_meeting(self, principal_id: str, meeting: MeetingRecord) -> None:
+        self._log("insert_meeting", meeting.meeting_id)
+        super().insert_meeting(principal_id, meeting)
+
+    def update_meeting(self, principal_id: str, meeting: MeetingRecord) -> None:
+        self._log("update_meeting", meeting.meeting_id)
+        super().update_meeting(principal_id, meeting)
+
+    def insert_attendees(
+        self,
+        principal_id: str,
+        meeting_id: str,
+        attendees: Sequence[MeetingAttendeeRecord],
+        *,
+        added_at: datetime,
+    ) -> None:
+        self._log("insert_attendees", *(record.attendee.entity_id or "" for record in attendees))
+        super().insert_attendees(principal_id, meeting_id, attendees, added_at=added_at)
+
+
+def _recording_unit_of_work(
+    harness: Harness,
+) -> tuple[_InjectingUnitOfWork, list[tuple[str, tuple[str, ...]]]]:
+    log: list[tuple[str, tuple[str, ...]]] = []
+
+    class _Recorder(_RecordingRepository):
+        calls = log
+
+    return _InjectingUnitOfWork(harness.engine, audit=harness.audit, repository=_Recorder), log
+
+
+def _row_lock_granted(
+    engine: Engine, table: Table, column: str, value: str, mode: Literal["NO KEY UPDATE", "SHARE"]
+) -> bool:
+    """Whether a second connection can row-lock one committed row right now.
+
+    `NOWAIT` answers at once. `FOR NO KEY UPDATE` conflicts with `FOR SHARE`
+    and stronger, and not with the `FOR KEY SHARE` a foreign-key insert takes
+    on its parent, so it separates an application share lock from the FK's
+    own footprint; `FOR UPDATE` would conflict with both and prove nothing.
+    """
+    statement = text(
+        f"SELECT 1 FROM {table.fullname} WHERE {column} = :value FOR {mode} NOWAIT"  # noqa: S608
+    )
+    with engine.connect() as probe:
+        try:
+            assert probe.execute(statement, {"value": value}).scalar_one() == 1
+        except OperationalError as error:
+            if getattr(error.orig, "sqlstate", None) != LOCK_NOT_AVAILABLE:
+                raise
+            return False
+        finally:
+            probe.rollback()
+    return True
+
+
+def _person_is_share_locked(engine: Engine, entity_id: str) -> bool:
+    """Held FOR SHARE by another transaction: exclusive modes refused, SHARE granted."""
+    exclusive = _row_lock_granted(engine, entities, "entity_id", entity_id, "NO KEY UPDATE")
+    shared = _row_lock_granted(engine, entities, "entity_id", entity_id, "SHARE")
+    return not exclusive and shared
+
+
+def _plainly_readable(engine: Engine, table: Table, column: str, value: str) -> bool:
+    """No application row lock: only the FK's KEY SHARE, if anything, is held."""
+    return _row_lock_granted(engine, table, column, value, "NO KEY UPDATE")
+
+
+@pytest.mark.recovery
+def test_an_open_create_share_locks_its_people_and_no_other_reference(
+    harness: Harness, stage: Stage
+) -> None:
+    """AC-043 (R3-01): Person Entities FOR SHARE, sorted; Project/document unlocked.
+
+    Probed from a second connection while the create's transaction is still
+    open, after every write has run and before commit.
+    """
+    mine = stage.mine
+    first, second, bystander = mine.person_ids
+    request = _create_request(
+        project_id=mine.project_id,
+        attachment_document_ids=(mine.document_id,),
+        attendees=(_person(second), _person(first)),
+    )
+    engine = harness.engine
+    unit, calls = _recording_unit_of_work(harness)
+    with unit as uow:
+        created = APP.create_meeting(uow, mine.principal_id, request, "footprint", NOW)
+
+        assert _person_is_share_locked(engine, first)
+        assert _person_is_share_locked(engine, second)
+        assert _plainly_readable(engine, entities, "entity_id", bystander)
+        assert _plainly_readable(engine, projects, "project_id", mine.project_id)
+        assert _plainly_readable(engine, managed_documents, "document_id", mine.document_id)
+
+    # Every lock was the create's own: the commit released it.
+    assert _plainly_readable(engine, entities, "entity_id", first)
+    assert _plainly_readable(engine, entities, "entity_id", second)
+    # References, then one sorted share lock, then the parent, then its children.
+    assert calls == [
+        ("project_is_owned", (mine.project_id,)),
+        ("owned_managed_documents", (mine.document_id,)),
+        ("share_lock_person_entities", (first, second)),
+        ("insert_meeting", (created.meeting.meeting_id,)),
+        ("insert_attendees", (first, second)),
+    ]
+
+
+@pytest.mark.recovery
+def test_an_open_update_share_locks_its_people_and_no_other_reference(
+    harness: Harness, stage: Stage
+) -> None:
+    """AC-043 (R3-01): Meeting FOR UPDATE first, then sorted Person FOR SHARE only."""
+    mine = stage.mine
+    earlier, first, second = mine.person_ids
+    seed = harness.create(
+        mine.principal_id, _create_request(attendees=(_person(earlier),)), "seed"
+    ).meeting
+    request = MeetingUpdateRequest(
+        meeting_id=seed.meeting_id,
+        project_id=mine.project_id,
+        attachment_add_document_ids=(mine.document_id,),
+        attendees_replace=(_person(second), _person(first)),
+    )
+    engine = harness.engine
+    unit, calls = _recording_unit_of_work(harness)
+    with unit as uow:
+        updated = APP.update_meeting(uow, mine.principal_id, request, 1, "footprint", LATER)
+        assert updated.meeting.version == 2
+
+        assert not _plainly_readable(engine, meetings, "meeting_id", seed.meeting_id)
+        assert _person_is_share_locked(engine, first)
+        assert _person_is_share_locked(engine, second)
+        # The retired attendee's Entity is not re-validated, so it is not locked.
+        assert _plainly_readable(engine, entities, "entity_id", earlier)
+        assert _plainly_readable(engine, projects, "project_id", mine.project_id)
+        assert _plainly_readable(engine, managed_documents, "document_id", mine.document_id)
+
+    assert _plainly_readable(engine, meetings, "meeting_id", seed.meeting_id)
+    assert _plainly_readable(engine, entities, "entity_id", first)
+    assert _plainly_readable(engine, entities, "entity_id", second)
+    # The parent lock precedes every reference read, lock and child write.
+    assert calls == [
+        ("lock_meeting_for_update", (seed.meeting_id,)),
+        ("project_is_owned", (mine.project_id,)),
+        ("owned_managed_documents", (mine.document_id,)),
+        ("share_lock_person_entities", (first, second)),
+        ("update_meeting", (seed.meeting_id,)),
+        ("insert_attendees", (first, second)),
+    ]

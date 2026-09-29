@@ -52,6 +52,13 @@ create is Principal-scoped and digest-bound to `task_id` plus the validated
 body, using the repository port methods
 (`create_comment` / `find_comment_by_idempotency_key` / `list_comments`).
 
+**Every APPLIED mutation stages exactly one Record Event (WP-RE-02).** `_mutate`
+stages it on the unit of work it wrote through -- the caller's `active_uow` or
+its own -- right after the APPLIED history receipt, so the event commits with
+the change or not at all. The REPLAYED, NO_OP and REJECTED branches stage
+nothing. `changed_fields` is a typed comparison or a static set, never a
+payload: `task_record_event` is the one builder, shared with `tasks.bulk_confirm`.
+
 **Errors here are plain exceptions, not `application.errors` codes.** The
 existing precedent is `domain.source.provider.VersionChangedError`: a plain
 exception a lower layer raises and a higher one (`ApplicationService.invoke`)
@@ -69,7 +76,7 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, Final, Protocol
 
 from my_pa.contracts.ports import (
     RecordEventStager,
@@ -78,6 +85,14 @@ from my_pa.contracts.ports import (
 )
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import utc_now
+from my_pa.domain.identity.operation import Capability
+from my_pa.domain.record_events import (
+    NON_MEMORY_CLASSIFICATION,
+    TASK_ACTOR_CLASSES,
+    RecordEventDraft,
+    RecordEventFamily,
+    RecordEventKind,
+)
 from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.comment import TaskComment, validate_task_comment_body
@@ -104,6 +119,7 @@ __all__ = [
     "TaskMutationReceipt",
     "TaskNotFoundError",
     "TaskVersionConflictError",
+    "task_record_event",
 ]
 
 
@@ -162,6 +178,119 @@ class TaskCommentReceipt:
     replayed: bool = False
 
 
+def _task_created_values(task: Task) -> dict[str, object]:
+    """WP-RE-02: the fields a create materializes, by name.
+
+    A created event names the ones this Task actually holds (non-null);
+    bookkeeping timestamps are not fields. Spelled attribute by attribute rather
+    than read by string, so every field this builder can name is visible.
+    """
+    return {
+        "accepted_by_review_decision_id": task.accepted_by_review_decision_id,
+        "acceptance_kind": task.acceptance_kind,
+        "commitment_id": task.commitment_id,
+        "description": task.description,
+        "due_at": task.due_at,
+        "evidence_state": task.evidence_state,
+        "lifecycle_state": task.lifecycle_state,
+        "opened_at": task.opened_at,
+        "origin_evidence_ref": task.origin_evidence_ref,
+        "origin_kind": task.origin_kind,
+        "priority": task.priority,
+        "project_id": task.project_id,
+        "role": task.role,
+        "situation_id": task.situation_id,
+        "title": task.title,
+    }
+
+
+def _task_patchable_values(task: Task) -> dict[str, object]:
+    """The patchable fields, compared field by field for an update.
+
+    `role` is here because clearing `commitment_id` clears it implicitly.
+    """
+    return {
+        "archived_at": task.archived_at,
+        "commitment_id": task.commitment_id,
+        "deferred_until": task.deferred_until,
+        "description": task.description,
+        "due_at": task.due_at,
+        "priority": task.priority,
+        "project_id": task.project_id,
+        "role": task.role,
+        "scheduled_at": task.scheduled_at,
+        "title": task.title,
+    }
+
+
+#: A transition is a static set: the lifecycle state, plus the closure fields
+#: when the transition closes the Task.
+_TASK_TRANSITION_FIELDS: Final = ("lifecycle_state",)
+_TASK_CLOSURE_FIELDS: Final = ("closed_at", "closure_evidence_ref")
+
+#: The public capability each action is reached through, for a caller that does
+#: not name one (a standalone `TaskManagementService`).
+_DEFAULT_SOURCE_CAPABILITY: Final = {
+    TaskMutationAction.CREATE: Capability.TASKS_CREATE.value,
+    TaskMutationAction.TRANSITION_LIFECYCLE: Capability.TASKS_TRANSITION.value,
+}
+
+
+def task_record_event(
+    *,
+    principal_id: str,
+    action: TaskMutationAction,
+    before: Task | None,
+    after: Task,
+    actor: TaskMutationActor,
+    history_id: str,
+    occurred_at: datetime,
+    source_capability: str | None = None,
+    correlation_id: str | None = None,
+) -> RecordEventDraft:
+    """The one Record Event an APPLIED Task mutation stages.
+
+    `before` is `None` for a create. Only field *names*, versions and ids are
+    read; no Task value reaches the draft. `principal_id` is the caller's
+    server-resolved Principal, never read back off the Task.
+    """
+    if action is TaskMutationAction.CREATE or before is None:
+        kind = RecordEventKind.CREATED
+        fields = tuple(
+            name for name, value in _task_created_values(after).items() if value is not None
+        )
+    elif action is TaskMutationAction.TRANSITION_LIFECYCLE:
+        kind = RecordEventKind.STATE_CHANGED
+        closes = (
+            after.lifecycle_state in TERMINAL_TASK_LIFECYCLE_STATES
+            and before.lifecycle_state not in TERMINAL_TASK_LIFECYCLE_STATES
+        )
+        fields = _TASK_TRANSITION_FIELDS + (_TASK_CLOSURE_FIELDS if closes else ())
+    else:
+        kind = RecordEventKind.UPDATED
+        was = _task_patchable_values(before)
+        fields = tuple(
+            name for name, value in _task_patchable_values(after).items() if was[name] != value
+        )
+    return RecordEventDraft.issue(
+        principal_id=principal_id,
+        record_family=RecordEventFamily.TASK,
+        record_id=after.task_id,
+        event_kind=kind,
+        record_version=after.version,
+        changed_fields=tuple(sorted(fields)),
+        source_capability=(
+            source_capability
+            or _DEFAULT_SOURCE_CAPABILITY.get(action, Capability.TASKS_UPDATE.value)
+        ),
+        actor_class=TASK_ACTOR_CLASSES[actor],
+        classification=NON_MEMORY_CLASSIFICATION,
+        occurred_at=occurred_at,
+        source_receipt_id=history_id,
+        correlation_id=correlation_id,
+    )
+
+
 class TaskManagementService:
     """The one canonical entry point for creating, updating, and transitioning a Task."""
 
@@ -194,6 +323,8 @@ class TaskManagementService:
         role: TaskRole | None = None,
         active_uow: _ActiveTaskUnitOfWork | None = None,
         validate_first_write: Callable[[], None] | None = None,
+        source_capability: str | None = None,
+        correlation_id: str | None = None,
     ) -> TaskMutationReceipt:
         """Create a new task under one origin kind.
 
@@ -276,6 +407,8 @@ class TaskManagementService:
             ),
             active_uow=active_uow,
             validate_first_write=validate_first_write,
+            source_capability=source_capability,
+            correlation_id=correlation_id,
         )
 
     def update_task(
@@ -290,6 +423,8 @@ class TaskManagementService:
         idempotency_key: str | None = None,
         client_context: str | None = None,
         active_uow: _ActiveTaskUnitOfWork | None = None,
+        source_capability: str | None = None,
+        correlation_id: str | None = None,
     ) -> TaskMutationReceipt:
         """Apply one normalized Task patch under one lock and one history receipt."""
         mutable = {
@@ -335,6 +470,8 @@ class TaskManagementService:
                 clear_fields=sorted(clear_fields),
             ),
             active_uow=active_uow,
+            source_capability=source_capability,
+            correlation_id=correlation_id,
         )
 
     def update_title(
@@ -509,6 +646,8 @@ class TaskManagementService:
         client_context: str | None = None,
         active_uow: _ActiveTaskUnitOfWork | None = None,
         validate_first_write: Callable[[], None] | None = None,
+        source_capability: str | None = None,
+        correlation_id: str | None = None,
     ) -> TaskMutationReceipt:
         """Move a task to `to_state`.
 
@@ -558,6 +697,8 @@ class TaskManagementService:
             ),
             active_uow=active_uow,
             validate_first_write=validate_first_write,
+            source_capability=source_capability,
+            correlation_id=correlation_id,
         )
 
     def link_commitment(
@@ -701,6 +842,8 @@ class TaskManagementService:
         request_digest: str | None = None,
         active_uow: _ActiveTaskUnitOfWork | None = None,
         validate_first_write: Callable[[], None] | None = None,
+        source_capability: str | None = None,
+        correlation_id: str | None = None,
     ) -> TaskMutationReceipt:
         """The single transactional mechanism every public method delegates to.
 
@@ -815,6 +958,20 @@ class TaskManagementService:
                             idempotency_key=idempotency_key,
                             client_context=client_context,
                             request_digest=request_digest,
+                        )
+                        # WP-RE-02: the APPLIED branch, and only it, stages.
+                        uow.record_events.stage(
+                            task_record_event(
+                                principal_id=principal_id,
+                                action=action,
+                                before=current,
+                                after=applied_task,
+                                actor=actor,
+                                history_id=applied_history.history_id,
+                                occurred_at=now,
+                                source_capability=source_capability,
+                                correlation_id=correlation_id,
+                            )
                         )
                         result = TaskMutationReceipt(history=applied_history, task=applied_task)
 

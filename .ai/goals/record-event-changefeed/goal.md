@@ -55,7 +55,22 @@ Re-derived in the worktree (PYTHONPATH=src):
 
 | CP | WP | Head | Tree | RE-AC | FAST | DB lane (local PG) | Notes |
 |---|---|---|---|---|---|---|---|
-| CP-RE-01 | WP-RE-01 | the commit that adds this row (SHA recorded in the CP-RE-02 update and the PR) | | 001-017 | green: 25,169 passed / 74 skipped / 0 failed; ruff, format, mypy (522 files) clean | PG 15.15 local, PGTZ=UTC: new DB modules + meeting app 114 passed; recovery `tests/concurrency` 15 passed; migration_empty_to_head 9 passed; migration_edge subset 179 passed (worker full lane 1,052 passed) | revision `1d9b248e7f83` (down `7d9a450dfd07`); N-conditions none fired |
+| CP-RE-01 | WP-RE-01 | `bf1bfe9c61496275440a13be1be3fd8d4eb94962` | `8f9f2b38fcef0b35d877c82820429973ceb0dc75` | 001-017 | green: 25,169 passed / 74 skipped / 0 failed; ruff, format, mypy (522 files) clean | PG 15.15 local, PGTZ=UTC: new DB modules + meeting app 114 passed; recovery `tests/concurrency` 15 passed; migration_empty_to_head 9 passed; migration_edge subset 179 passed (worker full lane 1,052 passed) | revision `1d9b248e7f83` (down `7d9a450dfd07`); N-conditions none fired |
+
+| CP-RE-02 | WP-RE-02 | the commit that adds this row (SHA recorded in CP-RE-03) | | 018-030 | green: 25,188 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: WP-02 + task/commitment/project/continuity + record-event DB modules 195 passed; full `-m recovery` 46 passed (worker: full tests/database 1,689 passed) | no N fired; T-12 premise finding (below) |
+**CP-RE-01 out-of-matrix mechanical edits (as reported to the Manager):**
+- C5/C6 fan-out: 34 `HEAD_PIN_FILES` plus the control file `tests/schema/test_constraint_authoring_capability_migration.py`, 24 revision-count pins, and `tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py`.
+- `KNOWLEDGE_TABLES_BY_REVISION` in `tests/schema/test_extraction_schema_migration.py`.
+- The trigger inventory in `tests/schema/test_capture_schema_migration.py`.
+- The 5 hand-kept stacked-table lists (audit/entity/entity_assertion_provenance/enrollment/entity_relationship_types migration tests).
+- The `tests/unit/test_identifiers.py` prefix set.
+- `tests/schema/test_meeting_records_migration.py`: head and link assertions, plus `at=REVISION` in the two downgrade-refusal tests.
+- `TABLES_SHA256` re-pin in `tests/architecture/test_capture_project_binding.py` (MR-01).
+- Registry entries in `tests/architecture/test_principal_partition_is_reached_through_the_guard.py` and `tests/architecture/test_principal_is_never_caller_supplied.py` (`VERIFIED_CALLER_STATEMENTS`).
+- Head-citing docs forced by `test_readme_state_claims.py`: `README.md`, `docs/architecture/00_ARCHITECTURE_INDEX.md`, `docs/architecture/system-context.md`, `ops/runbooks/gateway-operations.md`, `ops/runbooks/mcp-and-cli-operations.md`.
+- `docs/plans/mcv-completion-plan.md`: head, count and module-count lines, plus a remeasurement paragraph. No OD-9 text.
+- `docs/plans/relationship-intelligence-implementation-plan.md` cells :660/:661/:663/:664. These overlap PR #287.
+- Schema strengthening: `'' <> ALL (changed_fields)`.
 
 ## Working notes
 
@@ -78,6 +93,27 @@ Re-derived in the worktree (PYTHONPATH=src):
   - Count cells in both guarded docs/plans files: the relationship-intelligence plan :660/:661/:663/:664 cells overlap PR #287. No OD-9 text.
 - Local environment divergences: PG 15 locally vs PG 17 in CI. Two `test_health_probe.py` failures assert PG 17. Local time zone needs `PGTZ=UTC`.
 - Deferred to WP-RE-06: G1-MG-013 `CHECKED_VOCABULARY`. Deferred to WP-RE-07: unbound stale head comments (mcp-and-cli-operations.md:494,533; ops/nas configs; mcv-limitations.md).
+
+### WP-RE-02 (CP-RE-02)
+
+- Emitters:
+  - Task (`_mutate` APPLIED only; typed diff incl. the implicit `role` clear; transition closure fields);
+  - `continuity.tasks.create` (receipt = OPENED lifecycle event; `author_task` returns it; the port signature is updated);
+  - `bulk_confirm` (applied members, `mutations` order);
+  - Commitment create/update/close;
+  - Project create, then the bound Entity (causation = the Project event, receipts None);
+  - Project update/close (APPLIED and not replayed; an identical update gives `("version",)`).
+- `invoke` raises InternalError if a committed refusal has staged drafts (G1-TX-006).
+- `_continuity_project_mutation` takes `lock_project` before `mutate()`. This is the same row and lock the writer takes first, so the lock order is unchanged.
+- **Finding (T-12 premise):** the plan expected "concurrent same-name creates ⇒ one pair". Repository truth: `_mint_bound_project_entity` claims the name with an unlocked SELECT and there is no unique constraint (tables.py `projects`/`entities` indexes only), so both creates commit. This behaviour exists independently of this feature and is out of scope. The test asserts one pair per committed create instead. The RE-AC-028 text is met. This was referred to the Manager for a ruling.
+- Mechanical edits:
+  - `docs/plans/relationship-intelligence-implementation-plan.md` :660 (FAST 25,188) and :664 (DB 2,999), which are contended with PR #287;
+  - `docs/plans/mcv-completion-plan.md` module counts (359/602).
+- CP-RE-01 CI at `bf1bfe9c`: repository-checks run 36616266822 had all 9 jobs succeed, including `database-tier`. frontend-quality run 36616266764 had classify and required succeed; visual failed (continue-on-error, Darwin goldens).
+
+## Manager rulings
+
+- **MR-01 (2026-09-29):** the `TABLES_SHA256` re-pin in `tests/architecture/test_capture_project_binding.py` is MECHANICAL and ACCEPTED, because the tables.py diff against the base only adds lines and the captures Table is unchanged. Each later tables.py edit re-pins it under the same rule, provided the captures Table stays unchanged. CP-RE-01 was accepted by the Manager, and draft PR #297 is open.
 
 ## Review outcome and final state
 

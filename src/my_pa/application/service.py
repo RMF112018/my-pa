@@ -474,7 +474,7 @@ from my_pa.application.relationship_memory import (
     RelationshipMemoryService,
     ReviseMemoryCommand,
 )
-from my_pa.application.tasks import TaskManagementService
+from my_pa.application.tasks import TaskManagementService, task_record_event
 from my_pa.contracts.ports import (
     Acceptance,
     AuthoringConflictError,
@@ -611,6 +611,14 @@ from my_pa.domain.project_controls.read_models import (
 from my_pa.domain.project_controls.relationship import ConstraintRelationshipError
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
 from my_pa.domain.project_controls.sync import ConstraintSyncAction, NormalizedExternalConstraintRow
+from my_pa.domain.record_events import (
+    NON_MEMORY_CLASSIFICATION,
+    TASK_ACTOR_CLASSES,
+    RecordEventActorClass,
+    RecordEventDraft,
+    RecordEventFamily,
+    RecordEventKind,
+)
 from my_pa.domain.relationship.authoring import (
     AmbiguousEntityError,
     ConflictedIdentifierError,
@@ -695,6 +703,8 @@ from my_pa.domain.search.query import (
     label_for_media_type,
 )
 from my_pa.domain.situation.continuity import CommitmentWorkView
+from my_pa.domain.situation.continuity import Task as ContinuityTask
+from my_pa.domain.situation.project_history import ProjectMutationReceipt
 from my_pa.domain.situation.situation import Project, ProjectEntityLinkageState, Situation
 from my_pa.domain.source.enrollment import (
     MAX_ENROLLMENT_BYTES,
@@ -1605,6 +1615,71 @@ def _normalise_bulk_mutations(
             )
     canonical = json.dumps(normalised, sort_keys=True, separators=(",", ":"))
     return tuple(normalised), hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+#: WP-RE-02: the Task fields `continuity.tasks.create` always materializes,
+#: named as the `tasks.*` reads name them; the optional context fields are added
+#: when present.
+_CONTINUITY_TASK_CREATED_FIELDS: Final = (
+    "acceptance_kind",
+    "evidence_state",
+    "lifecycle_state",
+    "opened_at",
+    "origin_kind",
+    "title",
+)
+
+
+def _continuity_task_created_fields(task: ContinuityTask) -> tuple[str, ...]:
+    optional = {
+        "due_at": task.due_at,
+        "project_id": task.project_id,
+        "situation_id": task.situation_id,
+    }
+    present = tuple(name for name, value in optional.items() if value is not None)
+    return tuple(sorted(_CONTINUITY_TASK_CREATED_FIELDS + present))
+
+
+def _project_updatable_values(project: Project) -> dict[str, object]:
+    """What `continuity.projects.update` compares.
+
+    The version always advances, so an identical update still names `version`
+    (G1-EM-010).
+    """
+    return {"description": project.description, "name": project.name, "state": project.state}
+
+
+def _project_mutation_record_event(
+    authorization: Authorization, before: Project | None, receipt: ProjectMutationReceipt
+) -> RecordEventDraft:
+    """The one event an APPLIED Project update or close stages (RE-AC-029/030)."""
+    after = receipt.project
+    if authorization.capability is Capability.CONTINUITY_PROJECTS_CLOSE:
+        kind = RecordEventKind.STATE_CHANGED
+        fields: tuple[str, ...] = ("closed_at", "state")
+    else:
+        if before is None or before.version != receipt.history.before_version:
+            raise InternalError()
+        was = _project_updatable_values(before)
+        diff = tuple(
+            name for name, value in _project_updatable_values(after).items() if was[name] != value
+        )
+        kind = RecordEventKind.STATE_CHANGED if diff == ("state",) else RecordEventKind.UPDATED
+        fields = tuple(sorted((*diff, "version")))
+    return RecordEventDraft.issue(
+        principal_id=authorization.principal.principal_id,
+        record_family=RecordEventFamily.PROJECT,
+        record_id=after.project_id,
+        event_kind=kind,
+        record_version=after.version,
+        changed_fields=fields,
+        source_capability=authorization.capability.value,
+        actor_class=TASK_ACTOR_CLASSES[receipt.history.actor],
+        classification=NON_MEMORY_CLASSIFICATION,
+        occurred_at=receipt.history.occurred_at,
+        source_receipt_id=receipt.history.history_id,
+        correlation_id=authorization.correlation_id,
+    )
 
 
 def _bulk_candidate(
@@ -3901,6 +3976,11 @@ class ApplicationService:
                         # are identical. Leaving normally commits that receipt;
                         # no generic ApplicationError receives this treatment.
                         committed_conflict = conflict.failure
+                        # WP-RE-02 (G1-TX-006): a committed refusal commits
+                        # no Record Event. Anything staged here is a defect, and
+                        # raising rolls the whole transaction back.
+                        if unit_of_work.record_events.pending_count:
+                            raise InternalError() from None
         # Reached only after the transaction committed, which is what preserves
         # the audit event recording the refusal.
         if mismatch:
@@ -5619,7 +5699,64 @@ class ApplicationService:
                 if str(error) != "an active project-type canonical name is already held":
                     raise
                 raise ConflictError(SafeDetail.NAME) from None
+            self._stage_project_created(unit_of_work, authorization, project)
         return self._project_authoring_result(authorization, project, replayed=False)
+
+    @staticmethod
+    def _stage_project_created(
+        unit_of_work: UnitOfWork, authorization: Authorization, project: Project
+    ) -> None:
+        """WP-RE-02 (RE-AC-028): the Project, then its bound Entity, in one batch.
+
+        Both are unledgered creates, so neither names a receipt (G1-EM-008). The
+        bound Entity is read back from the link this same transaction wrote, and
+        its event names the Project event as its cause.
+        """
+        principal_id = authorization.principal.principal_id
+        project_event = RecordEventDraft.issue(
+            principal_id=principal_id,
+            record_family=RecordEventFamily.PROJECT,
+            record_id=project.project_id,
+            event_kind=RecordEventKind.CREATED,
+            record_version=project.version,
+            changed_fields=tuple(
+                sorted(
+                    name
+                    for name, value in (
+                        ("description", project.description),
+                        ("name", project.name),
+                        ("opened_at", project.opened_at),
+                        ("state", project.state),
+                    )
+                    if value is not None
+                )
+            ),
+            source_capability=authorization.capability.value,
+            actor_class=RecordEventActorClass.PRINCIPAL,
+            classification=NON_MEMORY_CLASSIFICATION,
+            occurred_at=project.opened_at,
+            correlation_id=authorization.correlation_id,
+        )
+        unit_of_work.record_events.stage(project_event)
+        link = unit_of_work.projects.get_project_entity_link(principal_id, project.project_id)
+        if link is None or link.project_entity_id is None:
+            raise InternalError()
+        unit_of_work.record_events.stage(
+            RecordEventDraft.issue(
+                principal_id=principal_id,
+                record_family=RecordEventFamily.ENTITY,
+                record_id=link.project_entity_id,
+                event_kind=RecordEventKind.CREATED,
+                record_version=1,
+                changed_fields=("canonical_name", "display_name", "entity_type", "status"),
+                source_capability=authorization.capability.value,
+                actor_class=RecordEventActorClass.PRINCIPAL,
+                classification=NON_MEMORY_CLASSIFICATION,
+                occurred_at=project.opened_at,
+                correlation_id=authorization.correlation_id,
+                causation_event_id=project_event.event_id,
+            )
+        )
 
     def _continuity_projects_update(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: UpdateProject
@@ -5694,6 +5831,12 @@ class ApplicationService:
         principal_id = authorization.principal.principal_id
         try:
             with _translated():
+                # WP-RE-02: the row as it stands under the write's own lock, so
+                # an APPLIED update's `changed_fields` compares exactly the
+                # version the update advanced from. `update_project` and
+                # `close_project` take this same lock first; taking it here
+                # adds no new lock and changes no order.
+                before = unit_of_work.projects.lock_project(principal_id, project_id)
                 receipt = mutate()  # type: ignore[operator]
         except ProjectIllegalTransitionError:
             raise ConflictError(SafeDetail.PROJECT_ID) from None
@@ -5713,6 +5856,10 @@ class ApplicationService:
             raise _CommitRejectedConflictError(ConflictError(SafeDetail.PROJECT_ID)) from None
         if receipt is None:
             raise NotFoundError(SafeDetail.PROJECT_ID)
+        if not receipt.replayed and receipt.history.outcome is TaskMutationOutcome.APPLIED:
+            unit_of_work.record_events.stage(
+                _project_mutation_record_event(authorization, before, receipt)
+            )
         payload = self._continuity_project_payload(unit_of_work, receipt.project)
         payload["replayed"] = receipt.replayed
         return _Result(
@@ -5815,7 +5962,7 @@ class ApplicationService:
                         authorization.at, trust_basis=_CONTINUITY_TRUST_BASIS
                     ),
                 )
-            task = authoring.author_task(
+            task, opened_event_id = authoring.author_task(
                 principal_id=principal_id,
                 task_id=object_id,
                 title=command.title,
@@ -5823,6 +5970,26 @@ class ApplicationService:
                 project_id=command.project_id,
                 situation_id=command.situation_id,
                 due_at=command.due_at,
+            )
+            # WP-RE-02 (G1-TX-003): this path writes the Task without
+            # `TaskManagementService`, so it stages its own `created` event. The
+            # row is inserted at the column's default version, 1; the receipt is
+            # the OPENED lifecycle event that recorded it.
+            unit_of_work.record_events.stage(
+                RecordEventDraft.issue(
+                    principal_id=principal_id,
+                    record_family=RecordEventFamily.TASK,
+                    record_id=task.task_id,
+                    event_kind=RecordEventKind.CREATED,
+                    record_version=1,
+                    changed_fields=_continuity_task_created_fields(task),
+                    source_capability=command.capability.value,
+                    actor_class=RecordEventActorClass.PRINCIPAL,
+                    classification=NON_MEMORY_CLASSIFICATION,
+                    occurred_at=task.opened_at,
+                    source_receipt_id=opened_event_id,
+                    correlation_id=authorization.correlation_id,
+                )
             )
         return _Result(
             payload={
@@ -8716,6 +8883,8 @@ class ApplicationService:
                     commitment_id=command.commitment_id,
                     role=command.role,
                     active_uow=unit_of_work,
+                    source_capability=command.capability.value,
+                    correlation_id=authorization.correlation_id,
                     validate_first_write=validate_first_write,
                 )
         except TaskIdempotencyConflictError:
@@ -8792,6 +8961,8 @@ class ApplicationService:
                     idempotency_key=command.idempotency_key,
                     client_context=command.client_context,
                     active_uow=unit_of_work,
+                    source_capability=command.capability.value,
+                    correlation_id=authorization.correlation_id,
                 )
         except TaskNotFoundError:
             raise NotFoundError(SafeDetail.TASK_ID) from None
@@ -8851,6 +9022,8 @@ class ApplicationService:
                     idempotency_key=command.idempotency_key,
                     client_context=command.client_context,
                     active_uow=unit_of_work,
+                    source_capability=command.capability.value,
+                    correlation_id=authorization.correlation_id,
                     validate_first_write=(
                         None
                         if command.closure_evidence_ref is None
@@ -9148,6 +9321,22 @@ class ApplicationService:
             )
             unit_of_work.tasks.insert_history(history)
             history_ids.append(history.history_id)
+            if applied:
+                # WP-RE-02 (RE-AC-024): one event per APPLIED member, in
+                # `mutations` order; a no-op member stages nothing.
+                unit_of_work.record_events.stage(
+                    task_record_event(
+                        principal_id=principal_id,
+                        action=history.action,
+                        before=current,
+                        after=candidate,
+                        actor=history.actor,
+                        history_id=history.history_id,
+                        occurred_at=authorization.at,
+                        source_capability=command.capability.value,
+                        correlation_id=authorization.correlation_id,
+                    )
+                )
 
         confirmed = replace(
             operation,
@@ -9435,6 +9624,8 @@ class ApplicationService:
                     idempotency_key=command.idempotency_key,
                     client_context=command.client_context,
                     active_uow=unit_of_work,
+                    source_capability=command.capability.value,
+                    correlation_id=authorization.correlation_id,
                     validate_first_write=lambda: self._require_commitment_create_eligibility(
                         unit_of_work,
                         principal_id,
@@ -9478,6 +9669,8 @@ class ApplicationService:
                     idempotency_key=command.idempotency_key,
                     client_context=command.client_context,
                     active_uow=unit_of_work,
+                    source_capability=command.capability.value,
+                    correlation_id=authorization.correlation_id,
                     validate_first_write=lambda: self._require_work_evidence(
                         unit_of_work, principal_id, command.closure_evidence_ref
                     ),
@@ -9539,6 +9732,8 @@ class ApplicationService:
                     idempotency_key=command.idempotency_key,
                     client_context=command.client_context,
                     active_uow=unit_of_work,
+                    source_capability=command.capability.value,
+                    correlation_id=authorization.correlation_id,
                     validate_first_write=(
                         None
                         if command.counterparty_person_id is None

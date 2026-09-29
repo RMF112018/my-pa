@@ -4469,7 +4469,7 @@ class _ContinuityAuthoring(ContinuityAuthoringRepository):
         project_id: str | None = None,
         situation_id: str | None = None,
         due_at: datetime | None = None,
-    ) -> ContinuityTask:
+    ) -> tuple[ContinuityTask, str]:
         now = utc_now()
         task = ContinuityTask(
             task_id=task_id,
@@ -4487,7 +4487,7 @@ class _ContinuityAuthoring(ContinuityAuthoringRepository):
             acceptance_kind=ContinuityAcceptanceKind.DIRECT_PRINCIPAL,
         )
         self._world.continuity_tasks.append(task)
-        return task
+        return task, issue_identifier(IdKind.LIFECYCLE_EVENT)
 
 
 class _Pulse(PulseRepository):

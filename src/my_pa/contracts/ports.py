@@ -4613,8 +4613,12 @@ class ContinuityAuthoringRepository(ABC):
         project_id: str | None = None,
         situation_id: str | None = None,
         due_at: datetime | None = None,
-    ) -> Task:
-        """Create one accepted Task under a key this transaction already reserved."""
+    ) -> tuple[Task, str]:
+        """Create one accepted Task under a key this transaction already reserved.
+
+        Returns the Task and the identifier of the OPENED lifecycle event that
+        recorded it, which is the receipt its Record Event names (WP-RE-02).
+        """
 
 
 class GoodNotesPullRepositoryConflictError(Exception):

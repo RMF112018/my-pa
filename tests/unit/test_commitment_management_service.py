@@ -25,8 +25,13 @@ from my_pa.application.commitments import (
     CommitmentNotFoundError,
     CommitmentVersionConflictError,
 )
-from my_pa.contracts.ports import CommitmentManagementRepository, CommitmentManagementUnitOfWork
+from my_pa.contracts.ports import (
+    CommitmentManagementRepository,
+    CommitmentManagementUnitOfWork,
+    RecordEventStager,
+)
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.record_events import RecordEventDraft
 from my_pa.domain.situation.continuity import (
     CommitmentDirection,
     CommitmentState,
@@ -37,6 +42,7 @@ from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.commitment import Commitment
 from my_pa.domain.task.commitment_history import CommitmentHistoryEntry, CommitmentMutationAction
 from my_pa.domain.task.history import TaskMutationActor, TaskMutationOutcome
+from tests.conftest import FakeRecordEventStager
 
 PRINCIPAL_A = issue_identifier(IdKind.PRINCIPAL)
 PRINCIPAL_B = issue_identifier(IdKind.PRINCIPAL)
@@ -63,6 +69,8 @@ class _World:
         self.insert_history_calls = 0
         self.commits = 0
         self.rollbacks = 0
+        #: WP-RE-01: Record Event drafts committed by `_FakeUnitOfWork`, in order.
+        self.record_events: list[RecordEventDraft] = []
 
 
 class _FakeRepository(CommitmentManagementRepository):
@@ -126,8 +134,10 @@ class _FakeUnitOfWork(CommitmentManagementUnitOfWork):
 
     def __init__(self, world: _World) -> None:
         self._world = world
+        self._record_events = FakeRecordEventStager(world.record_events)
 
     def __enter__(self) -> CommitmentManagementUnitOfWork:
+        self._record_events.begin()
         return self
 
     def __exit__(
@@ -136,10 +146,15 @@ class _FakeUnitOfWork(CommitmentManagementUnitOfWork):
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
+        self._record_events.settle(committed=exc is None)
         if exc is None:
             self._world.commits += 1
         else:
             self._world.rollbacks += 1
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        return self._record_events
 
     @property
     def commitments(self) -> CommitmentManagementRepository:

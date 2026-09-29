@@ -71,7 +71,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
 
-from my_pa.contracts.ports import TaskManagementRepository, TaskManagementUnitOfWork
+from my_pa.contracts.ports import (
+    RecordEventStager,
+    TaskManagementRepository,
+    TaskManagementUnitOfWork,
+)
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import utc_now
 from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
@@ -132,6 +136,11 @@ class IllegalTaskTransitionError(ValueError):
 class _ActiveTaskUnitOfWork(Protocol):
     @property
     def tasks(self) -> TaskManagementRepository: ...
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        """The joined transaction's Record Event buffer (WP-RE-01)."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)

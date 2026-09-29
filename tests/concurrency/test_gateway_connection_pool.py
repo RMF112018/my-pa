@@ -90,6 +90,7 @@ from my_pa.contracts.ports import (
     OperationQueue,
     ProjectRepository,
     PulseRepository,
+    RecordEventStager,
     ReviewRepository,
     SituationRepository,
     SourceProviders,
@@ -155,6 +156,10 @@ class _HoldsItsConnection(UnitOfWork):
         traceback: TracebackType | None,
     ) -> None:
         self._inner.__exit__(exc_type, exc, traceback)
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        return self._inner.record_events
 
     @property
     def providers(self) -> SourceProviders:

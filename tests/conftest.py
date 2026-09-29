@@ -125,6 +125,7 @@ from my_pa.contracts.ports import (
     ProjectRepository,
     ProposalAdmissionConflictError,
     PulseRepository,
+    RecordEventStager,
     RelationshipMemoryProposalRepository,
     RelationshipMemoryRepository,
     RelationshipWriteRequest,
@@ -276,6 +277,7 @@ from my_pa.domain.project_controls.read_models import (
 from my_pa.domain.project_controls.relationship import ConstraintRelationship
 from my_pa.domain.project_controls.revision import ConstraintRevision
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
+from my_pa.domain.record_events import RecordEventDraft
 from my_pa.domain.relationship.authoring import (
     ConflictedIdentifierError,
     DuplicateEntityFactError,
@@ -997,6 +999,9 @@ class World:
     )
     commits: int = 0
     rollbacks: int = 0
+    #: WP-RE-01: Record Event drafts the fake units of work committed, in commit
+    #: order. A draft staged in a block that raised never lands here.
+    record_events: list[RecordEventDraft] = field(default_factory=list)
     #: Port failures a test wants raised, keyed by the method that should raise.
     failures: dict[str, PortError] = field(default_factory=dict)
 
@@ -3209,11 +3214,45 @@ class _TasksWrite(TaskManagementRepository):
         return tuple(rows[:limit])
 
 
+class FakeRecordEventStager(RecordEventStager):
+    """WP-RE-01: an in-memory transaction buffer for the fake units of work.
+
+    The same contract the SQL units of work keep: drafts are held in stage order
+    until the block ends, published to `sink` only when it ends normally, and
+    discarded when it raises. `sink` is the committed feed a test inspects.
+    """
+
+    def __init__(self, sink: list[RecordEventDraft]) -> None:
+        self._sink = sink
+        self._pending: list[RecordEventDraft] = []
+
+    def stage(self, draft: RecordEventDraft) -> None:
+        if not isinstance(draft, RecordEventDraft):
+            raise TypeError("only a RecordEventDraft can be staged")
+        self._pending.append(draft)
+
+    @property
+    def pending_count(self) -> int:
+        return len(self._pending)
+
+    def begin(self) -> None:
+        """Start a transaction: nothing is pending."""
+        self._pending.clear()
+
+    def settle(self, *, committed: bool) -> None:
+        """End the transaction: publish the buffer if it committed, and clear it."""
+        if committed:
+            self._sink.extend(self._pending)
+        self._pending.clear()
+
+
 class FakeTaskManagementUnitOfWork(TaskManagementUnitOfWork):
     def __init__(self, world: World) -> None:
         self._world = world
+        self._record_events = FakeRecordEventStager(world.record_events)
 
     def __enter__(self) -> TaskManagementUnitOfWork:
+        self._record_events.begin()
         return self
 
     def __exit__(
@@ -3222,7 +3261,11 @@ class FakeTaskManagementUnitOfWork(TaskManagementUnitOfWork):
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        pass
+        self._record_events.settle(committed=exc is None)
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        return self._record_events
 
     @property
     def tasks(self) -> TaskManagementRepository:
@@ -3306,8 +3349,10 @@ class _CommitmentsWrite(CommitmentManagementRepository):
 class FakeCommitmentManagementUnitOfWork(CommitmentManagementUnitOfWork):
     def __init__(self, world: World) -> None:
         self._world = world
+        self._record_events = FakeRecordEventStager(world.record_events)
 
     def __enter__(self) -> CommitmentManagementUnitOfWork:
+        self._record_events.begin()
         return self
 
     def __exit__(
@@ -3316,7 +3361,11 @@ class FakeCommitmentManagementUnitOfWork(CommitmentManagementUnitOfWork):
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        pass
+        self._record_events.settle(committed=exc is None)
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        return self._record_events
 
     @property
     def commitments(self) -> CommitmentManagementRepository:
@@ -3920,8 +3969,10 @@ class _ConstraintReads:
 class FakeConstraintManagementUnitOfWork(ConstraintManagementUnitOfWork):
     def __init__(self, world: World) -> None:
         self._world = world
+        self._record_events = FakeRecordEventStager(world.record_events)
 
     def __enter__(self) -> ConstraintManagementUnitOfWork:
+        self._record_events.begin()
         return self
 
     def __exit__(
@@ -3930,7 +3981,11 @@ class FakeConstraintManagementUnitOfWork(ConstraintManagementUnitOfWork):
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        pass
+        self._record_events.settle(committed=exc is None)
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        return self._record_events
 
     @property
     def constraints(self) -> ConstraintManagementRepository:
@@ -9167,9 +9222,11 @@ class FakeUnitOfWork(UnitOfWork):
     def __init__(self, world: World) -> None:
         self._world = world
         self._open = False
+        self._record_events = FakeRecordEventStager(world.record_events)
 
     def __enter__(self) -> UnitOfWork:
         self._open = True
+        self._record_events.begin()
         return self
 
     def __exit__(
@@ -9179,10 +9236,15 @@ class FakeUnitOfWork(UnitOfWork):
         traceback: TracebackType | None,
     ) -> None:
         self._open = False
+        self._record_events.settle(committed=exc is None)
         if exc is None:
             self._world.commits += 1
         else:
             self._world.rollbacks += 1
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        return self._record_events
 
     @property
     def providers(self) -> SourceProviders:

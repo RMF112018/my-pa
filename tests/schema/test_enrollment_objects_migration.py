@@ -324,6 +324,9 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "meeting_note_versions",
         "meeting_series_history",
         "meeting_write_requests",
+        # WP-RE-01. The Record Event revision stacks its two tables.
+        "record_event_sequences",
+        "record_events",
     }
 )
 

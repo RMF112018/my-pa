@@ -32,6 +32,7 @@ from typing import Any, Protocol
 from my_pa.contracts.ports import (
     CommitmentManagementRepository,
     CommitmentManagementUnitOfWork,
+    RecordEventStager,
 )
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import utc_now
@@ -78,6 +79,11 @@ class CommitmentIdempotencyConflictError(Exception):
 class _ActiveCommitmentUnitOfWork(Protocol):
     @property
     def commitments(self) -> CommitmentManagementRepository: ...
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        """The joined transaction's Record Event buffer (WP-RE-01)."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)

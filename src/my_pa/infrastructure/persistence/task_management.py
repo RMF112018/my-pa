@@ -47,6 +47,7 @@ from sqlalchemy.exc import IntegrityError
 
 from my_pa.contracts.ports import (
     BulkIdempotencyConflictError,
+    RecordEventStager,
     TaskManagementRepository,
     TaskManagementUnitOfWork,
     WorkCursorError,
@@ -67,6 +68,11 @@ from my_pa.domain.task.lifecycle import (
 )
 from my_pa.domain.task.role import TaskRole
 from my_pa.domain.task.task import Task
+from my_pa.infrastructure.persistence.record_events import (
+    RecordEventBuffer,
+    SqlRecordEventWriter,
+    flush_record_events,
+)
 from my_pa.infrastructure.persistence.tables import (
     task_bulk_operations,
     task_comments,
@@ -1014,6 +1020,7 @@ class SqlAlchemyTaskManagementUnitOfWork(TaskManagementUnitOfWork):
         self._engine = engine
         self._context: AbstractContextManager[Connection] | None = None
         self._connection: Connection | None = None
+        self._record_events = RecordEventBuffer()
 
     def __enter__(self) -> TaskManagementUnitOfWork:
         if self._context is not None:
@@ -1021,6 +1028,7 @@ class SqlAlchemyTaskManagementUnitOfWork(TaskManagementUnitOfWork):
         context = self._engine.begin()
         self._connection = context.__enter__()
         self._context = context
+        self._record_events.reset()
         return self
 
     def __exit__(
@@ -1030,10 +1038,35 @@ class SqlAlchemyTaskManagementUnitOfWork(TaskManagementUnitOfWork):
         traceback: TracebackType | None,
     ) -> None:
         context = self._context
+        connection = self._connection
+        # WP-RE-01: the buffer is emptied on every exit, and flushed only when
+        # the block succeeded -- one allocator batch, then the inserts in stage
+        # order -- as the last database work before COMMIT, and *before* the
+        # connection is cleared (G1-TX-001). A flush failure is handed to the
+        # same `context.__exit__` below, which rolls the canonical change back
+        # with it, and is then re-raised (already translated).
+        drafts = self._record_events.drain()
+        failure: Exception | None = None
+        if context is not None and connection is not None and exc_type is None and drafts:
+            try:
+                flush_record_events(SqlRecordEventWriter(connection), drafts)
+            except Exception as error:  # re-raised below, after the rollback
+                failure = error
         self._context = None
         self._connection = None
-        if context is not None:
+        if context is not None and failure is not None:
+            context.__exit__(type(failure), failure, failure.__traceback__)
+        elif context is not None:
             context.__exit__(exc_type, exc, traceback)
+        if failure is not None:
+            raise failure
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        """This transaction's Record Event buffer (WP-RE-01)."""
+        if self._connection is None:
+            raise RuntimeError("this unit of work is not inside a transaction")
+        return self._record_events
 
     @property
     def tasks(self) -> TaskManagementRepository:

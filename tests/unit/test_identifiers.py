@@ -218,6 +218,9 @@ def test_contract_prefixes_are_stable() -> None:
         "mhst",
         "mnote",
         "mshst",
+        # WP-RE-01: one committed Record Event. `rcev` crosses the wire as the
+        # `event_id` of every `record_events.list` item (WP-RE-06).
+        "rcev",
     }
 
 

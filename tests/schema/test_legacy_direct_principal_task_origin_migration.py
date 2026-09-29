@@ -51,8 +51,9 @@ SCHEMA: Final = "knowledge"
 REVISION: Final = "6f6ead27d122"
 PREVIOUS: Final = "e6a4c2f91b73"
 #: The chain head this revision's tests run against. `7d9a450dfd07` (WP-MTG-04,
-#: Meeting records) is additive on `REVISION`, so `REVISION` is no longer the head.
-HEAD: Final = "7d9a450dfd07"
+#: Meeting records) is additive on `REVISION`, and `1d9b248e7f83` (WP-RE-01, Record
+#: Events) is additive on that, so `REVISION` is no longer the head.
+HEAD: Final = "1d9b248e7f83"
 
 PRINCIPAL: Final = "prn_aaaaaaaa11111111"
 TASK_LEGACY: Final = "tsk_aaaaaaaa11111111"
@@ -169,11 +170,12 @@ def _origin_rows(engine: Engine) -> dict[str, tuple[str, str | None]]:
 
 
 def test_the_revision_is_in_the_chain() -> None:
-    """Unique head is `7d9a450dfd07`, directly on `6f6ead27d122`, directly on `e6a4c2f91b73`."""
+    """Unique head `1d9b248e7f83`, on `7d9a450dfd07`, on `6f6ead27d122`, on `e6a4c2f91b73`."""
     script = ScriptDirectory.from_config(_config())
     assert len(list(script.get_heads())) == 1
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == REVISION
+    assert script.get_revision(HEAD).down_revision == "7d9a450dfd07"
+    assert script.get_revision("7d9a450dfd07").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 
 

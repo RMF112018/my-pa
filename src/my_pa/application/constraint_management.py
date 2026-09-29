@@ -77,6 +77,7 @@ from my_pa.contracts.ports import (
     ConstraintManagementRepository,
     ConstraintManagementUnitOfWork,
     ProjectRepository,
+    RecordEventStager,
 )
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import utc_now
@@ -338,6 +339,11 @@ class _ActiveConstraintUnitOfWork(Protocol):
         Principal-scoped ownership answer `get_project` returns, and nothing
         else.
         """
+        ...
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        """The joined transaction's Record Event buffer (WP-RE-01)."""
         ...
 
 

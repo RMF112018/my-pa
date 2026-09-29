@@ -133,6 +133,7 @@ from my_pa.domain.project_controls.read_models import (
 from my_pa.domain.project_controls.relationship import ConstraintRelationship
 from my_pa.domain.project_controls.revision import ConstraintRevision
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
+from my_pa.domain.record_events import RecordEventDraft
 from my_pa.domain.relationship.authoring import (
     MAX_EVIDENCE_REFERENCES,
     MAX_INITIAL_ALIASES,
@@ -363,6 +364,8 @@ __all__ = [
     "ProjectRepository",
     "ProposalAdmissionConflictError",
     "PulseRepository",
+    "RecordEventStager",
+    "RecordEventWriter",
     "RelationshipEventRepository",
     "RelationshipRepository",
     "RelationshipWriteRequest",
@@ -4749,6 +4752,46 @@ class GoodNotesSemanticReviewDecisionRecord:
     replayed: bool = False
 
 
+class RecordEventStager(ABC):
+    """The transaction-local Record Event buffer one unit of work owns (WP-RE-01).
+
+    An emitter stages a draft on the APPLIED branch of a canonical write, inside
+    the transaction that makes the write; nothing reaches the database until the
+    unit of work that owns the buffer leaves its block normally, when the whole
+    buffer is sequenced in one allocator batch and inserted in stage order as
+    the last work before COMMIT. A block that raises discards the buffer with
+    the transaction. There is deliberately no `flush` here: flushing belongs to
+    the unit of work's exit and to nothing an application service can call.
+    """
+
+    @abstractmethod
+    def stage(self, draft: RecordEventDraft) -> None:
+        """Append `draft` to this transaction's buffer, in order."""
+
+    @property
+    @abstractmethod
+    def pending_count(self) -> int:
+        """How many drafts this transaction has staged and not yet flushed."""
+
+
+class RecordEventWriter(ABC):
+    """The persistence half of a flush: allocate one batch, then insert it.
+
+    Reached only from a unit of work's exit (and, in WP-RE-04, the one
+    re-enrichment worker transaction), never from an application service.
+    `allocate` takes the per-Principal sequence row lock and holds it to COMMIT;
+    it is a row lock, never an advisory lock (G1-TX-008).
+    """
+
+    @abstractmethod
+    def allocate(self, principal_id: str, count: int) -> int:
+        """Reserve `count` contiguous sequence numbers and return the first."""
+
+    @abstractmethod
+    def insert(self, first_sequence_number: int, drafts: Sequence[RecordEventDraft]) -> None:
+        """Insert `drafts` in order at `first_sequence_number` onward."""
+
+
 class UnitOfWork(ABC):
     """One transaction, and the repositories that run inside it.
 
@@ -4771,6 +4814,20 @@ class UnitOfWork(ABC):
         traceback: TracebackType | None,
     ) -> None:
         """Commit when the block succeeded, roll back when it did not."""
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        """This transaction's Record Event buffer (WP-RE-01).
+
+        A refusing default rather than an abstract member, on the precedent of
+        `reenrichment` above: an in-memory double or evaluation harness that
+        never commits a canonical change need not carry a buffer. The refusal
+        is fail-closed -- an emitter that stages against a unit of work without
+        a buffer raises inside the transaction, so the canonical change rolls
+        back with it rather than committing with no event. Every SQL unit of
+        work overrides this, and nothing may catch the refusal to skip staging.
+        """
+        raise NotImplementedError
 
     @property
     @abstractmethod
@@ -6536,6 +6593,20 @@ class TaskManagementUnitOfWork(ABC):
     def tasks(self) -> TaskManagementRepository:
         """The task-management repository, inside this transaction."""
 
+    @property
+    def record_events(self) -> RecordEventStager:
+        """This transaction's Record Event buffer (WP-RE-01).
+
+        A refusing default rather than an abstract member, on the precedent of
+        `reenrichment` above: an in-memory double or evaluation harness that
+        never commits a canonical change need not carry a buffer. The refusal
+        is fail-closed -- an emitter that stages against a unit of work without
+        a buffer raises inside the transaction, so the canonical change rolls
+        back with it rather than committing with no event. Every SQL unit of
+        work overrides this, and nothing may catch the refusal to skip staging.
+        """
+        raise NotImplementedError
+
 
 # --- WP-TM-05: Commitment/Waiting-On/Follow-Up -----------------------------
 #
@@ -6691,6 +6762,20 @@ class CommitmentManagementUnitOfWork(ABC):
     @abstractmethod
     def commitments(self) -> CommitmentManagementRepository:
         """The commitment-management repository, inside this transaction."""
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        """This transaction's Record Event buffer (WP-RE-01).
+
+        A refusing default rather than an abstract member, on the precedent of
+        `reenrichment` above: an in-memory double or evaluation harness that
+        never commits a canonical change need not carry a buffer. The refusal
+        is fail-closed -- an emitter that stages against a unit of work without
+        a buffer raises inside the transaction, so the canonical change rolls
+        back with it rather than committing with no event. Every SQL unit of
+        work overrides this, and nothing may catch the refusal to skip staging.
+        """
+        raise NotImplementedError
 
 
 # PC-CM-IMP-WP02. `ConstraintManagementRepository`/`ConstraintManagementUnitOfWork`
@@ -7170,6 +7255,20 @@ class ConstraintManagementUnitOfWork(ABC):
     @abstractmethod
     def constraints(self) -> ConstraintManagementRepository:
         """The constraint-management repository, inside this transaction."""
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        """This transaction's Record Event buffer (WP-RE-01).
+
+        A refusing default rather than an abstract member, on the precedent of
+        `reenrichment` above: an in-memory double or evaluation harness that
+        never commits a canonical change need not carry a buffer. The refusal
+        is fail-closed -- an emitter that stages against a unit of work without
+        a buffer raises inside the transaction, so the canonical change rolls
+        back with it rather than committing with no event. Every SQL unit of
+        work overrides this, and nothing may catch the refusal to skip staging.
+        """
+        raise NotImplementedError
 
     @property
     @abstractmethod

@@ -95,6 +95,7 @@ from my_pa.contracts.ports import (
     ConstraintManagementRepository,
     ConstraintManagementUnitOfWork,
     ProjectRepository,
+    RecordEventStager,
 )
 from my_pa.domain.common.identifiers import IdKind, make_identifier
 from my_pa.domain.project_controls.category import ConstraintCategory, ConstraintCategoryState
@@ -165,6 +166,11 @@ from my_pa.infrastructure.persistence.principal_scope import (
     partition_criterion,
     principal_bound_values,
     principal_scoped,
+)
+from my_pa.infrastructure.persistence.record_events import (
+    RecordEventBuffer,
+    SqlRecordEventWriter,
+    flush_record_events,
 )
 from my_pa.infrastructure.persistence.situation_repository import SqlProjectRepository
 from my_pa.infrastructure.persistence.tables import (
@@ -4090,6 +4096,7 @@ class SqlAlchemyConstraintManagementUnitOfWork(ConstraintManagementUnitOfWork):
         self._engine = engine
         self._context: AbstractContextManager[Connection] | None = None
         self._connection: Connection | None = None
+        self._record_events = RecordEventBuffer()
 
     def __enter__(self) -> ConstraintManagementUnitOfWork:
         if self._context is not None:
@@ -4097,6 +4104,7 @@ class SqlAlchemyConstraintManagementUnitOfWork(ConstraintManagementUnitOfWork):
         context = self._engine.begin()
         self._connection = context.__enter__()
         self._context = context
+        self._record_events.reset()
         return self
 
     def __exit__(
@@ -4106,10 +4114,35 @@ class SqlAlchemyConstraintManagementUnitOfWork(ConstraintManagementUnitOfWork):
         traceback: TracebackType | None,
     ) -> None:
         context = self._context
+        connection = self._connection
+        # WP-RE-01: the buffer is emptied on every exit, and flushed only when
+        # the block succeeded -- one allocator batch, then the inserts in stage
+        # order -- as the last database work before COMMIT, and *before* the
+        # connection is cleared (G1-TX-001). A flush failure is handed to the
+        # same `context.__exit__` below, which rolls the canonical change back
+        # with it, and is then re-raised (already translated).
+        drafts = self._record_events.drain()
+        failure: Exception | None = None
+        if context is not None and connection is not None and exc_type is None and drafts:
+            try:
+                flush_record_events(SqlRecordEventWriter(connection), drafts)
+            except Exception as error:  # re-raised below, after the rollback
+                failure = error
         self._context = None
         self._connection = None
-        if context is not None:
+        if context is not None and failure is not None:
+            context.__exit__(type(failure), failure, failure.__traceback__)
+        elif context is not None:
             context.__exit__(exc_type, exc, traceback)
+        if failure is not None:
+            raise failure
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        """This transaction's Record Event buffer (WP-RE-01)."""
+        if self._connection is None:
+            raise RuntimeError("this unit of work is not inside a transaction")
+        return self._record_events
 
     @property
     def constraints(self) -> ConstraintManagementRepository:

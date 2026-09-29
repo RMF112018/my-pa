@@ -4,8 +4,9 @@
 `6f6ead27d122`, authenticated immediately before generation; nothing about it
 was preassigned. This module proves what the plan's section 9.5/9.6 asks of it:
 
-* **the graph** -- exactly one head, this revision, directly on `6f6ead27d122`,
-  and 108 revision files;
+* **the graph** -- exactly one head, `1d9b248e7f83` (WP-RE-01, Record Events),
+  directly on this revision, which is directly on `6f6ead27d122`, and 109
+  revision files;
 * **the freeze** -- the revision imports nothing from the package it migrates,
   names every table, constraint and index `tables.py` declares for the eight
   Meeting tables in frozen text, and restates the audit vocabulary from byte
@@ -67,6 +68,9 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "7d9a450dfd07"
 PREVIOUS: Final = "6f6ead27d122"
+#: The chain head these tests run against. `1d9b248e7f83` (WP-RE-01, Record
+#: Events) is additive on `REVISION`, so `REVISION` is no longer the head.
+HEAD: Final = "1d9b248e7f83"
 #: The revision that last stated `capability_is_known` and `purpose_is_known`,
 #: and therefore the only correct source for this revision's BEFORE literals.
 VOCABULARY_PREDECESSOR: Final = "e6a4c2f91b73"
@@ -143,13 +147,14 @@ def _offline(target: str, *, down: bool = False) -> str:
 
 def test_the_revision_is_the_single_head_directly_on_the_previous_head() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [REVISION]
+    assert script.get_heads() == [HEAD]
+    assert script.get_revision(HEAD).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == VOCABULARY_PREDECESSOR
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 108
+    assert len(list(MIGRATIONS.glob("*.py"))) == 109
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -348,9 +353,9 @@ def _catalog(engine: Engine) -> dict[str, set[str]]:
     }
 
 
-def _assert_meeting_schema_present(engine: Engine) -> None:
+def _assert_meeting_schema_present(engine: Engine, *, at: str = HEAD) -> None:
     catalog = _catalog(engine)
-    assert catalog["version"] == {REVISION}
+    assert catalog["version"] == {at}
     assert catalog["tables"] >= MEETING_TABLE_NAMES
     assert OWNER_UNIQUE in catalog["constraints"]
     assert catalog["triggers"] >= set(TRIGGERS)
@@ -570,7 +575,7 @@ def test_the_previous_head_with_neighbouring_rows_upgrades_to_the_meeting_head(
     with engine.begin() as connection:
         rows = _seed_neighbours(connection)
     command.upgrade(_config(), REVISION)
-    _assert_meeting_schema_present(engine)
+    _assert_meeting_schema_present(engine, at=REVISION)
     with engine.begin() as connection:
         ids = _seed_meeting(connection)
         connection.execute(
@@ -627,7 +632,9 @@ def test_a_downgrade_refuses_while_a_meeting_row_exists(
     with pytest.raises(DBAPIError) as refused:
         command.downgrade(_config(), PREVIOUS)
     assert "refusing to downgrade" in str(refused.value)
-    _assert_meeting_schema_present(engine)
+    # Each revision downgrades in its own transaction, so the empty Record Event
+    # head above this one has already gone when this revision refuses.
+    _assert_meeting_schema_present(engine, at=REVISION)
 
 
 @pytest.mark.database
@@ -640,7 +647,7 @@ def test_a_downgrade_refuses_while_an_audit_event_names_the_meeting_vocabulary(
         _audit(connection, capability="meetings.list", purpose="meeting_read", suffix="mtgmig0004x")
     with pytest.raises(DBAPIError):
         command.downgrade(_config(), PREVIOUS)
-    _assert_meeting_schema_present(engine)
+    _assert_meeting_schema_present(engine, at=REVISION)
 
 
 @pytest.mark.database

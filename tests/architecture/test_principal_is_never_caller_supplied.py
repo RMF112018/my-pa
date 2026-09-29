@@ -177,6 +177,11 @@ DERIVED_CHAINS: Final = ("principal.principal_id", "account.principal_id")
 #: The registry is exact. A sixth module reading a request's stated principal is
 #: a decision that has to be written here, with what verifies it.
 VERIFIED_CALLER_STATEMENTS: Final = {
+    # WP-RE-01. A Record Event draft is built by an emitter from the
+    # server-resolved Authorization, never from a request body. The flush reads
+    # the drafts' Principal once, to refuse a batch naming two Principals, and
+    # stamps every row through `principal_bound_values` from that one value.
+    "infrastructure/persistence/record_events.py": (("draft", "principal_id"),),
     # The binding is an operator-created credential record and the identity is
     # the result of verifying that record, never a request body field.
     "application/apple_machine.py": (("binding", "principal_id"),),

@@ -147,6 +147,21 @@ def test_source_receipt_id_when_present_must_be_an_opaque_identifier() -> None:
         _draft(source_receipt_id="receipt 1")
 
 
+@pytest.mark.parametrize(
+    "value",
+    ["receipt 1", "cpsh_short", "notes/one_00000001", "CPSH_0123456789abcdef", "a.b_12345678"],
+)
+def test_a_receipt_identifier_must_have_the_opaque_shape(value: str) -> None:
+    with pytest.raises(InvalidRecordEventError, match="source_receipt_id"):
+        _draft(source_receipt_id=value)
+
+
+def test_a_receipt_of_a_ledger_outside_idkind_is_accepted() -> None:
+    """WP-RE-03: the Project Controls settings ledger mints `cpsh_` receipts."""
+    receipt = "cpsh_0123456789abcdef0123456789abcdef"
+    assert _draft(source_receipt_id=receipt).source_receipt_id == receipt
+
+
 def test_causation_event_id_when_present_must_be_a_record_event_identifier() -> None:
     assert _draft(causation_event_id=OTHER_EVENT).causation_event_id == OTHER_EVENT
     with pytest.raises(InvalidRecordEventError, match="causation_event_id"):

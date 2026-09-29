@@ -3760,7 +3760,12 @@ class SqlConstraintManagementRepository(ConstraintManagementRepository):
         mutation_service: object,
         active_uow: object,
         correlation_id: str | None,
+        event_origin: object = None,
     ) -> Mapping[str, object] | None:
+        # WP-RE-03 (RE-AC-040, G1-EM-005): `event_origin` carries the request's
+        # `constraint_sync.resolve` identity through to the canonical mutation
+        # below, which stages the only Record Event a resolution produces. The
+        # conflict and resolution receipts are control rows and stage none.
         request_digest = hashlib.sha256(
             json.dumps(
                 {
@@ -3914,6 +3919,7 @@ class SqlConstraintManagementRepository(ConstraintManagementRepository):
                 idempotency_key="sync_" + request_digest,
                 correlation_id=correlation_id,
                 active_uow=active_uow,
+                event_origin=event_origin,
             )
         elif resolution is ConstraintSyncResolution.REOPEN:
             if record is None:
@@ -3938,6 +3944,7 @@ class SqlConstraintManagementRepository(ConstraintManagementRepository):
                 idempotency_key="sync_" + request_digest,
                 correlation_id=correlation_id,
                 active_uow=active_uow,
+                event_origin=event_origin,
             )
         elif resolution is ConstraintSyncResolution.MANUAL_PATCH:
             if record is None:
@@ -3965,6 +3972,7 @@ class SqlConstraintManagementRepository(ConstraintManagementRepository):
                 idempotency_key="sync_" + request_digest,
                 correlation_id=correlation_id,
                 active_uow=active_uow,
+                event_origin=event_origin,
             )
         constraint_version = (
             None

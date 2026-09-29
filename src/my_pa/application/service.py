@@ -324,6 +324,7 @@ from my_pa.application.constraint_management import (
     ConstraintProjectUnavailableError,
     ConstraintReorderError,
     ConstraintVersionConflictError,
+    RecordEventOrigin,
 )
 from my_pa.application.constraint_settings import (
     ProjectControlsConfigurationResult,
@@ -1680,6 +1681,11 @@ def _project_mutation_record_event(
         source_receipt_id=receipt.history.history_id,
         correlation_id=authorization.correlation_id,
     )
+
+
+def _constraint_event_origin(authorization: Authorization) -> RecordEventOrigin:
+    """WP-RE-03: the request's exact capability and correlation, for U4's events."""
+    return RecordEventOrigin(authorization.capability.value, authorization.correlation_id)
 
 
 def _bulk_candidate(
@@ -10467,6 +10473,7 @@ class ApplicationService:
                                 ).hexdigest()
                             ),
                             correlation_id=authorization.correlation_id,
+                            event_origin=_constraint_event_origin(authorization),
                             active_uow=work,
                         )
                         record = mutation.record
@@ -10494,6 +10501,7 @@ class ApplicationService:
                                     ).hexdigest()
                                 ),
                                 correlation_id=authorization.correlation_id,
+                                event_origin=_constraint_event_origin(authorization),
                                 active_uow=work,
                             )
                             record = mutation.record
@@ -10513,6 +10521,7 @@ class ApplicationService:
                                     ).hexdigest()
                                 ),
                                 correlation_id=authorization.correlation_id,
+                                event_origin=_constraint_event_origin(authorization),
                                 active_uow=work,
                             )
                             record = mutation.record
@@ -10589,6 +10598,7 @@ class ApplicationService:
                     mutation_service=self._constraint_mutations(),
                     active_uow=work,
                     correlation_id=authorization.correlation_id,
+                    event_origin=_constraint_event_origin(authorization),
                 )
             except ValueError as error:
                 raise ConflictError() from error
@@ -10685,6 +10695,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, self._constraint_mutation_result(result)
@@ -10722,6 +10733,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, self._constraint_mutation_result(result)
@@ -10747,6 +10759,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, self._constraint_mutation_result(result)
@@ -10790,6 +10803,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, self._constraint_mutation_result(result)
@@ -10810,6 +10824,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, self._constraint_mutation_result(result)
@@ -10831,6 +10846,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, self._constraint_mutation_result(result)
@@ -10867,6 +10883,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization,
@@ -10896,6 +10913,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, self._constraint_mutation_result(result)
@@ -10917,6 +10935,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, self._constraint_mutation_result(result)
@@ -10943,6 +10962,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, self._constraint_category_result(result)
@@ -10973,6 +10993,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, self._constraint_category_result(result)
@@ -10995,6 +11016,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, self._constraint_category_result(result)
@@ -11024,6 +11046,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization,
@@ -11076,6 +11099,7 @@ class ApplicationService:
                 expected_version=command.expected_version,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, _project_controls_configuration_payload(result)

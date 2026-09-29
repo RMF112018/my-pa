@@ -61,8 +61,10 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Final
 
+from my_pa.application.constraint_management import RecordEventOrigin
 from my_pa.contracts.ports import ConstraintManagementUnitOfWork
 from my_pa.domain.common.time import utc_now
+from my_pa.domain.identity.operation import Capability
 from my_pa.domain.project_controls.business_time import validate_project_timezone_name
 from my_pa.domain.project_controls.history import (
     CONSTRAINT_IDEMPOTENCY_KEY_PATTERN,
@@ -74,6 +76,13 @@ from my_pa.domain.project_controls.history import (
     issue_settings_history_id,
 )
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
+from my_pa.domain.record_events import (
+    CONSTRAINT_ACTOR_CLASSES,
+    NON_MEMORY_CLASSIFICATION,
+    RecordEventDraft,
+    RecordEventFamily,
+    RecordEventKind,
+)
 
 __all__ = [
     "ProjectControlsConfigurationResult",
@@ -282,6 +291,7 @@ class ProjectControlsConfigurationService:
         expected_version: int | None = None,
         client_context: str | None = None,
         correlation_id: str | None = None,
+        event_origin: RecordEventOrigin | None = None,
     ) -> ProjectControlsConfigurationResult:
         """State this Project's Constraint calendar, or say why it was not stated.
 
@@ -318,6 +328,7 @@ class ProjectControlsConfigurationService:
                 client_context=client_context,
                 correlation_id=correlation_id,
                 digest=digest,
+                event_origin=event_origin,
             )
         except ConstraintProjectSettingsHistoryKeyConflictError:
             # The key was bound by a request this transaction could not see.
@@ -342,6 +353,7 @@ class ProjectControlsConfigurationService:
         client_context: str | None,
         correlation_id: str | None,
         digest: str,
+        event_origin: RecordEventOrigin | None = None,
     ) -> ProjectControlsConfigurationResult:
         """One transaction: lock, replay gate, version comparison, write, receipt."""
         pending_unavailable = False
@@ -402,6 +414,7 @@ class ProjectControlsConfigurationService:
                             request_digest=digest,
                             client_context=client_context,
                             correlation_id=correlation_id,
+                            event_origin=event_origin,
                         )
                     elif expected_version is not None and settings.version != expected_version:
                         rejected = self._record(
@@ -478,6 +491,7 @@ class ProjectControlsConfigurationService:
                             request_digest=digest,
                             client_context=client_context,
                             correlation_id=correlation_id,
+                            event_origin=event_origin,
                         )
 
         # Outside the block, always: every refusal above that wrote a `REJECTED`
@@ -533,6 +547,7 @@ class ProjectControlsConfigurationService:
         request_digest: str,
         client_context: str | None,
         correlation_id: str | None,
+        event_origin: RecordEventOrigin | None = None,
     ) -> ProjectControlsConfigurationResult:
         """Insert or update the one settings row, and account for it.
 
@@ -568,6 +583,34 @@ class ProjectControlsConfigurationService:
             correlation_id=correlation_id,
             resulting_timezone_name=settings.timezone_name,
             resulting_settings_updated_at=settings.updated_at,
+        )
+        # WP-RE-03 (RE-AC-039): the settings row has no identifier of its own;
+        # its Project names it (G1-EM-011). Staged on this Constraint unit of
+        # work, after the APPLIED receipt.
+        origin = event_origin or RecordEventOrigin(
+            Capability.PROJECT_CONTROLS_CONFIGURE.value, correlation_id
+        )
+        uow.record_events.stage(
+            RecordEventDraft.issue(
+                principal_id=principal_id,
+                record_family=RecordEventFamily.PROJECT_CONTROLS_SETTINGS,
+                record_id=project_id,
+                event_kind=(
+                    RecordEventKind.CREATED if current is None else RecordEventKind.UPDATED
+                ),
+                record_version=settings.version,
+                changed_fields=(
+                    ("timezone_name",)
+                    if current is None or current.timezone_name != settings.timezone_name
+                    else ()
+                ),
+                source_capability=origin.source_capability,
+                actor_class=CONSTRAINT_ACTOR_CLASSES[actor],
+                classification=NON_MEMORY_CLASSIFICATION,
+                occurred_at=occurred_at,
+                source_receipt_id=receipt.history_id,
+                correlation_id=origin.correlation_id,
+            )
         )
         return ProjectControlsConfigurationResult(
             disposition=ProjectControlsDisposition.APPLIED,

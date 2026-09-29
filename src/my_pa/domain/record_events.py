@@ -90,6 +90,13 @@ CHANGED_FIELD_PATTERN: Final = re.compile(r"\A[a-z][a-z0-9_]{0,63}\Z")
 #: A dotted lower-snake operation name. Every `Capability.value` matches it, and
 #: so does every bounded internal token a non-request path uses.
 SOURCE_CAPABILITY_PATTERN: Final = re.compile(r"\A[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*\Z")
+#: A receipt identifier of any kind: an opaque lower-case prefix and the
+#: standard suffix -- exactly the `record_events` receipt CHECK. Wider than
+#: `IdKind` on purpose: a receipt ledger may mint an identifier that is not a
+#: contract-v1 kind (the Project Controls settings ledger's `cpsh_`, which
+#: `project_controls.history` deliberately keeps out of `IdKind`). Still no
+#: path, host, dot, colon, space or `@` can pass.
+RECEIPT_IDENTIFIER_PATTERN: Final = re.compile(r"\A[a-z]+_[A-Za-z0-9]{8,64}\Z")
 
 #: The classification every non-memory event carries (G1-EM-009). Only a
 #: Relationship Memory event takes its classification from the committed
@@ -267,6 +274,14 @@ def _optional_identifier(value: object, kind: IdKind | None, field: str) -> str 
     return None if value is None else _identifier(value, kind, field)
 
 
+def _receipt(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not RECEIPT_IDENTIFIER_PATTERN.fullmatch(value):
+        raise InvalidRecordEventError("source_receipt_id is not an opaque identifier")
+    return value
+
+
 def _positive(value: object, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise InvalidRecordEventError(f"{field} must be an integer >= 1")
@@ -348,7 +363,7 @@ def _validated(
         actor_class=_member(RecordEventActorClass, actor_class, "actor_class"),
         classification=_member(Classification, classification, "classification"),
         occurred_at=_instant(occurred_at, "occurred_at"),
-        source_receipt_id=_optional_identifier(source_receipt_id, None, "source_receipt_id"),
+        source_receipt_id=_receipt(source_receipt_id),
         authority=(
             None if authority is None else _member(RecordEventAuthority, authority, "authority")
         ),

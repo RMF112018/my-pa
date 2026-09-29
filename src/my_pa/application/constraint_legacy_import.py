@@ -62,6 +62,11 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Final, Protocol
 
+from my_pa.application.constraint_management import (
+    RecordEventOrigin,
+    category_record_event,
+    constraint_record_event,
+)
 from my_pa.contracts.ports import ConstraintManagementUnitOfWork
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.project_controls.business_time import project_today
@@ -91,6 +96,12 @@ from my_pa.domain.project_controls.read_models import (
 )
 from my_pa.domain.project_controls.revision import ConstraintRevision
 from my_pa.domain.source.registry import issue_identifier
+
+#: WP-RE-03 (G1-TX-010, G1-EM-012): the bounded, non-public operation name the
+#: legacy import's Record Events carry. It is no `Capability` -- the import is an
+#: operator tool, not a request -- and it satisfies the feed's
+#: `source_capability` shape.
+LEGACY_IMPORT_SOURCE: Final = RecordEventOrigin("constraint_legacy_import.apply")
 
 __all__ = [
     "AUTHORITATIVE_CATEGORY_NAMES",
@@ -1465,6 +1476,18 @@ class ConstraintLegacyImportService:
                     next_sequence=entry.proposed_next_sequence,
                     issued_count=entry.proposed_issued_count,
                 )
+                uow.record_events.stage(
+                    category_record_event(
+                        principal_id=principal_id,
+                        before=None,
+                        after=category,
+                        version=1,
+                        actor=ConstraintMutationActor.SYSTEM,
+                        history_id=None,
+                        occurred_at=now,
+                        origin=LEGACY_IMPORT_SOURCE,
+                    )
+                )
                 identifiers[name] = category.category_id
                 continue
             current = uow.constraints.get_category_for_update(
@@ -1475,12 +1498,29 @@ class ConstraintLegacyImportService:
                     "legacy_import_category_vanished",
                     "a category listed for this project could not be locked",
                 )
+            advanced = replace(current, updated_at=now)
             uow.constraints.update_category(
                 principal_id,
-                replace(current, updated_at=now),
+                advanced,
                 next_sequence=entry.proposed_next_sequence,
                 issued_count=entry.proposed_issued_count,
                 version=(entry.existing_version or 1) + 1,
+            )
+            # The allocator advanced and the version with it; no Category field
+            # a reader sees moved, so the event names the version. No receipt:
+            # the import writes none for a Category (G1-EM-012).
+            uow.record_events.stage(
+                category_record_event(
+                    principal_id=principal_id,
+                    before=current,
+                    after=advanced,
+                    version=(entry.existing_version or 1) + 1,
+                    actor=ConstraintMutationActor.SYSTEM,
+                    history_id=None,
+                    occurred_at=now,
+                    origin=LEGACY_IMPORT_SOURCE,
+                    always_version=True,
+                )
             )
             identifiers[name] = entry.existing_category_id
         return identifiers
@@ -1554,4 +1594,19 @@ class ConstraintLegacyImportService:
                 history_id=receipt.history_id,
                 recorded_at=now,
             ),
+        )
+        # WP-RE-03 (RE-AC-041): one `created` per imported record, in the
+        # source-row order `apply_disposable` writes them, after the Category
+        # events, all in this one Constraint transaction.
+        uow.record_events.stage(
+            constraint_record_event(
+                principal_id=principal_id,
+                operation=ConstraintMutationOperation.CREATE,
+                before=None,
+                after=constraint,
+                actor=ConstraintMutationActor.SYSTEM,
+                history_id=receipt.history_id,
+                occurred_at=now,
+                origin=LEGACY_IMPORT_SOURCE,
+            )
         )

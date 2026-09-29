@@ -57,7 +57,7 @@ Re-derived in the worktree (PYTHONPATH=src):
 |---|---|---|---|---|---|---|---|
 | CP-RE-01 | WP-RE-01 | `bf1bfe9c61496275440a13be1be3fd8d4eb94962` | `8f9f2b38fcef0b35d877c82820429973ceb0dc75` | 001-017 | green: 25,169 passed / 74 skipped / 0 failed; ruff, format, mypy (522 files) clean | PG 15.15 local, PGTZ=UTC: new DB modules + meeting app 114 passed; recovery `tests/concurrency` 15 passed; migration_empty_to_head 9 passed; migration_edge subset 179 passed (worker full lane 1,052 passed) | revision `1d9b248e7f83` (down `7d9a450dfd07`); N-conditions none fired |
 
-| CP-RE-02 | WP-RE-02 | the commit that adds this row (SHA recorded in CP-RE-03) | | 018-030 | green: 25,188 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: WP-02 + task/commitment/project/continuity + record-event DB modules 195 passed; full `-m recovery` 46 passed (worker: full tests/database 1,689 passed) | no N fired; T-12 premise finding (below) |
+| CP-RE-02 | WP-RE-02 | `97cae35bb8185ef6f082143321ca028bf7966cfe` | `7bc006d28f280e678ab200ee9e9003e1b8c8bbba` | 018-030 | green: 25,188 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: WP-02 + task/commitment/project/continuity + record-event DB modules 195 passed; full `-m recovery` 46 passed (worker: full tests/database 1,689 passed) | no N fired; T-12 premise finding (below) |
 **CP-RE-01 out-of-matrix mechanical edits (as reported to the Manager):**
 - C5/C6 fan-out: 34 `HEAD_PIN_FILES` plus the control file `tests/schema/test_constraint_authoring_capability_migration.py`, 24 revision-count pins, and `tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py`.
 - `KNOWLEDGE_TABLES_BY_REVISION` in `tests/schema/test_extraction_schema_migration.py`.
@@ -114,6 +114,17 @@ Re-derived in the worktree (PYTHONPATH=src):
 ## Manager rulings
 
 - **MR-01 (2026-09-29):** the `TABLES_SHA256` re-pin in `tests/architecture/test_capture_project_binding.py` is MECHANICAL and ACCEPTED, because the tables.py diff against the base only adds lines and the captures Table is unchanged. Each later tables.py edit re-pins it under the same rule, provided the captures Table stays unchanged. CP-RE-01 was accepted by the Manager, and draft PR #297 is open.
+
+- **MR-02 (2026-09-29):** the T-12 reframe is ACCEPTED as a correction to a plan premise, not a weakening.
+  - RE-AC-028 says only "Project create emits Project + bound Entity in causal order".
+  - The "concurrent same-name ⇒ one pair" clause exists only in the TRANSACTION matrix T-12 row.
+  - Evidence: `_mint_bound_project_entity` (`src/my_pa/infrastructure/persistence/continuity_authoring.py`) claims the canonical name with an unlocked `SELECT entities.entity_id WHERE canonical_name = …`. Neither `projects` nor `entities` in `tables.py` has a unique constraint on the name (indexes only: `projects_by_principal`, `projects_by_principal_state`, `entities_by_principal`, `entities_by_entity_type`). Two concurrent same-name creates therefore both commit.
+  - Conditions:
+    - the test runs the two creates truly concurrently, behind a barrier;
+    - for each committed create it asserts exactly one Project event followed by one Entity event, in the same batch, with causation pointing at that create's own Project event;
+    - it asserts no cross-linking between the two creates.
+  - The race is NOT fixed and no issue is opened; the Manager reports it to the operator as a separate candidate work item.
+  - CP-RE-02 was accepted.
 
 ## Review outcome and final state
 

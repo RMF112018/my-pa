@@ -27,7 +27,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from my_pa.application.commands import CreateProject
 from my_pa.contracts.v1.envelope import ResponseEnvelope
@@ -45,6 +45,7 @@ __all__ = ["runtime"]
 pytestmark = pytest.mark.database
 
 JOIN_TIMEOUT_SECONDS: Final = 60.0
+SCHEMA: Final = "knowledge"
 
 
 def test_a_create_commits_the_project_then_its_bound_entity_in_one_batch(
@@ -108,11 +109,37 @@ def test_concurrent_creates_of_one_name_commit_one_pair_per_committed_create(
     assert stored == {str(winner["project_id"]) for winner in winners if winner is not None}
     events = feed(runtime.work_engine)
     assert len(events) == 2 * len(stored)
-    for project_event, entity_event in zip(events[::2], events[1::2], strict=True):
+    with runtime.work_engine.connect() as connection:
+        # `xmin` is the id of the transaction that inserted the row: equal
+        # `xmin` is the same-batch proof, and `recorded_at` (the transaction's
+        # `now()`) must agree with it.
+        writer = dict(
+            connection.execute(text(f"SELECT event_id, xmin::text FROM {SCHEMA}.record_events"))  # noqa: S608
+            .tuples()
+            .all()
+        )
+        bound = dict(
+            connection.execute(
+                select(project_entity_links.c.project_id, project_entity_links.c.project_entity_id)
+            )
+            .tuples()
+            .all()
+        )
+    pairs = list(zip(events[::2], events[1::2], strict=True))
+    for project_event, entity_event in pairs:
         assert project_event["record_family"] == "project"
         assert project_event["record_id"] in stored
         assert entity_event["record_family"] == "entity"
-        assert entity_event["causation_event_id"] == project_event["event_id"]
+        # One batch: consecutive numbers, one transaction, one request.
         assert entity_event["sequence_number"] == project_event["sequence_number"] + 1
+        assert writer[entity_event["event_id"]] == writer[project_event["event_id"]]
+        assert entity_event["recorded_at"] == project_event["recorded_at"]
+        assert entity_event["correlation_id"] == project_event["correlation_id"]
+        # The Entity is the one bound to THIS Project, caused by THIS create.
+        assert entity_event["record_id"] == bound[project_event["record_id"]]
+        assert entity_event["causation_event_id"] == project_event["event_id"]
+    # No cross-linking between the creates.
+    assert len({writer[project_event["event_id"]] for project_event, _ in pairs}) == len(pairs)
+    assert len({entity_event["record_id"] for _, entity_event in pairs}) == len(pairs)
     assert {event["record_id"] for event in events[::2]} == stored
     assert_gap_free(runtime.work_engine)

@@ -79,6 +79,7 @@ from typing import Final, cast
 from my_pa.application.errors import (
     ConflictError,
     DeniedError,
+    InternalError,
     InvalidRequestError,
     NotFoundError,
     SafeDetail,
@@ -87,14 +88,27 @@ from my_pa.contracts.ports import (
     AmbiguitySettlement,
     EntitiesRepository,
     PreviewAmbiguity,
+    RecordEventStager,
     RelationshipMemoryRepository,
 )
+from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import (
     IdKind,
     InvalidIdentifierError,
     validate_identifier,
 )
 from my_pa.domain.common.time import ensure_utc
+from my_pa.domain.identity.operation import Capability
+from my_pa.domain.record_events import (
+    ENTITY_ACTOR_CLASSES,
+    IDENTITY_EFFECT_RECORD_FAMILIES,
+    NON_MEMORY_CLASSIFICATION,
+    RecordEventDraft,
+    RecordEventFamily,
+    RecordEventKind,
+    field_set,
+    observation_feed_version,
+)
 from my_pa.domain.relationship.authoring import MAX_EVIDENCE_REFERENCES
 from my_pa.domain.relationship.entity import (
     AliasState,
@@ -532,6 +546,19 @@ class _BoundRecord:
 
     expected_version: int
     entity_ids: frozenset[str]
+    #: `(column, entity_id)` for every entity-reference column, read in the same
+    #: statement as the guard. WP-RE-04 (MR-07): a reassignment's Record Event
+    #: names exactly the columns that referenced the survivor.
+    columns: tuple[tuple[str, str | None], ...] = ()
+
+
+def _bound(version: int, **columns: str | None) -> _BoundRecord:
+    """A `_BoundRecord` from its guard and its named entity-reference columns."""
+    return _BoundRecord(
+        version,
+        frozenset(value for value in columns.values() if value is not None),
+        tuple(sorted(columns.items())),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -542,6 +569,103 @@ class _Assignment:
     record_id: str
     expected_version: int
     target_entity_id: str
+    #: The entity-reference columns that named the survivor when the row was
+    #: resolved -- the ones `reparent_entity_reference` rewrites (MR-07).
+    reference_columns: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingEvent:
+    """One Record Event a merge or split will stage, before the root is known."""
+
+    position: int
+    family: RecordEventFamily
+    record_id: str
+    kind: RecordEventKind
+    version: int
+    fields: tuple[str, ...]
+    receipt: str
+    classification: Classification = NON_MEMORY_CLASSIFICATION
+
+
+def _position(entry: _PendingEvent) -> int:
+    return entry.position
+
+
+class _Batch:
+    """The events of one identity-correction batch, in effect order.
+
+    Memory events are gathered per memory rather than per effect: a memory
+    whose subject moved and whose context link was retargeted in the same
+    batch is one changed record and gets one event (S-006).
+    """
+
+    def __init__(self) -> None:
+        self.entries: list[_PendingEvent] = []
+        self.memories: dict[str, tuple[int, set[str], str]] = {}
+        self._next = 0
+
+    def _position(self) -> int:
+        self._next += 1
+        return self._next
+
+    def add(
+        self,
+        family: RecordEventFamily,
+        record_id: str,
+        kind: RecordEventKind,
+        version: int,
+        fields: tuple[str, ...],
+        receipt: str,
+    ) -> None:
+        self.entries.append(
+            _PendingEvent(
+                position=self._position(),
+                family=family,
+                record_id=record_id,
+                kind=kind,
+                version=version,
+                fields=fields,
+                receipt=receipt,
+            )
+        )
+
+    def touch_memory(self, memory_id: str, fields: tuple[str, ...], receipt: str) -> None:
+        held = self.memories.get(memory_id)
+        if held is None:
+            self.memories[memory_id] = (self._position(), set(fields), receipt)
+        else:
+            held[1].update(fields)
+
+
+#: How each effect kind reads in the feed (P2b IM1): a reparent is an update;
+#: a redirect, a coalesce or a superseded self-edge changes the record's state.
+_EFFECT_EVENT_KINDS: Final[Mapping[IdentityEffectKind, RecordEventKind]] = {
+    IdentityEffectKind.ENTITY_REDIRECTED: RecordEventKind.STATE_CHANGED,
+    IdentityEffectKind.OWNER_REPARENTED: RecordEventKind.UPDATED,
+    IdentityEffectKind.ROW_COALESCED: RecordEventKind.STATE_CHANGED,
+    IdentityEffectKind.SELF_EDGE_SUPERSEDED: RecordEventKind.STATE_CHANGED,
+    IdentityEffectKind.DEPENDENT_INVALIDATED: RecordEventKind.STATE_CHANGED,
+    IdentityEffectKind.DERIVED_STATE_INVALIDATED: RecordEventKind.STATE_CHANGED,
+}
+
+
+def _changed_state_fields(
+    before: Mapping[str, object], after: Mapping[str, object]
+) -> tuple[str, ...]:
+    """The state keys one effect changed, as field-name tokens.
+
+    A comparison of the effect's typed before/after states -- the closed binding
+    values the planner computed, never a record body -- with `updated_at`
+    excluded as bookkeeping (G1-EM-010).
+    """
+    return field_set(
+        *(
+            name
+            for name in {*before, *after}
+            if name != "updated_at" and before.get(name) != after.get(name)
+        )
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -2425,9 +2549,17 @@ class IdentityCorrectionService:
     """Computes a governed merge, persists what it computed, and performs it once."""
 
     def __init__(
-        self, entities: EntitiesRepository, memories: RelationshipMemoryRepository
+        self,
+        entities: EntitiesRepository,
+        memories: RelationshipMemoryRepository,
+        *,
+        stager: RecordEventStager | None = None,
     ) -> None:
         self._entities = entities
+        # WP-RE-04: the Record Event buffer a merge or split stages into. The
+        # handlers pass the unit of work's own; without one the entity
+        # repository's buffer is used, which the unit of work also owns.
+        self._stager = stager
         # The memory plane is reached through its own port and not through the
         # entity repository, although the question this asks is about entities.
         # Every statement over a memory table belongs to that plane's two
@@ -2785,6 +2917,9 @@ class IdentityCorrectionService:
             effects_digest=effects_digest_for(effects),
         )
         self._entities.complete_identity_operation(command.principal_id, completed)
+        # WP-RE-04 split seam: the restores (S3/S4) and the `ASSIGN_TO_ENTITY`
+        # reassignments (S5), after the ledger is closed.
+        self._stage_split_events(principal_id, completed, effects, reassignments, at=moment)
         return SplitReceipt(completed, effects, False)
 
     def _split_source(
@@ -3254,6 +3389,9 @@ class IdentityCorrectionService:
             effects_digest=effects_digest_for(effects),
         )
         self._entities.complete_identity_operation(principal_id, completed)
+        # WP-RE-04 merge seam: after the ledger is closed, in the same
+        # transaction, and never on the replay path (`_replay` returns first).
+        self._stage_merge_events(principal_id, completed, effects, at=at)
         return MergeReceipt(operation=completed, effects=effects, replayed=False)
 
     def _write(
@@ -3326,6 +3464,194 @@ class IdentityCorrectionService:
                     expected_version=_guarded_version(change),
                     at=at,
                 )
+
+    # ---- WP-RE-04: the Record Events of a merge or split ------------------
+
+    def _stage_merge_events(
+        self,
+        principal_id: str,
+        operation: IdentityOperation,
+        effects: Sequence[IdentityEffect],
+        *,
+        at: datetime,
+    ) -> None:
+        """One event per materially changed in-scope record a merge wrote (T-001 M3-M7).
+
+        `record_version` is the version the write produced: the effect's
+        `after_state["version"]`, which the planner set to the guarded version
+        plus one; an observation's is its feed version (T-002, OD-2 (a)); a
+        memory's is its post-batch `version` (OD-2 (b)).
+        """
+        batch = _Batch()
+        for effect in effects:
+            self._collect_effect(principal_id, batch, effect, split=False)
+        self._stage_batch(
+            principal_id, operation, batch, capability=Capability.ENTITIES_MERGE.value, at=at
+        )
+
+    def _stage_split_events(
+        self,
+        principal_id: str,
+        operation: IdentityOperation,
+        effects: Sequence[IdentityEffect],
+        reassignments: Sequence[_Assignment],
+        *,
+        at: datetime,
+    ) -> None:
+        """A split's restores (S3/S4), then its reassignments (S5), in that order.
+
+        A restored versioned record's `record_version` is the source merge's
+        `after_state["version"] + 1` -- the split effect's `before_state` is that
+        source state -- because the restore advances from the post-merge token.
+        The split ledger's own `after_state` is never read for it (G1-EM-017):
+        for most families it restates the pre-merge version.
+        """
+        batch = _Batch()
+        for effect in effects:
+            self._collect_effect(principal_id, batch, effect, split=True)
+        survivor_entity_id = operation.survivor_entity_id
+        for reassignment in reassignments:
+            family = IDENTITY_EFFECT_RECORD_FAMILIES.get(reassignment.family)
+            if family is None or reassignment.family in _MEMORY_EFFECT_FAMILIES:
+                continue  # ORGANIZATION_PROFILE (OD-3)
+            moved = reassignment.target_entity_id != survivor_entity_id
+            if reassignment.family is IdentityEffectFamily.OBSERVATION:
+                # OD-2 (e) / V-001: a reassignment to the survivor itself changes
+                # neither a field nor `resolution_version`, so it is no change.
+                if moved:
+                    batch.add(
+                        family,
+                        reassignment.record_id,
+                        RecordEventKind.UPDATED,
+                        self._observation_feed_version(principal_id, reassignment.record_id),
+                        ("entity_id",),
+                        operation.identity_operation_id,
+                    )
+                continue
+            # `reparent_entity_reference` advances `version` even for a
+            # self-assignment, which is an applied change: version-only (V-001).
+            batch.add(
+                family,
+                reassignment.record_id,
+                RecordEventKind.UPDATED,
+                reassignment.expected_version + 1,
+                field_set(*reassignment.reference_columns, "version") if moved else ("version",),
+                operation.identity_operation_id,
+            )
+        self._stage_batch(
+            principal_id, operation, batch, capability=Capability.ENTITIES_SPLIT.value, at=at
+        )
+
+    def _collect_effect(
+        self, principal_id: str, batch: _Batch, effect: IdentityEffect, *, split: bool
+    ) -> None:
+        """Add the event one effect implies to `batch`, or nothing (OD-3)."""
+        if effect.family is IdentityEffectFamily.MEMORY_CONTEXT_LINK:
+            # OD-2 (b), S-006: the owning memory, resolved in this transaction.
+            owner = self._memories.context_link_owner(principal_id, effect.record_id)
+            if owner is None:  # STOP N17: an owner this transaction cannot resolve
+                raise InternalError()
+            batch.touch_memory(owner.memory_id, ("context_links",), effect.effect_id)
+            return
+        family = IDENTITY_EFFECT_RECORD_FAMILIES.get(effect.family)
+        if family is None:
+            return
+        changed = _changed_state_fields(effect.before_state, effect.after_state)
+        if effect.family is IdentityEffectFamily.RELATIONSHIP_MEMORY:
+            batch.touch_memory(effect.record_id, field_set(*changed, "version"), effect.effect_id)
+            return
+        if effect.family is IdentityEffectFamily.OBSERVATION:
+            batch.add(
+                family,
+                effect.record_id,
+                RecordEventKind.UPDATED,
+                self._observation_feed_version(principal_id, effect.record_id),
+                changed or ("entity_id",),
+                effect.effect_id,
+            )
+            return
+        source_state = effect.before_state if split else effect.after_state
+        source_version = source_state.get("version")
+        if not isinstance(source_version, int):  # STOP N9
+            raise InternalError()
+        batch.add(
+            family,
+            effect.record_id,
+            _EFFECT_EVENT_KINDS[effect.kind],
+            source_version + 1 if split else source_version,
+            field_set(*changed, "version"),
+            effect.effect_id,
+        )
+
+    def _observation_feed_version(self, principal_id: str, observation_id: str) -> int:
+        """T-002: the feed version of the observation as this transaction left it."""
+        held = self._entities.observation(principal_id, observation_id)
+        if held is None:
+            raise InternalError()
+        return observation_feed_version(held.resolution_version)
+
+    def _stage_batch(
+        self,
+        principal_id: str,
+        operation: IdentityOperation,
+        batch: _Batch,
+        *,
+        capability: str,
+        at: datetime,
+    ) -> None:
+        """Stage the root first, then every other event caused by it (S-001, T-007).
+
+        The root is the `entity` event of the lowest absorbed `entity_id` -- the
+        redirect on a merge, its restore on a split -- and never a memory event.
+        Every memory event is staged once per memory, at the position of the
+        first effect that touched it, with the union of what changed and the
+        memory's post-batch version and current classification (OD-8).
+        """
+        entries = list(batch.entries)
+        for memory_id, (position, fields, receipt) in batch.memories.items():
+            facts = self._memories.memory_feed_facts(principal_id, memory_id)
+            if facts is None:  # STOP N17
+                raise InternalError()
+            entries.append(
+                _PendingEvent(
+                    position=position,
+                    family=RecordEventFamily.RELATIONSHIP_MEMORY,
+                    record_id=memory_id,
+                    kind=RecordEventKind.UPDATED,
+                    version=facts.version,
+                    fields=field_set(*fields),
+                    receipt=receipt,
+                    classification=facts.classification,
+                )
+            )
+        if not entries:
+            return
+        roots = [entry for entry in entries if entry.family is RecordEventFamily.ENTITY]
+        if not roots:  # STOP N19: a batch with no identifiable root
+            raise InternalError()
+        root = min(roots, key=lambda entry: entry.record_id)
+        ordered = [root, *sorted((e for e in entries if e is not root), key=_position)]
+        stager = self._stager if self._stager is not None else self._entities.record_events
+        cause: str | None = None
+        for entry in ordered:
+            draft = RecordEventDraft.issue(
+                principal_id=principal_id,
+                record_family=entry.family,
+                record_id=entry.record_id,
+                event_kind=entry.kind,
+                record_version=entry.version,
+                changed_fields=entry.fields,
+                source_capability=capability,
+                actor_class=ENTITY_ACTOR_CLASSES[operation.actor_class],
+                classification=entry.classification,
+                occurred_at=at,
+                source_receipt_id=entry.receipt,
+                correlation_id=operation.correlation_id,
+                causation_event_id=cause,
+            )
+            stager.stage(draft)
+            if cause is None:
+                cause = draft.event_id
 
     def _replay(
         self, principal_id: str, idempotency_key: str, request_digest: str
@@ -4031,6 +4357,9 @@ class IdentityCorrectionService:
                     record_id=ambiguity.record_id,
                     expected_version=record.expected_version,
                     target_entity_id=target_entity_id,
+                    reference_columns=tuple(
+                        column for column, named in record.columns if named == survivor_entity_id
+                    ),
                 )
             )
         return tuple(resolved)
@@ -4049,27 +4378,22 @@ class IdentityCorrectionService:
         limit = MAX_AFFECTED_RECORDS
         if family is IdentityEffectFamily.ALIAS:
             return {
-                alias.alias_id: _BoundRecord(alias.version, frozenset({alias.entity_id}))
+                alias.alias_id: _bound(alias.version, entity_id=alias.entity_id)
                 for alias in self._entities.aliases(principal_id, entity_id, limit=limit)
             }
         if family is IdentityEffectFamily.IDENTIFIER:
             return {
-                identifier.identifier_id: _BoundRecord(
-                    identifier.version, frozenset({identifier.entity_id})
-                )
+                identifier.identifier_id: _bound(identifier.version, entity_id=identifier.entity_id)
                 for identifier in self._entities.external_identifiers(
                     principal_id, entity_id, limit=limit
                 )
             }
         if family is IdentityEffectFamily.ASSIGNMENT:
             return {
-                assignment.assignment_id: _BoundRecord(
+                assignment.assignment_id: _bound(
                     assignment.version,
-                    frozenset(
-                        name
-                        for name in (assignment.entity_id, assignment.scope_entity_id)
-                        if name is not None
-                    ),
+                    entity_id=assignment.entity_id,
+                    scope_entity_id=assignment.scope_entity_id,
                 )
                 for assignment in (
                     *self._entities.assignments(
@@ -4080,17 +4404,11 @@ class IdentityCorrectionService:
             }
         if family is IdentityEffectFamily.RELATIONSHIP:
             return {
-                edge.relationship_id: _BoundRecord(
+                edge.relationship_id: _bound(
                     edge.version,
-                    frozenset(
-                        name
-                        for name in (
-                            edge.from_entity_id,
-                            edge.to_entity_id,
-                            edge.scope_entity_id,
-                        )
-                        if name is not None
-                    ),
+                    from_entity_id=edge.from_entity_id,
+                    to_entity_id=edge.to_entity_id,
+                    scope_entity_id=edge.scope_entity_id,
                 )
                 for edge in (
                     *self._entities.relationships(principal_id, entity_id, limit=limit),
@@ -4102,46 +4420,39 @@ class IdentityCorrectionService:
             # the token `reparent_entity_reference` reads for it, and a rebinding
             # does not advance it.
             return {
-                observation.observation_id: _BoundRecord(
-                    observation.resolution_version,
-                    frozenset({observation.entity_id})
-                    if observation.entity_id is not None
-                    else frozenset(),
+                observation.observation_id: _bound(
+                    observation.resolution_version, entity_id=observation.entity_id
                 )
                 for observation in self._entities.observations(principal_id, entity_id, limit=limit)
             }
         if family is IdentityEffectFamily.NAME:
             return {
-                name.entity_name_id: _BoundRecord(name.version, frozenset({name.entity_id}))
+                name.entity_name_id: _bound(name.version, entity_id=name.entity_id)
                 for name in self._entities.names(principal_id, entity_id, limit=limit)
             }
         if family is IdentityEffectFamily.ORGANIZATION_PROFILE:
             profile = self._entities.organization_profile(principal_id, entity_id)
             if profile is None:
                 return {}
-            return {
-                profile.entity_id: _BoundRecord(profile.version, frozenset({profile.entity_id}))
-            }
+            return {profile.entity_id: _bound(profile.version, entity_id=profile.entity_id)}
         if family is IdentityEffectFamily.ADDRESS:
             return {
-                address.entity_address_id: _BoundRecord(
-                    address.version, frozenset({address.entity_id})
-                )
+                address.entity_address_id: _bound(address.version, entity_id=address.entity_id)
                 for address in self._entities.addresses(principal_id, entity_id, limit=limit)
             }
         if family is IdentityEffectFamily.COMMUNICATION_METHOD:
             return {
-                method.communication_method_id: _BoundRecord(
-                    method.version, frozenset({method.entity_id})
-                )
+                method.communication_method_id: _bound(method.version, entity_id=method.entity_id)
                 for method in self._entities.communication_methods(
                     principal_id, entity_id, limit=limit
                 )
             }
         if family is IdentityEffectFamily.PROJECT_PARTICIPATION:
             return {
-                row.participation_id: _BoundRecord(
-                    row.version, frozenset({row.project_entity_id, row.participant_entity_id})
+                row.participation_id: _bound(
+                    row.version,
+                    project_entity_id=row.project_entity_id,
+                    participant_entity_id=row.participant_entity_id,
                 )
                 for row in (
                     *self._entities.project_participations_as_project(
@@ -4154,13 +4465,10 @@ class IdentityCorrectionService:
             }
         if family is IdentityEffectFamily.PERSON_ORGANIZATION_AFFILIATION:
             return {
-                row.affiliation_id: _BoundRecord(
+                row.affiliation_id: _bound(
                     row.version,
-                    frozenset(
-                        name
-                        for name in (row.person_entity_id, row.organization_entity_id)
-                        if name is not None
-                    ),
+                    person_entity_id=row.person_entity_id,
+                    organization_entity_id=row.organization_entity_id,
                 )
                 for row in (
                     *self._entities.person_organization_affiliations_as_person(

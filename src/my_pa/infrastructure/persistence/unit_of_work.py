@@ -555,8 +555,13 @@ class _Reviews(ReviewRepository):
         relationship_memory_enabled: bool,
         relationship_intelligence_enabled: bool = False,
         goodnotes_pull_enabled: bool = False,
+        stager: RecordEventStager | None = None,
     ) -> None:
         self._connection = connection
+        # WP-RE-04 RP2: a memory promotion stages its Record Event into the
+        # owning unit of work's buffer; without one (a fixture) it stages into
+        # a private buffer nothing flushes.
+        self._record_events = stager
         self._relationship_memory_enabled = relationship_memory_enabled
         self._relationship_intelligence_enabled = relationship_intelligence_enabled
         self._goodnotes_pull_enabled = goodnotes_pull_enabled
@@ -726,6 +731,7 @@ class _Reviews(ReviewRepository):
                     self._connection,
                     request,
                     has_operator_authority=has_operator_authority,
+                    stager=self._record_events,
                 )
             return decide_review(self._connection, request)
 
@@ -1173,6 +1179,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
             relationship_memory_enabled=self._relationship_memory_enabled,
             relationship_intelligence_enabled=self._relationship_intelligence_enabled,
             goodnotes_pull_enabled=self._goodnotes_pull_enabled,
+            stager=self._record_events,
         )
 
     @property
@@ -1266,7 +1273,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     @property
     def entities(self) -> EntitiesRepository:
         """The generalized entity rows, on this transaction's connection."""
-        return SqlEntityRepository(self._open)
+        return SqlEntityRepository(self._open, stager=self._record_events)
 
     @property
     def meetings(self) -> MeetingRepository:
@@ -1281,7 +1288,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     @property
     def relationship_memory(self) -> RelationshipMemoryRepository:
         """The Relationship Memory rows, on this transaction's connection."""
-        return SqlRelationshipMemoryRepository(self._open)
+        return SqlRelationshipMemoryRepository(self._open, stager=self._record_events)
 
     @property
     def relationship_memory_proposals(self) -> RelationshipMemoryProposalRepository:

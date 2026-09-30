@@ -277,7 +277,7 @@ from my_pa.domain.project_controls.read_models import (
 from my_pa.domain.project_controls.relationship import ConstraintRelationship
 from my_pa.domain.project_controls.revision import ConstraintRevision
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
-from my_pa.domain.record_events import RecordEventDraft
+from my_pa.domain.record_events import EntityEventShape, RecordEventDraft
 from my_pa.domain.relationship.authoring import (
     ConflictedIdentifierError,
     DuplicateEntityFactError,
@@ -4547,8 +4547,18 @@ class _Entities(EntitiesRepository):
     mine" are different questions, and only the second one is safe.
     """
 
-    def __init__(self, world: World) -> None:
+    def __init__(self, world: World, record_events: RecordEventStager | None = None) -> None:
         self._world = world
+        # WP-RE-04: the buffer `resolve_mention` stages its unledgered Entity
+        # create into (G1-EM-002). The fake ledger's seams stage nothing: the
+        # S-A/S-B/S-C seams are SQL and are proven against Postgres.
+        self._record_events: RecordEventStager = (
+            FakeRecordEventStager([]) if record_events is None else record_events
+        )
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        return self._record_events
 
     # --- guards ----------------------------------------------------------
 
@@ -6472,7 +6482,13 @@ class _Entities(EntitiesRepository):
             None,
         )
 
-    def record_mutation_event(self, principal_id: str, event: EntityMutationEvent) -> None:
+    def record_mutation_event(
+        self,
+        principal_id: str,
+        event: EntityMutationEvent,
+        *,
+        shape: EntityEventShape | None = None,
+    ) -> None:
         self._world.fail("entities.record_mutation_event")
         if event.principal_id != principal_id:
             raise ValueError("a mutation event belongs to the acting Principal")
@@ -9340,7 +9356,7 @@ class FakeUnitOfWork(UnitOfWork):
     @property
     def entities(self) -> EntitiesRepository:
         """The relationship-intelligence entity plane over this `World`."""
-        return _Entities(self._world)
+        return _Entities(self._world, record_events=self._record_events)
 
     @property
     def meetings(self) -> MeetingRepository:

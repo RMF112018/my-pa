@@ -128,12 +128,21 @@ from my_pa.contracts.ports import (
     ProposalAdmissionConflictError,
     ProposalEvidenceConflictError,
     ProposalReviewScopeConflictError,
+    RecordEventStager,
     RelationshipWriteRequest,
     UnknownScopeError,
 )
 from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, validate_identifier
 from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.identity.operation import Capability
+from my_pa.domain.record_events import (
+    EntityEventShape,
+    RecordEventDraft,
+    RecordEventKind,
+    entity_record_event,
+    field_set,
+    observation_feed_version,
+)
 from my_pa.domain.relationship.authoring import (
     ConflictedIdentifierError,
     UnsettledBindingError,
@@ -245,6 +254,7 @@ from my_pa.infrastructure.persistence.principal_scope import (
     partition_criterion,
     principal_bound_values,
 )
+from my_pa.infrastructure.persistence.record_events import RecordEventBuffer
 from my_pa.infrastructure.persistence.tables import (
     capture_spans,
     capture_versions,
@@ -540,6 +550,15 @@ if frozenset(_PROPOSAL_ENTITY_FIELDS) != frozenset(EntityProposalKind):
     raise RuntimeError("every Entity proposal kind declares its mutation lock references")
 
 
+#: P2b E11/E14 static create sets (R3 (a)), and the version-only change an
+#: identical revise still makes (G1-EM-010).
+_ASSIGNMENT_CREATE_FIELDS = field_set("assignment_type", "entity_id", "state")
+_RELATIONSHIP_CREATE_FIELDS = field_set(
+    "from_entity_id", "relationship_type", "state", "to_entity_id"
+)
+_VERSION_ONLY = field_set("version")
+
+
 class SqlEntityRepository(EntitiesRepository):
     """SQLAlchemy implementation of ``EntitiesRepository``.
 
@@ -547,10 +566,25 @@ class SqlEntityRepository(EntitiesRepository):
     ``SqlTaskManagementRepository`` does: the caller owns the transaction,
     this class only issues statements on it. ``principal_id`` is passed per
     method and applied per statement, rather than bound at construction.
+
+    **`stager` is the Record Event buffer its seams stage into**
+    (WP-RE-04: S-A `admit_mutation`, S-B `_append_mutation`, S-C
+    `record_mutation_event`). `SqlAlchemyUnitOfWork` always passes its own, so
+    every staged draft is flushed with the transaction that made the change.
+    A repository built without one -- a test fixture, or a lock-only call --
+    stages into a private buffer that nothing flushes, because it has no
+    transaction boundary of its own to flush at;
+    `tests/architecture/test_record_event_stager_injection.py` holds every
+    writing construction in `src/` to passing one.
     """
 
-    def __init__(self, connection: Connection) -> None:
+    def __init__(self, connection: Connection, stager: RecordEventStager | None = None) -> None:
         self._connection = connection
+        self._record_events: RecordEventStager = RecordEventBuffer() if stager is None else stager
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        return self._record_events
 
     # --- Partition guards ----------------------------------------------------
 
@@ -2568,7 +2602,7 @@ class SqlEntityRepository(EntitiesRepository):
     # --- WP-RI-A-02: the governed write path ---------------------------------
 
     def admit_mutation(self, request: EntityWriteRequest) -> EntityMutationAdmission:
-        return admit_mutation(self._connection, request)
+        return admit_mutation(self._connection, request, self._record_events)
 
     def mutation_replay_for(
         self,
@@ -3254,6 +3288,8 @@ class SqlEntityRepository(EntitiesRepository):
             before_state=None,
             after_state=_assignment_state(assignment),
             state=assignment.state.value,
+            event_kind=RecordEventKind.CREATED,
+            changed_fields=_ASSIGNMENT_CREATE_FIELDS,
         )
 
     def revise_assignment(self, request: AssignmentWriteRequest) -> DirectedReceipt:
@@ -3334,6 +3370,8 @@ class SqlEntityRepository(EntitiesRepository):
             before_state=None,
             after_state=_relationship_state(edge),
             state=edge.state.value,
+            event_kind=RecordEventKind.CREATED,
+            changed_fields=_RELATIONSHIP_CREATE_FIELDS,
         )
 
     def revise_relationship(self, request: RelationshipWriteRequest) -> DirectedReceipt:
@@ -3419,6 +3457,31 @@ class SqlEntityRepository(EntitiesRepository):
                 "effective_to": after_to,
             }
             after_state_name = current.state.value
+        # P2b E12/E13 (R3): the typed comparison of what this write set against
+        # the row it guarded on, `version`/`updated_at` excluded; an end is a
+        # static lifecycle set. An identical revise still advances the version.
+        if ending:
+            event_kind = RecordEventKind.STATE_CHANGED
+            changed = field_set(
+                "ended_at",
+                "state",
+                *(("effective_to",) if after_to != current.effective_to else ()),
+            )
+        else:
+            held_assignment: dict[str, object] = {
+                "role": current.role,
+                "discipline": current.discipline,
+                "responsibility_class": current.responsibility_class,
+                "effective_from": current.effective_from,
+                "effective_to": current.effective_to,
+            }
+            event_kind = RecordEventKind.UPDATED
+            changed = (
+                field_set(
+                    *(name for name, value in values.items() if held_assignment[name] != value)
+                )
+                or _VERSION_ONLY
+            )
         values["version"] = current.version + 1
         values["updated_at"] = request.server_received_at
         with _duplicate_translated(_ASSIGNMENT_UNIQUE):
@@ -3457,6 +3520,8 @@ class SqlEntityRepository(EntitiesRepository):
             before_state=_assignment_state(current),
             after_state=after,
             state=after_state_name,
+            event_kind=event_kind,
+            changed_fields=changed,
         )
 
     def _mutate_relationship(
@@ -3516,6 +3581,24 @@ class SqlEntityRepository(EntitiesRepository):
                 raise DirectedWriteError("an entity relationship cannot end before it begins")
             values = {"effective_from": after_from, "effective_to": after_to}
             after_state_name = current.state.value
+        # P2b E15/E16: as `_mutate_assignment`.
+        if ending:
+            event_kind = RecordEventKind.STATE_CHANGED
+            changed = field_set(
+                "ended_at",
+                "state",
+                *(("effective_to",) if after_to != current.effective_to else ()),
+            )
+        else:
+            held_edge: dict[str, object] = {
+                "effective_from": current.effective_from,
+                "effective_to": current.effective_to,
+            }
+            event_kind = RecordEventKind.UPDATED
+            changed = (
+                field_set(*(name for name, value in values.items() if held_edge[name] != value))
+                or _VERSION_ONLY
+            )
         values["version"] = current.version + 1
         values["updated_at"] = request.server_received_at
         updated = self._connection.execute(
@@ -3551,6 +3634,8 @@ class SqlEntityRepository(EntitiesRepository):
             before_state=_relationship_state(current),
             after_state=after,
             state=after_state_name,
+            event_kind=event_kind,
+            changed_fields=changed,
         )
 
     # --- the shared guards and the ledger ------------------------------------
@@ -3727,6 +3812,8 @@ class SqlEntityRepository(EntitiesRepository):
         before_state: dict[str, Any] | None,
         after_state: dict[str, Any],
         state: str,
+        event_kind: RecordEventKind,
+        changed_fields: tuple[str, ...],
     ) -> DirectedReceipt:
         """Append the ledger row that *is* this plane's receipt, and return it.
 
@@ -3788,6 +3875,26 @@ class SqlEntityRepository(EntitiesRepository):
                     )
                 )
             )
+        # WP-RE-04 seam S-B (P2b E11-E16): after the ledger INSERT, before the
+        # receipt. A replay never reaches here -- `directed_replay` answers it
+        # before any write -- and the only savepoint in this class is the
+        # proposal insert's, which this path never enters.
+        self._record_events.stage(
+            entity_record_event(
+                principal_id=request.principal_id,
+                family=family,
+                record_id=record_id,
+                event_kind=event_kind,
+                record_version=new_version,
+                changed_fields=changed_fields,
+                capability=capability,
+                authority=request.authority,
+                actor_class=request.actor_class,
+                occurred_at=request.server_received_at,
+                receipt_id=event_id,
+                correlation_id=request.correlation_id,
+            )
+        )
         return DirectedReceipt(
             mutation_event_id=event_id,
             record_id=record_id,
@@ -3943,7 +4050,13 @@ class SqlEntityRepository(EntitiesRepository):
 
     # --- WP-RI-A-04: the three ledgers, written for the first time -----------
 
-    def record_mutation_event(self, principal_id: str, event: EntityMutationEvent) -> None:
+    def record_mutation_event(
+        self,
+        principal_id: str,
+        event: EntityMutationEvent,
+        *,
+        shape: EntityEventShape | None = None,
+    ) -> None:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         if event.principal_id != principal_id:
             raise ValueError("a mutation event belongs to the acting Principal")
@@ -4015,6 +4128,90 @@ class SqlEntityRepository(EntitiesRepository):
                     )
                 )
             )
+        # WP-RE-04 seam S-C: after the INSERT, so the same-digest replay
+        # `return` above stages nothing (G1-EM-016, RE-AC-046).
+        for draft in self._ledger_row_events(principal_id, event, shape):
+            self._record_events.stage(draft)
+
+    def _ledger_row_events(
+        self,
+        principal_id: str,
+        event: EntityMutationEvent,
+        shape: EntityEventShape | None,
+    ) -> list[RecordEventDraft]:
+        """The events one appended ledger row implies (P2b E17-E33).
+
+        An `OBSERVATION` row names the observation at its feed version, read
+        from the canonical row this transaction just wrote (T-002): the ledger's
+        `new_version` is the resolution version the decider checked against
+        plus one, which is not the feed version for an observe. Every other
+        family's `record_version` is the row's typed `new_version`. A caller
+        that states no shape gets the lifecycle default -- a create when there
+        is no prior version, a state change otherwise.
+        """
+        if shape is None:
+            shape = EntityEventShape(
+                event_kind=(
+                    RecordEventKind.CREATED
+                    if event.prior_version is None
+                    else RecordEventKind.STATE_CHANGED
+                ),
+                changed_fields=("state",),
+            )
+        if event.record_family is MutationRecordFamily.OBSERVATION:
+            resolution_version = self._connection.execute(
+                select(entity_observations.c.resolution_version).where(
+                    _mine(entity_observations, principal_id),
+                    entity_observations.c.observation_id == event.record_id,
+                )
+            ).scalar_one()
+            record_version = observation_feed_version(int(resolution_version))
+        else:
+            record_version = event.new_version
+
+        def draft(
+            record_id: str,
+            kind: RecordEventKind,
+            version: int,
+            changed: tuple[str, ...],
+            cause: str | None,
+        ) -> RecordEventDraft:
+            return entity_record_event(
+                principal_id=principal_id,
+                family=event.record_family,
+                record_id=record_id,
+                event_kind=kind,
+                record_version=version,
+                changed_fields=changed,
+                capability=event.capability,
+                authority=event.authority,
+                actor_class=event.actor_class,
+                occurred_at=event.recorded_at,
+                receipt_id=event.event_id,
+                correlation_id=event.correlation_id,
+                causation_event_id=cause,
+            )
+
+        primary = draft(
+            event.record_id,
+            shape.event_kind,
+            record_version,
+            shape.changed_fields,
+            shape.causation_event_id,
+        )
+        events = [primary]
+        if shape.superseded is not None:
+            superseded_id, superseded_version = shape.superseded
+            events.append(
+                draft(
+                    superseded_id,
+                    RecordEventKind.STATE_CHANGED,
+                    superseded_version,
+                    shape.superseded_fields,
+                    primary.event_id,
+                )
+            )
+        return events
 
     def mutation_event(
         self, principal_id: str, *, capability: str, idempotency_key: str

@@ -12976,7 +12976,9 @@ class ApplicationService:
         """
         self._identity_correction_plane()
         report = IdentityCorrectionService(
-            unit_of_work.entities, unit_of_work.relationship_memory
+            unit_of_work.entities,
+            unit_of_work.relationship_memory,
+            stager=unit_of_work.record_events,
         ).preview(
             MergePreviewCommand(
                 principal_id=authorization.principal.principal_id,
@@ -13057,7 +13059,9 @@ class ApplicationService:
         self._identity_correction_plane()
         principal_id = authorization.principal.principal_id
         receipt = IdentityCorrectionService(
-            unit_of_work.entities, unit_of_work.relationship_memory
+            unit_of_work.entities,
+            unit_of_work.relationship_memory,
+            stager=unit_of_work.record_events,
         ).apply(
             MergeCommand(
                 principal_id=principal_id,
@@ -13203,7 +13207,9 @@ class ApplicationService:
         """`entities.split.preview`: persist the exact inverse plan for one merge."""
         self._identity_correction_plane()
         report = IdentityCorrectionService(
-            unit_of_work.entities, unit_of_work.relationship_memory
+            unit_of_work.entities,
+            unit_of_work.relationship_memory,
+            stager=unit_of_work.record_events,
         ).split_preview(
             SplitPreviewCommand(
                 principal_id=authorization.principal.principal_id,
@@ -13264,7 +13270,9 @@ class ApplicationService:
         self._identity_correction_plane()
         principal_id = authorization.principal.principal_id
         receipt = IdentityCorrectionService(
-            unit_of_work.entities, unit_of_work.relationship_memory
+            unit_of_work.entities,
+            unit_of_work.relationship_memory,
+            stager=unit_of_work.record_events,
         ).split_apply(
             SplitCommand(
                 principal_id=principal_id,

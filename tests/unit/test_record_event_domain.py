@@ -36,12 +36,17 @@ from my_pa.domain.record_events import (
     CONSTRAINT_ACTOR_CLASSES,
     ENTITY_ACTOR_CLASSES,
     ENTITY_AUTHORITIES,
+    ENTITY_RECORD_FAMILIES,
+    IDENTITY_EFFECT_RECORD_FAMILIES,
     MAX_CHANGED_FIELDS,
     MEETING_ACTOR_CLASSES,
     MEMORY_ACTOR_CLASSES,
     MEMORY_AUTHORITIES,
+    MEMORY_CAPABILITIES,
     NON_MEMORY_CLASSIFICATION,
+    REVIEW_PROMOTION_CAPABILITY,
     TASK_ACTOR_CLASSES,
+    EntityEventShape,
     InvalidRecordEventError,
     RecordEvent,
     RecordEventActorClass,
@@ -49,9 +54,19 @@ from my_pa.domain.record_events import (
     RecordEventDraft,
     RecordEventFamily,
     RecordEventKind,
+    entity_record_event,
+    entity_source_capability,
+    field_set,
+    memory_source_capability,
+    observation_feed_version,
 )
-from my_pa.domain.relationship.governance import ActorClass, MutationAuthority
-from my_pa.domain.relationship.memory import MemoryActorClass, MemoryAuthority
+from my_pa.domain.relationship.governance import (
+    ActorClass,
+    MutationAuthority,
+    MutationRecordFamily,
+)
+from my_pa.domain.relationship.identity_correction import IdentityEffectFamily
+from my_pa.domain.relationship.memory import MemoryActorClass, MemoryAuthority, MemoryOperation
 from my_pa.domain.task.history import TaskMutationActor
 
 PRINCIPAL = "prn_recordevent0001"
@@ -443,3 +458,142 @@ def test_the_carrier_holds_no_payload_field() -> None:
         "occurred_at",
         "recorded_at",
     }
+
+
+# ---- WP-RE-04: the Entity and Relationship Memory vocabulary ---------------
+
+
+def test_the_entity_family_map_is_total_and_one_to_one() -> None:
+    """RE-AC-045: all 11 ledger families map, each to its own feed family (P2b 1.4)."""
+    assert set(ENTITY_RECORD_FAMILIES) == set(MutationRecordFamily)
+    assert len(MutationRecordFamily) == 11
+    assert len(set(ENTITY_RECORD_FAMILIES.values())) == len(ENTITY_RECORD_FAMILIES)
+
+
+def test_the_entity_family_map_names_exactly_the_eleven_expected_pairs() -> None:
+    assert {member.value: family.value for member, family in ENTITY_RECORD_FAMILIES.items()} == {
+        "entity": "entity",
+        "identifier": "entity_identifier",
+        "alias": "entity_alias",
+        "assignment": "entity_assignment",
+        "relationship": "entity_relationship",
+        "observation": "entity_observation",
+        "name": "entity_name",
+        "address": "entity_address",
+        "communication_method": "entity_communication_method",
+        "project_participation": "entity_project_participation",
+        "person_organization_affiliation": "person_organization_affiliation",
+    }
+
+
+def test_review_promotion_names_the_review_decide_capability() -> None:
+    """OD-6."""
+    assert REVIEW_PROMOTION_CAPABILITY == Capability.REVIEW_DECIDE.value == "review.decide"
+
+
+def test_the_memory_capability_map_is_total_over_the_public_writes() -> None:
+    assert set(MEMORY_CAPABILITIES) == set(MemoryOperation)
+    assert {Capability(value) for value in MEMORY_CAPABILITIES.values()} == {
+        Capability.RELATIONSHIP_MEMORY_CREATE,
+        Capability.RELATIONSHIP_MEMORY_REVISE,
+        Capability.RELATIONSHIP_MEMORY_ARCHIVE,
+        Capability.RELATIONSHIP_MEMORY_RESTORE,
+    }
+
+
+@pytest.mark.parametrize("actor", list(ActorClass))
+def test_an_entity_event_names_review_decide_exactly_when_a_review_promoted_it(
+    actor: ActorClass,
+) -> None:
+    capability = entity_source_capability("entities.create", actor)
+    expected = "review.decide" if actor is ActorClass.REVIEW_PROMOTION else "entities.create"
+    assert capability == expected
+
+
+@pytest.mark.parametrize("actor", list(MemoryActorClass))
+def test_a_memory_event_names_review_decide_exactly_when_a_review_promoted_it(
+    actor: MemoryActorClass,
+) -> None:
+    capability = memory_source_capability(MemoryOperation.REVISE, actor)
+    expected = (
+        "review.decide"
+        if actor is MemoryActorClass.REVIEW_PROMOTION
+        else "relationship_memory.revise"
+    )
+    assert capability == expected
+
+
+@pytest.mark.parametrize(("resolution_version", "feed"), [(0, 1), (1, 2), (7, 8)])
+def test_the_observation_feed_version_is_the_resolution_version_plus_one(
+    resolution_version: int, feed: int
+) -> None:
+    """OD-2 (d-i), T-002: one function, and it always satisfies `record_version >= 1`."""
+    assert observation_feed_version(resolution_version) == feed
+
+
+@pytest.mark.parametrize("value", [-1, True, 1.0, "1", None])
+def test_the_observation_feed_version_refuses_a_non_version(value: object) -> None:
+    with pytest.raises(InvalidRecordEventError):
+        observation_feed_version(value)  # type: ignore[arg-type]
+
+
+def test_field_set_is_the_canonical_order() -> None:
+    assert field_set("state", "entity_id", "state") == ("entity_id", "state")
+
+
+def test_an_entity_event_shape_validates_its_tokens_and_predecessor() -> None:
+    shape = EntityEventShape(
+        event_kind=RecordEventKind.CREATED,
+        changed_fields=("entity_id", "state"),
+        superseded=("enam_recordevent0001", 2),
+    )
+    assert shape.superseded_fields == ("state",)
+    with pytest.raises(InvalidRecordEventError):
+        EntityEventShape(event_kind=RecordEventKind.CREATED, changed_fields=("state", "entity_id"))
+    with pytest.raises(InvalidRecordEventError):
+        EntityEventShape(
+            event_kind=RecordEventKind.CREATED,
+            changed_fields=("state",),
+            superseded=("enam_recordevent0001", 0),
+        )
+    with pytest.raises(InvalidRecordEventError):
+        EntityEventShape(event_kind="deleted", changed_fields=("state",))  # type: ignore[arg-type]
+
+
+def test_an_entity_event_carries_the_mapped_actor_authority_and_family() -> None:
+    draft = entity_record_event(
+        principal_id=PRINCIPAL,
+        family=MutationRecordFamily.ALIAS,
+        record_id="eals_recordevent0001",
+        event_kind=RecordEventKind.CREATED,
+        record_version=1,
+        changed_fields=("state",),
+        capability="entities.aliases.add",
+        authority=MutationAuthority.REVIEW_ACCEPTED,
+        actor_class=ActorClass.REVIEW_PROMOTION,
+        occurred_at=WHEN,
+        receipt_id="emut_recordevent0001",
+        correlation_id=CORRELATION,
+    )
+    assert draft.record_family is RecordEventFamily.ENTITY_ALIAS
+    assert draft.actor_class is RecordEventActorClass.REVIEW_PROMOTION
+    assert draft.authority is RecordEventAuthority.REVIEW_ACCEPTED
+    assert draft.source_capability == "review.decide"
+    assert draft.classification is NON_MEMORY_CLASSIFICATION
+
+
+def test_the_identity_effect_map_names_exactly_the_twelve_in_scope_families() -> None:
+    """P2b 1.4 / OD-3: twelve effect families have a feed family; the rest none."""
+    assert len(IDENTITY_EFFECT_RECORD_FAMILIES) == 12
+    assert set(IdentityEffectFamily) - set(IDENTITY_EFFECT_RECORD_FAMILIES) == {
+        IdentityEffectFamily.ORGANIZATION_PROFILE,
+        IdentityEffectFamily.PROPOSAL,
+        IdentityEffectFamily.REVIEW_CASE,
+        IdentityEffectFamily.MEMORY_PROPOSAL,
+        IdentityEffectFamily.MEMORY_CONTEXT_LINK,
+        IdentityEffectFamily.DERIVED_CONTEXT,
+    }
+    assert len(set(IDENTITY_EFFECT_RECORD_FAMILIES.values())) == 12
+    for member, family in IDENTITY_EFFECT_RECORD_FAMILIES.items():
+        if member.value in {item.value for item in MutationRecordFamily}:
+            assert family is ENTITY_RECORD_FAMILIES[MutationRecordFamily(member.value)]

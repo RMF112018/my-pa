@@ -56,8 +56,10 @@ Re-derived in the worktree (PYTHONPATH=src):
 | CP | WP | Head | Tree | RE-AC | FAST | DB lane (local PG) | Notes |
 |---|---|---|---|---|---|---|---|
 | CP-RE-01 | WP-RE-01 | `bf1bfe9c61496275440a13be1be3fd8d4eb94962` | `8f9f2b38fcef0b35d877c82820429973ceb0dc75` | 001-017 | green: 25,169 passed / 74 skipped / 0 failed; ruff, format, mypy (522 files) clean | PG 15.15 local, PGTZ=UTC: new DB modules + meeting app 114 passed; recovery `tests/concurrency` 15 passed; migration_empty_to_head 9 passed; migration_edge subset 179 passed (worker full lane 1,052 passed) | revision `1d9b248e7f83` (down `7d9a450dfd07`); N-conditions none fired |
-
 | CP-RE-02 | WP-RE-02 | `97cae35bb8185ef6f082143321ca028bf7966cfe` | `7bc006d28f280e678ab200ee9e9003e1b8c8bbba` | 018-030 | green: 25,188 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: WP-02 + task/commitment/project/continuity + record-event DB modules 195 passed; full `-m recovery` 46 passed (worker: full tests/database 1,689 passed) | no N fired; T-12 premise finding (below) |
+| CP-RE-03 | WP-RE-03 | `9102e2f2642a3ef6bf7cc16b93ecd8460fa79509` | `ee2238f806f4e0bff42dc1850b1ac107a20aff85` | 031-043 | green: 25,206 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: 32 constraint/project-controls/project-create/tbr DB modules 468 passed; full `-m recovery` 46 passed (worker: full tests/database 1,713 passed) | no N fired; T-10 no 40P01/lock_timeout |
+| CP-RE-04 | WP-RE-04 | the commit that adds this row (SHA recorded in CP-RE-05) | | 044-051 | green: 25,274 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: entity/identity/memory/review/reenrichment/record-event DB modules + no-payload 916 passed; full `-m recovery` 46 passed | no N fired (N8 resolved as not-fired, MR-05); T-15 no 40P01 |
+
 **CP-RE-01 out-of-matrix mechanical edits (as reported to the Manager):**
 - C5/C6 fan-out: 34 `HEAD_PIN_FILES` plus the control file `tests/schema/test_constraint_authoring_capability_migration.py`, 24 revision-count pins, and `tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py`.
 - `KNOWLEDGE_TABLES_BY_REVISION` in `tests/schema/test_extraction_schema_migration.py`.
@@ -111,6 +113,46 @@ Re-derived in the worktree (PYTHONPATH=src):
   - `docs/plans/mcv-completion-plan.md` module counts (359/602).
 - CP-RE-01 CI at `bf1bfe9c`: repository-checks run 36616266822 had all 9 jobs succeed, including `database-tier`. frontend-quality run 36616266764 had classify and required succeed; visual failed (continue-on-error, Darwin goldens).
 
+### WP-RE-03 (CP-RE-03)
+
+- Constraint, Category, Settings, sync and legacy-import emitters stage only on the U4 / `_Mutation.uow` / `active_uow` stager.
+  - `create_published` emits one final `created`, with its substeps suppressed.
+  - `close_with_follow_up` emits the predecessor `state_changed`, then the successor `created`, whose causation is the predecessor.
+  - `reorder` emits one `updated` per Category in `wanted` order.
+  - Settings events use `record_id = project_id`.
+  - Legacy import emits Category events, then record events, as one batch (actor `system`, token `constraint_legacy_import.apply`).
+  - Sync apply and resolve (accept_external, manual_patch, reopen) are covered; control rows emit nothing.
+- MR-02(b) is satisfied. The T-12 concurrent test proves the same batch via equal `xmin` (plus `recorded_at` and `correlation_id`), the bound Entity via `project_entity_links`, causation pointing at the create's own Project event, and no cross-linking. Two prove-reds were recorded.
+- RE-AC-043 prove-red: a new deterministic test, `test_a_composite_waiting_on_a_domain_lock_holds_no_allocator_lock`, gives 40P01 3/3 under the per-substep allocation mutant and is green unmutated.
+- N13 was found and fixed: the resolve mutant stayed green, so manual_patch and reopen resolve tests were added.
+- Edits outside the listed paths:
+  - `domain/record_events.py`: the `source_receipt_id` check changed from "a known IdKind" to the any-kind opaque shape that matches the DDL CHECK. This was forced by the settings ledger's `cpsh_` receipt, which by design is not an `IdKind`. The hardened package §3.5 says only "opaque identifiers".
+  - `tests/database/test_constraint_schema_invariants.py`: 7 `SimpleNamespace` stand-in units of work gain `record_events` (a test-double consequence).
+  - The `_FakeUnitOfWork` doubles in `tests/unit/test_constraint_management_service.py` and `tests/unit/test_project_controls_settings_service.py`.
+  - Doc count cells: `relationship-intelligence-implementation-plan.md` :660 (25,206) and :664 (3,023), contended with #287; `mcv-completion-plan.md` (359/608).
+- CP-RE-02 CI at `97cae35b`: repository-checks run 36631335712 succeeded on all 9 jobs. frontend-quality run 36631335886 had classify and required succeed; visual failed (continue-on-error).
+- Note: this CP-RE-03 ledger row and these notes were written after the CP-RE-03 commit (a script error) and are committed with CP-RE-04.
+
+### WP-RE-04 (CP-RE-04)
+
+- Phases were serialized on the SFI worker:
+  - 4A: Entity seams S-A/S-B/S-C, derived drafts incl. MR-05 E5-E10, `resolve_mention` (G1-EM-002), review promotion RP1/RP2 (OD-6), memory M1-M4 (OD-8), stager injection, T-20, and the N9 guard.
+  - 4B: merge/split seams, root = the lowest-entity_id Entity redirect/restore, staged first; all other events caused by the root; memory events de-duplicated; context-link owner; feed version; G1-EM-017; V-001; fail-closed on N17/N19.
+  - 4C: W5 rebind emitter (OD-5; R-008 flush placement), T-17, T-18 extensions (W5, memory never root, X1-X3 dormant writers), and `tests/security/test_record_events_carry_no_payload.py` including the MR-06 one-column guard.
+- MR-07: the exact reassignment columns come from the `_bound_records` domain objects. There is no new read, no new lock, and no signature change.
+- `A/entity_authoring.py` is intentionally unchanged (decision 3): `entity_source_capability` returns `review.decide` exactly for the REVIEW_PROMOTION actor, which is admitted only on the promotion path.
+- Prove-reds: 4A 21, 4B 17 (re-run after MR-07), 4C 15. All red on assertions. W5 flush-failure rollback is proven behaviourally rather than by mutant.
+- Edits outside the matrix:
+  - Mechanical:
+    - registry entries in `test_principal_is_never_caller_supplied.py`;
+    - `DECLARED_TABLE_REACH` and reasons in `test_every_capability_reaching_a_memory_row_is_declared.py`;
+    - T-20 READS;
+    - fakes and stubs in `tests/conftest.py`, `tests/evaluation/resolution_harness.py`, `tests/unit/test_identity_correction.py` and `tests/unit/test_identity_split_service.py` (MR-04 precedent);
+    - count cells in `relationship-intelligence-implementation-plan.md` :660/:661/:664 (#287 contended) and module counts in `mcv-completion-plan.md` (359/619).
+  - **MR-06:** `evidence/acceptance/RI-FINAL-COMPLETION-RM-AC-DELTA-20260828.md` (RM-API-AC-002 claim, classification column only).
+- Stager-less repositories use a private unflushed buffer. `test_record_event_stager_injection.py` requires `stager=` at every writing construction in `src`.
+- CI at `9102e2f2` (CP-RE-03): repository-checks 36644032291 succeeded on all jobs. frontend-quality 36644032408 had classify and required succeed; visual failed (continue-on-error).
+
 ## Manager rulings
 
 - **MR-01 (2026-09-29):** the `TABLES_SHA256` re-pin in `tests/architecture/test_capture_project_binding.py` is MECHANICAL and ACCEPTED, because the tables.py diff against the base only adds lines and the captures Table is unchanged. Each later tables.py edit re-pins it under the same rule, provided the captures Table stays unchanged. CP-RE-01 was accepted by the Manager, and draft PR #297 is open.
@@ -125,6 +167,33 @@ Re-derived in the worktree (PYTHONPATH=src):
     - it asserts no cross-linking between the two creates.
   - The race is NOT fixed and no issue is opened; the Manager reports it to the operator as a separate candidate work item.
   - CP-RE-02 was accepted.
+
+- **MR-03 (2026-09-29):** the `source_receipt_id` relaxation in `domain/record_events.py` is ACCEPTED as a correction toward the specification.
+  - Hardened package §3.5 requires only "opaque identifiers".
+  - `RECEIPT_IDENTIFIER_PATTERN` is byte-equivalent to the migration and `tables.py` CHECK `^[a-z]+_[A-Za-z0-9]{8,64}$`.
+  - `event_id`, `principal_id`, causation and correlation keep their exact-kind checks.
+  - The `cpsh_` provenance is kept.
+- **MR-04 (2026-09-29):** the stager additions are ACCEPTED as mechanical test-double consequences, with assertions unchanged. They are the `SimpleNamespace` stand-ins in `tests/database/test_constraint_schema_invariants.py` and the `_FakeUnitOfWork` doubles in `tests/unit/test_constraint_management_service.py` and `tests/unit/test_project_controls_settings_service.py`. CP-RE-03 was accepted.
+
+- **MR-05 (2026-09-29):** N8 did NOT fire. The `_advance_entity` parent-Entity advance (`P/entity_authoring.py` `_mutate` :455, `_advance_entity` :821-845) on the six identifier/alias operations is an enumerated compound write.
+  - Citation: Gate-1 evidence P2b emitter matrix (`scratchpad/sources/gate1-evidence/P2b-emitter-matrix.md`, SHA-256 `38c601a0beaa5fb4e1992622cc76afe2b8c71ee694d470c80113ec8d3a78d10b`), §3.5 rows E5-E10 (lines 251-256), and finding G1-EM-001(a) (line 494).
+  - Option (a) is the planned behaviour: a derived `entity` `updated` with `record_version = outcome.entity_version` and `changed_fields = ("version",)`; causation is the primary child event; it carries the same receipt, actor, authority and capability as the primary event.
+  - E7/E10 order: primary replacement `created`, then the predecessor `state_changed`, then the `entity` `updated`.
+  - P2b §3.5-§3.7 and §3.9 are the row-level reference for WP-RE-04, subordinate to the rulings where they differ.
+  - Worker design decisions 1-7 are accepted. Decision 3: `src/my_pa/application/entity_authoring.py` is intentionally unchanged. `review.decide` comes from one domain helper keyed on the REVIEW_PROMOTION actor (OD-6), and a REVIEW_PROMOTION actor is already refused off the review path.
+  - No GATE2_BLOCKED receipt.
+
+- **WP-RE-04 P2b departures (2026-09-29, accepted as repository-truth corrections):**
+  - E18: observation reject/defer is `updated {resolution_version}`, because `decide_observation` sets no state for them. Only quarantine is `state_changed`.
+  - E9: alias retire is `{retired_at, state}`, because `_transition_alias` also sets `retired_at`.
+- **MR-06 (2026-09-29):** option (a) is ACCEPTED. Under OD-8 (i), merge and split read `relationship_memory_versions`, but only the `classification` column plus the join key, to stamp memory events. This is a change to accepted privacy claim RM-API-AC-002, and the Manager surfaces it to the operator.
+  - Claim source edited: `evidence/acceptance/RI-FINAL-COMPLETION-RM-AC-DELTA-20260828.md`. It is a live guard-parsed claim document. The claim must name only the `classification` column plus keys, and it keeps the dated WP-RE-04 paragraph.
+  - The one-column limit is guard-enforced, with a single-guard prove-red.
+  - The edit is listed among the CP-RE-04 out-of-matrix edits.
+- **MR-07 (2026-09-29):** the S5 over-approximation is NOT accepted. `changed_fields` must name the exact changed column plus `version`.
+  - Use the recorded effect state if it names the column. Otherwise use one same-transaction read, with no new lock and no order change.
+  - STOP if this would need a repository signature change outside the matrix.
+  - Test: a multi-column family where only one column references the source.
 
 ## Review outcome and final state
 

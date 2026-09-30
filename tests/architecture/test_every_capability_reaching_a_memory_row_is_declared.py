@@ -363,13 +363,14 @@ BEYOND_THE_NINE: Final = {
         "classification, or evidence payload."
     ),
     Capability.ENTITIES_SPLIT: (
-        "purpose `entity_identity_correction`. `entities.split` reads three of the eight "
+        "purpose `entity_identity_correction`. `entities.split` reads four of the eight "
         "(`relationship_memories`, `relationship_memory_context_links`, "
-        "`relationship_memory_proposals`) and writes three of the eight "
-        "(`relationship_memories`, `relationship_memory_context_links`, "
+        "`relationship_memory_proposals`, `relationship_memory_versions`) and writes three "
+        "of the eight (`relationship_memories`, `relationship_memory_context_links`, "
         "`relationship_memory_proposals`) to restore only exact opaque before-state bindings "
-        "under after-state guards. It reads or writes no memory text, classification, or "
-        "evidence payload."
+        "under after-state guards. The fourth read is the current version's "
+        "`classification` alone, which each memory Record Event stores (WP-RE-04, OD-8); "
+        "it reads or writes no memory text or evidence payload."
     ),
     Capability.ENTITIES_CONTEXT: (
         "purpose `entity_read`. `entities.context` reads two of the eight "
@@ -428,13 +429,15 @@ BEYOND_THE_NINE: Final = {
     ),
     Capability.ENTITIES_MERGE: (
         "purpose `entity_identity_correction`, and it is operator-only. "
-        "`entities.merge` reads three of the eight "
+        "`entities.merge` reads four of the eight "
         "(`relationship_memories`, `relationship_memory_context_links`, "
-        "`relationship_memory_proposals`) and writes three of the eight "
-        "(`relationship_memories`, `relationship_memory_context_links`, "
+        "`relationship_memory_proposals`, `relationship_memory_versions`) and writes three "
+        "of the eight (`relationship_memories`, `relationship_memory_context_links`, "
         "`relationship_memory_proposals`). Apply revalidates and changes only opaque "
-        "subject/context bindings while retaining immutable origin subjects; it reads or "
-        "writes no memory text, classification, or evidence payload."
+        "subject/context bindings while retaining immutable origin subjects. The fourth "
+        "read is the current version's `classification` alone, which each memory Record "
+        "Event stores (WP-RE-04, OD-8); it reads or writes no memory text or evidence "
+        "payload."
     ),
 }
 
@@ -563,11 +566,15 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
         frozenset(),
     ),
     Capability.ENTITIES_SPLIT: (
+        # WP-RE-04 Phase 4B: `relationship_memory_versions` is read for the
+        # current version's `classification` only, which each memory Record
+        # Event stores (OD-8).
         frozenset(
             {
                 "relationship_memories",
                 "relationship_memory_context_links",
                 "relationship_memory_proposals",
+                "relationship_memory_versions",
             }
         ),
         frozenset(
@@ -579,11 +586,15 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
         ),
     ),
     Capability.ENTITIES_MERGE: (
+        # WP-RE-04 Phase 4B: `relationship_memory_versions` is read for the
+        # current version's `classification` only, which each memory Record
+        # Event stores (OD-8).
         frozenset(
             {
                 "relationship_memories",
                 "relationship_memory_context_links",
                 "relationship_memory_proposals",
+                "relationship_memory_versions",
             }
         ),
         frozenset(

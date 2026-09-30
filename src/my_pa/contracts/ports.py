@@ -133,7 +133,7 @@ from my_pa.domain.project_controls.read_models import (
 from my_pa.domain.project_controls.relationship import ConstraintRelationship
 from my_pa.domain.project_controls.revision import ConstraintRevision
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
-from my_pa.domain.record_events import RecordEventDraft
+from my_pa.domain.record_events import EntityEventShape, RecordEventDraft
 from my_pa.domain.relationship.authoring import (
     MAX_EVIDENCE_REFERENCES,
     MAX_INITIAL_ALIASES,
@@ -358,6 +358,7 @@ __all__ = [
     "MeetingRecord",
     "MeetingRepository",
     "MeetingWriteRequestRecord",
+    "MemoryFeedFacts",
     "Operation",
     "OperationQueue",
     "PortError",
@@ -2205,8 +2206,21 @@ class EntitiesRepository(ABC):
     # disagrees with the plane.
 
     @abstractmethod
-    def record_mutation_event(self, principal_id: str, event: EntityMutationEvent) -> None:
+    def record_mutation_event(
+        self,
+        principal_id: str,
+        event: EntityMutationEvent,
+        *,
+        shape: EntityEventShape | None = None,
+    ) -> None:
         """Append one row to the mutation ledger, which is also the idempotency store.
+
+        WP-RE-04 seam S-C: after the INSERT -- never on the same-digest replay
+        return, which writes nothing (G1-EM-016) -- a Record Event is staged
+        from the row and `shape`, the caller's typed statement of the event's
+        kind and changed fields (and a supersession's predecessor, and its
+        cause). An `OBSERVATION` row's `record_version` is the feed version of
+        the observation's post-write `resolution_version` (T-002).
 
         `(principal_id, capability, idempotency_key)` is unique at the server,
         so two concurrent writers holding one key produce one row and the loser
@@ -2218,6 +2232,18 @@ class EntitiesRepository(ABC):
         Append-only by trigger. There is no update and no delete, and this port
         offers neither.
         """
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        """The Record Event buffer this repository's seams stage into (WP-RE-04).
+
+        Reached directly by one caller: `resolve_mention`, whose `create_new`
+        mints an Entity with no ledger row and so no seam (G1-EM-002). A
+        refusing default, on the `UnitOfWork.record_events` precedent: a double
+        that stages nothing need not carry a buffer, and one that is asked to
+        stage without one raises inside the transaction.
+        """
+        raise NotImplementedError
 
     @abstractmethod
     def mutation_event(
@@ -5973,6 +5999,21 @@ class MemoryDetail:
     canonical_entity_id: str | None = None
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MemoryFeedFacts:
+    """One memory as the Record Event feed names it: identity, version, classification.
+
+    WP-RE-04: the memory's current aggregate `version` and the classification of
+    its current version (OD-8). Read in the writer's transaction -- for a memory
+    an identity correction reparented, and for the memory that owns a context
+    link it retargeted, which has no version of its own (OD-2 (b), S-006).
+    """
+
+    memory_id: str
+    version: int
+    classification: Classification
+
+
 class RelationshipMemoryRepository(ABC):
     """The Relationship Memory plane, inside one transaction.
 
@@ -6108,6 +6149,18 @@ class RelationshipMemoryRepository(ABC):
 
     def apply_identity_effect(self, principal_id: str, effect: IdentityEffectDraft) -> None:
         """Apply one planned RM binding move under its exact before-state guard."""
+        raise NotImplementedError
+
+    def context_link_owner(self, principal_id: str, context_link_id: str) -> MemoryFeedFacts | None:
+        """The owning memory of one context link (link -> version -> memory), or `None`.
+
+        Read inside the caller's transaction, so an identity correction resolves
+        the owner of a link it retargets against the state it is changing.
+        """
+        raise NotImplementedError
+
+    def memory_feed_facts(self, principal_id: str, memory_id: str) -> MemoryFeedFacts | None:
+        """One memory's current `version` and current-version classification, or `None`."""
         raise NotImplementedError
 
     def restore_identity_effect(

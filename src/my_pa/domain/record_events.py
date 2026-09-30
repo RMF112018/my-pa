@@ -46,10 +46,16 @@ from my_pa.domain.common.identifiers import (
     validate_identifier,
 )
 from my_pa.domain.common.time import NaiveDatetimeError, ensure_utc
+from my_pa.domain.identity.operation import Capability
 from my_pa.domain.meeting.model import MeetingActor
 from my_pa.domain.project_controls.history import ConstraintMutationActor
-from my_pa.domain.relationship.governance import ActorClass, MutationAuthority
-from my_pa.domain.relationship.memory import MemoryActorClass, MemoryAuthority
+from my_pa.domain.relationship.governance import (
+    ActorClass,
+    MutationAuthority,
+    MutationRecordFamily,
+)
+from my_pa.domain.relationship.identity_correction import IdentityEffectFamily
+from my_pa.domain.relationship.memory import MemoryActorClass, MemoryAuthority, MemoryOperation
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.history import TaskMutationActor
 
@@ -57,14 +63,19 @@ __all__ = [
     "CONSTRAINT_ACTOR_CLASSES",
     "ENTITY_ACTOR_CLASSES",
     "ENTITY_AUTHORITIES",
+    "ENTITY_RECORD_FAMILIES",
+    "IDENTITY_EFFECT_RECORD_FAMILIES",
     "MAX_CHANGED_FIELDS",
     "MAX_CHANGED_FIELD_CHARACTERS",
     "MAX_SOURCE_CAPABILITY_CHARACTERS",
     "MEETING_ACTOR_CLASSES",
     "MEMORY_ACTOR_CLASSES",
     "MEMORY_AUTHORITIES",
+    "MEMORY_CAPABILITIES",
     "NON_MEMORY_CLASSIFICATION",
+    "REVIEW_PROMOTION_CAPABILITY",
     "TASK_ACTOR_CLASSES",
+    "EntityEventShape",
     "InvalidRecordEventError",
     "RecordEvent",
     "RecordEventActorClass",
@@ -72,6 +83,11 @@ __all__ = [
     "RecordEventDraft",
     "RecordEventFamily",
     "RecordEventKind",
+    "entity_record_event",
+    "entity_source_capability",
+    "field_set",
+    "memory_source_capability",
+    "observation_feed_version",
     "validate_changed_fields",
     "validate_source_capability",
 ]
@@ -490,3 +506,178 @@ class RecordEvent:
             recorded_at=recorded_at,
             **{name: getattr(draft, name) for name in _Semantics.__slots__},
         )
+
+
+# --- WP-RE-04: the Entity and Relationship Memory emitter vocabulary ----------
+
+#: RE-AC-045: every `MutationRecordFamily` the Entity mutation ledger can name,
+#: mapped to the feed family it is (P2b section 1.4). Total and one-to-one;
+#: `tests/unit/test_record_event_domain.py` holds it to both.
+ENTITY_RECORD_FAMILIES: Final[Mapping[MutationRecordFamily, RecordEventFamily]] = _frozen(
+    {
+        MutationRecordFamily.ENTITY: RecordEventFamily.ENTITY,
+        MutationRecordFamily.IDENTIFIER: RecordEventFamily.ENTITY_IDENTIFIER,
+        MutationRecordFamily.ALIAS: RecordEventFamily.ENTITY_ALIAS,
+        MutationRecordFamily.ASSIGNMENT: RecordEventFamily.ENTITY_ASSIGNMENT,
+        MutationRecordFamily.RELATIONSHIP: RecordEventFamily.ENTITY_RELATIONSHIP,
+        MutationRecordFamily.OBSERVATION: RecordEventFamily.ENTITY_OBSERVATION,
+        MutationRecordFamily.NAME: RecordEventFamily.ENTITY_NAME,
+        MutationRecordFamily.ADDRESS: RecordEventFamily.ENTITY_ADDRESS,
+        MutationRecordFamily.COMMUNICATION_METHOD: RecordEventFamily.ENTITY_COMMUNICATION_METHOD,
+        MutationRecordFamily.PROJECT_PARTICIPATION: RecordEventFamily.ENTITY_PROJECT_PARTICIPATION,
+        MutationRecordFamily.PERSON_ORGANIZATION_AFFILIATION: (
+            RecordEventFamily.PERSON_ORGANIZATION_AFFILIATION
+        ),
+    }
+)
+
+#: Merge/split effects to the feed family they name (P2b section 1.4): twelve.
+#: A family absent here gets no event of its own (OD-3): ORGANIZATION_PROFILE,
+#: PROPOSAL, REVIEW_CASE, MEMORY_PROPOSAL and DERIVED_CONTEXT. A retargeted
+#: MEMORY_CONTEXT_LINK is named through the memory that owns it (OD-2 (b)).
+IDENTITY_EFFECT_RECORD_FAMILIES: Final[Mapping[IdentityEffectFamily, RecordEventFamily]] = _frozen(
+    {
+        IdentityEffectFamily.ENTITY: RecordEventFamily.ENTITY,
+        IdentityEffectFamily.IDENTIFIER: RecordEventFamily.ENTITY_IDENTIFIER,
+        IdentityEffectFamily.ALIAS: RecordEventFamily.ENTITY_ALIAS,
+        IdentityEffectFamily.ASSIGNMENT: RecordEventFamily.ENTITY_ASSIGNMENT,
+        IdentityEffectFamily.RELATIONSHIP: RecordEventFamily.ENTITY_RELATIONSHIP,
+        IdentityEffectFamily.NAME: RecordEventFamily.ENTITY_NAME,
+        IdentityEffectFamily.ADDRESS: RecordEventFamily.ENTITY_ADDRESS,
+        IdentityEffectFamily.COMMUNICATION_METHOD: RecordEventFamily.ENTITY_COMMUNICATION_METHOD,
+        IdentityEffectFamily.PROJECT_PARTICIPATION: (
+            RecordEventFamily.ENTITY_PROJECT_PARTICIPATION
+        ),
+        IdentityEffectFamily.PERSON_ORGANIZATION_AFFILIATION: (
+            RecordEventFamily.PERSON_ORGANIZATION_AFFILIATION
+        ),
+        IdentityEffectFamily.OBSERVATION: RecordEventFamily.ENTITY_OBSERVATION,
+        IdentityEffectFamily.RELATIONSHIP_MEMORY: RecordEventFamily.RELATIONSHIP_MEMORY,
+    }
+)
+
+#: OD-6: every event a review promotion causes names the request capability
+#: that caused it, whichever canonical writer performed the change.
+REVIEW_PROMOTION_CAPABILITY: Final = Capability.REVIEW_DECIDE.value
+
+#: The public capability behind each Relationship Memory write (P2b M1-M4).
+MEMORY_CAPABILITIES: Final[Mapping[MemoryOperation, str]] = _frozen(
+    {
+        MemoryOperation.CREATE: Capability.RELATIONSHIP_MEMORY_CREATE.value,
+        MemoryOperation.REVISE: Capability.RELATIONSHIP_MEMORY_REVISE.value,
+        MemoryOperation.ARCHIVE: Capability.RELATIONSHIP_MEMORY_ARCHIVE.value,
+        MemoryOperation.RESTORE: Capability.RELATIONSHIP_MEMORY_RESTORE.value,
+    }
+)
+
+
+def entity_source_capability(capability: str, actor_class: ActorClass) -> str:
+    """The `source_capability` of an Entity-plane event (OD-6, G1-EM-004).
+
+    The ledger records the canonical writer's capability (`entities.create`
+    and the like) even when `review.decide` executed it. The actor class is
+    what tells the two apart, and it is trustworthy for that: no transport
+    command carries it, and `EntityWriteRequest` / `_check_write_authority`
+    refuse `review_promotion` on anything but the promotion path.
+    """
+    if actor_class is ActorClass.REVIEW_PROMOTION:
+        return REVIEW_PROMOTION_CAPABILITY
+    return capability
+
+
+def memory_source_capability(operation: MemoryOperation, actor: MemoryActorClass) -> str:
+    """`entity_source_capability` for a Relationship Memory write."""
+    if actor is MemoryActorClass.REVIEW_PROMOTION:
+        return REVIEW_PROMOTION_CAPABILITY
+    return MEMORY_CAPABILITIES[operation]
+
+
+def observation_feed_version(resolution_version: int) -> int:
+    """OD-2 (d-i), T-002: the one `entity_observation` feed version function.
+
+    `resolution_version + 1`, from the *post-write* canonical value. The
+    canonical column starts at 0 and a merge reparent does not advance it, so
+    the feed version is not a dedup key: a consumer rereads an observation on
+    every event and never skips an equal version.
+    """
+    if isinstance(resolution_version, bool) or not isinstance(resolution_version, int):
+        raise InvalidRecordEventError("resolution_version must be an integer")
+    if resolution_version < 0:
+        raise InvalidRecordEventError("resolution_version must be an integer >= 0")
+    return resolution_version + 1
+
+
+def field_set(*names: str) -> tuple[str, ...]:
+    """A `changed_fields` value in the canonical (sorted, unique) order."""
+    return tuple(sorted(set(names)))
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class EntityEventShape:
+    """What an Entity ledger caller knows about the event its row implies.
+
+    Passed to `EntitiesRepository.record_mutation_event`, whose seam (S-C) stages
+    the event only after the ledger INSERT -- never on its silent replay return
+    (G1-EM-016). The shape is typed, so the event is never re-derived from the
+    ledger row's before/after JSON (P2b R2/R3).
+
+    `superseded` names the predecessor a family supersession transitioned, as
+    `(record_id, version after the supersession)`; it becomes a derived
+    `state_changed` (G1-EM-001(b)). `causation_event_id` names an earlier
+    staged event this one follows from (the `resolve_mention` Entity create,
+    G1-EM-002).
+    """
+
+    event_kind: RecordEventKind
+    changed_fields: tuple[str, ...]
+    superseded: tuple[str, int] | None = None
+    superseded_fields: tuple[str, ...] = ("state",)
+    causation_event_id: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "event_kind", _member(RecordEventKind, self.event_kind, "event_kind")
+        )
+        object.__setattr__(self, "changed_fields", validate_changed_fields(self.changed_fields))
+        object.__setattr__(
+            self, "superseded_fields", validate_changed_fields(self.superseded_fields)
+        )
+        if self.superseded is not None:
+            record_id, version = self.superseded
+            _identifier(record_id, None, "superseded")
+            _positive(version, "superseded")
+
+
+def entity_record_event(
+    *,
+    principal_id: str,
+    family: MutationRecordFamily,
+    record_id: str,
+    event_kind: RecordEventKind,
+    record_version: int,
+    changed_fields: tuple[str, ...],
+    capability: str,
+    authority: MutationAuthority,
+    actor_class: ActorClass,
+    occurred_at: datetime,
+    receipt_id: str | None,
+    correlation_id: str | None,
+    causation_event_id: str | None = None,
+) -> RecordEventDraft:
+    """One Entity-plane draft, with the section 3.4/3.5 maps applied in one place."""
+    return RecordEventDraft.issue(
+        principal_id=principal_id,
+        record_family=ENTITY_RECORD_FAMILIES[family],
+        record_id=record_id,
+        event_kind=event_kind,
+        record_version=record_version,
+        changed_fields=changed_fields,
+        source_capability=entity_source_capability(capability, actor_class),
+        actor_class=ENTITY_ACTOR_CLASSES[actor_class],
+        classification=NON_MEMORY_CLASSIFICATION,
+        occurred_at=occurred_at,
+        source_receipt_id=receipt_id,
+        authority=ENTITY_AUTHORITIES[authority],
+        correlation_id=correlation_id,
+        causation_event_id=causation_event_id,
+    )

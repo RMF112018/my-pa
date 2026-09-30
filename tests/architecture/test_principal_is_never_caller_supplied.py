@@ -283,7 +283,9 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     "application/entity_authoring.py": (("request", "principal_id"),) * 2,
     # The persistence serializer now reads the same server-composed field once
     # more to acquire the Entity mutation scope before any identifier read.
-    "infrastructure/persistence/entity_authoring.py": (("request", "principal_id"),) * 23,
+    # WP-RE-04: one more, stamping the same partition onto the Record Events
+    # seam S-A stages (`_outcome_events`).
+    "infrastructure/persistence/entity_authoring.py": (("request", "principal_id"),) * 24,
     "application/intelligence.py": (
         ("artifact", "principal_id"),
         ("artifact", "principal_id"),
@@ -431,6 +433,9 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("proposal", "principal_id"),
         ("record", "principal_id"),
         ("rel", "principal_id"),
+        # WP-RE-04: seam S-B stamps the directed request's partition onto its
+        # Record Event.
+        ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
@@ -657,6 +662,11 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # lock cannot turn caller input into a partition choice.
     "infrastructure/persistence/relationship_memory.py": (
         ("link", "principal_id"),
+        # WP-RE-04: the Record Event `admit` stages, and the prior version's
+        # classification read a revise compares against, are stamped and scoped
+        # with the same field.
+        ("request", "principal_id"),
+        ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
@@ -691,6 +701,9 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # mutation lock, and the locked proposal re-read; they preserve that same
     # authenticated partition while closing the merge/review race.
     "infrastructure/persistence/relationship_memory_review.py": (
+        # WP-RE-04: the promoted memory's Record Event (RP2) is stamped with the
+        # same field.
+        ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),

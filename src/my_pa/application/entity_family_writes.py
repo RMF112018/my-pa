@@ -113,6 +113,7 @@ from my_pa.contracts.ports import (
 )
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability
+from my_pa.domain.record_events import EntityEventShape, RecordEventKind, field_set
 from my_pa.domain.relationship.entity import (
     EntityAddressState,
     EntityCommunicationMethodState,
@@ -323,6 +324,7 @@ class EntityFamilyWriteService:
             state=EntityNameState.ACTIVE.value,
             before_state=_predecessor(corrected.superseded_record_id, command.expected_version),
             superseded_id=corrected.superseded_record_id,
+            superseded_version=command.expected_version + 1,
             digest=digest,
             idempotency_key=command.idempotency_key,
             principal_id=principal_id,
@@ -513,6 +515,7 @@ class EntityFamilyWriteService:
             state=EntityAddressState.ACTIVE.value,
             before_state=_predecessor(corrected.superseded_record_id, command.expected_version),
             superseded_id=corrected.superseded_record_id,
+            superseded_version=command.expected_version + 1,
             digest=digest,
             idempotency_key=command.idempotency_key,
             principal_id=principal_id,
@@ -695,6 +698,7 @@ class EntityFamilyWriteService:
             state=EntityCommunicationMethodState.ACTIVE.value,
             before_state=_predecessor(corrected.superseded_record_id, command.expected_version),
             superseded_id=corrected.superseded_record_id,
+            superseded_version=command.expected_version + 1,
             digest=digest,
             idempotency_key=command.idempotency_key,
             principal_id=principal_id,
@@ -889,6 +893,7 @@ class EntityFamilyWriteService:
             state=EntityProjectParticipationState.ACTIVE.value,
             before_state=_predecessor(corrected.superseded_record_id, command.expected_version),
             superseded_id=corrected.superseded_record_id,
+            superseded_version=command.expected_version + 1,
             digest=digest,
             idempotency_key=command.idempotency_key,
             principal_id=principal_id,
@@ -1070,6 +1075,7 @@ class EntityFamilyWriteService:
             state=PersonOrganizationAffiliationState.ACTIVE.value,
             before_state=_predecessor(corrected.superseded_record_id, command.expected_version),
             superseded_id=corrected.superseded_record_id,
+            superseded_version=command.expected_version + 1,
             digest=digest,
             idempotency_key=command.idempotency_key,
             principal_id=principal_id,
@@ -1161,6 +1167,7 @@ class EntityFamilyWriteService:
         at: datetime,
         authority: MutationAuthority,
         actor_class: ActorClass,
+        superseded_version: int | None = None,
     ) -> DirectedReceipt:
         """Append the ledger row and answer with the receipt it is.
 
@@ -1179,6 +1186,13 @@ class EntityFamilyWriteService:
         this ledger is read by operators, exported, and rendered in failures, and
         a photograph of a name row taken wholesale is exactly how somebody's name
         would arrive on all three surfaces.
+
+        **The Record Event shape (WP-RE-04, P2b E19-E33).** An add, and the
+        successor a correction mints, is `created`; a retire or end is
+        `state_changed`. A correction also transitions its predecessor, which
+        the ledger row names only in `before_state`, so the predecessor and the
+        version the guarded supersession gave it (`expected_version + 1`) are
+        passed explicitly and become a derived `state_changed` (G1-EM-001(b)).
 
         `replayed=False` unconditionally. Reaching here means step 2 found no
         prior receipt and the write was performed, and a replay returns before
@@ -1205,6 +1219,19 @@ class EntityFamilyWriteService:
                 before_state=before_state,
                 after_state={"state": state},
             ),
+            shape=EntityEventShape(
+                event_kind=(
+                    RecordEventKind.CREATED
+                    if prior_version is None
+                    else RecordEventKind.STATE_CHANGED
+                ),
+                changed_fields=_CREATED_FIELDS if prior_version is None else _STATE_FIELDS,
+                superseded=(
+                    None
+                    if superseded_id is None or superseded_version is None
+                    else (superseded_id, superseded_version)
+                ),
+            ),
         )
         return DirectedReceipt(
             mutation_event_id=event_id,
@@ -1220,6 +1247,13 @@ class EntityFamilyWriteService:
             issued_at=at,
             replayed=False,
         )
+
+
+#: P2b E19-E33 static `changed_fields` (R3 (a)): a new row of any of the five
+#: families is bound to its Entity and active; a retire, end or supersession
+#: changes its state.
+_CREATED_FIELDS = field_set("entity_id", "state")
+_STATE_FIELDS = field_set("state")
 
 
 def _address_payload(command: AddEntityAddress | ReviseEntityAddress) -> dict[str, Any]:

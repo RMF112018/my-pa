@@ -421,6 +421,7 @@ class TaskManagementService:
         actor: TaskMutationActor,
         values: dict[str, object],
         clear_fields: frozenset[str] = frozenset(),
+        archived: bool | None = None,
         idempotency_key: str | None = None,
         client_context: str | None = None,
         active_uow: _ActiveTaskUnitOfWork | None = None,
@@ -448,9 +449,28 @@ class TaskManagementService:
         if set(values) & set(clear_fields):
             raise ValueError("a task patch field cannot be both set and cleared")
 
+        if archived is not None:
+            if not isinstance(archived, bool):
+                raise ValueError("archived must be a boolean")
+            if "archived_at" in values or "archived_at" in clear_fields:
+                raise ValueError("logical archived and raw archived_at cannot be combined")
+        digest_values = dict(values)
+        if archived is True:
+            # Bind replay to caller intent, never a generated transition timestamp.
+            digest_values["archived"] = True
+        elif archived is False:
+            # Preserve the existing public unarchive digest representation.
+            digest_values["archived_at"] = None
+
         def change(current: Task) -> Task:
             replacements: dict[str, Any] = dict(values)
             replacements.update(dict.fromkeys(clear_fields))
+            if archived is True:
+                replacements["archived_at"] = (
+                    current.archived_at if current.archived_at is not None else self._clock()
+                )
+            elif archived is False:
+                replacements["archived_at"] = None
             if replacements.get("commitment_id", current.commitment_id) is None:
                 replacements["role"] = None
             return dataclasses.replace(current, **replacements)
@@ -467,7 +487,7 @@ class TaskManagementService:
             request_digest=_request_digest(
                 task_id=task_id,
                 expected_version=expected_version,
-                values=values,
+                values=digest_values,
                 clear_fields=sorted(clear_fields),
             ),
             active_uow=active_uow,
@@ -609,7 +629,18 @@ class TaskManagementService:
             actor=actor,
             idempotency_key=idempotency_key,
             client_context=client_context,
-            change=lambda current: dataclasses.replace(current, archived_at=self._clock()),
+            change=lambda current: dataclasses.replace(
+                current,
+                archived_at=(
+                    current.archived_at if current.archived_at is not None else self._clock()
+                ),
+            ),
+            request_digest=_request_digest(
+                action=TaskMutationAction.ARCHIVE,
+                task_id=task_id,
+                expected_version=expected_version,
+                archived=True,
+            ),
         )
 
     def unarchive(
@@ -632,6 +663,12 @@ class TaskManagementService:
             idempotency_key=idempotency_key,
             client_context=client_context,
             change=lambda current: dataclasses.replace(current, archived_at=None),
+            request_digest=_request_digest(
+                action=TaskMutationAction.UNARCHIVE,
+                task_id=task_id,
+                expected_version=expected_version,
+                archived=False,
+            ),
         )
 
     def transition_lifecycle(

@@ -2439,3 +2439,26 @@ operator scope/authority decision invalidates the affected statements and
 requires fresh raw readback and re-reconciliation. A green repository hash test
 proves only that the mirror matches these receipts; it does not prove Drive has
 not changed again.
+
+## 18. Capture withdrawal product contract — CRL-WP-02
+
+On 2026-09-30 the operator approved the product meaning in
+[`capture-withdrawal-v0.1.md`](../specs/capture-withdrawal-v0.1.md): reversible,
+owner-scoped Capture archive and restore; immutable exact content versions and
+evidence spans; exclusion from default active discovery; blocked revision and
+paused derivation while archived, including a commit fence for in-flight work;
+and restore resumption of unfinished eligible work under then-current policy
+without duplicating completed work. Independently promoted records retain their
+own authority and disclose withdrawn-source provenance.
+
+This closes `PD-CAP-01` and `CRL-CAP-001` **for the product contract only**.
+Requirements `CW-001`–`CW-019` and scenarios `CW-AC-01`–`CW-AC-10` define future
+acceptance proofs; this documentation change does not claim those behaviors are
+implemented or those runtime proofs have passed. CRL-WP-03 is the separate
+implementation-planning boundary and requires separately authorized runtime
+work. This entry does not activate schema, capability, grant, processing,
+frontend, deployment, or production changes.
+
+Retention, archive duration, draft expiry, hard-delete authority and audit
+retention remain unresolved under `O-10`; no deletion or risk acceptance is
+inferred. Historical Quick Capture mirrors and decision rows remain unchanged.

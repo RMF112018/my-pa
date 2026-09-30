@@ -75,7 +75,8 @@ Re-derived in the worktree (PYTHONPATH=src):
 | CP-RE-04 | WP-RE-04 | `d442f923705025ff03c323c06caf9a0840d367ea` | `d1025a5765c2dc1aa8a9202d17218a78e1cb3892` | 044-051 | green: 25,274 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: entity/identity/memory/review/reenrichment/record-event DB modules + no-payload 916 passed; full `-m recovery` 46 passed | no N fired (N8 resolved as not-fired, MR-05); T-15 no 40P01 |
 | CP-RE-05 | WP-RE-05 | `f3ad197e4a31d80cbf64f08b5aa0be10b53ad515` | `51380af70dbcd4e1a15a7082370252ccdf61f405` | 052-056 | green: 25,299 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: meeting DB/concurrency + record_event DB modules 185 passed; full `-m recovery` 46 passed | no N fired; T-13 no 40P01 |
 | CP-RE-06 | WP-RE-06 | `40037597b73dc9c04a8d29331a2ef40910ae05f4` | `b9ec6b088834391b8dc0d7b04c06cc8e3fcfe03a` | 057-083 | green: 25,726 passed / 74 skipped / 0 failed; ruff, format, mypy (524) clean | PG 15 local, PGTZ=UTC: record-event DB/concurrency/security modules 191 passed; recovery 46; migration_empty_to_head 10; migration_edge subset 46 (worker: full 1,071); e2e 13 (worker 31); worker web npm test 3,563 passed, lint 0 errors, typecheck and build OK | no N fired; counts equal projections (no N12) |
-| CP-RE-08 | WP-RE-08 | this commit (recorded in the next ledger update) | this commit | 086-108 | green: 25,803 passed / 74 skipped / 0 failed (Orchestrator re-run: unit+schema 15,369; architecture 5,919 + 71 skipped; rest 4,515 + 3 skipped); ruff, format, mypy (524) clean | PG 15.15 local (re-created after the reboot), PGTZ=UTC: record-event DB modules 227 passed; capture/pipeline/review/comment DB modules 200 passed; full `-m recovery` 53 passed; migration_empty_to_head 10; full migration_edge 1,033 passed | no N fired (N13, N24-N35); T-21..T-25 no 40P01/lock_timeout (worker 3/3, Orchestrator 1/1) |
+| CP-RE-08 | WP-RE-08 | `20f224133880754e1229f09a3e7ae0a6a9e4e25d` | `1730816ac500e70adb64bd17580971f8558ac8b1` | 086-108 | green: 25,803 passed / 74 skipped / 0 failed (Orchestrator re-run: unit+schema 15,369; architecture 5,919 + 71 skipped; rest 4,515 + 3 skipped); ruff, format, mypy (524) clean | PG 15.15 local (re-created after the reboot), PGTZ=UTC: record-event DB modules 227 passed; capture/pipeline/review/comment DB modules 200 passed; full `-m recovery` 53 passed; migration_empty_to_head 10; full migration_edge 1,033 passed | no N fired (N13, N24-N35); T-21..T-25 no 40P01/lock_timeout (worker 3/3, Orchestrator 1/1) |
+| CP-RE-08b | merge `8940e60b` (MR-17a) + scoped N3 | merge `953695a59a93ae8fafb511cb70b0e36299d0a98b`; CP-RE-08b = this commit | this commit | 018-024 re-pinned vs #298; 086-108 unchanged | green: 25,837 passed / 74 skipped / 0 failed (unit+schema 15,386; architecture 5,919 + 71 skipped; rest 4,532 + 3 skipped); ruff, format, mypy (524) clean | PG 15.15 local, PGTZ=UTC: full `tests/database` current-head selector 1,820 passed; record-event modules + archive module 243; Task/capture modules 49 + 21; full `-m recovery` 53; migration_empty_to_head 10; full migration_edge 1,033; `alembic heads` single `1d9b248e7f83`, down `7d9a450dfd07` | N10/N3 resolved by the MR-17a merge; no N fired in the re-plan (RE-AC-018..024 hold as written) |
 
 **CP-RE-01 out-of-matrix mechanical edits (as reported to the Manager):**
 - C5/C6 fan-out: 34 `HEAD_PIN_FILES` plus the control file `tests/schema/test_constraint_authoring_capability_migration.py`, 24 revision-count pins, and `tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py`.
@@ -282,6 +283,25 @@ Re-derived in the worktree (PYTHONPATH=src):
   - CP-RE-06a `36e71e44`: repository-checks 36699008786 and frontend-quality 36699008389 both succeeded.
 - **New risk:** PR #298 (`bf/task-archive-option-b`, draft, opened 2026-09-30) edits `src/my_pa/application/service.py` and `tasks.py`, which overlap WP-RE-08. If it merges first, this branch needs a rebase (N3 check at R3).
 
+### CP-RE-08b: integration of `origin/main` `8940e60b` (PR #298) and scoped N3 re-plan
+
+- **Stop (after the CP-RE-08 push).** PR #298 (`fix(tasks): preserve archive state and logical replay`) was squash-merged to main at 18:11 UTC on 2026-09-30, during WP-RE-08. PR #297 became CONFLICTING, so zero workflows ran at `20f22413` (N10). #298 changed the owned surfaces `service.py` and `tasks.py` (N3). The Orchestrator halted and reported.
+- **MR-17 (Manager): rebase authorized.** When the Orchestrator ran `git rebase -X theirs origin/main`, the Claude Code auto-mode permission classifier denied it as "[Git Destructive]". A second, read-only command in the same session was also denied. The tree was verified untouched: HEAD `20f22413`, clean. The Orchestrator did not route around the denial and reported it.
+- **MR-17a (operator ruling, Option B):** merge `origin/main` into the branch instead of rebasing. There is no history rewrite and no force-push. This amends authorization §6 R3's "rebase" wording for this integration.
+  - Merge commit `953695a5` (parents `20f22413`, `8940e60b`), pushed fast-forward.
+  - The textual conflicts were only in the two count-guarded docs. Their cells were re-derived at the merged tree, not taken from either side.
+  - `service.py`, `tasks.py` and `tests/unit/test_task_management_service.py` merged automatically.
+- **Scoped N3 re-plan** (one opus worker; `$M/cp08b/`). New module `tests/database/test_task_archive_record_events.py` has 14 DB tests pinning the WP-RE-02 Task emitters against #298:
+  - (a) `tasks.update(archived=True)` is APPLIED at v+1 with `changed_fields` `["archived_at"]`, or `["archived_at","title"]` when the title also changes.
+  - (b) Archiving an already-archived task, through `tasks.update(archived=True)` or `archive()`, is **NO_OP**: no event and no sequence advance. The G1-EM-010 `("version",)` case therefore does not arise.
+  - (c) `unarchive()` and `archived=False` name `["archived_at"]`.
+  - (d) Logical replays (update, no-op update, and standalone archive/unarchive/re-archive) stage nothing and advance no sequence.
+  - (e) `bulk_confirm` does not call `_mutate`, but #298's `_bulk_candidate` now keeps an existing `archived_at`. In a 3-member bulk: 2 applied `["archived_at"]` events in `mutations` order, 1 NO_OP member, and the replay stages nothing.
+  - 18 single-guard prove-reds, all RED on assertions, each restored with a matching SHA. No N13. M8 mutates `service.py` `_bulk_candidate`, which is where #298's bulk guard lives.
+  - **RE-AC-018..024 all hold as written.** No emitter code changed.
+- **Counts at CP-RE-08b** (re-derived; guards green): FAST 25,911 collected / 25,837 passed / 74 skipped; architecture 5,990; database tier 3,150 (`3150/29073`); modules 361/645; mypy 524.
+- **Ratifications recorded:** MR-14, MR-15, MR-16 and MR-17a (below).
+
 ## Manager rulings
 
 - **MR-01 (2026-09-29):** the `TABLES_SHA256` re-pin in `tests/architecture/test_capture_project_binding.py` is MECHANICAL and ACCEPTED, because the tables.py diff against the base only adds lines and the captures Table is unchanged. Each later tables.py edit re-pins it under the same rule, provided the captures Table stays unchanged. CP-RE-01 was accepted by the Manager, and draft PR #297 is open.
@@ -345,6 +365,14 @@ Re-derived in the worktree (PYTHONPATH=src):
   - OD-W8-8: TRUNCATE is an operator residual.
   - OD-W8-12: include the runtime principal assertion only if it is small and local, and record the choice.
   - The plan's unverified items are resolved against the code during 8A-8G. A lock-order change or a new capability is a STOP.
+
+- **CP-RE-08 ACCEPTED (2026-09-30).** The N10/N3 stop was correct. The `40037597` responsive-flake classification is accepted.
+- **MR-14:** the RE-AC-088 field lists are RATIFIED. They follow MR-11: public, non-narrative read fields only, and `character_count` is an int computed in the existing single statement.
+- **MR-15:** the `_SWEPT` redaction deviation (G-3b-4) is RATIFIED.
+- **MR-16:** the out-of-matrix files are RATIFIED as mechanical: the `application/record_events.py` docstring, and `apps/cli/tbr_import.py` with its test (MR-10).
+- Also accepted as recorded: the MR-12 "no claim document" finding, OD-W8-12 not implemented, and the M-19b/M-09/M-22 adaptations.
+- **MR-17 (N10 + N3):** rebase onto `8940e60b` authorized, with a scoped N3 re-plan (Task emitters (a)-(e) vs #298, each with a single-guard prove-red; STOP if any RE-AC-018..024 cannot be met as written). The rebase was denied by the permission system and not performed.
+- **MR-17a (operator ruling):** Option B. Merge `origin/main` into the branch; no history rewrite and no force-push. It amends authorization §6 R3's "rebase" wording for this integration.
 
 ## Review outcome and final state
 

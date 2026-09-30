@@ -61,7 +61,7 @@ implementation. This bounded investigation is not a claim of runtime closure.
 | `domain/identity/operation.py:74–87,1030`, `domain/identity/chatllm_capability_policy.py:53–57` | Capture authoring purpose and DATA_REQUIRED boundary exist. | Register lifecycle writes with same boundaries; no runtime grant activation. |
 | `infrastructure/jobs/capture_pipeline.py:879–952,1089` | Nine stages commit separately, assert job lease before writing, use saved local-only policy; completed stage identities are reused. | Root lock before lease; current eligibility at every stage commit and completion. |
 | `persistence/jobs.py:262,345,494,524`, `jobs/worker.py:225–275` | Four stored job states; normal handler return succeeds, error release spends retry budget and can fail. | Capture-only suspension overlay plus neutral interruption, never normal success or failure for withdrawal. |
-| `domain/capture/version.py:68`, `service.py:11523` | Saved policy has LOCAL_ONLY ceiling; no then-current eligibility resolver. | Resolve immutable ceiling intersected with current authorization and runtime configuration at each admission. |
+| `domain/capture/version.py:68`, `application/service.py:11523` | Saved policy has LOCAL_ONLY ceiling; no then-current eligibility resolver. | Resolve immutable ceiling intersected with current authorization and runtime configuration at each admission. |
 | `migrations/versions/20260927_7d9a450dfd07_meeting_records.py` | Sole inspected migration head `7d9a450dfd07`, predecessor `6f6ead27d122`. | Generate next revision only after current-head authentication; freeze revision-local DDL. |
 
 Existing Capture immutability trigger is in revision `1a4c9e77b2d5`; append-only

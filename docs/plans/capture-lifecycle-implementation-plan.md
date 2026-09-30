@@ -349,7 +349,8 @@ verifiable throughout archive and restore.
 
 Select canonical capabilities `capture.archive` and `capture.restore`; separate
 strict `ArchiveCapture` / `RestoreCapture` commands contain `capture_id`,
-`expected_lifecycle_revision` (integer >=0), `idempotency_key` and `reason`.
+`expected_lifecycle_revision` (strict integer >=0, explicitly rejecting booleans
+in both DTO validation and public schema), `idempotency_key` and `reason`.
 Owner identity is verified session context, never a caller field. No text or
 content-version fields are accepted. Reason normalization/bounds follow section 4.
 
@@ -406,7 +407,7 @@ proofs use a newly attested isolated disposable PostgreSQL target.
 | CW-003 | CW-AC-01,05 | Ordered immutable events; direct UPDATE/DELETE refused; contiguous alternating constraints. |
 | CW-004 | CW-AC-01 | Byte/hash/predecessor/span/classification/provenance/content-receipt snapshot unchanged. |
 | CW-005 | CW-AC-04 | Advancing clock plus fresh same-state key preserves counter/current archive time; restore nulls current time only. |
-| CW-006 | CW-AC-02,10 | All canonical/compact purpose/write/DATA_REQUIRED guards; absent/foreign identical; no override/delete. |
+| CW-006 | CW-AC-02,10 | All canonical/compact purpose/write/DATA_REQUIRED guards; boolean expected revision refused in DTO/schema; absent/foreign identical; no override/delete. |
 | CW-007 | CW-AC-03,10 | Pinned digest; boundary trim, Unicode/internal whitespace significance, 0/501 code point refusal; no clock/ID input. |
 | CW-008 | CW-AC-03,04 | Replay after inverse transition; original receipt/outcome/time, no side effects; changed intent conflict; current auth refusal. |
 | CW-009 | CW-AC-04 | Fresh stale request conflicts even when desired state already true; honest NO_OP receipt only. |
@@ -463,8 +464,8 @@ commissions a fresh independent reviewer with authority to block.
 | Phase / worker | Exclusive write ownership | Dependencies and exit evidence |
 | --- | --- | --- |
 | P0 source-closure analyst | Read-only current metadata/code census and ledger evidence | Fresh base, contract, migration tip and PR #297 identity; classify every source/sink/surface. |
-| P1 persistence worker | New lifecycle repository module, new migration, persistence tests | P0 lock protocol/owner references settled; shared integration owner first serializes matching tables.py changes before P1 persistence tests; empty/edge migration, constraints, rollback and receipt races. |
-| P2 domain/command worker | Capture lifecycle domain values, command/contract DTO sections, unit tests | P1 semantics stable; exact normalization/digest/no-op/replay contracts. |
+| P1 persistence worker | New lifecycle repository module, new migration, persistence tests | P0 lock protocol/owner references settled; P2 shared domain/port definitions and P6 early matching tables.py integration must land before P1 implementation/tests; empty/edge migration, constraints, rollback and receipt races. |
+| P2 domain/command worker | Capture lifecycle domain values, command/contract DTO sections, unit tests | Establish shared domain/port definitions first from this accepted plan, before P1; then finalize DTO/use-case tests against P1 without circular prerequisites; exact normalization/digest/no-op/replay contracts. |
 | P3 processing worker | Capture pipeline, Capture branch of jobs/worker, processing tests | P1 lock helpers and P2 pause semantics; all stage/completion fences, neutral suspension/recovery/current-policy proof. |
 | P4 publication worker | Review, Entity governance/authoring, Memory promotion and context publication paths/tests | P0 closure census, P1 lock helpers, P3 eligibility; each new-effect sink fenced, exemptions tested. |
 | P5 read-projection worker | Capture list/search/reveal and downstream provenance converters/tests | P1 lifecycle projection, P4 source-resolution census; all selectors and disclosure surfaces complete. |

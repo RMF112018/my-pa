@@ -26,6 +26,17 @@ this module to that.
 Principal through `principal_bound_values` (`_bound`); the Principal is a
 parameter taken from the buffer, never a value a draft writes for itself.
 
+**The read half is one statement per question** (WP-RE-06). `page` returns a
+keyset page *and* the high watermark from a single SQL statement -- two
+`LATERAL` subqueries over the base table under one outer SELECT -- so under READ
+COMMITTED both see one snapshot and the watermark can never pass an event the
+page did not see (G1-TX-004, plan D-01). Every predicate is scoped through
+`partition_criterion`, and a remote read (`include_restricted_memory=False`)
+appends the OD-8 restricted-memory predicate -- the stored classification *or*
+the memory's current version -- to both subqueries, so a withheld event cannot
+reach a row, a truncation flag or the watermark. The sequence number orders the
+page and never leaves this module.
+
 **Failures are translated** exactly as `unit_of_work._read` translates a
 statement failure: an unreachable server or a timeout is
 `EvidenceUnavailableError`, anything else the store refused is
@@ -35,29 +46,59 @@ statement runs.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Final
+from collections.abc import Callable, Sequence
+from typing import Any, Final, cast
 
-from sqlalchemy import Connection, Table, insert
+from sqlalchemy import (
+    ColumnElement,
+    Connection,
+    Row,
+    Table,
+    and_,
+    exists,
+    insert,
+    literal,
+    not_,
+    or_,
+    select,
+    true,
+)
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
 
 from my_pa.contracts.ports import (
     EvidenceUnavailableError,
+    RecordEventFeedItem,
+    RecordEventPage,
+    RecordEventReader,
     RecordEventStager,
     RecordEventWriter,
     RepositoryFailureError,
 )
-from my_pa.domain.record_events import RecordEventDraft
+from my_pa.domain.common.classification import Classification
+from my_pa.domain.record_events import (
+    RecordEventActorClass,
+    RecordEventAuthority,
+    RecordEventDraft,
+    RecordEventFamily,
+    RecordEventKind,
+)
 from my_pa.infrastructure.persistence import IsolationLevelError
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
+    partition_criterion,
     principal_bound_values,
 )
-from my_pa.infrastructure.persistence.tables import record_event_sequences, record_events
+from my_pa.infrastructure.persistence.tables import (
+    record_event_sequences,
+    record_events,
+    relationship_memories,
+    relationship_memory_versions,
+)
 
 __all__ = [
     "RecordEventBuffer",
+    "SqlRecordEventReader",
     "SqlRecordEventWriter",
     "flush_record_events",
 ]
@@ -188,3 +229,185 @@ def flush_record_events(writer: RecordEventWriter, drafts: Sequence[RecordEventD
     else:
         return
     raise failure
+
+
+# --- WP-RE-06: the feed reader ------------------------------------------------
+
+#: The two aliases the one `page` statement reads the feed through.
+_PAGE: Final = cast(Table, record_events.alias("feed_page"))
+_WATERMARK: Final = cast(Table, record_events.alias("feed_watermark"))
+
+#: The public columns of a feed item, in the order `_item` reads them.
+_ITEM_COLUMNS: Final = (
+    "event_id",
+    "record_family",
+    "record_id",
+    "event_kind",
+    "record_version",
+    "changed_fields",
+    "source_capability",
+    "source_receipt_id",
+    "actor_class",
+    "authority",
+    "occurred_at",
+    "recorded_at",
+    "causation_event_id",
+)
+
+
+def _restricted_memory(event: Table, principal_id: str) -> ColumnElement[bool]:
+    """OD-8 (i): the event is a memory event a remote caller must not see.
+
+    Either its stored classification is `restricted_local`, or the memory it
+    names is *currently* restricted: an `EXISTS` from the memory's
+    `current_version_id` to that version's classification. Both memory tables
+    are reached through the caller's own partition.
+    """
+    context = capture_context(principal_id)
+    restricted = Classification.RESTRICTED_LOCAL.value
+    currently_restricted = exists(
+        select(literal(1))
+        .select_from(relationship_memories)
+        .join(
+            relationship_memory_versions,
+            relationship_memory_versions.c.memory_version_id
+            == relationship_memories.c.current_version_id,
+        )
+        .where(
+            partition_criterion(relationship_memories, context),
+            partition_criterion(relationship_memory_versions, context),
+            relationship_memories.c.memory_id == event.c.record_id,
+            relationship_memory_versions.c.classification == restricted,
+        )
+    )
+    return and_(
+        event.c.record_family == RecordEventFamily.RELATIONSHIP_MEMORY.value,
+        or_(event.c.classification == restricted, currently_restricted),
+    )
+
+
+def _visible(
+    event: Table,
+    principal_id: str,
+    families: frozenset[RecordEventFamily],
+    include_restricted_memory: bool,
+) -> list[ColumnElement[bool]]:
+    """The one visibility predicate every feed read applies to `event`."""
+    criteria: list[ColumnElement[bool]] = [
+        partition_criterion(event, capture_context(principal_id)),
+        event.c.record_family.in_(sorted(family.value for family in families)),
+    ]
+    if not include_restricted_memory:
+        criteria.append(not_(_restricted_memory(event, principal_id)))
+    return criteria
+
+
+def _item(row: Row[Any]) -> RecordEventFeedItem:
+    mapping = row._mapping
+    authority = mapping["authority"]
+    return RecordEventFeedItem(
+        event_id=mapping["event_id"],
+        record_family=RecordEventFamily(mapping["record_family"]),
+        record_id=mapping["record_id"],
+        event_kind=RecordEventKind(mapping["event_kind"]),
+        record_version=mapping["record_version"],
+        changed_fields=tuple(mapping["changed_fields"]),
+        source_capability=mapping["source_capability"],
+        source_receipt_id=mapping["source_receipt_id"],
+        actor_class=RecordEventActorClass(mapping["actor_class"]),
+        authority=None if authority is None else RecordEventAuthority(authority),
+        occurred_at=mapping["occurred_at"],
+        recorded_at=mapping["recorded_at"],
+        causation_event_id=mapping["causation_event_id"],
+    )
+
+
+def _translated[ResultT](work: Callable[[], ResultT]) -> ResultT:
+    """Run one read, translating a store failure as `flush_record_events` does."""
+    try:
+        return work()
+    except (OperationalError, InterfaceError):
+        failure: Exception = EvidenceUnavailableError("the store could not be read")
+    except (SQLAlchemyError, IsolationLevelError):
+        failure = RepositoryFailureError("the request could not be completed")
+    raise failure
+
+
+class SqlRecordEventReader(RecordEventReader):
+    """The feed reader, on one transaction's connection."""
+
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+
+    def page(
+        self,
+        *,
+        principal_id: str,
+        after_sequence: int,
+        families: frozenset[RecordEventFamily],
+        include_restricted_memory: bool,
+        limit: int,
+    ) -> RecordEventPage:
+        if not families:
+            raise ValueError("an empty family set is answered without a statement")
+        if isinstance(limit, bool) or limit < 1:
+            raise ValueError("a page holds at least one event")
+        page = (
+            select(*(_PAGE.c[name] for name in _ITEM_COLUMNS), _PAGE.c.sequence_number)
+            .where(
+                *_visible(_PAGE, principal_id, families, include_restricted_memory),
+                _PAGE.c.sequence_number > after_sequence,
+            )
+            .order_by(_PAGE.c.sequence_number.asc())
+            .limit(limit + 1)
+            .lateral("page")
+        )
+        watermark = (
+            select(_WATERMARK.c.event_id.label("high_watermark_event_id"))
+            .where(*_visible(_WATERMARK, principal_id, families, include_restricted_memory))
+            .order_by(_WATERMARK.c.sequence_number.desc())
+            .limit(1)
+            .lateral("watermark")
+        )
+        anchor = select(literal(1).label("anchor")).subquery("anchor")
+        statement = (
+            select(
+                watermark.c.high_watermark_event_id,
+                *(page.c[name] for name in _ITEM_COLUMNS),
+            )
+            .select_from(
+                anchor.outerjoin(watermark, true()).outerjoin(page, true()),
+            )
+            .order_by(page.c.sequence_number.asc())
+        )
+        rows = _translated(lambda: self._connection.execute(statement).all())
+        high_watermark = rows[0]._mapping["high_watermark_event_id"] if rows else None
+        return RecordEventPage(
+            rows=tuple(_item(row) for row in rows if row._mapping["event_id"] is not None),
+            high_watermark_event_id=high_watermark,
+        )
+
+    def resolve_position(self, *, principal_id: str, event_id: str) -> int | None:
+        statement = select(record_events.c.sequence_number).where(
+            partition_criterion(record_events, capture_context(principal_id)),
+            record_events.c.event_id == event_id,
+        )
+        position = _translated(lambda: self._connection.execute(statement).scalar_one_or_none())
+        return None if position is None else int(position)
+
+    def visible_event_ids(
+        self,
+        *,
+        principal_id: str,
+        event_ids: frozenset[str],
+        families: frozenset[RecordEventFamily],
+        include_restricted_memory: bool,
+    ) -> frozenset[str]:
+        if not event_ids or not families:
+            return frozenset()
+        statement = select(record_events.c.event_id).where(
+            *_visible(record_events, principal_id, families, include_restricted_memory),
+            record_events.c.event_id.in_(sorted(event_ids)),
+        )
+        found = _translated(lambda: self._connection.execute(statement).scalars().all())
+        return frozenset(found)

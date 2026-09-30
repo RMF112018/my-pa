@@ -76,15 +76,15 @@ _MEETINGS = _MEETING_READS | _MEETING_WRITES
 
 def test_policy_covers_every_public_capability_exactly_once() -> None:
     assert set(CHATLLM_CAPABILITY_POLICY) == set(Capability)
-    assert len(CHATLLM_CAPABILITY_POLICY) == 178
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v3"
+    assert len(CHATLLM_CAPABILITY_POLICY) == 179
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v4"
 
 
 def test_classification_counts_match_the_approved_plan() -> None:
     counts = dict.fromkeys(ChatLLMCapabilityClass, 0)
     for policy in CHATLLM_CAPABILITY_POLICY.values():
         counts[policy.classification] += 1
-    assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 69
+    assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 70
     assert counts[ChatLLMCapabilityClass.DATA_CONDITIONAL] == 90
     assert counts[ChatLLMCapabilityClass.COMPATIBILITY_ONLY] == 2
     assert counts[ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED] == 15
@@ -160,6 +160,30 @@ def test_the_six_meeting_capabilities_are_data_required_on_the_core_plane() -> N
     for capability in _MEETING_WRITES:
         assert permitted_purposes(capability) == frozenset({Purpose.MEETING_AUTHORING})
         assert is_write_capability(capability)
+
+
+def test_record_events_list_is_data_required_on_the_core_plane() -> None:
+    """WP-RE-06, OD-11 (i): the change feed is always composed and metadata only.
+
+    Its introduction is why the profile identity moved to `chatllm-data-v4`: a
+    client must not converge on the new catalog under v3.
+    """
+    named = {
+        capability for capability in Capability if capability.value.startswith("record_events.")
+    }
+    assert named == {Capability.RECORD_EVENTS_LIST}
+    policy = CHATLLM_CAPABILITY_POLICY[Capability.RECORD_EVENTS_LIST]
+    assert policy.classification is ChatLLMCapabilityClass.DATA_REQUIRED
+    assert is_chatllm_data_management(Capability.RECORD_EVENTS_LIST)
+    assert policy.family == "record_events"
+    assert policy.composition_prerequisite is ChatLLMCompositionPrerequisite.ALWAYS
+    assert policy.compatibility_replacement is None
+    assert policy.exclusion_rationale is None
+    assert Capability.RECORD_EVENTS_LIST in _HANDLERS
+    assert permitted_purposes(Capability.RECORD_EVENTS_LIST) == frozenset(
+        {Purpose.RECORD_EVENT_READ}
+    )
+    assert not is_write_capability(Capability.RECORD_EVENTS_LIST)
 
 
 def test_continuity_tasks_create_names_the_work_plane_replacement() -> None:

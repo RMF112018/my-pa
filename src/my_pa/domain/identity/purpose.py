@@ -385,3 +385,11 @@ class Purpose(StrEnum):
     # and `meetings.create`/`update`/`series.update` to `meeting_authoring` only.
     MEETING_READ = "meeting_read"
     MEETING_AUTHORING = "meeting_authoring"
+    # The Record Event change feed (WP-RE-06), on `D-91`: would reuse widen the
+    # grant? Every candidate would. The feed spans twenty record families across
+    # the Task, Commitment, Project, Entity, Relationship Memory, Constraint and
+    # Meeting planes, so admitting it under any one plane's read purpose would
+    # let a grant issued for that plane enumerate change activity on all the
+    # others. A purpose of its own, read-only: the feed never writes, and which
+    # families it discloses is still narrowed to the caller's own family grants.
+    RECORD_EVENT_READ = "record_event_read"

@@ -28,8 +28,8 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with one hundred and seventy-eight capabilities and
-forty-seven purposes now declared in the domain. If this reddens, the freeze has been undone
+emits what it emitted on the day it merged, with one hundred and seventy-nine capabilities and
+forty-eight purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
 
@@ -100,6 +100,12 @@ from my_pa.domain.conversation.event import ConversationChannel, ConversationSta
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.policy.decision import DenialReason
+from my_pa.domain.record_events import (
+    RecordEventActorClass,
+    RecordEventAuthority,
+    RecordEventFamily,
+    RecordEventKind,
+)
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.capture_search import SEARCH_CONFIG, SEARCH_INDEX
 from my_pa.infrastructure.persistence.tables import JobState
@@ -422,6 +428,9 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "meetings.search",
         "meetings.series.update",
         "meetings.update",
+        # WP-RE-06. The Record Event revision is the forward `ALTER` that admits
+        # it, and the same revision widens `purpose_is_known` for `record_event_read`.
+        "record_events.list",
     }
 )
 
@@ -752,6 +761,14 @@ CHECKED_VOCABULARY: Final[tuple[tuple[str, str, frozenset[str]], ...]] = (
         "conversation_channel_is_known",
         frozenset(c.value for c in ConversationChannel),
     ),
+    # G1-MG-013: the five closed sets the Record Event revision freezes on the
+    # feed, on the same terms: each is a literal in that revision, so a later
+    # enum member without a forward `ALTER` is caught here.
+    ("record_events", "a_record_event_family_is_known", frozenset(RecordEventFamily)),
+    ("record_events", "a_record_event_kind_is_known", frozenset(RecordEventKind)),
+    ("record_events", "a_record_event_actor_class_is_known", frozenset(RecordEventActorClass)),
+    ("record_events", "a_record_event_classification_is_known", frozenset(Classification)),
+    ("record_events", "a_record_event_authority_is_known", frozenset(RecordEventAuthority)),
 )
 
 

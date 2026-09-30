@@ -217,6 +217,77 @@ def test_the_memory_version_scan_sees_a_wider_read(planted: str) -> None:
     assert not set(_memory_version_reads(tree)) <= MEMORY_VERSION_COLUMNS_ALLOWED
 
 
+# ---- FAST: MR-06 extended to the WP-RE-06 feed reader -------------------------
+
+#: The feed reader's OD-8 (i) predicate may name, per memory table, only these
+#: columns: the join keys, `current_version_id` and the version `classification`.
+READER_MEMORY_COLUMNS_ALLOWED: Final = {
+    "relationship_memories": frozenset({"memory_id", "current_version_id"}),
+    "relationship_memory_versions": frozenset({"memory_version_id", "classification"}),
+}
+FEED_READER: Final = PACKAGE / "infrastructure" / "persistence" / "record_events.py"
+
+
+def _reader_memory_reads(tree: ast.Module) -> dict[str, set[str]]:
+    """Every column of a memory table the reader names; a whole-table select is `*`."""
+    found: dict[str, set[str]] = {table: set() for table in READER_MEMORY_COLUMNS_ALLOWED}
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Attribute)
+            and node.value.attr == "c"
+            and isinstance(node.value.value, ast.Name)
+            and node.value.value.id in found
+        ):
+            found[node.value.value.id].add(node.attr)
+        if (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.value, ast.Attribute)
+            and node.value.attr == "c"
+            and isinstance(node.value.value, ast.Name)
+            and node.value.value.id in found
+        ):
+            key = node.slice
+            named = key.value if isinstance(key, ast.Constant) else "*"
+            found[node.value.value.id].add(str(named))
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "select":
+            for argument in node.args:
+                if isinstance(argument, ast.Name) and argument.id in found:
+                    found[argument.id].add("*")
+                if isinstance(argument, ast.Starred):
+                    for inner in ast.walk(argument.value):
+                        if isinstance(inner, ast.Name) and inner.id in found:
+                            found[inner.id].add("*")
+    return found
+
+
+def test_the_feed_reader_reads_only_memory_keys_and_the_version_classification() -> None:
+    """MR-06, extended (WP-RE-06): the OD-8 predicate's one-column reach."""
+    reads = _reader_memory_reads(ast.parse(FEED_READER.read_text(encoding="utf-8")))
+    assert "classification" in reads["relationship_memory_versions"]
+    assert "current_version_id" in reads["relationship_memories"]
+    for table, allowed in READER_MEMORY_COLUMNS_ALLOWED.items():
+        assert reads[table] <= allowed, (table, sorted(reads[table]))
+
+
+@pytest.mark.parametrize(
+    "planted",
+    [
+        "select(relationship_memory_versions.c.statement_text)",
+        "select(relationship_memories.c.subject_entity_id)",
+        "select(relationship_memory_versions)",
+        "select(*(relationship_memories.c[name] for name in NAMES))",
+        'relationship_memory_versions.c["statement_text"] == 1',
+    ],
+)
+def test_the_feed_reader_scan_sees_a_wider_read(planted: str) -> None:
+    """The control: a statement, another column, or the whole row is reported."""
+    reads = _reader_memory_reads(ast.parse(f"def page(self):\n    return {planted}\n"))
+    assert any(
+        not reads[table] <= allowed for table, allowed in READER_MEMORY_COLUMNS_ALLOWED.items()
+    )
+
+
 # ---- database: the committed feed holds none of the narrative ------------------
 
 PRINCIPAL: Final = "prn_rcevnopayload0001"

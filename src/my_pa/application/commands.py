@@ -46,6 +46,10 @@ from my_pa.application import goodnotes_note_unit_contract as _note_unit
 from my_pa.application.errors import InvalidRequestError, SafeDetail
 from my_pa.application.goodnotes_pull_orchestration import MAX_PULL_BATCH_SIZE
 from my_pa.application.identity_correction import ConflictChoice
+from my_pa.application.record_events import (
+    MAX_RECORD_EVENT_CURSOR_CHARACTERS,
+    requested_families,
+)
 from my_pa.domain.capture.display_label import normalize_display_label
 from my_pa.domain.capture.errors import CaptureBoundsError, CaptureError
 from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS, ProposalState
@@ -165,6 +169,7 @@ from my_pa.domain.project_controls.sync import (
     NormalizedExternalConstraintRow,
     validate_digest,
 )
+from my_pa.domain.record_events import RecordEventFamily
 from my_pa.domain.relationship.authoring import (
     CALLER_SETTABLE_STATUSES,
     MAX_ENTITY_NAME_CHARACTERS,
@@ -10488,6 +10493,33 @@ class UpdateMeetingSeries:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ListRecordEvents:
+    """`record_events.list`: one page of your change feed, oldest first.
+
+    Each event says only that one record changed: its family, id, new version,
+    kind, the changed field names and the operation, with no record content. Read
+    the record itself to see the change. Resume with `cursor` (a page's
+    `next_cursor`, or its `high_watermark_cursor` to wait for new changes); a
+    cursor from a different request is a conflict. `record_families` narrows the
+    feed; families you may not read are omitted, never reported.
+    """
+
+    capability: ClassVar[Capability] = Capability.RECORD_EVENTS_LIST
+
+    page_size: int | None = None
+    cursor: str | None = field(default=None, repr=False)
+    record_families: tuple[RecordEventFamily, ...] | None = None
+
+    def __post_init__(self) -> None:
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.cursor is not None:
+            _text(self.cursor, SafeDetail.CURSOR)
+            if not 1 <= len(self.cursor) <= MAX_RECORD_EVENT_CURSOR_CHARACTERS:
+                raise InvalidRequestError(SafeDetail.CURSOR)
+        requested_families(self.record_families)
+
+
 type Command = (
     GetCapabilities
     | ListSources
@@ -10667,6 +10699,7 @@ type Command = (
     | SearchMeetings
     | UpdateMeeting
     | UpdateMeetingSeries
+    | ListRecordEvents
 )
 
 

@@ -63,6 +63,8 @@ __all__ = [
     "CONSTRAINT_ACTOR_CLASSES",
     "ENTITY_ACTOR_CLASSES",
     "ENTITY_AUTHORITIES",
+    "ENTITY_FLOOR_CAPABILITY",
+    "ENTITY_FLOOR_FAMILIES",
     "ENTITY_RECORD_FAMILIES",
     "IDENTITY_EFFECT_RECORD_FAMILIES",
     "MAX_CHANGED_FIELDS",
@@ -73,6 +75,7 @@ __all__ = [
     "MEMORY_AUTHORITIES",
     "MEMORY_CAPABILITIES",
     "NON_MEMORY_CLASSIFICATION",
+    "RECORD_EVENT_FAMILY_READS",
     "REVIEW_PROMOTION_CAPABILITY",
     "TASK_ACTOR_CLASSES",
     "EntityEventShape",
@@ -681,3 +684,84 @@ def entity_record_event(
         correlation_id=correlation_id,
         causation_event_id=causation_event_id,
     )
+
+
+# --- WP-RE-06: which read discloses which family (plan section 6.1) -----------
+
+#: Every family, and the existing read capabilities that disclose its canonical
+#: records; any one suffices. Written out row by row and never derived from a
+#: capability name prefix: a read that does not return a family's records is
+#: never a fallback for it, because that would widen a grant (REQUEST section
+#: 5.K). `tests/unit/test_record_event_family_reads.py` holds the table to the
+#: plan literally, so a change here is a reviewed decision.
+#:
+#: Composition is checked on these reads too: a family is composed iff one of
+#: its reads is in `ApplicationService.available_capabilities`.
+RECORD_EVENT_FAMILY_READS: Final[Mapping[RecordEventFamily, frozenset[Capability]]] = _frozen(
+    {
+        RecordEventFamily.TASK: frozenset({Capability.TASKS_READ, Capability.TASKS_LIST}),
+        RecordEventFamily.COMMITMENT: frozenset(
+            {Capability.COMMITMENTS_READ, Capability.COMMITMENTS_LIST}
+        ),
+        RecordEventFamily.PROJECT: frozenset(
+            {Capability.CONTINUITY_PROJECTS_READ, Capability.CONTINUITY_PROJECTS}
+        ),
+        RecordEventFamily.ENTITY: frozenset({Capability.ENTITIES_GET}),
+        RecordEventFamily.ENTITY_IDENTIFIER: frozenset({Capability.ENTITIES_IDENTIFIERS_LIST}),
+        RecordEventFamily.ENTITY_ALIAS: frozenset({Capability.ENTITIES_ALIASES_LIST}),
+        RecordEventFamily.ENTITY_ASSIGNMENT: frozenset({Capability.ENTITIES_ASSIGNMENTS_LIST}),
+        RecordEventFamily.ENTITY_RELATIONSHIP: frozenset({Capability.ENTITIES_RELATIONSHIPS}),
+        RecordEventFamily.ENTITY_OBSERVATION: frozenset({Capability.ENTITIES_OBSERVATIONS_LIST}),
+        RecordEventFamily.ENTITY_NAME: frozenset(
+            {Capability.ENTITIES_NAMES_LIST, Capability.ENTITIES_PROFILE}
+        ),
+        RecordEventFamily.ENTITY_ADDRESS: frozenset(
+            {Capability.ENTITIES_ADDRESSES_LIST, Capability.ENTITIES_PROFILE}
+        ),
+        RecordEventFamily.ENTITY_COMMUNICATION_METHOD: frozenset(
+            {Capability.ENTITIES_COMMUNICATION_LIST, Capability.ENTITIES_PROFILE}
+        ),
+        RecordEventFamily.ENTITY_PROJECT_PARTICIPATION: frozenset(
+            {Capability.ENTITIES_PARTICIPATIONS_LIST, Capability.ENTITIES_PROFILE}
+        ),
+        # No affiliation list read exists; the profile is its only disclosure.
+        RecordEventFamily.PERSON_ORGANIZATION_AFFILIATION: frozenset({Capability.ENTITIES_PROFILE}),
+        RecordEventFamily.RELATIONSHIP_MEMORY: frozenset(
+            {Capability.RELATIONSHIP_MEMORY_GET, Capability.RELATIONSHIP_MEMORY_LIST}
+        ),
+        RecordEventFamily.CONSTRAINT: frozenset(
+            {Capability.CONSTRAINTS_READ, Capability.CONSTRAINTS_LIST}
+        ),
+        RecordEventFamily.CONSTRAINT_CATEGORY: frozenset({Capability.CONSTRAINT_CATEGORIES_LIST}),
+        RecordEventFamily.PROJECT_CONTROLS_SETTINGS: frozenset(
+            {Capability.PROJECT_CONTROLS_STATUS}
+        ),
+        RecordEventFamily.MEETING: frozenset({Capability.MEETINGS_READ, Capability.MEETINGS_LIST}),
+        # No series read exists; the Meeting reads carry the series (and, under
+        # OD-7 (i), its `series_version`).
+        RecordEventFamily.MEETING_SERIES: frozenset(
+            {Capability.MEETINGS_READ, Capability.MEETINGS_LIST}
+        ),
+    }
+)
+
+#: OD-10 (i), the entity floor: the base Entity read every Entity-plane family
+#: needs *in addition to* one of its own mapped reads. Conjunctive, so it only
+#: ever narrows visibility; the `entity` family's own mapped read is this one.
+ENTITY_FLOOR_CAPABILITY: Final = Capability.ENTITIES_GET
+
+#: The ten families the floor is ANDed onto (plan section 6.1, rows 5-14).
+ENTITY_FLOOR_FAMILIES: Final[frozenset[RecordEventFamily]] = frozenset(
+    {
+        RecordEventFamily.ENTITY_IDENTIFIER,
+        RecordEventFamily.ENTITY_ALIAS,
+        RecordEventFamily.ENTITY_ASSIGNMENT,
+        RecordEventFamily.ENTITY_RELATIONSHIP,
+        RecordEventFamily.ENTITY_OBSERVATION,
+        RecordEventFamily.ENTITY_NAME,
+        RecordEventFamily.ENTITY_ADDRESS,
+        RecordEventFamily.ENTITY_COMMUNICATION_METHOD,
+        RecordEventFamily.ENTITY_PROJECT_PARTICIPATION,
+        RecordEventFamily.PERSON_ORGANIZATION_AFFILIATION,
+    }
+)

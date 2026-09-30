@@ -216,6 +216,7 @@ from my_pa.application.commands import (
     ListMeetings,
     ListPortfolioConstraints,
     ListProjects,
+    ListRecordEvents,
     ListRelationshipMemories,
     ListReviewCases,
     ListSituations,
@@ -465,6 +466,7 @@ from my_pa.application.meetings import (
 )
 from my_pa.application.model_gate import BoundedModelGate
 from my_pa.application.producer_origin import ProducerOriginError, ProducerOriginRegistry
+from my_pa.application.record_events import list_record_events, record_event_page_size
 from my_pa.application.relationship_memory import (
     ArchiveMemoryCommand,
     CreateMemoryCommand,
@@ -578,7 +580,7 @@ from my_pa.domain.documents.managed import (
 from my_pa.domain.extraction.coverage import CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus, extract_text
 from my_pa.domain.goodnotes.models import GoodNotesReviewCase, GoodNotesSemanticReviewCase
-from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.operation import Capability, granted_purposes
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.meeting.model import (
@@ -2892,6 +2894,11 @@ def _namespace_or_refuse(named: str | None) -> ExternalIdentifierNamespace | Non
         return ExternalIdentifierNamespace(named)
     except ValueError:
         raise InvalidRequestError(SafeDetail.SELECTOR) from None
+
+
+#: A Record Event names an ADR-003 product-owned record of this Principal's own
+#: partition, read through no configured source (WP-RE-06).
+_RECORD_EVENT_TRUST_BASIS: Final = ("principal_partition",)
 
 
 #: A Meeting is an ADR-003 product-owned record in this Principal's own
@@ -11932,6 +11939,51 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MEETING_TRUST_BASIS),
         )
 
+    # ---- the Record Event change feed (WP-RE-06) ------------------------------
+
+    def _record_events_list(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListRecordEvents
+    ) -> _Result:
+        """`record_events.list`: one page of the caller's own change feed.
+
+        A remote caller must hold `record_events.list` for `record_event_read`,
+        re-checked here and not only at the MCP wrapper, because `invoke`
+        itself does not check the grant set (G1-RD-008). Families, disclosure
+        mode and the cursor binding are re-derived from the authorization and
+        this process's composition by `list_record_events`; nothing is taken
+        from the request but the page size, the cursor and the narrowing.
+        """
+        grants = authorization.capability_grants
+        if grants is not None and Purpose.RECORD_EVENT_READ not in granted_purposes(
+            Capability.RECORD_EVENTS_LIST, grants
+        ):
+            raise UnsupportedError()
+        with _translated():
+            view = list_record_events(
+                unit_of_work.record_event_reader,
+                principal_id=authorization.principal.principal_id,
+                available_capabilities=self.available_capabilities,
+                capability_grants=grants,
+                record_families=command.record_families,
+                page_size=record_event_page_size(
+                    command.page_size, published_max=self._limits.max_page_size
+                ),
+                cursor=command.cursor,
+            )
+        has_more = view.next_cursor is not None
+        return _Result(
+            payload=view.to_canonical_dict(),
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_RECORD_EVENT_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=has_more,
+                    reason="page_size_reached" if has_more else None,
+                    next_cursor=view.next_cursor,
+                ),
+            ),
+        )
+
     def _meeting_page_size(self, requested: int | None) -> int:
         """The effective page bound: the published limit, never above the plane's 100."""
         return min(self._page_size(requested), MAX_MEETING_PAGE_SIZE)
@@ -13557,6 +13609,7 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.MEETINGS_SEARCH: ApplicationService._meetings_search,
         Capability.MEETINGS_UPDATE: ApplicationService._meetings_update,
         Capability.MEETINGS_SERIES_UPDATE: ApplicationService._meetings_series_update,
+        Capability.RECORD_EVENTS_LIST: ApplicationService._record_events_list,
     }
 )
 

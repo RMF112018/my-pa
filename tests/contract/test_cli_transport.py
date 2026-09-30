@@ -195,7 +195,7 @@ def test_the_cli_reaches_nothing_http_would_deny(capability: Capability, scene: 
 def test_the_cli_publishes_no_command_for_handler_unwired_capabilities() -> None:
     assert set(Capability) - set(_HANDLERS) == HANDLER_UNWIRED_CAPABILITIES
     assert set(_BUILDERS) == set(_HANDLERS)
-    assert len(_BUILDERS) == 178
+    assert len(_BUILDERS) == 179
     assert not HANDLER_UNWIRED_CAPABILITIES & set(_BUILDERS)
 
 

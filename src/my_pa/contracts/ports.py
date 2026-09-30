@@ -133,7 +133,14 @@ from my_pa.domain.project_controls.read_models import (
 from my_pa.domain.project_controls.relationship import ConstraintRelationship
 from my_pa.domain.project_controls.revision import ConstraintRevision
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
-from my_pa.domain.record_events import EntityEventShape, RecordEventDraft
+from my_pa.domain.record_events import (
+    EntityEventShape,
+    RecordEventActorClass,
+    RecordEventAuthority,
+    RecordEventDraft,
+    RecordEventFamily,
+    RecordEventKind,
+)
 from my_pa.domain.relationship.authoring import (
     MAX_EVIDENCE_REFERENCES,
     MAX_INITIAL_ALIASES,
@@ -365,6 +372,9 @@ __all__ = [
     "ProjectRepository",
     "ProposalAdmissionConflictError",
     "PulseRepository",
+    "RecordEventFeedItem",
+    "RecordEventPage",
+    "RecordEventReader",
     "RecordEventStager",
     "RecordEventWriter",
     "RelationshipEventRepository",
@@ -4822,6 +4832,87 @@ class RecordEventWriter(ABC):
         """Insert `drafts` in order at `first_sequence_number` onward."""
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RecordEventFeedItem:
+    """One committed Record Event as the feed reader returns it (WP-RE-06).
+
+    Deliberately narrower than the stored row. There is no `principal_id` (the
+    caller's own partition is the only one read), no `classification` and no
+    `correlation_id` (package section 12), and **no `sequence_number`**: under
+    OD-1 the order is the sequence but the number never leaves the reader, so a
+    remote caller cannot count withheld events from gaps (G1-RD-001).
+    """
+
+    event_id: str
+    record_family: RecordEventFamily
+    record_id: str
+    event_kind: RecordEventKind
+    record_version: int
+    changed_fields: tuple[str, ...]
+    source_capability: str
+    source_receipt_id: str | None
+    actor_class: RecordEventActorClass
+    authority: RecordEventAuthority | None
+    occurred_at: datetime
+    recorded_at: datetime
+    causation_event_id: str | None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RecordEventPage:
+    """One keyset page and the high watermark, computed by one statement.
+
+    `rows` holds at most `limit + 1` items in sequence order (the extra one
+    only says there is more). `high_watermark_event_id` names the effective
+    visible event with the greatest sequence number at the same snapshot, or
+    `None` when there is none.
+    """
+
+    rows: tuple[RecordEventFeedItem, ...]
+    high_watermark_event_id: str | None
+
+
+class RecordEventReader(ABC):
+    """The Record Event feed's read half (WP-RE-06, plan D-01).
+
+    `page` is the page *and* the watermark behind one method and one SQL
+    statement, so the two can never be read at two snapshots (G1-TX-004). Every
+    method is scoped to `principal_id`, which the caller takes from the
+    server-resolved authorization. With `include_restricted_memory` false (a
+    remote caller), every predicate also withholds each `relationship_memory`
+    event whose stored classification is `restricted_local` or whose memory's
+    current version is (OD-8), in SQL, so nothing withheld reaches a count, a
+    truncation flag or a watermark.
+    """
+
+    @abstractmethod
+    def page(
+        self,
+        *,
+        principal_id: str,
+        after_sequence: int,
+        families: frozenset[RecordEventFamily],
+        include_restricted_memory: bool,
+        limit: int,
+    ) -> RecordEventPage:
+        """The first `limit + 1` effective events after `after_sequence`, and W."""
+
+    @abstractmethod
+    def resolve_position(self, *, principal_id: str, event_id: str) -> int | None:
+        """The internal sequence position of the caller's own `event_id`, or `None`."""
+
+    @abstractmethod
+    def visible_event_ids(
+        self,
+        *,
+        principal_id: str,
+        event_ids: frozenset[str],
+        families: frozenset[RecordEventFamily],
+        include_restricted_memory: bool,
+    ) -> frozenset[str]:
+        """Which of `event_ids` the same visibility predicate as `page` admits."""
+
+
 class UnitOfWork(ABC):
     """One transaction, and the repositories that run inside it.
 
@@ -4856,6 +4947,16 @@ class UnitOfWork(ABC):
         a buffer raises inside the transaction, so the canonical change rolls
         back with it rather than committing with no event. Every SQL unit of
         work overrides this, and nothing may catch the refusal to skip staging.
+        """
+        raise NotImplementedError
+
+    @property
+    def record_event_reader(self) -> RecordEventReader:
+        """The Record Event feed reader, inside this transaction (WP-RE-06).
+
+        A refusing default for the reason `record_events` above has one: a
+        double that never serves the feed need not carry a reader. The SQL unit
+        of work overrides it.
         """
         raise NotImplementedError
 

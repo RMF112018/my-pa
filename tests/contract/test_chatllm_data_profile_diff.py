@@ -217,11 +217,12 @@ def test_full_plane_effective_target_is_one_hundred_forty_nine() -> None:
     than summed from the two branches' deltas. PC-CM-RUN01-WP07's
     `constraints.create_published` moved it by one more, on the same reading.
     Meeting Records WP-MTG-05 moved it by six (the `DATA_REQUIRED` Meeting
-    capabilities), re-measured from the live derivation.
+    capabilities), re-measured from the live derivation. WP-RE-06 moved it by
+    one (`record_events.list`, `DATA_REQUIRED` on the core plane).
     """
     composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
     desired = desired_effective_capabilities(composed)
-    assert len(desired) == 159
+    assert len(desired) == 160
     assert Capability.PROJECT_CONTROLS_CONFIGURE in desired
     assert Capability.PROJECT_CONTROLS_STATUS in desired
     assert Capability.REPORTS_BEGIN_CYCLE in desired
@@ -235,8 +236,10 @@ def test_default_plane_effective_target_is_eighty_three() -> None:
     composed = composed_capabilities(IMPLEMENTED, _DEFAULT_PLANES)
     desired = desired_effective_capabilities(composed)
     # The six Meeting capabilities need no plane flag, so they are in the
-    # default-plane target too (re-measured from the live derivation).
-    assert len(desired) == 93
+    # default-plane target too (re-measured from the live derivation), and so
+    # does WP-RE-06's `record_events.list`.
+    assert len(desired) == 94
+    assert Capability.RECORD_EVENTS_LIST in desired
     assert desired >= _MEETINGS
     assert Capability.DOCUMENTS_READ not in desired
     assert Capability.ENTITIES_SEARCH not in desired
@@ -432,7 +435,7 @@ def test_no_path_grants_every_capability_enum_member() -> None:
     assert Capability.SOURCES_ENROLL not in desired
     assert Capability.GSQS_START not in desired
     assert Capability.CONTINUITY_TASKS_CREATE not in desired
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v3"
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v4"
 
 
 def test_mismatched_purpose_or_write_is_add_not_noop() -> None:
@@ -686,12 +689,39 @@ def test_a_v2_converged_client_plans_exactly_the_six_meeting_adds() -> None:
         scope=SCOPE,
     )
     assert not diff.is_healthy()
-    assert diff.profile_version == "chatllm-data-v3"
+    assert diff.profile_version == "chatllm-data-v4"
     assert diff.add == _MEETINGS
     assert diff.renew == frozenset()
     actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
     assert {action.capability for action in actions if action.kind != "noop"} == _MEETINGS
     assert {action.kind for action in actions if action.capability in _MEETINGS} == {"add"}
+
+
+def test_a_v3_converged_client_plans_exactly_the_record_events_add() -> None:
+    """WP-RE-06: a client converged on the v3 catalog needs exactly the feed grant."""
+    composed = composed_capabilities(IMPLEMENTED, _FULL_PLANES)
+    desired = desired_effective_capabilities(composed)
+    feed = frozenset({Capability.RECORD_EVENTS_LIST})
+    grants = tuple(_grant(capability) for capability in desired - feed)
+    diff = diff_chatllm_data_profile(
+        implemented=IMPLEMENTED,
+        composed=composed,
+        grants=grants,
+        now=NOW,
+        resource=RESOURCE,
+        scope=SCOPE,
+    )
+    assert not diff.is_healthy()
+    assert diff.profile_version == "chatllm-data-v4"
+    assert diff.add == feed
+    assert diff.renew == frozenset()
+    actions = plan_chatllm_grant_actions(diff, grants, now=NOW, resource=RESOURCE, scope=SCOPE)
+    (added,) = [action for action in actions if action.kind != "noop"]
+    assert added.capability is Capability.RECORD_EVENTS_LIST
+    assert added.kind == "add"
+    assert added.purpose is Purpose.RECORD_EVENT_READ
+    assert added.is_write is False
+    assert chatllm_grant_purpose(Capability.RECORD_EVENTS_LIST) is Purpose.RECORD_EVENT_READ
 
 
 def test_mismatched_meeting_grants_plan_as_add() -> None:

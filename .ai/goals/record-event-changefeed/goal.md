@@ -51,6 +51,20 @@ Re-derived in the worktree (PYTHONPATH=src):
 - §9 branches: `cursor/stage-a-post-pr278-rebase-4d70` @ `f01825af`, `handoff/stage-a-candidate-pre-pr278-20260924` @ `dce96b19`, `claude/festive-fermi-lh0oat` @ `5a57f265`: dormant, no PR; classification unchanged (none).
 - Main has not moved since the bound SHA, so no WP is invalidated (N3 not fired). All controlling-source SHA-256 values verified by the Orchestrator.
 
+## R2 record (before WP-RE-06), 2026-09-30
+
+| Fact | R1 | R2 value | Note |
+|---|---|---|---|
+| `origin/main` | `d6c706bb…` | `d6c706bb4e43cc15eefcda35f40d66eb58abe9ed` | unchanged; the rebase is a no-op (HEAD already descends from it) |
+| Alembic heads | `7d9a450dfd07` | `1d9b248e7f83 (head)`, single | our revision; its `down_revision` `7d9a450dfd07` is still main's head, so no re-point |
+| Revision files | 108 | 109 | +1 (ours) |
+| `Capability` / `Purpose` | 178 / 47 | 178 / 47 | unchanged before WP-RE-06 |
+| ChatLLM profile / classes | v3; 69/90/2/15/2/0 | v3; 69/90/2/15/2/0 | unchanged |
+| Audit vocabulary | 189 / 47 | 189 / 47 | the latest restating revision is still `20260927_7d9a450dfd07_meeting_records.py` (SHA-256 `fe36b8ff8479a8cae2f0054f61907345014ea4b9ec17f30ac413c0259be1576c`); BEFORE byte copies come from its `_CAPABILITIES_AT_THIS_REVISION` / `_PURPOSES_AT_THIS_REVISION` |
+
+- PR #287: OPEN, CONFLICTING, head `b9b2b203`, unchanged. It is the only other open PR. The §9 dormant branches are unchanged.
+- N2, N3 and N16 are not fired at R2 (N16 is re-verified in WP-RE-06 Phase A).
+
 ## Checkpoint ledger
 
 | CP | WP | Head | Tree | RE-AC | FAST | DB lane (local PG) | Notes |
@@ -59,7 +73,8 @@ Re-derived in the worktree (PYTHONPATH=src):
 | CP-RE-02 | WP-RE-02 | `97cae35bb8185ef6f082143321ca028bf7966cfe` | `7bc006d28f280e678ab200ee9e9003e1b8c8bbba` | 018-030 | green: 25,188 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: WP-02 + task/commitment/project/continuity + record-event DB modules 195 passed; full `-m recovery` 46 passed (worker: full tests/database 1,689 passed) | no N fired; T-12 premise finding (below) |
 | CP-RE-03 | WP-RE-03 | `9102e2f2642a3ef6bf7cc16b93ecd8460fa79509` | `ee2238f806f4e0bff42dc1850b1ac107a20aff85` | 031-043 | green: 25,206 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: 32 constraint/project-controls/project-create/tbr DB modules 468 passed; full `-m recovery` 46 passed (worker: full tests/database 1,713 passed) | no N fired; T-10 no 40P01/lock_timeout |
 | CP-RE-04 | WP-RE-04 | `d442f923705025ff03c323c06caf9a0840d367ea` | `d1025a5765c2dc1aa8a9202d17218a78e1cb3892` | 044-051 | green: 25,274 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: entity/identity/memory/review/reenrichment/record-event DB modules + no-payload 916 passed; full `-m recovery` 46 passed | no N fired (N8 resolved as not-fired, MR-05); T-15 no 40P01 |
-| CP-RE-05 | WP-RE-05 | the commit that adds this row (SHA recorded in CP-RE-06) | | 052-056 | green: 25,299 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: meeting DB/concurrency + record_event DB modules 185 passed; full `-m recovery` 46 passed | no N fired; T-13 no 40P01 |
+| CP-RE-05 | WP-RE-05 | `f3ad197e4a31d80cbf64f08b5aa0be10b53ad515` | `51380af70dbcd4e1a15a7082370252ccdf61f405` | 052-056 | green: 25,299 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: meeting DB/concurrency + record_event DB modules 185 passed; full `-m recovery` 46 passed | no N fired; T-13 no 40P01 |
+| CP-RE-06 | WP-RE-06 | the commit that adds this row (SHA recorded in CP-RE-07) | | 057-083 | green: 25,726 passed / 74 skipped / 0 failed; ruff, format, mypy (524) clean | PG 15 local, PGTZ=UTC: record-event DB/concurrency/security modules 191 passed; recovery 46; migration_empty_to_head 10; migration_edge subset 46 (worker: full 1,071); e2e 13 (worker 31); worker web npm test 3,563 passed, lint 0 errors, typecheck and build OK | no N fired; counts equal projections (no N12) |
 
 **CP-RE-01 out-of-matrix mechanical edits (as reported to the Manager):**
 - C5/C6 fan-out: 34 `HEAD_PIN_FILES` plus the control file `tests/schema/test_constraint_authoring_capability_migration.py`, 24 revision-count pins, and `tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py`.
@@ -173,6 +188,45 @@ Re-derived in the worktree (PYTHONPATH=src):
   - `mcv-completion-plan.md` module count 359/623.
 - No `web/` edit: the web app does not consume meetings.
 - CI at `d442f923` (CP-RE-04): repository-checks 36664088723 succeeded on all jobs. frontend-quality 36664088720 had classify and required succeed; visual failed (continue-on-error).
+
+### WP-RE-06 (CP-RE-06)
+
+- R2 (above): no re-point, since the head is unchanged.
+- **6A, read core:**
+  - `RECORD_EVENT_FAMILY_READS` (20 rows, explicit), with the entity floor (OD-10).
+  - `A/record_events.py`: the cursor codec (OD-1 `{b,e,v}`, U-002 decode order), the binding with `cursor_version`/`memory_disclosure`/`grant_digest` (D-04), visible/effective families, and OD-12 causation nulling.
+  - `SqlRecordEventReader.page`: one statement, keyset page plus watermark via LEFT JOIN LATERAL (D-01). OD-8 stored OR current-version EXISTS in both subqueries.
+  - `contracts/v1/record_events.py`: 13 item fields, no `sequence_number`.
+  - N16 re-verified as not fired.
+- **6B, registration:**
+  - `record_events.list` → `record_event_read`, scopeless; the handler re-checks the grant for remote callers (G1-RD-008).
+  - Normalization builder and gateway `record_events` feature.
+  - ChatLLM `_DATA_REQUIRED` and profile `chatllm-data-v4` (OD-11; repository only).
+  - Migration `_restate_audit`: BEFORE is a byte copy of 7d9a450dfd07 (189/47); AT is 190/48. The downgrade refusal is widened to audit rows.
+  - G1-MG-013 `CHECKED_VOCABULARY`.
+  - The `success.json` `capabilities.get` entry was regenerated.
+- **Count ledger, R2 → CP-RE-06 actual (= projected):**
+  - Capability 179; Purpose 48; NativeSource 11.
+  - ChatLLM 70/90/2/15/2/0; profile v4.
+  - Audit vocabulary 190/48; pairs 181/8411.
+  - Handlers/builders/tools 179; default/withheld 109/70; local MCP/composed 106/176; ChatLLM desired 160/94.
+  - Write sets 14/96/34; revisions 109, head `1d9b248e7f83`; modules 361/631.
+- **Guard-forced pins:**
+  - The C7/C8 spelled and derived doc/prose pins moved forward from WP-RE-07 because FAST binds them: README.md, the three architecture docs, the gateway and MCP runbooks, web/README.md, the docstrings in `bootstrap/gateway.py` and `adapters/cli/app.py`, and test prose/literals including `SPELLED_COUNTS` +179 and `_ORDINAL_UNITS` +"hundred-eightieth".
+  - The unbound `chatllm-data-v3` doc mentions and the ops/nas head config remain for WP-RE-07.
+- **Other out-of-matrix edits, mechanical:**
+  - `application/errors.py` `SafeDetail.RECORD_FAMILIES`.
+  - `operation.py` `granted_purposes`, factored from `remote_request.py` with no behaviour change.
+  - The memory-reach guard's `MEMORY_SQL_MODULES`, port crossings, `UNCALLED_PORT_METHOD_REFERENCES` (`portfolio.page` name collision), `DECLARED`, `BEYOND_THE_NINE` and `DECLARED_TABLE_REACH`.
+  - Partition-guard reason texts.
+  - The conftest `FakeRecordEventReader`.
+  - The registries in PATH-SYMBOL §3.3.
+- **MR-06 precedent applied, ratification requested:** an appended dated paragraph in `evidence/acceptance/RI-FINAL-COMPLETION-RM-AC-DELTA-20260828.md`. `record_events.list` reads `relationship_memories` and `relationship_memory_versions`, keys plus `classification` only, inside the OD-8 EXISTS, for remote callers. The one-column guard is extended to the reader, with a prove-red.
+- **Prove-reds:** 6A 19 and 6B 13. All went red on assertions.
+- **CI at `f3ad197e` (CP-RE-05):**
+  - repository-checks 36670556653 succeeded on all jobs.
+  - frontend-quality 36670556632 attempt 1 failed `frontend / e2e-critical`: 3 `constraints-mutations.spec.ts` tests got HTML instead of JSON after the WebServer logged "destination stream closed early". This is the same tree class that passed at `9102e2f2`/`d442f923`, and CP-RE-05 touched only meetings.
+  - A rerun of the failed jobs (attempt 2) succeeded, including classify and required. Recorded as a flake; visual failed (continue-on-error).
 
 ## Manager rulings
 

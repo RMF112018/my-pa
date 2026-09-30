@@ -15,7 +15,7 @@ from typing import Final
 
 from my_pa.domain.identity.operation import Capability
 
-CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v3"
+CHATLLM_DATA_PROFILE_VERSION: Final = "chatllm-data-v4"
 
 
 class ChatLLMCapabilityClass(StrEnum):
@@ -117,6 +117,11 @@ _DATA_REQUIRED: Final[frozenset[Capability]] = frozenset(
         Capability.TASKS_SEARCH,
         Capability.TASKS_TRANSITION,
         Capability.TASKS_UPDATE,
+        # WP-RE-06, OD-11 (i): the Record Event feed is metadata only (ids,
+        # families, kinds, versions, field names, timestamps, the operation and
+        # the actor class), narrowed to the caller's own family grants, with
+        # restricted memory withheld in SQL. Always composed, so DATA_REQUIRED.
+        Capability.RECORD_EVENTS_LIST,
     }
 )
 

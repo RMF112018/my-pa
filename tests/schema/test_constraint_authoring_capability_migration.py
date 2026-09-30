@@ -183,6 +183,7 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_goodnotes_semantic_proposal_migration.py",
     "tests/schema/test_legacy_direct_principal_task_origin_migration.py",
     "tests/schema/test_meeting_records_migration.py",
+    "tests/schema/test_record_events_migration.py",
     "tests/schema/test_oauth_refresh_migration.py",
     "tests/schema/test_project_controls_run01_integrity_migration.py",
     "tests/schema/test_project_version_and_entity_bridge_migration.py",

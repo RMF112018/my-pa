@@ -482,6 +482,9 @@ _ORDINAL_UNITS = (
     "hundred-seventy-seventh",
     "hundred-seventy-eighth",
     "hundred-seventy-ninth",
+    # WP-RE-06's `record_events.list` takes the public set to one hundred and
+    # seventy-nine, so the plant now indexes the one hundred and eightieth.
+    "hundred-eightieth",
 )
 
 

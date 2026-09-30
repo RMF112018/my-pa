@@ -29,3 +29,14 @@ Record Event they stage stores that classification (operator ruling OD-8 (i), Ma
 ruling MR-06). No statement, structured value, evidence payload or any other version column
 is read; `tests/security/test_record_events_carry_no_payload.py` holds the read to those
 columns.
+
+**WP-RE-06 (Record Event feed read, 2026-09-30):** `record_events.list` reads two of the eight
+(`relationship_memories`, `relationship_memory_versions`) and writes none of the eight. The
+reach exists only for a remote caller, inside the operator-ruled OD-8 (i) `EXISTS` that
+withholds every Record Event of a memory whose current version is `restricted_local`: it
+joins `relationship_memories.memory_id` and `current_version_id` to
+`relationship_memory_versions.memory_version_id` under the Principal partition and compares
+that version's `classification`. No memory column enters a returned row -- a feed item
+carries only the event's own metadata -- and no statement, structured value, evidence
+payload or any other memory or version column is read;
+`tests/security/test_record_events_carry_no_payload.py` holds the reader to those columns.

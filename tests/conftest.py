@@ -125,6 +125,9 @@ from my_pa.contracts.ports import (
     ProjectRepository,
     ProposalAdmissionConflictError,
     PulseRepository,
+    RecordEventFeedItem,
+    RecordEventPage,
+    RecordEventReader,
     RecordEventStager,
     RelationshipMemoryProposalRepository,
     RelationshipMemoryRepository,
@@ -277,7 +280,7 @@ from my_pa.domain.project_controls.read_models import (
 from my_pa.domain.project_controls.relationship import ConstraintRelationship
 from my_pa.domain.project_controls.revision import ConstraintRevision
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
-from my_pa.domain.record_events import EntityEventShape, RecordEventDraft
+from my_pa.domain.record_events import EntityEventShape, RecordEventDraft, RecordEventFamily
 from my_pa.domain.relationship.authoring import (
     ConflictedIdentifierError,
     DuplicateEntityFactError,
@@ -3244,6 +3247,95 @@ class FakeRecordEventStager(RecordEventStager):
         if committed:
             self._sink.extend(self._pending)
         self._pending.clear()
+
+
+class FakeRecordEventReader(RecordEventReader):
+    """WP-RE-06: the feed reader over `World.record_events`, the committed feed.
+
+    Test infrastructure, not database evidence: sequence numbers are positions
+    in the Principal's committed drafts, `recorded_at` is `occurred_at`, and
+    the remote restricted-memory rule reads only the stored classification
+    (the SQL reader's current-version `EXISTS` is database-tested).
+    """
+
+    def __init__(self, sink: list[RecordEventDraft]) -> None:
+        self._sink = sink
+
+    def _mine(self, principal_id: str) -> list[tuple[int, RecordEventDraft]]:
+        owned = [draft for draft in self._sink if draft.principal_id == principal_id]
+        return [(index + 1, draft) for index, draft in enumerate(owned)]
+
+    @staticmethod
+    def _visible(
+        draft: RecordEventDraft,
+        families: frozenset[RecordEventFamily],
+        include_restricted_memory: bool,
+    ) -> bool:
+        if draft.record_family not in families:
+            return False
+        return include_restricted_memory or not (
+            draft.record_family is RecordEventFamily.RELATIONSHIP_MEMORY
+            and draft.classification.value == "restricted_local"
+        )
+
+    def page(
+        self,
+        *,
+        principal_id: str,
+        after_sequence: int,
+        families: frozenset[RecordEventFamily],
+        include_restricted_memory: bool,
+        limit: int,
+    ) -> RecordEventPage:
+        visible = [
+            (sequence, draft)
+            for sequence, draft in self._mine(principal_id)
+            if self._visible(draft, families, include_restricted_memory)
+        ]
+        rows = tuple(
+            RecordEventFeedItem(
+                event_id=draft.event_id,
+                record_family=draft.record_family,
+                record_id=draft.record_id,
+                event_kind=draft.event_kind,
+                record_version=draft.record_version,
+                changed_fields=draft.changed_fields,
+                source_capability=draft.source_capability,
+                source_receipt_id=draft.source_receipt_id,
+                actor_class=draft.actor_class,
+                authority=draft.authority,
+                occurred_at=draft.occurred_at,
+                recorded_at=draft.occurred_at,
+                causation_event_id=draft.causation_event_id,
+            )
+            for sequence, draft in visible
+            if sequence > after_sequence
+        )
+        return RecordEventPage(
+            rows=rows[: limit + 1],
+            high_watermark_event_id=visible[-1][1].event_id if visible else None,
+        )
+
+    def resolve_position(self, *, principal_id: str, event_id: str) -> int | None:
+        found = [
+            sequence for sequence, draft in self._mine(principal_id) if draft.event_id == event_id
+        ]
+        return found[0] if found else None
+
+    def visible_event_ids(
+        self,
+        *,
+        principal_id: str,
+        event_ids: frozenset[str],
+        families: frozenset[RecordEventFamily],
+        include_restricted_memory: bool,
+    ) -> frozenset[str]:
+        return frozenset(
+            draft.event_id
+            for _, draft in self._mine(principal_id)
+            if draft.event_id in event_ids
+            and self._visible(draft, families, include_restricted_memory)
+        )
 
 
 class FakeTaskManagementUnitOfWork(TaskManagementUnitOfWork):
@@ -9270,6 +9362,10 @@ class FakeUnitOfWork(UnitOfWork):
     @property
     def record_events(self) -> RecordEventStager:
         return self._record_events
+
+    @property
+    def record_event_reader(self) -> RecordEventReader:
+        return FakeRecordEventReader(self._world.record_events)
 
     @property
     def providers(self) -> SourceProviders:

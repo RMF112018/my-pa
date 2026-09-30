@@ -239,16 +239,28 @@ def test_the_at_texts_add_exactly_the_meeting_vocabulary_and_stay_sorted() -> No
     assert purposes_at == sorted(purposes_at)
 
 
+#: What the next vocabulary restatement (`1d9b248e7f83`, WP-RE-06) admits; this
+#: revision's AT set is every name declared *before* it.
+ADMITTED_LATER_CAPABILITIES: Final = frozenset({"record_events.list"})
+ADMITTED_LATER_PURPOSES: Final = frozenset({"record_event_read"})
+
+
 def test_head_admits_every_declared_capability_and_purpose() -> None:
-    """A subset, not equality: the audit set also holds the operator names."""
+    """A subset, not equality: the audit set also holds the operator names.
+
+    Every name declared today is admitted here except the ones the next
+    restatement admits, which `tests/schema/test_record_events_migration.py`
+    holds to that revision.
+    """
     source = MIGRATION.read_text(encoding="utf-8")
     at = set(_literals(_constant(source, "_CAPABILITIES_AT_THIS_REVISION")))
     purposes_at = set(_literals(_constant(source, "_PURPOSES_AT_THIS_REVISION")))
-    assert {capability.value for capability in Capability} <= at
-    assert {purpose.value for purpose in Purpose} <= purposes_at
-    assert at - {capability.value for capability in Capability} == {
-        capability.value for capability in NativeSourceCapability
-    }
+    declared = {capability.value for capability in Capability}
+    assert declared - ADMITTED_LATER_CAPABILITIES <= at
+    assert not ADMITTED_LATER_CAPABILITIES & at
+    assert {purpose.value for purpose in Purpose} - ADMITTED_LATER_PURPOSES <= purposes_at
+    assert not ADMITTED_LATER_PURPOSES & purposes_at
+    assert at - declared == {capability.value for capability in NativeSourceCapability}
 
 
 # ---- offline SQL -------------------------------------------------------------

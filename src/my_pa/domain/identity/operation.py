@@ -27,6 +27,7 @@ __all__ = [
     "AuthorizedCapability",
     "Capability",
     "NativeSourceCapability",
+    "granted_purposes",
     "is_destructive_capability",
     "is_operator_only",
     "is_write_capability",
@@ -910,6 +911,15 @@ class Capability(StrEnum):
     MEETINGS_SEARCH = "meetings.search"
     MEETINGS_UPDATE = "meetings.update"
     MEETINGS_SERIES_UPDATE = "meetings.series.update"
+    #: The Record Event change feed (WP-RE-06): one read over the Principal's own
+    #: invalidation feed -- which canonical record changed, to which version,
+    #: through which operation, and nothing else. A read, never a write and
+    #: never operator-only; scopeless, because an event names a product-owned
+    #: record of the acting Principal's own partition and no configured source.
+    #: Which families a caller sees is derived from its composition and grants
+    #: on every request (`application.record_events`), so the grant for this
+    #: name alone discloses no family.
+    RECORD_EVENTS_LIST = "record_events.list"
 
 
 class NativeSourceCapability(StrEnum):
@@ -1416,6 +1426,8 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.MEETINGS_CREATE: frozenset({Purpose.MEETING_AUTHORING}),
         Capability.MEETINGS_UPDATE: frozenset({Purpose.MEETING_AUTHORING}),
         Capability.MEETINGS_SERIES_UPDATE: frozenset({Purpose.MEETING_AUTHORING}),
+        # The Record Event feed (WP-RE-06): exactly one purpose of its own.
+        Capability.RECORD_EVENTS_LIST: frozenset({Purpose.RECORD_EVENT_READ}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),
@@ -1676,3 +1688,23 @@ def permitted_purposes(capability: AuthorizedCapability) -> frozenset[Purpose]:
     An unmapped capability yields the empty set, so policy denies it.
     """
     return _PERMITTED_PURPOSES.get(capability, frozenset())
+
+
+def granted_purposes(
+    capability: Capability,
+    grants: frozenset[tuple[Capability, Purpose | None]] | None,
+) -> frozenset[Purpose]:
+    """The permitted purposes of `capability` that a remote grant set admits.
+
+    The one purpose-aware grant rule, shared by the remote boundary
+    (`adapters.remote_request.resolve_remote_purpose`) and the Record Event
+    feed's visible-family derivation (WP-RE-06, P2c section 3.2): `None` (no
+    grant ceiling attached) or a capability-wide grant `(capability, None)`
+    admits every permitted purpose; otherwise only the `(capability, purpose)`
+    pairs whose purpose is permitted count. A grant for a purpose the capability
+    does not permit admits nothing.
+    """
+    permitted = permitted_purposes(capability)
+    if grants is None or (capability, None) in grants:
+        return permitted
+    return frozenset(purpose for purpose in permitted if (capability, purpose) in grants)

@@ -142,6 +142,7 @@ from my_pa.application.commands import (
     ListMeetings,
     ListPortfolioConstraints,
     ListProjects,
+    ListRecordEvents,
     ListRelationshipMemories,
     ListReviewCases,
     ListSituations,
@@ -1145,6 +1146,7 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             idempotency_key="policy-meetings-series-update",
             title="A policy meeting series, retitled",
         ),
+        Capability.RECORD_EVENTS_LIST: ListRecordEvents(),
     }
 
 
@@ -1565,6 +1567,8 @@ SCOPED_CAPABILITIES = [
         Capability.MEETINGS_SEARCH,
         Capability.MEETINGS_UPDATE,
         Capability.MEETINGS_SERIES_UPDATE,
+        # WP-RE-06: the change feed, also in `_SCOPELESS`.
+        Capability.RECORD_EVENTS_LIST,
     }
 ]
 
@@ -1835,6 +1839,8 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.MEETINGS_SEARCH,
         Capability.MEETINGS_UPDATE,
         Capability.MEETINGS_SERIES_UPDATE,
+        # WP-RE-06: the change feed carries no source scope either.
+        Capability.RECORD_EVENTS_LIST,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

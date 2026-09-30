@@ -82,6 +82,7 @@ from my_pa.contracts.ports import (
     OperationQueue,
     ProjectRepository,
     PulseRepository,
+    RecordEventReader,
     RecordEventStager,
     RelationshipMemoryProposalRepository,
     RelationshipMemoryRepository,
@@ -184,6 +185,7 @@ from my_pa.infrastructure.persistence.meetings import SqlMeetingRepository
 from my_pa.infrastructure.persistence.principal_scope import capture_context
 from my_pa.infrastructure.persistence.record_events import (
     RecordEventBuffer,
+    SqlRecordEventReader,
     SqlRecordEventWriter,
     flush_record_events,
 )
@@ -1123,6 +1125,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         if self._connection is None:
             raise RuntimeError("this unit of work is not inside a transaction")
         return self._record_events
+
+    @property
+    def record_event_reader(self) -> RecordEventReader:
+        """The Record Event feed reader, on this transaction's connection (WP-RE-06)."""
+        return SqlRecordEventReader(self._open)
 
     @property
     def _open(self) -> Connection:

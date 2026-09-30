@@ -419,6 +419,7 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.MEETINGS_CREATE, Purpose.MEETING_AUTHORING),
         (Capability.MEETINGS_UPDATE, Purpose.MEETING_AUTHORING),
         (Capability.MEETINGS_SERIES_UPDATE, Purpose.MEETING_AUTHORING),
+        (Capability.RECORD_EVENTS_LIST, Purpose.RECORD_EVENT_READ),
     }
 )
 
@@ -493,9 +494,10 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # split between its read and authoring purposes, without widening the canonical grants.
     # WP-MTG-04 adds six Meeting names and the `meeting_read`/`meeting_authoring`
     # purpose pair, each name mapped to exactly one of the pair, so six pairs.
-    # Unioned: 178 capabilities, 47 purposes, 180 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 180
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 180 == 8186
+    # WP-RE-06 adds `record_events.list` and its own `record_event_read`, one pair.
+    # Unioned: 179 capabilities, 48 purposes, 181 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 181
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 181 == 8411
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

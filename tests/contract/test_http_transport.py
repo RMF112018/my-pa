@@ -176,6 +176,7 @@ from my_pa.application.commands import (
     ListMeetings,
     ListPortfolioConstraints,
     ListProjects,
+    ListRecordEvents,
     ListRelationshipMemories,
     ListReviewCases,
     ListSituations,
@@ -1453,6 +1454,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "idempotency_key": "http-meetings-series-update-0001",
             "title": "A synthetic meeting series, retitled",
         },
+        Capability.RECORD_EVENTS_LIST: {"page_size": 10},
     }
 
 
@@ -2401,6 +2403,7 @@ def commands_for(
             idempotency_key="http-meetings-series-update-0001",
             title="A synthetic meeting series, retitled",
         ),
+        Capability.RECORD_EVENTS_LIST: ListRecordEvents(page_size=10),
     }
 
 
@@ -2524,7 +2527,7 @@ def test_handler_unwired_capabilities_return_the_canonical_http_problem(
     capability: Capability, scene: Scene, wire: Wire
 ) -> None:
     assert set(Capability) - set(_HANDLERS) == _UNIMPLEMENTED_CAPABILITIES
-    assert len(HANDLER_CAPABILITIES) == 178
+    assert len(HANDLER_CAPABILITIES) == 179
     reply = wire.send(capability.value, document_for(capability, scene, {}))
     problem = ProblemDetail.model_validate(reply.document())
     assert reply.status == 501

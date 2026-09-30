@@ -139,6 +139,7 @@ from my_pa.application.commands import (
     ListMeetings,
     ListPortfolioConstraints,
     ListProjects,
+    ListRecordEvents,
     ListRelationshipMemories,
     ListReviewCases,
     ListSituations,
@@ -615,6 +616,9 @@ def _requested_scope(
             | SearchMeetings()
             | UpdateMeeting()
             | UpdateMeetingSeries()
+            # `record_events.list` (WP-RE-06) names only the acting Principal's
+            # own change feed, never a configured source (G1-RD-011).
+            | ListRecordEvents()
         ):
             return frozenset()
         case CreateCapture():

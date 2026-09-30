@@ -74,7 +74,7 @@ Re-derived in the worktree (PYTHONPATH=src):
 | CP-RE-03 | WP-RE-03 | `9102e2f2642a3ef6bf7cc16b93ecd8460fa79509` | `ee2238f806f4e0bff42dc1850b1ac107a20aff85` | 031-043 | green: 25,206 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: 32 constraint/project-controls/project-create/tbr DB modules 468 passed; full `-m recovery` 46 passed (worker: full tests/database 1,713 passed) | no N fired; T-10 no 40P01/lock_timeout |
 | CP-RE-04 | WP-RE-04 | `d442f923705025ff03c323c06caf9a0840d367ea` | `d1025a5765c2dc1aa8a9202d17218a78e1cb3892` | 044-051 | green: 25,274 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: entity/identity/memory/review/reenrichment/record-event DB modules + no-payload 916 passed; full `-m recovery` 46 passed | no N fired (N8 resolved as not-fired, MR-05); T-15 no 40P01 |
 | CP-RE-05 | WP-RE-05 | `f3ad197e4a31d80cbf64f08b5aa0be10b53ad515` | `51380af70dbcd4e1a15a7082370252ccdf61f405` | 052-056 | green: 25,299 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: meeting DB/concurrency + record_event DB modules 185 passed; full `-m recovery` 46 passed | no N fired; T-13 no 40P01 |
-| CP-RE-06 | WP-RE-06 | the commit that adds this row (SHA recorded in CP-RE-07) | | 057-083 | green: 25,726 passed / 74 skipped / 0 failed; ruff, format, mypy (524) clean | PG 15 local, PGTZ=UTC: record-event DB/concurrency/security modules 191 passed; recovery 46; migration_empty_to_head 10; migration_edge subset 46 (worker: full 1,071); e2e 13 (worker 31); worker web npm test 3,563 passed, lint 0 errors, typecheck and build OK | no N fired; counts equal projections (no N12) |
+| CP-RE-06 | WP-RE-06 | `40037597b73dc9c04a8d29331a2ef40910ae05f4` | `b9ec6b088834391b8dc0d7b04c06cc8e3fcfe03a` | 057-083 | green: 25,726 passed / 74 skipped / 0 failed; ruff, format, mypy (524) clean | PG 15 local, PGTZ=UTC: record-event DB/concurrency/security modules 191 passed; recovery 46; migration_empty_to_head 10; migration_edge subset 46 (worker: full 1,071); e2e 13 (worker 31); worker web npm test 3,563 passed, lint 0 errors, typecheck and build OK | no N fired; counts equal projections (no N12) |
 
 **CP-RE-01 out-of-matrix mechanical edits (as reported to the Manager):**
 - C5/C6 fan-out: 34 `HEAD_PIN_FILES` plus the control file `tests/schema/test_constraint_authoring_capability_migration.py`, 24 revision-count pins, and `tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py`.
@@ -228,6 +228,19 @@ Re-derived in the worktree (PYTHONPATH=src):
   - frontend-quality 36670556632 attempt 1 failed `frontend / e2e-critical`: 3 `constraints-mutations.spec.ts` tests got HTML instead of JSON after the WebServer logged "destination stream closed early". This is the same tree class that passed at `9102e2f2`/`d442f923`, and CP-RE-05 touched only meetings.
   - A rerun of the failed jobs (attempt 2) succeeded, including classify and required. Recorded as a flake; visual failed (continue-on-error).
 
+### CP-RE-06a (R3 prep, pre-amendment), 2026-09-30
+
+- R3: `origin/main` is still `d6c706bb`, so there is no rebase, no re-point, and every count is unchanged from CP-RE-06 (all equal the projections).
+- Doc items resolved, docs only:
+  - `docs/operations/mcv-limitations.md` §15 (Record Event feed, not commissioned);
+  - `ops/runbooks/managed-knowledge-context.md`: v4 commands, and the G1-MG-011 stale counts corrected to 160/94;
+  - `ops/runbooks/mcp-and-cli-operations.md` :448/:494/:527/:530/:533: v4 and head `1d9b248e7f83`;
+  - relationship-intelligence plan cells relabelled "WP-RE-07 final (R3)", with the PR #287 sequencing note.
+- `ops/nas/production-environment.{schema.toml,example.env}` are left unchanged and are an **operator item**. Deploy tooling reads both files (`ops/nas/validate-production-env.py`, `validate-delivery-config.py`, `preserved-runtime-env-preflight.py`). PATH-SYMBOL C6 says "only with operator agreement". Editing example.env also triggers frontend CI classification. The stale comment should read `1d9b248e7f83`.
+- The 85-row evidence map was drafted before the amendment (`scratchpad/RE-AC-EVIDENCE-MAP.md`, 85/85 node ids collected). It will be rebuilt after WP-RE-08.
+- FAST over this tree: 25,726 passed / 74 skipped / 0 failed (worker). The Orchestrator re-ran the doc guards and they were green.
+- **HOLD, operator scope amendment:** Captures and Task comments are to be included in this PR as WP-RE-08, planned and implemented before the WP-RE-07 terminal. No reviewer has been commissioned.
+
 ## Manager rulings
 
 - **MR-01 (2026-09-29):** the `TABLES_SHA256` re-pin in `tests/architecture/test_capture_project_binding.py` is MECHANICAL and ACCEPTED, because the tables.py diff against the base only adds lines and the captures Table is unchanged. Each later tables.py edit re-pins it under the same rule, provided the captures Table stays unchanged. CP-RE-01 was accepted by the Manager, and draft PR #297 is open.
@@ -269,6 +282,9 @@ Re-derived in the worktree (PYTHONPATH=src):
   - Use the recorded effect state if it names the column. Otherwise use one same-transaction read, with no new lock and no order change.
   - STOP if this would need a repository signature change outside the matrix.
   - Test: a multi-column family where only one column references the source.
+
+- **MR-08 (2026-09-30):** the feed-reader paragraph in `evidence/acceptance/RI-FINAL-COMPLETION-RM-AC-DELTA-20260828.md` is RATIFIED. It extends the MR-06 precedent on the same basis: OD-8 (i), mechanically enforced to keys plus `classification`. The Manager surfaces it to the operator with MR-06. CP-RE-06 accepted; the CP-RE-05 e2e-critical failure was accepted as a flake (same tree, re-run green).
+- **MR-09 (2026-09-30):** moving the C7/C8 spelled/derived doc pins into CP-RE-06 is RATIFIED. They are re-verified at R3.
 
 ## Review outcome and final state
 

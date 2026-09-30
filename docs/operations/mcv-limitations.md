@@ -616,6 +616,38 @@ Evidence: `src/my_pa/domain/meeting/model.py`, `src/my_pa/application/meetings.p
 `tests/contract/test_chatllm_data_profile_diff.py::test_a_v2_converged_client_plans_exactly_the_six_meeting_adds`,
 `tests/schema/test_meeting_records_migration.py::test_the_revision_is_the_single_head_directly_on_the_previous_head`.
 
+## 15. The Record Event feed is an invalidation feed, not a history, and is not commissioned
+
+**Metadata only.** `record_events.list` says *that* a canonical record changed --
+its family, id, new version, kind, changed field names and the operation -- and
+never what it changed to. A consumer rereads the record through its own family's
+read. There is no historical backfill: records written before the Record Event
+revision have no event until they change again.
+
+**Narrowed to the caller's own grants.** A remote caller sees only the families
+one of its granted reads discloses (the entity floor applies), never a
+restricted Relationship Memory event, and never a causation reference to an
+event it cannot see. There is no public sequence number; the cursor is bound to
+the request and anchored on an opaque event id.
+
+**Nothing here is commissioned.** The migration `1d9b248e7f83` is proven on
+disposable databases only. The ChatLLM data profile `chatllm-data-v4`, which
+adds `record_events.list` as `DATA_REQUIRED`, is repository desire. Whether any
+persistent database carries the feed tables and whether any client holds the
+feed grant are runtime facts that no repository evidence establishes; applying
+the profile needs separate operator authority, as in
+`ops/runbooks/mcp-and-cli-operations.md`.
+
+Evidence: `src/my_pa/domain/record_events.py`, `src/my_pa/application/record_events.py`,
+`src/my_pa/contracts/v1/record_events.py`,
+`src/my_pa/infrastructure/persistence/record_events.py`,
+`migrations/versions/20260929_1d9b248e7f83_record_events.py`,
+`tests/security/test_record_events_carry_no_payload.py::test_the_stored_row_is_metadata_only`,
+`tests/security/test_record_events_grant_narrowing.py::test_the_entity_floor_withholds_every_sub_family_without_entities_get`,
+`tests/database/test_record_events_bootstrap_race.py::test_remote_watermark_excludes_restricted_memory`,
+`tests/schema/test_record_events_migration.py::test_the_revision_writes_no_rows`,
+`tests/contract/test_chatllm_data_profile_diff.py::test_a_v3_converged_client_plans_exactly_the_record_events_add`.
+
 ---
 
 New implementation must use the neutral `my_pa` / `MY_PA_` namespace. Legacy

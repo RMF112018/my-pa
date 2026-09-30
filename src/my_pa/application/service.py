@@ -1622,7 +1622,9 @@ def _bulk_candidate(
             elif name == "role":
                 replacements[name] = TaskRole(str(value))
             elif name == "archived":
-                replacements["archived_at"] = now if value else None
+                replacements["archived_at"] = (
+                    (task.archived_at if task.archived_at is not None else now) if value else None
+                )
             else:
                 replacements[name] = value
         replacements.update(dict.fromkeys(cast(list[str], mutation["clear_fields"])))
@@ -8763,8 +8765,6 @@ class ApplicationService:
             value = getattr(command, field_name)
             if value is not None:
                 values[field_name] = value
-        if command.archived is not None:
-            values["archived_at"] = self._clock() if command.archived else None
         if command.clear_project:
             values["project_id"] = None
         elif command.project_id is not None:
@@ -8788,6 +8788,7 @@ class ApplicationService:
                     expected_version=command.expected_version,
                     actor=TaskMutationActor.PRINCIPAL,
                     values=values,
+                    archived=command.archived,
                     clear_fields=frozenset(command.clear_fields),
                     idempotency_key=command.idempotency_key,
                     client_context=command.client_context,

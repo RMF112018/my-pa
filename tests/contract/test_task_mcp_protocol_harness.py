@@ -20,10 +20,11 @@ already cover.
 from __future__ import annotations
 
 from contextlib import AbstractContextManager
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 from tests.conftest import (
+    WHEN,
     Scene,
     build_service,
     staged_record,
@@ -344,3 +345,72 @@ def test_pulse_items_for_tasks_carry_subject_title(scene: Scene) -> None:
             f"Pulse item {item.get('pulse_id')} is missing subject_title"
         )
         assert item["subject_title"], "subject_title must be non-empty"
+
+
+@pytest.mark.slow
+def test_archive_update_replay_and_repeated_state_over_mcp(
+    scene: Scene, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Clock changes cannot turn identical archive intent into a write or conflict."""
+    task = staged_task(scene)
+    now = [WHEN]
+    service = build_service(scene.world, scene.providers)
+    monkeypatch.setattr(service, "_clock", lambda: now[0])
+    assert service._tasks is not None
+    monkeypatch.setattr(service._tasks, "_clock", lambda: now[0])
+    initial_history_count = len(scene.world.task_history_v2)
+
+    with mcp_transport(service, scene.principal) as session:
+
+        def update(version: int, key: str, archived: bool) -> dict:
+            answer = session.send(
+                "tasks.update",
+                _task_doc(
+                    scene,
+                    Capability.TASKS_UPDATE,
+                    {
+                        "task_id": task.task_id,
+                        "expected_version": version,
+                        "idempotency_key": key,
+                        "archived": archived,
+                    },
+                ),
+            )
+            assert not answer.failed, answer.document
+            return answer.document["result"]
+
+        archived = update(task.version, "mcp-archive-original", True)
+        assert archived["history"]["action"] == "update"
+        assert archived["history"]["outcome"] == "applied"
+        assert archived["task"]["version"] == task.version + 1
+        assert datetime.fromisoformat(archived["task"]["archived_at"]) == WHEN
+        now[0] += timedelta(seconds=30)
+        replay = update(task.version, "mcp-archive-original", True)
+        assert replay == {**archived, "replayed": True}
+        assert len(scene.world.task_history_v2) == initial_history_count + 1
+        now[0] += timedelta(seconds=30)
+        repeat = update(archived["task"]["version"], "mcp-archive-repeat", True)
+        assert repeat["task"] == archived["task"]
+        assert repeat["history"]["outcome"] == "no_op"
+        assert len(scene.world.task_history_v2) == initial_history_count + 2
+        now[0] += timedelta(seconds=30)
+        restored = update(repeat["task"]["version"], "mcp-unarchive-original", False)
+        assert restored["task"]["archived_at"] is None
+        assert restored["task"]["version"] == task.version + 2
+        now[0] += timedelta(seconds=30)
+        restored_replay = update(repeat["task"]["version"], "mcp-unarchive-original", False)
+        assert restored_replay == {**restored, "replayed": True}
+        assert len(scene.world.task_history_v2) == initial_history_count + 3
+        now[0] += timedelta(seconds=30)
+        restored_repeat = update(restored["task"]["version"], "mcp-unarchive-repeat", False)
+        assert restored_repeat["task"] == restored["task"]
+        assert restored_repeat["history"]["outcome"] == "no_op"
+        assert len(scene.world.task_history_v2) == initial_history_count + 4
+        read = session.send(
+            "tasks.read", _task_doc(scene, Capability.TASKS_READ, {"task_id": task.task_id})
+        )
+        assert not read.failed
+        assert read.document["result"]["task"]["version"] == task.version + 2
+        assert read.document["result"]["task"]["archived_at"] is None
+    assert scene.world.tasks_v2[0].version == task.version + 2
+    assert scene.world.tasks_v2[0].archived_at is None

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 import httpx2
@@ -13,7 +13,7 @@ import pytest
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from sqlalchemy import create_engine
-from tests.conftest import Scene, build_service
+from tests.conftest import WHEN, Scene, build_service, staged_task
 
 from my_pa.adapters.mcp.chatllm_gateway import (
     DESCRIBE_TOOL,
@@ -742,3 +742,140 @@ async def test_a_denied_meeting_write_is_denied_after_authority_change_and_says_
     assert marker not in text
     assert "example.invalid" not in text
     assert scene.world.meetings == before
+
+
+@pytest.mark.anyio
+async def test_compact_task_archive_server_key_replay_and_state_no_op(
+    scene: Scene, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The compact route stamps a stable key, and refuses caller-owned keys."""
+    task = staged_task(scene)
+    now = [WHEN]
+    service = build_service(scene.world, scene.providers)
+    monkeypatch.setattr(service, "_clock", lambda: now[0])
+    assert service._tasks is not None
+    monkeypatch.setattr(service._tasks, "_clock", lambda: now[0])
+    capability = Capability.TASKS_UPDATE
+    app = create_remote_mcp_app(
+        service,
+        resolve_access=lambda _authorization: RemoteAccessContext(
+            principal=scene.principal,
+            allowed_capabilities=frozenset({capability.value}),
+            capability_purposes=frozenset({(capability, Purpose.TASK_AUTHORING)}),
+            compact_publication=True,
+        ),
+        allowed_hosts=("testserver",),
+        remote_enabled=True,
+        writes_enabled=True,
+        resource=RESOURCE,
+        authorization_servers=(ISSUER,),
+        scopes=frozenset({"my-pa.read"}),
+    )
+    initial_history_count = len(scene.world.task_history_v2)
+
+    async def exercise(session: ClientSession) -> None:
+        async def update(payload: dict) -> dict:
+            result = await session.call_tool(
+                WRITE_TOOL, {"capability": capability.value, "arguments": {"payload": payload}}
+            )
+            assert result.is_error is False, result.content
+            envelope = json.loads(result.content[0].text)
+            assert envelope["error"] is None
+            return envelope["result"]
+
+        payload = {"task_id": task.task_id, "expected_version": task.version, "archived": True}
+        first = await update(payload)
+        assert first["task"]["version"] == task.version + 1
+        assert datetime.fromisoformat(first["task"]["archived_at"]) == WHEN
+        first_receipt = scene.world.task_history_v2[-1]
+        assert first_receipt.idempotency_key.startswith("idk_")
+        now[0] += timedelta(seconds=30)
+        replay = await update(payload)
+        assert replay == {**first, "replayed": True}
+        assert len(scene.world.task_history_v2) == initial_history_count + 1
+        now[0] += timedelta(seconds=30)
+        repeat = await update({**payload, "expected_version": first["task"]["version"]})
+        assert repeat["history"]["outcome"] == "no_op"
+        assert repeat["task"] == first["task"]
+        assert scene.world.task_history_v2[-1].idempotency_key != first_receipt.idempotency_key
+        now[0] += timedelta(seconds=30)
+        restore_payload = {
+            **payload,
+            "expected_version": first["task"]["version"],
+            "archived": False,
+        }
+        restored = await update(restore_payload)
+        assert restored["task"]["archived_at"] is None
+        assert restored["task"]["version"] == task.version + 2
+        now[0] += timedelta(seconds=30)
+        assert await update(restore_payload) == {**restored, "replayed": True}
+        now[0] += timedelta(seconds=30)
+        repeat_restore = await update(
+            {**restore_payload, "expected_version": restored["task"]["version"]}
+        )
+        assert repeat_restore["history"]["outcome"] == "no_op"
+        assert repeat_restore["task"] == restored["task"]
+        assert len(scene.world.task_history_v2) == initial_history_count + 4
+        before = tuple(scene.world.task_history_v2)
+        for arguments in (
+            {"payload": {**payload, "idempotency_key": "forged-key"}},
+            {"payload": payload, "idempotency_key": "forged-key"},
+        ):
+            refused = await session.call_tool(
+                WRITE_TOOL, {"capability": capability.value, "arguments": arguments}
+            )
+            assert refused.is_error is True
+            assert json.loads(refused.content[0].text)["code"] == "invalid_request"
+        assert tuple(scene.world.task_history_v2) == before
+        assert scene.world.tasks_v2[0].version == task.version + 2
+        assert scene.world.tasks_v2[0].archived_at is None
+
+    await _session(app, exercise)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("guard", ["writes_disabled", "missing_grant", "wrong_purpose"])
+async def test_compact_task_archive_keeps_write_authorization_guards(
+    scene: Scene, guard: str
+) -> None:
+    task = staged_task(scene)
+    before = tuple(scene.world.task_history_v2)
+    allowed = (
+        frozenset({Capability.CAPABILITIES_GET.value})
+        if guard == "missing_grant"
+        else frozenset({Capability.TASKS_UPDATE.value})
+    )
+    purposes = (
+        frozenset({(Capability.TASKS_UPDATE, Purpose.TASK_READ)})
+        if guard == "wrong_purpose"
+        else frozenset({(Capability.TASKS_UPDATE, Purpose.TASK_AUTHORING)})
+    )
+
+    async def exercise(session: ClientSession) -> None:
+        refused = await session.call_tool(
+            WRITE_TOOL,
+            {
+                "capability": Capability.TASKS_UPDATE.value,
+                "arguments": {
+                    "payload": {
+                        "task_id": task.task_id,
+                        "expected_version": task.version,
+                        "archived": True,
+                    }
+                },
+            },
+        )
+        assert refused.is_error is True
+
+    await _session(
+        _app(
+            scene,
+            compact=True,
+            allowed=allowed,
+            purposes=purposes,
+            writes_enabled=guard != "writes_disabled",
+        ),
+        exercise,
+    )
+    assert scene.world.tasks_v2 == [task]
+    assert tuple(scene.world.task_history_v2) == before

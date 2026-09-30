@@ -1030,3 +1030,395 @@ def test_create_task_comment_conflicts_when_create_race_returns_different_digest
             actor=TaskMutationActor.PRINCIPAL,
             idempotency_key=key,
         )
+
+
+# CRL-WP-01 / TA-INV-01..08: archive intent, replay and state remain orthogonal.
+def _archive_scene() -> tuple[_World, TaskManagementService, list[datetime], Task]:
+    world = _World()
+    clock = [NOW]
+    service = _service(world, clock=lambda: clock[0])
+    created = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Synthetic archive task",
+        origin_kind=TaskOriginKind.EVIDENCE,
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+    )
+    return world, service, clock, created.task
+
+
+def test_logical_archive_replays_across_clock_and_later_version_without_writes() -> None:
+    world, service, clock, task = _archive_scene()
+    request = {
+        "principal_id": PRINCIPAL_A,
+        "task_id": task.task_id,
+        "expected_version": task.version,
+        "actor": TaskMutationActor.PRINCIPAL,
+        "values": {},
+        "archived": True,
+        "idempotency_key": _idempotency_key("logical-archive"),
+    }
+    first = service.update_task(**request)
+    assert first.task.archived_at == NOW
+    assert first.history.action is TaskMutationAction.UPDATE
+    clock[0] += timedelta(minutes=1)
+    service.update_task(
+        principal_id=PRINCIPAL_A,
+        task_id=task.task_id,
+        expected_version=first.task.version,
+        actor=TaskMutationActor.PRINCIPAL,
+        values={"title": "Changed synthetic title"},
+    )
+    counts = world.update_task_calls, world.insert_history_calls
+    replay = service.update_task(**request)
+    assert replay.replayed and replay.history == first.history
+    assert replay.task.version == first.task.version + 1
+    assert (world.update_task_calls, world.insert_history_calls) == counts
+    for changes in (
+        {"archived": False},
+        {"expected_version": first.task.version},
+        {"values": {"title": "Other synthetic title"}},
+    ):
+        with pytest.raises(TaskIdempotencyConflictError):
+            service.update_task(**(request | changes))
+    assert (world.update_task_calls, world.insert_history_calls) == counts
+
+
+def test_logical_archive_repeat_and_mixed_patch_preserve_original_timestamp() -> None:
+    world, service, clock, task = _archive_scene()
+    request = {
+        "principal_id": PRINCIPAL_A,
+        "task_id": task.task_id,
+        "actor": TaskMutationActor.PRINCIPAL,
+        "values": {},
+        "archived": True,
+    }
+    first = service.update_task(**request, expected_version=task.version)
+    clock[0] += timedelta(minutes=1)
+    repeated = service.update_task(
+        **request,
+        expected_version=first.task.version,
+        idempotency_key=_idempotency_key("repeat-archive"),
+    )
+    assert repeated.history.outcome is TaskMutationOutcome.NO_OP
+    assert repeated.task == first.task
+    assert world.update_task_calls == 1
+    mixed = service.update_task(
+        **(request | {"values": {"description": "New synthetic detail"}}),
+        expected_version=repeated.task.version,
+    )
+    assert mixed.history.outcome is TaskMutationOutcome.APPLIED
+    assert mixed.task.archived_at == NOW
+    assert mixed.task.description == "New synthetic detail"
+    assert mixed.task.version == first.task.version + 1
+    cleared = service.update_task(
+        **(request | {"archived": False}), expected_version=mixed.task.version
+    )
+    again = service.update_task(
+        **(request | {"archived": False}), expected_version=cleared.task.version
+    )
+    assert cleared.task.archived_at is None
+    assert again.history.outcome is TaskMutationOutcome.NO_OP
+    assert again.task == cleared.task
+
+
+@pytest.mark.parametrize("method", ["archive", "unarchive"])
+def test_internal_archive_keys_bind_action_target_and_expected_version(method: str) -> None:
+    world, service, clock, task = _archive_scene()
+    other = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Other synthetic task",
+        origin_kind=TaskOriginKind.EVIDENCE,
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+    ).task
+    request = {
+        "principal_id": PRINCIPAL_A,
+        "task_id": task.task_id,
+        "expected_version": task.version,
+        "actor": TaskMutationActor.PRINCIPAL,
+        "idempotency_key": _idempotency_key(method),
+    }
+    mutation = getattr(service, method)
+    first = mutation(**request)
+    assert first.history.request_digest is not None
+    clock[0] += timedelta(minutes=1)
+    counts = world.update_task_calls, world.insert_history_calls
+    assert mutation(**request).replayed
+    for changed in ({"task_id": other.task_id}, {"expected_version": task.version + 1}):
+        with pytest.raises(TaskIdempotencyConflictError):
+            mutation(**(request | changed))
+    opposite = service.unarchive if method == "archive" else service.archive
+    with pytest.raises(TaskIdempotencyConflictError):
+        opposite(**request)
+    with pytest.raises(TaskIdempotencyConflictError):
+        service.update_title(**request, title="Forbidden key reuse")
+    assert (world.update_task_calls, world.insert_history_calls) == counts
+    repeat = mutation(
+        **(
+            request
+            | {
+                "expected_version": first.task.version,
+                "idempotency_key": _idempotency_key(method + "-repeat"),
+            }
+        )
+    )
+    assert repeat.history.outcome is TaskMutationOutcome.NO_OP
+    assert repeat.task == first.task
+    clock[0] += timedelta(minutes=1)
+    assert mutation(
+        **(
+            request
+            | {
+                "expected_version": first.task.version,
+                "idempotency_key": _idempotency_key(method + "-repeat"),
+            }
+        )
+    ).replayed
+
+
+@pytest.mark.parametrize("method", ["archive", "unarchive"])
+def test_internal_archive_refuses_existing_legacy_null_receipt(method: str) -> None:
+    world, service, _, task = _archive_scene()
+    key = _idempotency_key("legacy-null")
+    legacy = service.update_title(
+        principal_id=PRINCIPAL_A,
+        task_id=task.task_id,
+        expected_version=task.version,
+        actor=TaskMutationActor.PRINCIPAL,
+        title=task.title,
+        idempotency_key=key,
+    )
+    assert legacy.history.request_digest is None
+    counts = world.update_task_calls, world.insert_history_calls
+    with pytest.raises(TaskIdempotencyConflictError):
+        getattr(service, method)(
+            principal_id=PRINCIPAL_A,
+            task_id=task.task_id,
+            expected_version=task.version,
+            actor=TaskMutationActor.PRINCIPAL,
+            idempotency_key=key,
+        )
+    assert (world.update_task_calls, world.insert_history_calls) == counts
+
+
+def test_logical_archive_refuses_legacy_timestamp_digest_without_guessing() -> None:
+    world, service, clock, task = _archive_scene()
+    key = _idempotency_key("legacy-true")
+    raw = service.update_task(
+        principal_id=PRINCIPAL_A,
+        task_id=task.task_id,
+        expected_version=task.version,
+        actor=TaskMutationActor.PRINCIPAL,
+        values={"archived_at": NOW},
+        idempotency_key=key,
+    )
+    clock[0] += timedelta(minutes=1)
+    counts = world.update_task_calls, world.insert_history_calls
+    with pytest.raises(TaskIdempotencyConflictError):
+        service.update_task(
+            principal_id=PRINCIPAL_A,
+            task_id=task.task_id,
+            expected_version=task.version,
+            actor=TaskMutationActor.PRINCIPAL,
+            values={},
+            archived=True,
+            idempotency_key=key,
+        )
+    assert world.tasks[(PRINCIPAL_A, task.task_id)] == raw.task
+    assert (world.update_task_calls, world.insert_history_calls) == counts
+
+
+def test_logical_false_replays_existing_raw_false_digest_and_normal_patch_unchanged() -> None:
+    world, service, clock, task = _archive_scene()
+    key = _idempotency_key("legacy-false")
+    old = service.update_task(
+        principal_id=PRINCIPAL_A,
+        task_id=task.task_id,
+        expected_version=task.version,
+        actor=TaskMutationActor.PRINCIPAL,
+        values={"archived_at": None, "title": "Compatible synthetic title"},
+        clear_fields=frozenset({"description"}),
+        idempotency_key=key,
+    )
+    clock[0] += timedelta(minutes=1)
+    counts = world.update_task_calls, world.insert_history_calls
+    replay = service.update_task(
+        principal_id=PRINCIPAL_A,
+        task_id=task.task_id,
+        expected_version=task.version,
+        actor=TaskMutationActor.PRINCIPAL,
+        values={"title": "Compatible synthetic title"},
+        archived=False,
+        clear_fields=frozenset({"description"}),
+        idempotency_key=key,
+    )
+    assert replay.replayed and replay.history == old.history
+    assert (world.update_task_calls, world.insert_history_calls) == counts
+    # Pin historical non-archive normalization bytes with a fixed synthetic identity.
+    import hashlib
+
+    fixed_id = "tsk_synthetic001synthetic001"
+    world.tasks[(PRINCIPAL_A, fixed_id)] = dataclasses.replace(task, task_id=fixed_id)
+    normal = service.update_task(
+        principal_id=PRINCIPAL_A,
+        task_id=fixed_id,
+        expected_version=1,
+        actor=TaskMutationActor.PRINCIPAL,
+        values={"title": "Normalized synthetic title"},
+        clear_fields=frozenset({"due_at", "description"}),
+    )
+    historical = (
+        b'{"clear_fields":["description","due_at"],"expected_version":1,'
+        b'"task_id":"tsk_synthetic001synthetic001",'
+        b'"values":{"title":"Normalized synthetic title"}}'
+    )
+    assert normal.history.request_digest == hashlib.sha256(historical).hexdigest()
+
+
+def test_stale_logical_archive_records_and_replays_rejection_after_clock_advance() -> None:
+    world, service, clock, task = _archive_scene()
+    service.update_title(
+        principal_id=PRINCIPAL_A,
+        task_id=task.task_id,
+        expected_version=task.version,
+        actor=TaskMutationActor.PRINCIPAL,
+        title="Advanced synthetic task",
+    )
+    request = {
+        "principal_id": PRINCIPAL_A,
+        "task_id": task.task_id,
+        "expected_version": task.version,
+        "actor": TaskMutationActor.PRINCIPAL,
+        "values": {},
+        "archived": True,
+        "idempotency_key": _idempotency_key("stale-archive"),
+    }
+    counts = world.update_task_calls, world.insert_history_calls
+    with pytest.raises(TaskVersionConflictError):
+        service.update_task(**request)
+    prior = world.history_by_key[(PRINCIPAL_A, request["idempotency_key"])]
+    assert prior.outcome is TaskMutationOutcome.REJECTED
+    assert world.update_task_calls == counts[0]
+    assert world.insert_history_calls == counts[1] + 1
+    clock[0] += timedelta(minutes=1)
+    replay = service.update_task(**request)
+    assert replay.replayed and replay.history == prior
+    assert world.insert_history_calls == counts[1] + 1
+    assert replay.task.archived_at is None
+
+
+@pytest.mark.parametrize("archived", [True, False])
+@pytest.mark.parametrize("raw", ["value", "clear"])
+def test_logical_and_raw_archive_fields_are_refused_before_writes(archived: bool, raw: str) -> None:
+    world, service, _, task = _archive_scene()
+    with pytest.raises(ValueError, match="logical archived and raw archived_at"):
+        service.update_task(
+            principal_id=PRINCIPAL_A,
+            task_id=task.task_id,
+            expected_version=task.version,
+            actor=TaskMutationActor.PRINCIPAL,
+            values={"archived_at": None} if raw == "value" else {},
+            clear_fields=frozenset({"archived_at"}) if raw == "clear" else frozenset(),
+            archived=archived,
+        )
+    assert world.update_task_calls == 0 and world.insert_history_calls == 1
+
+
+@pytest.mark.parametrize("state", [TaskLifecycleState.COMPLETED, TaskLifecycleState.CANCELLED])
+def test_archive_and_unarchive_preserve_terminal_execution_state(state: TaskLifecycleState) -> None:
+    world, service, clock, task = _archive_scene()
+    terminal = dataclasses.replace(
+        task, lifecycle_state=state, closed_at=NOW, closure_evidence_ref=ORIGIN
+    )
+    world.tasks[(PRINCIPAL_A, task.task_id)] = terminal
+    archived = service.update_task(
+        principal_id=PRINCIPAL_A,
+        task_id=task.task_id,
+        expected_version=task.version,
+        actor=TaskMutationActor.PRINCIPAL,
+        values={},
+        archived=True,
+    )
+    clock[0] += timedelta(minutes=1)
+    restored = service.update_task(
+        principal_id=PRINCIPAL_A,
+        task_id=task.task_id,
+        expected_version=archived.task.version,
+        actor=TaskMutationActor.PRINCIPAL,
+        values={},
+        archived=False,
+    )
+    assert restored.task.lifecycle_state is state
+    assert restored.task.closed_at == terminal.closed_at
+    assert restored.task.closure_evidence_ref == terminal.closure_evidence_ref
+
+
+def test_raw_archive_timestamp_patch_remains_deterministic_and_digest_bound() -> None:
+    world, service, clock, task = _archive_scene()
+    supplied = NOW - timedelta(days=2)
+    request = {
+        "principal_id": PRINCIPAL_A,
+        "task_id": task.task_id,
+        "expected_version": task.version,
+        "actor": TaskMutationActor.PRINCIPAL,
+        "values": {"archived_at": supplied},
+        "idempotency_key": _idempotency_key("raw-timestamp"),
+    }
+    first = service.update_task(**request)
+    assert first.task.archived_at == supplied
+    clock[0] += timedelta(minutes=1)
+    counts = world.update_task_calls, world.insert_history_calls
+    replay = service.update_task(**request)
+    assert replay.replayed and replay.history == first.history
+    with pytest.raises(TaskIdempotencyConflictError):
+        service.update_task(**(request | {"values": {"archived_at": supplied + timedelta(days=1)}}))
+    assert (world.update_task_calls, world.insert_history_calls) == counts
+    assert world.tasks[(PRINCIPAL_A, task.task_id)] == first.task
+
+
+def test_logical_archive_keys_are_partitioned_by_principal() -> None:
+    world, service, clock, task = _archive_scene()
+    other = service.create_task(
+        principal_id=PRINCIPAL_B,
+        title="Other principal synthetic task",
+        origin_kind=TaskOriginKind.EVIDENCE,
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+    ).task
+    key = _idempotency_key("principal-archive")
+    first = service.update_task(
+        principal_id=PRINCIPAL_A,
+        task_id=task.task_id,
+        expected_version=task.version,
+        actor=TaskMutationActor.PRINCIPAL,
+        values={},
+        archived=True,
+        idempotency_key=key,
+    )
+    clock[0] += timedelta(minutes=1)
+    second = service.update_task(
+        principal_id=PRINCIPAL_B,
+        task_id=other.task_id,
+        expected_version=other.version,
+        actor=TaskMutationActor.PRINCIPAL,
+        values={},
+        archived=True,
+        idempotency_key=key,
+    )
+    assert not second.replayed
+    assert second.history.principal_id == PRINCIPAL_B
+    assert second.task.task_id == other.task_id
+    assert second.task.archived_at == clock[0]
+    counts = world.update_task_calls, world.insert_history_calls
+    replay = service.update_task(
+        principal_id=PRINCIPAL_A,
+        task_id=task.task_id,
+        expected_version=task.version,
+        actor=TaskMutationActor.PRINCIPAL,
+        values={},
+        archived=True,
+        idempotency_key=key,
+    )
+    assert replay.replayed and replay.history == first.history
+    assert (world.update_task_calls, world.insert_history_calls) == counts

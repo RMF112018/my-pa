@@ -980,3 +980,129 @@ def test_an_explicit_due_time_is_preserved_exactly(migrated_engine: Engine) -> N
     # Named separately so a truncation to a civil-day boundary reports as the
     # loss of the time-of-day rather than as an opaque instant mismatch.
     assert (read_back.hour, read_back.minute, read_back.second) == (14, 37, 42)
+
+
+# CRL-WP-01 / TA-INV-01..08: persisted logical archive receipts and state.
+def test_logical_archive_persists_one_transition_and_replays_without_new_history(
+    migrated_engine: Engine,
+) -> None:
+    from datetime import timedelta
+
+    clock = [datetime(2026, 8, 10, 12, tzinfo=UTC)]
+    service = TaskManagementService(
+        unit_of_work=lambda: SqlAlchemyTaskManagementUnitOfWork(migrated_engine),
+        clock=lambda: clock[0],
+    )
+    task = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Synthetic archive persistence",
+        origin_kind=TaskOriginKind.EVIDENCE,
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+    ).task
+    request = {
+        "principal_id": PRINCIPAL_A,
+        "task_id": task.task_id,
+        "expected_version": task.version,
+        "actor": TaskMutationActor.PRINCIPAL,
+        "values": {},
+        "archived": True,
+        "idempotency_key": _idempotency_key("logical-archive-persisted"),
+    }
+    first = service.update_task(**request)
+    assert first.history.action is TaskMutationAction.UPDATE
+    row = _task_row(migrated_engine, task.task_id)
+    history = _history_rows(migrated_engine, task.task_id)
+    clock[0] += timedelta(minutes=1)
+    replay = service.update_task(**request)
+    assert replay.replayed and replay.history.history_id == first.history.history_id
+    assert _task_row(migrated_engine, task.task_id) == row
+    assert _history_rows(migrated_engine, task.task_id) == history
+    repeated = service.update_task(
+        **(
+            request
+            | {
+                "expected_version": first.task.version,
+                "idempotency_key": _idempotency_key("repeat-persisted"),
+            }
+        )
+    )
+    assert repeated.history.outcome is TaskMutationOutcome.NO_OP
+    assert _task_row(migrated_engine, task.task_id) == row
+    assert len(_history_rows(migrated_engine, task.task_id)) == len(history) + 1
+    mixed = service.update_task(
+        **(
+            request
+            | {
+                "expected_version": first.task.version,
+                "idempotency_key": _idempotency_key("mixed-persisted"),
+                "values": {"description": "New synthetic detail"},
+            }
+        )
+    )
+    assert mixed.task.version == first.task.version + 1
+    assert mixed.task.archived_at == first.task.archived_at
+    assert _task_row(migrated_engine, task.task_id)["description"] == "New synthetic detail"
+    assert service.update_task(**request).replayed
+    assert len(_history_rows(migrated_engine, task.task_id)) == len(history) + 2
+    stale = request | {"idempotency_key": _idempotency_key("rejected-persisted")}
+    with pytest.raises(TaskVersionConflictError):
+        service.update_task(**stale)
+    persisted = _task_row(migrated_engine, task.task_id)
+    refused_history = _history_rows(migrated_engine, task.task_id)
+    clock[0] += timedelta(minutes=1)
+    rejected_replay = service.update_task(**stale)
+    assert rejected_replay.replayed
+    assert rejected_replay.history.outcome is TaskMutationOutcome.REJECTED
+    assert _task_row(migrated_engine, task.task_id) == persisted
+    assert _history_rows(migrated_engine, task.task_id) == refused_history
+
+
+def test_archive_key_collision_and_legacy_refusal_leave_database_unchanged(
+    migrated_engine: Engine,
+) -> None:
+    service = _service(migrated_engine)
+    task = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Synthetic archive key isolation",
+        origin_kind=TaskOriginKind.EVIDENCE,
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+    ).task
+    other = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Other synthetic archive task",
+        origin_kind=TaskOriginKind.EVIDENCE,
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+    ).task
+    key = _idempotency_key("internal-persisted")
+    request = {
+        "principal_id": PRINCIPAL_A,
+        "task_id": task.task_id,
+        "expected_version": task.version,
+        "actor": TaskMutationActor.PRINCIPAL,
+        "idempotency_key": key,
+    }
+    archived = service.archive(**request)
+    row = _task_row(migrated_engine, task.task_id)
+    history = _history_rows(migrated_engine, task.task_id)
+    with pytest.raises(TaskIdempotencyConflictError):
+        service.unarchive(**request)
+    with pytest.raises(TaskIdempotencyConflictError):
+        service.archive(**(request | {"task_id": other.task_id}))
+    assert _task_row(migrated_engine, task.task_id) == row
+    assert _history_rows(migrated_engine, task.task_id) == history
+    legacy_key = _idempotency_key("legacy-null-persisted")
+    legacy = service.update_title(
+        **(request | {"expected_version": archived.task.version, "idempotency_key": legacy_key}),
+        title=task.title,
+    )
+    assert legacy.history.request_digest is None
+    legacy_history = _history_rows(migrated_engine, task.task_id)
+    with pytest.raises(TaskIdempotencyConflictError):
+        service.archive(
+            **(request | {"expected_version": archived.task.version, "idempotency_key": legacy_key})
+        )
+    assert _task_row(migrated_engine, task.task_id) == row
+    assert _history_rows(migrated_engine, task.task_id) == legacy_history

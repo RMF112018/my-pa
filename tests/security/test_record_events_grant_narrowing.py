@@ -204,6 +204,60 @@ def test_a_local_caller_sees_every_composed_family() -> None:
     assert visible_families(ALL, None) == frozenset(RecordEventFamily)
 
 
+def test_capture_and_comment_families_need_their_own_read() -> None:
+    """WP-RE-08 RE-AC-100: `capture` needs `capture.read` or `capture.list`, and
+    `task_comment` needs `tasks.comments.list`; nothing else discloses either,
+    and neither takes a floor (OD-W8-1 (i))."""
+    capture, comment = RecordEventFamily.CAPTURE, RecordEventFamily.TASK_COMMENT
+    assert visible_families(ALL, grants(Capability.CAPTURE_READ)) == {capture}
+    assert visible_families(ALL, grants(Capability.CAPTURE_LIST)) == {capture}
+    assert visible_families(ALL, grants(Capability.TASKS_COMMENTS_LIST)) == {comment}
+    # `capture.search` returns identifiers without records: never a disclosure.
+    assert visible_families(ALL, grants(Capability.CAPTURE_SEARCH)) == frozenset()
+    # A Task read does not disclose its comments, nor a comment read its Task.
+    assert comment not in visible_families(ALL, grants(Capability.TASKS_READ))
+    assert RecordEventFamily.TASK not in visible_families(
+        ALL, grants(Capability.TASKS_COMMENTS_LIST)
+    )
+    everything_else = grants(
+        *(
+            capability
+            for capability in MAPPED
+            if capability
+            not in {
+                Capability.CAPTURE_READ,
+                Capability.CAPTURE_LIST,
+                Capability.TASKS_COMMENTS_LIST,
+            }
+        )
+    )
+    visible = visible_families(ALL, everything_else)
+    assert capture not in visible
+    assert comment not in visible
+    # The withheld rows never reach the page either.
+    rows = (
+        item("rcev_grantnarrow0001", capture),
+        item("rcev_grantnarrow0002", comment),
+        item("rcev_grantnarrow0003", RecordEventFamily.TASK),
+    )
+    view = run(FakeReader(rows=rows), grants(Capability.TASKS_READ))
+    assert [event.event_id for event in view.events] == ["rcev_grantnarrow0003"]
+
+
+def test_a_capture_read_grant_enters_the_digest_and_invalidates_the_cursor() -> None:
+    """RE-AC-100/069: gaining `capture.read` changes the binding of a prior cursor."""
+    rows = tuple(item(f"rcev_grantnarrow000{index}", RecordEventFamily.TASK) for index in (1, 2))
+    reader = FakeReader(rows=rows)
+    before = run(reader, grants(Capability.TASKS_READ), page_size=1)
+    assert before.next_cursor is not None
+    for widened in (
+        grants(Capability.TASKS_READ, Capability.CAPTURE_READ),
+        grants(Capability.TASKS_READ, Capability.TASKS_COMMENTS_LIST),
+    ):
+        with pytest.raises(ConflictError):
+            run(reader, widened, page_size=1, cursor=before.next_cursor)
+
+
 # ---- RE-AC-062 / 069 ---------------------------------------------------------------
 
 

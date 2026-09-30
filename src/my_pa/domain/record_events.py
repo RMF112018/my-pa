@@ -15,8 +15,9 @@ either has a sequence number (hardened package section 3.6).
 
 The closed vocabularies are:
 
-* `RecordEventFamily` -- the twenty canonical record families the feed covers;
-  a later family is an explicit enum, schema and migration change;
+* `RecordEventFamily` -- the twenty-two canonical record families the feed
+  covers (WP-RE-08 added the Capture and Task-comment planes); a later family is
+  an explicit enum, schema and migration change;
 * `RecordEventKind` -- `created`, `updated`, `state_changed`; the exact operation
   is `source_capability`, so no duplicate verb vocabulary exists here;
 * `RecordEventActorClass` -- the four actor classes, with one map per source
@@ -117,14 +118,15 @@ SOURCE_CAPABILITY_PATTERN: Final = re.compile(r"\A[a-z][a-z0-9_]*(?:\.[a-z][a-z0
 #: path, host, dot, colon, space or `@` can pass.
 RECEIPT_IDENTIFIER_PATTERN: Final = re.compile(r"\A[a-z]+_[A-Za-z0-9]{8,64}\Z")
 
-#: The classification every non-memory event carries (G1-EM-009). Only a
-#: Relationship Memory event takes its classification from the committed
-#: version it describes.
+#: The classification every other event carries (G1-EM-009, amended by
+#: WP-RE-08 under OD-W8-5). Two families take their classification from the
+#: committed version they describe instead: a Relationship Memory event and a
+#: Capture event.
 NON_MEMORY_CLASSIFICATION: Final = Classification.PRIVATE_LOCAL
 
 
 class RecordEventFamily(StrEnum):
-    """The twenty canonical record families the feed names (section 3.2).
+    """The twenty-two canonical record families the feed names (section 3.2).
 
     Closed: a free-form family name is refused, and a later family is an
     explicit enum, schema and migration change.
@@ -150,6 +152,8 @@ class RecordEventFamily(StrEnum):
     PROJECT_CONTROLS_SETTINGS = "project_controls_settings"
     MEETING = "meeting"
     MEETING_SERIES = "meeting_series"
+    CAPTURE = "capture"
+    TASK_COMMENT = "task_comment"
 
 
 class RecordEventKind(StrEnum):
@@ -686,6 +690,177 @@ def entity_record_event(
     )
 
 
+# --- WP-RE-08: the Capture plane (Amendment 01) --------------------------------
+
+#: What every capture create names: every non-narrative, non-digest field the
+#: capture read views (`CaptureVersionView`, `CaptureListEntry`) expose that a
+#: first version always materializes (MR-11, the WP-RE-02/05 created-event
+#: precedent). Tokens are the public read field names. Never the text, a digest
+#: or a label value. Not named: `capture_id` and the version's own
+#: `version_id`/`version_number` (the event's `record_id`/`record_version`, and
+#: `latest_version_*`); `is_current` (derived); `supersedes_version_id` (null on
+#: a first version); and server bookkeeping times (`server_received_at`,
+#: `accepted_at`, `recorded_at`, `created_at`, `latest_recorded_at`).
+CAPTURE_CREATED_FIELDS: Final = field_set(
+    "character_count",
+    "classification",
+    "latest_version_id",
+    "latest_version_number",
+    "owner_principal_id",
+    "processing_policy",
+    "version_count",
+)
+
+#: What every capture revise names, whatever else differs: the new head, and
+#: the current version's `supersedes_version_id` (`capture.read`'s
+#: `CaptureVersionView`), which a revise always moves -- from nothing to the
+#: first version, or from one predecessor to the next (MR-11, literal reading).
+CAPTURE_HEAD_FIELDS: Final = field_set(
+    "latest_version_id", "latest_version_number", "supersedes_version_id", "version_count"
+)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CaptureVersionFacts:
+    """The non-narrative, caller-visible facts one capture version holds.
+
+    Exactly the version fields `capture.read` exposes that a revise can change
+    independently: compared field by field between the predecessor (read by the
+    same head statement that orders the chain) and the version just written.
+    `character_count` is a count, neither narrative nor a digest, so it is named
+    when it moves (MR-11). No text, no digest, no label, no key -- so nothing
+    narrative can cross into a token. Server bookkeeping times
+    (`server_received_at`, `accepted_at`, `recorded_at`) are not fields, the
+    Task precedent.
+    """
+
+    classification: Classification
+    processing_policy: str
+    client_created_at: datetime | None
+    occurred_at: datetime | None
+    character_count: int
+
+
+def _capture_version_values(facts: CaptureVersionFacts) -> dict[str, object]:
+    """The compared fields, spelled attribute by attribute rather than by string."""
+    return {
+        "character_count": facts.character_count,
+        "classification": facts.classification,
+        "client_created_at": facts.client_created_at,
+        "occurred_at": facts.occurred_at,
+        "processing_policy": facts.processing_policy,
+    }
+
+
+def capture_changed_fields(
+    *,
+    prior: CaptureVersionFacts | None,
+    written: CaptureVersionFacts,
+    label_recorded: bool,
+    project_bound: bool,
+) -> tuple[str, ...]:
+    """The exact `changed_fields` of one capture admission (RE-AC-088, MR-07/MR-11).
+
+    A create (`prior is None`) names `CAPTURE_CREATED_FIELDS` plus each optional
+    field it wrote non-null: `client_created_at`, `occurred_at`, the first
+    `display_label` and the bound `project_id`. A revise names the new head
+    and its `supersedes_version_id`, plus each version field whose value
+    differs from the predecessor's; a revise writes no label and never binds a
+    Project.
+    """
+    values = _capture_version_values(written)
+    if prior is None:
+        present = [
+            name for name in ("client_created_at", "occurred_at") if values[name] is not None
+        ]
+        if label_recorded:
+            present.append("display_label")
+        if project_bound:
+            present.append("project_id")
+        return field_set(*CAPTURE_CREATED_FIELDS, *present)
+    if label_recorded or project_bound:
+        raise InvalidRecordEventError("a capture revise writes no label and binds no Project")
+    was = _capture_version_values(prior)
+    diff = [name for name, value in values.items() if was[name] != value]
+    return field_set(*CAPTURE_HEAD_FIELDS, *diff)
+
+
+def capture_record_event(
+    *,
+    principal_id: str,
+    capture_id: str,
+    event_kind: RecordEventKind,
+    version_number: int,
+    changed_fields: tuple[str, ...],
+    capability: str,
+    classification: Classification,
+    occurred_at: datetime,
+    receipt_id: str,
+    correlation_id: str | None,
+) -> RecordEventDraft:
+    """The one draft a created capture version stages (E-CAP-1/E-CAP-2).
+
+    `classification` is the committed version's (OD-W8-5, amending G1-EM-009):
+    a capture event, like a memory event, carries the classification of the
+    version it announces. Every capture admission is the authenticated
+    Principal's own, and no capture plane records an authority.
+    """
+    return RecordEventDraft.issue(
+        principal_id=principal_id,
+        record_family=RecordEventFamily.CAPTURE,
+        record_id=capture_id,
+        event_kind=event_kind,
+        record_version=version_number,
+        changed_fields=changed_fields,
+        source_capability=capability,
+        actor_class=RecordEventActorClass.PRINCIPAL,
+        classification=classification,
+        occurred_at=occurred_at,
+        source_receipt_id=receipt_id,
+        correlation_id=correlation_id,
+    )
+
+
+# --- WP-RE-08: the Task-comment plane (Amendment 01) ---------------------------
+
+#: What every comment create names: the non-narrative fields a comment holds,
+#: as `tasks.comments.list` names them. Never `body` (narrative, MR-11) and
+#: never `created_at` (bookkeeping, the Task precedent).
+TASK_COMMENT_CREATED_FIELDS: Final = field_set("author_id", "author_kind", "task_id")
+
+
+def task_comment_record_event(
+    *,
+    principal_id: str,
+    comment_id: str,
+    actor: TaskMutationActor,
+    capability: str,
+    occurred_at: datetime,
+    correlation_id: str | None,
+) -> RecordEventDraft:
+    """The one draft a created (never replayed) Task comment stages (E-TC-1).
+
+    A comment is append-only, so it is always version 1 and always `created`.
+    It names no receipt (OD-W8-6: the comment row is its own), no causation,
+    and never a `task` event: a comment does not advance the Task's version.
+    A consumer rereads it through `tasks.comments.list`, keyed by its Task
+    (MR-13).
+    """
+    return RecordEventDraft.issue(
+        principal_id=principal_id,
+        record_family=RecordEventFamily.TASK_COMMENT,
+        record_id=comment_id,
+        event_kind=RecordEventKind.CREATED,
+        record_version=1,
+        changed_fields=TASK_COMMENT_CREATED_FIELDS,
+        source_capability=capability,
+        actor_class=TASK_ACTOR_CLASSES[actor],
+        classification=NON_MEMORY_CLASSIFICATION,
+        occurred_at=occurred_at,
+        correlation_id=correlation_id,
+    )
+
+
 # --- WP-RE-06: which read discloses which family (plan section 6.1) -----------
 
 #: Every family, and the existing read capabilities that disclose its canonical
@@ -742,6 +917,12 @@ RECORD_EVENT_FAMILY_READS: Final[Mapping[RecordEventFamily, frozenset[Capability
         RecordEventFamily.MEETING_SERIES: frozenset(
             {Capability.MEETINGS_READ, Capability.MEETINGS_LIST}
         ),
+        # WP-RE-08. `capture.search` returns identifiers without records, so it
+        # is not a disclosure of the family (the `tasks.search` precedent).
+        RecordEventFamily.CAPTURE: frozenset({Capability.CAPTURE_READ, Capability.CAPTURE_LIST}),
+        # The only comment read is keyed by the Task (MR-13, OD-W8-9); no floor
+        # (OD-W8-1 (i)): a comment event names no Task field.
+        RecordEventFamily.TASK_COMMENT: frozenset({Capability.TASKS_COMMENTS_LIST}),
     }
 )
 

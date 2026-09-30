@@ -92,6 +92,7 @@ from my_pa.domain.record_events import (
     RecordEventDraft,
     RecordEventFamily,
     RecordEventKind,
+    task_comment_record_event,
 )
 from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
 from my_pa.domain.source.registry import issue_identifier
@@ -763,12 +764,19 @@ class TaskManagementService:
         idempotency_key: str,
         author_id: str | None = None,
         active_uow: _ActiveTaskUnitOfWork | None = None,
+        source_capability: str | None = None,
+        correlation_id: str | None = None,
     ) -> TaskCommentReceipt:
         """Append one Task comment without bumping `Task.version` or history.
 
         Principal-scoped idempotency: the same key with the same digest
         (`task_id` + validated body) replays the original comment; a different
         digest under the same key conflicts.
+
+        WP-RE-08 (E-TC-1): a comment this call inserted stages one
+        `task_comment` `created` event on the owning transaction's buffer --
+        after the repository's savepoint is released, and never for a replay
+        (by key, or by losing a concurrent same-key insert) or a refusal.
         """
         validated_body = validate_task_comment_body(body)
         digest = _request_digest(task_id=task_id, body=validated_body)
@@ -803,9 +811,19 @@ class TaskManagementService:
                 raise TaskIdempotencyConflictError(
                     "the idempotency key was used for different normalized content"
                 )
-            return TaskCommentReceipt(
-                comment=stored, replayed=stored.comment_id != comment.comment_id
-            )
+            replayed = stored.comment_id != comment.comment_id
+            if not replayed:
+                uow.record_events.stage(
+                    task_comment_record_event(
+                        principal_id=principal_id,
+                        comment_id=stored.comment_id,
+                        actor=stored.author_kind,
+                        capability=source_capability or Capability.TASKS_COMMENTS_CREATE.value,
+                        occurred_at=stored.created_at,
+                        correlation_id=correlation_id,
+                    )
+                )
+            return TaskCommentReceipt(comment=stored, replayed=replayed)
 
     def list_task_comments(
         self,

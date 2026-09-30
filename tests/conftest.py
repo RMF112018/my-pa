@@ -280,7 +280,13 @@ from my_pa.domain.project_controls.read_models import (
 from my_pa.domain.project_controls.relationship import ConstraintRelationship
 from my_pa.domain.project_controls.revision import ConstraintRevision
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
-from my_pa.domain.record_events import EntityEventShape, RecordEventDraft, RecordEventFamily
+from my_pa.domain.record_events import (
+    CaptureVersionFacts,
+    EntityEventShape,
+    RecordEventDraft,
+    RecordEventFamily,
+    capture_changed_fields,
+)
 from my_pa.domain.relationship.authoring import (
     ConflictedIdentifierError,
     DuplicateEntityFactError,
@@ -1348,7 +1354,9 @@ class _Captures(CaptureRepository):
             digest, receipt_id = held
             if digest != request.payload_digest:
                 raise CaptureConflictError("the idempotency key is bound to different content")
-            return CaptureAdmission(receipt=self._world.capture_receipts[receipt_id], created=False)
+            return CaptureAdmission(
+                receipt=self._world.capture_receipts[receipt_id], created=False, changed_fields=()
+            )
 
         if request.capture_id is None:
             capture_id = issue_identifier(IdKind.CAPTURE)
@@ -1358,7 +1366,7 @@ class _Captures(CaptureRepository):
                 request.accepted_at,
                 project_id,
             )
-            number, supersedes = 1, None
+            number, supersedes, prior = 1, None, None
         else:
             capture_id = request.capture_id
             head = self._head(capture_id, principal_id=principal_id)
@@ -1366,6 +1374,15 @@ class _Captures(CaptureRepository):
                 raise UnknownScopeError("the request names no stored capture")
             project_id = self._world.captures[capture_id][2]
             number, supersedes = head.version_number + 1, head.version_id
+            # WP-RE-08 (MR-04, mechanical): the same four facts the store's
+            # widened head statement reads.
+            prior = CaptureVersionFacts(
+                classification=head.classification,
+                processing_policy=head.processing_policy.value,
+                client_created_at=head.client_created_at,
+                occurred_at=head.occurred_at,
+                character_count=head.content.character_count,
+            )
 
         version = CaptureVersion(
             version_id=issue_identifier(IdKind.CAPTURE_VERSION),
@@ -1408,7 +1425,19 @@ class _Captures(CaptureRepository):
         )
         if request.capture_id is None and request.display_label is not None:
             self._world.capture_labels.setdefault(capture_id, []).append(request.display_label)
-        return CaptureAdmission(receipt=receipt, created=True)
+        changed_fields = capture_changed_fields(
+            prior=prior,
+            written=CaptureVersionFacts(
+                classification=request.classification,
+                processing_policy=request.processing_policy.value,
+                client_created_at=request.client_created_at,
+                occurred_at=request.occurred_at,
+                character_count=request.content.character_count,
+            ),
+            label_recorded=request.capture_id is None and request.display_label is not None,
+            project_bound=request.capture_id is None and request.project_id is not None,
+        )
+        return CaptureAdmission(receipt=receipt, created=True, changed_fields=changed_fields)
 
     def version(
         self, capture_id: str, *, version_id: str | None = None, principal_id: str

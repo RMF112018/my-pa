@@ -630,6 +630,18 @@ restricted Relationship Memory event, and never a causation reference to an
 event it cannot see. There is no public sequence number; the cursor is bound to
 the request and anchored on an opaque event id.
 
+**Captures and Task comments (WP-RE-08).** A capture create or revise and a
+Task comment each record one event; the capture text, its digests, a display
+label value and a comment body are never named. A capture event carries its
+committed version's classification, and a remote caller never sees a capture
+event stored `restricted_local` or one whose capture's *current* version is
+restricted: for that, the feed reader reads `capture_versions`' join keys and
+`classification`, and nothing else. A comment event names the comment, not its
+Task, and the only comment read, `tasks.comments.list`, is keyed by the Task:
+a consumer must already know the Task to reread the comment (the Entity
+sub-family precedent). A cursor issued before these two families existed is
+`conflict(cursor)`; listing again from the start returns the full history.
+
 **Nothing here is commissioned.** The migration `1d9b248e7f83` is proven on
 disposable databases only. The ChatLLM data profile `chatllm-data-v4`, which
 adds `record_events.list` as `DATA_REQUIRED`, is repository desire. Whether any
@@ -645,6 +657,11 @@ Evidence: `src/my_pa/domain/record_events.py`, `src/my_pa/application/record_eve
 `tests/security/test_record_events_carry_no_payload.py::test_the_stored_row_is_metadata_only`,
 `tests/security/test_record_events_grant_narrowing.py::test_the_entity_floor_withholds_every_sub_family_without_entities_get`,
 `tests/database/test_record_events_bootstrap_race.py::test_remote_watermark_excludes_restricted_memory`,
+`tests/database/test_record_events_bootstrap_race.py::test_remote_watermark_excludes_a_currently_restricted_capture`,
+`tests/database/test_capture_record_events.py::test_create_commits_one_created_event`,
+`tests/database/test_task_comment_record_events.py::test_a_comment_commits_one_created_event_and_no_task_event`,
+`tests/security/test_record_events_carry_no_payload.py::test_the_feed_reader_reads_only_capture_keys_and_the_version_classification`,
+`tests/unit/test_record_event_cursor.py::test_a_cursor_bound_to_the_twenty_family_set_conflicts`,
 `tests/schema/test_record_events_migration.py::test_the_revision_writes_no_rows`,
 `tests/contract/test_chatllm_data_profile_diff.py::test_a_v3_converged_client_plans_exactly_the_record_events_add`.
 

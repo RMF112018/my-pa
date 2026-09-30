@@ -426,7 +426,16 @@ def test_the_identity_correction_root_is_an_entity_event_staged_first() -> None:
 # ---- WP-RE-04: the dormant writers X1-X3 (G1-EM-015) ----------------------------
 
 DORMANT_WRITERS: Final = frozenset(
-    {"add_project", "propose_task", "propose_commitment", "observe", "link"}
+    {
+        "add_project",
+        "propose_task",
+        "propose_commitment",
+        "observe",
+        "link",
+        # WP-RE-08 (W-C5, RE-AC-094): the capture label writer. If it is ever
+        # wired it must stage a `capture` `updated {display_label}` event.
+        "append_capture_label",
+    }
 )
 
 #: The production calls of those names that are not the dormant writers, each
@@ -463,12 +472,21 @@ def _dormant_calls() -> set[tuple[str, str, str]]:
                             ast.unparse(node.func.value),
                         )
                     )
+                # A module-level writer is called by bare name once imported
+                # (`append_capture_label(...)`), which the attribute form misses.
+                elif (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id in DORMANT_WRITERS
+                ):
+                    found.add((path.relative_to(ROOT).as_posix(), node.func.id, ""))
     return found
 
 
 def test_the_dormant_writers_have_no_production_caller() -> None:
     """X1 `SituationService.add_project`, X2 `propose_task`/`propose_commitment`,
-    X3 `EntityGovernanceService.observe`/`.link`: excluded from the feed because
-    nothing in production calls them. A caller appearing is a writer with no
+    X3 `EntityGovernanceService.observe`/`.link`, and WP-RE-08's W-C5
+    `append_capture_label`: excluded from the feed because nothing in production
+    calls them. A caller appearing is a writer with no
     emitter, so it fails here."""
     assert _dormant_calls() == UNRELATED_CALLS

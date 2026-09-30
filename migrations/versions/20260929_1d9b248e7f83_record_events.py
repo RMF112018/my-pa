@@ -13,6 +13,9 @@ WP-RE-06 admission, and again before the pull request, the sole head is
 re-authenticated and `down_revision` moves to it if main has advanced. WP-RE-06
 re-authenticated the head (still `7d9a450dfd07`, so no re-point) and added the
 audit-vocabulary restatement (`record_events.list`, `record_event_read`).
+WP-RE-08 (Amendment 01) amended this revision in place, before merge: the
+family CHECK gains `capture` and `task_comment` (twenty-two families). Nothing
+else changed -- no column, index, constraint or audit-vocabulary literal.
 
 It:
 
@@ -259,13 +262,13 @@ _TABLE_DDL: Final[tuple[tuple[str, str], ...]] = (
               '^[a-z]+_[A-Za-z0-9]{8,64}$'),
           CONSTRAINT a_record_event_receipt_id_is_an_opaque_identifier CHECK (source_receipt_id
               IS NULL OR source_receipt_id ~ '^[a-z]+_[A-Za-z0-9]{8,64}$'),
-          CONSTRAINT a_record_event_family_is_known CHECK (record_family IN ('commitment',
-              'constraint', 'constraint_category', 'entity', 'entity_address', 'entity_alias',
-              'entity_assignment', 'entity_communication_method', 'entity_identifier',
-              'entity_name', 'entity_observation', 'entity_project_participation',
-              'entity_relationship', 'meeting', 'meeting_series',
-              'person_organization_affiliation', 'project', 'project_controls_settings',
-              'relationship_memory', 'task')),
+          CONSTRAINT a_record_event_family_is_known CHECK (record_family IN ('capture',
+              'commitment', 'constraint', 'constraint_category', 'entity', 'entity_address',
+              'entity_alias', 'entity_assignment', 'entity_communication_method',
+              'entity_identifier', 'entity_name', 'entity_observation',
+              'entity_project_participation', 'entity_relationship', 'meeting',
+              'meeting_series', 'person_organization_affiliation', 'project',
+              'project_controls_settings', 'relationship_memory', 'task', 'task_comment')),
           CONSTRAINT a_record_event_kind_is_known CHECK (event_kind IN ('created',
               'state_changed', 'updated')),
           CONSTRAINT a_record_event_actor_class_is_known CHECK (actor_class IN ('assistant',

@@ -33,7 +33,8 @@ COMMITTED both see one snapshot and the watermark can never pass an event the
 page did not see (G1-TX-004, plan D-01). Every predicate is scoped through
 `partition_criterion`, and a remote read (`include_restricted_memory=False`)
 appends the OD-8 restricted-memory predicate -- the stored classification *or*
-the memory's current version -- to both subqueries, so a withheld event cannot
+the memory's current version -- and its WP-RE-08 capture analogue (the stored
+classification *or* the capture's current version) to both subqueries, so a withheld event cannot
 reach a row, a truncation flag or the watermark. The sequence number orders the
 page and never leaves this module.
 
@@ -90,6 +91,7 @@ from my_pa.infrastructure.persistence.principal_scope import (
     principal_bound_values,
 )
 from my_pa.infrastructure.persistence.tables import (
+    capture_versions,
     record_event_sequences,
     record_events,
     relationship_memories,
@@ -237,6 +239,13 @@ def flush_record_events(writer: RecordEventWriter, drafts: Sequence[RecordEventD
 _PAGE: Final = cast(Table, record_events.alias("feed_page"))
 _WATERMARK: Final = cast(Table, record_events.alias("feed_watermark"))
 
+#: WP-RE-08: the two aliases the capture predicate reads `capture_versions`
+#: through -- a restricted version, and a later version that would supersede it.
+#: MR-12: only `capture_id`, `version_number` and `classification` (plus the
+#: partition) are ever named on either.
+_CAPTURE_VERSION: Final = cast(Table, capture_versions.alias("capture_version"))
+_LATER_CAPTURE_VERSION: Final = cast(Table, capture_versions.alias("later_capture_version"))
+
 #: The public columns of a feed item, in the order `_item` reads them.
 _ITEM_COLUMNS: Final = (
     "event_id",
@@ -286,19 +295,64 @@ def _restricted_memory(event: Table, principal_id: str) -> ColumnElement[bool]:
     )
 
 
+def _restricted_capture(event: Table, principal_id: str) -> ColumnElement[bool]:
+    """WP-RE-08 (the OD-8 (i) analogue, OD-W8-4/MR-12): a capture event withheld remotely.
+
+    Either its stored classification is `restricted_local`, or the capture it
+    names is *currently* restricted: its current version -- the one no later
+    version supersedes in number -- is `restricted_local`. Both aliases are
+    reached through the caller's own partition, and name only the join keys and
+    `classification`: never the text, a digest or the whole row.
+    """
+    context = capture_context(principal_id)
+    restricted = Classification.RESTRICTED_LOCAL.value
+    later = exists(
+        select(literal(1))
+        .select_from(_LATER_CAPTURE_VERSION)
+        .where(
+            partition_criterion(_LATER_CAPTURE_VERSION, context),
+            _LATER_CAPTURE_VERSION.c.capture_id == _CAPTURE_VERSION.c.capture_id,
+            _LATER_CAPTURE_VERSION.c.version_number > _CAPTURE_VERSION.c.version_number,
+        )
+    )
+    currently_restricted = exists(
+        select(literal(1))
+        .select_from(_CAPTURE_VERSION)
+        .where(
+            partition_criterion(_CAPTURE_VERSION, context),
+            _CAPTURE_VERSION.c.capture_id == event.c.record_id,
+            _CAPTURE_VERSION.c.classification == restricted,
+            not_(later),
+        )
+    )
+    return and_(
+        event.c.record_family == RecordEventFamily.CAPTURE.value,
+        or_(event.c.classification == restricted, currently_restricted),
+    )
+
+
+def _withheld_remotely(event: Table, principal_id: str) -> ColumnElement[bool]:
+    """Everything a remote caller must not see: the memory and capture predicates."""
+    return or_(_restricted_memory(event, principal_id), _restricted_capture(event, principal_id))
+
+
 def _visible(
     event: Table,
     principal_id: str,
     families: frozenset[RecordEventFamily],
     include_restricted_memory: bool,
 ) -> list[ColumnElement[bool]]:
-    """The one visibility predicate every feed read applies to `event`."""
+    """The one visibility predicate every feed read applies to `event`.
+
+    `include_restricted_memory` keeps its name (OD-W8-10) and now also gates
+    restricted captures: false for a remote caller.
+    """
     criteria: list[ColumnElement[bool]] = [
         partition_criterion(event, capture_context(principal_id)),
         event.c.record_family.in_(sorted(family.value for family in families)),
     ]
     if not include_restricted_memory:
-        criteria.append(not_(_restricted_memory(event, principal_id)))
+        criteria.append(not_(_withheld_remotely(event, principal_id)))
     return criteria
 
 

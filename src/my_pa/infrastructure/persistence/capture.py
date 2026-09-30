@@ -87,6 +87,7 @@ from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.conversation.event import ConversationChannel, ConversationState
 from my_pa.domain.identity.user_account import CallerSuppliedPrincipalError
+from my_pa.domain.record_events import CaptureVersionFacts, capture_changed_fields
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence import conflicting_row
 from my_pa.infrastructure.persistence.jobs import CAPTURE_JOBS, enqueue_job
@@ -152,10 +153,16 @@ _VERSION_COLUMNS: Final = (
 
 
 class _Head(NamedTuple):
-    """Where a capture's chain has got to: its latest version and that number."""
+    """Where a capture's chain has got to: its latest version and that number.
+
+    `facts` are the head version's non-narrative, caller-visible fields,
+    read by the same statement (WP-RE-08, MR-07: one same-transaction read, no
+    new lock) so a revise's Record Event can name exactly the ones it changed.
+    """
 
     version_id: str
     version_number: int
+    facts: CaptureVersionFacts
 
 
 def _to_version(row: Row[tuple[object, ...]]) -> CaptureVersion:
@@ -273,18 +280,40 @@ def _head(connection: Connection, capture_id: str, *, context: PrincipalContext)
     nonexistent capture earns — one answer for both, which is what keeps the
     refusal from being an existence oracle.
     """
-    row: Row[tuple[str, int]] | None = connection.execute(
-        principal_scoped(
-            select(capture_versions.c.version_id, capture_versions.c.version_number).where(
-                capture_versions.c.capture_id == capture_id
-            ),
-            capture_versions,
-            context,
-        )
-        .order_by(capture_versions.c.version_number.desc())
-        .limit(1)
-    ).one_or_none()
-    return None if row is None else _Head(str(row[0]), int(row[1]))
+    row: Row[tuple[str, int, str, str, datetime | None, datetime | None, int]] | None = (
+        connection.execute(
+            principal_scoped(
+                select(
+                    capture_versions.c.version_id,
+                    capture_versions.c.version_number,
+                    capture_versions.c.classification,
+                    capture_versions.c.processing_policy,
+                    capture_versions.c.client_created_at,
+                    capture_versions.c.occurred_at,
+                    # A count, computed by the server in the same statement;
+                    # the text itself never leaves it (MR-11).
+                    func.char_length(capture_versions.c.content),
+                ).where(capture_versions.c.capture_id == capture_id),
+                capture_versions,
+                context,
+            )
+            .order_by(capture_versions.c.version_number.desc())
+            .limit(1)
+        ).one_or_none()
+    )
+    if row is None:
+        return None
+    return _Head(
+        str(row[0]),
+        int(row[1]),
+        CaptureVersionFacts(
+            classification=Classification(row[2]),
+            processing_policy=str(row[3]),
+            client_created_at=row[4],
+            occurred_at=row[5],
+            character_count=int(row[6]),
+        ),
+    )
 
 
 def _receipt(connection: Connection, receipt_id: str) -> CaptureReceipt:
@@ -423,7 +452,21 @@ def admit_capture(
     # processing, not the record that it is owed. Nothing claims this row until
     # WP-7.
     enqueue_job(connection, version_id, plane=CAPTURE_JOBS)
-    return CaptureAdmission(receipt=_receipt(connection, receipt_id), created=True)
+    changed_fields = capture_changed_fields(
+        prior=None if prior is None else prior.facts,
+        written=CaptureVersionFacts(
+            classification=request.classification,
+            processing_policy=request.processing_policy.value,
+            client_created_at=request.client_created_at,
+            occurred_at=request.occurred_at,
+            character_count=request.content.character_count,
+        ),
+        label_recorded=request.capture_id is None and request.display_label is not None,
+        project_bound=request.capture_id is None and request.project_id is not None,
+    )
+    return CaptureAdmission(
+        receipt=_receipt(connection, receipt_id), created=True, changed_fields=changed_fields
+    )
 
 
 def _replay(
@@ -454,7 +497,9 @@ def _replay(
     stored = conflicting_row(row, "knowledge.capture_submissions")
     if str(stored[0]) != digest:
         raise CaptureConflictError("the idempotency key is bound to different content")
-    return CaptureAdmission(receipt=_receipt(connection, str(stored[1])), created=False)
+    return CaptureAdmission(
+        receipt=_receipt(connection, str(stored[1])), created=False, changed_fields=()
+    )
 
 
 def _chain(

@@ -20,6 +20,14 @@ are the production `ApplicationService` and `RelationshipMemoryService`.
   a remote read withholds every event of a memory stored restricted *and* of a
   memory whose current version is restricted, from the page and from the
   watermark, with no count anywhere.
+* **WP-RE-08 RE-AC-090** -- the capture analogue, on both arms:
+  `test_remote_watermark_excludes_a_currently_restricted_capture` (the capture's
+  current version is restricted; its earlier event is stored private) and
+  `test_remote_page_excludes_a_capture_event_stored_restricted` (the event is
+  stored restricted; the capture's current version is private). The only
+  production capture writer fixes `private_local`, so the restricted rows are
+  fixture-written: a raw restricted version, and a restricted draft staged on a
+  production unit of work's buffer.
 
 Every identity here is synthetic.
 """
@@ -30,16 +38,25 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
+from datetime import datetime
 from typing import Any, Final
 
 import pytest
 from sqlalchemy import Engine, event, text
 
-from my_pa.application.commands import ReadTask, UpdateTask
+from my_pa.application.commands import CreateCapture, ReadTask, UpdateTask
 from my_pa.application.record_events import list_record_events, read_cursor
 from my_pa.contracts.v1.record_events import RecordEventListView
+from my_pa.domain.common.classification import Classification
+from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability, permitted_purposes
+from my_pa.domain.record_events import (
+    CAPTURE_HEAD_FIELDS,
+    RecordEventKind,
+    capture_record_event,
+)
 from my_pa.domain.relationship.memory import MemoryKind
+from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence import record_events as feed_persistence
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
@@ -369,3 +386,101 @@ def test_remote_page_excludes_an_event_stored_restricted(staged: Engine) -> None
         restricted,
         private,
     ]
+
+
+# ---- WP-RE-08 RE-AC-090: the capture analogue ------------------------------------
+
+
+CAPTURE_GRANTS: Final = frozenset(
+    (capability, next(iter(permitted_purposes(capability))))
+    for capability in (Capability.CAPTURE_READ,)
+)
+
+
+def _captured(runtime: Runtime, principal: str, key: str) -> dict[str, Any]:
+    return runtime.ok(
+        CreateCapture(text=f"Synthetic wp08 restricted-capture note {key}", idempotency_key=key),
+        principal_id=principal,
+    )
+
+
+def _capture_events(engine: Engine, principal: str) -> list[dict[str, Any]]:
+    return [item for item in feed(engine, principal) if item["record_family"] == "capture"]
+
+
+def _raise_to_restricted(engine: Engine, principal: str, created: dict[str, Any]) -> None:
+    """Fixture-only writer: append a restricted version 2, as no production path can."""
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.capture_versions (version_id, capture_id, version_number, "
+                "supersedes_version_id, content, content_sha256, owner_principal_id, "
+                "classification, processing_policy, idempotency_key, correlation_id, audit_id, "
+                "server_received_at, accepted_at, recorded_at) VALUES (:v, :c, 2, :s, "
+                "'Synthetic restricted text', :d, :p, 'restricted_local', 'local_only', :k, "
+                ":corr, :a, now(), now(), now())"
+            ),
+            {
+                "v": issue_identifier(IdKind.CAPTURE_VERSION),
+                "c": created["capture_id"],
+                "s": created["version_id"],
+                "d": "0" * 64,
+                "p": principal,
+                "k": "wp08-restricted-v2",
+                "corr": issue_identifier(IdKind.CORRELATION),
+                "a": issue_identifier(IdKind.AUDIT),
+            },
+        )
+
+
+def test_remote_watermark_excludes_a_currently_restricted_capture(runtime: Runtime) -> None:
+    """The capture's current version is restricted: only the `EXISTS` withholds it."""
+    principal = issue_identifier(IdKind.PRINCIPAL)
+    engine = runtime.work_engine
+    plain = _captured(runtime, principal, "wp08-r090-plain")
+    raised = _captured(runtime, principal, "wp08-r090-raised")
+    _raise_to_restricted(engine, principal, raised)
+    e1, e2 = (item["event_id"] for item in _capture_events(engine, principal))
+    local = listing(engine, principal)
+    assert [item.event_id for item in local.events] == [e1, e2]
+    assert watermark(local) == e2
+    remote = listing(engine, principal, capability_grants=CAPTURE_GRANTS)
+    assert [item.record_id for item in remote.events] == [plain["capture_id"]]
+    assert [item.event_id for item in remote.events] == [e1]
+    assert watermark(remote) == e1
+    _assert_no_count_channel(remote)
+    resumed = listing(
+        engine, principal, capability_grants=CAPTURE_GRANTS, cursor=remote.high_watermark_cursor
+    )
+    assert resumed.events == ()
+    assert watermark(resumed) == e1
+
+
+def test_remote_page_excludes_a_capture_event_stored_restricted(runtime: Runtime) -> None:
+    """An event stored `restricted_local` is withheld though its capture is private now."""
+    principal = issue_identifier(IdKind.PRINCIPAL)
+    engine = runtime.work_engine
+    created = _captured(runtime, principal, "wp08-r090-stored")
+    with SqlAlchemyUnitOfWork(engine, audit=SqlAlchemyAuditSink(engine)) as uow:
+        # Fixture-only writer: a restricted draft on the production buffer.
+        uow.record_events.stage(
+            capture_record_event(
+                principal_id=principal,
+                capture_id=created["capture_id"],
+                event_kind=RecordEventKind.UPDATED,
+                version_number=2,
+                changed_fields=CAPTURE_HEAD_FIELDS,
+                capability="capture.revise",
+                classification=Classification.RESTRICTED_LOCAL,
+                occurred_at=datetime.fromisoformat(str(created["issued_at"])),
+                receipt_id=issue_identifier(IdKind.RECEIPT),
+                correlation_id=issue_identifier(IdKind.CORRELATION),
+            )
+        )
+    private, restricted = (item["event_id"] for item in _capture_events(engine, principal))
+    remote = listing(engine, principal, capability_grants=CAPTURE_GRANTS, page_size=1)
+    assert [item.event_id for item in remote.events] == [private]
+    assert remote.next_cursor is None
+    assert watermark(remote) == private
+    _assert_no_count_channel(remote)
+    assert [item.event_id for item in listing(engine, principal).events] == [private, restricted]

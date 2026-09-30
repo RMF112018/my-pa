@@ -20,12 +20,21 @@ says. Two halves:
 narrative -- an entity with an alias, a memory created and revised, a merge
 that moves both -- no committed feed row contains any of that text in any
 column, and every committed `changed_fields` token is a name token.
+
+**WP-RE-08 (RE-AC-091):** the capture builders take only ids, versions, enums,
+tokens, times and typed non-narrative facts -- never text, a label, a digest or
+a key (G-3b-2) -- and a capture created with a sentinel text, label and Project
+and revised with a second sentinel text, plus a Task comment with a sentinel
+body, commits no sentinel, no digest of either text, no idempotency key and no
+request id to any feed column (G-3b-3).
 """
 
 from __future__ import annotations
 
 import ast
 import dataclasses
+import hashlib
+import inspect
 import json
 import re
 from collections.abc import Iterator
@@ -36,7 +45,15 @@ from typing import Any, Final
 
 import pytest
 from sqlalchemy import Engine, text
+from tests.database.test_task_record_events import Runtime
 
+from my_pa.application.commands import (
+    CreateCapture,
+    CreateProject,
+    CreateTask,
+    CreateTaskComment,
+    ReviseCapture,
+)
 from my_pa.application.entity_authoring import EntityAuthoringService, NamedValue
 from my_pa.application.identity_correction import (
     IdentityCorrectionService,
@@ -49,11 +66,20 @@ from my_pa.application.relationship_memory import (
     ReviseMemoryCommand,
 )
 from my_pa.domain.common.identifiers import IdKind
-from my_pa.domain.record_events import CHANGED_FIELD_PATTERN, RecordEvent, RecordEventDraft
+from my_pa.domain.record_events import (
+    CHANGED_FIELD_PATTERN,
+    CaptureVersionFacts,
+    RecordEvent,
+    RecordEventDraft,
+    capture_changed_fields,
+    capture_record_event,
+    task_comment_record_event,
+)
 from my_pa.domain.relationship.entity import EntityType
 from my_pa.domain.relationship.governance import ActorClass
 from my_pa.domain.relationship.memory import MemoryKind
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.domain.task.lifecycle import TaskOriginKind
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.tables import record_events
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
@@ -99,6 +125,14 @@ NARRATIVE_FIELDS: Final = frozenset(
         "after_state",
         "payload",
         "body",
+        # WP-RE-08 (G-3b-1, MR-11): capture text, its digests, and the
+        # admission's own request identity are never tokens.
+        "content",
+        "text",
+        "content_sha256",
+        "payload_sha256",
+        "request_digest",
+        "idempotency_key",
     }
 )
 
@@ -288,6 +322,106 @@ def test_the_feed_reader_scan_sees_a_wider_read(planted: str) -> None:
     )
 
 
+# ---- FAST: MR-12, the one-column capture reach of the feed reader --------------
+
+#: WP-RE-08 (OD-W8-4, ratified as MR-12): the reader's capture predicate may name,
+#: per capture table, only the join keys and the version `classification` --
+#: through the table itself or any alias of it. The partition column is reached
+#: through `partition_criterion`, never named here.
+READER_CAPTURE_COLUMNS_ALLOWED: Final = {
+    "capture_versions": frozenset({"capture_id", "version_number", "classification"}),
+    "captures": frozenset({"capture_id"}),
+}
+
+
+def _capture_aliases(tree: ast.Module) -> dict[str, str]:
+    """Every name bound to a capture table or to an `.alias(...)` of one."""
+    aliases = {table: table for table in READER_CAPTURE_COLUMNS_ALLOWED}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        for inner in ast.walk(value):
+            if (
+                isinstance(inner, ast.Call)
+                and isinstance(inner.func, ast.Attribute)
+                and inner.func.attr == "alias"
+                and isinstance(inner.func.value, ast.Name)
+                and inner.func.value.id in READER_CAPTURE_COLUMNS_ALLOWED
+            ):
+                for target in targets:
+                    if isinstance(target, ast.Name):
+                        aliases[target.id] = inner.func.value.id
+    return aliases
+
+
+def _reader_capture_reads(tree: ast.Module) -> dict[str, set[str]]:
+    """Every column of a capture table the reader names; a whole-table read is `*`."""
+    aliases = _capture_aliases(tree)
+    found: dict[str, set[str]] = {table: set() for table in READER_CAPTURE_COLUMNS_ALLOWED}
+
+    def table_of(node: ast.AST) -> str | None:
+        return aliases.get(node.id) if isinstance(node, ast.Name) else None
+
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Attribute)
+            and node.value.attr in {"c", "columns"}
+            and (table := table_of(node.value.value)) is not None
+        ):
+            found[table].add(node.attr)
+        if (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.value, ast.Attribute)
+            and node.value.attr in {"c", "columns"}
+            and (table := table_of(node.value.value)) is not None
+        ):
+            key = node.slice
+            found[table].add(str(key.value) if isinstance(key, ast.Constant) else "*")
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "select":
+            for argument in node.args:
+                if (table := table_of(argument)) is not None:
+                    found[table].add("*")
+                if isinstance(argument, ast.Starred):
+                    for inner in ast.walk(argument.value):
+                        if (table := table_of(inner)) is not None:
+                            found[table].add("*")
+    return found
+
+
+def test_the_feed_reader_reads_only_capture_keys_and_the_version_classification() -> None:
+    """MR-12: the capture predicate's one-column reach, through every alias."""
+    reads = _reader_capture_reads(ast.parse(FEED_READER.read_text(encoding="utf-8")))
+    assert "classification" in reads["capture_versions"], "the scan found no capture reach"
+    for table, allowed in READER_CAPTURE_COLUMNS_ALLOWED.items():
+        assert reads[table] <= allowed, (table, sorted(reads[table]))
+
+
+@pytest.mark.parametrize(
+    "planted",
+    [
+        "def page(self):\n    return select(capture_versions.c.content)\n",
+        "def page(self):\n    return select(capture_versions)\n",
+        'def page(self):\n    return capture_versions.c["content_sha256"] == 1\n',
+        "_A = cast(Table, capture_versions.alias('a'))\n"
+        "def page(self):\n    return select(_A.c.content)\n",
+        "_A = capture_versions.alias('a')\ndef page(self):\n    return select(*_A.c)\n",
+        "_A = capture_versions.alias('a')\ndef page(self):\n    return select(_A)\n",
+        "def page(self):\n    return select(captures.c.owner_principal_id)\n",
+    ],
+)
+def test_the_capture_reader_scan_sees_a_wider_read(planted: str) -> None:
+    """The control: the text, a digest, another column or a whole row is reported."""
+    reads = _reader_capture_reads(ast.parse(planted))
+    assert any(
+        not reads[table] <= allowed for table, allowed in READER_CAPTURE_COLUMNS_ALLOWED.items()
+    )
+
+
 # ---- database: the committed feed holds none of the narrative ------------------
 
 PRINCIPAL: Final = "prn_rcevnopayload0001"
@@ -434,6 +568,169 @@ def test_the_committed_feed_carries_none_of_the_narrative(migrated_engine: Engin
         assert narrative.lower() not in serialized, narrative
     token = re.compile(CHANGED_FIELD_PATTERN.pattern)
     for row in rows:
+        assert set(row) == METADATA_COLUMNS
+        assert all(token.fullmatch(name) for name in row["changed_fields"])
+        assert not set(row["changed_fields"]) & NARRATIVE_FIELDS
+
+
+# ---- WP-RE-08 G-3b-2 (FAST): the capture builders take no narrative ------------
+
+#: Every parameter a capture builder may take: identifiers, versions, enums,
+#: tokens, times, correlation, and the typed non-narrative version facts. A
+#: `text`, `content`, `body`, `display_label`, `*_sha256` or key parameter is
+#: outside it by construction.
+CAPTURE_BUILDER_PARAMETERS_ALLOWED: Final = frozenset(
+    {
+        "principal_id",
+        "capture_id",
+        "event_kind",
+        "version_number",
+        "changed_fields",
+        "capability",
+        "classification",
+        "occurred_at",
+        "receipt_id",
+        "correlation_id",
+        "prior",
+        "written",
+        "label_recorded",
+        "project_bound",
+        # WP-RE-08 8C: the comment builder.
+        "comment_id",
+        "actor",
+    }
+)
+CAPTURE_FACT_FIELDS_ALLOWED: Final = frozenset(
+    {"classification", "processing_policy", "client_created_at", "occurred_at", "character_count"}
+)
+CAPTURE_BUILDERS: Final = (
+    capture_record_event,
+    capture_changed_fields,
+    task_comment_record_event,
+)
+
+
+def test_the_capture_builders_take_only_allow_listed_parameters() -> None:
+    for builder in CAPTURE_BUILDERS:
+        parameters = set(inspect.signature(builder).parameters)
+        assert parameters <= CAPTURE_BUILDER_PARAMETERS_ALLOWED, (
+            builder.__name__,
+            sorted(parameters - CAPTURE_BUILDER_PARAMETERS_ALLOWED),
+        )
+    facts = {field.name for field in dataclasses.fields(CaptureVersionFacts)}
+    assert facts == CAPTURE_FACT_FIELDS_ALLOWED
+
+
+@pytest.mark.parametrize(
+    "planted", ["text", "content", "display_label", "content_sha256", "idempotency_key", "body"]
+)
+def test_the_builder_allow_list_refuses_a_narrative_parameter(planted: str) -> None:
+    """The control: each narrative-bearing name is outside the allow-list."""
+    assert planted not in CAPTURE_BUILDER_PARAMETERS_ALLOWED
+    assert planted not in CAPTURE_FACT_FIELDS_ALLOWED
+
+
+# ---- WP-RE-08 G-3b-3 (database): the capture sentinel sweep --------------------
+
+CAPTURE_TEXT: Final = "Sentinel wp08 capture text quartzmoth-5521."
+CAPTURE_REVISED: Final = "Sentinel wp08 revised text quartzmoth-5522."
+CAPTURE_LABEL: Final = "Sentinel label quartzmoth-5523"
+CAPTURE_PROJECT: Final = "Sentinel project quartzmoth-5524"
+COMMENT_BODY: Final = "Sentinel comment body quartzmoth-5525."
+
+
+@pytest.mark.database
+def test_the_committed_capture_feed_carries_no_text_label_digest_or_key(
+    disposable_database: str,
+) -> None:
+    principal = issue_identifier(IdKind.PRINCIPAL)
+    runtime = Runtime(disposable_database)
+    try:
+        project = runtime.ok(
+            CreateProject(name=CAPTURE_PROJECT, idempotency_key="wp08-sweep-project"),
+            principal_id=principal,
+        )
+        created = runtime.ok(
+            CreateCapture(
+                text=CAPTURE_TEXT,
+                idempotency_key="wp08-sweep-create-key",
+                project_id=project["project_id"],
+                display_label=CAPTURE_LABEL,
+            ),
+            principal_id=principal,
+        )
+        revised = runtime.ok(
+            ReviseCapture(
+                capture_id=created["capture_id"],
+                text=CAPTURE_REVISED,
+                idempotency_key="wp08-sweep-revise-key",
+            ),
+            principal_id=principal,
+        )
+        task = runtime.ok(
+            CreateTask(
+                title="Synthetic wp08 sweep task",
+                idempotency_key="wp08-sweep-task",
+                origin_kind=TaskOriginKind.DIRECT_PRINCIPAL,
+            ),
+            principal_id=principal,
+        )
+        runtime.ok(
+            CreateTaskComment(
+                task_id=task["task"]["task_id"],
+                body=COMMENT_BODY,
+                idempotency_key="wp08-sweep-comment-key",
+            ),
+            principal_id=principal,
+        )
+        with runtime.work_engine.connect() as connection:
+            rows = [
+                json.loads(row[0])
+                for row in connection.execute(
+                    text(
+                        "SELECT row_to_json(e)::text FROM knowledge.record_events e "
+                        "WHERE principal_id = :p ORDER BY sequence_number"
+                    ),
+                    {"p": principal},
+                )
+            ]
+            request_ids = list(
+                connection.execute(
+                    text(
+                        "SELECT request_id FROM knowledge.capture_submissions "
+                        "WHERE principal_id = :p"
+                    ),
+                    {"p": principal},
+                ).scalars()
+            )
+    finally:
+        runtime.close()
+    captures = [row for row in rows if row["record_family"] == "capture"]
+    assert [row["event_kind"] for row in captures] == ["created", "updated"]
+    comments = [row for row in rows if row["record_family"] == "task_comment"]
+    assert len(comments) == 1
+    assert len(request_ids) == 2
+    serialized = json.dumps(rows).lower()
+    forbidden = (
+        CAPTURE_TEXT,
+        CAPTURE_REVISED,
+        CAPTURE_LABEL,
+        CAPTURE_PROJECT,
+        COMMENT_BODY,
+        "wp08-sweep-comment-key",
+        "quartzmoth",
+        str(created["content_sha256"]),
+        str(revised["content_sha256"]),
+        hashlib.sha256(CAPTURE_TEXT.encode("utf-8")).hexdigest(),
+        hashlib.sha256(CAPTURE_REVISED.encode("utf-8")).hexdigest(),
+        "wp08-sweep-create-key",
+        "wp08-sweep-revise-key",
+        *request_ids,
+    )
+    for value in forbidden:
+        assert value.lower() not in serialized, value
+    token = re.compile(CHANGED_FIELD_PATTERN.pattern)
+    for row in (*captures, *comments):
         assert set(row) == METADATA_COLUMNS
         assert all(token.fullmatch(name) for name in row["changed_fields"])
         assert not set(row["changed_fields"]) & NARRATIVE_FIELDS

@@ -1034,8 +1034,8 @@ audit_events = Table(
 #: rather than declared and unreachable.
 #:
 #: `owner_principal_id` is stored because `ADR-003` clause 6 requires every
-#: stored record to bind its owning principal. It is deliberately *not* an
-#: authorization input: see `capture_versions`.
+#: stored record to bind its owning principal. It is the Principal partition
+#: every capture read and revise is scoped to (WP-03); see `capture_versions`.
 captures = Table(
     "captures",
     METADATA,
@@ -1073,13 +1073,15 @@ captures = Table(
 #: depend on the durability of the work it exists to outlive, which is the same
 #: reason `audit_events` itself declares none.
 #:
-#: **`owner_principal_id` is recorded and never authorized on** (`D-72`).
-#: Identity in this build is process-scoped — a restart mints a new principal —
-#: so requiring owner equality on read or revise would make `QC-AC-013`
-#: unprovable across two processes while enforcing a distinction a
-#: single-local-principal, loopback-only deployment cannot make. The column is an
-#: honest record of who wrote the version. `docs/operations/mcv-limitations.md`
-#: is where the consequence is disclosed.
+#: **`owner_principal_id` is the partition and is authorized on** (WP-03,
+#: `PKL-MYPA-D-WP03-001`, superseding `D-72`). Identity is durable: the loopback
+#: operator is the fixed `LOCAL_OPERATOR_UUID` and an authenticated account maps
+#: to one `identity.user_accounts` principal forever (`domain/identity/binding.py`),
+#: so a restart presents the same principal. Every read, list, search and
+#: revise-head lookup is scoped to the caller's own partition
+#: (`persistence/capture.py`, `persistence/capture_search.py`), and `QC-AC-013`
+#: stays provable across two processes (`tests/capture/test_owner_is_the_partition.py`).
+#: `docs/operations/mcv-limitations.md` section 2 records the history.
 capture_versions = Table(
     "capture_versions",
     METADATA,

@@ -149,8 +149,9 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # upsert on `record_event_sequences` and the ordered insert into
         # `record_events` -- both compose `_bound` over `principal_bound_values`.
         # WP-RE-06's reads (the one-statement page, the position lookup and the
-        # causation probe) scope every table they name -- both feed aliases and
-        # the two memory tables of the OD-8 predicate -- through
+        # causation probe) scope every table they name -- both feed aliases, the
+        # two memory tables of the OD-8 predicate, and (WP-RE-08) the two
+        # `capture_versions` aliases of its capture analogue -- through
         # `partition_criterion`. It writes no hand-written partition comparison.
         "infrastructure/persistence/record_events.py",
         "infrastructure/persistence/write_requests.py",
@@ -399,7 +400,8 @@ PER_MODULE_ONLY: Final = {
         "the allocator upsert and the ordered event insert both compose `_bound`, a "
         "one-line wrapper over `principal_bound_values`; every read (the page, the "
         "position lookup and the causation probe, including the OD-8 memory "
-        "predicate) composes `partition_criterion`. It has not joined a dedicated "
+        "predicate and its WP-RE-08 capture analogue) composes `partition_criterion`. "
+        "It has not joined a dedicated "
         "statement-level scanner."
     ),
     "infrastructure/persistence/write_requests.py": (

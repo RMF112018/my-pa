@@ -165,6 +165,31 @@ def test_a_token_issued_to_another_principal_is_a_conflict_before_any_lookup() -
     assert resolver.calls == []
 
 
+def test_a_cursor_bound_to_the_twenty_family_set_conflicts() -> None:
+    """WP-RE-08 RE-AC-102: a token issued before the two new families existed.
+
+    A local caller's visible set was the twenty pre-WP-RE-08 families; after
+    WP-RE-08 it is twenty-two, so the old token's binding mismatches at step 2
+    and is `conflict(cursor)` before its event is resolved. A fresh list from
+    the start (no token) is the designed recovery and returns full history.
+    """
+    new_families = {RecordEventFamily.CAPTURE, RecordEventFamily.TASK_COMMENT}
+    twenty = frozenset(RecordEventFamily) - new_families
+    assert len(twenty) == 20
+    old_token = encode_cursor(
+        binding(visible=twenty, disclosure=MemoryDisclosure.INCLUDE_RESTRICTED), EVENT
+    )
+    current = binding(
+        visible=frozenset(RecordEventFamily), disclosure=MemoryDisclosure.INCLUDE_RESTRICTED
+    )
+    resolver = Resolver()
+    with pytest.raises(ConflictError) as refused:
+        decode_cursor(old_token, current, resolver)
+    assert refused.value.safe_details == (SafeDetail.CURSOR,)
+    assert resolver.calls == []
+    assert decode_cursor(None, current, resolver) == 0
+
+
 def test_an_event_that_does_not_resolve_after_a_binding_match_is_invalid() -> None:
     bound = binding()
     resolver = Resolver(answer=None)

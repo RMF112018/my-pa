@@ -106,7 +106,11 @@ _VISIBILITY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
 
 
 class MemoryDisclosure(StrEnum):
-    """Whether restricted Relationship Memory events are disclosed (G1-RD-003)."""
+    """Whether restricted Relationship Memory events are disclosed (G1-RD-003).
+
+    WP-RE-08 (OD-W8-10): the same choice now also governs restricted Capture
+    events; the name is kept rather than widened into a port change.
+    """
 
     INCLUDE_RESTRICTED = "include_restricted"
     EXCLUDE_RESTRICTED = "exclude_restricted"

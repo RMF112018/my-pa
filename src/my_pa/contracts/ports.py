@@ -3725,10 +3725,17 @@ class CaptureAdmission:
     content, so the correct answer is the receipt the first call got — the
     `QC-AC-031` replay. A key bound to different content is a
     `domain.capture.errors.CaptureConflictError` and never a receipt.
+
+    `changed_fields` (WP-RE-08) is the exact Record Event token set for the
+    version this call wrote, computed where the predecessor was read
+    (`domain.record_events.capture_changed_fields`), so only name tokens cross
+    the port and no prior value leaves the store. A replay wrote nothing and
+    carries `()`.
     """
 
     receipt: CaptureReceipt
     created: bool
+    changed_fields: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -4881,8 +4888,10 @@ class RecordEventReader(ABC):
     server-resolved authorization. With `include_restricted_memory` false (a
     remote caller), every predicate also withholds each `relationship_memory`
     event whose stored classification is `restricted_local` or whose memory's
-    current version is (OD-8), in SQL, so nothing withheld reaches a count, a
-    truncation flag or a watermark.
+    current version is (OD-8), and -- WP-RE-08, under the same flag (OD-W8-10)
+    -- each `capture` event whose stored classification is `restricted_local`
+    or whose capture's current version is, in SQL, so nothing withheld reaches a
+    count, a truncation flag or a watermark.
     """
 
     @abstractmethod

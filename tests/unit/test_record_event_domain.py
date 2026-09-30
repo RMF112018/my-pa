@@ -13,7 +13,7 @@ What is proved here, without a database:
 * **RE-AC-003 -- changed_fields sorted/unique/bounded.** Sorted, unique, each
   token 1..64 lower_snake characters, at most 64 tokens.
 
-Plus the closed vocabularies (20 families, 3 kinds, 4 actor classes, 6
+Plus the closed vocabularies (22 families, 3 kinds, 4 actor classes, 6
 authorities), the section 3.4 actor maps, the non-memory classification, UTC
 normalization and immutability. Each guard has its own test so a prove-red that
 disables one guard reddens exactly the test named for it.
@@ -282,7 +282,7 @@ def test_source_capability_is_a_bounded_operation_name(value: object) -> None:
 # ---- closed vocabularies ----------------------------------------------------
 
 
-def test_the_family_vocabulary_is_exactly_the_twenty_named_families() -> None:
+def test_the_family_vocabulary_is_exactly_the_twenty_two_named_families() -> None:
     assert {member.value for member in RecordEventFamily} == {
         "task",
         "commitment",
@@ -304,8 +304,10 @@ def test_the_family_vocabulary_is_exactly_the_twenty_named_families() -> None:
         "project_controls_settings",
         "meeting",
         "meeting_series",
+        "capture",
+        "task_comment",
     }
-    assert len(RecordEventFamily) == 20
+    assert len(RecordEventFamily) == 22
 
 
 def test_the_kind_vocabulary_is_created_updated_state_changed() -> None:

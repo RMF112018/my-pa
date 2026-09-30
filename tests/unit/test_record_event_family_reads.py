@@ -3,7 +3,7 @@
 FAST. `RECORD_EVENT_FAMILY_READS` decides which grant discloses which family,
 so every property that keeps it from widening a grant is pinned here:
 
-* exactly the twenty `RecordEventFamily` members, each with a non-empty set;
+* exactly the twenty-two `RecordEventFamily` members, each with a non-empty set;
 * the literal plan table (section 6.1), so a change is a reviewed decision;
 * every mapped read is a read (never a write), never operator-only, and has
   exactly one permitted purpose -- the one the plan names for the family;
@@ -80,12 +80,15 @@ EXPECTED: Final[dict[RecordEventFamily, tuple[frozenset[Capability], Purpose]]] 
     ),
     F.MEETING: (frozenset({C.MEETINGS_READ, C.MEETINGS_LIST}), Purpose.MEETING_READ),
     F.MEETING_SERIES: (frozenset({C.MEETINGS_READ, C.MEETINGS_LIST}), Purpose.MEETING_READ),
+    # WP-RE-08 (Amendment 01; OD-W8-1 (i) no floor, OD-W8-11 both capture reads).
+    F.CAPTURE: (frozenset({C.CAPTURE_READ, C.CAPTURE_LIST}), Purpose.CAPTURE_REVIEW),
+    F.TASK_COMMENT: (frozenset({C.TASKS_COMMENTS_LIST}), Purpose.TASK_READ),
 }
 
 
-def test_the_table_covers_exactly_the_twenty_families() -> None:
+def test_the_table_covers_exactly_the_twenty_two_families() -> None:
     assert set(RECORD_EVENT_FAMILY_READS) == set(RecordEventFamily)
-    assert len(RECORD_EVENT_FAMILY_READS) == 20
+    assert len(RECORD_EVENT_FAMILY_READS) == 22
     assert all(RECORD_EVENT_FAMILY_READS.values())
 
 

@@ -75,6 +75,7 @@ Re-derived in the worktree (PYTHONPATH=src):
 | CP-RE-04 | WP-RE-04 | `d442f923705025ff03c323c06caf9a0840d367ea` | `d1025a5765c2dc1aa8a9202d17218a78e1cb3892` | 044-051 | green: 25,274 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: entity/identity/memory/review/reenrichment/record-event DB modules + no-payload 916 passed; full `-m recovery` 46 passed | no N fired (N8 resolved as not-fired, MR-05); T-15 no 40P01 |
 | CP-RE-05 | WP-RE-05 | `f3ad197e4a31d80cbf64f08b5aa0be10b53ad515` | `51380af70dbcd4e1a15a7082370252ccdf61f405` | 052-056 | green: 25,299 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: meeting DB/concurrency + record_event DB modules 185 passed; full `-m recovery` 46 passed | no N fired; T-13 no 40P01 |
 | CP-RE-06 | WP-RE-06 | `40037597b73dc9c04a8d29331a2ef40910ae05f4` | `b9ec6b088834391b8dc0d7b04c06cc8e3fcfe03a` | 057-083 | green: 25,726 passed / 74 skipped / 0 failed; ruff, format, mypy (524) clean | PG 15 local, PGTZ=UTC: record-event DB/concurrency/security modules 191 passed; recovery 46; migration_empty_to_head 10; migration_edge subset 46 (worker: full 1,071); e2e 13 (worker 31); worker web npm test 3,563 passed, lint 0 errors, typecheck and build OK | no N fired; counts equal projections (no N12) |
+| CP-RE-08 | WP-RE-08 | this commit (recorded in the next ledger update) | this commit | 086-108 | green: 25,803 passed / 74 skipped / 0 failed (Orchestrator re-run: unit+schema 15,369; architecture 5,919 + 71 skipped; rest 4,515 + 3 skipped); ruff, format, mypy (524) clean | PG 15.15 local (re-created after the reboot), PGTZ=UTC: record-event DB modules 227 passed; capture/pipeline/review/comment DB modules 200 passed; full `-m recovery` 53 passed; migration_empty_to_head 10; full migration_edge 1,033 passed | no N fired (N13, N24-N35); T-21..T-25 no 40P01/lock_timeout (worker 3/3, Orchestrator 1/1) |
 
 **CP-RE-01 out-of-matrix mechanical edits (as reported to the Manager):**
 - C5/C6 fan-out: 34 `HEAD_PIN_FILES` plus the control file `tests/schema/test_constraint_authoring_capability_migration.py`, 24 revision-count pins, and `tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py`.
@@ -241,6 +242,46 @@ Re-derived in the worktree (PYTHONPATH=src):
 - FAST over this tree: 25,726 passed / 74 skipped / 0 failed (worker). The Orchestrator re-ran the doc guards and they were green.
 - **HOLD, operator scope amendment:** Captures and Task comments are to be included in this PR as WP-RE-08, planned and implemented before the WP-RE-07 terminal. No reviewer has been commissioned.
 
+### Restart after the OS reboot (2026-09-30)
+
+- An OS update rebooted the machine and killed the previous Orchestrator, the WP-RE-08 implementer and the disposable PG 15 (datadir was in `/private/tmp`). The Manager restarted one new Orchestrator with `ORCHESTRATOR-RESTART-BRIEF.md`.
+- **Restored-file provenance.** All working files now live in `/Users/bobbyfetting/my-pa-wt/record-event-changefeed-manager/` (not `/private/tmp`). The authorization (`1b867134…`), Amendment 01 (`5b4f4c4f…`), Amendment 02 (`ceccba79…`) and the WP-RE-08 plan (`94a7030f…`, rebuilt byte-exact from transcripts; also Drive `1hsb5u1bI8-jxYZXlAXXBeNwGDw2xMOGv`) were re-verified by SHA-256 by the Manager and again by the Orchestrator. Gate-1 evidence P1/P2b/P2c are exact; P2a/P2d are `.APPROX` reconstructions, reference only. The WIP snapshot is `recovery/wp08-wip-1706.patch` (`4a4e1ab2…`).
+- **PG 15.15 re-created** under the manager directory (`pg15/data`, 127.0.0.1:55439, role `my_pa`, db `my_pa_ci`, scram; `PGPASSWORD` via the environment only). Local and disposable.
+- **WIP triage** (`wp08/TRIAGE.md`). The dead implementer's uncommitted WIP (26 modified + 12 new files) covered 8A-8F in code and part of 8G (count cells). A health probe passed (342 FAST + 17 DB). **Nothing was discarded.** Every phase was re-verified under prove-red by one fresh opus SFI worker.
+- `origin/main` re-fetched: still `d6c706bb`, so no rebase, no re-point, and `1d9b248e7f83` is still the sole head.
+
+### WP-RE-08 (CP-RE-08)
+
+- **Scope.** Amendment 01: the `capture` and `task_comment` families (20 → 22), with the migration amended in place (family CHECK and docstring only). Amendment 02: stable user association. RE-AC-086..108.
+- **Phase verdicts** (SFI worker, re-verification):
+  - 8A, 8C, 8D, 8E and 8F: WIP kept, no fixes.
+  - 8B: WIP kept with one fix. `tests/capture/test_remote_capture_record_event.py` asserted a global count of local-operator capture events on the shared, never-truncated capture package database (the INFO-2 hazard). It now compares against a snapshot taken before the call: the earlier events are unchanged, exactly one new event appears, and the replay adds none. No assertion was weakened.
+- **Prove-reds:** 48 PASS (`wp08/prove_red_log.md`), all single-guard, red on assertions, restored SHA-exact. No N13.
+  - M-19b: the plan's second target `test_each_mapped_read_admits_exactly_its_families` does not exist. M-19's literal-table guard went red.
+  - M-09 was placed in the builder: `_admit` fixes PRIVATE_LOCAL, so a mutant in the service is not observable.
+  - M-22 was run as a planted production caller with the registry entry present. Removing the entry disables its own scan by design.
+  - Extras: M-CC1..3 (`character_count`), M-SV1/M-SV1db (`supersedes_version_id`), M-G3b3/M-G3b4 (sweeps), M-11b, and MR-10 (the CLI principal-shape check).
+- **T-21..T-25:** REC 3/3 by the worker (7/7 each run), plus the Orchestrator's full recovery lane (53). No 40P01 or `lock_timeout`, so N27 did not fire.
+- **Departure for Manager ratification: RE-AC-088 token sets.** The implementation follows MR-11 ("every non-narrative field that changed must be named") over the plan's literal RE-AC-088 set.
+  - created = {`character_count`, `classification`, `latest_version_id`, `latest_version_number`, `owner_principal_id`, `processing_policy`, `version_count`}, plus each of `client_created_at`/`display_label`/`occurred_at`/`project_id` written non-null.
+  - updated = {`latest_version_id`, `latest_version_number`, `supersedes_version_id`, `version_count`}, plus each of `character_count`/`classification`/`client_created_at`/`occurred_at`/`processing_policy` that differs from the predecessor.
+  - Every added token is a public `CaptureVersionView`/`CaptureListEntry` field and is neither narrative nor a digest.
+  - `character_count` is `char_length(content)` computed inside the one `_head` SELECT. Only an int leaves the server; there is no second statement and no new lock (N28 not fired).
+  - A text-only revise names exactly the head fields.
+- **Plan deviation (G-3b-4):** the redaction test sweeps the feed through a new `_SWEPT` tuple rather than `_TABLES`, because the fixture TRUNCATEs every `_TABLES` entry and the feed is append-only.
+- **MR-12:** no claim document. No capture claim document is guard-parsed or states the reach. The only statement of the reach is the new mcv-limitations §15 paragraph.
+- **OD-W8-12:** not implemented. It needs a `staged_principals()` port method on every stager and double plus a `_run` hook, which is not small or local. RE-AC-103 is covered by G-A02-1 and its prove-reds.
+- **Files outside plan §7.2:**
+  - `src/my_pa/application/record_events.py`: `MemoryDisclosure` docstring only (OD-W8-10). The plan listed the file as NO-CHANGE.
+  - `apps/cli/tbr_import.py` plus `tests/unit/test_tbr_import_principal_shape.py`: MR-10.
+  - `tests/database/test_record_events_bootstrap_race.py`, `tests/security/test_record_events_grant_narrowing.py`, `tests/unit/test_record_event_cursor.py`: plan §7.2 test rows.
+  - Count cells: `relationship-intelligence-implementation-plan.md` FAST 25,803 / architecture 5,990 / DB 3,134 (contended with PR #287); `mcv-completion-plan.md` module counts. Both are bound by FAST guards, which are green.
+- **Evidence map** rows 086..108: `wp08/RE-AC-086-108-EVIDENCE-MAP.md` in the manager directory. The full 108-row map is rebuilt at WP-RE-07.
+- **CI classification:**
+  - `40037597` frontend-quality run 36693560876: attempt 1 failed `frontend / responsive` (and so `required`); attempt 2 on the identical head succeeded on all required jobs. **Classified as a flake** (same tree, re-run green).
+  - CP-RE-06a `36e71e44`: repository-checks 36699008786 and frontend-quality 36699008389 both succeeded.
+- **New risk:** PR #298 (`bf/task-archive-option-b`, draft, opened 2026-09-30) edits `src/my_pa/application/service.py` and `tasks.py`, which overlap WP-RE-08. If it merges first, this branch needs a rebase (N3 check at R3).
+
 ## Manager rulings
 
 - **MR-01 (2026-09-29):** the `TABLES_SHA256` re-pin in `tests/architecture/test_capture_project_binding.py` is MECHANICAL and ACCEPTED, because the tables.py diff against the base only adds lines and the captures Table is unchanged. Each later tables.py edit re-pins it under the same rule, provided the captures Table stays unchanged. CP-RE-01 was accepted by the Manager, and draft PR #297 is open.
@@ -285,6 +326,25 @@ Re-derived in the worktree (PYTHONPATH=src):
 
 - **MR-08 (2026-09-30):** the feed-reader paragraph in `evidence/acceptance/RI-FINAL-COMPLETION-RM-AC-DELTA-20260828.md` is RATIFIED. It extends the MR-06 precedent on the same basis: OD-8 (i), mechanically enforced to keys plus `classification`. The Manager surfaces it to the operator with MR-06. CP-RE-06 accepted; the CP-RE-05 e2e-critical failure was accepted as a flake (same tree, re-run green).
 - **MR-09 (2026-09-30):** moving the C7/C8 spelled/derived doc pins into CP-RE-06 is RATIFIED. They are re-verified at R3.
+
+- **WP-RE-08 plan APPROVED (2026-09-30):** `scratchpad/wp08/WP-RE-08-PLAN.md`, SHA-256 `94a7030f89d2ca2925911d93ac347f152c6ff4ac6f3316783462e55e62c84063`. It covers Amendment 01 (Captures and Task comments; families 20→22; migration amended in place) and Amendment 02 (stable user association). It adds RE-AC-086..108, N24..N35, and phases 8A-8G, and is to be published alongside CP-RE-08.
+- **MR-10 (operator ruling OD-W8-2):** the legacy import CLI (`apps/cli/tbr_import.py`, disposable databases only) is the ONE enumerated exception to Amendment 02(1).
+  - The durable-principal guard names exactly that path; any other request- or argument-supplied principal fails the guard.
+  - `--principal` must be in the durable bound form: `prn_` + 32 lowercase hex, which is the `capture_principal_id` output. This gets a CLI check, a test, and a single-guard prove-red.
+- **MR-11 (OD-W8-3):** confirmed consistent with MR-07.
+  - Narrative fields (the `NARRATIVE_FIELDS` rule) are never named.
+  - A text-only capture revise still names `latest_version_id` / `latest_version_number` / `version_count`. A test covers exactly that case.
+  - Every non-narrative field that changed must be named.
+- **MR-12 (OD-W8-4):** the feed reader's read of `capture_versions.classification` is RATIFIED as the capture analogue of MR-08.
+  - It needs a one-column guard (classification plus join keys only).
+  - Add a dated paragraph to any capture claim document that a guard parses or that states the reach. If there is none, record "no claim document".
+  - The Manager surfaces this with MR-06 and MR-08.
+- **MR-13 (OD-W8-9):** accepted. Comment events are re-read through `tasks.comments.list`, following the entity sub-family precedent. No new capability.
+- **Minor items:**
+  - OD-W8-1, W8-5, W8-6, W8-7, W8-10 and W8-11 are accepted as recommended.
+  - OD-W8-8: TRUNCATE is an operator residual.
+  - OD-W8-12: include the runtime principal assertion only if it is small and local, and record the choice.
+  - The plan's unverified items are resolved against the code during 8A-8G. A lock-order change or a new capability is a STOP.
 
 ## Review outcome and final state
 

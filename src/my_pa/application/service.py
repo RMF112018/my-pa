@@ -621,6 +621,7 @@ from my_pa.domain.record_events import (
     RecordEventDraft,
     RecordEventFamily,
     RecordEventKind,
+    capture_record_event,
 )
 from my_pa.domain.relationship.authoring import (
     AmbiguousEntityError,
@@ -9139,6 +9140,8 @@ class ApplicationService:
                     actor=TaskMutationActor.PRINCIPAL,
                     idempotency_key=command.idempotency_key,
                     active_uow=unit_of_work,
+                    source_capability=authorization.capability.value,
+                    correlation_id=authorization.correlation_id,
                 )
         except TaskNotFoundError:
             raise NotFoundError(SafeDetail.TASK_ID) from None
@@ -11801,6 +11804,27 @@ class ApplicationService:
                         str(receipt.version_number),
                     ),
                 ),
+            )
+        if admission.created:
+            # WP-RE-08 (E-CAP-1/E-CAP-2): one event for the version this call
+            # wrote, staged in memory on the admitting transaction's buffer and
+            # allocated at its exit. A replay wrote nothing and stages nothing;
+            # a conflict or an unknown capture raised above.
+            unit_of_work.record_events.stage(
+                capture_record_event(
+                    principal_id=authorization.principal.principal_id,
+                    capture_id=receipt.capture_id,
+                    event_kind=(
+                        RecordEventKind.CREATED if capture_id is None else RecordEventKind.UPDATED
+                    ),
+                    version_number=receipt.version_number,
+                    changed_fields=admission.changed_fields,
+                    capability=authorization.capability.value,
+                    classification=request.classification,
+                    occurred_at=request.accepted_at,
+                    receipt_id=receipt.receipt_id,
+                    correlation_id=authorization.correlation_id,
+                )
             )
         return _Result(
             payload=CaptureReceiptView(

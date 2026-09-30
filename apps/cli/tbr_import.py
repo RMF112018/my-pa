@@ -20,7 +20,8 @@ because a rule stated only in a docstring is not a control.
 
 Two rules this obeys, from `AGENTS.md` section 5. Targets are always explicit:
 `--source`, `--sheet`, `--project-id`, `--principal` and `--register-id` are all
-required, there is no default for any of them, and the database comes from
+required, there is no default for any of them, `--principal` must be the durable
+bound form (`prn_` + 32 lowercase hex, MR-10), and the database comes from
 `MY_PA_DATABASE_URL`, so none of them can be inferred. And output carries
 counts, identifiers, codes, prefixes and stable issue codes — never a workbook
 value, never a description, comment, party label, closure note or void reason,
@@ -71,6 +72,13 @@ DISPOSABLE_DATABASE_PATTERN: Final = re.compile(
 #: file name: it is composed into a stored idempotency key, so it must be stable
 #: across runs and must carry nothing personal.
 REGISTER_ID_PATTERN: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{2,63}$")
+
+#: MR-10 (WP-RE-08, Amendment 02): `--principal` is the one operator-typed
+#: principal that reaches Record Event staging, so it must be the durable bound
+#: form `capture_principal_id` produces -- `prn_` and exactly 32 lowercase hex
+#: characters, a durable identity-plane UUID -- never an arbitrary `prn_` token
+#: that no composition root would ever present.
+BOUND_PRINCIPAL_PATTERN: Final = re.compile(r"^prn_[0-9a-f]{32}$")
 
 
 def is_disposable_database(name: str | None) -> bool:
@@ -184,6 +192,10 @@ def _apply_disposable(args: argparse.Namespace) -> int:
 
 def _check_identifiers(args: argparse.Namespace) -> None:
     validate_identifier(args.principal, IdKind.PRINCIPAL)
+    if BOUND_PRINCIPAL_PATTERN.fullmatch(args.principal) is None:
+        raise LegacyImportError(
+            "principal_shape", "a principal is the durable bound form prn_ + 32 lowercase hex"
+        )
     validate_identifier(args.project_id, IdKind.PROJECT)
     if REGISTER_ID_PATTERN.fullmatch(args.register_id) is None:
         raise LegacyImportError(

@@ -73,6 +73,9 @@ __all__ = [
 _Title = Field(min_length=1, max_length=MAX_MEETING_TITLE_CHARACTERS)
 _TimezoneName = Field(min_length=1, max_length=MAX_TIMEZONE_NAME_CHARACTERS)
 _Version = Field(ge=1)
+#: The series' own version (plan D-21, OD-7 (i)): nullable, and never the
+#: Meeting's `version`, which keeps its name and meaning.
+_SeriesVersion = Field(default=None, ge=1)
 
 
 def _check_versions(
@@ -174,6 +177,7 @@ def _check_meeting_core(
     meeting_id: str,
     meeting_series_id: str | None,
     series_title: str | None,
+    series_version: int | None,
     title: str,
     timezone_name: str,
     start_at: datetime,
@@ -183,6 +187,8 @@ def _check_meeting_core(
     validate_identifier(meeting_id, IdKind.MEETING)
     if (meeting_series_id is None) != (series_title is None):
         raise ValueError("a series member carries its series title; a standalone carries neither")
+    if meeting_series_id is None and series_version is not None:
+        raise ValueError("a standalone Meeting carries no series version")
     if meeting_series_id is not None:
         validate_identifier(meeting_series_id, IdKind.MEETING_SERIES)
     if series_title is not None:
@@ -205,6 +211,9 @@ class MeetingView(StrictModel):
     meeting_id: str
     meeting_series_id: str | None = None
     series_title: str | None = None
+    #: The series' current version, read with the Meeting (plan D-21); `None`
+    #: for a standalone Meeting. The Meeting's own version is `version`.
+    series_version: int | None = _SeriesVersion
     title: str = _Title
     status: MeetingStatus
     start_at: UtcDatetime
@@ -242,6 +251,7 @@ class MeetingView(StrictModel):
             meeting_id=self.meeting_id,
             meeting_series_id=self.meeting_series_id,
             series_title=self.series_title,
+            series_version=self.series_version,
             title=self.title,
             timezone_name=self.timezone_name,
             start_at=self.start_at,
@@ -275,6 +285,9 @@ class MeetingListEntry(StrictModel):
     meeting_id: str
     meeting_series_id: str | None = None
     series_title: str | None = None
+    #: The series' current version, read with the Meeting (plan D-21); `None`
+    #: for a standalone Meeting. The Meeting's own version is `version`.
+    series_version: int | None = _SeriesVersion
     title: str = _Title
     status: MeetingStatus
     start_at: UtcDatetime
@@ -293,6 +306,7 @@ class MeetingListEntry(StrictModel):
             meeting_id=self.meeting_id,
             meeting_series_id=self.meeting_series_id,
             series_title=self.series_title,
+            series_version=self.series_version,
             title=self.title,
             timezone_name=self.timezone_name,
             start_at=self.start_at,

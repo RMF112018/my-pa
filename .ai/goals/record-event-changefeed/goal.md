@@ -58,7 +58,8 @@ Re-derived in the worktree (PYTHONPATH=src):
 | CP-RE-01 | WP-RE-01 | `bf1bfe9c61496275440a13be1be3fd8d4eb94962` | `8f9f2b38fcef0b35d877c82820429973ceb0dc75` | 001-017 | green: 25,169 passed / 74 skipped / 0 failed; ruff, format, mypy (522 files) clean | PG 15.15 local, PGTZ=UTC: new DB modules + meeting app 114 passed; recovery `tests/concurrency` 15 passed; migration_empty_to_head 9 passed; migration_edge subset 179 passed (worker full lane 1,052 passed) | revision `1d9b248e7f83` (down `7d9a450dfd07`); N-conditions none fired |
 | CP-RE-02 | WP-RE-02 | `97cae35bb8185ef6f082143321ca028bf7966cfe` | `7bc006d28f280e678ab200ee9e9003e1b8c8bbba` | 018-030 | green: 25,188 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: WP-02 + task/commitment/project/continuity + record-event DB modules 195 passed; full `-m recovery` 46 passed (worker: full tests/database 1,689 passed) | no N fired; T-12 premise finding (below) |
 | CP-RE-03 | WP-RE-03 | `9102e2f2642a3ef6bf7cc16b93ecd8460fa79509` | `ee2238f806f4e0bff42dc1850b1ac107a20aff85` | 031-043 | green: 25,206 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: 32 constraint/project-controls/project-create/tbr DB modules 468 passed; full `-m recovery` 46 passed (worker: full tests/database 1,713 passed) | no N fired; T-10 no 40P01/lock_timeout |
-| CP-RE-04 | WP-RE-04 | the commit that adds this row (SHA recorded in CP-RE-05) | | 044-051 | green: 25,274 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: entity/identity/memory/review/reenrichment/record-event DB modules + no-payload 916 passed; full `-m recovery` 46 passed | no N fired (N8 resolved as not-fired, MR-05); T-15 no 40P01 |
+| CP-RE-04 | WP-RE-04 | `d442f923705025ff03c323c06caf9a0840d367ea` | `d1025a5765c2dc1aa8a9202d17218a78e1cb3892` | 044-051 | green: 25,274 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: entity/identity/memory/review/reenrichment/record-event DB modules + no-payload 916 passed; full `-m recovery` 46 passed | no N fired (N8 resolved as not-fired, MR-05); T-15 no 40P01 |
+| CP-RE-05 | WP-RE-05 | the commit that adds this row (SHA recorded in CP-RE-06) | | 052-056 | green: 25,299 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: meeting DB/concurrency + record_event DB modules 185 passed; full `-m recovery` 46 passed | no N fired; T-13 no 40P01 |
 
 **CP-RE-01 out-of-matrix mechanical edits (as reported to the Manager):**
 - C5/C6 fan-out: 34 `HEAD_PIN_FILES` plus the control file `tests/schema/test_constraint_authoring_capability_migration.py`, 24 revision-count pins, and `tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py`.
@@ -152,6 +153,26 @@ Re-derived in the worktree (PYTHONPATH=src):
   - **MR-06:** `evidence/acceptance/RI-FINAL-COMPLETION-RM-AC-DELTA-20260828.md` (RM-API-AC-002 claim, classification column only).
 - Stager-less repositories use a private unflushed buffer. `test_record_event_stager_injection.py` requires `stager=` at every writing construction in `src`.
 - CI at `9102e2f2` (CP-RE-03): repository-checks 36644032291 succeeded on all jobs. frontend-quality 36644032408 had classify and required succeed; visual failed (continue-on-error).
+
+### WP-RE-05 (CP-RE-05)
+
+- The SFI worker was retired on the Manager's instruction. A fresh opus worker took over as SFI with a compact handoff brief (`scratchpad/WORKER-BRIEF-WP-RE-05.md`). The retired worker had completed, with no live children, per the harness completion notice; ListAgents is not in the Orchestrator toolset.
+- Meeting emitters MT1-MT4:
+  - a new series stages series `created` first, then meeting `created` with causation = the series event;
+  - material updates stage `updated` with exact scalar names plus attendees/attachments/notes;
+  - a series retitle stages `updated {title}`;
+  - NO_OP and replay stage nothing.
+- OD-7 (i) / D-21: `series_version: int | None` on `MeetingView` and `MeetingListEntry`, populated by the SQL read/list subquery. A standalone meeting refuses it.
+- Departure from P2b (exactness, following MR-07 and the E9 precedent): a cancel or uncancel names `{cancelled_at, status}`.
+- T-13 has 3 tests. The allocator-last hazard is proven red. The ascending entity-lock order is guarded by the existing `test_meeting_writes.py`, because FOR SHARE locks cannot deadlock, so the T-13 prove-red would stay green there.
+- Mechanical/guard-forced edits:
+  - `service.py` passes capability and correlation;
+  - `tests/conftest.py` fake `_Meetings` carries `series_version`;
+  - `tests/contract/test_meeting_contracts.py` `EXPECTED_FIELDS` gains `series_version` (exact-set guard, no weakening);
+  - count cells: `relationship-intelligence-implementation-plan.md` :660 (25,299) and :664 (3,084), contended with #287;
+  - `mcv-completion-plan.md` module count 359/623.
+- No `web/` edit: the web app does not consume meetings.
+- CI at `d442f923` (CP-RE-04): repository-checks 36664088723 succeeded on all jobs. frontend-quality 36664088720 had classify and required succeed; visual failed (continue-on-error).
 
 ## Manager rulings
 

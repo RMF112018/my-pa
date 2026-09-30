@@ -11837,6 +11837,8 @@ class ApplicationService:
                 command.meeting_request(),
                 command.idempotency_key,
                 authorization.at,
+                source_capability=authorization.capability.value,
+                correlation_id=authorization.correlation_id,
             )
             payload = _meeting_write_payload(unit_of_work, principal_id, written)
         return _Result(
@@ -11898,6 +11900,8 @@ class ApplicationService:
                 command.expected_version,
                 command.idempotency_key,
                 authorization.at,
+                source_capability=authorization.capability.value,
+                correlation_id=authorization.correlation_id,
             )
             payload = _meeting_write_payload(unit_of_work, principal_id, written)
         return _Result(
@@ -11920,6 +11924,8 @@ class ApplicationService:
                 command.expected_version,
                 command.idempotency_key,
                 authorization.at,
+                source_capability=authorization.capability.value,
+                correlation_id=authorization.correlation_id,
             )
         return _Result(
             payload=_meeting_series_write_payload(written),

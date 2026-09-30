@@ -9010,6 +9010,7 @@ class _Meetings:
             meeting_id=record.meeting_id,
             meeting_series_id=record.meeting_series_id,
             series_title=self._series_title(principal_id, record.meeting_series_id),
+            series_version=self._series_version(principal_id, record.meeting_series_id),
             title=record.title,
             status=record.status,
             start_at=record.start_at,
@@ -9072,6 +9073,13 @@ class _Meetings:
             return None
         series = self._world.meeting_series.get((principal_id, meeting_series_id))
         return None if series is None else series.title
+
+    def _series_version(self, principal_id: str, meeting_series_id: str | None) -> int | None:
+        """The series' current version, as the SQL read carries it (plan D-21)."""
+        if meeting_series_id is None:
+            return None
+        series = self._world.meeting_series.get((principal_id, meeting_series_id))
+        return None if series is None else series.version
 
     def _active_attendees(self, principal_id: str, meeting_id: str) -> list[_MeetingAttendeeRow]:
         rows = [
@@ -9214,6 +9222,7 @@ class _Meetings:
                     meeting_id=record.meeting_id,
                     meeting_series_id=record.meeting_series_id,
                     series_title=self._series_title(principal_id, record.meeting_series_id),
+                    series_version=self._series_version(principal_id, record.meeting_series_id),
                     title=record.title,
                     status=record.status,
                     start_at=record.start_at,

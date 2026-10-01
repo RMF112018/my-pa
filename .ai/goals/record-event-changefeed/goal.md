@@ -65,6 +65,28 @@ Re-derived in the worktree (PYTHONPATH=src):
 - PR #287: OPEN, CONFLICTING, head `b9b2b203`, unchanged. It is the only other open PR. The §9 dormant branches are unchanged.
 - N2, N3 and N16 are not fired at R2 (N16 is re-verified in WP-RE-06 Phase A).
 
+## R3 record (final integration, WP-RE-07), 2026-10-01
+
+Integration was by **merge**, not rebase (MR-17a also applies to R3). The merge commit is `88f77c30a88821d24a753cfd1a16444c42f5f3c0`, tree `c895b14b28c9a09c1644cc9d1c8d2d5f65e11655`, with parents CP-RE-08b `3012ad3d` and `origin/main` `b5baf962`. It was pushed as a plain fast-forward.
+
+| Fact | Bound basis | R3 value | Note |
+|---|---|---|---|
+| `origin/main` | `d6c706bb` | `b5baf962dcabd39b0d2e3936b80421e28986fb8b` | advanced through #298 `8940e60b` (merged at CP-RE-08b), #299 `fa07ac06` and #300 `b5baf962` (docs only) |
+| Alembic heads | `7d9a450dfd07` | `1d9b248e7f83 (head)`, single; `down_revision` `7d9a450dfd07` | main added no migration, so no re-point |
+| Revision files | 108 | 109 | +1 (ours) |
+| `Capability` / `Purpose` | 178 / 47 | 179 / 48 | +`record_events.list` / +`record_event_read` (WP-RE-06) |
+| `IdKind` | 130 | 131 | +`rcev` |
+| `RecordEventFamily` | — | 22 | 20 at WP-RE-06, plus `capture` and `task_comment` (WP-RE-08) |
+| ChatLLM profile and classes | v3; 69/90/2/15/2/0 | `chatllm-data-v4`; 70/90/2/15/2/0 | OD-11 |
+| Audit vocabulary | 189 / 47 | 190 / 48 | byte-unchanged by WP-RE-08 |
+| Source / test modules | 357 / 588 | 361 / 645 | +#298 `tests/contract/test_task_archive_bulk.py`; main added none at R3 |
+| FAST / architecture / database tier (collected) | — | 25,911 / 5,990 / 3,150 | re-derived at CP-RE-08b; main's R3 changes add no tests |
+
+- The textual conflicts at the CP-RE-08b merge (both count-guarded docs) were resolved by re-derivation. The R3 merge had no conflicts.
+- PR #287 is still OPEN and CONFLICTING, untouched. Whichever of #287 and #297 merges second re-measures the relationship-intelligence tier cells.
+- **Sequencing item (CRL-WP-03):** `docs/plans/capture-lifecycle-implementation-plan.md` (#300) plans future capture lifecycle write paths (`knowledge.capture_lifecycle_events`, withdrawal per `docs/specs/capture-withdrawal-v0.1.md`). It states that it does not depend on PR #297. Whichever of CRL-WP-03 and PR #297 lands second must cover the new capture write paths with `capture` Record Events, consistent with the flush-discipline, durable-principal (G-A02-1) and never-rewritten (G-A02-3) guards.
+- MR-18: CI timeouts are handled by same-head re-run only; the workflow is not changed.
+
 ## Checkpoint ledger
 
 | CP | WP | Head | Tree | RE-AC | FAST | DB lane (local PG) | Notes |
@@ -76,7 +98,8 @@ Re-derived in the worktree (PYTHONPATH=src):
 | CP-RE-05 | WP-RE-05 | `f3ad197e4a31d80cbf64f08b5aa0be10b53ad515` | `51380af70dbcd4e1a15a7082370252ccdf61f405` | 052-056 | green: 25,299 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: meeting DB/concurrency + record_event DB modules 185 passed; full `-m recovery` 46 passed | no N fired; T-13 no 40P01 |
 | CP-RE-06 | WP-RE-06 | `40037597b73dc9c04a8d29331a2ef40910ae05f4` | `b9ec6b088834391b8dc0d7b04c06cc8e3fcfe03a` | 057-083 | green: 25,726 passed / 74 skipped / 0 failed; ruff, format, mypy (524) clean | PG 15 local, PGTZ=UTC: record-event DB/concurrency/security modules 191 passed; recovery 46; migration_empty_to_head 10; migration_edge subset 46 (worker: full 1,071); e2e 13 (worker 31); worker web npm test 3,563 passed, lint 0 errors, typecheck and build OK | no N fired; counts equal projections (no N12) |
 | CP-RE-08 | WP-RE-08 | `20f224133880754e1229f09a3e7ae0a6a9e4e25d` | `1730816ac500e70adb64bd17580971f8558ac8b1` | 086-108 | green: 25,803 passed / 74 skipped / 0 failed (Orchestrator re-run: unit+schema 15,369; architecture 5,919 + 71 skipped; rest 4,515 + 3 skipped); ruff, format, mypy (524) clean | PG 15.15 local (re-created after the reboot), PGTZ=UTC: record-event DB modules 227 passed; capture/pipeline/review/comment DB modules 200 passed; full `-m recovery` 53 passed; migration_empty_to_head 10; full migration_edge 1,033 passed | no N fired (N13, N24-N35); T-21..T-25 no 40P01/lock_timeout (worker 3/3, Orchestrator 1/1) |
-| CP-RE-08b | merge `8940e60b` (MR-17a) + scoped N3 | merge `953695a59a93ae8fafb511cb70b0e36299d0a98b`; CP-RE-08b = this commit | this commit | 018-024 re-pinned vs #298; 086-108 unchanged | green: 25,837 passed / 74 skipped / 0 failed (unit+schema 15,386; architecture 5,919 + 71 skipped; rest 4,532 + 3 skipped); ruff, format, mypy (524) clean | PG 15.15 local, PGTZ=UTC: full `tests/database` current-head selector 1,820 passed; record-event modules + archive module 243; Task/capture modules 49 + 21; full `-m recovery` 53; migration_empty_to_head 10; full migration_edge 1,033; `alembic heads` single `1d9b248e7f83`, down `7d9a450dfd07` | N10/N3 resolved by the MR-17a merge; no N fired in the re-plan (RE-AC-018..024 hold as written) |
+| CP-RE-08b | merge `8940e60b` (MR-17a) + scoped N3 | `3012ad3d509d4feaead0d6e8cf5de157405c1ba8` (after merge `953695a5`) | `1acb7644917a775f46c98185cb5eef7eb5da0d8b` | 018-024 re-pinned vs #298; 086-108 unchanged | green: 25,837 passed / 74 skipped / 0 failed (unit+schema 15,386; architecture 5,919 + 71 skipped; rest 4,532 + 3 skipped); ruff, format, mypy (524) clean | PG 15.15 local, PGTZ=UTC: full `tests/database` current-head selector 1,820 passed; record-event modules + archive module 243; Task/capture modules 49 + 21; full `-m recovery` 53; migration_empty_to_head 10; full migration_edge 1,033; `alembic heads` single `1d9b248e7f83`, down `7d9a450dfd07` | N10/N3 resolved by the MR-17a merge; no N fired in the re-plan (RE-AC-018..024 hold as written) |
+| CP-RE-07 | WP-RE-07 (terminal) | this commit (see PR #297) | this commit | 001-108 (085 = review, pending) | green: 25,837 passed / 74 skipped / 0 failed (unit+schema 15,386; architecture 5,919 + 71 skipped; rest 4,532 + 3 skipped); ruff, format, mypy (524) clean | PG 15.15 local, PGTZ=UTC: full database-current-head lane 2,263 passed + 2 env failures (`tests/contract/test_health_probe.py` asserts PG 17) before the 2 new RE-AC-090 tests, then `test_record_events_list.py` 13 passed; full `-m recovery` 53 (no 40P01/lock_timeout); migration_empty_to_head 10; full migration_edge 1,033; `-m e2e` 31; web: npm test 3,563 passed, lint 0 errors (132 warnings), typecheck and build OK | no N fired |
 
 **CP-RE-01 out-of-matrix mechanical edits (as reported to the Manager):**
 - C5/C6 fan-out: 34 `HEAD_PIN_FILES` plus the control file `tests/schema/test_constraint_authoring_capability_migration.py`, 24 revision-count pins, and `tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py`.
@@ -302,6 +325,21 @@ Re-derived in the worktree (PYTHONPATH=src):
 - **Counts at CP-RE-08b** (re-derived; guards green): FAST 25,911 collected / 25,837 passed / 74 skipped; architecture 5,990; database tier 3,150 (`3150/29073`); modules 361/645; mypy 524.
 - **Ratifications recorded:** MR-14, MR-15, MR-16 and MR-17a (below).
 
+### WP-RE-07 (CP-RE-07, terminal)
+
+- R3: see the R3 record above (merge `88f77c30`; no conflicts; single head `1d9b248e7f83`).
+- **Evidence map:** `record-event-changefeed-manager/final/RE-AC-EVIDENCE-MAP.md`, 108 rows built by a read-only opus worker. `check_map.py` PASS: 108 rows in order, criterion text verbatim, every one of the listed node ids collects at HEAD.
+  - Substitutions for test names that no longer exist (no weakening): RE-AC-005/006 trigger tests, RE-AC-083, RE-AC-082, and the line references in 073/074/076/081.
+  - Task archive pins were added to rows 019/021/022/024.
+  - Departures are carried in the row notes: MR-02, MR-07/MR-11/MR-14, OD-W8-11 ("22 rows"), MR-15.
+  - Correction to the CP-RE-08 note: M-19b's target `test_each_mapped_read_admits_exactly_its_families` does exist, in `tests/security/test_record_events_grant_narrowing.py`. Row 068 uses it.
+- **Gap closed:** the RE-AC-090 causation-probe arm had no direct test. A second opus worker added `tests/database/test_record_events_list.py::test_remote_causation_never_names_a_capture_event_stored_restricted` and `::test_remote_causation_never_names_an_event_of_a_currently_restricted_capture`.
+  - Single-guard prove-reds: in `visible_event_ids`, forcing `include_restricted_memory=True` turns both tests red; dropping the current-version EXISTS turns test 2 red while test 1 stays green.
+  - Log: `final/re-ac-090-prove-red.md`. Production code is unchanged.
+- Partial evidence recorded in the map: RE-AC-108's "only comment lines change" rests on the diff, not a test. RE-AC-102's "full history" is shown by the grant-change DB test.
+- Count cells re-derived: database tier 3,152 (`3152/29075`), FAST 25,911 (`25911/29075`), relabelled "WP-RE-07 final (R3)". Modules are unchanged at 361/645.
+- RE-AC-085 (independent exact-head review) is pending. The reviewer is commissioned at the CP-RE-07 head.
+
 ## Manager rulings
 
 - **MR-01 (2026-09-29):** the `TABLES_SHA256` re-pin in `tests/architecture/test_capture_project_binding.py` is MECHANICAL and ACCEPTED, because the tables.py diff against the base only adds lines and the captures Table is unchanged. Each later tables.py edit re-pins it under the same rule, provided the captures Table stays unchanged. CP-RE-01 was accepted by the Manager, and draft PR #297 is open.
@@ -373,6 +411,10 @@ Re-derived in the worktree (PYTHONPATH=src):
 - Also accepted as recorded: the MR-12 "no claim document" finding, OD-W8-12 not implemented, and the M-19b/M-09/M-22 adaptations.
 - **MR-17 (N10 + N3):** rebase onto `8940e60b` authorized, with a scoped N3 re-plan (Task emitters (a)-(e) vs #298, each with a single-guard prove-red; STOP if any RE-AC-018..024 cannot be met as written). The rebase was denied by the permission system and not performed.
 - **MR-17a (operator ruling):** Option B. Merge `origin/main` into the branch; no history rewrite and no force-push. It amends authorization §6 R3's "rebase" wording for this integration.
+
+- **CP-RE-08b ACCEPTED (2026-09-30).** The CI timeout and `browsers` flake classifications are accepted, and so are the #298 Task semantics: a repeat archive is a no-op with no event.
+- **MR-18:** do NOT change the CI timeout (a workflow change outside scope). Handle timeouts by same-head re-run only and report the attempt counts.
+- **GO for WP-RE-07** (terminal): R3 by merge, full validation, the 108-row evidence map, CP-RE-07, CI, and one fresh independent reviewer. No ready-for-review flip and no merge.
 
 ## Review outcome and final state
 

@@ -19,6 +19,12 @@ rows are exactly what an emitter commits.
 * **RE-AC-064** -- an empty feed still returns a high-watermark cursor.
 * Effective families, the local restricted-memory rule, and remote causation
   nulling through the reader's existence probe (OD-12).
+* **RE-AC-090** (causation-probe arm) -- a remote caller holding the capture
+  read never learns of a withheld capture event through `causation_event_id`:
+  the probe refuses a cause stored `restricted_local`, and a cause stored
+  `private_local` whose capture's current version is `restricted_local`; a
+  local caller keeps both. The restricted capture rows are fixture-written, as
+  no production capture writer can produce them.
 
 Every identity here is synthetic.
 """
@@ -30,7 +36,7 @@ from datetime import UTC, datetime
 from typing import Final
 
 import pytest
-from sqlalchemy import Engine
+from sqlalchemy import Engine, text
 
 from my_pa.application.errors import ConflictError, InvalidRequestError
 from my_pa.application.record_events import (
@@ -311,3 +317,128 @@ def test_remote_causation_is_kept_only_when_the_cause_is_visible(engine: Engine)
     second = listing(engine, capability_grants=both, page_size=1, cursor=first.next_cursor)
     assert ids(second) == [effect]
     assert second.events[0].causation_event_id == cause
+
+
+# ---- RE-AC-090: the causation probe withholds restricted captures -------------
+
+CAPTURE_AND_TASKS: Final = grants(Capability.CAPTURE_READ, Capability.TASKS_READ)
+
+
+def _capture_rows(engine: Engine, principal_id: str, *classifications: Classification) -> str:
+    """Fixture-only writer: one capture whose versions carry `classifications` in order."""
+    capture_id = issue_identifier(IdKind.CAPTURE)
+    with engine.begin() as connection:
+        connection.execute(
+            text("INSERT INTO knowledge.captures (capture_id, owner_principal_id) VALUES (:c, :p)"),
+            {"c": capture_id, "p": principal_id},
+        )
+        previous: str | None = None
+        for number, classification in enumerate(classifications, start=1):
+            version_id = issue_identifier(IdKind.CAPTURE_VERSION)
+            connection.execute(
+                text(
+                    "INSERT INTO knowledge.capture_versions (version_id, capture_id, "
+                    "version_number, supersedes_version_id, content, content_sha256, "
+                    "owner_principal_id, classification, processing_policy, idempotency_key, "
+                    "correlation_id, audit_id, server_received_at, accepted_at, recorded_at) "
+                    "VALUES (:v, :c, :n, :s, 'Synthetic re-ac-090 capture text', :d, :p, :cl, "
+                    "'local_only', :k, :corr, :a, now(), now(), now())"
+                ),
+                {
+                    "v": version_id,
+                    "c": capture_id,
+                    "n": number,
+                    "s": previous,
+                    "d": "0" * 64,
+                    "p": principal_id,
+                    "cl": classification.value,
+                    "k": f"re-ac-090-{capture_id}-{number}",
+                    "corr": issue_identifier(IdKind.CORRELATION),
+                    "a": issue_identifier(IdKind.AUDIT),
+                },
+            )
+            previous = version_id
+    return capture_id
+
+
+def _assert_probe_withholds(
+    engine: Engine, principal: str, *, visible_cause: str, withheld_cause: str
+) -> None:
+    """Both causes sit off the remote page, so only the reader's probe decides them.
+
+    The probe-only page comes first: it resumes after `kept`, so the withheld
+    cause's slot lies outside its window and only the probe decides `nulled`'s
+    causation. The walk then confirms the server issues that same cursor.
+    """
+    kept = stage(engine, principal, RecordEventFamily.TASK, causation_event_id=visible_cause)
+    nulled = stage(engine, principal, RecordEventFamily.TASK, causation_event_id=withheld_cause)
+    local = listing(engine, principal)
+    assert ids(local) == [visible_cause, withheld_cause, kept, nulled]
+    assert local.events[2].causation_event_id == visible_cause
+    assert local.events[3].causation_event_id == withheld_cause
+    first = listing(engine, principal, capability_grants=CAPTURE_AND_TASKS, page_size=1)
+    assert RecordEventFamily.CAPTURE in first.visible_families
+    assert RecordEventFamily.TASK in first.visible_families
+    assert ids(first) == [visible_cause]
+    assert first.next_cursor is not None
+    read = read_cursor(first.next_cursor)
+    assert read is not None
+    after_kept = encode_cursor(read[0], kept)
+    probed = listing(
+        engine, principal, capability_grants=CAPTURE_AND_TASKS, page_size=1, cursor=after_kept
+    )
+    assert ids(probed) == [nulled]
+    assert probed.events[0].causation_event_id is None
+    second = listing(
+        engine,
+        principal,
+        capability_grants=CAPTURE_AND_TASKS,
+        page_size=1,
+        cursor=first.next_cursor,
+    )
+    assert ids(second) == [kept]
+    assert second.events[0].causation_event_id == visible_cause
+    assert second.next_cursor == after_kept
+    third = listing(
+        engine,
+        principal,
+        capability_grants=CAPTURE_AND_TASKS,
+        page_size=1,
+        cursor=second.next_cursor,
+    )
+    assert ids(third) == [nulled]
+    assert third.events[0].causation_event_id is None
+    assert third.next_cursor is None
+
+
+def test_remote_causation_never_names_a_capture_event_stored_restricted(engine: Engine) -> None:
+    principal = issue_identifier(IdKind.PRINCIPAL)
+    plain = _capture_rows(engine, principal, Classification.PRIVATE_LOCAL)
+    restricted = _capture_rows(engine, principal, Classification.PRIVATE_LOCAL)
+    visible_cause = stage(engine, principal, RecordEventFamily.CAPTURE, record_id=plain)
+    withheld_cause = stage(
+        engine,
+        principal,
+        RecordEventFamily.CAPTURE,
+        classification=Classification.RESTRICTED_LOCAL,
+        record_id=restricted,
+    )
+    _assert_probe_withholds(
+        engine, principal, visible_cause=visible_cause, withheld_cause=withheld_cause
+    )
+
+
+def test_remote_causation_never_names_an_event_of_a_currently_restricted_capture(
+    engine: Engine,
+) -> None:
+    principal = issue_identifier(IdKind.PRINCIPAL)
+    plain = _capture_rows(engine, principal, Classification.PRIVATE_LOCAL)
+    raised = _capture_rows(
+        engine, principal, Classification.PRIVATE_LOCAL, Classification.RESTRICTED_LOCAL
+    )
+    visible_cause = stage(engine, principal, RecordEventFamily.CAPTURE, record_id=plain)
+    # Stored `private_local`: only the capture's current version withholds it.
+    withheld_cause = stage(engine, principal, RecordEventFamily.CAPTURE, record_id=raised)
+    _assert_probe_withholds(
+        engine, principal, visible_cause=visible_cause, withheld_cause=withheld_cause
+    )

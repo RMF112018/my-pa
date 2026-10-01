@@ -6,7 +6,7 @@
 - Request: `MYPA-CRL-WP03-CAPTURE-LIFECYCLE-RUNTIME-IMPLEMENTATION-20261001-001`, SHA-256 `929141a4d070768302149ad9315c9f66a5b13d263b6f65f949958477cadaeaea`, Drive file `1EMNqHHxte8xlolP626-KaYq21l6SckUA`
 - Authorization: issued 2026-10-01 by the operator in session 257acc32 (campaign brief plus session amendments A1–A5)
 - Approved plan: `CRL-WP03-REBOUND-PLAN.md` (rebinds `docs/plans/capture-lifecycle-implementation-plan.md` to `1b9e8aab`), SHA-256 `7ef282b52203debc5f9468e6ed977c298c35b39d0e59174e7f41372da5b513b5`, Drive file `1fcSNVKUXpPTh3UgoRjOQgZnCXZGEiPkM` (readback MATCH; manifest `1JkUEK9XNwX5QAJ569B5E9OndyYs-T7pv`, receipt `1qjowBfKYQr24iDJ8eMobBMuUx0LDOobs`; index registration pending)
-- Manager rulings: MR-C01..C19 (below)
+- Manager rulings: MR-C01..C19; operator ruling MR-C20 (below)
 - Repository: `RMF112018/my-pa`
 - Branch: `bf/crl-wp03-capture-lifecycle-20261001`
 - Worktree: `/Users/bobbyfetting/my-pa-wt/crl-wp03-capture-lifecycle`
@@ -30,7 +30,7 @@ Manager → one Orchestrator → workers; at most one Orchestrator and one worke
 
 The plan is APPROVED as written. Rulings are numbered by the plan's decision IDs (MR-Cnn = D-nn); the plan has no D-15, so MR-C15 records the consumer-contract scope ruling.
 
-- **MR-C01 (D-1): HELD for the operator.** Re-listing the audit capability vocabulary in the new revision trips `tests/architecture/test_record_events_are_never_rewritten.py:157-158` (only one migration may contain `record_event`). Narrowing that guard edits an exact-set security guard, so it is operator-reserved under AGENTS §8.2 and A5. CP-CRL-07 does not start until the ruling arrives.
+- **MR-C01 (D-1): HELD for the operator.** Re-listing the audit capability vocabulary in the new revision trips `tests/architecture/test_record_events_are_never_rewritten.py:157-158` (only one migration may contain `record_event`). Narrowing that guard edits an exact-set security guard, so it is operator-reserved under AGENTS §8.2 and A5. CP-CRL-07 does not start until the ruling arrives. **Ruled by the operator: see MR-C20.**
 - **MR-C02 (D-2):** ACCEPTED. A lifecycle event's `record_version` is the Capture's current head version number; the consumer contract states that `record_version` is not a dedup key.
 - **MR-C03 (D-3):** ACCEPTED. Create events are unchanged; they do not name the lifecycle fields.
 - **MR-C04 (D-4):** ACCEPTED. `lifecycle_state`, `lifecycle_revision` and `archived_at` on read and list; bounded opt-in history via `include_lifecycle_history` on `capture.read`; no third capability.
@@ -49,10 +49,12 @@ The plan is APPROVED as written. Rulings are numbered by the plan's decision IDs
 - **MR-C17 (D-17):** ACCEPTED, with a condition. New derivation from an archived Capture returns `denied/capture_withdrawn`, which must never reveal a foreign root: a foreign or absent root is still `not_found`.
 - **MR-C18 (D-18):** ACCEPTED. A `context.prepare` race drops archived items and discloses the drop.
 - **MR-C19 (D-19):** ACCEPTED. PR #287's contended count cells are re-derived to current-main truth and the need for its remeasurement is noted.
-- **Proceed:** Phase I CP-CRL-01..06 serially on ONE opus implementer, after re-fetching main. Draft PR after CP-CRL-01 is green, titled `feat(capture): archive/restore lifecycle runtime (CRL-WP-03)`. Report each checkpoint. The plan's (c) ledger, (d) census and "no public reader" conclusions are re-verified against code, with file:line, at CP-CRL-05 and CP-CRL-06. STOP before CP-CRL-07 until MR-C01 is ruled.
+- **Proceed:** Phase I CP-CRL-01..06 serially on ONE opus implementer, after re-fetching main. Draft PR after CP-CRL-01 is green, titled `feat(capture): archive/restore lifecycle runtime (CRL-WP-03)`. Report each checkpoint. The plan's (c) ledger, (d) census and "no public reader" conclusions are re-verified against code, with file:line, at CP-CRL-05 and CP-CRL-06. STOP before CP-CRL-07 until MR-C01 is ruled (now ruled by MR-C20; continue CP-CRL-07, 08 and Phase T without waiting unless a stop condition fires).
+- **MR-C20 (operator ruling on D-1, 2026-10-01): narrow the guard**, applied at CP-CRL-07 in its own commit citing this ruling. In `tests/architecture/test_record_events_are_never_rewritten.py:157` the bare `"record_event" in text` substring becomes a precise match on references to the two feed TABLES only (`record_events`, `record_event_sequences`), so that a capability token such as `'record_events.list'` does not match, while `op.execute` SQL, SQLAlchemy `Table`/`table()` references and `{SCHEMA}.record_events` are still caught. Every other assertion in that test stays byte-identical. Control tests in the same file: (i) synthetic migration text referencing the feed table in raw SQL and as a table object IS detected; (ii) text containing only the `'record_events.list'` literal is NOT detected. Single-guard prove-red, logged: with the narrowing reverted the new revision trips the guard; re-applied, the guard passes and control (i) still detects. A classifier denial of the edit or its test run is a STOP reported to the Manager.
 
 ## Checkpoints
 
 | CP | Head | Tree | Evidence |
 |---|---|---|---|
 | Phase P | `1b9e8aab` | `93216e2e` | Plan approved; main re-fetched 2026-10-01, unmoved |
+| CP-CRL-01 domain | `2ba4af45` | `a61dedcc` | FAST 25,969 passed / 74 skipped / 0 failed (26,043 collected); ruff, format, mypy (525 files) clean; prove-red DIGEST-1/2, ALTERNATION-1/2 all red-then-green (manager `work/CP-CRL-01-prove-red.log`); count re-pins in the two pinned plan docs only |

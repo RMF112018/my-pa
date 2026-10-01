@@ -11,6 +11,7 @@ Owning index for versioned behavioral contracts in `RMF112018/my-pa`. Repository
 | [`relationship-intelligence-v0.3.md`](relationship-intelligence-v0.3.md) | **DEMOTED 2026-08-20 — governs nothing.** Provenance unestablished: the operator does not know its origin, it has no publisher receipt, and an agent wrote it in outside instruction. Retained as an artifact only. |
 | [`relationship-intelligence-v0.3-acceptance.md`](relationship-intelligence-v0.3-acceptance.md) | Disposition against the demoted v0.3. **Not a compliance ledger** — it scores a document that governs nothing. Section 3 of the implementation plan is the campaign's own ledger, against v0.2. |
 | [`quick-capture/`](quick-capture/00_README.md) | Mirror — proposed product specification, implementation not authorized |
+| [`capture-withdrawal-v0.1.md`](capture-withdrawal-v0.1.md) | **Accepted product contract — 2026-09-30, CRL-WP-02.** Reversible owner-scoped archive/restore and processing pause/resumption; future implementation requires separate CRL-WP-03 authority. Retention and deletion remain open. |
 
 The MCV abbreviation follows [`AGENTS.md`](/AGENTS.md): Minimum Viable Candidate. The specification's own prose predates that wording and is preserved as authored.
 

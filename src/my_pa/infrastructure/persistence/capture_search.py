@@ -119,7 +119,9 @@ from my_pa.contracts.ports import (
     CaptureSearchOutcome,
     CaptureSearchRequest,
 )
+from my_pa.domain.capture.lifecycle import CaptureLifecycleSelector
 from my_pa.infrastructure.persistence.capture import current_display_label
+from my_pa.infrastructure.persistence.capture_lifecycle import lifecycle_selected
 from my_pa.infrastructure.persistence.principal_scope import (
     PrincipalContext,
     partition_criterion,
@@ -223,7 +225,10 @@ def _acknowledged_version_ids() -> Select[Any]:
     return select(capture_receipts.c.version_id)
 
 
-def capture_text_in_scope(context: PrincipalContext) -> tuple[ColumnElement[bool], ...]:
+def capture_text_in_scope(
+    context: PrincipalContext,
+    lifecycle: CaptureLifecycleSelector = CaptureLifecycleSelector.ACTIVE,
+) -> tuple[ColumnElement[bool], ...]:
     """Which rows of `capture_versions` hold text a capture search may return.
 
     One list, used by the page statement and by the totals beside it. When
@@ -261,12 +266,19 @@ def capture_text_in_scope(context: PrincipalContext) -> tuple[ColumnElement[bool
     a condition nothing can exercise, which the extraction plane's own predicate
     docstring rules out. The policy is read where it decides something, which is
     `P-01`.
+
+    **In the selected lifecycle** (CRL-WP-03, CW-012). `lifecycle` defaults to
+    active roots; `archived` and `all` are explicit. Being one of these
+    conditions, it narrows the page and both totals alike, before ranking and
+    limits, so an excluded root cannot leak through a count.
     """
-    return (
+    conditions = (
         partition_criterion(capture_versions, context),
         capture_versions.c.version_id.not_in(_superseded_version_ids()),
         capture_versions.c.version_id.in_(_acknowledged_version_ids()),
     )
+    selected = lifecycle_selected(capture_versions.c.capture_id, lifecycle, context=context)
+    return conditions if selected is None else (*conditions, selected)
 
 
 @dataclass(frozen=True, slots=True)
@@ -534,7 +546,7 @@ def match_statement(
             .label("project_id"),
         )
         .where(
-            *capture_text_in_scope(context),
+            *capture_text_in_scope(context, request.lifecycle),
             document_vector(plane).bool_op("@@")(_tsquery(request)),
             *_exact_confirmation(request, plane),
         )
@@ -544,7 +556,10 @@ def match_statement(
 
 
 def totals_statement(
-    *, context: PrincipalContext, plane: SearchPlane = CAPTURE_VERSIONS
+    *,
+    context: PrincipalContext,
+    plane: SearchPlane = CAPTURE_VERSIONS,
+    lifecycle: CaptureLifecycleSelector = CaptureLifecycleSelector.ACTIVE,
 ) -> Select[Any]:
     """How many of the Principal's versions the scope holds, and how many it stores.
 
@@ -577,12 +592,17 @@ def totals_statement(
     ANDs it, so anything less would widen the scope this count shares with the
     page.
     """
-    scoped = func.count(case((and_(*capture_text_in_scope(context)), 1)))
-    return (
+    scoped = func.count(case((and_(*capture_text_in_scope(context, lifecycle)), 1)))
+    statement = (
         select(scoped.label("searchable"), func.count().label("stored"))
         .select_from(plane.table)
         .where(partition_criterion(plane.table, context))
     )
+    # CRL-WP-03: `stored` counts only versions of roots in the selected
+    # lifecycle, so an archived root is absent from an active-only denominator
+    # rather than surfacing as "superseded" versions the search excluded.
+    selected = lifecycle_selected(plane.table.c.capture_id, lifecycle, context=context)
+    return statement if selected is None else statement.where(selected)
 
 
 def _exactly_one(result: CursorResult[Any]) -> Row[Any]:
@@ -686,7 +706,9 @@ def search_captures(
     """
     rows = list(_execute(connection, match_statement(request, context=context), _every_row))
     truncated = len(rows) > request.limit
-    totals = _execute(connection, totals_statement(context=context), _exactly_one)
+    totals = _execute(
+        connection, totals_statement(context=context, lifecycle=request.lifecycle), _exactly_one
+    )
     return CaptureSearchOutcome(
         matches=tuple(
             CaptureSearchMatch(

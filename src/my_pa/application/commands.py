@@ -52,6 +52,7 @@ from my_pa.application.record_events import (
 )
 from my_pa.domain.capture.display_label import normalize_display_label
 from my_pa.domain.capture.errors import CaptureBoundsError, CaptureError
+from my_pa.domain.capture.lifecycle import CaptureLifecycleSelector
 from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS, ProposalState
 from my_pa.domain.capture.review import (
     REVIEW_REASON_LIMIT,
@@ -512,6 +513,22 @@ def _positive(value: int | None, detail: SafeDetail) -> int | None:
     if value < 1:
         raise InvalidRequestError(detail)
     return value
+
+
+def _lifecycle_selector(value: object) -> CaptureLifecycleSelector:
+    """A Capture lifecycle selector from the closed vocabulary, or a refusal.
+
+    A transport hands the value over as the bare string; anything outside
+    `active`/`archived`/`all` is refused naming the field, never echoing it.
+    """
+    if isinstance(value, CaptureLifecycleSelector):
+        return value
+    if isinstance(value, str):
+        try:
+            return CaptureLifecycleSelector(value)
+        except ValueError:
+            pass
+    raise InvalidRequestError(SafeDetail.LIFECYCLE)
 
 
 def _idempotency_key(value: object) -> str:
@@ -1291,11 +1308,17 @@ class ReadCapture:
 
     capture_id: str
     version_id: str | None = None
+    #: CRL-WP-03 (D-4, MR-C04): opt into the root's lifecycle history, bounded
+    #: and disclosed as truncated past the bound. Off by default; the current
+    #: lifecycle state, revision and archive time are always on the answer.
+    include_lifecycle_history: bool = False
 
     def __post_init__(self) -> None:
         _identifier(self.capture_id, IdKind.CAPTURE, SafeDetail.CAPTURE_ID)
         if self.version_id is not None:
             _identifier(self.version_id, IdKind.CAPTURE_VERSION, SafeDetail.VERSION_ID)
+        if not isinstance(self.include_lifecycle_history, bool):
+            raise InvalidRequestError(SafeDetail.LIFECYCLE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1310,9 +1333,12 @@ class ListCaptures:
     capability: ClassVar[Capability] = Capability.CAPTURE_LIST
 
     page_size: int | None = None
+    #: CRL-WP-03 (CW-012): `active` (the default), `archived` or `all`.
+    lifecycle: CaptureLifecycleSelector = CaptureLifecycleSelector.ACTIVE
 
     def __post_init__(self) -> None:
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        object.__setattr__(self, "lifecycle", _lifecycle_selector(self.lifecycle))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1343,11 +1369,14 @@ class SearchCaptures:
 
     query: str = field(repr=False)
     page_size: int | None = None
+    #: CRL-WP-03 (CW-012): `active` (the default), `archived` or `all`.
+    lifecycle: CaptureLifecycleSelector = CaptureLifecycleSelector.ACTIVE
 
     def __post_init__(self) -> None:
         if not isinstance(self.query, str):
             raise InvalidRequestError(SafeDetail.QUERY)
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        object.__setattr__(self, "lifecycle", _lifecycle_selector(self.lifecycle))
 
 
 #: The dispositions section 13 states a reason for, and the two that cannot be

@@ -45,7 +45,7 @@ back, which is section 5.6's fail-closed requirement holding by structure.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import AbstractContextManager
 from datetime import datetime
 from types import TracebackType
@@ -61,6 +61,8 @@ from my_pa.contracts.ports import (
     CanvasWorkspaceRepository,
     CaptureAdmission,
     CaptureAdmissionRequest,
+    CaptureLifecycleJobResumption,
+    CaptureLifecycleRepository,
     CaptureRepository,
     CaptureSearchOutcome,
     CaptureSearchRequest,
@@ -101,6 +103,14 @@ from my_pa.contracts.ports import (
     WriteRequestRepository,
 )
 from my_pa.contracts.v1.status import SourceStatusState
+from my_pa.domain.capture.lifecycle import (
+    CaptureLifecycleEvent,
+    CaptureLifecycleProjection,
+    CaptureLifecycleReceipt,
+    CaptureLifecycleSelector,
+    CaptureProcessingEligibility,
+    CaptureProcessingSubject,
+)
 from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.reveal import Reveal
 from my_pa.domain.capture.review import (
@@ -131,6 +141,17 @@ from my_pa.infrastructure.persistence.capture import (
     admit_capture,
     capture_page,
     capture_version,
+)
+from my_pa.infrastructure.persistence.capture_lifecycle import (
+    latest_lifecycle,
+    latest_lifecycles,
+    lifecycle_history,
+    lifecycle_receipt,
+    lock_capture_root,
+    record_lifecycle_event,
+    record_lifecycle_receipt,
+    resume_capture_jobs,
+    suspend_capture_jobs,
 )
 from my_pa.infrastructure.persistence.capture_search import search_captures
 from my_pa.infrastructure.persistence.commitment_management import SqlCommitmentManagementRepository
@@ -435,10 +456,19 @@ class _Captures(CaptureRepository):
             )
         )
 
-    def captures(self, *, limit: int, principal_id: str) -> tuple[CaptureSummary, ...]:
+    def captures(
+        self,
+        *,
+        limit: int,
+        principal_id: str,
+        lifecycle: CaptureLifecycleSelector = CaptureLifecycleSelector.ACTIVE,
+    ) -> tuple[CaptureSummary, ...]:
         return _read(
             lambda: capture_page(
-                self._connection, limit=limit, context=capture_context(principal_id)
+                self._connection,
+                limit=limit,
+                context=capture_context(principal_id),
+                lifecycle=lifecycle,
             )
         )
 
@@ -511,6 +541,99 @@ class _Captures(CaptureRepository):
         else:
             return False
         return _read(lambda: self._connection.execute(statement).first() is not None)
+
+
+class _CaptureLifecycle(CaptureLifecycleRepository):
+    """The Capture root lifecycle plane, over `persistence.capture_lifecycle`.
+
+    The same translation `_Captures` makes: the port's text `principal_id`
+    becomes one `PrincipalContext` through `capture_context`, and every store
+    failure leaves through `_read`. `record_receipt`'s key collision is raised
+    by the module as the domain's `CaptureLifecycleKeyConflictError` before
+    `_read` sees it, so it reaches the use case as a refusal, not a failure.
+    """
+
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+
+    def lock_root(self, capture_id: str, *, principal_id: str) -> bool:
+        return _read(
+            lambda: lock_capture_root(
+                self._connection, capture_id, context=capture_context(principal_id)
+            )
+        )
+
+    def latest(self, capture_id: str, *, principal_id: str) -> CaptureLifecycleProjection:
+        return _read(
+            lambda: latest_lifecycle(
+                self._connection, capture_id, context=capture_context(principal_id)
+            )
+        )
+
+    def latest_many(
+        self, capture_ids: tuple[str, ...], *, principal_id: str
+    ) -> Mapping[str, CaptureLifecycleProjection]:
+        return _read(
+            lambda: latest_lifecycles(
+                self._connection, capture_ids, context=capture_context(principal_id)
+            )
+        )
+
+    def history(
+        self, capture_id: str, *, principal_id: str, limit: int
+    ) -> tuple[CaptureLifecycleEvent, ...]:
+        return _read(
+            lambda: lifecycle_history(
+                self._connection, capture_id, context=capture_context(principal_id), limit=limit
+            )
+        )
+
+    def receipt(self, idempotency_key: str, *, principal_id: str) -> CaptureLifecycleReceipt | None:
+        return _read(
+            lambda: lifecycle_receipt(
+                self._connection, idempotency_key, context=capture_context(principal_id)
+            )
+        )
+
+    def record_event(self, event: CaptureLifecycleEvent, *, principal_id: str) -> None:
+        _read(
+            lambda: record_lifecycle_event(
+                self._connection, event, context=capture_context(principal_id)
+            )
+        )
+
+    def record_receipt(self, receipt: CaptureLifecycleReceipt, *, principal_id: str) -> None:
+        _read(
+            lambda: record_lifecycle_receipt(
+                self._connection, receipt, context=capture_context(principal_id)
+            )
+        )
+
+    def suspend_jobs(self, capture_id: str, *, principal_id: str) -> int:
+        return _read(
+            lambda: suspend_capture_jobs(
+                self._connection, capture_id, context=capture_context(principal_id)
+            )
+        )
+
+    def resume_jobs(
+        self,
+        capture_id: str,
+        *,
+        principal_id: str,
+        eligibility: Callable[[CaptureProcessingSubject], CaptureProcessingEligibility],
+    ) -> CaptureLifecycleJobResumption:
+        resumed = _read(
+            lambda: resume_capture_jobs(
+                self._connection,
+                capture_id,
+                context=capture_context(principal_id),
+                eligibility=eligibility,
+            )
+        )
+        return CaptureLifecycleJobResumption(
+            resumed=resumed.resumed, still_paused=resumed.still_paused
+        )
 
 
 #: One case on the canonical Review surface, whichever plane opened it.
@@ -1178,6 +1301,10 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     @property
     def captures(self) -> CaptureRepository:
         return _Captures(self._open)
+
+    @property
+    def capture_lifecycle(self) -> CaptureLifecycleRepository:
+        return _CaptureLifecycle(self._open)
 
     @property
     def reviews(self) -> ReviewRepository:

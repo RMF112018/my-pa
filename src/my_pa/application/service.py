@@ -518,7 +518,12 @@ from my_pa.contracts.v1.canvas_workspace import (
     CanvasWorkspaceView,
 )
 from my_pa.contracts.v1.capabilities import EffectiveLimits, ReadinessReport, ReadinessState
-from my_pa.contracts.v1.capture import CaptureListEntry, CaptureReceiptView, CaptureVersionView
+from my_pa.contracts.v1.capture import (
+    CaptureLifecycleEventView,
+    CaptureListEntry,
+    CaptureReceiptView,
+    CaptureVersionView,
+)
 from my_pa.contracts.v1.commitments import (
     CommitmentHistoryEntryView,
     CommitmentListEntry,
@@ -547,6 +552,13 @@ from my_pa.domain.capture.errors import (
     CaptureConflictError,
     CaptureError,
     EmptyCaptureError,
+)
+from my_pa.domain.capture.lifecycle import (
+    MAX_LIFECYCLE_HISTORY,
+    CaptureLifecycleEvent,
+    CaptureLifecycleProjection,
+    CaptureLifecycleSelector,
+    CaptureWithdrawnError,
 )
 from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.reveal import EvidenceState
@@ -1299,14 +1311,48 @@ def _capture_content(text: str) -> CaptureContent:
     raise failure
 
 
-def _capture_version_view(version: CaptureVersion, *, is_current: bool) -> CaptureVersionView:
+def _capture_version_view(
+    version: CaptureVersion,
+    *,
+    is_current: bool,
+    lifecycle: CaptureLifecycleProjection | None = None,
+    history: tuple[CaptureLifecycleEvent, ...] | None = None,
+) -> CaptureVersionView:
     """One stored version as the contract publishes it.
 
     `is_current` is passed in rather than read off the version, because there is
     no column that says so: the current version is the greatest version number
     the capture holds, and the use case is what has read both.
+
+    `lifecycle` is the root's current lifecycle (CRL-WP-03), and `history` the
+    opt-in bounded event list (the most recent events, oldest first). Revisions
+    are contiguous from one, so the history is truncated exactly when its
+    oldest event is not revision one.
     """
+    lifecycle_fields: dict[str, object] = {}
+    if lifecycle is not None:
+        lifecycle_fields = {
+            "lifecycle_state": lifecycle.state,
+            "lifecycle_revision": lifecycle.revision,
+            "archived_at": lifecycle.archived_at,
+        }
+        if history is not None:
+            lifecycle_fields["lifecycle_history"] = tuple(
+                CaptureLifecycleEventView(
+                    event_id=event.event_id,
+                    lifecycle_revision=event.lifecycle_revision,
+                    operation=event.operation,
+                    resulting_state=event.resulting_state,
+                    transitioned_at=event.transitioned_at,
+                    reason_category=event.reason_category,
+                )
+                for event in history
+            )
+            lifecycle_fields["lifecycle_history_truncated"] = (
+                bool(history) and history[0].lifecycle_revision > 1
+            )
     return CaptureVersionView(
+        **lifecycle_fields,  # type: ignore[arg-type]
         capture_id=version.capture_id,
         version_id=version.version_id,
         version_number=version.version_number,
@@ -4723,9 +4769,31 @@ class ApplicationService:
             current = unit_of_work.captures.version(command.capture_id, principal_id=principal_id)
         if version is None or current is None:
             raise NotFoundError(SafeDetail.CAPTURE_ID)
-        view = _capture_version_view(version, is_current=version.version_id == current.version_id)
+        # CRL-WP-03 (D-4, CW-013): the root's *current* lifecycle, whichever
+        # version was named, and the bounded history only when asked for.
+        history: tuple[CaptureLifecycleEvent, ...] | None = None
+        with _translated():
+            lifecycle = unit_of_work.capture_lifecycle.latest(
+                command.capture_id, principal_id=principal_id
+            )
+            if command.include_lifecycle_history:
+                history = unit_of_work.capture_lifecycle.history(
+                    command.capture_id,
+                    principal_id=principal_id,
+                    limit=MAX_LIFECYCLE_HISTORY,
+                )
+        view = _capture_version_view(
+            version,
+            is_current=version.version_id == current.version_id,
+            lifecycle=lifecycle,
+            history=history,
+        )
+        payload = view.to_canonical_dict()
+        if history is None:
+            payload.pop("lifecycle_history", None)
+            payload.pop("lifecycle_history_truncated", None)
         return _Result(
-            payload=view.to_canonical_dict(),
+            payload=payload,
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CAPTURE_TRUST_BASIS),
         )
 
@@ -4740,12 +4808,18 @@ class ApplicationService:
         than a guess, exactly as `sources.list` does it.
         """
         page_size = self._page_size(command.page_size)
+        principal_id = authorization.principal.principal_id
         with _translated():
             found = unit_of_work.captures.captures(
-                limit=page_size + 1, principal_id=authorization.principal.principal_id
+                limit=page_size + 1, principal_id=principal_id, lifecycle=command.lifecycle
             )
         truncated = len(found) > page_size
         page = found[:page_size]
+        # CRL-WP-03 (D-4): the page's current lifecycle, in one statement.
+        with _translated():
+            states = unit_of_work.capture_lifecycle.latest_many(
+                tuple(summary.capture_id for summary in page), principal_id=principal_id
+            )
         return _Result(
             payload={
                 "captures": [
@@ -4759,6 +4833,9 @@ class ApplicationService:
                         latest_recorded_at=summary.latest_recorded_at,
                         display_label=summary.display_label,
                         project_id=summary.project_id,
+                        lifecycle_state=states[summary.capture_id].state,
+                        lifecycle_revision=states[summary.capture_id].revision,
+                        archived_at=states[summary.capture_id].archived_at,
                     ).to_canonical_dict()
                     for summary in page
                 ]
@@ -4814,7 +4891,9 @@ class ApplicationService:
         request: CaptureSearchRequest | None = None
         failure: ApplicationError | None = None
         try:
-            request = CaptureSearchRequest(query=SearchQuery(command.query), limit=page_size)
+            request = CaptureSearchRequest(
+                query=SearchQuery(command.query), limit=page_size, lifecycle=command.lifecycle
+            )
         except EmptySearchQueryError:
             # The query normalized to terms but yielded no lexemes — a different
             # answer from "the search found nothing", which section 9.7 forbids
@@ -4837,6 +4916,15 @@ class ApplicationService:
         if outcome is None:  # pragma: no cover - `_translated` raises or the call returns
             raise InternalError()
 
+        # CRL-WP-03 (P-3): a match's current lifecycle is published only when the
+        # caller opted beyond the active default, where it can differ per match.
+        states: Mapping[str, CaptureLifecycleProjection] = {}
+        if command.lifecycle is not CaptureLifecycleSelector.ACTIVE:
+            with _translated():
+                states = unit_of_work.capture_lifecycle.latest_many(
+                    tuple(match.capture_id for match in outcome.matches),
+                    principal_id=authorization.principal.principal_id,
+                )
         limitations: tuple[Limitation, ...] = (Limitation.CAPTURE_SEARCH_DOES_NOT_STEM,)
         if outcome.searchable_versions != outcome.stored_versions:
             limitations = (*limitations, Limitation.CAPTURE_SEARCH_EXCLUDES_SUPERSEDED)
@@ -4853,6 +4941,11 @@ class ApplicationService:
                         "recorded_at": format_rfc3339(match.recorded_at),
                         "display_label": match.display_label,
                         "project_id": match.project_id,
+                        **(
+                            {"lifecycle_state": states[match.capture_id].state.value}
+                            if states
+                            else {}
+                        ),
                     }
                     for match in outcome.matches
                 ],
@@ -11781,6 +11874,12 @@ class ApplicationService:
                 # request to whoever guessed the key. The raise is outside the
                 # handler for the usual reason.
                 conflict = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+            except CaptureWithdrawnError:
+                # CRL-WP-03 C-1 (MR-C17): a revise of the caller's own archived
+                # Capture. Ownership was decided first by the store, so a foreign
+                # or absent root is still `not_found`; this names only the
+                # caller's own root.
+                conflict = DeniedError(SafeDetail.CAPTURE_WITHDRAWN)
         if conflict is not None:
             raise conflict
         if admission is None:

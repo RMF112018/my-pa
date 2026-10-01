@@ -31,11 +31,21 @@ from typing import Final
 from pydantic import Field, model_validator
 
 from my_pa.contracts.v1.base import StrictModel, UtcDatetime
+from my_pa.domain.capture.lifecycle import (
+    CaptureLifecycleOperation,
+    CaptureLifecycleState,
+    CaptureReasonCategory,
+)
 from my_pa.domain.capture.version import DIGEST_PATTERN
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 
-__all__ = ["CaptureListEntry", "CaptureReceiptView", "CaptureVersionView"]
+__all__ = [
+    "CaptureLifecycleEventView",
+    "CaptureListEntry",
+    "CaptureReceiptView",
+    "CaptureVersionView",
+]
 
 #: A SHA-256 as it is published: 64 lowercase hexadecimal characters, the same
 #: shape `domain.capture.version` produces and the table constrains.
@@ -77,6 +87,28 @@ class CaptureReceiptView(StrictModel):
         return self
 
 
+class CaptureLifecycleEventView(StrictModel):
+    """One historical lifecycle transition, as the opt-in history publishes it.
+
+    A historical fact, never the current state: the root's current lifecycle is
+    the three fields on the version view itself (CW-013). No reason, digest,
+    key, correlation or audit reference -- the category is the only trace of
+    the reason the owner gave (CW-018).
+    """
+
+    event_id: str
+    lifecycle_revision: int = Field(ge=1)
+    operation: CaptureLifecycleOperation
+    resulting_state: CaptureLifecycleState
+    transitioned_at: UtcDatetime
+    reason_category: CaptureReasonCategory
+
+    @model_validator(mode="after")
+    def _check(self) -> CaptureLifecycleEventView:
+        validate_identifier(self.event_id, IdKind.CAPTURE_LIFECYCLE_EVENT)
+        return self
+
+
 class CaptureVersionView(StrictModel):
     """One stored version, its place in the chain, and its five timestamps.
 
@@ -104,9 +136,25 @@ class CaptureVersionView(StrictModel):
     occurred_at: UtcDatetime | None = None
     accepted_at: UtcDatetime
     recorded_at: UtcDatetime
+    #: CRL-WP-03 (D-4, CW-013): the root's *current* lifecycle, whichever
+    #: version was read. `archived_at` opens the current archived interval and
+    #: is null while active.
+    lifecycle_state: CaptureLifecycleState = CaptureLifecycleState.ACTIVE
+    lifecycle_revision: int = Field(default=0, ge=0)
+    archived_at: UtcDatetime | None = None
+    #: Present only when the read opted in (`include_lifecycle_history`): the
+    #: most recent events, oldest first, and whether older ones were left out.
+    lifecycle_history: tuple[CaptureLifecycleEventView, ...] | None = None
+    lifecycle_history_truncated: bool | None = None
 
     @model_validator(mode="after")
     def _check(self) -> CaptureVersionView:
+        if (self.lifecycle_state is CaptureLifecycleState.ARCHIVED) != (
+            self.archived_at is not None
+        ):
+            raise ValueError("only an archived capture carries an archive time")
+        if (self.lifecycle_history is None) != (self.lifecycle_history_truncated is None):
+            raise ValueError("a lifecycle history states whether it was truncated")
         validate_identifier(self.capture_id, IdKind.CAPTURE)
         validate_identifier(self.version_id, IdKind.CAPTURE_VERSION)
         validate_identifier(self.owner_principal_id, IdKind.PRINCIPAL)
@@ -138,9 +186,17 @@ class CaptureListEntry(StrictModel):
     latest_recorded_at: UtcDatetime
     display_label: str | None = Field(default=None, min_length=1, max_length=120)
     project_id: str | None = None
+    #: CRL-WP-03 (D-4): the root's current lifecycle.
+    lifecycle_state: CaptureLifecycleState = CaptureLifecycleState.ACTIVE
+    lifecycle_revision: int = Field(default=0, ge=0)
+    archived_at: UtcDatetime | None = None
 
     @model_validator(mode="after")
     def _check(self) -> CaptureListEntry:
+        if (self.lifecycle_state is CaptureLifecycleState.ARCHIVED) != (
+            self.archived_at is not None
+        ):
+            raise ValueError("only an archived capture carries an archive time")
         validate_identifier(self.capture_id, IdKind.CAPTURE)
         validate_identifier(self.owner_principal_id, IdKind.PRINCIPAL)
         validate_identifier(self.latest_version_id, IdKind.CAPTURE_VERSION)

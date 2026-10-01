@@ -27,12 +27,13 @@ which cannot emit DDL, the `capture._capture_roots` precedent.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import datetime
 from typing import Final, NamedTuple, cast
 
 from sqlalchemy import (
     BigInteger,
+    ColumnElement,
     Connection,
     DateTime,
     Integer,
@@ -44,13 +45,17 @@ from sqlalchemy import (
     select,
     table,
 )
+from sqlalchemy.exc import IntegrityError
 
 from my_pa.domain.capture.lifecycle import (
+    MAX_LIFECYCLE_HISTORY,
     CaptureLifecycleEvent,
+    CaptureLifecycleKeyConflictError,
     CaptureLifecycleOperation,
     CaptureLifecycleOutcome,
     CaptureLifecycleProjection,
     CaptureLifecycleReceipt,
+    CaptureLifecycleSelector,
     CaptureLifecycleState,
     CapturePauseCause,
     CaptureProcessingEligibility,
@@ -83,17 +88,17 @@ __all__ = [
     "MAX_LIFECYCLE_HISTORY",
     "JobResumption",
     "latest_lifecycle",
+    "latest_lifecycles",
     "lifecycle_history",
     "lifecycle_receipt",
+    "lifecycle_selected",
     "lock_capture_root",
     "record_lifecycle_event",
     "record_lifecycle_receipt",
     "resume_capture_jobs",
+    "share_capture_root",
     "suspend_capture_jobs",
 ]
-
-#: The most events one history read returns (D-4: bounded opt-in history).
-MAX_LIFECYCLE_HISTORY: Final = 50
 
 #: Runtime projection of `knowledge.capture_jobs` including the two
 #: database-only overlay columns. No MetaData, so it cannot emit DDL.
@@ -115,6 +120,11 @@ _JOBS: Final = cast(Table, _capture_jobs)
 
 #: The job states archive suspends. Terminal rows are never touched.
 _UNFINISHED: Final = (JobState.QUEUED.value, JobState.RUNNING.value)
+
+
+#: The receipts' per-Principal key constraint, by name: the one unique violation
+#: `record_lifecycle_receipt` turns into a typed refusal.
+_KEY_CONSTRAINT: Final = "a_capture_lifecycle_key_admits_one_request_per_principal"
 
 
 class JobResumption(NamedTuple):
@@ -157,6 +167,56 @@ def lock_capture_root(
         ).with_for_update(key_share=True)
     ).scalar_one_or_none()
     return held is not None
+
+
+def share_capture_root(
+    connection: Connection, capture_id: str, *, context: PrincipalContext | None
+) -> bool:
+    """Take the root `FOR SHARE`, or report that this caller has none (MR-C06).
+
+    The first root statement of every other admission on a Capture (revise, and
+    the later publication fences). `FOR SHARE` does not conflict with itself, so
+    two revises still race on the version index exactly as T-21 proves; it does
+    conflict with a lifecycle mutation's `FOR NO KEY UPDATE`, so a revise and an
+    archive serialize on the root in whichever order they arrive.
+    """
+    validate_identifier(capture_id, IdKind.CAPTURE)
+    held = connection.execute(
+        principal_scoped(
+            select(captures.c.capture_id).where(captures.c.capture_id == capture_id),
+            captures,
+            context,
+        ).with_for_update(read=True)
+    ).scalar_one_or_none()
+    return held is not None
+
+
+def lifecycle_selected(
+    capture_id_column: ColumnElement[str],
+    selector: CaptureLifecycleSelector,
+    *,
+    context: PrincipalContext | None,
+) -> ColumnElement[bool] | None:
+    """The condition a listing or search applies before totals and limits (CW-012).
+
+    `None` for `ALL`. Otherwise the root's latest lifecycle revision, read by a
+    correlated, partitioned subquery (0 when it has no event), decides by its
+    parity: alternation from active/0 makes odd revisions archived and even
+    ones active, so no stored state column is needed to filter.
+    """
+    selector = CaptureLifecycleSelector(selector)
+    if selector is CaptureLifecycleSelector.ALL:
+        return None
+    latest = (
+        select(func.coalesce(func.max(capture_lifecycle_events.c.lifecycle_revision), 0))
+        .where(
+            capture_lifecycle_events.c.capture_id == capture_id_column,
+            partition_criterion(capture_lifecycle_events, context),
+        )
+        .scalar_subquery()
+    )
+    parity = 1 if selector is CaptureLifecycleSelector.ARCHIVED else 0
+    return (latest % 2) == parity
 
 
 _EVENT_COLUMNS: Final = (
@@ -220,6 +280,48 @@ def latest_lifecycle(
     )
 
 
+def latest_lifecycles(
+    connection: Connection,
+    capture_ids: Iterable[str],
+    *,
+    context: PrincipalContext | None,
+) -> dict[str, CaptureLifecycleProjection]:
+    """The current lifecycle of each named root, in one statement (plan (d)).
+
+    One partitioned read for a whole page, so a listing or search attaches
+    lifecycle metadata without one query per row. A root with no event (or one
+    this caller cannot see) projects active/0.
+    """
+    wanted = sorted({validate_identifier(value, IdKind.CAPTURE) for value in capture_ids})
+    owner = _owner(context)
+    found: dict[str, CaptureLifecycleProjection] = {
+        capture_id: CaptureLifecycleProjection.initial(
+            owner_principal_id=owner, capture_id=capture_id
+        )
+        for capture_id in wanted
+    }
+    if not wanted:
+        return found
+    rows = connection.execute(
+        principal_scoped(
+            select(*_EVENT_COLUMNS).where(capture_lifecycle_events.c.capture_id.in_(wanted)),
+            capture_lifecycle_events,
+            context,
+        )
+        .order_by(
+            capture_lifecycle_events.c.capture_id,
+            capture_lifecycle_events.c.lifecycle_revision.desc(),
+        )
+        .distinct(capture_lifecycle_events.c.capture_id)
+    ).all()
+    for row in rows:
+        event = _to_event(row)
+        found[event.capture_id] = CaptureLifecycleProjection.from_latest(
+            owner_principal_id=owner, capture_id=event.capture_id, latest=event
+        )
+    return found
+
+
 def lifecycle_history(
     connection: Connection,
     capture_id: str,
@@ -278,8 +380,26 @@ def record_lifecycle_receipt(
     *,
     context: PrincipalContext | None,
 ) -> None:
-    """Insert one receipt. A reused key raises the unique violation to the caller."""
+    """Insert one receipt; a reused key raises `CaptureLifecycleKeyConflictError`.
+
+    The violation aborts the caller's transaction, which is the intended effect:
+    the use case lets the refusal propagate so nothing it staged commits.
+    """
     _require_own(receipt.owner_principal_id, context)
+    try:
+        _insert_receipt(connection, receipt, context=context)
+    except IntegrityError as error:
+        if getattr(getattr(error.orig, "diag", None), "constraint_name", None) == _KEY_CONSTRAINT:
+            raise CaptureLifecycleKeyConflictError() from None
+        raise
+
+
+def _insert_receipt(
+    connection: Connection,
+    receipt: CaptureLifecycleReceipt,
+    *,
+    context: PrincipalContext | None,
+) -> None:
     connection.execute(
         capture_lifecycle_receipts.insert().values(
             principal_bound_values(

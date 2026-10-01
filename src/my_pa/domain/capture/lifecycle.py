@@ -64,6 +64,7 @@ from my_pa.domain.common.time import ensure_utc
 __all__ = [
     "INITIAL_LIFECYCLE_REVISION",
     "INTENT_DIGEST_SCHEME",
+    "MAX_LIFECYCLE_HISTORY",
     "MAX_LIFECYCLE_REASON_CHARACTERS",
     "MAX_LIFECYCLE_REVISION",
     "CaptureLifecycleDecision",
@@ -71,18 +72,21 @@ __all__ = [
     "CaptureLifecycleEvent",
     "CaptureLifecycleHistoryError",
     "CaptureLifecycleIntent",
+    "CaptureLifecycleKeyConflictError",
     "CaptureLifecycleOperation",
     "CaptureLifecycleOutcome",
     "CaptureLifecycleProjection",
     "CaptureLifecycleReasonError",
     "CaptureLifecycleReceipt",
     "CaptureLifecycleRevisionError",
+    "CaptureLifecycleSelector",
     "CaptureLifecycleState",
     "CapturePauseCause",
     "CaptureProcessingEligibility",
     "CaptureProcessingEligibilityResolver",
     "CaptureProcessingSubject",
     "CaptureReasonCategory",
+    "CaptureWithdrawnError",
     "StaleCaptureLifecycleRevisionError",
     "decide_transition",
     "intent_digest",
@@ -105,6 +109,10 @@ MAX_LIFECYCLE_REVISION: Final = 2_147_483_647
 
 #: The trimmed reason holds 1..this many Unicode code points (CW-007).
 MAX_LIFECYCLE_REASON_CHARACTERS: Final = 500
+
+#: The most lifecycle events one opt-in history read returns (D-4, MR-C04).
+#: A longer history is disclosed as truncated rather than returned whole.
+MAX_LIFECYCLE_HISTORY: Final = 50
 
 #: The domain-separation tag inside the digest material. A later change to the
 #: material is a new scheme, never a silent reinterpretation of stored digests.
@@ -159,6 +167,19 @@ class CapturePauseCause(StrEnum):
     CURRENT_POLICY_INELIGIBLE = "current_policy_ineligible"
 
 
+class CaptureLifecycleSelector(StrEnum):
+    """Which roots a Capture listing or search considers (CW-012, MR-C04).
+
+    `ACTIVE` is the default everywhere; `ARCHIVED` and `ALL` are explicit opt-ins.
+    The selector is applied before totals, limits and ordering, so a root it
+    excludes cannot appear in a count or move a page boundary.
+    """
+
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+    ALL = "all"
+
+
 class CaptureProcessingEligibility(StrEnum):
     """A resolver's answer about then-current processing eligibility."""
 
@@ -195,6 +216,26 @@ class StaleCaptureLifecycleRevisionError(CaptureLifecycleError):
     already in the requested state: a fresh key must name the current revision
     for a no-op too. Carries neither revision, so a caller learns nothing about
     a root beyond the fact that its own precondition no longer holds.
+    """
+
+
+class CaptureLifecycleKeyConflictError(CaptureLifecycleError):
+    """The caller's idempotency key is already bound to another lifecycle request.
+
+    Raised by the store when the receipt insert meets the per-Principal key
+    constraint. Under the root lock a same-root reuse is answered by the replay
+    lookup first, so this can only be a different root and therefore a
+    different intent: `conflict/idempotency_key`. Carries nothing about the
+    other request.
+    """
+
+
+class CaptureWithdrawnError(CaptureLifecycleError):
+    """A new derivation named a Capture the caller owns that is archived (MR-C17).
+
+    `denied` naming `capture_withdrawn`. Raised only after ownership is
+    established: a foreign or absent root is still `not_found`, so this refusal
+    can only ever describe the caller's own root.
     """
 
 

@@ -74,6 +74,8 @@ from my_pa.contracts.ports import (
     CanvasWorkspaceRepository,
     CaptureAdmission,
     CaptureAdmissionRequest,
+    CaptureLifecycleJobResumption,
+    CaptureLifecycleRepository,
     CaptureRepository,
     CaptureSearchMatch,
     CaptureSearchOutcome,
@@ -171,6 +173,18 @@ from my_pa.contracts.v1.meetings import (
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.audit.events import AuditEvent
 from my_pa.domain.capture.errors import CaptureConflictError
+from my_pa.domain.capture.lifecycle import (
+    CaptureLifecycleEvent,
+    CaptureLifecycleKeyConflictError,
+    CaptureLifecycleProjection,
+    CaptureLifecycleReceipt,
+    CaptureLifecycleSelector,
+    CaptureLifecycleState,
+    CaptureProcessingEligibility,
+    CaptureProcessingSubject,
+    CaptureWithdrawnError,
+    project_history,
+)
 from my_pa.domain.capture.pipeline import ProcessingState
 from my_pa.domain.capture.proposal import ProposalState, ProposalType, RiskClass
 from my_pa.domain.capture.reveal import (
@@ -710,6 +724,19 @@ class World:
     capture_versions: list[CaptureVersion] = field(default_factory=list)
     capture_receipts: dict[str, CaptureReceipt] = field(default_factory=dict)
     capture_keys: dict[tuple[str, str], tuple[str, str]] = field(default_factory=dict)
+    #: CRL-WP-03: the fake's append-only lifecycle ledger and its receipts,
+    #: keyed by `(principal, idempotency key)` like the store's unique index.
+    capture_lifecycle_events: list[CaptureLifecycleEvent] = field(default_factory=list)
+    capture_lifecycle_receipts: dict[tuple[str, str], CaptureLifecycleReceipt] = field(
+        default_factory=dict
+    )
+    #: Uncommitted lifecycle writes. The fake store appends here, and
+    #: `FakeUnitOfWork` publishes them only when the block ends normally, the
+    #: same way `FakeRecordEventStager` publishes drafts.
+    capture_lifecycle_pending_events: list[CaptureLifecycleEvent] = field(default_factory=list)
+    capture_lifecycle_pending_receipts: dict[tuple[str, str], CaptureLifecycleReceipt] = field(
+        default_factory=dict
+    )
     #: Metadata-only synthetic evidence authority used by Work mutation tests.
     #: Values are partitioned exactly like the production metadata query.
     work_evidence_refs: set[tuple[str, str]] = field(default_factory=set)
@@ -1372,6 +1399,12 @@ class _Captures(CaptureRepository):
             head = self._head(capture_id, principal_id=principal_id)
             if head is None:
                 raise UnknownScopeError("the request names no stored capture")
+            # CRL-WP-03 C-1: the store's revise fence, after ownership.
+            if (
+                _fake_lifecycle(self._world, capture_id, principal_id).state
+                is CaptureLifecycleState.ARCHIVED
+            ):
+                raise CaptureWithdrawnError("an archived capture accepts no revision")
             project_id = self._world.captures[capture_id][2]
             number, supersedes = head.version_number + 1, head.version_id
             # WP-RE-08 (MR-04, mechanical): the same four facts the store's
@@ -1459,11 +1492,19 @@ class _Captures(CaptureRepository):
     def accepts_work_evidence_reference(self, reference: str, *, principal_id: str) -> bool:
         return (principal_id, reference) in self._world.work_evidence_refs
 
-    def captures(self, *, limit: int, principal_id: str) -> tuple[CaptureSummary, ...]:
+    def captures(
+        self,
+        *,
+        limit: int,
+        principal_id: str,
+        lifecycle: CaptureLifecycleSelector = CaptureLifecycleSelector.ACTIVE,
+    ) -> tuple[CaptureSummary, ...]:
         self._world.fail("capture_page")
         summaries: list[CaptureSummary] = []
         for capture_id, (owner, created_at, project_id) in self._world.captures.items():
             if owner != principal_id:
+                continue
+            if not _fake_selected(self._world, capture_id, principal_id, lifecycle):
                 continue
             head = self._head(capture_id, principal_id=principal_id)
             if head is None:
@@ -1515,6 +1556,7 @@ class _Captures(CaptureRepository):
             version
             for version in self._world.capture_versions
             if version.owner_principal_id == principal_id
+            and _fake_selected(self._world, version.capture_id, principal_id, request.lifecycle)
         ]
         superseded = {
             version.supersedes_version_id
@@ -9362,6 +9404,122 @@ class _Meetings:
         )
 
 
+def _fake_lifecycle(world: World, capture_id: str, principal_id: str) -> CaptureLifecycleProjection:
+    """The fake root's current lifecycle, projected from its own ledger.
+
+    Pending rows are visible inside the transaction that wrote them and absent
+    after a rollback, matching the SQL unit of work.
+    """
+    events = sorted(
+        (
+            event
+            for event in (
+                *world.capture_lifecycle_events,
+                *world.capture_lifecycle_pending_events,
+            )
+            if event.capture_id == capture_id and event.owner_principal_id == principal_id
+        ),
+        key=lambda event: event.lifecycle_revision,
+    )
+    return project_history(owner_principal_id=principal_id, capture_id=capture_id, events=events)
+
+
+def _fake_selected(
+    world: World, capture_id: str, principal_id: str, selector: CaptureLifecycleSelector
+) -> bool:
+    if selector is CaptureLifecycleSelector.ALL:
+        return True
+    state = _fake_lifecycle(world, capture_id, principal_id).state
+    return state.value == selector.value
+
+
+class _CaptureLifecycle(CaptureLifecycleRepository):
+    """The Capture root lifecycle plane over a `World` (CRL-WP-03).
+
+    Reproduces the rules, not the SQL: the owner partition (a foreign root is
+    an absent one), the append-only ledger, contiguity checked by projecting
+    the history on every read, and the per-Principal key. The fake holds no
+    job rows for captures, so suspension and resumption report nothing; the
+    job effects are proven on the `database` tier.
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def _owned(self, capture_id: str, principal_id: str) -> bool:
+        held = self._world.captures.get(capture_id)
+        return held is not None and held[0] == principal_id
+
+    def lock_root(self, capture_id: str, *, principal_id: str) -> bool:
+        self._world.fail("capture_lifecycle_lock")
+        return self._owned(capture_id, principal_id)
+
+    def latest(self, capture_id: str, *, principal_id: str) -> CaptureLifecycleProjection:
+        return _fake_lifecycle(self._world, capture_id, principal_id)
+
+    def latest_many(
+        self, capture_ids: tuple[str, ...], *, principal_id: str
+    ) -> Mapping[str, CaptureLifecycleProjection]:
+        return {
+            capture_id: _fake_lifecycle(self._world, capture_id, principal_id)
+            for capture_id in capture_ids
+        }
+
+    def history(
+        self, capture_id: str, *, principal_id: str, limit: int
+    ) -> tuple[CaptureLifecycleEvent, ...]:
+        events = sorted(
+            (
+                event
+                for event in (
+                    *self._world.capture_lifecycle_events,
+                    *self._world.capture_lifecycle_pending_events,
+                )
+                if event.capture_id == capture_id and event.owner_principal_id == principal_id
+            ),
+            key=lambda event: event.lifecycle_revision,
+        )
+        return tuple(events[-limit:])
+
+    def receipt(self, idempotency_key: str, *, principal_id: str) -> CaptureLifecycleReceipt | None:
+        key = (principal_id, idempotency_key)
+        pending = self._world.capture_lifecycle_pending_receipts.get(key)
+        if pending is not None:
+            return pending
+        return self._world.capture_lifecycle_receipts.get(key)
+
+    def record_event(self, event: CaptureLifecycleEvent, *, principal_id: str) -> None:
+        if event.owner_principal_id != principal_id:
+            raise CallerSuppliedPrincipalError("owner_principal_id")
+        current = _fake_lifecycle(self._world, event.capture_id, principal_id)
+        if event.lifecycle_revision != current.revision + 1:
+            raise ValueError("a lifecycle history is contiguous")
+        self._world.capture_lifecycle_pending_events.append(event)
+
+    def record_receipt(self, receipt: CaptureLifecycleReceipt, *, principal_id: str) -> None:
+        if receipt.owner_principal_id != principal_id:
+            raise CallerSuppliedPrincipalError("owner_principal_id")
+        key = (principal_id, receipt.idempotency_key)
+        if (
+            key in self._world.capture_lifecycle_receipts
+            or key in self._world.capture_lifecycle_pending_receipts
+        ):
+            raise CaptureLifecycleKeyConflictError()
+        self._world.capture_lifecycle_pending_receipts[key] = receipt
+
+    def suspend_jobs(self, capture_id: str, *, principal_id: str) -> int:
+        return 0
+
+    def resume_jobs(
+        self,
+        capture_id: str,
+        *,
+        principal_id: str,
+        eligibility: Callable[[CaptureProcessingSubject], CaptureProcessingEligibility],
+    ) -> CaptureLifecycleJobResumption:
+        return CaptureLifecycleJobResumption(resumed=0, still_paused=0)
+
+
 class FakeUnitOfWork(UnitOfWork):
     """One transaction over a `World`, counting how it ended."""
 
@@ -9384,9 +9542,17 @@ class FakeUnitOfWork(UnitOfWork):
         self._open = False
         self._record_events.settle(committed=exc is None)
         if exc is None:
+            self._world.capture_lifecycle_events.extend(
+                self._world.capture_lifecycle_pending_events
+            )
+            self._world.capture_lifecycle_receipts.update(
+                self._world.capture_lifecycle_pending_receipts
+            )
             self._world.commits += 1
         else:
             self._world.rollbacks += 1
+        self._world.capture_lifecycle_pending_events.clear()
+        self._world.capture_lifecycle_pending_receipts.clear()
 
     @property
     def record_events(self) -> RecordEventStager:
@@ -9419,6 +9585,10 @@ class FakeUnitOfWork(UnitOfWork):
     @property
     def captures(self) -> CaptureRepository:
         return _Captures(self._world)
+
+    @property
+    def capture_lifecycle(self) -> CaptureLifecycleRepository:
+        return _CaptureLifecycle(self._world)
 
     @property
     def reviews(self) -> ReviewRepository:

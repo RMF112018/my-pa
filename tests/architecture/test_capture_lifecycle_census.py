@@ -81,3 +81,28 @@ def test_class_3_paths_do_not_call_the_publication_fence() -> None:
     )
     assert "context_runs" in reenrichment.split("def ", 1)[0]
     assert "context_runs" not in reenrichment.split("def ", 1)[1]
+
+
+def test_span_evidence_has_no_public_read_model() -> None:
+    """P-8 and P-9: capture_span_id stays off public read contracts.
+
+    The entity-proposal receipt still names the span (P-7) and is not overlaid.
+    Memory proposal answers publish a count, not the span.
+    """
+    offenders = sorted(
+        str(path.relative_to(ROOT))
+        for path in (ROOT / "src/my_pa/contracts/v1").rglob("*.py")
+        if "capture_span_id" in path.read_text(encoding="utf-8")
+    )
+    assert offenders == []
+    service = (ROOT / "src/my_pa/application/service.py").read_text(encoding="utf-8")
+    proposal = service.split("def _entities_proposals_create(", 1)[1].split("\n    def ", 1)[0]
+    memory = service.split("def _relationship_memory_propose(", 1)[1].split("\n    def ", 1)[0]
+    assert "capture_span_id" in proposal
+    assert "capture_lifecycle_state" not in proposal
+    assert '"capture_span_id":' not in memory
+    repository = (ROOT / "src/my_pa/infrastructure/persistence/capture_lifecycle.py").read_text(
+        encoding="utf-8"
+    )
+    assert "def capture_lifecycle_states(" in repository
+    assert "Absent and foreign ids are omitted" in repository

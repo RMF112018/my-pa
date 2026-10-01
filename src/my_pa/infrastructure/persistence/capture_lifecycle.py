@@ -67,7 +67,12 @@ from my_pa.domain.capture.lifecycle import (
     pause_cause_for,
 )
 from my_pa.domain.common.classification import Classification
-from my_pa.domain.common.identifiers import IdKind, validate_identifier
+from my_pa.domain.common.identifiers import (
+    IdKind,
+    InvalidIdentifierError,
+    parse_identifier,
+    validate_identifier,
+)
 from my_pa.domain.identity.user_account import CallerSuppliedPrincipalError
 from my_pa.infrastructure.persistence.principal_scope import (
     MissingPrincipalContextError,
@@ -81,6 +86,7 @@ from my_pa.infrastructure.persistence.principal_scope import (
 from my_pa.infrastructure.persistence.tables import (
     SCHEMA,
     JobState,
+    capture_assertions,
     capture_lifecycle_events,
     capture_lifecycle_receipts,
     capture_spans,
@@ -91,6 +97,8 @@ from my_pa.infrastructure.persistence.tables import (
 __all__ = [
     "MAX_LIFECYCLE_HISTORY",
     "JobResumption",
+    "capture_lifecycle_states",
+    "evidence_lifecycle_states",
     "latest_lifecycle",
     "latest_lifecycles",
     "lifecycle_history",
@@ -518,6 +526,113 @@ def latest_lifecycles(
         found[event.capture_id] = CaptureLifecycleProjection.from_latest(
             owner_principal_id=owner, capture_id=event.capture_id, latest=event
         )
+    return found
+
+
+def capture_lifecycle_states(
+    connection: Connection,
+    capture_ids: Iterable[str],
+    *,
+    context: PrincipalContext | None,
+) -> dict[str, CaptureLifecycleState]:
+    """Owned roots only, one partitioned statement (plan (d)).
+
+    Absent and foreign ids are omitted. `latest_lifecycles` is the wrong
+    primitive here: it seeds active/0 for every requested id, including ones
+    this caller cannot see. An owned root with no event yet is active.
+    """
+    wanted = tuple(
+        dict.fromkeys(validate_identifier(value, IdKind.CAPTURE) for value in capture_ids)
+    )
+    if not wanted:
+        return {}
+    latest = principal_scoped(
+        select(
+            capture_lifecycle_events.c.capture_id.label("event_capture_id"),
+            capture_lifecycle_events.c.resulting_state,
+        )
+        .where(capture_lifecycle_events.c.capture_id.in_(wanted))
+        .order_by(
+            capture_lifecycle_events.c.capture_id,
+            capture_lifecycle_events.c.lifecycle_revision.desc(),
+        )
+        .distinct(capture_lifecycle_events.c.capture_id),
+        capture_lifecycle_events,
+        context,
+    ).subquery("latest_capture_lifecycle")
+    rows = connection.execute(
+        principal_scoped(
+            select(captures.c.capture_id, latest.c.resulting_state)
+            .select_from(
+                captures.outerjoin(
+                    latest, latest.c.event_capture_id == captures.c.capture_id
+                )
+            )
+            .where(captures.c.capture_id.in_(wanted)),
+            captures,
+            context,
+        )
+    ).all()
+    found: dict[str, CaptureLifecycleState] = {}
+    for row in rows:
+        raw = row.resulting_state
+        found[str(row.capture_id)] = (
+            CaptureLifecycleState.ACTIVE if raw is None else CaptureLifecycleState(str(raw))
+        )
+    return found
+
+
+def evidence_lifecycle_states(
+    connection: Connection,
+    references: Iterable[str],
+    *,
+    context: PrincipalContext | None,
+) -> dict[str, str]:
+    """`active` or `archived` for owned `cap_` refs and owned `asrt_` refs.
+
+    An assertion resolves through its version to the capture root. Any other
+    prefix, and any ref this caller does not own, is omitted.
+    """
+    capture_refs: list[str] = []
+    assertion_refs: list[str] = []
+    for reference in dict.fromkeys(references):
+        try:
+            kind, _suffix = parse_identifier(reference)
+        except InvalidIdentifierError:
+            continue
+        if kind is IdKind.CAPTURE:
+            capture_refs.append(reference)
+        elif kind is IdKind.ASSERTION:
+            assertion_refs.append(reference)
+    assertion_roots: dict[str, str] = {}
+    if assertion_refs:
+        rows = connection.execute(
+            principal_scoped(
+                select(capture_assertions.c.assertion_id, capture_versions.c.capture_id)
+                .select_from(
+                    capture_assertions.join(
+                        capture_versions,
+                        capture_versions.c.version_id == capture_assertions.c.version_id,
+                    )
+                )
+                .where(capture_assertions.c.assertion_id.in_(tuple(assertion_refs))),
+                capture_versions,
+                context,
+            )
+        ).all()
+        assertion_roots = {str(row.assertion_id): str(row.capture_id) for row in rows}
+    states = capture_lifecycle_states(
+        connection, (*capture_refs, *assertion_roots.values()), context=context
+    )
+    found: dict[str, str] = {}
+    for reference in capture_refs:
+        state = states.get(reference)
+        if state is not None:
+            found[reference] = state.value
+    for reference, capture_id in assertion_roots.items():
+        state = states.get(capture_id)
+        if state is not None:
+            found[reference] = state.value
     return found
 
 

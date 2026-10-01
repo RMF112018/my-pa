@@ -580,6 +580,7 @@ def _review_list() -> dict[str, Any]:
                 "capture_id": case.capture_id,
                 "version_id": case.version_id,
                 "proposal_type": case.proposal_type.value,
+                "capture_lifecycle_state": None,
             }
         ]
     }

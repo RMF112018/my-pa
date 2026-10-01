@@ -108,6 +108,7 @@ from my_pa.domain.capture.lifecycle import (
     CaptureLifecycleProjection,
     CaptureLifecycleReceipt,
     CaptureLifecycleSelector,
+    CaptureLifecycleState,
     CaptureProcessingEligibility,
     CaptureProcessingSubject,
 )
@@ -143,6 +144,8 @@ from my_pa.infrastructure.persistence.capture import (
     capture_version,
 )
 from my_pa.infrastructure.persistence.capture_lifecycle import (
+    capture_lifecycle_states,
+    evidence_lifecycle_states,
     latest_lifecycle,
     latest_lifecycles,
     lifecycle_history,
@@ -566,6 +569,30 @@ class _Captures(CaptureRepository):
                 self._connection,
                 capture_context(principal_id),
                 capture_ids=capture_ids,
+            )
+        )
+
+    def lifecycle_states(
+        self, principal_id: str, capture_ids: tuple[str, ...]
+    ) -> Mapping[str, CaptureLifecycleState]:
+        """Owned roots only. Absent and foreign ids are omitted."""
+        if not capture_ids:
+            return {}
+        return _read(
+            lambda: capture_lifecycle_states(
+                self._connection, capture_ids, context=capture_context(principal_id)
+            )
+        )
+
+    def evidence_lifecycle_states(
+        self, principal_id: str, references: tuple[str, ...]
+    ) -> Mapping[str, str]:
+        """Owned `cap_` and `asrt_` refs only, one batch."""
+        if not references:
+            return {}
+        return _read(
+            lambda: evidence_lifecycle_states(
+                self._connection, references, context=capture_context(principal_id)
             )
         )
 

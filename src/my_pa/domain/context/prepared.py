@@ -354,6 +354,7 @@ class PreparedContextEvidence:
     product_id: str | None = None
     managed_document_id: str | None = None
     managed_document_version_id: str | None = None
+    capture_lifecycle_state: str | None = None
 
     def __post_init__(self) -> None:
         try:
@@ -397,6 +398,8 @@ class PreparedContextEvidence:
             object.__setattr__(self, "freshness", ensure_utc(self.freshness))
         if any(not isinstance(code, SelectionReasonCode) for code in self.reason_codes):
             raise PreparedContextError("reason_codes must be SelectionReasonCode members")
+        if self.capture_lifecycle_state not in (None, "active", "archived"):
+            raise PreparedContextError("capture_lifecycle_state is active, archived, or absent")
         if self.reveal_subject_id is not None:
             try:
                 validate_identifier(self.reveal_subject_id)
@@ -492,6 +495,7 @@ class PreparedContextEvidence:
             "product_id": self.product_id,
             "managed_document_id": self.managed_document_id,
             "managed_document_version_id": self.managed_document_version_id,
+            "capture_lifecycle_state": self.capture_lifecycle_state,
         }
 
 

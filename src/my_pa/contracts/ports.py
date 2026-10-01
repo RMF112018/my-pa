@@ -65,6 +65,7 @@ from my_pa.domain.capture.lifecycle import (
     CaptureLifecycleProjection,
     CaptureLifecycleReceipt,
     CaptureLifecycleSelector,
+    CaptureLifecycleState,
     CaptureProcessingEligibility,
     CaptureProcessingSubject,
 )
@@ -3999,6 +4000,28 @@ class CaptureRepository(ABC):
         """
         del principal_id
         return tuple(dict.fromkeys(capture_ids))
+
+    def lifecycle_states(
+        self, principal_id: str, capture_ids: tuple[str, ...]
+    ) -> Mapping[str, CaptureLifecycleState]:
+        """Owned capture roots mapped to their current lifecycle state.
+
+        The default is empty: a fake with no lifecycle store discloses nothing.
+        Absent and foreign ids stay omitted, so a caller renders them as
+        unavailable rather than active.
+        """
+        del principal_id, capture_ids
+        return {}
+
+    def evidence_lifecycle_states(
+        self, principal_id: str, references: tuple[str, ...]
+    ) -> Mapping[str, str]:
+        """`active` or `archived` for owned `cap_` and owned `asrt_` references.
+
+        The default is empty. Other prefixes are not capture provenance.
+        """
+        del principal_id, references
+        return {}
 
 
 @dataclass(frozen=True, slots=True)

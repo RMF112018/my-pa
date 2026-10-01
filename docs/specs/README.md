@@ -12,6 +12,8 @@ Owning index for versioned behavioral contracts in `RMF112018/my-pa`. Repository
 | [`relationship-intelligence-v0.3-acceptance.md`](relationship-intelligence-v0.3-acceptance.md) | Disposition against the demoted v0.3. **Not a compliance ledger** — it scores a document that governs nothing. Section 3 of the implementation plan is the campaign's own ledger, against v0.2. |
 | [`quick-capture/`](quick-capture/00_README.md) | Mirror — proposed product specification, implementation not authorized |
 | [`capture-withdrawal-v0.1.md`](capture-withdrawal-v0.1.md) | **Accepted product contract — 2026-09-30, CRL-WP-02.** Reversible owner-scoped archive/restore and processing pause/resumption; future implementation requires separate CRL-WP-03 authority. Retention and deletion remain open. |
+| [`record-event-consumer-contract-v0.1.md`](record-event-consumer-contract-v0.1.md) | **Implemented** — how a consumer of `record_events.list` resolves each event to its record (the routing reference), initializes without a gap, and recovers from a refused cursor, with the documented residuals. Describes repository behavior; it does not commission the feed. |
+| [`record-event-causal-provenance-v0.1.md`](record-event-causal-provenance-v0.1.md) | **Proposed / not implemented** — design record for how a future external proposal, review and approved write would carry its trigger event, external run, proposal, review case and correlation into provenance, so a consumer can tell a self-caused event from a new trigger. Implementation requires the future writeback-plane authorization. |
 
 The MCV abbreviation follows [`AGENTS.md`](/AGENTS.md): Minimum Viable Candidate. The specification's own prose predates that wording and is preserved as authored.
 

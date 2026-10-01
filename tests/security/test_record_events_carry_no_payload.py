@@ -15,6 +15,10 @@ says. Two halves:
   (`memory_feed_facts`, `context_link_owner`) select from
   `relationship_memory_versions` only its `classification` and key columns --
   never the statement or the whole row.
+* **RECR-AC-006 (MR-R09):** the feed reader's routing reach is keys only --
+  of each routed family's child table it names the primary key and the one
+  owner column (the partition comes through `partition_criterion`), never a
+  value, a narrative column or the whole row.
 
 **Database:** after representative committed writes carrying distinctive
 narrative -- an entity with an alias, a memory created and revised, a merge
@@ -419,6 +423,122 @@ def test_the_capture_reader_scan_sees_a_wider_read(planted: str) -> None:
     reads = _reader_capture_reads(ast.parse(planted))
     assert any(
         not reads[table] <= allowed for table, allowed in READER_CAPTURE_COLUMNS_ALLOWED.items()
+    )
+
+
+# ---- RECR-AC-006: the routing reach is keys only (MR-R09) -------------------------
+
+#: Of each routed family's child table, what the feed reader may name: the
+#: primary key the event's `record_id` names, the one owner column the routing
+#: reference is read from, and the partition column (reached through
+#: `partition_criterion`, so normally never named here at all).
+READER_ROUTING_COLUMNS_ALLOWED: Final = {
+    "task_comments": frozenset({"comment_id", "task_id", "principal_id"}),
+    "constraint_categories": frozenset({"category_id", "project_id", "principal_id"}),
+    "entity_external_identifiers": frozenset({"identifier_id", "entity_id", "principal_id"}),
+    "entity_aliases": frozenset({"alias_id", "entity_id", "principal_id"}),
+    "entity_assignments": frozenset({"assignment_id", "entity_id", "principal_id"}),
+    "entity_relationships": frozenset({"relationship_id", "from_entity_id", "principal_id"}),
+    "entity_observations": frozenset({"observation_id", "entity_id", "principal_id"}),
+    "entity_names": frozenset({"entity_name_id", "entity_id", "principal_id"}),
+    "entity_addresses": frozenset({"entity_address_id", "entity_id", "principal_id"}),
+    "entity_communication_methods": frozenset(
+        {"communication_method_id", "entity_id", "principal_id"}
+    ),
+    "entity_project_participations": frozenset(
+        {"participation_id", "participant_entity_id", "principal_id"}
+    ),
+    "entity_person_organization_affiliations": frozenset(
+        {"affiliation_id", "person_entity_id", "principal_id"}
+    ),
+}
+
+
+def _reader_routing_reads(tree: ast.Module) -> dict[str, set[str]]:
+    """Every column of a routing table the reader names; a whole-table read is `*`.
+
+    Aliases are followed as `_capture_aliases` follows them, so `t = table.alias()`
+    cannot hide a wider read.
+    """
+    aliases = {table: table for table in READER_ROUTING_COLUMNS_ALLOWED}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        for inner in ast.walk(value):
+            if (
+                isinstance(inner, ast.Call)
+                and isinstance(inner.func, ast.Attribute)
+                and inner.func.attr == "alias"
+                and isinstance(inner.func.value, ast.Name)
+                and inner.func.value.id in READER_ROUTING_COLUMNS_ALLOWED
+            ):
+                for target in targets:
+                    if isinstance(target, ast.Name):
+                        aliases[target.id] = inner.func.value.id
+    found: dict[str, set[str]] = {table: set() for table in READER_ROUTING_COLUMNS_ALLOWED}
+
+    def table_of(node: ast.AST) -> str | None:
+        return aliases.get(node.id) if isinstance(node, ast.Name) else None
+
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Attribute)
+            and node.value.attr in {"c", "columns"}
+            and (table := table_of(node.value.value)) is not None
+        ):
+            found[table].add(node.attr)
+        if (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.value, ast.Attribute)
+            and node.value.attr in {"c", "columns"}
+            and (table := table_of(node.value.value)) is not None
+        ):
+            key = node.slice
+            found[table].add(str(key.value) if isinstance(key, ast.Constant) else "*")
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "select":
+            for argument in node.args:
+                if (table := table_of(argument)) is not None:
+                    found[table].add("*")
+                if isinstance(argument, ast.Starred):
+                    for inner in ast.walk(argument.value):
+                        if (table := table_of(inner)) is not None:
+                            found[table].add("*")
+    return found
+
+
+def test_the_feed_reader_routing_reads_only_keys() -> None:
+    """RECR-AC-006: every routing table is reached, and only for its keys."""
+    reads = _reader_routing_reads(ast.parse(FEED_READER.read_text(encoding="utf-8")))
+    unreached = sorted(table for table, columns in reads.items() if not columns)
+    assert not unreached, f"the scan found no routing reach into {unreached}"
+    for table, allowed in READER_ROUTING_COLUMNS_ALLOWED.items():
+        assert reads[table] <= allowed, (table, sorted(reads[table]))
+
+
+@pytest.mark.parametrize(
+    "planted",
+    [
+        "def page(self):\n    return select(task_comments.c.body)\n",
+        "def page(self):\n    return select(task_comments)\n",
+        'def page(self):\n    return entity_names.c["display_value"] == 1\n',
+        "def page(self):\n    return select(entity_relationships.c.to_entity_id)\n",
+        "def page(self):\n"
+        "    return select(entity_person_organization_affiliations.c.organization_entity_id)\n",
+        "_A = entity_observations.alias('a')\n"
+        "def page(self):\n    return select(_A.c.observed_value)\n",
+        "_A = entity_aliases.alias('a')\ndef page(self):\n    return select(*_A.c)\n",
+    ],
+)
+def test_the_routing_reach_scan_sees_a_wider_read(planted: str) -> None:
+    """The control: a payload column, another endpoint, or a whole row is reported."""
+    reads = _reader_routing_reads(ast.parse(planted))
+    assert any(
+        not reads[table] <= allowed for table, allowed in READER_ROUTING_COLUMNS_ALLOWED.items()
     )
 
 

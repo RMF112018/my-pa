@@ -418,4 +418,6 @@ Integration was by **merge**, not rebase (MR-17a also applies to R3). The merge 
 
 ## Review outcome and final state
 
-Pending.
+- **Pre-merge independent exact-head review (RE-AC-085): PASS** at `806a3c90cba5f1a16958f6306eeeb4c14c40ae76` (tree `3679b51ba96922814283c0588bd8765f2a47bddc`), written 2026-10-01T03:27Z by a fresh reviewer with BLOCK authority, no authorship and no steering. Findings F-1..F-5 are all non-blocking. Drive `1OuWrO8WVh1RuRXnk1nWnYTkOdc_mvDGJ`.
+- **Merged by the operator** as `174876621c880312ee3f4e32f649520fab04aa9d` (PR #297, squash; single parent `b5baf962`). Its tree `3679b51b…` is identical to the reviewed tree.
+- Carried forward: F-3 (cursor position ignores visibility) is RECR-3 in `.ai/goals/record-event-consumer-readiness/goal.md`. F-5 TRUNCATE (OD-W8-8) and F-4 (`capability_grants=None` means local) remain recorded residuals.

@@ -27,8 +27,12 @@ guard:
 2. **binding** -- `b` against the binding re-derived for this request; a
    mismatch, including a token issued to another Principal, is
    `conflict(cursor)`, before `e` is looked at;
-3. **position** -- only then is `e` resolved inside the caller's partition; an
-   `e` that does not resolve is `invalid_request(cursor)`.
+3. **position** -- only then is `e` looked at: first it must pass the page's
+   own visibility predicate (RECR-3: `visible_event_ids` under the effective
+   families and, for a remote caller, the withholding of restricted memory and
+   capture events), and only then is it resolved inside the caller's partition;
+   an `e` that is hidden or does not resolve is `invalid_request(cursor)`, so a
+   hidden event is indistinguishable from an unknown one.
 
 **Remote disclosure.** A remote read withholds restricted Relationship Memory
 events in SQL (OD-8, in the reader) and nulls every `causation_event_id` that
@@ -356,7 +360,34 @@ def _view(item: RecordEventFeedItem, *, causation_event_id: str | None) -> Recor
         occurred_at=item.occurred_at,
         recorded_at=item.recorded_at,
         causation_event_id=causation_event_id,
+        routing_family=item.routing_family,
+        routing_record_id=item.routing_record_id,
     )
+
+
+def _anchor_position(
+    reader: RecordEventReader,
+    *,
+    principal_id: str,
+    event_id: str,
+    families: frozenset[RecordEventFamily],
+    include_restricted_memory: bool,
+) -> int | None:
+    """Step 3 (RECR-3): the anchor's position, only if this page would show it.
+
+    The visibility check is the same predicate the page applies, asked through
+    the reader's existing probe; a hidden anchor answers `None`, exactly as an
+    unknown one does, and is never resolved.
+    """
+    visible = reader.visible_event_ids(
+        principal_id=principal_id,
+        event_ids=frozenset({event_id}),
+        families=families,
+        include_restricted_memory=include_restricted_memory,
+    )
+    if event_id not in visible:
+        return None
+    return reader.resolve_position(principal_id=principal_id, event_id=event_id)
 
 
 # --- the use case ----------------------------------------------------------------
@@ -397,7 +428,13 @@ def list_record_events(
     after = decode_cursor(
         cursor,
         binding,
-        lambda event_id: reader.resolve_position(principal_id=principal_id, event_id=event_id),
+        lambda event_id: _anchor_position(
+            reader,
+            principal_id=principal_id,
+            event_id=event_id,
+            families=effective,
+            include_restricted_memory=include_restricted,
+        ),
     )
     if effective:
         page = reader.page(

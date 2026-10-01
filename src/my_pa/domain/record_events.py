@@ -77,6 +77,7 @@ __all__ = [
     "MEMORY_CAPABILITIES",
     "NON_MEMORY_CLASSIFICATION",
     "RECORD_EVENT_FAMILY_READS",
+    "RECORD_EVENT_ROUTING",
     "REVIEW_PROMOTION_CAPABILITY",
     "TASK_ACTOR_CLASSES",
     "EntityEventShape",
@@ -844,7 +845,8 @@ def task_comment_record_event(
     It names no receipt (OD-W8-6: the comment row is its own), no causation,
     and never a `task` event: a comment does not advance the Task's version.
     A consumer rereads it through `tasks.comments.list`, keyed by its Task
-    (MR-13).
+    (MR-13): the feed names that Task as the event's routing reference
+    (RECR-1, `RECORD_EVENT_ROUTING`), read from the comment row at list time.
     """
     return RecordEventDraft.issue(
         principal_id=principal_id,
@@ -921,8 +923,41 @@ RECORD_EVENT_FAMILY_READS: Final[Mapping[RecordEventFamily, frozenset[Capability
         # is not a disclosure of the family (the `tasks.search` precedent).
         RecordEventFamily.CAPTURE: frozenset({Capability.CAPTURE_READ, Capability.CAPTURE_LIST}),
         # The only comment read is keyed by the Task (MR-13, OD-W8-9); no floor
-        # (OD-W8-1 (i)): a comment event names no Task field.
+        # (OD-W8-1 (i)). RECR-1 (MR-R04) amends that ruling's premise: the event
+        # now routes to its Task, a field `tasks.comments.list` already
+        # discloses, so the ruling (no floor) stands.
         RecordEventFamily.TASK_COMMENT: frozenset({Capability.TASKS_COMMENTS_LIST}),
+    }
+)
+
+#: RECR-1 (MR-R01, MR-R08): the families whose `record_id` is not a key
+#: any of their mapped reads accepts, and the kind of record a consumer rereads
+#: them through instead. A listed event of one of these families carries
+#: `routing_family` (the value here) and `routing_record_id` (that record's id),
+#: both computed at list time from the child row's owner column, so they name
+#: the *current* owner. Every other family is keyed by `record_id` itself
+#: and carry no routing. Written out row by row, like the reads table above;
+#: `tests/unit/test_record_event_routing.py` holds it literally.
+#:
+#: The owner is the Task for a comment, the Project for a constraint category,
+#: and the Entity for an Entity-plane child: `from_entity_id` for a relationship,
+#: `participant_entity_id` for a participation, and the **person** end
+#: (`person_entity_id`) for a person-organization affiliation (MR-R05 (i)). An
+#: observation with no Entity has no owner, so its routing is null (MR-R05 (ii)).
+RECORD_EVENT_ROUTING: Final[Mapping[RecordEventFamily, RecordEventFamily]] = _frozen(
+    {
+        RecordEventFamily.TASK_COMMENT: RecordEventFamily.TASK,
+        RecordEventFamily.CONSTRAINT_CATEGORY: RecordEventFamily.PROJECT,
+        RecordEventFamily.ENTITY_IDENTIFIER: RecordEventFamily.ENTITY,
+        RecordEventFamily.ENTITY_ALIAS: RecordEventFamily.ENTITY,
+        RecordEventFamily.ENTITY_ASSIGNMENT: RecordEventFamily.ENTITY,
+        RecordEventFamily.ENTITY_RELATIONSHIP: RecordEventFamily.ENTITY,
+        RecordEventFamily.ENTITY_OBSERVATION: RecordEventFamily.ENTITY,
+        RecordEventFamily.ENTITY_NAME: RecordEventFamily.ENTITY,
+        RecordEventFamily.ENTITY_ADDRESS: RecordEventFamily.ENTITY,
+        RecordEventFamily.ENTITY_COMMUNICATION_METHOD: RecordEventFamily.ENTITY,
+        RecordEventFamily.ENTITY_PROJECT_PARTICIPATION: RecordEventFamily.ENTITY,
+        RecordEventFamily.PERSON_ORGANIZATION_AFFILIATION: RecordEventFamily.ENTITY,
     }
 )
 

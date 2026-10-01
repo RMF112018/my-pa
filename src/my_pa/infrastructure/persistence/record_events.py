@@ -38,6 +38,15 @@ classification *or* the capture's current version) to both subqueries, so a with
 reach a row, a truncation flag or the watermark. The sequence number orders the
 page and never leaves this module.
 
+**Routing is read by the same statement** (RECR-1, MR-R01). For the families
+whose `record_id` is a child row, the outer SELECT adds `routing_record_id`: a
+`CASE` over the page's family, each branch a keyed scalar subquery on that child
+table's primary key, under the caller's partition, selecting only its owner
+column. It adds no statement and no lock, reads the page's own snapshot, and
+names the *current* owner -- an Entity merge that reparents a child moves the
+routing of its earlier events too. Only the key and owner columns of those
+tables are named (MR-R09).
+
 **Failures are translated** exactly as `unit_of_work._read` translates a
 statement failure: an unreachable server or a timeout is
 `EvidenceUnavailableError`, anything else the store refused is
@@ -53,13 +62,16 @@ from typing import Any, Final, cast
 from sqlalchemy import (
     ColumnElement,
     Connection,
+    FromClause,
     Row,
     Table,
     and_,
+    case,
     exists,
     insert,
     literal,
     not_,
+    null,
     or_,
     select,
     true,
@@ -78,6 +90,7 @@ from my_pa.contracts.ports import (
 )
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.record_events import (
+    RECORD_EVENT_ROUTING,
     RecordEventActorClass,
     RecordEventAuthority,
     RecordEventDraft,
@@ -92,10 +105,22 @@ from my_pa.infrastructure.persistence.principal_scope import (
 )
 from my_pa.infrastructure.persistence.tables import (
     capture_versions,
+    constraint_categories,
+    entity_addresses,
+    entity_aliases,
+    entity_assignments,
+    entity_communication_methods,
+    entity_external_identifiers,
+    entity_names,
+    entity_observations,
+    entity_person_organization_affiliations,
+    entity_project_participations,
+    entity_relationships,
     record_event_sequences,
     record_events,
     relationship_memories,
     relationship_memory_versions,
+    task_comments,
 )
 
 __all__ = [
@@ -264,6 +289,90 @@ _ITEM_COLUMNS: Final = (
 )
 
 
+#: RECR-1 (MR-R01): where each routed family's owner lives -- the child table,
+#: its primary key (what the event's `record_id` names) and the one owner column
+#: the routing reference is read from. Keys only (MR-R09): no other column of
+#: these tables is ever named here, and
+#: `tests/security/test_record_events_carry_no_payload.py` holds the reader to
+#: that. An affiliation routes to its person end (MR-R05 (i)).
+_ROUTING_OWNERS: Final = (
+    (RecordEventFamily.TASK_COMMENT, task_comments.c.comment_id, task_comments.c.task_id),
+    (
+        RecordEventFamily.CONSTRAINT_CATEGORY,
+        constraint_categories.c.category_id,
+        constraint_categories.c.project_id,
+    ),
+    (
+        RecordEventFamily.ENTITY_IDENTIFIER,
+        entity_external_identifiers.c.identifier_id,
+        entity_external_identifiers.c.entity_id,
+    ),
+    (RecordEventFamily.ENTITY_ALIAS, entity_aliases.c.alias_id, entity_aliases.c.entity_id),
+    (
+        RecordEventFamily.ENTITY_ASSIGNMENT,
+        entity_assignments.c.assignment_id,
+        entity_assignments.c.entity_id,
+    ),
+    (
+        RecordEventFamily.ENTITY_RELATIONSHIP,
+        entity_relationships.c.relationship_id,
+        entity_relationships.c.from_entity_id,
+    ),
+    (
+        RecordEventFamily.ENTITY_OBSERVATION,
+        entity_observations.c.observation_id,
+        entity_observations.c.entity_id,
+    ),
+    (RecordEventFamily.ENTITY_NAME, entity_names.c.entity_name_id, entity_names.c.entity_id),
+    (
+        RecordEventFamily.ENTITY_ADDRESS,
+        entity_addresses.c.entity_address_id,
+        entity_addresses.c.entity_id,
+    ),
+    (
+        RecordEventFamily.ENTITY_COMMUNICATION_METHOD,
+        entity_communication_methods.c.communication_method_id,
+        entity_communication_methods.c.entity_id,
+    ),
+    (
+        RecordEventFamily.ENTITY_PROJECT_PARTICIPATION,
+        entity_project_participations.c.participation_id,
+        entity_project_participations.c.participant_entity_id,
+    ),
+    (
+        RecordEventFamily.PERSON_ORGANIZATION_AFFILIATION,
+        entity_person_organization_affiliations.c.affiliation_id,
+        entity_person_organization_affiliations.c.person_entity_id,
+    ),
+)
+
+
+def _routing_record_id(page: FromClause, principal_id: str) -> ColumnElement[Any]:
+    """RECR-1: the routed event's current owner id, or NULL, inside the page statement.
+
+    One `CASE` branch per routed family, each a keyed scalar subquery on the
+    child's primary key under the caller's partition, selecting only the owner
+    column. No row lock, no second statement: it reads the page's own snapshot.
+    A missing child or a NULL owner (an unresolved observation) is NULL.
+    """
+    context = capture_context(principal_id)
+    return case(
+        *(
+            (
+                page.c.record_family == family.value,
+                select(owner)
+                .where(
+                    partition_criterion(owner.table, context),
+                    key == page.c.record_id,
+                )
+                .scalar_subquery(),
+            )
+            for family, key, owner in _ROUTING_OWNERS
+        ),
+        else_=null(),
+    )
+
+
 def _restricted_memory(event: Table, principal_id: str) -> ColumnElement[bool]:
     """OD-8 (i): the event is a memory event a remote caller must not see.
 
@@ -359,9 +468,11 @@ def _visible(
 def _item(row: Row[Any]) -> RecordEventFeedItem:
     mapping = row._mapping
     authority = mapping["authority"]
+    family = RecordEventFamily(mapping["record_family"])
+    routing = mapping["routing_record_id"]
     return RecordEventFeedItem(
         event_id=mapping["event_id"],
-        record_family=RecordEventFamily(mapping["record_family"]),
+        record_family=family,
         record_id=mapping["record_id"],
         event_kind=RecordEventKind(mapping["event_kind"]),
         record_version=mapping["record_version"],
@@ -373,6 +484,8 @@ def _item(row: Row[Any]) -> RecordEventFeedItem:
         occurred_at=mapping["occurred_at"],
         recorded_at=mapping["recorded_at"],
         causation_event_id=mapping["causation_event_id"],
+        routing_family=None if routing is None else RECORD_EVENT_ROUTING[family],
+        routing_record_id=routing,
     )
 
 
@@ -428,6 +541,7 @@ class SqlRecordEventReader(RecordEventReader):
             select(
                 watermark.c.high_watermark_event_id,
                 *(page.c[name] for name in _ITEM_COLUMNS),
+                _routing_record_id(page, principal_id).label("routing_record_id"),
             )
             .select_from(
                 anchor.outerjoin(watermark, true()).outerjoin(page, true()),

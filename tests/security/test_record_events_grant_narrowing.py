@@ -17,6 +17,9 @@ grant, profile or OAuth row is read or written.
   cause is visible to that caller.
 * **RE-AC-072** -- the public item carries exactly its thirteen fields: no
   Principal, classification, correlation or sequence number.
+* **RECR-AC-014** (RECR-3) -- a cursor anchor is checked for visibility under
+  exactly the effective families and the request's disclosure flag before its
+  position is resolved.
 """
 
 from __future__ import annotations
@@ -87,6 +90,9 @@ class FakeReader(RecordEventReader):
     probe_answer: frozenset[str] = frozenset()
     page_calls: list[frozenset[RecordEventFamily]] = field(default_factory=list)
     probes: list[frozenset[str]] = field(default_factory=list)
+    visibility_calls: list[tuple[frozenset[str], frozenset[RecordEventFamily], bool]] = field(
+        default_factory=list
+    )
 
     def page(
         self,
@@ -117,7 +123,10 @@ class FakeReader(RecordEventReader):
         include_restricted_memory: bool,
     ) -> frozenset[str]:
         self.probes.append(event_ids)
-        return event_ids & self.probe_answer
+        self.visibility_calls.append((event_ids, families, include_restricted_memory))
+        # RECR-3: a cursor anchor among the rows is visible under its own family.
+        listed = frozenset(row.event_id for row in self.rows if row.record_family in families)
+        return event_ids & (self.probe_answer | listed)
 
 
 def run(
@@ -320,10 +329,56 @@ def test_remote_causation_is_nulled_unless_the_cause_is_visible() -> None:
     assert local.probes == []
 
 
+# ---- RECR-AC-014 -------------------------------------------------------------------
+
+
+def test_the_position_is_resolved_under_the_effective_families_and_disclosure() -> None:
+    """RECR-3 (Gate-2 F-3): a cursor's `e` must pass the page's own predicate.
+
+    Before the position is resolved, the reader's visibility probe is asked
+    about exactly `{e}`, under exactly `effective` (visible ∩ requested, not the
+    wider visible set) and the request's disclosure flag: false for a remote
+    caller, true for a local one.
+    """
+    task, capture = RecordEventFamily.TASK, RecordEventFamily.CAPTURE
+    rows = (
+        item("rcev_grantnarrow0001", task),
+        item("rcev_grantnarrow0002", capture),
+        item("rcev_grantnarrow0003", task),
+    )
+    for capability_grants, include_restricted in (
+        (grants(Capability.TASKS_READ, Capability.CAPTURE_READ), False),
+        (None, True),
+    ):
+        reader = FakeReader(rows=rows)
+        cursor: str | None = None
+        for _ in range(2):
+            view = list_record_events(
+                reader,
+                principal_id=PRINCIPAL,
+                available_capabilities=ALL,
+                capability_grants=capability_grants,
+                record_families=["task"],
+                page_size=1,
+                cursor=cursor,
+            )
+            assert capture in view.visible_families
+            assert view.next_cursor is not None
+            cursor = view.next_cursor
+        anchor = frozenset({"rcev_grantnarrow0001"})
+        # The remote page's own causation probes (empty here) are not the anchor check.
+        anchor_checks = [call for call in reader.visibility_calls if call[0] == anchor]
+        assert anchor_checks == [(anchor, frozenset({task}), include_restricted)]
+
+
 # ---- RE-AC-072 --------------------------------------------------------------------
 
 
 def test_the_public_item_carries_exactly_its_thirteen_fields() -> None:
+    # The node id keeps "thirteen" for evidence-map continuity (RE-AC-072, MR-R02):
+    # RECR-1 added the two routing fields, so the public item now carries
+    # fifteen. The criterion is unchanged -- no Principal, classification,
+    # correlation or sequence number -- and the withheld-name loop below holds it.
     assert set(RecordEventItemView.model_fields) == {
         "event_id",
         "record_family",
@@ -338,6 +393,8 @@ def test_the_public_item_carries_exactly_its_thirteen_fields() -> None:
         "occurred_at",
         "recorded_at",
         "causation_event_id",
+        "routing_family",
+        "routing_record_id",
     }
     for withheld in ("principal_id", "classification", "correlation_id", "sequence_number"):
         assert withheld not in RecordEventItemView.model_fields

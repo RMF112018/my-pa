@@ -116,6 +116,13 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # insert uses principal_bound_values.
         "infrastructure/persistence/canvas_workspace.py",
         "infrastructure/persistence/capture.py",
+        # CRL-WP-03's Capture root lifecycle repository. Every statement it
+        # builds reaches the partition: the root lock, the latest-event and
+        # history reads and the receipt lookup through `principal_scoped`, the
+        # event and receipt inserts through `principal_bound_values`, and the job
+        # lock and both job UPDATEs through `partition_criterion` (the lock also
+        # joins `capture_versions` under `matching_partition_criterion`).
+        "infrastructure/persistence/capture_lifecycle.py",
         # WP-10's client plane. Three of its four statements reach the partition
         # — the insert through `principal_bound_values`, the revoke through
         # `partition_criterion`, the listing through `principal_scoped`. The
@@ -476,6 +483,12 @@ PER_MODULE_ONLY: Final = {
         "the max-version-number subquery — carry the partition through an "
         "idempotency key or a version identifier instead of `principal_scoped`. "
         "Converting them is capture-plane work, not WP-04's."
+    ),
+    "infrastructure/persistence/capture_lifecycle.py": (
+        "every statement composes `principal_scoped`, `partition_criterion`, "
+        "`matching_partition_criterion` or `principal_bound_values` and none carries "
+        "a hand-written partition comparison; the module has not yet joined a "
+        "dedicated statement-level scanner."
     ),
     "infrastructure/persistence/capture_clients.py": (
         "one statement of four — `authenticate_client`'s lookup by `client_id` — "

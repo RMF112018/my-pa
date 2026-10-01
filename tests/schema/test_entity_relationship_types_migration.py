@@ -323,6 +323,9 @@ def test_downgrading_one_step_removes_exactly_this_table_and_restores_the_origin
         # WP-RE-01. The Record Event revision stacks its two tables.
         "record_event_sequences",
         "record_events",
+        # CRL-WP-03. The Capture lifecycle revision stacks its two tables.
+        "capture_lifecycle_events",
+        "capture_lifecycle_receipts",
     }
     # The rest of the entity plane survives the downgrade of this revision alone.
     assert {

@@ -4,9 +4,9 @@
 `6f6ead27d122`, authenticated immediately before generation; nothing about it
 was preassigned. This module proves what the plan's section 9.5/9.6 asks of it:
 
-* **the graph** -- exactly one head, `1d9b248e7f83` (WP-RE-01, Record Events),
-  directly on this revision, which is directly on `6f6ead27d122`, and 109
-  revision files;
+* **the graph** -- exactly one head, `0641c354ca85` (CRL-WP-03, Capture
+  lifecycle), on `1d9b248e7f83` (WP-RE-01, Record Events), directly on this
+  revision, which is directly on `6f6ead27d122`, and 110 revision files;
 * **the freeze** -- the revision imports nothing from the package it migrates,
   names every table, constraint and index `tables.py` declares for the eight
   Meeting tables in frozen text, and restates the audit vocabulary from byte
@@ -69,8 +69,9 @@ SCHEMA: Final = "knowledge"
 REVISION: Final = "7d9a450dfd07"
 PREVIOUS: Final = "6f6ead27d122"
 #: The chain head these tests run against. `1d9b248e7f83` (WP-RE-01, Record
-#: Events) is additive on `REVISION`, so `REVISION` is no longer the head.
-HEAD: Final = "1d9b248e7f83"
+#: Events) is additive on `REVISION`, and `0641c354ca85` (CRL-WP-03, Capture
+#: lifecycle) is additive on that, so `REVISION` is no longer the head.
+HEAD: Final = "0641c354ca85"
 #: The revision that last stated `capability_is_known` and `purpose_is_known`,
 #: and therefore the only correct source for this revision's BEFORE literals.
 VOCABULARY_PREDECESSOR: Final = "e6a4c2f91b73"
@@ -148,13 +149,14 @@ def _offline(target: str, *, down: bool = False) -> str:
 def test_the_revision_is_the_single_head_directly_on_the_previous_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD]
-    assert script.get_revision(HEAD).down_revision == REVISION
+    assert script.get_revision(HEAD).down_revision == "1d9b248e7f83"
+    assert script.get_revision("1d9b248e7f83").down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(PREVIOUS).down_revision == VOCABULARY_PREDECESSOR
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 109
+    assert len(list(MIGRATIONS.glob("*.py"))) == 110
 
 
 # ---- the freeze -------------------------------------------------------------

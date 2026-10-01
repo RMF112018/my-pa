@@ -255,6 +255,9 @@ def test_downgrading_one_step_removes_exactly_these_two_tables(migrated_engine: 
         # WP-RE-01. The Record Event revision stacks its two tables.
         "record_event_sequences",
         "record_events",
+        # CRL-WP-03. The Capture lifecycle revision stacks its two tables.
+        "capture_lifecycle_events",
+        "capture_lifecycle_receipts",
     }
     assert {
         "entities",

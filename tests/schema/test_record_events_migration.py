@@ -58,6 +58,10 @@ from my_pa.infrastructure.persistence.tables import (
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "1d9b248e7f83"
+#: The chain head. `0641c354ca85` (CRL-WP-03, Capture lifecycle) is additive on
+#: `REVISION`, so `REVISION` is no longer the head; a database upgraded to head
+#: stands there, and a refused downgrade leaves it there.
+HEAD: Final = "0641c354ca85"
 PREVIOUS: Final = "7d9a450dfd07"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20260929_1d9b248e7f83_record_events.py"
@@ -123,7 +127,8 @@ def _offline(target: str, *, down: bool = False) -> str:
 
 def test_the_revision_is_the_single_head_directly_on_7d9a450dfd07() -> None:
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [REVISION]
+    assert script.get_heads() == [HEAD]
+    assert script.get_revision(HEAD).down_revision == REVISION
     assert script.get_revision(REVISION).down_revision == PREVIOUS
 
 
@@ -375,7 +380,7 @@ def test_an_empty_database_upgrades_to_the_record_events_head(
 ) -> None:
     del disposable_database
     command.upgrade(_config(), "head")
-    assert _version(engine) == REVISION
+    assert _version(engine) == HEAD
     assert _tables(engine) >= TABLE_NAMES
     with engine.begin() as connection:
         _feed_row(connection)
@@ -506,4 +511,4 @@ def test_an_empty_downgrade_restores_the_meeting_head_vocabulary_and_drops_every
         )
     assert FUNCTION not in functions
     command.upgrade(_config(), "head")
-    assert _version(engine) == REVISION
+    assert _version(engine) == HEAD

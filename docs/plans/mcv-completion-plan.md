@@ -74,9 +74,11 @@ is not a defect.
 
 ## 3. What is implemented
 
-Three hundred and sixty-one Python modules under `src/my_pa` and six hundred and forty-six test modules —
+Three hundred and sixty-one Python modules under `src/my_pa` and six hundred and forty-eight test modules —
 
-**Current-tree remeasurement (CP-RECR-01, Record Event Consumer Readiness branch `bf/record-event-consumer-readiness-20261001` on `origin/main` `17487662`, 2026-10-01):** the two commands below count 361 source modules and 646 test modules: `main`'s 361/645 at `17487662` (PR #297), plus the RECR-3 cursor-visibility module `tests/database/test_record_events_cursor_visibility.py`.
+**Current-tree remeasurement (CP-RECR-02, Record Event Consumer Readiness branch `bf/record-event-consumer-readiness-20261001` on `origin/main` `17487662`, 2026-10-01):** the two commands below count 361 source modules and 648 test modules: CP-RECR-01's 361/646, plus the RECR-1 routing modules `tests/unit/test_record_event_routing.py` and `tests/database/test_record_event_routing.py`.
+
+**Historical current-tree remeasurement (CP-RECR-01, Record Event Consumer Readiness branch `bf/record-event-consumer-readiness-20261001` on `origin/main` `17487662`, 2026-10-01):** the two commands below count 361 source modules and 646 test modules: `main`'s 361/645 at `17487662` (PR #297), plus the RECR-3 cursor-visibility module `tests/database/test_record_events_cursor_visibility.py`.
 
 **Historical current-tree remeasurement (CP-RE-08b, Record Event branch `bf/record-event-changefeed-20260929` after merging `origin/main` `8940e60b`, 2026-09-30):** the two commands below count 361 source modules and 645 test modules: the Record Event branch's 361/643, plus CRL-WP-01's `tests/contract/test_task_archive_bulk.py` (PR #298), plus the scoped N3 re-plan module `tests/database/test_task_archive_record_events.py`. The branch measurements below are retained as historical evidence.
 

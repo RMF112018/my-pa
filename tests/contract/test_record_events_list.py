@@ -8,7 +8,8 @@ simulated with synthetic in-memory grant sets passed to `invoke`, the
 
 * **RE-AC-072** -- the result is exactly `{events, next_cursor,
   high_watermark_cursor, visible_families}` and every item carries exactly its
-  thirteen fields: no Principal, classification, correlation or sequence.
+  public fields (thirteen until RECR-1 added the two routing fields): no
+  Principal, classification, correlation or sequence.
 * the handler clamps the page size, discloses truncation with the page's own
   `next_cursor`, and resumes from it;
 * **G1-RD-008 / RE-AC-067** -- a remote caller without the `record_events.list`
@@ -16,6 +17,9 @@ simulated with synthetic in-memory grant sets passed to `invoke`, the
   family, no event and a null watermark;
 * **RE-AC-068 / 069** -- a family grant admits only its mapped families, and a
   changed grant set makes a prior cursor a conflict.
+* **RECR-AC-007** -- the item contract for the routing reference: both fields
+  or neither, only on a routed family, the kind `RECORD_EVENT_ROUTING` names,
+  and that kind's opaque-id shape.
 """
 
 from __future__ import annotations
@@ -29,11 +33,13 @@ from my_pa.application.commands import ListRecordEvents
 from my_pa.application.record_events import read_cursor
 from my_pa.contracts.v1.envelope import ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
+from my_pa.contracts.v1.record_events import RecordEventItemView
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.record_events import (
+    RECORD_EVENT_ROUTING,
     RecordEventActorClass,
     RecordEventDraft,
     RecordEventFamily,
@@ -57,6 +63,9 @@ ITEM_FIELDS: Final = {
     "occurred_at",
     "recorded_at",
     "causation_event_id",
+    # RECR-1 (MR-R08): the routing reference, both null on a direct family.
+    "routing_family",
+    "routing_record_id",
 }
 
 type Grants = frozenset[tuple[Capability, Purpose | None]]
@@ -195,3 +204,66 @@ def test_a_changed_grant_set_makes_a_prior_cursor_a_conflict(scene: Scene) -> No
     assert response.error.code is ErrorCode.CONFLICT
     resumed = ok(scene, ListRecordEvents(page_size=1, cursor=first["next_cursor"]), before)
     assert len(resumed["events"]) == 1
+
+
+# ---- RECR-AC-007 ------------------------------------------------------------------
+
+_ROUTING_KINDS: Final = {
+    RecordEventFamily.TASK: IdKind.TASK,
+    RecordEventFamily.PROJECT: IdKind.PROJECT,
+    RecordEventFamily.ENTITY: IdKind.ENTITY,
+}
+
+
+def _view(family: RecordEventFamily, **routing: object) -> RecordEventItemView:
+    return RecordEventItemView.model_validate(
+        {
+            "event_id": issue_identifier(IdKind.RECORD_EVENT),
+            "record_family": family.value,
+            "record_id": "rec_routing00000001",
+            "event_kind": RecordEventKind.CREATED.value,
+            "record_version": 1,
+            "changed_fields": ["title"],
+            "source_capability": "tasks.create",
+            "actor_class": RecordEventActorClass.PRINCIPAL.value,
+            "occurred_at": "2026-10-01T12:00:00Z",
+            "recorded_at": "2026-10-01T12:00:00Z",
+            **routing,
+        }
+    )
+
+
+def _refused(family: RecordEventFamily, **routing: object) -> bool:
+    try:
+        _view(family, **routing)
+    except ValueError:
+        return True
+    return False
+
+
+def test_routing_fields_are_validated() -> None:
+    """RECR-AC-007: both or neither; only on a routed family; the table's kind and shape."""
+    for family in RecordEventFamily:
+        # Neither field is always admitted: a direct family, or a routed one that
+        # is not currently resolvable (MR-R05 (ii)).
+        bare = _view(family)
+        assert bare.routing_family is None and bare.routing_record_id is None
+        routed = RECORD_EVENT_ROUTING.get(family)
+        for kind, id_kind in _ROUTING_KINDS.items():
+            good_id = issue_identifier(id_kind)
+            pair = {"routing_family": kind.value, "routing_record_id": good_id}
+            if routed is kind:
+                view = _view(family, **pair)
+                assert (view.routing_family, view.routing_record_id) == (kind, good_id)
+            else:
+                assert _refused(family, **pair), (family, kind)
+        if routed is not None:
+            right_kind = routed.value
+            # One without the other.
+            assert _refused(family, routing_family=right_kind)
+            assert _refused(family, routing_record_id=issue_identifier(_ROUTING_KINDS[routed]))
+            # The wrong identifier kind, and a value that is not an identifier.
+            other = next(kind for kind in _ROUTING_KINDS if kind is not routed)
+            wrong_id = issue_identifier(_ROUTING_KINDS[other])
+            assert _refused(family, routing_family=right_kind, routing_record_id=wrong_id)
+            assert _refused(family, routing_family=right_kind, routing_record_id="Dana Synthetic")

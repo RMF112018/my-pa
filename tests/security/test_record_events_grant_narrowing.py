@@ -375,6 +375,10 @@ def test_the_position_is_resolved_under_the_effective_families_and_disclosure() 
 
 
 def test_the_public_item_carries_exactly_its_thirteen_fields() -> None:
+    # The node id keeps "thirteen" for evidence-map continuity (RE-AC-072, MR-R02):
+    # RECR-1 added the two routing fields, so the public item now carries
+    # fifteen. The criterion is unchanged -- no Principal, classification,
+    # correlation or sequence number -- and the withheld-name loop below holds it.
     assert set(RecordEventItemView.model_fields) == {
         "event_id",
         "record_family",
@@ -389,6 +393,8 @@ def test_the_public_item_carries_exactly_its_thirteen_fields() -> None:
         "occurred_at",
         "recorded_at",
         "causation_event_id",
+        "routing_family",
+        "routing_record_id",
     }
     for withheld in ("principal_id", "classification", "correlation_id", "sequence_number"):
         assert withheld not in RecordEventItemView.model_fields

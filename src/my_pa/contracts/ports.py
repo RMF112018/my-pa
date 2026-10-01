@@ -4848,6 +4848,13 @@ class RecordEventFeedItem:
     `correlation_id` (package section 12), and **no `sequence_number`**: under
     OD-1 the order is the sequence but the number never leaves the reader, so a
     remote caller cannot count withheld events from gaps (G1-RD-001).
+
+    RECR-1: `routing_family` and `routing_record_id` name the record a consumer
+    rereads the event through when `record_id` is not a key of the family's
+    reads (`domain.record_events.RECORD_EVENT_ROUTING`). The reader computes the
+    id from the child row's current owner in the page statement; both are
+    `None` for every other family, and for a routed event whose owner is gone
+    or absent (an unresolved observation).
     """
 
     event_id: str
@@ -4863,6 +4870,8 @@ class RecordEventFeedItem:
     occurred_at: datetime
     recorded_at: datetime
     causation_event_id: str | None
+    routing_family: RecordEventFamily | None = None
+    routing_record_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

@@ -360,6 +360,8 @@ def _view(item: RecordEventFeedItem, *, causation_event_id: str | None) -> Recor
         occurred_at=item.occurred_at,
         recorded_at=item.recorded_at,
         causation_event_id=causation_event_id,
+        routing_family=item.routing_family,
+        routing_record_id=item.routing_record_id,
     )
 
 

@@ -58,3 +58,4 @@ The plan is APPROVED as written. Rulings are numbered by the plan's decision IDs
 |---|---|---|---|
 | Phase P | `1b9e8aab` | `93216e2e` | Plan approved; main re-fetched 2026-10-01, unmoved |
 | CP-CRL-01 domain | `2ba4af45` | `a61dedcc` | FAST 25,969 passed / 74 skipped / 0 failed (26,043 collected); ruff, format, mypy (525 files) clean; prove-red DIGEST-1/2, ALTERNATION-1/2 all red-then-green (manager `work/CP-CRL-01-prove-red.log`); count re-pins in the two pinned plan docs only |
+| CP-CRL-02 schema | `1915097e` | `cb6b8f6c` | Revision `0641c354ca85` (single head, 110 files); MIG lanes 810/810; DB capture/pipeline/jobs/schema-enumerating chunks green (full DB tier not run end to end); FAST 25,989 passed / 74 skipped / 0 failed (26,063 collected); ruff, format, mypy (527) clean; prove-red 8/8 red-then-green (`work/CP-CRL-02-prove-red.log`); Orchestrator re-check: 404 FAST + 20 DB passed |

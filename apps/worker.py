@@ -90,10 +90,14 @@ from types import FrameType, MappingProxyType
 
 from sqlalchemy import select
 
+from my_pa.application.capture_lifecycle import always_eligible
 from my_pa.bootstrap.gateway import local_principal
 from my_pa.bootstrap.settings import AuthMode, load_settings
 from my_pa.infrastructure.database.engine import create_database_engine
-from my_pa.infrastructure.jobs.capture_pipeline import process_capture_version
+from my_pa.infrastructure.jobs.capture_pipeline import (
+    configure_processing_eligibility,
+    process_capture_version,
+)
 from my_pa.infrastructure.jobs.extraction import extract_enrollment
 from my_pa.infrastructure.jobs.reenrichment import (
     DEFAULT_REENRICHMENT_POLL_SECONDS,
@@ -111,6 +115,8 @@ from my_pa.infrastructure.jobs.worker import (
 from my_pa.infrastructure.persistence.jobs import CAPTURE_JOBS, ENROLLMENT_JOBS, JobPlane
 from my_pa.infrastructure.persistence.tables import JobState, entity_reenrichment_work
 from my_pa.infrastructure.persistence.worker_health import record_worker_heartbeat
+
+configure_processing_eligibility(always_eligible)
 
 #: The two *job* planes this process can serve, and the handler each one's work
 #: needs. A mapping rather than an `if`, so that a plane cannot be added without
@@ -161,6 +167,7 @@ def _report(owner: str, plane: str, run: WorkerRun) -> None:
     print(f"completed    {run.completed}")
     print(f"released     {run.released}")
     print(f"lost         {run.lost}")
+    print(f"paused       {run.paused}")
     print(f"idle         {run.idle}")
 
 

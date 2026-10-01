@@ -31,10 +31,10 @@ same output".
 **The pipeline commits per stage, not per job** (`D-45`(e)'s shape). `P-16` has
 to survive `P-05` failing, because `QC-AC-050` says original text is searchable
 "independently of enrichment success" and one transaction over nine stages would
-discard it. `hold_lease` is the **first statement** in every one of those
-transactions, exactly as `jobs/extraction.py` does it, so a worker whose lease
-was taken finds out before it writes and its transaction rolls back having
-written nothing.
+discard it. Each of those transactions takes the capture root `FOR SHARE` first
+and then `hold_lease`, so an archive waits out the stage that is writing, and a
+worker whose lease was taken finds out before it writes. The transaction rolls
+back having written nothing.
 
 **`P-16` writes no index row, and that is stronger than the design that called
 for one.** `knowledge.capture_versions` carries a functional GIN index over
@@ -70,7 +70,7 @@ in the first place.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
@@ -87,6 +87,11 @@ from my_pa.domain.capture.classification import (
     CaptureEntityMention,
     CaptureLabel,
     EntityType,
+)
+from my_pa.domain.capture.lifecycle import (
+    CaptureLifecycleState,
+    CaptureProcessingEligibility,
+    CaptureProcessingSubject,
 )
 from my_pa.domain.capture.pipeline import (
     PIPELINE_VERSION,
@@ -107,10 +112,20 @@ from my_pa.domain.capture.proposal import (
 )
 from my_pa.domain.capture.span import SourceSpan, SpanRole
 from my_pa.domain.capture.version import ProcessingPolicy, digest_of
+from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.search.query import SearchQuery
 from my_pa.domain.source.registry import issue_identifier
-from my_pa.infrastructure.jobs.worker import JobExecutionError, LeaseLostError
+from my_pa.infrastructure.jobs.worker import (
+    CapturePausedError,
+    JobExecutionError,
+    LeaseLostError,
+)
+from my_pa.infrastructure.persistence.capture_lifecycle import (
+    latest_lifecycle,
+    pause_job_for_policy,
+    share_capture_root,
+)
 from my_pa.infrastructure.persistence.capture_search import CAPTURE_VERSIONS, match_statement
 from my_pa.infrastructure.persistence.jobs import CAPTURE_JOBS, LeasedJob, hold_lease
 from my_pa.infrastructure.persistence.principal_scope import capture_context
@@ -139,6 +154,7 @@ __all__ = [
     "SegmentKind",
     "TextMatch",
     "commitment_cues",
+    "configure_processing_eligibility",
     "derive",
     "detect_language",
     "normalize_text",
@@ -187,6 +203,36 @@ SCHEMA_VERSION: Final = "v1"
 #: build has no branch for stops at `P-01` as `policy_denied`, which is the
 #: state that exists for exactly that.
 _PROCESSABLE_POLICIES: Final[frozenset[ProcessingPolicy]] = frozenset({ProcessingPolicy.LOCAL_ONLY})
+
+
+def _default_processing_eligibility(
+    subject: CaptureProcessingSubject,
+) -> CaptureProcessingEligibility:
+    """This build has no then-current restriction beyond the saved ceiling."""
+    del subject
+    return CaptureProcessingEligibility.ELIGIBLE
+
+
+_processing_eligibility: Callable[[CaptureProcessingSubject], CaptureProcessingEligibility] = (
+    _default_processing_eligibility
+)
+
+
+def configure_processing_eligibility(
+    resolver: Callable[[CaptureProcessingSubject], CaptureProcessingEligibility],
+) -> None:
+    """Install the then-current eligibility resolver.
+
+    The composition root passes the application's `always_eligible`. Tests pass
+    a resolver that refuses. This module does not import the application layer.
+    """
+    global _processing_eligibility
+    _processing_eligibility = resolver
+
+
+class _PolicyIneligibleError(Exception):
+    """The stage transaction must roll back; the pause commits outside it."""
+
 
 #: The rule name recorded beside every deterministic label, and its version.
 _RULE: Final = "deterministic_cue_match"
@@ -794,18 +840,22 @@ class _Version:
     """
 
     version_id: str
+    capture_id: str
     content: str
     content_sha256: str
     processing_policy: ProcessingPolicy
+    classification: Classification
     owner_principal_id: str
 
 
 def _read_version(connection: Connection, version_id: str) -> _Version | None:
     row = connection.execute(
         select(
+            capture_versions.c.capture_id,
             capture_versions.c.content,
             capture_versions.c.content_sha256,
             capture_versions.c.processing_policy,
+            capture_versions.c.classification,
             capture_versions.c.owner_principal_id,
         ).where(capture_versions.c.version_id == version_id)
     ).one_or_none()
@@ -813,11 +863,98 @@ def _read_version(connection: Connection, version_id: str) -> _Version | None:
         return None
     return _Version(
         version_id=version_id,
+        capture_id=str(row.capture_id),
         content=str(row.content),
         content_sha256=str(row.content_sha256),
         processing_policy=ProcessingPolicy(row.processing_policy),
+        classification=Classification(row.classification),
         owner_principal_id=str(row.owner_principal_id),
     )
+
+
+def _admit(connection: Connection, job: LeasedJob, owner: str) -> _Version:
+    """Root share, active lifecycle, then-current eligibility, then the lease.
+
+    An archived root or a lease that is no longer this generation raises
+    `LeaseLostError` before any stage write. Then-current ineligibility on an
+    active root raises `_PolicyIneligibleError` so the caller can roll this
+    transaction back and commit the neutral pause outside it. A saved policy
+    outside `_PROCESSABLE_POLICIES` is not that pause: it stays the `D-95`
+    `policy_denied` stage.
+    """
+    version = _read_version(connection, job.subject_id)
+    if version is None:
+        raise JobExecutionError(ErrorCode.NOT_FOUND)
+    context = capture_context(version.owner_principal_id)
+    if not share_capture_root(connection, version.capture_id, context=context):
+        raise LeaseLostError(job.operation_id)
+    if latest_lifecycle(connection, version.capture_id, context=context).state is not (
+        CaptureLifecycleState.ACTIVE
+    ):
+        raise LeaseLostError(job.operation_id)
+    if version.processing_policy in _PROCESSABLE_POLICIES:
+        subject = CaptureProcessingSubject(
+            owner_principal_id=version.owner_principal_id,
+            capture_id=version.capture_id,
+            version_id=version.version_id,
+            processing_policy=version.processing_policy.value,
+            classification=version.classification,
+        )
+        if _processing_eligibility(subject) is CaptureProcessingEligibility.INELIGIBLE:
+            raise _PolicyIneligibleError()
+    if job.generation is None or not hold_lease(
+        connection,
+        job.operation_id,
+        owner=owner,
+        plane=CAPTURE_JOBS,
+        generation=job.generation,
+    ):
+        raise LeaseLostError(job.operation_id)
+    return version
+
+
+def _pause_for_policy(engine: Engine, job: LeasedJob, owner: str) -> None:
+    """Commit the neutral pause, or raise `LeaseLostError` when the lease is gone."""
+    if job.generation is None:
+        raise LeaseLostError(job.operation_id)
+    with engine.begin() as connection:
+        version = _read_version(connection, job.subject_id)
+        if version is None:
+            raise LeaseLostError(job.operation_id)
+        context = capture_context(version.owner_principal_id)
+        if not share_capture_root(connection, version.capture_id, context=context):
+            raise LeaseLostError(job.operation_id)
+        if latest_lifecycle(connection, version.capture_id, context=context).state is not (
+            CaptureLifecycleState.ACTIVE
+        ):
+            raise LeaseLostError(job.operation_id)
+        if not pause_job_for_policy(
+            connection,
+            job.operation_id,
+            owner=owner,
+            generation=job.generation,
+            context=context,
+        ):
+            raise LeaseLostError(job.operation_id)
+
+
+def _in_stage(
+    engine: Engine,
+    job: LeasedJob,
+    owner: str,
+    work: Callable[[Connection, _Version], None],
+) -> None:
+    """Run one admitted stage. A policy refusal pauses only after this rolls back."""
+    refused = False
+    try:
+        with engine.begin() as connection:
+            version = _admit(connection, job, owner)
+            work(connection, version)
+    except _PolicyIneligibleError:
+        refused = True
+    if refused:
+        _pause_for_policy(engine, job, owner)
+        raise CapturePausedError(job.operation_id)
 
 
 def _stage_key(version_id: str, stage: PipelineStage, config: str) -> str:
@@ -881,24 +1018,21 @@ def process_capture_version(engine: Engine, job: LeasedJob, owner: str) -> None:
 
     The `JobHandler` `apps/worker.py` installs for `CAPTURE_JOBS`. It takes the
     engine rather than a connection because it opens one transaction per stage,
-    and it takes the owner because each of those transactions asserts the lease
-    itself — `hold_lease` first, every time, so a worker whose lease was taken
-    writes nothing and says so by raising.
+    and it takes the owner because each of those transactions shares the root
+    and then asserts the lease, so a worker whose lease was taken writes nothing
+    and says so by raising.
 
     A stage already completed under its key is **not re-run**: its stored result
     is the answer, which is `11_…:212`. The derivation still happens, because the
     stages after it need its output and re-deriving is what the whole design
     rests on being able to do; what does not happen is a second write.
     """
-    with engine.begin() as connection:
-        if not hold_lease(connection, job.operation_id, owner=owner, plane=CAPTURE_JOBS):
-            raise LeaseLostError(job.operation_id)
-        version = _read_version(connection, job.subject_id)
-        if version is None:
-            # The job names a version the store does not hold. A broken store
-            # rather than a partial result: `capture_jobs.version_id` is a
-            # foreign key, so the row cannot have gone without the job going too.
-            raise JobExecutionError(ErrorCode.NOT_FOUND)
+    denied = False
+    admitted: _Version | None = None
+
+    def _validate(connection: Connection, version: _Version) -> None:
+        nonlocal admitted, denied
+        admitted = version
         if digest_of(version.content) != version.content_sha256:
             # `P-01`'s verification, and it fails the attempt rather than
             # continuing over text whose stored identity does not hold. Every
@@ -909,7 +1043,10 @@ def process_capture_version(engine: Engine, job: LeasedJob, owner: str) -> None:
             # governs, not the policy current at processing time, so a policy
             # added later is honoured for captures saved after it rather than
             # retroactively. One member exists today and this branch is what a
-            # second one arrives into.
+            # second one arrives into. That saved policy is the immutable
+            # ceiling. Then-current eligibility is a second gate, applied in
+            # `_admit` before this branch, and a refusal there pauses the job
+            # instead of recording `policy_denied`.
             _record(
                 connection,
                 job,
@@ -919,6 +1056,7 @@ def process_capture_version(engine: Engine, job: LeasedJob, owner: str) -> None:
                 digest=_validate_digest(version.content_sha256, version.processing_policy),
                 rows=0,
             )
+            denied = True
             return
         _record(
             connection,
@@ -930,13 +1068,23 @@ def process_capture_version(engine: Engine, job: LeasedJob, owner: str) -> None:
             rows=0,
         )
 
-    derivation = derive(version.content)
+    _in_stage(engine, job, owner, _validate)
+    if denied:
+        return
+    if admitted is None:  # `_validate` always runs when the stage is admitted
+        raise JobExecutionError(ErrorCode.NOT_FOUND)
+    derivation = derive(admitted.content)
     processing_text_id: str | None = None
 
     for stage in PIPELINE_ORDER[1:]:
-        with engine.begin() as connection:
-            if not hold_lease(connection, job.operation_id, owner=owner, plane=CAPTURE_JOBS):
-                raise LeaseLostError(job.operation_id)
+
+        def _stage(
+            connection: Connection,
+            version: _Version,
+            *,
+            stage: PipelineStage = stage,
+        ) -> None:
+            nonlocal processing_text_id
             written = _run_stage(
                 connection,
                 job,
@@ -947,6 +1095,8 @@ def process_capture_version(engine: Engine, job: LeasedJob, owner: str) -> None:
             )
             if stage is PipelineStage.NORMALIZE and written is not None:
                 processing_text_id = written
+
+        _in_stage(engine, job, owner, _stage)
 
 
 def _run_stage(

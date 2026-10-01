@@ -93,6 +93,7 @@ __all__ = [
     "lifecycle_receipt",
     "lifecycle_selected",
     "lock_capture_root",
+    "pause_job_for_policy",
     "record_lifecycle_event",
     "record_lifecycle_receipt",
     "resume_capture_jobs",
@@ -114,6 +115,9 @@ _capture_jobs = table(
     column("principal_id", Text),
     column("lease_generation", BigInteger),
     column("pause_cause", Text),
+    column("next_attempt_at", DateTime(timezone=True)),
+    column("last_error_code", Text),
+    column("dead_lettered_at", DateTime(timezone=True)),
     schema=SCHEMA,
 )
 _JOBS: Final = cast(Table, _capture_jobs)
@@ -590,3 +594,50 @@ def resume_capture_jobs(
                 .values(pause_cause=cause_value, updated_at=func.now())
             )
     return JobResumption(resumed=len(resumed), still_paused=len(paused))
+
+
+def pause_job_for_policy(
+    connection: Connection,
+    operation_id: str,
+    *,
+    owner: str,
+    generation: int,
+    context: PrincipalContext | None,
+) -> bool:
+    """Pause one running capture job the caller still holds. Not a failure.
+
+    A separate transaction from the stage that discovered the refusal, so the
+    pause commits after that stage rolls back (plan (f)). The root `FOR SHARE`
+    is the caller's, taken before this statement. The update matches the live
+    lease and generation, returns the job to queued, advances the generation so
+    the old holder cannot finish it, refunds the attempt, and sets the bounded
+    backoff `release_job` already uses. `last_error_code` and `dead_lettered_at`
+    stay unset. Returns whether this lease was still the one held.
+    """
+    validate_identifier(operation_id, IdKind.OPERATION)
+    if generation < 0:
+        raise ValueError("lease generation cannot be negative")
+    retry_seconds = func.least(300, func.power(2, _capture_jobs.c.attempt_count - 1))
+    statement = (
+        _capture_jobs.update()
+        .where(
+            _capture_jobs.c.operation_id == operation_id,
+            _capture_jobs.c.state == JobState.RUNNING.value,
+            _capture_jobs.c.lease_owner == owner,
+            _capture_jobs.c.lease_generation == generation,
+            partition_criterion(_JOBS, context),
+        )
+        .values(
+            state=JobState.QUEUED.value,
+            lease_owner=None,
+            lease_expires_at=None,
+            lease_generation=_capture_jobs.c.lease_generation + 1,
+            attempt_count=func.greatest(_capture_jobs.c.attempt_count - 1, 0),
+            pause_cause=CapturePauseCause.CURRENT_POLICY_INELIGIBLE.value,
+            next_attempt_at=func.now() + func.make_interval(0, 0, 0, 0, 0, 0, retry_seconds),
+            last_error_code=None,
+            dead_lettered_at=None,
+            updated_at=func.now(),
+        )
+    )
+    return connection.execute(statement).rowcount == 1

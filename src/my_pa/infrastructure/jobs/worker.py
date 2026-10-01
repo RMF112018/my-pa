@@ -160,6 +160,15 @@ class JobExecutionError(Exception):
         self.code = code
 
 
+class CapturePausedError(Exception):
+    """Then-current policy paused the job. Not a failure and not a lost lease.
+
+    The handler raises it only after the pause transaction has committed, so the
+    loop must not call `release_job`: the attempt was refunded, `last_error_code`
+    stays unset, and the row waits for a bounded re-evaluation.
+    """
+
+
 class LeaseLostError(Exception):
     """Raised, by a handler or by this module, when the lease is no longer ours.
 
@@ -186,8 +195,9 @@ class LeaseLostError(Exception):
 #:
 #: Raising `JobExecutionError` names the code the attempt failed with; raising
 #: `LeaseLostError` says the lease went and the attempt belongs to somebody else;
-#: raising anything else is an unclassified failure and is recorded as
-#: `internal_error`.
+#: raising `CapturePausedError` says then-current policy paused the job, which is
+#: neither a failure nor a lost lease; raising anything else is an unclassified
+#: failure and is recorded as `internal_error`.
 type JobHandler = Callable[[Engine, LeasedJob, str], None]
 type Heartbeat = Callable[[], None]
 
@@ -199,9 +209,11 @@ class WorkerRun:
     `released` counts attempts that ended in failure, whether or not attempts
     remained; `lost` counts attempts whose lease had been taken by another
     worker before they finished, which is a different event and is not a failure
-    of the work. `iterations` counts times round the loop, so an idle run is
-    distinguishable from one that found nothing to do because it was told to
-    stop.
+    of the work. `paused` counts attempts that stopped because then-current
+    policy refused an active root: the job was returned to the queue with its
+    attempt refunded, and nothing was recorded as a failure. `iterations` counts
+    times round the loop, so an idle run is distinguishable from one that found
+    nothing to do because it was told to stop.
     """
 
     iterations: int = 0
@@ -210,6 +222,7 @@ class WorkerRun:
     released: int = 0
     lost: int = 0
     idle: int = 0
+    paused: int = 0
 
 
 def issue_worker_owner() -> str:
@@ -227,10 +240,11 @@ def _execute(
 ) -> str:
     """Run one claimed job to an end, and report which end it reached.
 
-    Returns `"completed"`, `"released"`, or `"lost"`. The two failure paths are
-    separated because they mean different things: a released attempt failed and
-    may be retried within the bound, while a lost lease means this worker stopped
-    writing at the moment it lost the job and the job belongs to somebody else.
+    Returns `"completed"`, `"released"`, `"paused"`, or `"lost"`. The failure
+    paths are separated because they mean different things: a released attempt
+    failed and may be retried within the bound, a pause is a neutral withdrawal
+    from then-current policy, and a lost lease means this worker stopped writing
+    at the moment it lost the job and the job belongs to somebody else.
 
     The handler runs before the completion and outside it. Its own transactions
     are its own — see the module docstring for why they have to be, and for what
@@ -243,7 +257,13 @@ def _execute(
     try:
         handler(engine, job, owner)
         with engine.begin() as connection:
-            if not complete_job(connection, job.operation_id, owner=owner, plane=plane):
+            if not complete_job(
+                connection,
+                job.operation_id,
+                owner=owner,
+                plane=plane,
+                generation=job.generation,
+            ):
                 # The lease went while we were working. There is nothing to
                 # discard here any more — the handler committed as it went, and
                 # `hold_lease` is what stopped it once the lease was gone — so
@@ -252,6 +272,8 @@ def _execute(
         return "completed"
     except LeaseLostError:
         lost = True
+    except CapturePausedError:
+        return "paused"
     except JobExecutionError as error:
         failure = error.code
     except Exception:
@@ -267,7 +289,12 @@ def _execute(
         failure = ErrorCode.INTERNAL_ERROR
     with engine.begin() as connection:
         outcome = release_job(
-            connection, job.operation_id, owner=owner, error_code=failure, plane=plane
+            connection,
+            job.operation_id,
+            owner=owner,
+            error_code=failure,
+            plane=plane,
+            generation=job.generation,
         )
     # `None` means the update matched no row, which is the same discovery
     # `complete_job` makes: the lease is no longer ours and nothing was written.
@@ -322,7 +349,7 @@ def run_worker(
         raise ValueError("max_iterations cannot be negative")
 
     bounded = max_iterations is not None
-    iterations = claimed = completed = released = lost = idle = 0
+    iterations = claimed = completed = released = lost = idle = paused = 0
 
     while not stop.is_set():
         if max_iterations is not None and iterations >= max_iterations:
@@ -364,6 +391,8 @@ def run_worker(
                 completed += 1
             case "released":
                 released += 1
+            case "paused":
+                paused += 1
             case _:
                 lost += 1
         if heartbeat is not None:
@@ -376,4 +405,5 @@ def run_worker(
         released=released,
         lost=lost,
         idle=idle,
+        paused=paused,
     )

@@ -120,8 +120,9 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # builds reaches the partition: the root lock, the latest-event and
         # history reads and the receipt lookup through `principal_scoped`, the
         # event and receipt inserts through `principal_bound_values`, and the job
-        # lock and both job UPDATEs through `partition_criterion` (the lock also
-        # joins `capture_versions` under `matching_partition_criterion`).
+        # lock and the job UPDATEs (suspend, resume, and the neutral policy pause)
+        # through `partition_criterion` (the lock also joins `capture_versions`
+        # under `matching_partition_criterion`).
         "infrastructure/persistence/capture_lifecycle.py",
         # WP-10's client plane. Three of its four statements reach the partition
         # — the insert through `principal_bound_values`, the revoke through

@@ -450,6 +450,20 @@ class IdKind(StrEnum):
     #: file, and the uniqueness assertion in `tests/unit/test_identifiers.py`):
     #: `rcev` collides with none (`rcpt` differs).
     RECORD_EVENT = "rcev"
+    #: CRL-WP-03: the Capture root lifecycle plane (archive / restore). One
+    #: append-only lifecycle event and one idempotency receipt. Neither reuses
+    #: `LIFECYCLE_EVENT` (`lce`, the continuity plane's), `MANAGED_LIFECYCLE`
+    #: (`mdlce`), `RECEIPT` (`rcpt`, a capture *admission* receipt) or
+    #: `RECORD_EVENT` (`rcev`): a Capture lifecycle transition is none of those,
+    #: and a stored `predecessor_event_id`, a receipt's `event_id` or a Record
+    #: Event's `source_receipt_id` has to say which row it names. `clrcpt`
+    #: satisfies `RECEIPT_IDENTIFIER_PATTERN` in `domain.record_events`. Checked
+    #: against every prior member of this enum before use (a grep of each
+    #: quoted value over this file, and the uniqueness assertion in
+    #: `tests/unit/test_identifiers.py`): `clev`/`clrcpt` collide with none
+    #: (`clbl` / `clink` / `lce` / `rcpt` differ).
+    CAPTURE_LIFECYCLE_EVENT = "clev"
+    CAPTURE_LIFECYCLE_RECEIPT = "clrcpt"
 
 
 class InvalidIdentifierError(ValueError):

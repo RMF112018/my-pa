@@ -52,7 +52,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 SCHEMA: Final = "knowledge"
 REVISION: Final = "f7a2c9d51e64"
-CURRENT_HEAD: Final = "7d9a450dfd07"
+CURRENT_HEAD: Final = "1d9b248e7f83"
 CAPTURE_LABELS: Final = "c1a8e4d70b29"
 WP_TUX_01: Final = "de5ec1c65857"
 WP_MCP_PROJ_01: Final = "9f2c8a1d4e70"
@@ -83,6 +83,9 @@ CCA005_MIGRATION: Final = (
 #: WP-MTG-04's additive head (`7d9a450dfd07`, Meeting records), registered as
 #: this branch's additive head on the `CCA005_MIGRATION` precedent (#278).
 MEETING_RECORDS_MIGRATION: Final = MIGRATIONS / "20260927_7d9a450dfd07_meeting_records.py"
+#: WP-RE-01's additive head (`1d9b248e7f83`, Record Events), registered on the
+#: same precedent.
+RECORD_EVENTS_MIGRATION: Final = MIGRATIONS / "20260929_1d9b248e7f83_record_events.py"
 #: The one sanctioned edit to a historical revision (operator ruling
 #: OPERATOR_RULING_WP04_A_to_E.md section E). Like D-48, the Meeting-records
 #: work freezes `a_managed_document_is_identified_within_its_owner` out of
@@ -180,6 +183,7 @@ HEAD_PIN_FILES: Final[tuple[str, ...]] = (
     "tests/schema/test_goodnotes_semantic_proposal_migration.py",
     "tests/schema/test_legacy_direct_principal_task_origin_migration.py",
     "tests/schema/test_meeting_records_migration.py",
+    "tests/schema/test_record_events_migration.py",
     "tests/schema/test_oauth_refresh_migration.py",
     "tests/schema/test_project_controls_run01_integrity_migration.py",
     "tests/schema/test_project_version_and_entity_bridge_migration.py",
@@ -263,7 +267,8 @@ def _literals(block: str) -> list[str]:
 def test_revision_is_the_only_linear_head() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [CURRENT_HEAD]
-    assert script.get_revision(CURRENT_HEAD).down_revision == "6f6ead27d122"
+    assert script.get_revision(CURRENT_HEAD).down_revision == "7d9a450dfd07"
+    assert script.get_revision("7d9a450dfd07").down_revision == "6f6ead27d122"
     assert script.get_revision("6f6ead27d122").down_revision == "e6a4c2f91b73"
     assert script.get_revision("e6a4c2f91b73").down_revision == "c4f1a8e52d90"
     assert script.get_revision("c4f1a8e52d90").down_revision == WP_MCP_PROJ_02
@@ -276,7 +281,7 @@ def test_revision_is_the_only_linear_head() -> None:
 
 
 def test_the_chain_holds_the_files_it_claims() -> None:
-    assert len(list(MIGRATIONS.glob("*.py"))) == 108
+    assert len(list(MIGRATIONS.glob("*.py"))) == 109
 
 
 # ---- the freeze -------------------------------------------------------------
@@ -420,6 +425,7 @@ def test_no_historical_revision_was_edited() -> None:
         WP_MCP_PROJ_02_MIGRATION.relative_to(ROOT).as_posix(),
         WP_MCP_PROJ_01_MIGRATION.relative_to(ROOT).as_posix(),
         MEETING_RECORDS_MIGRATION.relative_to(ROOT).as_posix(),
+        RECORD_EVENTS_MIGRATION.relative_to(ROOT).as_posix(),
         # Not an additive head: the one sanctioned historical edit (see
         # `SANCTIONED_HISTORICAL_EDIT`; operator ruling section E).
         SANCTIONED_HISTORICAL_EDIT.relative_to(ROOT).as_posix(),

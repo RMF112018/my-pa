@@ -463,6 +463,10 @@ class SafeDetail(StrEnum):
     LOCATION_TEXT = "location_text"
     RESPONSE_STATUS = "response_status"
     CLEAR_FIELDS = "clear_fields"
+    #: The Record Event feed (WP-RE-06): the requested family narrowing was
+    #: empty, named an unknown family or repeated one. `CURSOR` and `PAGE_SIZE`
+    #: are reused for the feed's other two fields.
+    RECORD_FAMILIES = "record_families"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

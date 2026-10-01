@@ -63,6 +63,7 @@ _FEATURE_BY_FAMILY: Final[Mapping[str, str]] = {
     "constraint_categories": "constraints",
     "project_controls": "constraints",
     "meetings": "meetings",
+    "record_events": "record_events",
 }
 
 _WRAPPER_SCHEMA: Final[dict[str, Any]] = {

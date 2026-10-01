@@ -43,10 +43,10 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "e6a4c2f91b73"
 PREVIOUS: Final = "c4f1a8e52d90"
 #: The chain head this revision's test runs against. `6f6ead27d122` (CCA-005 /
-#: WP-TUX-01 legacy direct-Principal origin reconciliation) and then `7d9a450dfd07`
-#: (WP-MTG-04, Meeting records) are additive on `REVISION`, so `REVISION` is no
-#: longer the head.
-HEAD: Final = "7d9a450dfd07"
+#: WP-TUX-01 legacy direct-Principal origin reconciliation), then `7d9a450dfd07`
+#: (WP-MTG-04, Meeting records) and then `1d9b248e7f83` (WP-RE-01, Record Events)
+#: are additive on `REVISION`, so `REVISION` is no longer the head.
+HEAD: Final = "1d9b248e7f83"
 MIGRATION: Final = (
     ROOT / "migrations" / "versions" / "20260914_e6a4c2f91b73_project_controls_run01_integrity.py"
 )
@@ -121,8 +121,8 @@ def test_revision_identity_and_frozen_vocabulary_are_exact() -> None:
     }
     assert _literal("_PURPOSES_BEFORE_THIS_REVISION") == _literal("_PURPOSES_AT_THIS_REVISION")
     assert len(_values(_literal("_PURPOSES_AT_THIS_REVISION"))) == 45
-    assert len(Capability) == 178
-    assert len(Purpose) == 47
+    assert len(Capability) == 179
+    assert len(Purpose) == 48
     assert "from my_pa.domain" not in MIGRATION.read_text(encoding="utf-8")
 
 

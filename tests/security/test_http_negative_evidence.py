@@ -1278,6 +1278,7 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "idempotency_key": "wire-meetings-series-update-0001",
             "title": "A wire meeting series, retitled",
         },
+        Capability.RECORD_EVENTS_LIST: {"page_size": 10},
     }
 
 
@@ -1938,6 +1939,9 @@ SCOPED_CAPABILITIES = [
         Capability.MEETINGS_SEARCH,
         Capability.MEETINGS_UPDATE,
         Capability.MEETINGS_SERIES_UPDATE,
+        # WP-RE-06: `record_events.list` names only the acting Principal's own
+        # change feed and no `src_...` or `enr_...`; also in `_SCOPELESS`.
+        Capability.RECORD_EVENTS_LIST,
     }
 ]
 

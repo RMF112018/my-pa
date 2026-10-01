@@ -23,7 +23,11 @@ from my_pa.application.errors import InvalidRequestError, UnsupportedError
 from my_pa.contracts.v1.base import CONTRACT_VERSION
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import format_rfc3339, utc_now
-from my_pa.domain.identity.operation import Capability, permitted_purposes
+from my_pa.domain.identity.operation import (
+    Capability,
+    granted_purposes,
+    permitted_purposes,
+)
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.source.registry import issue_identifier
@@ -298,13 +302,9 @@ def resolve_remote_purpose(
     remaining purposes use `CANONICAL_REMOTE_PURPOSES` when that value is in
     the intersection; otherwise the request fails closed.
     """
-    permitted = permitted_purposes(capability)
-    if not permitted:
+    if not permitted_purposes(capability):
         raise UnsupportedError()
-    if grants is None or (capability, None) in grants:
-        effective = permitted
-    else:
-        effective = frozenset(purpose for purpose in permitted if (capability, purpose) in grants)
+    effective = granted_purposes(capability, grants)
     if not effective:
         raise UnsupportedError()
     if len(effective) == 1:

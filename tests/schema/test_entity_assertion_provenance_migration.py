@@ -252,6 +252,9 @@ def test_downgrading_one_step_removes_exactly_these_two_tables(migrated_engine: 
         "meeting_note_versions",
         "meeting_series_history",
         "meeting_write_requests",
+        # WP-RE-01. The Record Event revision stacks its two tables.
+        "record_event_sequences",
+        "record_events",
     }
     assert {
         "entities",

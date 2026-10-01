@@ -149,6 +149,7 @@ from my_pa.application.commands import (
     ListMeetings,
     ListPortfolioConstraints,
     ListProjects,
+    ListRecordEvents,
     ListRelationshipMemories,
     ListReviewCases,
     ListSituations,
@@ -287,6 +288,7 @@ from my_pa.domain.project_controls.sync import (
     ConstraintSyncResolution,
     NormalizedExternalConstraintRow,
 )
+from my_pa.domain.record_events import RecordEventFamily
 from my_pa.domain.relationship.authoring import CallerNamespace
 from my_pa.domain.relationship.entity import (
     AddressTypeCode,
@@ -2369,6 +2371,23 @@ def _read_meeting(payload: Mapping[str, Any]) -> Command:
     return ReadMeeting(**payload)
 
 
+def _list_record_events(payload: Mapping[str, Any]) -> Command:
+    """`record_events.list`: the family names become members; nothing else converts.
+
+    An unknown key -- `principal_id`, `sequence_number`, a grant or a
+    classification included -- reaches the frozen dataclass as an unexpected
+    keyword and is refused there, like every other command on this table.
+    """
+    converted = dict(payload)
+    families = converted.get("record_families")
+    if isinstance(families, list):
+        try:
+            converted["record_families"] = tuple(RecordEventFamily(item) for item in families)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.RECORD_FAMILIES) from None
+    return ListRecordEvents(**converted)
+
+
 def _list_meetings(payload: Mapping[str, Any]) -> Command:
     return ListMeetings(**_meeting_shapes(payload))
 
@@ -2565,6 +2584,7 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.MEETINGS_SEARCH: _search_meetings,
         Capability.MEETINGS_UPDATE: _update_meeting,
         Capability.MEETINGS_SERIES_UPDATE: _update_meeting_series,
+        Capability.RECORD_EVENTS_LIST: _list_record_events,
     }
 )
 

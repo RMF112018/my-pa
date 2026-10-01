@@ -30,6 +30,7 @@ from my_pa.application.constraint_settings import (
     ProjectControlsVersionConflictError,
     _digest,
 )
+from my_pa.contracts.ports import RecordEventStager
 from my_pa.domain.project_controls.business_time import ProjectTimezoneError
 from my_pa.domain.project_controls.history import (
     CONSTRAINT_PROJECT_SETTINGS_ACTION,
@@ -39,7 +40,9 @@ from my_pa.domain.project_controls.history import (
     ConstraintProjectSettingsOutcome,
 )
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
+from my_pa.domain.record_events import RecordEventDraft
 from my_pa.domain.situation.situation import Project, ProjectState
+from tests.conftest import FakeRecordEventStager
 
 PRINCIPAL_A: Final = "prn_pcaaaa0001aaaa0001aa"
 PRINCIPAL_B: Final = "prn_pcbbbb0002bbbb0002bb"
@@ -68,6 +71,8 @@ class _State:
     history: list[tuple[str, ConstraintProjectSettingsHistoryEntry]] = field(default_factory=list)
     #: Set to a stage name to make the next matching write fail there.
     fail_on: str | None = None
+    #: WP-RE-03: Record Event drafts committed by `_FakeUnitOfWork`, in order.
+    record_events: list[RecordEventDraft] = field(default_factory=list)
     #: Names of the calls made, in order, so the ordering claims are checkable.
     calls: list[str] = field(default_factory=list)
 
@@ -156,9 +161,11 @@ class _FakeUnitOfWork:
     def __init__(self, state: _State) -> None:
         self._state = state
         self._snapshot: _State | None = None
+        self._record_events = FakeRecordEventStager(state.record_events)
 
     def __enter__(self) -> _FakeUnitOfWork:
         self._snapshot = copy.deepcopy(self._state)
+        self._record_events = FakeRecordEventStager(self._state.record_events)
         return self
 
     def __exit__(
@@ -169,6 +176,7 @@ class _FakeUnitOfWork:
     ) -> None:
         snapshot = self._snapshot
         self._snapshot = None
+        self._record_events.settle(committed=exc_type is None)
         if exc_type is not None and snapshot is not None:
             restored = copy.deepcopy(snapshot)
             # `calls` is observation, not stored state: a rollback must not
@@ -180,6 +188,10 @@ class _FakeUnitOfWork:
     @property
     def constraints(self) -> _FakeConstraints:
         return _FakeConstraints(self._state)
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        return self._record_events
 
     @property
     def projects(self) -> _FakeProjects:

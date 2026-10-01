@@ -214,6 +214,14 @@ from my_pa.domain.project_controls.constraint import (
     ConstraintRecordQuality,
 )
 from my_pa.domain.project_controls.party import PartyKind
+from my_pa.domain.record_events import (
+    MAX_CHANGED_FIELDS,
+    MAX_SOURCE_CAPABILITY_CHARACTERS,
+    RecordEventActorClass,
+    RecordEventAuthority,
+    RecordEventFamily,
+    RecordEventKind,
+)
 from my_pa.domain.relationship.entity import (
     ARCHIVABLE_STATUSES,
     AddressTypeCode,
@@ -1026,8 +1034,8 @@ audit_events = Table(
 #: rather than declared and unreachable.
 #:
 #: `owner_principal_id` is stored because `ADR-003` clause 6 requires every
-#: stored record to bind its owning principal. It is deliberately *not* an
-#: authorization input: see `capture_versions`.
+#: stored record to bind its owning principal. It is the Principal partition
+#: every capture read and revise is scoped to (WP-03); see `capture_versions`.
 captures = Table(
     "captures",
     METADATA,
@@ -1065,13 +1073,15 @@ captures = Table(
 #: depend on the durability of the work it exists to outlive, which is the same
 #: reason `audit_events` itself declares none.
 #:
-#: **`owner_principal_id` is recorded and never authorized on** (`D-72`).
-#: Identity in this build is process-scoped — a restart mints a new principal —
-#: so requiring owner equality on read or revise would make `QC-AC-013`
-#: unprovable across two processes while enforcing a distinction a
-#: single-local-principal, loopback-only deployment cannot make. The column is an
-#: honest record of who wrote the version. `docs/operations/mcv-limitations.md`
-#: is where the consequence is disclosed.
+#: **`owner_principal_id` is the partition and is authorized on** (WP-03,
+#: `PKL-MYPA-D-WP03-001`, superseding `D-72`). Identity is durable: the loopback
+#: operator is the fixed `LOCAL_OPERATOR_UUID` and an authenticated account maps
+#: to one `identity.user_accounts` principal forever (`domain/identity/binding.py`),
+#: so a restart presents the same principal. Every read, list, search and
+#: revise-head lookup is scoped to the caller's own partition
+#: (`persistence/capture.py`, `persistence/capture_search.py`), and `QC-AC-013`
+#: stays provable across two processes (`tests/capture/test_owner_is_the_partition.py`).
+#: `docs/operations/mcv-limitations.md` section 2 records the history.
 capture_versions = Table(
     "capture_versions",
     METADATA,
@@ -13655,5 +13665,124 @@ meeting_write_requests = Table(
             f"{SCHEMA}.meeting_series_history.principal_id",
         ],
         name="a_meeting_write_request_names_a_receipt_of_its_series",
+    ),
+)
+
+
+# --- WP-RE-01: the Record Event feed -----------------------------------------
+#
+# Two tables. `record_event_sequences` is the per-Principal allocator row: a
+# concurrency primitive, not an activity record, so it is mutable and carries no
+# timestamp, no trigger and (repository convention) no Principal foreign key.
+# `record_events` is the append-only feed: one row per committed canonical
+# change, holding identities, typed versions, closed tokens and field *names* --
+# never a record body, a narrative value, a request body or a before/after
+# snapshot (hardened package RE-I-007). The append-only trigger is created by the
+# migration; a `Table` cannot declare one.
+
+#: One lower-snake field-name token, as a POSIX expression. The same rule
+#: `domain.record_events.CHANGED_FIELD_PATTERN` enforces, restated for the
+#: server; an array CHECK cannot use `_matches`, so the elements are joined and
+#: the joined string is matched whole. A NULL element joins as `*`, which no
+#: token matches, so the one expression also refuses NULL elements. A lone empty
+#: element joins to the empty string, which the pattern admits as "no fields", so
+#: empty elements are refused by their own conjunct.
+_RECORD_EVENT_FIELD_NAME: Final = "[a-z][a-z0-9_]{0,63}"
+
+record_event_sequences = Table(
+    "record_event_sequences",
+    METADATA,
+    Column("principal_id", Text, primary_key=True),
+    Column("next_sequence", BigInteger, nullable=False),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint("next_sequence >= 1", name="a_record_event_next_sequence_is_positive"),
+)
+
+record_events = Table(
+    "record_events",
+    METADATA,
+    Column("event_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("sequence_number", BigInteger, nullable=False),
+    Column("record_family", Text, nullable=False),
+    Column("record_id", Text, nullable=False),
+    Column("event_kind", Text, nullable=False),
+    Column("record_version", Integer, nullable=False),
+    Column("changed_fields", ARRAY(Text), nullable=False),
+    Column("source_capability", Text, nullable=False),
+    Column("source_receipt_id", Text),
+    Column("actor_class", Text, nullable=False),
+    Column("authority", Text),
+    Column("classification", Text, nullable=False),
+    Column("correlation_id", Text),
+    Column("causation_event_id", Text),
+    Column("occurred_at", DateTime(timezone=True), nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("event_id", IdKind.RECORD_EVENT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("causation_event_id", IdKind.RECORD_EVENT),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    # `record_id` and `source_receipt_id` carry no foreign key: each names a row
+    # in whichever table `record_family` says. What the server can still refuse
+    # is a value that is not an opaque identifier at all.
+    CheckConstraint(
+        f"record_id ~ '^[a-z]+_{_IDENTIFIER_SUFFIX}$'",
+        name="a_record_event_record_id_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        f"source_receipt_id IS NULL OR source_receipt_id ~ '^[a-z]+_{_IDENTIFIER_SUFFIX}$'",
+        name="a_record_event_receipt_id_is_an_opaque_identifier",
+    ),
+    _one_of("record_family", RecordEventFamily, name="a_record_event_family_is_known"),
+    _one_of("event_kind", RecordEventKind, name="a_record_event_kind_is_known"),
+    _one_of("actor_class", RecordEventActorClass, name="a_record_event_actor_class_is_known"),
+    _one_of("classification", Classification, name="a_record_event_classification_is_known"),
+    _one_of("authority", RecordEventAuthority, name="a_record_event_authority_is_known"),
+    CheckConstraint("sequence_number >= 1", name="a_record_event_sequence_is_positive"),
+    CheckConstraint("record_version >= 1", name="a_record_event_version_is_positive"),
+    CheckConstraint(
+        f"length(source_capability) BETWEEN 1 AND {MAX_SOURCE_CAPABILITY_CHARACTERS} "
+        "AND source_capability ~ '^[a-z][a-z0-9_]*([.][a-z][a-z0-9_]*)*$'",
+        name="a_record_event_source_capability_is_bounded",
+    ),
+    CheckConstraint(
+        f"cardinality(changed_fields) <= {MAX_CHANGED_FIELDS} "
+        "AND coalesce(array_ndims(changed_fields), 1) = 1 "
+        "AND '' <> ALL (changed_fields) "
+        "AND array_to_string(changed_fields, ',', '*') ~ "
+        f"'^({_RECORD_EVENT_FIELD_NAME}(,{_RECORD_EVENT_FIELD_NAME})*)?$'",
+        name="a_record_event_changed_fields_are_bounded",
+    ),
+    CheckConstraint(
+        "causation_event_id IS NULL OR causation_event_id <> event_id",
+        name="a_record_event_is_not_its_own_cause",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "sequence_number",
+        name="a_record_event_sequence_is_unique_within_its_principal",
+    ),
+    UniqueConstraint(
+        "event_id",
+        "principal_id",
+        name="a_record_event_is_identified_within_its_principal",
+    ),
+    # NOT DEFERRABLE on purpose: a cause is always staged, and so inserted,
+    # before its effect, so the check can run at each insert; a deferred check
+    # would be commit-time work after the allocator, which the lock-order proof
+    # (TRANSACTION matrix section 5) does not admit.
+    ForeignKeyConstraint(
+        ["causation_event_id", "principal_id"],
+        [f"{SCHEMA}.record_events.event_id", f"{SCHEMA}.record_events.principal_id"],
+        ondelete="RESTRICT",
+        deferrable=False,
+        name="a_record_event_cause_is_an_event_of_its_principal",
+    ),
+    Index(
+        "record_events_by_principal_record",
+        "principal_id",
+        "record_family",
+        "record_id",
+        text("sequence_number DESC"),
     ),
 )

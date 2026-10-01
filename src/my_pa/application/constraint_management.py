@@ -77,9 +77,11 @@ from my_pa.contracts.ports import (
     ConstraintManagementRepository,
     ConstraintManagementUnitOfWork,
     ProjectRepository,
+    RecordEventStager,
 )
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import utc_now
+from my_pa.domain.identity.operation import Capability
 from my_pa.domain.project_controls.business_time import default_due_date, project_today
 from my_pa.domain.project_controls.category import (
     ConstraintCategory,
@@ -117,6 +119,13 @@ from my_pa.domain.project_controls.relationship import (
     ConstraintRelationshipType,
 )
 from my_pa.domain.project_controls.revision import ConstraintRevision
+from my_pa.domain.record_events import (
+    CONSTRAINT_ACTOR_CLASSES,
+    NON_MEMORY_CLASSIFICATION,
+    RecordEventDraft,
+    RecordEventFamily,
+    RecordEventKind,
+)
 from my_pa.domain.source.registry import issue_identifier
 
 __all__ = [
@@ -135,6 +144,9 @@ __all__ = [
     "ConstraintProjectUnavailableError",
     "ConstraintReorderError",
     "ConstraintVersionConflictError",
+    "RecordEventOrigin",
+    "category_record_event",
+    "constraint_record_event",
 ]
 
 #: The accepted public-code suffix rendering: a *minimum* width of two, so the
@@ -282,6 +294,9 @@ class ConstraintMutationResult:
     disposition: ConstraintMutationDisposition
     record: ProjectConstraint
     receipt: ConstraintHistoryEntry
+    #: WP-RE-03: the Record Event this APPLIED attempt staged, when it staged
+    #: one -- what a composite names as a later event's cause.
+    record_event_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -324,6 +339,180 @@ class ConstraintFollowUpResult:
     relationship_id: str
 
 
+# --- WP-RE-03: the Record Events a Constraint-plane write stages -------------
+#
+# Staged on the Constraint unit of work (U4) -- `_Mutation.uow`, a composite's
+# own `uow`, or the caller's `active_uow` -- and never on the generic one
+# (REQUEST §5.E). Names, versions and ids only: `changed_fields` is a typed
+# comparison over explicitly spelled fields, never a payload.
+
+
+@dataclass(frozen=True, slots=True)
+class RecordEventOrigin:
+    """Where a Constraint-plane Record Event came from: the operation and request.
+
+    `source_capability` is the exact `Capability.value` a public request came
+    through, or a bounded non-public token for an internal path;
+    `correlation_id` is the request authorization's. Absent, each operation
+    falls back to its own public capability and the receipt's correlation.
+    """
+
+    source_capability: str
+    correlation_id: str | None = None
+
+
+def _origin(
+    origin: RecordEventOrigin | None, default_capability: str, correlation_id: str | None
+) -> RecordEventOrigin:
+    return origin or RecordEventOrigin(default_capability, correlation_id)
+
+
+_CONSTRAINT_CAPABILITY: Final = {
+    ConstraintMutationOperation.CREATE: Capability.CONSTRAINTS_CREATE.value,
+    ConstraintMutationOperation.PUBLISH: Capability.CONSTRAINTS_PUBLISH.value,
+    ConstraintMutationOperation.UPDATE: Capability.CONSTRAINTS_UPDATE.value,
+    ConstraintMutationOperation.TRANSITION: Capability.CONSTRAINTS_TRANSITION.value,
+    ConstraintMutationOperation.CLOSE: Capability.CONSTRAINTS_CLOSE.value,
+    ConstraintMutationOperation.VOID: Capability.CONSTRAINTS_VOID.value,
+    ConstraintMutationOperation.REOPEN: Capability.CONSTRAINTS_REOPEN.value,
+}
+
+
+def _constraint_values(record: ProjectConstraint) -> dict[str, object]:
+    """Every material Constraint field, by name (identity and bookkeeping excluded)."""
+    return {
+        "bic": record.bic or None,
+        "category_id": record.category_id,
+        "closure_commentary": record.closure_commentary,
+        "completion_date": record.completion_date,
+        "constraint_code": record.constraint_code,
+        "current_update": record.current_update,
+        "date_identified": record.date_identified,
+        "description": record.description,
+        "due_date": record.due_date,
+        "lifecycle_state": record.lifecycle_state,
+        "origin": record.origin,
+        "project_id": record.project_id,
+        "published_at": record.published_at,
+        "record_quality": record.record_quality,
+        "reference": record.reference,
+        "responsible": record.responsible or None,
+        "void_reason": record.void_reason,
+        "voided_date": record.voided_date,
+    }
+
+
+def _category_values(record: ConstraintCategory) -> dict[str, object]:
+    """Every material Category field, by name."""
+    return {
+        "description": record.description,
+        "display_order": record.display_order,
+        "prefix": record.prefix,
+        "prefix_locked_at": record.prefix_locked_at,
+        "state": record.state,
+        "title": record.title,
+    }
+
+
+def _changed(before: dict[str, object] | None, after: dict[str, object]) -> tuple[str, ...]:
+    if before is None:
+        return tuple(sorted(name for name, value in after.items() if value is not None))
+    return tuple(sorted(name for name, value in after.items() if before[name] != value))
+
+
+def constraint_record_event(
+    *,
+    principal_id: str,
+    operation: ConstraintMutationOperation,
+    before: ProjectConstraint | None,
+    after: ProjectConstraint,
+    actor: ConstraintMutationActor,
+    history_id: str,
+    occurred_at: datetime,
+    origin: RecordEventOrigin,
+    causation_event_id: str | None = None,
+) -> RecordEventDraft:
+    """The one event an APPLIED Constraint mutation stages.
+
+    A create is `created`; an update `updated` (its typed difference is within
+    the fields it touched, because `update` replaces only those); every
+    lifecycle operation -- publish, transition, close, void, reopen -- is
+    `state_changed`.
+    """
+    if before is None or operation is ConstraintMutationOperation.CREATE:
+        kind = RecordEventKind.CREATED
+        fields = _changed(None, _constraint_values(after))
+    else:
+        kind = (
+            RecordEventKind.UPDATED
+            if operation is ConstraintMutationOperation.UPDATE
+            else RecordEventKind.STATE_CHANGED
+        )
+        fields = _changed(_constraint_values(before), _constraint_values(after))
+    return RecordEventDraft.issue(
+        principal_id=principal_id,
+        record_family=RecordEventFamily.CONSTRAINT,
+        record_id=after.constraint_id,
+        event_kind=kind,
+        record_version=after.version,
+        changed_fields=fields,
+        source_capability=origin.source_capability,
+        actor_class=CONSTRAINT_ACTOR_CLASSES[actor],
+        classification=NON_MEMORY_CLASSIFICATION,
+        occurred_at=occurred_at,
+        source_receipt_id=history_id,
+        correlation_id=origin.correlation_id,
+        causation_event_id=causation_event_id,
+    )
+
+
+def category_record_event(
+    *,
+    principal_id: str,
+    before: ConstraintCategory | None,
+    after: ConstraintCategory,
+    version: int,
+    actor: ConstraintMutationActor,
+    history_id: str | None,
+    occurred_at: datetime,
+    origin: RecordEventOrigin,
+    always_version: bool = False,
+) -> RecordEventDraft:
+    """The one event an APPLIED Category mutation stages.
+
+    `created` for a new Category, `state_changed` when its state moved (the
+    deactivation), `updated` otherwise. `always_version` names `version` for a
+    write whose only certain change is the version itself (a reorder that left
+    a Category where it was; an import that advanced its allocator).
+    """
+    if before is None:
+        kind = RecordEventKind.CREATED
+        fields = _changed(None, _category_values(after))
+    else:
+        kind = (
+            RecordEventKind.STATE_CHANGED
+            if before.state is not after.state
+            else RecordEventKind.UPDATED
+        )
+        fields = _changed(_category_values(before), _category_values(after))
+    if always_version:
+        fields = tuple(sorted({*fields, "version"}))
+    return RecordEventDraft.issue(
+        principal_id=principal_id,
+        record_family=RecordEventFamily.CONSTRAINT_CATEGORY,
+        record_id=after.category_id,
+        event_kind=kind,
+        record_version=version,
+        changed_fields=fields,
+        source_capability=origin.source_capability,
+        actor_class=CONSTRAINT_ACTOR_CLASSES[actor],
+        classification=NON_MEMORY_CLASSIFICATION,
+        occurred_at=occurred_at,
+        source_receipt_id=history_id,
+        correlation_id=origin.correlation_id,
+    )
+
+
 class _ActiveConstraintUnitOfWork(Protocol):
     @property
     def constraints(self) -> ConstraintManagementRepository: ...
@@ -338,6 +527,11 @@ class _ActiveConstraintUnitOfWork(Protocol):
         Principal-scoped ownership answer `get_project` returns, and nothing
         else.
         """
+        ...
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        """The joined transaction's Record Event buffer (WP-RE-01)."""
         ...
 
 
@@ -421,8 +615,10 @@ class ConstraintManagementService:
         idempotency_key: str | None = None,
         client_context: str | None = None,
         correlation_id: str | None = None,
+        event_origin: RecordEventOrigin | None = None,
         active_uow: _ActiveConstraintUnitOfWork | None = None,
         digest_override: str | None = None,
+        record_event: bool = True,
     ) -> ConstraintMutationResult:
         """Create and save a Draft.
 
@@ -473,6 +669,7 @@ class ConstraintManagementService:
             idempotency_key=idempotency_key,
             client_context=client_context,
             correlation_id=correlation_id,
+            event_origin=event_origin,
             request_digest=_digest(
                 project_id=project_id,
                 category_id=category_id,
@@ -488,6 +685,7 @@ class ConstraintManagementService:
             change=change,
             active_uow=active_uow,
             digest_override=digest_override,
+            record_event=record_event,
         )
 
     def publish(
@@ -506,8 +704,10 @@ class ConstraintManagementService:
         idempotency_key: str | None = None,
         client_context: str | None = None,
         correlation_id: str | None = None,
+        event_origin: RecordEventOrigin | None = None,
         active_uow: _ActiveConstraintUnitOfWork | None = None,
         digest_override: str | None = None,
+        record_event: bool = True,
     ) -> ConstraintMutationResult:
         """Publish a Draft: allocate its public code and give it an active state.
 
@@ -562,6 +762,7 @@ class ConstraintManagementService:
             idempotency_key=idempotency_key,
             client_context=client_context,
             correlation_id=correlation_id,
+            event_origin=event_origin,
             request_digest=_digest(
                 constraint_id=constraint_id,
                 expected_version=expected_version,
@@ -577,6 +778,7 @@ class ConstraintManagementService:
             change=change,
             active_uow=active_uow,
             digest_override=digest_override,
+            record_event=record_event,
         )
 
     def create_published(
@@ -597,6 +799,7 @@ class ConstraintManagementService:
         idempotency_key: str | None = None,
         client_context: str | None = None,
         correlation_id: str | None = None,
+        event_origin: RecordEventOrigin | None = None,
     ) -> ConstraintMutationResult:
         """Create a Constraint and publish it, as one atomic operation.
 
@@ -650,6 +853,11 @@ class ConstraintManagementService:
         if idempotency_key is not None:
             _validate_idempotency_key(idempotency_key)
 
+        # WP-RE-03 (RE-AC-032): one final `created` event for the published
+        # record; neither step stages its own (REQUEST §5.F).
+        origin = _origin(
+            event_origin, Capability.CONSTRAINTS_CREATE_PUBLISHED.value, correlation_id
+        )
         with self._unit_of_work() as uow:
             # No row lock precedes this gate, and none can: a creation names no
             # row to lock. `_mutate` states the accepted answer -- a concurrent
@@ -682,6 +890,8 @@ class ConstraintManagementService:
                 idempotency_key=idempotency_key,
                 client_context=client_context,
                 correlation_id=correlation_id,
+                event_origin=origin,
+                record_event=False,
                 active_uow=uow,
                 digest_override=digest,
             )
@@ -702,14 +912,28 @@ class ConstraintManagementService:
                 idempotency_key=publish_key,
                 client_context=client_context,
                 correlation_id=correlation_id,
+                event_origin=origin,
+                record_event=False,
                 active_uow=uow,
                 digest_override=digest,
             )
+            final = constraint_record_event(
+                principal_id=principal_id,
+                operation=ConstraintMutationOperation.CREATE,
+                before=None,
+                after=published.record,
+                actor=actor,
+                history_id=published.receipt.history_id,
+                occurred_at=published.receipt.occurred_at,
+                origin=origin,
+            )
+            uow.record_events.stage(final)
 
         return ConstraintMutationResult(
             disposition=ConstraintMutationDisposition.APPLIED,
             record=published.record,
             receipt=published.receipt,
+            record_event_id=final.event_id,
         )
 
     def update(
@@ -724,6 +948,7 @@ class ConstraintManagementService:
         idempotency_key: str | None = None,
         client_context: str | None = None,
         correlation_id: str | None = None,
+        event_origin: RecordEventOrigin | None = None,
         active_uow: _ActiveConstraintUnitOfWork | None = None,
     ) -> ConstraintMutationResult:
         """Apply one bounded patch under one row lock and one receipt.
@@ -792,6 +1017,7 @@ class ConstraintManagementService:
             idempotency_key=idempotency_key,
             client_context=client_context,
             correlation_id=correlation_id,
+            event_origin=event_origin,
             request_digest=_digest(
                 constraint_id=constraint_id,
                 expected_version=expected_version,
@@ -813,6 +1039,7 @@ class ConstraintManagementService:
         idempotency_key: str | None = None,
         client_context: str | None = None,
         correlation_id: str | None = None,
+        event_origin: RecordEventOrigin | None = None,
         active_uow: _ActiveConstraintUnitOfWork | None = None,
     ) -> ConstraintMutationResult:
         """Move an active Constraint to another active state.
@@ -843,6 +1070,7 @@ class ConstraintManagementService:
             idempotency_key=idempotency_key,
             client_context=client_context,
             correlation_id=correlation_id,
+            event_origin=event_origin,
             request_digest=_digest(
                 constraint_id=constraint_id,
                 expected_version=expected_version,
@@ -864,6 +1092,7 @@ class ConstraintManagementService:
         idempotency_key: str | None = None,
         client_context: str | None = None,
         correlation_id: str | None = None,
+        event_origin: RecordEventOrigin | None = None,
         active_uow: _ActiveConstraintUnitOfWork | None = None,
         digest_override: str | None = None,
     ) -> ConstraintMutationResult:
@@ -903,6 +1132,7 @@ class ConstraintManagementService:
             idempotency_key=idempotency_key,
             client_context=client_context,
             correlation_id=correlation_id,
+            event_origin=event_origin,
             request_digest=_digest(
                 constraint_id=constraint_id,
                 expected_version=expected_version,
@@ -926,6 +1156,7 @@ class ConstraintManagementService:
         idempotency_key: str | None = None,
         client_context: str | None = None,
         correlation_id: str | None = None,
+        event_origin: RecordEventOrigin | None = None,
         active_uow: _ActiveConstraintUnitOfWork | None = None,
     ) -> ConstraintMutationResult:
         """Void an active Constraint: it will not happen, and this is why.
@@ -968,6 +1199,7 @@ class ConstraintManagementService:
             idempotency_key=idempotency_key,
             client_context=client_context,
             correlation_id=correlation_id,
+            event_origin=event_origin,
             request_digest=_digest(
                 constraint_id=constraint_id,
                 expected_version=expected_version,
@@ -990,6 +1222,7 @@ class ConstraintManagementService:
         idempotency_key: str | None = None,
         client_context: str | None = None,
         correlation_id: str | None = None,
+        event_origin: RecordEventOrigin | None = None,
         active_uow: _ActiveConstraintUnitOfWork | None = None,
     ) -> ConstraintMutationResult:
         """Return a CLOSED or VOID Constraint to an explicit active state.
@@ -1028,6 +1261,7 @@ class ConstraintManagementService:
             idempotency_key=idempotency_key,
             client_context=client_context,
             correlation_id=correlation_id,
+            event_origin=event_origin,
             request_digest=_digest(
                 constraint_id=constraint_id,
                 expected_version=expected_version,
@@ -1056,6 +1290,7 @@ class ConstraintManagementService:
         idempotency_key: str | None = None,
         client_context: str | None = None,
         correlation_id: str | None = None,
+        event_origin: RecordEventOrigin | None = None,
     ) -> ConstraintFollowUpResult:
         """Close a Constraint and publish its follow-up, as one atomic operation.
 
@@ -1103,6 +1338,10 @@ class ConstraintManagementService:
         if idempotency_key is not None:
             _validate_idempotency_key(idempotency_key)
 
+        # WP-RE-03 (RE-AC-036): the predecessor's `state_changed` (staged by its
+        # close), then one `created` for the published successor whose cause
+        # is that event; the successor's Draft and Publish steps stage nothing.
+        origin = _origin(event_origin, Capability.CONSTRAINTS_CLOSE_FOLLOW_UP.value, correlation_id)
         with self._unit_of_work() as uow:
             # The predecessor's row lock comes first and the replay gate sits
             # behind it, for the reason `_mutate` states. This composite names a
@@ -1138,6 +1377,7 @@ class ConstraintManagementService:
                 idempotency_key=idempotency_key,
                 client_context=client_context,
                 correlation_id=correlation_id,
+                event_origin=origin,
                 active_uow=uow,
                 digest_override=digest,
             )
@@ -1173,6 +1413,8 @@ class ConstraintManagementService:
                 ),
                 client_context=client_context,
                 correlation_id=correlation_id,
+                event_origin=origin,
+                record_event=False,
                 active_uow=uow,
             )
             published = self.publish(
@@ -1184,6 +1426,8 @@ class ConstraintManagementService:
                 idempotency_key=successor_key,
                 client_context=client_context,
                 correlation_id=correlation_id,
+                event_origin=origin,
+                record_event=False,
                 active_uow=uow,
                 digest_override=digest,
             )
@@ -1198,6 +1442,19 @@ class ConstraintManagementService:
                 created_at=now,
             )
             uow.constraints.insert_relationship(principal_id, relationship)
+            uow.record_events.stage(
+                constraint_record_event(
+                    principal_id=principal_id,
+                    operation=ConstraintMutationOperation.CREATE,
+                    before=None,
+                    after=published.record,
+                    actor=actor,
+                    history_id=published.receipt.history_id,
+                    occurred_at=published.receipt.occurred_at,
+                    origin=origin,
+                    causation_event_id=closed.record_event_id,
+                )
+            )
 
         return ConstraintFollowUpResult(
             disposition=ConstraintMutationDisposition.APPLIED,
@@ -1224,6 +1481,7 @@ class ConstraintManagementService:
         idempotency_key: str | None = None,
         client_context: str | None = None,
         correlation_id: str | None = None,
+        event_origin: RecordEventOrigin | None = None,
         active_uow: _ActiveConstraintUnitOfWork | None = None,
     ) -> ConstraintCategoryMutationResult:
         """Create one Constraint Category in one of this Principal's Projects.
@@ -1259,6 +1517,7 @@ class ConstraintManagementService:
             idempotency_key=idempotency_key,
             client_context=client_context,
             correlation_id=correlation_id,
+            event_origin=event_origin,
             request_digest=_digest(
                 project_id=project_id,
                 prefix=prefix,
@@ -1268,6 +1527,7 @@ class ConstraintManagementService:
                 state=state,
             ),
             change=build,
+            source_capability=Capability.CONSTRAINT_CATEGORIES_CREATE.value,
             active_uow=active_uow,
         )
 
@@ -1282,6 +1542,7 @@ class ConstraintManagementService:
         idempotency_key: str | None = None,
         client_context: str | None = None,
         correlation_id: str | None = None,
+        event_origin: RecordEventOrigin | None = None,
         active_uow: _ActiveConstraintUnitOfWork | None = None,
     ) -> ConstraintCategoryMutationResult:
         """Change a Category's title, description, display order, or unlocked prefix.
@@ -1323,12 +1584,14 @@ class ConstraintManagementService:
             idempotency_key=idempotency_key,
             client_context=client_context,
             correlation_id=correlation_id,
+            event_origin=event_origin,
             request_digest=_digest(
                 category_id=category_id,
                 expected_version=expected_version,
                 values=_normalized_patch(patch),
             ),
             change=build,
+            source_capability=Capability.CONSTRAINT_CATEGORIES_UPDATE.value,
             active_uow=active_uow,
         )
 
@@ -1342,6 +1605,7 @@ class ConstraintManagementService:
         idempotency_key: str | None = None,
         client_context: str | None = None,
         correlation_id: str | None = None,
+        event_origin: RecordEventOrigin | None = None,
         active_uow: _ActiveConstraintUnitOfWork | None = None,
     ) -> ConstraintCategoryMutationResult:
         """Retire a Category from new Publishes without deleting anything.
@@ -1375,8 +1639,10 @@ class ConstraintManagementService:
             idempotency_key=idempotency_key,
             client_context=client_context,
             correlation_id=correlation_id,
+            event_origin=event_origin,
             request_digest=_digest(category_id=category_id, expected_version=expected_version),
             change=build,
+            source_capability=Capability.CONSTRAINT_CATEGORIES_DEACTIVATE.value,
             active_uow=active_uow,
         )
 
@@ -1391,6 +1657,7 @@ class ConstraintManagementService:
         idempotency_key: str | None = None,
         client_context: str | None = None,
         correlation_id: str | None = None,
+        event_origin: RecordEventOrigin | None = None,
     ) -> ConstraintCategoryReorderResult:
         """Set the whole display order of a Project's Categories, atomically.
 
@@ -1523,6 +1790,26 @@ class ConstraintManagementService:
                             request_digest=digest,
                         )
                     )
+                    # WP-RE-03 (RE-AC-038): every Category in `wanted`
+                    # advances its version, so each is a changed record, in
+                    # request order.
+                    uow.record_events.stage(
+                        category_record_event(
+                            principal_id=principal_id,
+                            before=category,
+                            after=reordered,
+                            version=row.version + 1,
+                            actor=actor,
+                            history_id=receipts[-1].history_id,
+                            occurred_at=now,
+                            origin=_origin(
+                                event_origin,
+                                Capability.CONSTRAINT_CATEGORIES_REORDER.value,
+                                correlation_id,
+                            ),
+                            always_version=True,
+                        )
+                    )
 
         if rejected:
             raise ConstraintCategoryVersionConflictError(rejected)
@@ -1549,6 +1836,8 @@ class ConstraintManagementService:
         change: _Change,
         active_uow: _ActiveConstraintUnitOfWork | None = None,
         digest_override: str | None = None,
+        event_origin: RecordEventOrigin | None = None,
+        record_event: bool = True,
     ) -> ConstraintMutationResult:
         """The single transactional mechanism every Constraint method delegates to.
 
@@ -1703,10 +1992,33 @@ class ConstraintManagementService:
                                 recorded_at=now,
                             ),
                         )
+                        # WP-RE-03: the APPLIED branch, and only it, stages --
+                        # on the Constraint unit of work (U4) this attempt wrote
+                        # through. A composite passes `record_event=False` for
+                        # its intermediate steps and stages its own final event.
+                        event_id: str | None = None
+                        if record_event:
+                            draft = constraint_record_event(
+                                principal_id=principal_id,
+                                operation=operation,
+                                before=current,
+                                after=applied,
+                                actor=actor,
+                                history_id=receipt.history_id,
+                                occurred_at=now,
+                                origin=_origin(
+                                    event_origin,
+                                    _CONSTRAINT_CAPABILITY[operation],
+                                    correlation_id,
+                                ),
+                            )
+                            uow.record_events.stage(draft)
+                            event_id = draft.event_id
                         result = ConstraintMutationResult(
                             disposition=ConstraintMutationDisposition.APPLIED,
                             record=applied,
                             receipt=receipt,
+                            record_event_id=event_id,
                         )
 
         if pending_not_found:
@@ -1776,6 +2088,8 @@ class ConstraintManagementService:
         request_digest: str,
         change: _CategoryChange,
         active_uow: _ActiveConstraintUnitOfWork | None = None,
+        event_origin: RecordEventOrigin | None = None,
+        source_capability: str,
     ) -> ConstraintCategoryMutationResult:
         """The Category sibling of `_mutate`. Same discipline, one ledger over.
 
@@ -1906,6 +2220,19 @@ class ConstraintManagementService:
                             client_context=client_context,
                             correlation_id=correlation_id,
                             request_digest=request_digest,
+                        )
+                        # WP-RE-03: the APPLIED branch, and only it, stages.
+                        uow.record_events.stage(
+                            category_record_event(
+                                principal_id=principal_id,
+                                before=current,
+                                after=proposed,
+                                version=before_version + 1,
+                                actor=actor,
+                                history_id=receipt.history_id,
+                                occurred_at=now,
+                                origin=_origin(event_origin, source_capability, correlation_id),
+                            )
                         )
                         result = ConstraintCategoryMutationResult(
                             disposition=ConstraintMutationDisposition.APPLIED,

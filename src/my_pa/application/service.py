@@ -216,6 +216,7 @@ from my_pa.application.commands import (
     ListMeetings,
     ListPortfolioConstraints,
     ListProjects,
+    ListRecordEvents,
     ListRelationshipMemories,
     ListReviewCases,
     ListSituations,
@@ -324,6 +325,7 @@ from my_pa.application.constraint_management import (
     ConstraintProjectUnavailableError,
     ConstraintReorderError,
     ConstraintVersionConflictError,
+    RecordEventOrigin,
 )
 from my_pa.application.constraint_settings import (
     ProjectControlsConfigurationResult,
@@ -464,6 +466,7 @@ from my_pa.application.meetings import (
 )
 from my_pa.application.model_gate import BoundedModelGate
 from my_pa.application.producer_origin import ProducerOriginError, ProducerOriginRegistry
+from my_pa.application.record_events import list_record_events, record_event_page_size
 from my_pa.application.relationship_memory import (
     ArchiveMemoryCommand,
     CreateMemoryCommand,
@@ -474,7 +477,7 @@ from my_pa.application.relationship_memory import (
     RelationshipMemoryService,
     ReviseMemoryCommand,
 )
-from my_pa.application.tasks import TaskManagementService
+from my_pa.application.tasks import TaskManagementService, task_record_event
 from my_pa.contracts.ports import (
     Acceptance,
     AuthoringConflictError,
@@ -577,7 +580,7 @@ from my_pa.domain.documents.managed import (
 from my_pa.domain.extraction.coverage import CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus, extract_text
 from my_pa.domain.goodnotes.models import GoodNotesReviewCase, GoodNotesSemanticReviewCase
-from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.operation import Capability, granted_purposes
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.meeting.model import (
@@ -611,6 +614,15 @@ from my_pa.domain.project_controls.read_models import (
 from my_pa.domain.project_controls.relationship import ConstraintRelationshipError
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
 from my_pa.domain.project_controls.sync import ConstraintSyncAction, NormalizedExternalConstraintRow
+from my_pa.domain.record_events import (
+    NON_MEMORY_CLASSIFICATION,
+    TASK_ACTOR_CLASSES,
+    RecordEventActorClass,
+    RecordEventDraft,
+    RecordEventFamily,
+    RecordEventKind,
+    capture_record_event,
+)
 from my_pa.domain.relationship.authoring import (
     AmbiguousEntityError,
     ConflictedIdentifierError,
@@ -695,6 +707,8 @@ from my_pa.domain.search.query import (
     label_for_media_type,
 )
 from my_pa.domain.situation.continuity import CommitmentWorkView
+from my_pa.domain.situation.continuity import Task as ContinuityTask
+from my_pa.domain.situation.project_history import ProjectMutationReceipt
 from my_pa.domain.situation.situation import Project, ProjectEntityLinkageState, Situation
 from my_pa.domain.source.enrollment import (
     MAX_ENROLLMENT_BYTES,
@@ -1605,6 +1619,76 @@ def _normalise_bulk_mutations(
             )
     canonical = json.dumps(normalised, sort_keys=True, separators=(",", ":"))
     return tuple(normalised), hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+#: WP-RE-02: the Task fields `continuity.tasks.create` always materializes,
+#: named as the `tasks.*` reads name them; the optional context fields are added
+#: when present.
+_CONTINUITY_TASK_CREATED_FIELDS: Final = (
+    "acceptance_kind",
+    "evidence_state",
+    "lifecycle_state",
+    "opened_at",
+    "origin_kind",
+    "title",
+)
+
+
+def _continuity_task_created_fields(task: ContinuityTask) -> tuple[str, ...]:
+    optional = {
+        "due_at": task.due_at,
+        "project_id": task.project_id,
+        "situation_id": task.situation_id,
+    }
+    present = tuple(name for name, value in optional.items() if value is not None)
+    return tuple(sorted(_CONTINUITY_TASK_CREATED_FIELDS + present))
+
+
+def _project_updatable_values(project: Project) -> dict[str, object]:
+    """What `continuity.projects.update` compares.
+
+    The version always advances, so an identical update still names `version`
+    (G1-EM-010).
+    """
+    return {"description": project.description, "name": project.name, "state": project.state}
+
+
+def _project_mutation_record_event(
+    authorization: Authorization, before: Project | None, receipt: ProjectMutationReceipt
+) -> RecordEventDraft:
+    """The one event an APPLIED Project update or close stages (RE-AC-029/030)."""
+    after = receipt.project
+    if authorization.capability is Capability.CONTINUITY_PROJECTS_CLOSE:
+        kind = RecordEventKind.STATE_CHANGED
+        fields: tuple[str, ...] = ("closed_at", "state")
+    else:
+        if before is None or before.version != receipt.history.before_version:
+            raise InternalError()
+        was = _project_updatable_values(before)
+        diff = tuple(
+            name for name, value in _project_updatable_values(after).items() if was[name] != value
+        )
+        kind = RecordEventKind.STATE_CHANGED if diff == ("state",) else RecordEventKind.UPDATED
+        fields = tuple(sorted((*diff, "version")))
+    return RecordEventDraft.issue(
+        principal_id=authorization.principal.principal_id,
+        record_family=RecordEventFamily.PROJECT,
+        record_id=after.project_id,
+        event_kind=kind,
+        record_version=after.version,
+        changed_fields=fields,
+        source_capability=authorization.capability.value,
+        actor_class=TASK_ACTOR_CLASSES[receipt.history.actor],
+        classification=NON_MEMORY_CLASSIFICATION,
+        occurred_at=receipt.history.occurred_at,
+        source_receipt_id=receipt.history.history_id,
+        correlation_id=authorization.correlation_id,
+    )
+
+
+def _constraint_event_origin(authorization: Authorization) -> RecordEventOrigin:
+    """WP-RE-03: the request's exact capability and correlation, for U4's events."""
+    return RecordEventOrigin(authorization.capability.value, authorization.correlation_id)
 
 
 def _bulk_candidate(
@@ -2815,6 +2899,11 @@ def _namespace_or_refuse(named: str | None) -> ExternalIdentifierNamespace | Non
         raise InvalidRequestError(SafeDetail.SELECTOR) from None
 
 
+#: A Record Event names an ADR-003 product-owned record of this Principal's own
+#: partition, read through no configured source (WP-RE-06).
+_RECORD_EVENT_TRUST_BASIS: Final = ("principal_partition",)
+
+
 #: A Meeting is an ADR-003 product-owned record in this Principal's own
 #: partition, read through no configured source and no enrollment, so the basis
 #: is the partition exactly as the Constraint and task planes' is (WP-MTG-04).
@@ -3903,6 +3992,11 @@ class ApplicationService:
                         # are identical. Leaving normally commits that receipt;
                         # no generic ApplicationError receives this treatment.
                         committed_conflict = conflict.failure
+                        # WP-RE-02 (G1-TX-006): a committed refusal commits
+                        # no Record Event. Anything staged here is a defect, and
+                        # raising rolls the whole transaction back.
+                        if unit_of_work.record_events.pending_count:
+                            raise InternalError() from None
         # Reached only after the transaction committed, which is what preserves
         # the audit event recording the refusal.
         if mismatch:
@@ -5621,7 +5715,64 @@ class ApplicationService:
                 if str(error) != "an active project-type canonical name is already held":
                     raise
                 raise ConflictError(SafeDetail.NAME) from None
+            self._stage_project_created(unit_of_work, authorization, project)
         return self._project_authoring_result(authorization, project, replayed=False)
+
+    @staticmethod
+    def _stage_project_created(
+        unit_of_work: UnitOfWork, authorization: Authorization, project: Project
+    ) -> None:
+        """WP-RE-02 (RE-AC-028): the Project, then its bound Entity, in one batch.
+
+        Both are unledgered creates, so neither names a receipt (G1-EM-008). The
+        bound Entity is read back from the link this same transaction wrote, and
+        its event names the Project event as its cause.
+        """
+        principal_id = authorization.principal.principal_id
+        project_event = RecordEventDraft.issue(
+            principal_id=principal_id,
+            record_family=RecordEventFamily.PROJECT,
+            record_id=project.project_id,
+            event_kind=RecordEventKind.CREATED,
+            record_version=project.version,
+            changed_fields=tuple(
+                sorted(
+                    name
+                    for name, value in (
+                        ("description", project.description),
+                        ("name", project.name),
+                        ("opened_at", project.opened_at),
+                        ("state", project.state),
+                    )
+                    if value is not None
+                )
+            ),
+            source_capability=authorization.capability.value,
+            actor_class=RecordEventActorClass.PRINCIPAL,
+            classification=NON_MEMORY_CLASSIFICATION,
+            occurred_at=project.opened_at,
+            correlation_id=authorization.correlation_id,
+        )
+        unit_of_work.record_events.stage(project_event)
+        link = unit_of_work.projects.get_project_entity_link(principal_id, project.project_id)
+        if link is None or link.project_entity_id is None:
+            raise InternalError()
+        unit_of_work.record_events.stage(
+            RecordEventDraft.issue(
+                principal_id=principal_id,
+                record_family=RecordEventFamily.ENTITY,
+                record_id=link.project_entity_id,
+                event_kind=RecordEventKind.CREATED,
+                record_version=1,
+                changed_fields=("canonical_name", "display_name", "entity_type", "status"),
+                source_capability=authorization.capability.value,
+                actor_class=RecordEventActorClass.PRINCIPAL,
+                classification=NON_MEMORY_CLASSIFICATION,
+                occurred_at=project.opened_at,
+                correlation_id=authorization.correlation_id,
+                causation_event_id=project_event.event_id,
+            )
+        )
 
     def _continuity_projects_update(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: UpdateProject
@@ -5696,6 +5847,12 @@ class ApplicationService:
         principal_id = authorization.principal.principal_id
         try:
             with _translated():
+                # WP-RE-02: the row as it stands under the write's own lock, so
+                # an APPLIED update's `changed_fields` compares exactly the
+                # version the update advanced from. `update_project` and
+                # `close_project` take this same lock first; taking it here
+                # adds no new lock and changes no order.
+                before = unit_of_work.projects.lock_project(principal_id, project_id)
                 receipt = mutate()  # type: ignore[operator]
         except ProjectIllegalTransitionError:
             raise ConflictError(SafeDetail.PROJECT_ID) from None
@@ -5715,6 +5872,10 @@ class ApplicationService:
             raise _CommitRejectedConflictError(ConflictError(SafeDetail.PROJECT_ID)) from None
         if receipt is None:
             raise NotFoundError(SafeDetail.PROJECT_ID)
+        if not receipt.replayed and receipt.history.outcome is TaskMutationOutcome.APPLIED:
+            unit_of_work.record_events.stage(
+                _project_mutation_record_event(authorization, before, receipt)
+            )
         payload = self._continuity_project_payload(unit_of_work, receipt.project)
         payload["replayed"] = receipt.replayed
         return _Result(
@@ -5817,7 +5978,7 @@ class ApplicationService:
                         authorization.at, trust_basis=_CONTINUITY_TRUST_BASIS
                     ),
                 )
-            task = authoring.author_task(
+            task, opened_event_id = authoring.author_task(
                 principal_id=principal_id,
                 task_id=object_id,
                 title=command.title,
@@ -5825,6 +5986,26 @@ class ApplicationService:
                 project_id=command.project_id,
                 situation_id=command.situation_id,
                 due_at=command.due_at,
+            )
+            # WP-RE-02 (G1-TX-003): this path writes the Task without
+            # `TaskManagementService`, so it stages its own `created` event. The
+            # row is inserted at the column's default version, 1; the receipt is
+            # the OPENED lifecycle event that recorded it.
+            unit_of_work.record_events.stage(
+                RecordEventDraft.issue(
+                    principal_id=principal_id,
+                    record_family=RecordEventFamily.TASK,
+                    record_id=task.task_id,
+                    event_kind=RecordEventKind.CREATED,
+                    record_version=1,
+                    changed_fields=_continuity_task_created_fields(task),
+                    source_capability=command.capability.value,
+                    actor_class=RecordEventActorClass.PRINCIPAL,
+                    classification=NON_MEMORY_CLASSIFICATION,
+                    occurred_at=task.opened_at,
+                    source_receipt_id=opened_event_id,
+                    correlation_id=authorization.correlation_id,
+                )
             )
         return _Result(
             payload={
@@ -8718,6 +8899,8 @@ class ApplicationService:
                     commitment_id=command.commitment_id,
                     role=command.role,
                     active_uow=unit_of_work,
+                    source_capability=command.capability.value,
+                    correlation_id=authorization.correlation_id,
                     validate_first_write=validate_first_write,
                 )
         except TaskIdempotencyConflictError:
@@ -8793,6 +8976,8 @@ class ApplicationService:
                     idempotency_key=command.idempotency_key,
                     client_context=command.client_context,
                     active_uow=unit_of_work,
+                    source_capability=command.capability.value,
+                    correlation_id=authorization.correlation_id,
                 )
         except TaskNotFoundError:
             raise NotFoundError(SafeDetail.TASK_ID) from None
@@ -8852,6 +9037,8 @@ class ApplicationService:
                     idempotency_key=command.idempotency_key,
                     client_context=command.client_context,
                     active_uow=unit_of_work,
+                    source_capability=command.capability.value,
+                    correlation_id=authorization.correlation_id,
                     validate_first_write=(
                         None
                         if command.closure_evidence_ref is None
@@ -8954,6 +9141,8 @@ class ApplicationService:
                     actor=TaskMutationActor.PRINCIPAL,
                     idempotency_key=command.idempotency_key,
                     active_uow=unit_of_work,
+                    source_capability=authorization.capability.value,
+                    correlation_id=authorization.correlation_id,
                 )
         except TaskNotFoundError:
             raise NotFoundError(SafeDetail.TASK_ID) from None
@@ -9149,6 +9338,22 @@ class ApplicationService:
             )
             unit_of_work.tasks.insert_history(history)
             history_ids.append(history.history_id)
+            if applied:
+                # WP-RE-02 (RE-AC-024): one event per APPLIED member, in
+                # `mutations` order; a no-op member stages nothing.
+                unit_of_work.record_events.stage(
+                    task_record_event(
+                        principal_id=principal_id,
+                        action=history.action,
+                        before=current,
+                        after=candidate,
+                        actor=history.actor,
+                        history_id=history.history_id,
+                        occurred_at=authorization.at,
+                        source_capability=command.capability.value,
+                        correlation_id=authorization.correlation_id,
+                    )
+                )
 
         confirmed = replace(
             operation,
@@ -9436,6 +9641,8 @@ class ApplicationService:
                     idempotency_key=command.idempotency_key,
                     client_context=command.client_context,
                     active_uow=unit_of_work,
+                    source_capability=command.capability.value,
+                    correlation_id=authorization.correlation_id,
                     validate_first_write=lambda: self._require_commitment_create_eligibility(
                         unit_of_work,
                         principal_id,
@@ -9479,6 +9686,8 @@ class ApplicationService:
                     idempotency_key=command.idempotency_key,
                     client_context=command.client_context,
                     active_uow=unit_of_work,
+                    source_capability=command.capability.value,
+                    correlation_id=authorization.correlation_id,
                     validate_first_write=lambda: self._require_work_evidence(
                         unit_of_work, principal_id, command.closure_evidence_ref
                     ),
@@ -9540,6 +9749,8 @@ class ApplicationService:
                     idempotency_key=command.idempotency_key,
                     client_context=command.client_context,
                     active_uow=unit_of_work,
+                    source_capability=command.capability.value,
+                    correlation_id=authorization.correlation_id,
                     validate_first_write=(
                         None
                         if command.counterparty_person_id is None
@@ -10273,6 +10484,7 @@ class ApplicationService:
                                 ).hexdigest()
                             ),
                             correlation_id=authorization.correlation_id,
+                            event_origin=_constraint_event_origin(authorization),
                             active_uow=work,
                         )
                         record = mutation.record
@@ -10300,6 +10512,7 @@ class ApplicationService:
                                     ).hexdigest()
                                 ),
                                 correlation_id=authorization.correlation_id,
+                                event_origin=_constraint_event_origin(authorization),
                                 active_uow=work,
                             )
                             record = mutation.record
@@ -10319,6 +10532,7 @@ class ApplicationService:
                                     ).hexdigest()
                                 ),
                                 correlation_id=authorization.correlation_id,
+                                event_origin=_constraint_event_origin(authorization),
                                 active_uow=work,
                             )
                             record = mutation.record
@@ -10395,6 +10609,7 @@ class ApplicationService:
                     mutation_service=self._constraint_mutations(),
                     active_uow=work,
                     correlation_id=authorization.correlation_id,
+                    event_origin=_constraint_event_origin(authorization),
                 )
             except ValueError as error:
                 raise ConflictError() from error
@@ -10491,6 +10706,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, self._constraint_mutation_result(result)
@@ -10528,6 +10744,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, self._constraint_mutation_result(result)
@@ -10553,6 +10770,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, self._constraint_mutation_result(result)
@@ -10596,6 +10814,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, self._constraint_mutation_result(result)
@@ -10616,6 +10835,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, self._constraint_mutation_result(result)
@@ -10637,6 +10857,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, self._constraint_mutation_result(result)
@@ -10673,6 +10894,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization,
@@ -10702,6 +10924,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, self._constraint_mutation_result(result)
@@ -10723,6 +10946,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, self._constraint_mutation_result(result)
@@ -10749,6 +10973,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, self._constraint_category_result(result)
@@ -10779,6 +11004,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, self._constraint_category_result(result)
@@ -10801,6 +11027,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, self._constraint_category_result(result)
@@ -10830,6 +11057,7 @@ class ApplicationService:
                 idempotency_key=command.idempotency_key,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization,
@@ -10882,6 +11110,7 @@ class ApplicationService:
                 expected_version=command.expected_version,
                 client_context=command.client_context,
                 correlation_id=command.correlation_id,
+                event_origin=_constraint_event_origin(authorization),
             )
         return self._constraint_authoring_result(
             authorization, _project_controls_configuration_payload(result)
@@ -11577,6 +11806,27 @@ class ApplicationService:
                     ),
                 ),
             )
+        if admission.created:
+            # WP-RE-08 (E-CAP-1/E-CAP-2): one event for the version this call
+            # wrote, staged in memory on the admitting transaction's buffer and
+            # allocated at its exit. A replay wrote nothing and stages nothing;
+            # a conflict or an unknown capture raised above.
+            unit_of_work.record_events.stage(
+                capture_record_event(
+                    principal_id=authorization.principal.principal_id,
+                    capture_id=receipt.capture_id,
+                    event_kind=(
+                        RecordEventKind.CREATED if capture_id is None else RecordEventKind.UPDATED
+                    ),
+                    version_number=receipt.version_number,
+                    changed_fields=admission.changed_fields,
+                    capability=authorization.capability.value,
+                    classification=request.classification,
+                    occurred_at=request.accepted_at,
+                    receipt_id=receipt.receipt_id,
+                    correlation_id=authorization.correlation_id,
+                )
+            )
         return _Result(
             payload=CaptureReceiptView(
                 receipt_id=receipt.receipt_id,
@@ -11619,6 +11869,8 @@ class ApplicationService:
                 command.meeting_request(),
                 command.idempotency_key,
                 authorization.at,
+                source_capability=authorization.capability.value,
+                correlation_id=authorization.correlation_id,
             )
             payload = _meeting_write_payload(unit_of_work, principal_id, written)
         return _Result(
@@ -11680,6 +11932,8 @@ class ApplicationService:
                 command.expected_version,
                 command.idempotency_key,
                 authorization.at,
+                source_capability=authorization.capability.value,
+                correlation_id=authorization.correlation_id,
             )
             payload = _meeting_write_payload(unit_of_work, principal_id, written)
         return _Result(
@@ -11702,10 +11956,57 @@ class ApplicationService:
                 command.expected_version,
                 command.idempotency_key,
                 authorization.at,
+                source_capability=authorization.capability.value,
+                correlation_id=authorization.correlation_id,
             )
         return _Result(
             payload=_meeting_series_write_payload(written),
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MEETING_TRUST_BASIS),
+        )
+
+    # ---- the Record Event change feed (WP-RE-06) ------------------------------
+
+    def _record_events_list(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListRecordEvents
+    ) -> _Result:
+        """`record_events.list`: one page of the caller's own change feed.
+
+        A remote caller must hold `record_events.list` for `record_event_read`,
+        re-checked here and not only at the MCP wrapper, because `invoke`
+        itself does not check the grant set (G1-RD-008). Families, disclosure
+        mode and the cursor binding are re-derived from the authorization and
+        this process's composition by `list_record_events`; nothing is taken
+        from the request but the page size, the cursor and the narrowing.
+        """
+        grants = authorization.capability_grants
+        if grants is not None and Purpose.RECORD_EVENT_READ not in granted_purposes(
+            Capability.RECORD_EVENTS_LIST, grants
+        ):
+            raise UnsupportedError()
+        with _translated():
+            view = list_record_events(
+                unit_of_work.record_event_reader,
+                principal_id=authorization.principal.principal_id,
+                available_capabilities=self.available_capabilities,
+                capability_grants=grants,
+                record_families=command.record_families,
+                page_size=record_event_page_size(
+                    command.page_size, published_max=self._limits.max_page_size
+                ),
+                cursor=command.cursor,
+            )
+        has_more = view.next_cursor is not None
+        return _Result(
+            payload=view.to_canonical_dict(),
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_RECORD_EVENT_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=has_more,
+                    reason="page_size_reached" if has_more else None,
+                    next_cursor=view.next_cursor,
+                ),
+            ),
         )
 
     def _meeting_page_size(self, requested: int | None) -> int:
@@ -12758,7 +13059,9 @@ class ApplicationService:
         """
         self._identity_correction_plane()
         report = IdentityCorrectionService(
-            unit_of_work.entities, unit_of_work.relationship_memory
+            unit_of_work.entities,
+            unit_of_work.relationship_memory,
+            stager=unit_of_work.record_events,
         ).preview(
             MergePreviewCommand(
                 principal_id=authorization.principal.principal_id,
@@ -12839,7 +13142,9 @@ class ApplicationService:
         self._identity_correction_plane()
         principal_id = authorization.principal.principal_id
         receipt = IdentityCorrectionService(
-            unit_of_work.entities, unit_of_work.relationship_memory
+            unit_of_work.entities,
+            unit_of_work.relationship_memory,
+            stager=unit_of_work.record_events,
         ).apply(
             MergeCommand(
                 principal_id=principal_id,
@@ -12985,7 +13290,9 @@ class ApplicationService:
         """`entities.split.preview`: persist the exact inverse plan for one merge."""
         self._identity_correction_plane()
         report = IdentityCorrectionService(
-            unit_of_work.entities, unit_of_work.relationship_memory
+            unit_of_work.entities,
+            unit_of_work.relationship_memory,
+            stager=unit_of_work.record_events,
         ).split_preview(
             SplitPreviewCommand(
                 principal_id=authorization.principal.principal_id,
@@ -13046,7 +13353,9 @@ class ApplicationService:
         self._identity_correction_plane()
         principal_id = authorization.principal.principal_id
         receipt = IdentityCorrectionService(
-            unit_of_work.entities, unit_of_work.relationship_memory
+            unit_of_work.entities,
+            unit_of_work.relationship_memory,
+            stager=unit_of_work.record_events,
         ).split_apply(
             SplitCommand(
                 principal_id=principal_id,
@@ -13325,6 +13634,7 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.MEETINGS_SEARCH: ApplicationService._meetings_search,
         Capability.MEETINGS_UPDATE: ApplicationService._meetings_update,
         Capability.MEETINGS_SERIES_UPDATE: ApplicationService._meetings_series_update,
+        Capability.RECORD_EVENTS_LIST: ApplicationService._record_events_list,
     }
 )
 

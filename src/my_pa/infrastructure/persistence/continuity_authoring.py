@@ -242,7 +242,7 @@ class SqlContinuityAuthoringRepository(ContinuityAuthoringRepository):
         project_id: str | None = None,
         situation_id: str | None = None,
         due_at: datetime | None = None,
-    ) -> Task:
+    ) -> tuple[Task, str]:
         now = utc_now()
         # WP-TUX-01: direct-Principal rows store origin_kind + null origin_evidence_ref.
         # The statement that authorized the write remains on the OPENED lifecycle event.
@@ -267,7 +267,7 @@ class SqlContinuityAuthoringRepository(ContinuityAuthoringRepository):
                 updated_at=now,
             )
         )
-        _append_lifecycle_event(
+        opened_event_id = _append_lifecycle_event(
             self._connection,
             principal_id=principal_id,
             object_kind=ContinuityObjectKind.TASK,
@@ -292,7 +292,7 @@ class SqlContinuityAuthoringRepository(ContinuityAuthoringRepository):
                 occurred_at=now,
                 recorded_at=now,
             )
-        return Task(
+        task = Task(
             task_id=task_id,
             principal_id=principal_id,
             title=title,
@@ -307,3 +307,4 @@ class SqlContinuityAuthoringRepository(ContinuityAuthoringRepository):
             situation_id=situation_id,
             acceptance_kind=ContinuityAcceptanceKind.DIRECT_PRINCIPAL,
         )
+        return task, opened_event_id

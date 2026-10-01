@@ -31,9 +31,11 @@ from my_pa.application.identity_correction import (
 from my_pa.contracts.ports import (
     AmbiguitySettlement,
     EntitiesRepository,
+    MemoryFeedFacts,
     PreviewAmbiguity,
     RelationshipMemoryRepository,
 )
+from my_pa.domain.common.classification import Classification
 from my_pa.domain.relationship.entity import (
     AliasState,
     AliasType,
@@ -59,6 +61,7 @@ from my_pa.domain.relationship.identity_correction import (
     sequence_effects,
 )
 from my_pa.domain.relationship.normalization import normalize_name
+from tests.conftest import FakeRecordEventStager
 
 PRINCIPAL: Final = "prn_aaaa0001aaaa0001aaaa0001"
 OTHER_PRINCIPAL: Final = "prn_bbbb0002bbbb0002bbbb0002"
@@ -384,10 +387,19 @@ class _Memories:
         self.restored.append((effect.family, effect.record_id))
         self.restoration_order.append((effect.family, effect.record_id))
 
+    def memory_feed_facts(self, principal_id: str, memory_id: str) -> MemoryFeedFacts:
+        """WP-RE-04: the memory as its split Record Event names it."""
+        assert principal_id == PRINCIPAL
+        return MemoryFeedFacts(
+            memory_id=memory_id, version=9, classification=Classification.PRIVATE_LOCAL
+        )
+
 
 def _service(entities: _Entities, memories: _Memories) -> IdentityCorrectionService:
     return IdentityCorrectionService(
-        cast(EntitiesRepository, entities), cast(RelationshipMemoryRepository, memories)
+        cast(EntitiesRepository, entities),
+        cast(RelationshipMemoryRepository, memories),
+        stager=FakeRecordEventStager([]),
     )
 
 

@@ -146,6 +146,12 @@ from my_pa.domain.capture.review import (
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.identity.operation import Capability
+from my_pa.domain.record_events import (
+    EntityEventShape,
+    RecordEventKind,
+    entity_record_event,
+    field_set,
+)
 from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
 from my_pa.domain.relationship.governance import (
     ACCEPTED_PROPOSAL_STATES,
@@ -1533,6 +1539,16 @@ class EntityGovernanceService:
                 # exactly where the observed text would end up.
                 after_state=_observation_state(admission),
             ),
+            # P2b E17: a new observation, named at its feed version by S-C.
+            shape=EntityEventShape(
+                event_kind=RecordEventKind.CREATED,
+                changed_fields=field_set(
+                    "authority",
+                    "kind",
+                    "state",
+                    *(("entity_id",) if observation.entity_id is not None else ()),
+                ),
+            ),
         )
         return admission
 
@@ -1626,11 +1642,40 @@ class EntityGovernanceService:
         if binds and held.state is ObservationState.QUARANTINED:
             raise QuarantinedObservationError("a quarantined observation does not bind an entity")
 
+        # Minted before the writes rather than beside the ledger row: the Entity
+        # a `create_new` mints has no ledger row of its own, and its Record
+        # Event names this one as its receipt.
+        event_id = issue_identifier(IdKind.ENTITY_MUTATION_EVENT)
+        authority = (
+            MutationAuthority.REVIEW_ACCEPTED
+            if actor_class is ActorClass.REVIEW_PROMOTION
+            else MutationAuthority.USER_CONFIRMED_ASSERTION
+        )
         entity_id: str | None = None
+        created_event_id: str | None = None
         if command.disposition is ResolutionDisposition.LINK_EXISTING:
             entity_id = self._admit_link(command, held, refused, resolve=resolve, at=at)
         elif command.disposition is ResolutionDisposition.CREATE_NEW:
             entity_id = self._admit_creation(command, held, refused, resolve=resolve, at=at)
+            # G1-EM-002 (P2b E18): `SqlEntityRepository.create` writes no ENTITY
+            # ledger row, so no seam sees this Entity. It is staged here, at
+            # version 1, and the observation's event names it as its cause.
+            created = entity_record_event(
+                principal_id=principal_id,
+                family=MutationRecordFamily.ENTITY,
+                record_id=entity_id,
+                event_kind=RecordEventKind.CREATED,
+                record_version=1,
+                changed_fields=_ENTITY_CREATE_FIELDS,
+                capability=Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE.value,
+                authority=authority,
+                actor_class=actor_class,
+                occurred_at=at,
+                receipt_id=event_id,
+                correlation_id=correlation_id,
+            )
+            self._entities.record_events.stage(created)
+            created_event_id = created.event_id
 
         state = (
             ObservationState.QUARANTINED
@@ -1674,9 +1719,8 @@ class EntityGovernanceService:
             evidence_link_ids=evidence_link_ids,
         )
         self._entities.record_resolution_decision(principal_id, decision)
-        # Minted here for the reason `ingest` mints its own: the outcome carries
-        # it, and it is the receipt this capability returns.
-        event_id = issue_identifier(IdKind.ENTITY_MUTATION_EVENT)
+        # `event_id` was minted above for the reason `ingest` mints its own: the
+        # outcome carries it, and it is the receipt this capability returns.
         outcome = MentionResolution(
             decision_id=decision.decision_id,
             observation_id=command.observation_id,
@@ -1703,11 +1747,7 @@ class EntityGovernanceService:
                     else None
                 ),
                 new_version=resolution_version,
-                authority=(
-                    MutationAuthority.REVIEW_ACCEPTED
-                    if actor_class is ActorClass.REVIEW_PROMOTION
-                    else MutationAuthority.USER_CONFIRMED_ASSERTION
-                ),
+                authority=authority,
                 actor_class=actor_class,
                 idempotency_key=command.idempotency_key,
                 request_digest=digest,
@@ -1718,6 +1758,7 @@ class EntityGovernanceService:
                 before_state={"resolution_version": command.expected_resolution_version},
                 after_state=_resolution_state(outcome),
             ),
+            shape=_resolution_shape(command.disposition, cause=created_event_id),
         )
         return outcome
 
@@ -2718,6 +2759,35 @@ def _observation_state(admission: ObservationAdmission) -> dict[str, object]:
         "resolution_version": admission.resolution_version,
         "entity_id": admission.entity_id,
     }
+
+
+#: The static set a created Entity carries (P2b E1, and E18's `create_new`).
+_ENTITY_CREATE_FIELDS = field_set("canonical_name", "display_name", "entity_type", "status")
+
+
+def _resolution_shape(disposition: ResolutionDisposition, *, cause: str | None) -> EntityEventShape:
+    """The observation event one decision implies (P2b E18), by what it wrote.
+
+    Every decision advances `resolution_version`. A binding decision also sets
+    `entity_id`; a quarantine sets `state` and `state_reason`, which is the one
+    state change. A reject or defer writes the version alone
+    (`SqlEntityRepository.decide_observation` sets no state for either).
+    """
+    if disposition in (ResolutionDisposition.LINK_EXISTING, ResolutionDisposition.CREATE_NEW):
+        return EntityEventShape(
+            event_kind=RecordEventKind.UPDATED,
+            changed_fields=field_set("entity_id", "resolution_version"),
+            causation_event_id=cause,
+        )
+    if disposition is ResolutionDisposition.QUARANTINE:
+        return EntityEventShape(
+            event_kind=RecordEventKind.STATE_CHANGED,
+            changed_fields=field_set("resolution_version", "state", "state_reason"),
+        )
+    return EntityEventShape(
+        event_kind=RecordEventKind.UPDATED,
+        changed_fields=field_set("resolution_version"),
+    )
 
 
 def _resolution_state(outcome: MentionResolution) -> dict[str, object]:

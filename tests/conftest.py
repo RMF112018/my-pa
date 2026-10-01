@@ -125,6 +125,10 @@ from my_pa.contracts.ports import (
     ProjectRepository,
     ProposalAdmissionConflictError,
     PulseRepository,
+    RecordEventFeedItem,
+    RecordEventPage,
+    RecordEventReader,
+    RecordEventStager,
     RelationshipMemoryProposalRepository,
     RelationshipMemoryRepository,
     RelationshipWriteRequest,
@@ -276,6 +280,13 @@ from my_pa.domain.project_controls.read_models import (
 from my_pa.domain.project_controls.relationship import ConstraintRelationship
 from my_pa.domain.project_controls.revision import ConstraintRevision
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
+from my_pa.domain.record_events import (
+    CaptureVersionFacts,
+    EntityEventShape,
+    RecordEventDraft,
+    RecordEventFamily,
+    capture_changed_fields,
+)
 from my_pa.domain.relationship.authoring import (
     ConflictedIdentifierError,
     DuplicateEntityFactError,
@@ -997,6 +1008,9 @@ class World:
     )
     commits: int = 0
     rollbacks: int = 0
+    #: WP-RE-01: Record Event drafts the fake units of work committed, in commit
+    #: order. A draft staged in a block that raised never lands here.
+    record_events: list[RecordEventDraft] = field(default_factory=list)
     #: Port failures a test wants raised, keyed by the method that should raise.
     failures: dict[str, PortError] = field(default_factory=dict)
 
@@ -1340,7 +1354,9 @@ class _Captures(CaptureRepository):
             digest, receipt_id = held
             if digest != request.payload_digest:
                 raise CaptureConflictError("the idempotency key is bound to different content")
-            return CaptureAdmission(receipt=self._world.capture_receipts[receipt_id], created=False)
+            return CaptureAdmission(
+                receipt=self._world.capture_receipts[receipt_id], created=False, changed_fields=()
+            )
 
         if request.capture_id is None:
             capture_id = issue_identifier(IdKind.CAPTURE)
@@ -1350,7 +1366,7 @@ class _Captures(CaptureRepository):
                 request.accepted_at,
                 project_id,
             )
-            number, supersedes = 1, None
+            number, supersedes, prior = 1, None, None
         else:
             capture_id = request.capture_id
             head = self._head(capture_id, principal_id=principal_id)
@@ -1358,6 +1374,15 @@ class _Captures(CaptureRepository):
                 raise UnknownScopeError("the request names no stored capture")
             project_id = self._world.captures[capture_id][2]
             number, supersedes = head.version_number + 1, head.version_id
+            # WP-RE-08 (MR-04, mechanical): the same four facts the store's
+            # widened head statement reads.
+            prior = CaptureVersionFacts(
+                classification=head.classification,
+                processing_policy=head.processing_policy.value,
+                client_created_at=head.client_created_at,
+                occurred_at=head.occurred_at,
+                character_count=head.content.character_count,
+            )
 
         version = CaptureVersion(
             version_id=issue_identifier(IdKind.CAPTURE_VERSION),
@@ -1400,7 +1425,19 @@ class _Captures(CaptureRepository):
         )
         if request.capture_id is None and request.display_label is not None:
             self._world.capture_labels.setdefault(capture_id, []).append(request.display_label)
-        return CaptureAdmission(receipt=receipt, created=True)
+        changed_fields = capture_changed_fields(
+            prior=prior,
+            written=CaptureVersionFacts(
+                classification=request.classification,
+                processing_policy=request.processing_policy.value,
+                client_created_at=request.client_created_at,
+                occurred_at=request.occurred_at,
+                character_count=request.content.character_count,
+            ),
+            label_recorded=request.capture_id is None and request.display_label is not None,
+            project_bound=request.capture_id is None and request.project_id is not None,
+        )
+        return CaptureAdmission(receipt=receipt, created=True, changed_fields=changed_fields)
 
     def version(
         self, capture_id: str, *, version_id: str | None = None, principal_id: str
@@ -3209,11 +3246,134 @@ class _TasksWrite(TaskManagementRepository):
         return tuple(rows[:limit])
 
 
+class FakeRecordEventStager(RecordEventStager):
+    """WP-RE-01: an in-memory transaction buffer for the fake units of work.
+
+    The same contract the SQL units of work keep: drafts are held in stage order
+    until the block ends, published to `sink` only when it ends normally, and
+    discarded when it raises. `sink` is the committed feed a test inspects.
+    """
+
+    def __init__(self, sink: list[RecordEventDraft]) -> None:
+        self._sink = sink
+        self._pending: list[RecordEventDraft] = []
+
+    def stage(self, draft: RecordEventDraft) -> None:
+        if not isinstance(draft, RecordEventDraft):
+            raise TypeError("only a RecordEventDraft can be staged")
+        self._pending.append(draft)
+
+    @property
+    def pending_count(self) -> int:
+        return len(self._pending)
+
+    def begin(self) -> None:
+        """Start a transaction: nothing is pending."""
+        self._pending.clear()
+
+    def settle(self, *, committed: bool) -> None:
+        """End the transaction: publish the buffer if it committed, and clear it."""
+        if committed:
+            self._sink.extend(self._pending)
+        self._pending.clear()
+
+
+class FakeRecordEventReader(RecordEventReader):
+    """WP-RE-06: the feed reader over `World.record_events`, the committed feed.
+
+    Test infrastructure, not database evidence: sequence numbers are positions
+    in the Principal's committed drafts, `recorded_at` is `occurred_at`, and
+    the remote restricted-memory rule reads only the stored classification
+    (the SQL reader's current-version `EXISTS` is database-tested).
+    """
+
+    def __init__(self, sink: list[RecordEventDraft]) -> None:
+        self._sink = sink
+
+    def _mine(self, principal_id: str) -> list[tuple[int, RecordEventDraft]]:
+        owned = [draft for draft in self._sink if draft.principal_id == principal_id]
+        return [(index + 1, draft) for index, draft in enumerate(owned)]
+
+    @staticmethod
+    def _visible(
+        draft: RecordEventDraft,
+        families: frozenset[RecordEventFamily],
+        include_restricted_memory: bool,
+    ) -> bool:
+        if draft.record_family not in families:
+            return False
+        return include_restricted_memory or not (
+            draft.record_family is RecordEventFamily.RELATIONSHIP_MEMORY
+            and draft.classification.value == "restricted_local"
+        )
+
+    def page(
+        self,
+        *,
+        principal_id: str,
+        after_sequence: int,
+        families: frozenset[RecordEventFamily],
+        include_restricted_memory: bool,
+        limit: int,
+    ) -> RecordEventPage:
+        visible = [
+            (sequence, draft)
+            for sequence, draft in self._mine(principal_id)
+            if self._visible(draft, families, include_restricted_memory)
+        ]
+        rows = tuple(
+            RecordEventFeedItem(
+                event_id=draft.event_id,
+                record_family=draft.record_family,
+                record_id=draft.record_id,
+                event_kind=draft.event_kind,
+                record_version=draft.record_version,
+                changed_fields=draft.changed_fields,
+                source_capability=draft.source_capability,
+                source_receipt_id=draft.source_receipt_id,
+                actor_class=draft.actor_class,
+                authority=draft.authority,
+                occurred_at=draft.occurred_at,
+                recorded_at=draft.occurred_at,
+                causation_event_id=draft.causation_event_id,
+            )
+            for sequence, draft in visible
+            if sequence > after_sequence
+        )
+        return RecordEventPage(
+            rows=rows[: limit + 1],
+            high_watermark_event_id=visible[-1][1].event_id if visible else None,
+        )
+
+    def resolve_position(self, *, principal_id: str, event_id: str) -> int | None:
+        found = [
+            sequence for sequence, draft in self._mine(principal_id) if draft.event_id == event_id
+        ]
+        return found[0] if found else None
+
+    def visible_event_ids(
+        self,
+        *,
+        principal_id: str,
+        event_ids: frozenset[str],
+        families: frozenset[RecordEventFamily],
+        include_restricted_memory: bool,
+    ) -> frozenset[str]:
+        return frozenset(
+            draft.event_id
+            for _, draft in self._mine(principal_id)
+            if draft.event_id in event_ids
+            and self._visible(draft, families, include_restricted_memory)
+        )
+
+
 class FakeTaskManagementUnitOfWork(TaskManagementUnitOfWork):
     def __init__(self, world: World) -> None:
         self._world = world
+        self._record_events = FakeRecordEventStager(world.record_events)
 
     def __enter__(self) -> TaskManagementUnitOfWork:
+        self._record_events.begin()
         return self
 
     def __exit__(
@@ -3222,7 +3382,11 @@ class FakeTaskManagementUnitOfWork(TaskManagementUnitOfWork):
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        pass
+        self._record_events.settle(committed=exc is None)
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        return self._record_events
 
     @property
     def tasks(self) -> TaskManagementRepository:
@@ -3306,8 +3470,10 @@ class _CommitmentsWrite(CommitmentManagementRepository):
 class FakeCommitmentManagementUnitOfWork(CommitmentManagementUnitOfWork):
     def __init__(self, world: World) -> None:
         self._world = world
+        self._record_events = FakeRecordEventStager(world.record_events)
 
     def __enter__(self) -> CommitmentManagementUnitOfWork:
+        self._record_events.begin()
         return self
 
     def __exit__(
@@ -3316,7 +3482,11 @@ class FakeCommitmentManagementUnitOfWork(CommitmentManagementUnitOfWork):
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        pass
+        self._record_events.settle(committed=exc is None)
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        return self._record_events
 
     @property
     def commitments(self) -> CommitmentManagementRepository:
@@ -3920,8 +4090,10 @@ class _ConstraintReads:
 class FakeConstraintManagementUnitOfWork(ConstraintManagementUnitOfWork):
     def __init__(self, world: World) -> None:
         self._world = world
+        self._record_events = FakeRecordEventStager(world.record_events)
 
     def __enter__(self) -> ConstraintManagementUnitOfWork:
+        self._record_events.begin()
         return self
 
     def __exit__(
@@ -3930,7 +4102,11 @@ class FakeConstraintManagementUnitOfWork(ConstraintManagementUnitOfWork):
         exc: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        pass
+        self._record_events.settle(committed=exc is None)
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        return self._record_events
 
     @property
     def constraints(self) -> ConstraintManagementRepository:
@@ -4414,7 +4590,7 @@ class _ContinuityAuthoring(ContinuityAuthoringRepository):
         project_id: str | None = None,
         situation_id: str | None = None,
         due_at: datetime | None = None,
-    ) -> ContinuityTask:
+    ) -> tuple[ContinuityTask, str]:
         now = utc_now()
         task = ContinuityTask(
             task_id=task_id,
@@ -4432,7 +4608,7 @@ class _ContinuityAuthoring(ContinuityAuthoringRepository):
             acceptance_kind=ContinuityAcceptanceKind.DIRECT_PRINCIPAL,
         )
         self._world.continuity_tasks.append(task)
-        return task
+        return task, issue_identifier(IdKind.LIFECYCLE_EVENT)
 
 
 class _Pulse(PulseRepository):
@@ -4492,8 +4668,18 @@ class _Entities(EntitiesRepository):
     mine" are different questions, and only the second one is safe.
     """
 
-    def __init__(self, world: World) -> None:
+    def __init__(self, world: World, record_events: RecordEventStager | None = None) -> None:
         self._world = world
+        # WP-RE-04: the buffer `resolve_mention` stages its unledgered Entity
+        # create into (G1-EM-002). The fake ledger's seams stage nothing: the
+        # S-A/S-B/S-C seams are SQL and are proven against Postgres.
+        self._record_events: RecordEventStager = (
+            FakeRecordEventStager([]) if record_events is None else record_events
+        )
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        return self._record_events
 
     # --- guards ----------------------------------------------------------
 
@@ -6417,7 +6603,13 @@ class _Entities(EntitiesRepository):
             None,
         )
 
-    def record_mutation_event(self, principal_id: str, event: EntityMutationEvent) -> None:
+    def record_mutation_event(
+        self,
+        principal_id: str,
+        event: EntityMutationEvent,
+        *,
+        shape: EntityEventShape | None = None,
+    ) -> None:
         self._world.fail("entities.record_mutation_event")
         if event.principal_id != principal_id:
             raise ValueError("a mutation event belongs to the acting Principal")
@@ -8939,6 +9131,7 @@ class _Meetings:
             meeting_id=record.meeting_id,
             meeting_series_id=record.meeting_series_id,
             series_title=self._series_title(principal_id, record.meeting_series_id),
+            series_version=self._series_version(principal_id, record.meeting_series_id),
             title=record.title,
             status=record.status,
             start_at=record.start_at,
@@ -9001,6 +9194,13 @@ class _Meetings:
             return None
         series = self._world.meeting_series.get((principal_id, meeting_series_id))
         return None if series is None else series.title
+
+    def _series_version(self, principal_id: str, meeting_series_id: str | None) -> int | None:
+        """The series' current version, as the SQL read carries it (plan D-21)."""
+        if meeting_series_id is None:
+            return None
+        series = self._world.meeting_series.get((principal_id, meeting_series_id))
+        return None if series is None else series.version
 
     def _active_attendees(self, principal_id: str, meeting_id: str) -> list[_MeetingAttendeeRow]:
         rows = [
@@ -9143,6 +9343,7 @@ class _Meetings:
                     meeting_id=record.meeting_id,
                     meeting_series_id=record.meeting_series_id,
                     series_title=self._series_title(principal_id, record.meeting_series_id),
+                    series_version=self._series_version(principal_id, record.meeting_series_id),
                     title=record.title,
                     status=record.status,
                     start_at=record.start_at,
@@ -9167,9 +9368,11 @@ class FakeUnitOfWork(UnitOfWork):
     def __init__(self, world: World) -> None:
         self._world = world
         self._open = False
+        self._record_events = FakeRecordEventStager(world.record_events)
 
     def __enter__(self) -> UnitOfWork:
         self._open = True
+        self._record_events.begin()
         return self
 
     def __exit__(
@@ -9179,10 +9382,19 @@ class FakeUnitOfWork(UnitOfWork):
         traceback: TracebackType | None,
     ) -> None:
         self._open = False
+        self._record_events.settle(committed=exc is None)
         if exc is None:
             self._world.commits += 1
         else:
             self._world.rollbacks += 1
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        return self._record_events
+
+    @property
+    def record_event_reader(self) -> RecordEventReader:
+        return FakeRecordEventReader(self._world.record_events)
 
     @property
     def providers(self) -> SourceProviders:
@@ -9278,7 +9490,7 @@ class FakeUnitOfWork(UnitOfWork):
     @property
     def entities(self) -> EntitiesRepository:
         """The relationship-intelligence entity plane over this `World`."""
-        return _Entities(self._world)
+        return _Entities(self._world, record_events=self._record_events)
 
     @property
     def meetings(self) -> MeetingRepository:

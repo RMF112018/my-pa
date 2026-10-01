@@ -133,6 +133,14 @@ from my_pa.domain.project_controls.read_models import (
 from my_pa.domain.project_controls.relationship import ConstraintRelationship
 from my_pa.domain.project_controls.revision import ConstraintRevision
 from my_pa.domain.project_controls.settings import ConstraintProjectSettings
+from my_pa.domain.record_events import (
+    EntityEventShape,
+    RecordEventActorClass,
+    RecordEventAuthority,
+    RecordEventDraft,
+    RecordEventFamily,
+    RecordEventKind,
+)
 from my_pa.domain.relationship.authoring import (
     MAX_EVIDENCE_REFERENCES,
     MAX_INITIAL_ALIASES,
@@ -357,12 +365,18 @@ __all__ = [
     "MeetingRecord",
     "MeetingRepository",
     "MeetingWriteRequestRecord",
+    "MemoryFeedFacts",
     "Operation",
     "OperationQueue",
     "PortError",
     "ProjectRepository",
     "ProposalAdmissionConflictError",
     "PulseRepository",
+    "RecordEventFeedItem",
+    "RecordEventPage",
+    "RecordEventReader",
+    "RecordEventStager",
+    "RecordEventWriter",
     "RelationshipEventRepository",
     "RelationshipRepository",
     "RelationshipWriteRequest",
@@ -2202,8 +2216,21 @@ class EntitiesRepository(ABC):
     # disagrees with the plane.
 
     @abstractmethod
-    def record_mutation_event(self, principal_id: str, event: EntityMutationEvent) -> None:
+    def record_mutation_event(
+        self,
+        principal_id: str,
+        event: EntityMutationEvent,
+        *,
+        shape: EntityEventShape | None = None,
+    ) -> None:
         """Append one row to the mutation ledger, which is also the idempotency store.
+
+        WP-RE-04 seam S-C: after the INSERT -- never on the same-digest replay
+        return, which writes nothing (G1-EM-016) -- a Record Event is staged
+        from the row and `shape`, the caller's typed statement of the event's
+        kind and changed fields (and a supersession's predecessor, and its
+        cause). An `OBSERVATION` row's `record_version` is the feed version of
+        the observation's post-write `resolution_version` (T-002).
 
         `(principal_id, capability, idempotency_key)` is unique at the server,
         so two concurrent writers holding one key produce one row and the loser
@@ -2215,6 +2242,18 @@ class EntitiesRepository(ABC):
         Append-only by trigger. There is no update and no delete, and this port
         offers neither.
         """
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        """The Record Event buffer this repository's seams stage into (WP-RE-04).
+
+        Reached directly by one caller: `resolve_mention`, whose `create_new`
+        mints an Entity with no ledger row and so no seam (G1-EM-002). A
+        refusing default, on the `UnitOfWork.record_events` precedent: a double
+        that stages nothing need not carry a buffer, and one that is asked to
+        stage without one raises inside the transaction.
+        """
+        raise NotImplementedError
 
     @abstractmethod
     def mutation_event(
@@ -3686,10 +3725,17 @@ class CaptureAdmission:
     content, so the correct answer is the receipt the first call got — the
     `QC-AC-031` replay. A key bound to different content is a
     `domain.capture.errors.CaptureConflictError` and never a receipt.
+
+    `changed_fields` (WP-RE-08) is the exact Record Event token set for the
+    version this call wrote, computed where the predecessor was read
+    (`domain.record_events.capture_changed_fields`), so only name tokens cross
+    the port and no prior value leaves the store. A replay wrote nothing and
+    carries `()`.
     """
 
     receipt: CaptureReceipt
     created: bool
+    changed_fields: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -4610,8 +4656,12 @@ class ContinuityAuthoringRepository(ABC):
         project_id: str | None = None,
         situation_id: str | None = None,
         due_at: datetime | None = None,
-    ) -> Task:
-        """Create one accepted Task under a key this transaction already reserved."""
+    ) -> tuple[Task, str]:
+        """Create one accepted Task under a key this transaction already reserved.
+
+        Returns the Task and the identifier of the OPENED lifecycle event that
+        recorded it, which is the receipt its Record Event names (WP-RE-02).
+        """
 
 
 class GoodNotesPullRepositoryConflictError(Exception):
@@ -4749,6 +4799,129 @@ class GoodNotesSemanticReviewDecisionRecord:
     replayed: bool = False
 
 
+class RecordEventStager(ABC):
+    """The transaction-local Record Event buffer one unit of work owns (WP-RE-01).
+
+    An emitter stages a draft on the APPLIED branch of a canonical write, inside
+    the transaction that makes the write; nothing reaches the database until the
+    unit of work that owns the buffer leaves its block normally, when the whole
+    buffer is sequenced in one allocator batch and inserted in stage order as
+    the last work before COMMIT. A block that raises discards the buffer with
+    the transaction. There is deliberately no `flush` here: flushing belongs to
+    the unit of work's exit and to nothing an application service can call.
+    """
+
+    @abstractmethod
+    def stage(self, draft: RecordEventDraft) -> None:
+        """Append `draft` to this transaction's buffer, in order."""
+
+    @property
+    @abstractmethod
+    def pending_count(self) -> int:
+        """How many drafts this transaction has staged and not yet flushed."""
+
+
+class RecordEventWriter(ABC):
+    """The persistence half of a flush: allocate one batch, then insert it.
+
+    Reached only from a unit of work's exit (and, in WP-RE-04, the one
+    re-enrichment worker transaction), never from an application service.
+    `allocate` takes the per-Principal sequence row lock and holds it to COMMIT;
+    it is a row lock, never an advisory lock (G1-TX-008).
+    """
+
+    @abstractmethod
+    def allocate(self, principal_id: str, count: int) -> int:
+        """Reserve `count` contiguous sequence numbers and return the first."""
+
+    @abstractmethod
+    def insert(self, first_sequence_number: int, drafts: Sequence[RecordEventDraft]) -> None:
+        """Insert `drafts` in order at `first_sequence_number` onward."""
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RecordEventFeedItem:
+    """One committed Record Event as the feed reader returns it (WP-RE-06).
+
+    Deliberately narrower than the stored row. There is no `principal_id` (the
+    caller's own partition is the only one read), no `classification` and no
+    `correlation_id` (package section 12), and **no `sequence_number`**: under
+    OD-1 the order is the sequence but the number never leaves the reader, so a
+    remote caller cannot count withheld events from gaps (G1-RD-001).
+    """
+
+    event_id: str
+    record_family: RecordEventFamily
+    record_id: str
+    event_kind: RecordEventKind
+    record_version: int
+    changed_fields: tuple[str, ...]
+    source_capability: str
+    source_receipt_id: str | None
+    actor_class: RecordEventActorClass
+    authority: RecordEventAuthority | None
+    occurred_at: datetime
+    recorded_at: datetime
+    causation_event_id: str | None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RecordEventPage:
+    """One keyset page and the high watermark, computed by one statement.
+
+    `rows` holds at most `limit + 1` items in sequence order (the extra one
+    only says there is more). `high_watermark_event_id` names the effective
+    visible event with the greatest sequence number at the same snapshot, or
+    `None` when there is none.
+    """
+
+    rows: tuple[RecordEventFeedItem, ...]
+    high_watermark_event_id: str | None
+
+
+class RecordEventReader(ABC):
+    """The Record Event feed's read half (WP-RE-06, plan D-01).
+
+    `page` is the page *and* the watermark behind one method and one SQL
+    statement, so the two can never be read at two snapshots (G1-TX-004). Every
+    method is scoped to `principal_id`, which the caller takes from the
+    server-resolved authorization. With `include_restricted_memory` false (a
+    remote caller), every predicate also withholds each `relationship_memory`
+    event whose stored classification is `restricted_local` or whose memory's
+    current version is (OD-8), and -- WP-RE-08, under the same flag (OD-W8-10)
+    -- each `capture` event whose stored classification is `restricted_local`
+    or whose capture's current version is, in SQL, so nothing withheld reaches a
+    count, a truncation flag or a watermark.
+    """
+
+    @abstractmethod
+    def page(
+        self,
+        *,
+        principal_id: str,
+        after_sequence: int,
+        families: frozenset[RecordEventFamily],
+        include_restricted_memory: bool,
+        limit: int,
+    ) -> RecordEventPage:
+        """The first `limit + 1` effective events after `after_sequence`, and W."""
+
+    @abstractmethod
+    def resolve_position(self, *, principal_id: str, event_id: str) -> int | None:
+        """The internal sequence position of the caller's own `event_id`, or `None`."""
+
+    @abstractmethod
+    def visible_event_ids(
+        self,
+        *,
+        principal_id: str,
+        event_ids: frozenset[str],
+        families: frozenset[RecordEventFamily],
+        include_restricted_memory: bool,
+    ) -> frozenset[str]:
+        """Which of `event_ids` the same visibility predicate as `page` admits."""
+
+
 class UnitOfWork(ABC):
     """One transaction, and the repositories that run inside it.
 
@@ -4771,6 +4944,30 @@ class UnitOfWork(ABC):
         traceback: TracebackType | None,
     ) -> None:
         """Commit when the block succeeded, roll back when it did not."""
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        """This transaction's Record Event buffer (WP-RE-01).
+
+        A refusing default rather than an abstract member, on the precedent of
+        `reenrichment` above: an in-memory double or evaluation harness that
+        never commits a canonical change need not carry a buffer. The refusal
+        is fail-closed -- an emitter that stages against a unit of work without
+        a buffer raises inside the transaction, so the canonical change rolls
+        back with it rather than committing with no event. Every SQL unit of
+        work overrides this, and nothing may catch the refusal to skip staging.
+        """
+        raise NotImplementedError
+
+    @property
+    def record_event_reader(self) -> RecordEventReader:
+        """The Record Event feed reader, inside this transaction (WP-RE-06).
+
+        A refusing default for the reason `record_events` above has one: a
+        double that never serves the feed need not carry a reader. The SQL unit
+        of work overrides it.
+        """
+        raise NotImplementedError
 
     @property
     @abstractmethod
@@ -5912,6 +6109,21 @@ class MemoryDetail:
     canonical_entity_id: str | None = None
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MemoryFeedFacts:
+    """One memory as the Record Event feed names it: identity, version, classification.
+
+    WP-RE-04: the memory's current aggregate `version` and the classification of
+    its current version (OD-8). Read in the writer's transaction -- for a memory
+    an identity correction reparented, and for the memory that owns a context
+    link it retargeted, which has no version of its own (OD-2 (b), S-006).
+    """
+
+    memory_id: str
+    version: int
+    classification: Classification
+
+
 class RelationshipMemoryRepository(ABC):
     """The Relationship Memory plane, inside one transaction.
 
@@ -6047,6 +6259,18 @@ class RelationshipMemoryRepository(ABC):
 
     def apply_identity_effect(self, principal_id: str, effect: IdentityEffectDraft) -> None:
         """Apply one planned RM binding move under its exact before-state guard."""
+        raise NotImplementedError
+
+    def context_link_owner(self, principal_id: str, context_link_id: str) -> MemoryFeedFacts | None:
+        """The owning memory of one context link (link -> version -> memory), or `None`.
+
+        Read inside the caller's transaction, so an identity correction resolves
+        the owner of a link it retargets against the state it is changing.
+        """
+        raise NotImplementedError
+
+    def memory_feed_facts(self, principal_id: str, memory_id: str) -> MemoryFeedFacts | None:
+        """One memory's current `version` and current-version classification, or `None`."""
         raise NotImplementedError
 
     def restore_identity_effect(
@@ -6536,6 +6760,20 @@ class TaskManagementUnitOfWork(ABC):
     def tasks(self) -> TaskManagementRepository:
         """The task-management repository, inside this transaction."""
 
+    @property
+    def record_events(self) -> RecordEventStager:
+        """This transaction's Record Event buffer (WP-RE-01).
+
+        A refusing default rather than an abstract member, on the precedent of
+        `reenrichment` above: an in-memory double or evaluation harness that
+        never commits a canonical change need not carry a buffer. The refusal
+        is fail-closed -- an emitter that stages against a unit of work without
+        a buffer raises inside the transaction, so the canonical change rolls
+        back with it rather than committing with no event. Every SQL unit of
+        work overrides this, and nothing may catch the refusal to skip staging.
+        """
+        raise NotImplementedError
+
 
 # --- WP-TM-05: Commitment/Waiting-On/Follow-Up -----------------------------
 #
@@ -6691,6 +6929,20 @@ class CommitmentManagementUnitOfWork(ABC):
     @abstractmethod
     def commitments(self) -> CommitmentManagementRepository:
         """The commitment-management repository, inside this transaction."""
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        """This transaction's Record Event buffer (WP-RE-01).
+
+        A refusing default rather than an abstract member, on the precedent of
+        `reenrichment` above: an in-memory double or evaluation harness that
+        never commits a canonical change need not carry a buffer. The refusal
+        is fail-closed -- an emitter that stages against a unit of work without
+        a buffer raises inside the transaction, so the canonical change rolls
+        back with it rather than committing with no event. Every SQL unit of
+        work overrides this, and nothing may catch the refusal to skip staging.
+        """
+        raise NotImplementedError
 
 
 # PC-CM-IMP-WP02. `ConstraintManagementRepository`/`ConstraintManagementUnitOfWork`
@@ -7170,6 +7422,20 @@ class ConstraintManagementUnitOfWork(ABC):
     @abstractmethod
     def constraints(self) -> ConstraintManagementRepository:
         """The constraint-management repository, inside this transaction."""
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        """This transaction's Record Event buffer (WP-RE-01).
+
+        A refusing default rather than an abstract member, on the precedent of
+        `reenrichment` above: an in-memory double or evaluation harness that
+        never commits a canonical change need not carry a buffer. The refusal
+        is fail-closed -- an emitter that stages against a unit of work without
+        a buffer raises inside the transaction, so the canonical change rolls
+        back with it rather than committing with no event. Every SQL unit of
+        work overrides this, and nothing may catch the refusal to skip staging.
+        """
+        raise NotImplementedError
 
     @property
     @abstractmethod

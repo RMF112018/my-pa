@@ -54,9 +54,16 @@ from my_pa.contracts.ports import (
     EntityMutationAdmission,
     EntityMutationReceipt,
     EntityWriteRequest,
+    RecordEventStager,
     UnknownScopeError,
 )
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
+from my_pa.domain.record_events import (
+    RecordEventDraft,
+    RecordEventKind,
+    entity_record_event,
+    field_set,
+)
 from my_pa.domain.relationship.authoring import (
     AmbiguousEntityError,
     ConflictedIdentifierError,
@@ -218,6 +225,41 @@ _EVIDENCE_TARGET_COLUMN: Mapping[MutationRecordFamily, str] = {
 }
 
 
+#: P2b section 3.5 static `changed_fields` sets (R3 (a)): field-name tokens
+#: for the create and lifecycle operations. Never a value.
+_ENTITY_CREATE_FIELDS = field_set("canonical_name", "display_name", "entity_type", "status")
+_ENTITY_LIFECYCLE_FIELDS = field_set("archived_from_status", "status")
+_IDENTIFIER_CREATE_FIELDS = field_set(
+    "display_value", "entity_id", "namespace", "normalized_value", "state"
+)
+_ALIAS_CREATE_FIELDS = field_set(
+    "alias_type", "display_value", "entity_id", "normalized_value", "state"
+)
+_RETIRE_FIELDS = field_set("retired_at", "state")
+_SUPERSEDED_FIELDS: Mapping[MutationRecordFamily, tuple[str, ...]] = {
+    MutationRecordFamily.IDENTIFIER: field_set(
+        "retired_at", "state", "superseded_by_identifier_id"
+    ),
+    MutationRecordFamily.ALIAS: field_set("retired_at", "state", "superseded_by_alias_id"),
+}
+#: The Entity advanced by `_advance_entity` under a child operation: nothing
+#: but its version changed (G1-EM-001(a), P2b E5-E10).
+_VERSION_ONLY = field_set("version")
+
+#: The six operations whose ledger row names a child record while the Entity
+#: row's version also advances (P2b E5-E10).
+_CHILD_OPERATIONS = frozenset(
+    {
+        EntityWriteOperation.BIND_IDENTIFIER,
+        EntityWriteOperation.RETIRE_IDENTIFIER,
+        EntityWriteOperation.SUPERSEDE_IDENTIFIER,
+        EntityWriteOperation.ADD_ALIAS,
+        EntityWriteOperation.RETIRE_ALIAS,
+        EntityWriteOperation.SUPERSEDE_ALIAS,
+    }
+)
+
+
 class _Outcome:
     """What one operation produced, before it becomes a ledger row and a receipt.
 
@@ -228,12 +270,14 @@ class _Outcome:
 
     __slots__ = (
         "before_state",
+        "changed_fields",
         "child_id",
         "child_state",
         "child_version",
         "entity_id",
         "entity_status",
         "entity_version",
+        "event_kind",
         "new_version",
         "prior_version",
         "record_id",
@@ -250,6 +294,8 @@ class _Outcome:
         prior_version: int | None,
         new_version: int,
         before_state: dict[str, Any],
+        event_kind: RecordEventKind,
+        changed_fields: tuple[str, ...],
         child_id: str | None = None,
         child_version: int | None = None,
         child_state: str | None = None,
@@ -262,6 +308,8 @@ class _Outcome:
         self.prior_version = prior_version
         self.new_version = new_version
         self.before_state = before_state
+        self.event_kind = event_kind
+        self.changed_fields = changed_fields
         self.child_id = child_id
         self.child_version = child_version
         self.child_state = child_state
@@ -293,8 +341,16 @@ def mutation_replay_for(
     return _receipt_from(row)
 
 
-def admit_mutation(connection: Connection, request: EntityWriteRequest) -> EntityMutationAdmission:
-    """Admit one governed entity write. See `EntitiesRepository.admit_mutation`."""
+def admit_mutation(
+    connection: Connection, request: EntityWriteRequest, stager: RecordEventStager
+) -> EntityMutationAdmission:
+    """Admit one governed entity write. See `EntitiesRepository.admit_mutation`.
+
+    WP-RE-04 seam S-A: after the ledger row, every canonical record the write
+    changed is staged into `stager` (`_outcome_events`). Reaching here is
+    the applied branch -- a replay was answered by `mutation_replay_for` before
+    any write, and a refusal raises before the ledger row.
+    """
     _serialize_identifier_request(connection, request)
     if request.operation is EntityWriteOperation.CREATE:
         outcome = _create(connection, request)
@@ -302,6 +358,8 @@ def admit_mutation(connection: Connection, request: EntityWriteRequest) -> Entit
         outcome = _mutate(connection, request)
     link_ids = _record_evidence(connection, request, outcome)
     _record_mutation(connection, request, outcome, link_ids)
+    for draft in _outcome_events(request, outcome):
+        stager.stage(draft)
     return EntityMutationAdmission(
         receipt=EntityMutationReceipt(
             event_id=request.event_id,
@@ -322,6 +380,110 @@ def admit_mutation(connection: Connection, request: EntityWriteRequest) -> Entit
         ),
         created=True,
     )
+
+
+def _outcome_events(request: EntityWriteRequest, outcome: _Outcome) -> list[RecordEventDraft]:
+    """Every Record Event one admitted write implies, primary first (P2b E1-E10).
+
+    The primary names the ledger row's own record. The derived drafts
+    (G1-EM-001) name the other canonical records the same write changed, each
+    caused by the primary and carrying its receipt, actor, authority and
+    capability:
+
+    * a create's initial aliases, then its initial identifiers (E1);
+    * an update's FORMER_NAME alias, when one was written (E2);
+    * a supersession's predecessor, then the Entity the child operation
+      advanced (E7, E10); every other child operation's Entity (E5, E6, E8,
+      E9).
+    """
+
+    def draft(
+        family: MutationRecordFamily,
+        record_id: str,
+        kind: RecordEventKind,
+        version: int,
+        changed: tuple[str, ...],
+        cause: str | None,
+    ) -> RecordEventDraft:
+        return entity_record_event(
+            principal_id=request.principal_id,
+            family=family,
+            record_id=record_id,
+            event_kind=kind,
+            record_version=version,
+            changed_fields=changed,
+            capability=request.capability,
+            authority=request.authority,
+            actor_class=request.actor_class,
+            occurred_at=request.server_received_at,
+            receipt_id=request.event_id,
+            correlation_id=request.correlation_id,
+            causation_event_id=cause,
+        )
+
+    primary = draft(
+        request.record_family,
+        outcome.record_id,
+        outcome.event_kind,
+        outcome.new_version,
+        outcome.changed_fields,
+        None,
+    )
+    events = [primary]
+    cause = primary.event_id
+    created = RecordEventKind.CREATED
+    if request.operation is EntityWriteOperation.CREATE:
+        events.extend(
+            draft(
+                MutationRecordFamily.ALIAS, alias.alias_id, created, 1, _ALIAS_CREATE_FIELDS, cause
+            )
+            for alias in request.initial_aliases
+        )
+        events.extend(
+            draft(
+                MutationRecordFamily.IDENTIFIER,
+                identifier.identifier_id,
+                created,
+                1,
+                _IDENTIFIER_CREATE_FIELDS,
+                cause,
+            )
+            for identifier in request.initial_identifiers
+        )
+    elif request.operation is EntityWriteOperation.UPDATE and outcome.child_id is not None:
+        events.append(
+            draft(
+                MutationRecordFamily.ALIAS,
+                outcome.child_id,
+                created,
+                1,
+                _ALIAS_CREATE_FIELDS,
+                cause,
+            )
+        )
+    elif request.operation in _CHILD_OPERATIONS:
+        events.extend(
+            draft(
+                request.record_family,
+                superseded_id,
+                RecordEventKind.STATE_CHANGED,
+                int(request.target_child_version or 0) + 1,
+                _SUPERSEDED_FIELDS[request.record_family],
+                cause,
+            )
+            for superseded_id in outcome.superseded_ids
+        )
+        events.append(
+            draft(
+                MutationRecordFamily.ENTITY,
+                outcome.entity_id,
+                RecordEventKind.UPDATED,
+                outcome.entity_version,
+                _VERSION_ONLY,
+                cause,
+            )
+        )
+    return events
 
 
 def _serialize_identifier_request(connection: Connection, request: EntityWriteRequest) -> None:
@@ -437,6 +599,8 @@ def _create(connection: Connection, request: EntityWriteRequest) -> _Outcome:
         prior_version=None,
         new_version=1,
         before_state={},
+        event_kind=RecordEventKind.CREATED,
+        changed_fields=_ENTITY_CREATE_FIELDS,
     )
 
 
@@ -490,6 +654,19 @@ def _update(
         if status == EntityStatus.ARCHIVED.value:
             raise DuplicateEntityFactError("an archived entity is restored rather than updated")
         values["status"] = EntityStatus(request.status).value
+    # P2b E2 (R3 (b)): the typed comparison of what the request set against
+    # what the row held -- the bookkeeping `version`/`updated_at` excluded. An
+    # identical update still advances the version, so it is a version-only
+    # change (G1-EM-010), and one that changed only the status is a state
+    # change.
+    held: dict[str, object] = {
+        "display_name": row.display_name,
+        "canonical_name": row.canonical_name,
+        "status": status,
+    }
+    changed = field_set(*(name for name, value in values.items() if held[name] != value))
+    kind = RecordEventKind.STATE_CHANGED if changed == ("status",) else RecordEventKind.UPDATED
+    changed = changed or _VERSION_ONLY
     new_version = _advance_entity(connection, request, **values)
     alias_id: str | None = None
     if request.canonical_name is not None and request.canonical_name != row.canonical_name:
@@ -525,6 +702,8 @@ def _update(
         prior_version=request.expected_version,
         new_version=new_version,
         before_state=before,
+        event_kind=kind,
+        changed_fields=changed,
         child_id=alias_id,
         child_version=1 if alias_id else None,
         child_state=AliasState.ACTIVE.value if alias_id else None,
@@ -550,6 +729,8 @@ def _archive(
         prior_version=request.expected_version,
         new_version=new_version,
         before_state=before,
+        event_kind=RecordEventKind.STATE_CHANGED,
+        changed_fields=_ENTITY_LIFECYCLE_FIELDS,
     )
 
 
@@ -573,6 +754,8 @@ def _restore(
         prior_version=request.expected_version,
         new_version=new_version,
         before_state=before,
+        event_kind=RecordEventKind.STATE_CHANGED,
+        changed_fields=_ENTITY_LIFECYCLE_FIELDS,
     )
 
 
@@ -603,6 +786,8 @@ def _bind(
         prior_version=None,
         new_version=1,
         before_state=before,
+        event_kind=RecordEventKind.CREATED,
+        changed_fields=_IDENTIFIER_CREATE_FIELDS,
         child_id=identifier_id,
         child_version=1,
         child_state=IdentifierState.ACTIVE.value,
@@ -631,6 +816,8 @@ def _retire_identifier(
         prior_version=request.target_child_version,
         new_version=int(request.target_child_version or 0) + 1,
         before_state={**before, "identifier": prior},
+        event_kind=RecordEventKind.STATE_CHANGED,
+        changed_fields=_RETIRE_FIELDS,
         child_id=target,
         child_version=int(request.target_child_version or 0) + 1,
         child_state=IdentifierState.RETIRED.value,
@@ -686,6 +873,8 @@ def _supersede_identifier(
         prior_version=None,
         new_version=1,
         before_state={**before, "identifier": prior},
+        event_kind=RecordEventKind.CREATED,
+        changed_fields=_IDENTIFIER_CREATE_FIELDS,
         child_id=replacement,
         child_version=1,
         child_state=IdentifierState.ACTIVE.value,
@@ -720,6 +909,8 @@ def _add_alias(
         prior_version=None,
         new_version=1,
         before_state=before,
+        event_kind=RecordEventKind.CREATED,
+        changed_fields=_ALIAS_CREATE_FIELDS,
         child_id=alias_id,
         child_version=1,
         child_state=AliasState.ACTIVE.value,
@@ -747,6 +938,8 @@ def _retire_alias(
         prior_version=request.target_child_version,
         new_version=int(request.target_child_version or 0) + 1,
         before_state={**before, "alias": prior},
+        event_kind=RecordEventKind.STATE_CHANGED,
+        changed_fields=_RETIRE_FIELDS,
         child_id=target,
         child_version=int(request.target_child_version or 0) + 1,
         child_state=AliasState.RETIRED.value,
@@ -786,6 +979,8 @@ def _supersede_alias(
         prior_version=None,
         new_version=1,
         before_state={**before, "alias": prior},
+        event_kind=RecordEventKind.CREATED,
+        changed_fields=_ALIAS_CREATE_FIELDS,
         child_id=replacement,
         child_version=1,
         child_state=AliasState.ACTIVE.value,

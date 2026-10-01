@@ -67,6 +67,7 @@ from my_pa.infrastructure.persistence.constraints import (
     SqlAlchemyConstraintManagementUnitOfWork,
     SqlConstraintManagementRepository,
 )
+from my_pa.infrastructure.persistence.record_events import RecordEventBuffer
 from my_pa.infrastructure.persistence.tables import (
     SCHEMA,
     constraint_categories,
@@ -2628,7 +2629,7 @@ def test_resolved_conflict_requires_fresh_verified_run_before_baseline_advances(
             idempotency_key="resolve_sync_0001",
             at=T0,
             mutation_service=service,
-            active_uow=SimpleNamespace(constraints=repository),
+            active_uow=SimpleNamespace(constraints=repository, record_events=RecordEventBuffer()),
             correlation_id=None,
         )
         assert resolved is not None and resolved["constraint_version"] == (
@@ -2644,7 +2645,7 @@ def test_resolved_conflict_requires_fresh_verified_run_before_baseline_advances(
             idempotency_key="resolve_sync_0001",
             at=T0,
             mutation_service=service,
-            active_uow=SimpleNamespace(constraints=repository),
+            active_uow=SimpleNamespace(constraints=repository, record_events=RecordEventBuffer()),
             correlation_id=None,
         )
         assert replay == {**resolved, "replayed": True}
@@ -3771,7 +3772,7 @@ def test_reopen_resolution_uses_canonical_reopen_and_replays_without_duplicate_h
             idempotency_key="resolve_sync_reopen0001",
             at=T0,
             mutation_service=service,
-            active_uow=SimpleNamespace(constraints=repository),
+            active_uow=SimpleNamespace(constraints=repository, record_events=RecordEventBuffer()),
             correlation_id="corr_syncreopen0001",
         )
         assert result is not None
@@ -3815,7 +3816,7 @@ def test_reopen_resolution_uses_canonical_reopen_and_replays_without_duplicate_h
             idempotency_key="resolve_sync_reopen0001",
             at=T0,
             mutation_service=service,
-            active_uow=SimpleNamespace(constraints=repository),
+            active_uow=SimpleNamespace(constraints=repository, record_events=RecordEventBuffer()),
             correlation_id="corr_syncreopen0001",
         )
         assert replay == {**result, "replayed": True}
@@ -3876,7 +3877,9 @@ def test_reopen_resolution_stale_version_has_zero_effects(migrated_engine: Engin
                 idempotency_key="resolve_sync_reopen0002",
                 at=T0,
                 mutation_service=service,
-                active_uow=SimpleNamespace(constraints=repository),
+                active_uow=SimpleNamespace(
+                    constraints=repository, record_events=RecordEventBuffer()
+                ),
                 correlation_id=None,
             )
         stored = repository.read_constraint(PRINCIPAL, CONSTRAINT)
@@ -4008,7 +4011,7 @@ def test_manual_patch_turns_nulls_into_canonical_draft_clears(
             idempotency_key="resolve_sync_0001",
             at=T0,
             mutation_service=service,
-            active_uow=SimpleNamespace(constraints=repository),
+            active_uow=SimpleNamespace(constraints=repository, record_events=RecordEventBuffer()),
             correlation_id=None,
         )
         assert result is not None and result["constraint_version"] == 2
@@ -4048,7 +4051,9 @@ def test_manual_patch_cannot_clear_published_required_fields(
                 idempotency_key="resolve_sync_0001",
                 at=T0,
                 mutation_service=service,
-                active_uow=SimpleNamespace(constraints=repository),
+                active_uow=SimpleNamespace(
+                    constraints=repository, record_events=RecordEventBuffer()
+                ),
                 correlation_id=None,
             )
         assert connection.execute(select(constraint_sync_conflicts.c.state)).scalar_one() == "open"

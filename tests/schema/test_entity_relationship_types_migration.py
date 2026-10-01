@@ -320,6 +320,9 @@ def test_downgrading_one_step_removes_exactly_this_table_and_restores_the_origin
         "meeting_note_versions",
         "meeting_series_history",
         "meeting_write_requests",
+        # WP-RE-01. The Record Event revision stacks its two tables.
+        "record_event_sequences",
+        "record_events",
     }
     # The rest of the entity plane survives the downgrade of this revision alone.
     assert {

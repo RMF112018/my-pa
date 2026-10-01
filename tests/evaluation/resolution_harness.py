@@ -45,6 +45,7 @@ from my_pa.contracts.ports import (
     RelationshipWriteRequest,
     UnknownScopeError,
 )
+from my_pa.domain.record_events import EntityEventShape
 from my_pa.domain.relationship.entity import (
     AliasState,
     AliasType,
@@ -843,7 +844,13 @@ class _CorpusRepository(EntitiesRepository):
     # through a read, so the calibration still exercises the withholding rule
     # without this repository answering for it.
 
-    def record_mutation_event(self, principal_id: str, event: EntityMutationEvent) -> None:
+    def record_mutation_event(
+        self,
+        principal_id: str,
+        event: EntityMutationEvent,
+        *,
+        shape: EntityEventShape | None = None,
+    ) -> None:
         raise NotImplementedError("the evaluation corpus is frozen")
 
     def mutation_event(

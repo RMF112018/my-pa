@@ -82,6 +82,8 @@ from my_pa.contracts.ports import (
     OperationQueue,
     ProjectRepository,
     PulseRepository,
+    RecordEventReader,
+    RecordEventStager,
     RelationshipMemoryProposalRepository,
     RelationshipMemoryRepository,
     RepositoryFailureError,
@@ -181,6 +183,12 @@ from my_pa.infrastructure.persistence.knowledge import (
 from my_pa.infrastructure.persistence.managed_documents import SqlManagedDocumentRepository
 from my_pa.infrastructure.persistence.meetings import SqlMeetingRepository
 from my_pa.infrastructure.persistence.principal_scope import capture_context
+from my_pa.infrastructure.persistence.record_events import (
+    RecordEventBuffer,
+    SqlRecordEventReader,
+    SqlRecordEventWriter,
+    flush_record_events,
+)
 from my_pa.infrastructure.persistence.registry import (
     UnknownSourceError,
     get_source,
@@ -549,8 +557,13 @@ class _Reviews(ReviewRepository):
         relationship_memory_enabled: bool,
         relationship_intelligence_enabled: bool = False,
         goodnotes_pull_enabled: bool = False,
+        stager: RecordEventStager | None = None,
     ) -> None:
         self._connection = connection
+        # WP-RE-04 RP2: a memory promotion stages its Record Event into the
+        # owning unit of work's buffer; without one (a fixture) it stages into
+        # a private buffer nothing flushes.
+        self._record_events = stager
         self._relationship_memory_enabled = relationship_memory_enabled
         self._relationship_intelligence_enabled = relationship_intelligence_enabled
         self._goodnotes_pull_enabled = goodnotes_pull_enabled
@@ -720,6 +733,7 @@ class _Reviews(ReviewRepository):
                     self._connection,
                     request,
                     has_operator_authority=has_operator_authority,
+                    stager=self._record_events,
                 )
             return decide_review(self._connection, request)
 
@@ -1042,6 +1056,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         self._goodnotes_pull_enabled = goodnotes_pull_enabled
         self._context: AbstractContextManager[Connection] | None = None
         self._connection: Connection | None = None
+        self._record_events = RecordEventBuffer()
 
     def __enter__(self) -> UnitOfWork:
         """Open the transaction, translating a failure to open it.
@@ -1067,6 +1082,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         context = self._engine.begin()
         self._connection = _read(context.__enter__)
         self._context = context
+        self._record_events.reset()
         return self
 
     def __exit__(
@@ -1076,13 +1092,44 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         traceback: TracebackType | None,
     ) -> None:
         context = self._context
+        connection = self._connection
+        # WP-RE-01: the buffer is emptied on every exit, and flushed only when
+        # the block succeeded -- one allocator batch, then the inserts in stage
+        # order -- as the last database work before COMMIT, after the handler
+        # and its re-enrichment registration, and *before* the connection is
+        # cleared (G1-TX-001). A flush failure is handed to the same
+        # `context.__exit__` below, which rolls the canonical change back with
+        # it, and is then re-raised (already translated).
+        drafts = self._record_events.drain()
+        failure: Exception | None = None
+        if context is not None and connection is not None and exc_type is None and drafts:
+            try:
+                flush_record_events(SqlRecordEventWriter(connection), drafts)
+            except Exception as error:  # re-raised below, after the rollback
+                failure = error
         self._context = None
         self._connection = None
-        if context is not None:
+        if context is not None and failure is not None:
+            context.__exit__(type(failure), failure, failure.__traceback__)
+        elif context is not None:
             # Commits when the block succeeded and rolls back when it did not.
             # The return value is discarded deliberately: a unit of work that
             # swallowed its caller's exception would commit a failed operation.
             context.__exit__(exc_type, exc, traceback)
+        if failure is not None:
+            raise failure
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        """This transaction's Record Event buffer (WP-RE-01)."""
+        if self._connection is None:
+            raise RuntimeError("this unit of work is not inside a transaction")
+        return self._record_events
+
+    @property
+    def record_event_reader(self) -> RecordEventReader:
+        """The Record Event feed reader, on this transaction's connection (WP-RE-06)."""
+        return SqlRecordEventReader(self._open)
 
     @property
     def _open(self) -> Connection:
@@ -1139,6 +1186,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
             relationship_memory_enabled=self._relationship_memory_enabled,
             relationship_intelligence_enabled=self._relationship_intelligence_enabled,
             goodnotes_pull_enabled=self._goodnotes_pull_enabled,
+            stager=self._record_events,
         )
 
     @property
@@ -1232,7 +1280,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     @property
     def entities(self) -> EntitiesRepository:
         """The generalized entity rows, on this transaction's connection."""
-        return SqlEntityRepository(self._open)
+        return SqlEntityRepository(self._open, stager=self._record_events)
 
     @property
     def meetings(self) -> MeetingRepository:
@@ -1247,7 +1295,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     @property
     def relationship_memory(self) -> RelationshipMemoryRepository:
         """The Relationship Memory rows, on this transaction's connection."""
-        return SqlRelationshipMemoryRepository(self._open)
+        return SqlRelationshipMemoryRepository(self._open, stager=self._record_events)
 
     @property
     def relationship_memory_proposals(self) -> RelationshipMemoryProposalRepository:

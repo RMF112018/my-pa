@@ -37,6 +37,7 @@ from my_pa.application.service import ApplicationService
 from my_pa.contracts.ports import (
     CommitmentManagementRepository,
     CommitmentManagementUnitOfWork,
+    RecordEventStager,
     TaskManagementRepository,
     TaskManagementUnitOfWork,
 )
@@ -65,6 +66,7 @@ from my_pa.domain.task.task import Task
 from tests.conftest import (
     DEFAULT_LIMITS,
     WHEN,
+    FakeRecordEventStager,
     FakeUnitOfWork,
     World,
     metadata_for,
@@ -187,8 +189,10 @@ class _CommitmentRepo(CommitmentManagementRepository):
 class _CommitmentUoW(CommitmentManagementUnitOfWork):
     def __init__(self, world: World) -> None:
         self._world = world
+        self._record_events = FakeRecordEventStager(world.record_events)
 
     def __enter__(self) -> CommitmentManagementUnitOfWork:
+        self._record_events.begin()
         return self
 
     def __exit__(
@@ -197,7 +201,11 @@ class _CommitmentUoW(CommitmentManagementUnitOfWork):
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        pass
+        self._record_events.settle(committed=exc is None)
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        return self._record_events
 
     @property
     def commitments(self) -> CommitmentManagementRepository:
@@ -292,8 +300,10 @@ class _TaskRepo(TaskManagementRepository):
 class _TaskUoW(TaskManagementUnitOfWork):
     def __init__(self, world: World) -> None:
         self._world = world
+        self._record_events = FakeRecordEventStager(world.record_events)
 
     def __enter__(self) -> TaskManagementUnitOfWork:
+        self._record_events.begin()
         return self
 
     def __exit__(
@@ -302,7 +312,11 @@ class _TaskUoW(TaskManagementUnitOfWork):
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        pass
+        self._record_events.settle(committed=exc is None)
+
+    @property
+    def record_events(self) -> RecordEventStager:
+        return self._record_events
 
     @property
     def tasks(self) -> TaskManagementRepository:

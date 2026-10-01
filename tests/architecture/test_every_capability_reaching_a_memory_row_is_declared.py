@@ -301,6 +301,12 @@ CAPABILITY_PREFIX: Final = "relationship_memory."
 #: two-file answer is what lets claim 3 walk callers instead of grepping.
 MEMORY_SQL_MODULES: Final = frozenset(
     {
+        # WP-RE-06 (OD-8 (i)): the Record Event feed reader's remote predicate
+        # reads `relationship_memories.current_version_id` and
+        # `relationship_memory_versions.classification` -- the join key and the
+        # one column -- inside an `EXISTS`, to withhold every event of a
+        # currently restricted memory. It selects no memory column into a row.
+        "infrastructure/persistence/record_events.py",
         "infrastructure/persistence/relationship_memory.py",
         "infrastructure/persistence/relationship_memory_proposals.py",
         "infrastructure/persistence/relationship_memory_review.py",
@@ -339,6 +345,9 @@ DECLARED: Final = frozenset(
         Capability.ENTITIES_MERGE,
         Capability.ENTITIES_SPLIT_PREVIEW,
         Capability.ENTITIES_SPLIT,
+        # `WP-RE-06`: the Record Event feed's remote restricted-memory predicate
+        # (OD-8 (i)) reads a memory's current classification to withhold it.
+        Capability.RECORD_EVENTS_LIST,
     }
 )
 
@@ -355,6 +364,15 @@ DECLARED: Final = frozenset(
 #: in a reason is written in the `N of the eight (…)` form on purpose: that form
 #: is what `_claims_in()` reads, and anything written another way is prose again.
 BEYOND_THE_NINE: Final = {
+    Capability.RECORD_EVENTS_LIST: (
+        "purpose `record_event_read`. `record_events.list` reads two of the eight "
+        "(`relationship_memories`, `relationship_memory_versions`) and writes none of the "
+        "eight, and only for a remote caller: inside the OD-8 (i) `EXISTS` that withholds "
+        "every event of a currently restricted memory, it joins `memory_id` and "
+        "`current_version_id` to `memory_version_id` under the Principal partition and "
+        "compares the version's `classification`. No memory column enters a returned row; "
+        "an item carries only the event's own metadata (WP-RE-06)."
+    ),
     Capability.ENTITIES_SPLIT_PREVIEW: (
         "purpose `entity_identity_correction`. `entities.split.preview` reads three of the "
         "eight (`relationship_memories`, `relationship_memory_context_links`, "
@@ -363,13 +381,14 @@ BEYOND_THE_NINE: Final = {
         "classification, or evidence payload."
     ),
     Capability.ENTITIES_SPLIT: (
-        "purpose `entity_identity_correction`. `entities.split` reads three of the eight "
+        "purpose `entity_identity_correction`. `entities.split` reads four of the eight "
         "(`relationship_memories`, `relationship_memory_context_links`, "
-        "`relationship_memory_proposals`) and writes three of the eight "
-        "(`relationship_memories`, `relationship_memory_context_links`, "
+        "`relationship_memory_proposals`, `relationship_memory_versions`) and writes three "
+        "of the eight (`relationship_memories`, `relationship_memory_context_links`, "
         "`relationship_memory_proposals`) to restore only exact opaque before-state bindings "
-        "under after-state guards. It reads or writes no memory text, classification, or "
-        "evidence payload."
+        "under after-state guards. The fourth read is the current version's "
+        "`classification` alone, which each memory Record Event stores (WP-RE-04, OD-8); "
+        "it reads or writes no memory text or evidence payload."
     ),
     Capability.ENTITIES_CONTEXT: (
         "purpose `entity_read`. `entities.context` reads two of the eight "
@@ -428,13 +447,15 @@ BEYOND_THE_NINE: Final = {
     ),
     Capability.ENTITIES_MERGE: (
         "purpose `entity_identity_correction`, and it is operator-only. "
-        "`entities.merge` reads three of the eight "
+        "`entities.merge` reads four of the eight "
         "(`relationship_memories`, `relationship_memory_context_links`, "
-        "`relationship_memory_proposals`) and writes three of the eight "
-        "(`relationship_memories`, `relationship_memory_context_links`, "
+        "`relationship_memory_proposals`, `relationship_memory_versions`) and writes three "
+        "of the eight (`relationship_memories`, `relationship_memory_context_links`, "
         "`relationship_memory_proposals`). Apply revalidates and changes only opaque "
-        "subject/context bindings while retaining immutable origin subjects; it reads or "
-        "writes no memory text, classification, or evidence payload."
+        "subject/context bindings while retaining immutable origin subjects. The fourth "
+        "read is the current version's `classification` alone, which each memory Record "
+        "Event stores (WP-RE-04, OD-8); it reads or writes no memory text or evidence "
+        "payload."
     ),
 }
 
@@ -450,6 +471,12 @@ BEYOND_THE_NINE: Final = {
 #: is a bound and not an itinerary — see this module's docstring on
 #: `relationship_memory.archive`.
 DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str]]]] = {
+    # `WP-RE-06` (OD-8 (i)): keys, `current_version_id` and `classification` only,
+    # inside the remote predicate's `EXISTS`; nothing is written.
+    Capability.RECORD_EVENTS_LIST: (
+        frozenset({"relationship_memories", "relationship_memory_versions"}),
+        frozenset(),
+    ),
     Capability.RELATIONSHIP_MEMORY_CREATE: (
         frozenset(
             {
@@ -563,11 +590,15 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
         frozenset(),
     ),
     Capability.ENTITIES_SPLIT: (
+        # WP-RE-04 Phase 4B: `relationship_memory_versions` is read for the
+        # current version's `classification` only, which each memory Record
+        # Event stores (OD-8).
         frozenset(
             {
                 "relationship_memories",
                 "relationship_memory_context_links",
                 "relationship_memory_proposals",
+                "relationship_memory_versions",
             }
         ),
         frozenset(
@@ -579,11 +610,15 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
         ),
     ),
     Capability.ENTITIES_MERGE: (
+        # WP-RE-04 Phase 4B: `relationship_memory_versions` is read for the
+        # current version's `classification` only, which each memory Record
+        # Event stores (OD-8).
         frozenset(
             {
                 "relationship_memories",
                 "relationship_memory_context_links",
                 "relationship_memory_proposals",
+                "relationship_memory_versions",
             }
         ),
         frozenset(
@@ -921,6 +956,12 @@ DISPATCH_THROUGH_A_SUBSCRIPT: Final[dict[tuple[str, str], str]] = {
 #: dozens at a stroke. The module docstring says why the narrower rule that would
 #: avoid that is not available.
 UNCALLED_PORT_METHOD_REFERENCES: Final[dict[tuple[str, str], str]] = {
+    ("my_pa.application.service", "portfolio.page"): (
+        "not a port method. `portfolio` is the Constraint portfolio read model "
+        "`list_portfolio_constraints` returns, and `page` there is its truncation "
+        "record (`portfolio.page.is_truncated`). It collides with WP-RE-06's "
+        "`RecordEventReader.page`, with which it shares nothing but the word."
+    ),
     ("my_pa.application.service", "receipt.history"): (
         "not a port method. `receipt` is bound from `conflict.receipt` on a caught "
         "conflict, which this walk cannot type, and `history` there is the task "
@@ -3021,10 +3062,13 @@ def test_the_port_crossings_that_reach_a_memory_row_are_the_two_planes() -> None
     own, and the review repository, which is the shared capture-plane surface the
     memory plane joined. That second one is the entire content of the
     `review.list` and `review.decide` findings — a capability can reach memory
-    rows through a port that has nothing to do with memory in its name.
+    rows through a port that has nothing to do with memory in its name. The
+    Record Event feed reader (WP-RE-06) is the same shape again: its remote
+    predicate (OD-8) reads a memory's current classification to withhold it.
     """
     crossings = _memory_reaching_port_methods()
     assert set(crossings) == {
+        "RecordEventReader",
         "RelationshipMemoryProposalRepository",
         "RelationshipMemoryRepository",
         "ReviewRepository",
@@ -3036,6 +3080,11 @@ def test_the_port_crossings_that_reach_a_memory_row_are_the_two_planes() -> None
         "the producer's crossing is now "
         f"{sorted(crossings['RelationshipMemoryProposalRepository'])}; the whole claim about "
         "that port is that it has exactly one method and a producer can call nothing else"
+    )
+    assert crossings["RecordEventReader"] == frozenset({"page", "visible_event_ids"}), (
+        "the Record Event feed's crossings are now "
+        f"{sorted(crossings['RecordEventReader'])}; only the two reads that apply the "
+        "OD-8 restricted-memory predicate may reach a memory row"
     )
     assert crossings["ReviewRepository"] == frozenset({"cases", "decide"}), (
         f"the review-plane crossings are now {sorted(crossings['ReviewRepository'])}; "

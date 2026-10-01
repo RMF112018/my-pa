@@ -27,14 +27,23 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, Final, Protocol
 
 from my_pa.contracts.ports import (
     CommitmentManagementRepository,
     CommitmentManagementUnitOfWork,
+    RecordEventStager,
 )
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import utc_now
+from my_pa.domain.identity.operation import Capability
+from my_pa.domain.record_events import (
+    NON_MEMORY_CLASSIFICATION,
+    TASK_ACTOR_CLASSES,
+    RecordEventDraft,
+    RecordEventFamily,
+    RecordEventKind,
+)
 from my_pa.domain.situation.continuity import (
     CommitmentDirection,
     CommitmentState,
@@ -51,6 +60,7 @@ __all__ = [
     "CommitmentMutationReceipt",
     "CommitmentNotFoundError",
     "CommitmentVersionConflictError",
+    "commitment_record_event",
 ]
 
 
@@ -79,6 +89,11 @@ class _ActiveCommitmentUnitOfWork(Protocol):
     @property
     def commitments(self) -> CommitmentManagementRepository: ...
 
+    @property
+    def record_events(self) -> RecordEventStager:
+        """The joined transaction's Record Event buffer (WP-RE-01)."""
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class CommitmentMutationReceipt:
@@ -89,6 +104,89 @@ class CommitmentMutationReceipt:
     #: `True` when `history` is a prior attempt's receipt, returned unchanged
     #: because the request's `idempotency_key` had already been used.
     replayed: bool = False
+
+
+def _commitment_created_values(commitment: Commitment) -> dict[str, object]:
+    """WP-RE-02: the fields a create materializes (named only when non-null)."""
+    return {
+        "accepted_by_review_decision_id": commitment.accepted_by_review_decision_id,
+        "counterparty_person_id": commitment.counterparty_person_id,
+        "direction": commitment.direction,
+        "due_at": commitment.due_at,
+        "evidence_state": commitment.evidence_state,
+        "opened_at": commitment.opened_at,
+        "origin_evidence_ref": commitment.origin_evidence_ref,
+        "project_id": commitment.project_id,
+        "situation_id": commitment.situation_id,
+        "state": commitment.state,
+        "summary": commitment.summary,
+    }
+
+
+def _commitment_patchable_values(commitment: Commitment) -> dict[str, object]:
+    """The only patchable fields, compared field by field for an update."""
+    return {
+        "counterparty_person_id": commitment.counterparty_person_id,
+        "due_at": commitment.due_at,
+        "summary": commitment.summary,
+    }
+
+
+#: Close is a static set.
+_COMMITMENT_CLOSE_FIELDS: Final = ("closed_at", "closure_evidence_ref", "state")
+
+_SOURCE_CAPABILITY: Final = {
+    CommitmentMutationAction.CREATE: Capability.COMMITMENTS_CREATE.value,
+    CommitmentMutationAction.UPDATE: Capability.COMMITMENTS_UPDATE.value,
+    CommitmentMutationAction.CLOSE: Capability.COMMITMENTS_CLOSE.value,
+}
+_KIND: Final = {
+    CommitmentMutationAction.CREATE: RecordEventKind.CREATED,
+    CommitmentMutationAction.UPDATE: RecordEventKind.UPDATED,
+    CommitmentMutationAction.CLOSE: RecordEventKind.STATE_CHANGED,
+}
+
+
+def commitment_record_event(
+    *,
+    principal_id: str,
+    action: CommitmentMutationAction,
+    before: Commitment | None,
+    after: Commitment,
+    actor: TaskMutationActor,
+    history_id: str,
+    occurred_at: datetime,
+    source_capability: str | None = None,
+    correlation_id: str | None = None,
+) -> RecordEventDraft:
+    """The one Record Event an APPLIED Commitment mutation stages (names, never values)."""
+    if action is CommitmentMutationAction.CREATE or before is None:
+        fields: tuple[str, ...] = tuple(
+            name for name, value in _commitment_created_values(after).items() if value is not None
+        )
+    elif action is CommitmentMutationAction.CLOSE:
+        fields = _COMMITMENT_CLOSE_FIELDS
+    else:
+        was = _commitment_patchable_values(before)
+        fields = tuple(
+            name
+            for name, value in _commitment_patchable_values(after).items()
+            if was[name] != value
+        )
+    return RecordEventDraft.issue(
+        principal_id=principal_id,
+        record_family=RecordEventFamily.COMMITMENT,
+        record_id=after.commitment_id,
+        event_kind=_KIND[action],
+        record_version=after.version,
+        changed_fields=tuple(sorted(fields)),
+        source_capability=source_capability or _SOURCE_CAPABILITY[action],
+        actor_class=TASK_ACTOR_CLASSES[actor],
+        classification=NON_MEMORY_CLASSIFICATION,
+        occurred_at=occurred_at,
+        source_receipt_id=history_id,
+        correlation_id=correlation_id,
+    )
 
 
 class CommitmentManagementService:
@@ -120,6 +218,8 @@ class CommitmentManagementService:
         client_context: str | None = None,
         active_uow: _ActiveCommitmentUnitOfWork | None = None,
         validate_first_write: Callable[[], None] | None = None,
+        source_capability: str | None = None,
+        correlation_id: str | None = None,
     ) -> CommitmentMutationReceipt:
         """Create a new commitment.
 
@@ -180,6 +280,8 @@ class CommitmentManagementService:
             ),
             active_uow=active_uow,
             validate_first_write=validate_first_write,
+            source_capability=source_capability,
+            correlation_id=correlation_id,
         )
 
     def update_commitment(
@@ -195,6 +297,8 @@ class CommitmentManagementService:
         client_context: str | None = None,
         active_uow: _ActiveCommitmentUnitOfWork | None = None,
         validate_first_write: Callable[[], None] | None = None,
+        source_capability: str | None = None,
+        correlation_id: str | None = None,
     ) -> CommitmentMutationReceipt:
         """Atomically update only the mutable Work-facing commitment fields."""
         allowed = {"summary", "due_at", "counterparty_person_id"}
@@ -226,6 +330,8 @@ class CommitmentManagementService:
             ),
             active_uow=active_uow,
             validate_first_write=validate_first_write,
+            source_capability=source_capability,
+            correlation_id=correlation_id,
         )
 
     def close_commitment(
@@ -240,6 +346,8 @@ class CommitmentManagementService:
         client_context: str | None = None,
         active_uow: _ActiveCommitmentUnitOfWork | None = None,
         validate_first_write: Callable[[], None] | None = None,
+        source_capability: str | None = None,
+        correlation_id: str | None = None,
     ) -> CommitmentMutationReceipt:
         """Close a commitment. Already-closed is recorded `NO_OP`, not `APPLIED`."""
 
@@ -271,6 +379,8 @@ class CommitmentManagementService:
             ),
             active_uow=active_uow,
             validate_first_write=validate_first_write,
+            source_capability=source_capability,
+            correlation_id=correlation_id,
         )
 
     def _mutate(
@@ -287,6 +397,8 @@ class CommitmentManagementService:
         request_digest: str | None = None,
         active_uow: _ActiveCommitmentUnitOfWork | None = None,
         validate_first_write: Callable[[], None] | None = None,
+        source_capability: str | None = None,
+        correlation_id: str | None = None,
     ) -> CommitmentMutationReceipt:
         """The single transactional mechanism every public method delegates to.
 
@@ -401,6 +513,20 @@ class CommitmentManagementService:
                             idempotency_key=idempotency_key,
                             client_context=client_context,
                             request_digest=request_digest,
+                        )
+                        # WP-RE-02: the APPLIED branch, and only it, stages.
+                        uow.record_events.stage(
+                            commitment_record_event(
+                                principal_id=principal_id,
+                                action=action,
+                                before=current,
+                                after=applied_commitment,
+                                actor=actor,
+                                history_id=applied_history.history_id,
+                                occurred_at=now,
+                                source_capability=source_capability,
+                                correlation_id=correlation_id,
+                            )
                         )
                         result = CommitmentMutationReceipt(
                             history=applied_history, commitment=applied_commitment

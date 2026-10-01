@@ -37,6 +37,8 @@ from my_pa.application.identity_correction import (
     _inverse_drafts,
     plan_entities,
 )
+from my_pa.contracts.ports import MemoryFeedFacts
+from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import InvalidIdentifierError
 from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
 from my_pa.domain.relationship.governance import ActorClass, EntityProposal
@@ -67,6 +69,7 @@ from my_pa.domain.relationship.identity_correction import (
 )
 from my_pa.domain.relationship.normalization import normalize_name
 from my_pa.infrastructure.persistence.relationship_memory import SqlRelationshipMemoryRepository
+from tests.conftest import FakeRecordEventStager
 
 PRINCIPAL: Final = "prn_aaaa0001aaaa0001aaaa0001"
 SURVIVOR: Final = "ent_aaaa0001aaaa0001"
@@ -800,6 +803,13 @@ class _SplitMemories:
         assert restored_state
         self.restored.append(effect)
 
+    def memory_feed_facts(self, principal_id: str, memory_id: str) -> MemoryFeedFacts:
+        """WP-RE-04: the memory as its split Record Event names it."""
+        assert principal_id == PRINCIPAL
+        return MemoryFeedFacts(
+            memory_id=memory_id, version=9, classification=Classification.PRIVATE_LOCAL
+        )
+
 
 def _split_fixture() -> tuple[_SplitEntities, _SplitMemories, IdentityCorrectionService]:
     drafts = (
@@ -836,7 +846,15 @@ def _split_fixture() -> tuple[_SplitEntities, _SplitMemories, IdentityCorrection
     )
     entities = _SplitEntities(source, effects)
     memories = _SplitMemories()
-    return entities, memories, IdentityCorrectionService(entities, memories)  # type: ignore[arg-type]
+    return (
+        entities,
+        memories,
+        IdentityCorrectionService(
+            entities,  # type: ignore[arg-type]
+            memories,  # type: ignore[arg-type]
+            stager=FakeRecordEventStager([]),
+        ),
+    )
 
 
 def _split_preview(service: IdentityCorrectionService) -> SplitPreviewReport:

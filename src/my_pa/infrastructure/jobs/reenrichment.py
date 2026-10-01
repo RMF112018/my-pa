@@ -98,6 +98,15 @@ from typing import Final
 
 from sqlalchemy import Connection, Engine, and_, exists, func, or_, select
 
+from my_pa.domain.record_events import (
+    NON_MEMORY_CLASSIFICATION,
+    RecordEventActorClass,
+    RecordEventDraft,
+    RecordEventFamily,
+    RecordEventKind,
+    field_set,
+    observation_feed_version,
+)
 from my_pa.domain.relationship.entity import EntityStatus
 from my_pa.domain.relationship.governance import ObservationState
 from my_pa.domain.relationship.reenrichment import (
@@ -115,6 +124,11 @@ from my_pa.infrastructure.persistence.principal_scope import (
     PrincipalContext,
     capture_context,
     partition_criterion,
+)
+from my_pa.infrastructure.persistence.record_events import (
+    RecordEventBuffer,
+    SqlRecordEventWriter,
+    flush_record_events,
 )
 from my_pa.infrastructure.persistence.tables import (
     entities,
@@ -178,6 +192,10 @@ class DerivedResolution:
     rebound: int = 0
     left_to_a_governed_decision: int = 0
     bound_reached: bool = False
+    #: WP-RE-04 (OD-5 INCLUDE, G1-EM-007): `(observation_id, new
+    #: resolution_version)` for every observation this pass rebound, in
+    #: ascending `observation_id` order -- what the rebind's Record Events name.
+    rebinds: tuple[tuple[str, int], ...] = ()
 
     @property
     def limitations(self) -> tuple[ReenrichmentLimitation, ...]:
@@ -279,6 +297,7 @@ def resolve_derived_linkage(
     bound_reached = len(candidates) > limit
     rebound = 0
     yielded = 0
+    rebinds: list[tuple[str, int]] = []
     for candidate in candidates[:limit]:
         survivor = _current_survivor(
             connection,
@@ -312,6 +331,7 @@ def resolve_derived_linkage(
         )
         if updated.rowcount == 1:
             rebound += 1
+            rebinds.append((str(candidate.observation_id), int(candidate.resolution_version) + 1))
         else:
             yielded += 1
     return DerivedResolution(
@@ -319,6 +339,43 @@ def resolve_derived_linkage(
         left_to_a_governed_decision=yielded
         + _placeable_unresolved_mentions(connection, context=context, limit=limit),
         bound_reached=bound_reached,
+        rebinds=tuple(rebinds),
+    )
+
+
+#: The non-public operation name every rebind event carries (P2b I1).
+REBIND_SOURCE_CAPABILITY: Final = "system.entity_reenrichment.rebind"
+
+
+def rebind_record_events(
+    *,
+    principal_id: str,
+    work_id: str,
+    rebinds: tuple[tuple[str, int], ...],
+    at: datetime,
+) -> tuple[RecordEventDraft, ...]:
+    """One `entity_observation` `updated` per rebound observation (WP-RE-04, I1).
+
+    In ascending `observation_id` order, at the feed version of the new
+    `resolution_version` (T-002: `resolution_version + 1`), by the system,
+    with the work item as receipt. Nothing else: the observation's text and
+    the entities' names are not the event's to carry.
+    """
+    return tuple(
+        RecordEventDraft.issue(
+            principal_id=principal_id,
+            record_family=RecordEventFamily.ENTITY_OBSERVATION,
+            record_id=observation_id,
+            event_kind=RecordEventKind.UPDATED,
+            record_version=observation_feed_version(resolution_version),
+            changed_fields=field_set("entity_id", "resolution_version"),
+            source_capability=REBIND_SOURCE_CAPABILITY,
+            actor_class=RecordEventActorClass.SYSTEM,
+            classification=NON_MEMORY_CLASSIFICATION,
+            occurred_at=at,
+            source_receipt_id=work_id,
+        )
+        for observation_id, resolution_version in sorted(rebinds)
     )
 
 
@@ -454,9 +511,26 @@ def settle_reenrichment_work(
                 at=at,
             )
             if not currency.is_current:
+                # The fenced mutation was discarded with its savepoint, so there
+                # is nothing to announce: the `stale` exit stages nothing.
                 return "stale", DerivedResolution()
+            # WP-RE-04 W5 (OD-5 INCLUDE): a connection-scoped stager, filled
+            # only now -- after `apply_claimed` kept the savepoint -- and never
+            # inside it. Flushed as the last database work of the transaction
+            # at each committing exit that has drafts (R-008); a flush failure
+            # raises inside the `with` and rolls the whole pass back.
+            stager = RecordEventBuffer()
+            for draft in rebind_record_events(
+                principal_id=principal_id,
+                work_id=work.work_id,
+                rebinds=outcome.rebinds,
+                at=at,
+            ):
+                stager.stage(draft)
             limitations = outcome.limitations
             if not limitations:
+                if drafts := stager.drain():
+                    flush_record_events(SqlRecordEventWriter(connection), drafts)
                 return "succeeded", outcome
             _correct_settlement_to_partial(
                 connection,
@@ -464,6 +538,8 @@ def settle_reenrichment_work(
                 work_id=work.work_id,
                 limitations=limitations,
             )
+            if drafts := stager.drain():
+                flush_record_events(SqlRecordEventWriter(connection), drafts)
             return "partial", outcome
     except Exception:
         with engine.begin() as connection:

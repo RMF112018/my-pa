@@ -63,14 +63,25 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from my_pa.contracts.ports import (
     MemoryDetail,
+    MemoryFeedFacts,
     MemoryListingFacts,
     MemoryPage,
     MemoryWriteRequest,
+    RecordEventStager,
     RelationshipMemoryRepository,
     UnknownScopeError,
 )
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
+from my_pa.domain.record_events import (
+    MEMORY_ACTOR_CLASSES,
+    MEMORY_AUTHORITIES,
+    RecordEventDraft,
+    RecordEventFamily,
+    RecordEventKind,
+    field_set,
+    memory_source_capability,
+)
 from my_pa.domain.relationship.entity import EntityStatus, EntityType
 from my_pa.domain.relationship.identity_correction import (
     IdentityEffect,
@@ -106,6 +117,7 @@ from my_pa.infrastructure.persistence.principal_scope import (
     partition_criterion,
     principal_bound_values,
 )
+from my_pa.infrastructure.persistence.record_events import RecordEventBuffer
 from my_pa.infrastructure.persistence.relationship_memory_context import (
     requested_entity_context_ids,
     require_own_writable_context_targets,
@@ -132,6 +144,19 @@ __all__ = ["SqlRelationshipMemoryRepository"]
 #: bound configuration compiles to `to_tsvector($1, …)` and stops matching the
 #: functional index.
 _SEARCH_CONFIG = "simple"
+
+#: P2b M1-M4 static `changed_fields` (R3 (a)); a revise adds what its typed
+#: comparison found. No set names the statement or the structured value.
+_MEMORY_CREATE_FIELDS = field_set(
+    "current_version_id",
+    "current_version_number",
+    "lifecycle_state",
+    "memory_kind",
+    "pinned",
+    "subject_entity_id",
+)
+_MEMORY_REVISE_FIELDS = field_set("current_version_id", "current_version_number", "version")
+_MEMORY_LIFECYCLE_FIELDS = field_set("archived_at", "lifecycle_state", "version")
 
 _MEMORY_COLUMNS = (
     relationship_memories.c.memory_id,
@@ -245,10 +270,16 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
     Takes the connection rather than opening one, exactly as
     `SqlEntityRepository` does: the caller owns the transaction and this class
     only issues statements on it.
+
+    `stager` is the Record Event buffer `admit` stages into (WP-RE-04,
+    P2b M1-M4), on `SqlEntityRepository`'s terms: the unit of work passes its
+    own, and a repository built without one stages into a private buffer
+    nothing flushes.
     """
 
-    def __init__(self, connection: Connection) -> None:
+    def __init__(self, connection: Connection, stager: RecordEventStager | None = None) -> None:
         self._connection = connection
+        self._record_events: RecordEventStager = RecordEventBuffer() if stager is None else stager
 
     # ---- writes ----------------------------------------------------------
 
@@ -431,14 +462,16 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
         memory_id: str,
         aggregate_version: int,
         lifecycle: MemoryLifecycle,
-    ) -> None:
+    ) -> str:
+        """Append the admission row, and return its id: the write's receipt (G1-EM-014)."""
+        submission_id = issue_identifier(IdKind.RELATIONSHIP_MEMORY_SUBMISSION)
         self._connection.execute(
             insert(relationship_memory_submissions).values(
                 _bound(
                     relationship_memory_submissions,
                     request.principal_id,
                     {
-                        "submission_id": issue_identifier(IdKind.RELATIONSHIP_MEMORY_SUBMISSION),
+                        "submission_id": submission_id,
                         "idempotency_key": request.idempotency_key,
                         "correlation_id": request.correlation_id,
                         "operation": request.operation.value,
@@ -450,6 +483,44 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
                         "lifecycle_state": lifecycle.value,
                     },
                 )
+            )
+        )
+        return submission_id
+
+    def _stage(
+        self,
+        request: MemoryWriteRequest,
+        *,
+        memory_id: str,
+        kind: RecordEventKind,
+        version: int,
+        changed: tuple[str, ...],
+        classification: Classification,
+        receipt: str,
+    ) -> None:
+        """Stage the one event an admitted (never replayed) write implies (P2b M1-M4).
+
+        `admit` is reached only after `RelationshipMemoryService._admit` found no
+        replay, so every call here is on the applied branch. The classification
+        is the committed version's (OD-8).
+        """
+        self._record_events.stage(
+            RecordEventDraft.issue(
+                principal_id=request.principal_id,
+                record_family=RecordEventFamily.RELATIONSHIP_MEMORY,
+                record_id=memory_id,
+                event_kind=kind,
+                record_version=version,
+                changed_fields=changed,
+                source_capability=memory_source_capability(
+                    request.operation, request.created_by_actor
+                ),
+                actor_class=MEMORY_ACTOR_CLASSES[request.created_by_actor],
+                classification=classification,
+                occurred_at=request.server_received_at,
+                source_receipt_id=receipt,
+                authority=MEMORY_AUTHORITIES[request.authority],
+                correlation_id=request.correlation_id,
             )
         )
 
@@ -508,11 +579,20 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
             prior_version_id=None,
             memory_kind=memory_kind,
         )
-        self._record_submission(
+        submission_id = self._record_submission(
             request,
             memory_id=memory_id,
             aggregate_version=1,
             lifecycle=MemoryLifecycle.ACTIVE,
+        )
+        self._stage(
+            request,
+            memory_id=memory_id,
+            kind=RecordEventKind.CREATED,
+            version=1,
+            changed=_MEMORY_CREATE_FIELDS,
+            classification=request.classification,
+            receipt=submission_id,
         )
         return MemoryAdmission(
             receipt=MemoryReceipt(
@@ -597,6 +677,29 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
         }[request.operation]
         next_version = int(current.version) + 1
         next_number = int(current.current_version_number) + (1 if revising else 0)
+        # P2b M2 (R3 (b)): what a revise changed besides the new version itself,
+        # by typed comparison with the row and version it replaces. Never the
+        # statement: the new `current_version_id` already says the text moved.
+        revised: tuple[str, ...] = ()
+        if revising:
+            prior_classification = self._connection.execute(
+                select(relationship_memory_versions.c.classification).where(
+                    _mine(relationship_memory_versions, request.principal_id),
+                    relationship_memory_versions.c.memory_version_id == current.current_version_id,
+                )
+            ).scalar_one()
+            revised = tuple(
+                name
+                for name, differs in (
+                    ("classification", prior_classification != request.classification.value),
+                    ("memory_kind", memory_kind.value != current.memory_kind),
+                    (
+                        "pinned",
+                        request.pinned is not None and request.pinned != bool(current.pinned),
+                    ),
+                )
+                if differs
+            )
         values: dict[str, Any] = {
             "version": next_version,
             "lifecycle_state": lifecycle.value,
@@ -641,18 +744,38 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
             # same receipt the original did rather than a receipt for a version
             # that was never written.
             recorded_version_id = current.current_version_id
-        self._record_submission(
+        submission_id = self._record_submission(
             _with_version(request, recorded_version_id),
             memory_id=memory_id,
             aggregate_version=next_version,
             lifecycle=lifecycle,
         )
-        digest = self._connection.execute(
-            select(relationship_memory_versions.c.statement_sha256).where(
+        # Extended to read the committed version's classification, which every
+        # memory event stores (OD-8): the new version on a revise, the
+        # unchanged current one on an archive or restore.
+        recorded = self._connection.execute(
+            select(
+                relationship_memory_versions.c.statement_sha256,
+                relationship_memory_versions.c.classification,
+            ).where(
                 _mine(relationship_memory_versions, request.principal_id),
                 relationship_memory_versions.c.memory_version_id == recorded_version_id,
             )
-        ).scalar_one()
+        ).one()
+        digest = recorded.statement_sha256
+        self._stage(
+            request,
+            memory_id=memory_id,
+            kind=RecordEventKind.UPDATED if revising else RecordEventKind.STATE_CHANGED,
+            version=next_version,
+            changed=(
+                field_set(*_MEMORY_REVISE_FIELDS, *revised)
+                if revising
+                else _MEMORY_LIFECYCLE_FIELDS
+            ),
+            classification=Classification(recorded.classification),
+            receipt=submission_id,
+        )
         return MemoryAdmission(
             receipt=MemoryReceipt(
                 memory_id=memory_id,
@@ -1217,6 +1340,60 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
         )
         if result.rowcount != 1:
             raise UnknownScopeError("a memory binding changed after merge preview")
+
+    def context_link_owner(self, principal_id: str, context_link_id: str) -> MemoryFeedFacts | None:
+        validate_identifier(context_link_id, IdKind.RELATIONSHIP_MEMORY_CONTEXT_LINK)
+        # Link -> the version it hangs from -> that version's memory, then the
+        # memory's facts in their own statements rather than a self-join of
+        # `relationship_memory_versions`: its *current* version is a second row
+        # of the same table.
+        owner = self._connection.execute(
+            select(relationship_memories.c.memory_id)
+            .select_from(
+                relationship_memory_context_links.join(
+                    relationship_memory_versions,
+                    relationship_memory_versions.c.memory_version_id
+                    == relationship_memory_context_links.c.memory_version_id,
+                ).join(
+                    relationship_memories,
+                    relationship_memories.c.memory_id == relationship_memory_versions.c.memory_id,
+                )
+            )
+            .where(
+                _mine(relationship_memory_context_links, principal_id),
+                _mine(relationship_memory_versions, principal_id),
+                _mine(relationship_memories, principal_id),
+                relationship_memory_context_links.c.context_link_id == context_link_id,
+            )
+        ).one_or_none()
+        if owner is None:
+            return None
+        return self.memory_feed_facts(principal_id, str(owner.memory_id))
+
+    def memory_feed_facts(self, principal_id: str, memory_id: str) -> MemoryFeedFacts | None:
+        validate_identifier(memory_id, IdKind.RELATIONSHIP_MEMORY)
+        held = self._connection.execute(
+            select(
+                relationship_memories.c.version,
+                relationship_memories.c.current_version_id,
+            ).where(
+                _mine(relationship_memories, principal_id),
+                relationship_memories.c.memory_id == memory_id,
+            )
+        ).one_or_none()
+        if held is None:
+            return None
+        classification = self._connection.execute(
+            select(relationship_memory_versions.c.classification).where(
+                _mine(relationship_memory_versions, principal_id),
+                relationship_memory_versions.c.memory_version_id == held.current_version_id,
+            )
+        ).scalar_one()
+        return MemoryFeedFacts(
+            memory_id=memory_id,
+            version=int(held.version),
+            classification=Classification(classification),
+        )
 
     def restore_identity_effect(
         self,

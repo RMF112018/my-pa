@@ -72,6 +72,7 @@ from my_pa.contracts.ports import (
     MeetingRecord,
     MeetingRepository,
     MeetingWriteRequestRecord,
+    RecordEventStager,
     RepositoryFailureError,
     UnitOfWork,
 )
@@ -84,6 +85,7 @@ from my_pa.contracts.v1.meetings import (
 )
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import ensure_utc
+from my_pa.domain.identity.operation import Capability
 from my_pa.domain.meeting.model import (
     MAX_MEETING_ATTACHMENTS,
     MAX_MEETING_IDEMPOTENCY_KEY_CHARACTERS,
@@ -113,6 +115,14 @@ from my_pa.domain.meeting.model import (
     note_content_sha256,
     validate_meeting_notes_markdown,
     validate_meeting_time_range,
+)
+from my_pa.domain.record_events import (
+    MEETING_ACTOR_CLASSES,
+    NON_MEMORY_CLASSIFICATION,
+    RecordEventDraft,
+    RecordEventFamily,
+    RecordEventKind,
+    field_set,
 )
 from my_pa.domain.relationship.entity import EntityStatus, EntityType
 from my_pa.domain.source.registry import issue_identifier
@@ -443,6 +453,76 @@ def _create_completion_ids(
     return None, None
 
 
+# ------------------------------------------------- WP-RE-05: Record Events
+#
+# Rows MT1-MT4 of the emitter matrix. Staged on the caller's generic unit of
+# work (U1) only on an APPLIED, non-replay branch, after the request is
+# completed; U1 flushes the buffer in `__exit__`. Names, versions and ids only:
+# `changed_fields` names fields, never a value, a note body or an attendee.
+
+#: The scalar fields every Meeting create materializes.
+_MEETING_CREATED_FIELDS: Final = ("start_at", "status", "timezone_name", "title")
+#: The one field a MeetingSeries create or retitle writes.
+_SERIES_TITLE_FIELDS: Final = ("title",)
+
+
+def _stage_meeting_event(
+    stager: RecordEventStager,
+    *,
+    principal_id: str,
+    record_family: RecordEventFamily,
+    record_id: str,
+    event_kind: RecordEventKind,
+    record_version: int,
+    changed_fields: tuple[str, ...],
+    source_capability: str,
+    correlation_id: str | None,
+    source_receipt_id: str,
+    occurred_at: datetime,
+    causation_event_id: str | None = None,
+) -> RecordEventDraft:
+    """Build one Meeting-plane draft, stage it, and return it (for causation).
+
+    `principal_id` is the server-resolved caller the application was handed,
+    never a value read off a record.
+    """
+    draft = RecordEventDraft.issue(
+        principal_id=principal_id,
+        record_family=record_family,
+        record_id=record_id,
+        event_kind=event_kind,
+        record_version=record_version,
+        changed_fields=changed_fields,
+        source_capability=source_capability,
+        actor_class=MEETING_ACTOR_CLASSES[_ACTOR],
+        classification=NON_MEMORY_CLASSIFICATION,
+        occurred_at=occurred_at,
+        source_receipt_id=source_receipt_id,
+        correlation_id=correlation_id,
+        causation_event_id=causation_event_id,
+    )
+    stager.stage(draft)
+    return draft
+
+
+def _meeting_created_fields(request: MeetingCreateRequest) -> tuple[str, ...]:
+    """MT2: the static scalar names plus each optional part the create holds."""
+    optional: dict[str, bool] = {
+        "end_at": request.end_at is not None,
+        "location_text": request.location_text is not None,
+        "virtual_meeting_url": request.virtual_meeting_url is not None,
+        "description": request.description is not None,
+        "project_id": request.project_id is not None,
+        "meeting_series_id": (
+            request.meeting_series_id is not None or request.series_title is not None
+        ),
+        "attendees": bool(request.attendees),
+        "attachments": bool(request.attachment_document_ids),
+        "notes": request.notes_markdown is not None,
+    }
+    return field_set(*_MEETING_CREATED_FIELDS, *(name for name, held in optional.items() if held))
+
+
 # --------------------------------------------------------------- the service
 
 
@@ -463,9 +543,16 @@ class MeetingApplication:
         request: MeetingCreateRequest,
         idempotency_key: str,
         now: datetime,
+        *,
+        source_capability: str = Capability.MEETINGS_CREATE.value,
+        correlation_id: str | None = None,
     ) -> MeetingWriteResult:
         """Create a standalone Meeting, a new series and its first occurrence, or
-        an occurrence of an existing series, as one request identity (AC-022)."""
+        an occurrence of an existing series, as one request identity (AC-022).
+
+        Stages the series `created` event first when this call made the series,
+        then the Meeting `created` event, caused by it (WP-RE-05 MT1/MT2).
+        """
         key = _checked_idempotency_key(idempotency_key)
         at = ensure_utc(now)
         digest = meeting_request_digest(MEETINGS_CREATE_NAME, principal_id, request)
@@ -596,6 +683,35 @@ class MeetingApplication:
             result_version=view.version,
             completed_at=at,
         )
+        series_event_id: str | None = None
+        if series_receipt is not None:
+            series_event_id = _stage_meeting_event(
+                uow.record_events,
+                principal_id=principal_id,
+                record_family=RecordEventFamily.MEETING_SERIES,
+                record_id=series_receipt.meeting_series_id,
+                event_kind=RecordEventKind.CREATED,
+                record_version=series_receipt.after_version,
+                changed_fields=_SERIES_TITLE_FIELDS,
+                source_capability=source_capability,
+                correlation_id=correlation_id,
+                source_receipt_id=series_receipt.series_history_id,
+                occurred_at=at,
+            ).event_id
+        _stage_meeting_event(
+            uow.record_events,
+            principal_id=principal_id,
+            record_family=RecordEventFamily.MEETING,
+            record_id=meeting_id,
+            event_kind=RecordEventKind.CREATED,
+            record_version=receipt.after_version,
+            changed_fields=_meeting_created_fields(request),
+            source_capability=source_capability,
+            correlation_id=correlation_id,
+            source_receipt_id=receipt.history_id,
+            occurred_at=at,
+            causation_event_id=series_event_id,
+        )
         return MeetingWriteResult(
             meeting=view, receipt=receipt, replayed=False, series_receipt=series_receipt
         )
@@ -635,13 +751,17 @@ class MeetingApplication:
         expected_version: int,
         idempotency_key: str,
         now: datetime,
+        *,
+        source_capability: str = Capability.MEETINGS_UPDATE.value,
+        correlation_id: str | None = None,
     ) -> MeetingWriteResult:
         """Patch one Meeting's scalars, attendees, attachments and note atomically.
 
         One row lock, one `expected_version` gate and at most one version
         increment, however many children change (section 19.6). A request that
         normalizes to the current state records a `no_op` receipt and leaves the
-        version alone (section 35.9).
+        version alone (section 35.9). Only a material change stages its one
+        `updated` event (WP-RE-05 MT3); a cancel is an `updated` event too.
         """
         key = _checked_idempotency_key(idempotency_key)
         version = _checked_expected_version(expected_version)
@@ -669,7 +789,7 @@ class MeetingApplication:
         if request.attendees_replace is not None:
             _require_active_people(meetings, principal_id, request.attendees_replace)
 
-        record, scalar_change = _updated_record(current, request, at)
+        record, scalar_fields = _updated_record(current, request, at)
 
         attendees_retired: tuple[str, ...] = ()
         attendees_added: tuple[MeetingAttendeeRecord, ...] = ()
@@ -684,7 +804,7 @@ class MeetingApplication:
 
         note_body = _note_body(current, request)
         material = (
-            scalar_change
+            bool(scalar_fields)
             or bool(attendees_retired or attendees_added)
             or bool(attachments_retired or attachments_added)
             or note_body is not None
@@ -760,6 +880,27 @@ class MeetingApplication:
             result_version=after_version,
             completed_at=at,
         )
+        if material:
+            child_fields: dict[str, bool] = {
+                "attendees": bool(attendees_retired or attendees_added),
+                "attachments": bool(attachments_retired or attachments_added),
+                "notes": note_body is not None,
+            }
+            _stage_meeting_event(
+                uow.record_events,
+                principal_id=principal_id,
+                record_family=RecordEventFamily.MEETING,
+                record_id=current.meeting_id,
+                event_kind=RecordEventKind.UPDATED,
+                record_version=after_version,
+                changed_fields=field_set(
+                    *scalar_fields, *(name for name, held in child_fields.items() if held)
+                ),
+                source_capability=source_capability,
+                correlation_id=correlation_id,
+                source_receipt_id=receipt.history_id,
+                occurred_at=at,
+            )
         return MeetingWriteResult(meeting=view, receipt=receipt, replayed=False)
 
     # --- meetings.series.update ---------------------------------------------
@@ -772,8 +913,14 @@ class MeetingApplication:
         expected_version: int,
         idempotency_key: str,
         now: datetime,
+        *,
+        source_capability: str = Capability.MEETINGS_SERIES_UPDATE.value,
+        correlation_id: str | None = None,
     ) -> MeetingSeriesWriteResult:
-        """Retitle one MeetingSeries. No occurrence is locked or rewritten (AC-027)."""
+        """Retitle one MeetingSeries. No occurrence is locked or rewritten (AC-027).
+
+        Only a material retitle stages its one `updated` event (WP-RE-05 MT4).
+        """
         key = _checked_idempotency_key(idempotency_key)
         version = _checked_expected_version(expected_version)
         at = ensure_utc(now)
@@ -837,6 +984,20 @@ class MeetingApplication:
             result_version=after_version,
             completed_at=at,
         )
+        if material:
+            _stage_meeting_event(
+                uow.record_events,
+                principal_id=principal_id,
+                record_family=RecordEventFamily.MEETING_SERIES,
+                record_id=current.meeting_series_id,
+                event_kind=RecordEventKind.UPDATED,
+                record_version=after_version,
+                changed_fields=_SERIES_TITLE_FIELDS,
+                source_capability=source_capability,
+                correlation_id=correlation_id,
+                source_receipt_id=receipt.series_history_id,
+                occurred_at=at,
+            )
         series = meetings.read_owned_series(principal_id, current.meeting_series_id)
         if series is None:
             raise RepositoryFailureError
@@ -864,8 +1025,9 @@ class MeetingApplication:
 
 def _updated_record(
     current: MeetingView, request: MeetingUpdateRequest, at: datetime
-) -> tuple[MeetingRecord, bool]:
-    """The Meeting's scalar state after the patch, and whether it differs.
+) -> tuple[MeetingRecord, tuple[str, ...]]:
+    """The Meeting's scalar state after the patch, and the names of the fields
+    that differ (sorted; empty when nothing scalar changes).
 
     Omitted means unchanged; a `clear_fields` member means NULL, and wins over
     a value supplied for the same field (module docstring, ruling R3-02). Series
@@ -926,28 +1088,34 @@ def _updated_record(
         created_at=current.created_at,
         updated_at=current.updated_at,
     )
-    changed = (
-        title,
-        start_at,
-        end_at,
-        timezone_name,
-        status,
-        location_text,
-        virtual_meeting_url,
-        description,
-        project_id,
-    ) != (
-        current.title,
-        current.start_at,
-        current.end_at,
-        current.timezone_name,
-        current.status,
-        current.location_text,
-        current.virtual_meeting_url,
-        current.description,
-        current.project_id,
-    )
-    return record, changed
+    # A typed comparison over explicitly spelled fields (WP-RE-05 MT3, R3).
+    # `cancelled_at` moves exactly when `status` enters or leaves CANCELLED, so
+    # it never makes a patch material on its own, but it is named when it moves.
+    before: dict[str, object] = {
+        "title": current.title,
+        "start_at": current.start_at,
+        "end_at": current.end_at,
+        "timezone_name": current.timezone_name,
+        "status": current.status,
+        "cancelled_at": current.cancelled_at,
+        "location_text": current.location_text,
+        "virtual_meeting_url": current.virtual_meeting_url,
+        "description": current.description,
+        "project_id": current.project_id,
+    }
+    after: dict[str, object] = {
+        "title": title,
+        "start_at": start_at,
+        "end_at": end_at,
+        "timezone_name": timezone_name,
+        "status": status,
+        "cancelled_at": cancelled_at,
+        "location_text": location_text,
+        "virtual_meeting_url": virtual_meeting_url,
+        "description": description,
+        "project_id": project_id,
+    }
+    return record, field_set(*(name for name, value in after.items() if before[name] != value))
 
 
 def _attachment_delta(

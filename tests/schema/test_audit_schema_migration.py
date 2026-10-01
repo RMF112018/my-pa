@@ -341,6 +341,9 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "meeting_note_versions",
         "meeting_series_history",
         "meeting_write_requests",
+        # WP-RE-01's Record Event feed.
+        "record_event_sequences",
+        "record_events",
     }
 )
 

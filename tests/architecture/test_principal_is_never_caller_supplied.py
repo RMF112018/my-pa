@@ -177,6 +177,11 @@ DERIVED_CHAINS: Final = ("principal.principal_id", "account.principal_id")
 #: The registry is exact. A sixth module reading a request's stated principal is
 #: a decision that has to be written here, with what verifies it.
 VERIFIED_CALLER_STATEMENTS: Final = {
+    # WP-RE-01. A Record Event draft is built by an emitter from the
+    # server-resolved Authorization, never from a request body. The flush reads
+    # the drafts' Principal once, to refuse a batch naming two Principals, and
+    # stamps every row through `principal_bound_values` from that one value.
+    "infrastructure/persistence/record_events.py": (("draft", "principal_id"),),
     # The binding is an operator-created credential record and the identity is
     # the result of verifying that record, never a request body field.
     "application/apple_machine.py": (("binding", "principal_id"),),
@@ -278,7 +283,9 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     "application/entity_authoring.py": (("request", "principal_id"),) * 2,
     # The persistence serializer now reads the same server-composed field once
     # more to acquire the Entity mutation scope before any identifier read.
-    "infrastructure/persistence/entity_authoring.py": (("request", "principal_id"),) * 23,
+    # WP-RE-04: one more, stamping the same partition onto the Record Events
+    # seam S-A stages (`_outcome_events`).
+    "infrastructure/persistence/entity_authoring.py": (("request", "principal_id"),) * 24,
     "application/intelligence.py": (
         ("artifact", "principal_id"),
         ("artifact", "principal_id"),
@@ -426,6 +433,9 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("proposal", "principal_id"),
         ("record", "principal_id"),
         ("rel", "principal_id"),
+        # WP-RE-04: seam S-B stamps the directed request's partition onto its
+        # Record Event.
+        ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
@@ -652,6 +662,11 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # lock cannot turn caller input into a partition choice.
     "infrastructure/persistence/relationship_memory.py": (
         ("link", "principal_id"),
+        # WP-RE-04: the Record Event `admit` stages, and the prior version's
+        # classification read a revise compares against, are stamped and scoped
+        # with the same field.
+        ("request", "principal_id"),
+        ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
@@ -686,6 +701,9 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # mutation lock, and the locked proposal re-read; they preserve that same
     # authenticated partition while closing the merge/review race.
     "infrastructure/persistence/relationship_memory_review.py": (
+        # WP-RE-04: the promoted memory's Record Event (RP2) is stamped with the
+        # same field.
+        ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),

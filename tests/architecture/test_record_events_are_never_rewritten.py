@@ -1,0 +1,222 @@
+"""WP-RE-08 G-A02-3 (RE-AC-106, Amendment 02 (3)): a Record Event is never lost.
+
+No application, repository, CLI, ops or script path updates, deletes or
+truncates `record_events` or `record_event_sequences`, or re-keys a principal --
+except the allocator's own `next_sequence` upsert. FAST, by `ast` and by
+string scan:
+
+1. **Importers.** Only `infrastructure/persistence/record_events.py` imports the
+   two `Table` objects from `tables.py`.
+2. **Builders.** In that module the only statements built on them are
+   `pg_insert(record_event_sequences)` with `on_conflict_do_update(set_=...)`
+   whose keys are exactly `{"next_sequence"}` -- so the principal can never be
+   re-keyed -- and `insert(record_events)`. No `update`, `delete` or
+   attribute-form `.update()`/`.delete()` on either.
+3. **Raw SQL.** No string literal in `src/`, `apps/`, `ops/` or `scripts/`
+   updates, deletes from or truncates either table. In `migrations/`, only the
+   Record Event revision names them; its downgrade's first statement is the
+   refusal; its append-only trigger is `BEFORE UPDATE OR DELETE` on
+   `record_events`; and no other revision drops that trigger.
+
+The database half is existing: the append-only trigger
+(`tests/database/test_record_event_persistence.py`) and the downgrade refusals
+(`tests/schema/test_record_events_migration.py`). `TRUNCATE` bypasses a row
+trigger; a statement-level guard is an operator residual (OD-W8-8), and this
+module refuses every `TRUNCATE` of the feed in code.
+"""
+
+from __future__ import annotations
+
+import ast
+import re
+from pathlib import Path
+from typing import Final
+
+import pytest
+
+ROOT: Final = Path(__file__).resolve().parents[2]
+TABLES_MODULE: Final = "my_pa.infrastructure.persistence.tables"
+FEED_TABLES: Final = frozenset({"record_events", "record_event_sequences"})
+#: The SQLAlchemy write-statement constructors (reads are not rewrites).
+WRITE_BUILDERS: Final = frozenset({"insert", "pg_insert", "update", "delete"})
+OWNER: Final = "src/my_pa/infrastructure/persistence/record_events.py"
+#: The Record Event revision is found by its content, not pinned by filename:
+#: naming the head here would make this a head-pin file for every later
+#: revision to edit.
+REVISION_DOCSTRING: Final = "Admit the Record Event feed"
+RAW_REWRITE: Final = re.compile(
+    r"\b(UPDATE|DELETE\s+FROM|TRUNCATE(\s+TABLE)?)\s+(ONLY\s+)?(\w+\.)?record_event(s|_sequences)\b",
+    re.IGNORECASE,
+)
+DROP_TRIGGER: Final = re.compile(r"DROP\s+TRIGGER\s+(IF\s+EXISTS\s+)?record_events_are_append_only")
+
+
+def _code_sources() -> dict[str, str]:
+    return {
+        path.relative_to(ROOT).as_posix(): path.read_text(encoding="utf-8")
+        for root in ("src", "apps", "ops", "scripts")
+        if (ROOT / root).is_dir()
+        for path in sorted((ROOT / root).rglob("*.py"))
+    }
+
+
+def _importers(sources: dict[str, str]) -> set[str]:
+    found: set[str] = set()
+    for path, source in sources.items():
+        for node in ast.walk(ast.parse(source)):
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.module == TABLES_MODULE
+                and any(alias.name in FEED_TABLES for alias in node.names)
+            ):
+                found.add(path)
+    return found
+
+
+def _statements(source: str) -> set[str]:
+    """Every statement builder applied to a feed table, as `builder(table)`."""
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Name) and func.id in WRITE_BUILDERS and node.args:
+            target = node.args[0]
+            if isinstance(target, ast.Name) and target.id in FEED_TABLES:
+                found.add(f"{func.id}({target.id})")
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr in {"insert", "update", "delete"}
+            and isinstance(func.value, ast.Name)
+            and func.value.id in FEED_TABLES
+        ):
+            found.add(f"{func.value.id}.{func.attr}()")
+    return found
+
+
+def _upsert_keys(source: str) -> list[set[str]]:
+    keys: list[set[str]] = []
+    for node in ast.walk(ast.parse(source)):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "on_conflict_do_update"
+        ):
+            for keyword in node.keywords:
+                if keyword.arg == "set_":
+                    value = keyword.value
+                    keys.append(
+                        {str(k.value) for k in value.keys if isinstance(k, ast.Constant)}
+                        if isinstance(value, ast.Dict)
+                        else {"*"}
+                    )
+    return keys
+
+
+def _raw_rewrites(sources: dict[str, str]) -> list[tuple[str, int, str]]:
+    found: list[tuple[str, int, str]] = []
+    for path, source in sources.items():
+        for node in ast.walk(ast.parse(source)):
+            if (
+                isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and RAW_REWRITE.search(node.value)
+            ):
+                found.append((path, node.lineno, node.value.strip()[:80]))
+    return found
+
+
+# ---- 1. importers ------------------------------------------------------------------
+
+
+def test_only_the_feed_module_imports_the_feed_tables() -> None:
+    assert _importers(_code_sources()) == {OWNER}
+
+
+# ---- 2. builders -------------------------------------------------------------------
+
+
+def test_the_feed_module_builds_only_the_upsert_and_the_insert() -> None:
+    source = (ROOT / OWNER).read_text(encoding="utf-8")
+    assert _statements(source) == {"pg_insert(record_event_sequences)", "insert(record_events)"}
+    assert _upsert_keys(source) == [{"next_sequence"}], "a principal must never be re-keyed"
+
+
+# ---- 3. raw SQL --------------------------------------------------------------------
+
+
+def test_no_code_path_updates_deletes_or_truncates_the_feed() -> None:
+    assert _raw_rewrites(_code_sources()) == []
+
+
+def test_only_the_record_event_revision_names_the_feed_and_it_keeps_the_guards() -> None:
+    revisions = {
+        path.relative_to(ROOT).as_posix(): path.read_text(encoding="utf-8")
+        for path in sorted((ROOT / "migrations" / "versions").glob("*.py"))
+    }
+    naming = {path for path, text in revisions.items() if "record_event" in text}
+    assert len(naming) == 1, sorted(naming)
+    (revision,) = naming
+    assert REVISION_DOCSTRING in revisions[revision]
+    for path, text in revisions.items():
+        if path != revision:
+            assert not DROP_TRIGGER.search(text), path
+    tree = ast.parse(revisions[revision])
+    downgrade = next(
+        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "downgrade"
+    )
+    first = downgrade.body[0]
+    assert (
+        isinstance(first, ast.Expr) and ast.unparse(first.value) == "op.execute(_REFUSE_DOWNGRADE)"
+    )
+    assert "BEFORE UPDATE OR DELETE ON {SCHEMA}.{table}" in revisions[revision]
+    append_only = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "_APPEND_ONLY"
+    )
+    assert "'record_events'" in ast.unparse(append_only)
+
+
+# ---- controls ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "planted",
+    [
+        "record_events.update()",
+        "delete(record_event_sequences)",
+        "update(record_events)",
+        "record_event_sequences.delete()",
+    ],
+)
+def test_the_builder_scan_sees_a_rewrite(planted: str) -> None:
+    assert _statements(planted) - {
+        "pg_insert(record_event_sequences)",
+        "insert(record_events)",
+    }
+
+
+@pytest.mark.parametrize(
+    "planted",
+    [
+        'text("DELETE FROM knowledge.record_events")',
+        'text("TRUNCATE knowledge.record_events")',
+        'text("truncate table record_event_sequences")',
+        'text("UPDATE knowledge.record_events SET principal_id = 1")',
+    ],
+)
+def test_the_raw_scan_sees_a_rewrite(planted: str) -> None:
+    assert _raw_rewrites({"planted.py": planted})
+
+
+def test_the_upsert_scan_sees_a_rekey() -> None:
+    planted = 'x.on_conflict_do_update(set_={"next_sequence": 1, "principal_id": p})'
+    assert _upsert_keys(planted) == [{"next_sequence", "principal_id"}]
+
+
+def test_the_importer_scan_sees_a_second_importer() -> None:
+    planted = {"src/other.py": f"from {TABLES_MODULE} import record_events\n"}
+    assert _importers(planted) == {"src/other.py"}

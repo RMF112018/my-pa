@@ -1,0 +1,421 @@
+# Goal: Record Event / Change Feed (Gate 2, WP-RE-01..07)
+
+## Identity
+
+- Goal ID: `record-event-changefeed`
+- Coordination request: `MYPA-RECORD-EVENT-CHANGEFEED-GATE2-IMPLEMENTATION-20260929-001` (parent `MYPA-RECORD-EVENT-CHANGEFEED-GATE1-PLANNING-20260929-001`, PLAN_APPROVED)
+- Authorization: GATE2-IMPLEMENTATION-AUTHORIZATION-ISSUED (Drive `1hSti-ja53NbVEYgVMMAuU1qQyC0P420s`, SHA-256 `1b8671340f93e45ffe9042a4523b7cec8a2ffbfb0410cbf3c322b659fde66964`)
+- Operator rulings: Drive `1eGaV_16WVOcPgVdSJvyc5sBMqZFYB0Jw` (SHA-256 `40ff9f0c…9e10cf`)
+- Repository: `RMF112018/my-pa`
+- Branch: `bf/record-event-changefeed-20260929`
+- Worktree: `/Users/bobbyfetting/my-pa-wt/record-event-changefeed`
+- Base: `origin/main` `d6c706bb4e43cc15eefcda35f40d66eb58abe9ed`, tree `31d6dcebaf4fa076ec33d387a4e527d983518373`
+- Head / PR: recorded per checkpoint below
+- Gate-2 evidence Drive folder: `15gJT1I5uoEL3sMJb9uJWGHBzOnRVE5dt`
+
+## Objective and scope
+
+Implement the approved Gate-1 plan WP-RE-01..07 serially on one branch and one draft PR. Terminal state: **PR-READY, NOT MERGED** (`GATE2_PR_READY_NOT_MERGED`).
+
+- Acceptance criteria: RE-AC-001..085 (Part 2 matrix), none weakened, renumbered or deselected.
+- Scope: only the paths in the PATH-SYMBOL-OWNERSHIP matrix, plus this file, plus strictly mechanical consequences (recorded per checkpoint).
+- Binding rulings: OD-1 (i) event_id cursor; OD-2 (i) + (d-i); OD-3 (i); OD-4 **B** (migration generated in WP-RE-01, re-pointed at R2/R3); OD-5 INCLUDE; OD-6 `review.decide`; OD-7 (i) `series_version`; OD-8 (i); OD-9 admitted to MCV (no `docs/plans/mcv-completion-plan.md` edit for OD-9); OD-10 (i); OD-11 (i) DATA_REQUIRED; OD-12 (i).
+
+## Prohibitions
+
+No merge (no §8.1 delegated merge, no `wi-complete`, no auto-merge); no deploy/NAS/production; no live DB write or migration; no live grant/profile/OAuth/secret/config change; no second PR; no weakening/deselection/xfail of any RE-AC or applicable test; no RE-AC PASS without exact-head evidence; no risk acceptance; no edits to PR #287 or any other branch; never touch `~/my-pa`. Stop conditions: package §19 items 1-9 and N1-N23.
+
+## Execution topology (AGENTS.md §8.3)
+
+Manager → one Orchestrator → specialized workers; at most one worker active at a time; model set explicitly, never above Opus; workers run tests in the foreground; one SFI owns PATH-SYMBOL §1 files.
+
+## R1 record (branch creation), 2026-09-29
+
+Re-derived in the worktree (PYTHONPATH=src):
+
+| Fact | Bound basis | R1 value | Match |
+|---|---|---|---|
+| `origin/main` (ls-remote) | `d6c706bb4e43…` | `d6c706bb4e43cc15eefcda35f40d66eb58abe9ed` | yes |
+| tree | `31d6dceb…` | `31d6dcebaf4fa076ec33d387a4e527d983518373` | yes |
+| Alembic heads | `7d9a450dfd07` (sole) | `7d9a450dfd07 (head)`, single | yes |
+| Revision files | 108 | 108 | yes |
+| `Capability` | 178 | 178 | yes |
+| `Purpose` | 47 | 47 | yes |
+| `IdKind` members / `rcev` | 130 / absent | 130 / absent | yes |
+| ChatLLM profile | `chatllm-data-v3` | `chatllm-data-v3` | yes |
+| DATA_REQUIRED / CONDITIONAL / COMPAT / CONTROL_PLANE / OPERATOR_DECISION / RETIRED | 69/90/2/15/2/0 | 69/90/2/15/2/0 | yes |
+| Audit vocabulary (latest restating revision `7d9a450dfd07`) | 189 / 47 | 189 / 47 (comments at AT literals) | yes |
+| Source / test modules | 357 / 588 | 357 `*.py` under `src` / 588 `test_*.py` under `tests` | yes |
+
+- PR #287: OPEN, CONFLICTING, head `b9b2b203cda2bf19c95e48d82b3f87ace99ed030`; files `docs/plans/relationship-intelligence-implementation-plan.md`, `ops/nas/preserved-runtime-env-preflight.py`, `tests/architecture/test_nas_preserved_runtime_env_preflight.py`. Unchanged from the plan (sequencing dependency at WP-RE-07). Only open PR.
+- §9 branches: `cursor/stage-a-post-pr278-rebase-4d70` @ `f01825af`, `handoff/stage-a-candidate-pre-pr278-20260924` @ `dce96b19`, `claude/festive-fermi-lh0oat` @ `5a57f265`: dormant, no PR; classification unchanged (none).
+- Main has not moved since the bound SHA, so no WP is invalidated (N3 not fired). All controlling-source SHA-256 values verified by the Orchestrator.
+
+## R2 record (before WP-RE-06), 2026-09-30
+
+| Fact | R1 | R2 value | Note |
+|---|---|---|---|
+| `origin/main` | `d6c706bb…` | `d6c706bb4e43cc15eefcda35f40d66eb58abe9ed` | unchanged; the rebase is a no-op (HEAD already descends from it) |
+| Alembic heads | `7d9a450dfd07` | `1d9b248e7f83 (head)`, single | our revision; its `down_revision` `7d9a450dfd07` is still main's head, so no re-point |
+| Revision files | 108 | 109 | +1 (ours) |
+| `Capability` / `Purpose` | 178 / 47 | 178 / 47 | unchanged before WP-RE-06 |
+| ChatLLM profile / classes | v3; 69/90/2/15/2/0 | v3; 69/90/2/15/2/0 | unchanged |
+| Audit vocabulary | 189 / 47 | 189 / 47 | the latest restating revision is still `20260927_7d9a450dfd07_meeting_records.py` (SHA-256 `fe36b8ff8479a8cae2f0054f61907345014ea4b9ec17f30ac413c0259be1576c`); BEFORE byte copies come from its `_CAPABILITIES_AT_THIS_REVISION` / `_PURPOSES_AT_THIS_REVISION` |
+
+- PR #287: OPEN, CONFLICTING, head `b9b2b203`, unchanged. It is the only other open PR. The §9 dormant branches are unchanged.
+- N2, N3 and N16 are not fired at R2 (N16 is re-verified in WP-RE-06 Phase A).
+
+## R3 record (final integration, WP-RE-07), 2026-10-01
+
+Integration was by **merge**, not rebase (MR-17a also applies to R3). The merge commit is `88f77c30a88821d24a753cfd1a16444c42f5f3c0`, tree `c895b14b28c9a09c1644cc9d1c8d2d5f65e11655`, with parents CP-RE-08b `3012ad3d` and `origin/main` `b5baf962`. It was pushed as a plain fast-forward.
+
+| Fact | Bound basis | R3 value | Note |
+|---|---|---|---|
+| `origin/main` | `d6c706bb` | `b5baf962dcabd39b0d2e3936b80421e28986fb8b` | advanced through #298 `8940e60b` (merged at CP-RE-08b), #299 `fa07ac06` and #300 `b5baf962` (docs only) |
+| Alembic heads | `7d9a450dfd07` | `1d9b248e7f83 (head)`, single; `down_revision` `7d9a450dfd07` | main added no migration, so no re-point |
+| Revision files | 108 | 109 | +1 (ours) |
+| `Capability` / `Purpose` | 178 / 47 | 179 / 48 | +`record_events.list` / +`record_event_read` (WP-RE-06) |
+| `IdKind` | 130 | 131 | +`rcev` |
+| `RecordEventFamily` | — | 22 | 20 at WP-RE-06, plus `capture` and `task_comment` (WP-RE-08) |
+| ChatLLM profile and classes | v3; 69/90/2/15/2/0 | `chatllm-data-v4`; 70/90/2/15/2/0 | OD-11 |
+| Audit vocabulary | 189 / 47 | 190 / 48 | byte-unchanged by WP-RE-08 |
+| Source / test modules | 357 / 588 | 361 / 645 | +#298 `tests/contract/test_task_archive_bulk.py`; main added none at R3 |
+| FAST / architecture / database tier (collected) | — | 25,911 / 5,990 / 3,150 | re-derived at CP-RE-08b; main's R3 changes add no tests |
+
+- The textual conflicts at the CP-RE-08b merge (both count-guarded docs) were resolved by re-derivation. The R3 merge had no conflicts.
+- PR #287 is still OPEN and CONFLICTING, untouched. Whichever of #287 and #297 merges second re-measures the relationship-intelligence tier cells.
+- **Sequencing item (CRL-WP-03):** `docs/plans/capture-lifecycle-implementation-plan.md` (#300) plans future capture lifecycle write paths (`knowledge.capture_lifecycle_events`, withdrawal per `docs/specs/capture-withdrawal-v0.1.md`). It states that it does not depend on PR #297. Whichever of CRL-WP-03 and PR #297 lands second must cover the new capture write paths with `capture` Record Events, consistent with the flush-discipline, durable-principal (G-A02-1) and never-rewritten (G-A02-3) guards.
+- MR-18: CI timeouts are handled by same-head re-run only; the workflow is not changed.
+
+## Checkpoint ledger
+
+| CP | WP | Head | Tree | RE-AC | FAST | DB lane (local PG) | Notes |
+|---|---|---|---|---|---|---|---|
+| CP-RE-01 | WP-RE-01 | `bf1bfe9c61496275440a13be1be3fd8d4eb94962` | `8f9f2b38fcef0b35d877c82820429973ceb0dc75` | 001-017 | green: 25,169 passed / 74 skipped / 0 failed; ruff, format, mypy (522 files) clean | PG 15.15 local, PGTZ=UTC: new DB modules + meeting app 114 passed; recovery `tests/concurrency` 15 passed; migration_empty_to_head 9 passed; migration_edge subset 179 passed (worker full lane 1,052 passed) | revision `1d9b248e7f83` (down `7d9a450dfd07`); N-conditions none fired |
+| CP-RE-02 | WP-RE-02 | `97cae35bb8185ef6f082143321ca028bf7966cfe` | `7bc006d28f280e678ab200ee9e9003e1b8c8bbba` | 018-030 | green: 25,188 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: WP-02 + task/commitment/project/continuity + record-event DB modules 195 passed; full `-m recovery` 46 passed (worker: full tests/database 1,689 passed) | no N fired; T-12 premise finding (below) |
+| CP-RE-03 | WP-RE-03 | `9102e2f2642a3ef6bf7cc16b93ecd8460fa79509` | `ee2238f806f4e0bff42dc1850b1ac107a20aff85` | 031-043 | green: 25,206 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: 32 constraint/project-controls/project-create/tbr DB modules 468 passed; full `-m recovery` 46 passed (worker: full tests/database 1,713 passed) | no N fired; T-10 no 40P01/lock_timeout |
+| CP-RE-04 | WP-RE-04 | `d442f923705025ff03c323c06caf9a0840d367ea` | `d1025a5765c2dc1aa8a9202d17218a78e1cb3892` | 044-051 | green: 25,274 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: entity/identity/memory/review/reenrichment/record-event DB modules + no-payload 916 passed; full `-m recovery` 46 passed | no N fired (N8 resolved as not-fired, MR-05); T-15 no 40P01 |
+| CP-RE-05 | WP-RE-05 | `f3ad197e4a31d80cbf64f08b5aa0be10b53ad515` | `51380af70dbcd4e1a15a7082370252ccdf61f405` | 052-056 | green: 25,299 passed / 74 skipped / 0 failed; ruff, format, mypy (522) clean | PG 15 local, PGTZ=UTC: meeting DB/concurrency + record_event DB modules 185 passed; full `-m recovery` 46 passed | no N fired; T-13 no 40P01 |
+| CP-RE-06 | WP-RE-06 | `40037597b73dc9c04a8d29331a2ef40910ae05f4` | `b9ec6b088834391b8dc0d7b04c06cc8e3fcfe03a` | 057-083 | green: 25,726 passed / 74 skipped / 0 failed; ruff, format, mypy (524) clean | PG 15 local, PGTZ=UTC: record-event DB/concurrency/security modules 191 passed; recovery 46; migration_empty_to_head 10; migration_edge subset 46 (worker: full 1,071); e2e 13 (worker 31); worker web npm test 3,563 passed, lint 0 errors, typecheck and build OK | no N fired; counts equal projections (no N12) |
+| CP-RE-08 | WP-RE-08 | `20f224133880754e1229f09a3e7ae0a6a9e4e25d` | `1730816ac500e70adb64bd17580971f8558ac8b1` | 086-108 | green: 25,803 passed / 74 skipped / 0 failed (Orchestrator re-run: unit+schema 15,369; architecture 5,919 + 71 skipped; rest 4,515 + 3 skipped); ruff, format, mypy (524) clean | PG 15.15 local (re-created after the reboot), PGTZ=UTC: record-event DB modules 227 passed; capture/pipeline/review/comment DB modules 200 passed; full `-m recovery` 53 passed; migration_empty_to_head 10; full migration_edge 1,033 passed | no N fired (N13, N24-N35); T-21..T-25 no 40P01/lock_timeout (worker 3/3, Orchestrator 1/1) |
+| CP-RE-08b | merge `8940e60b` (MR-17a) + scoped N3 | `3012ad3d509d4feaead0d6e8cf5de157405c1ba8` (after merge `953695a5`) | `1acb7644917a775f46c98185cb5eef7eb5da0d8b` | 018-024 re-pinned vs #298; 086-108 unchanged | green: 25,837 passed / 74 skipped / 0 failed (unit+schema 15,386; architecture 5,919 + 71 skipped; rest 4,532 + 3 skipped); ruff, format, mypy (524) clean | PG 15.15 local, PGTZ=UTC: full `tests/database` current-head selector 1,820 passed; record-event modules + archive module 243; Task/capture modules 49 + 21; full `-m recovery` 53; migration_empty_to_head 10; full migration_edge 1,033; `alembic heads` single `1d9b248e7f83`, down `7d9a450dfd07` | N10/N3 resolved by the MR-17a merge; no N fired in the re-plan (RE-AC-018..024 hold as written) |
+| CP-RE-07 | WP-RE-07 (terminal) | this commit (see PR #297) | this commit | 001-108 (085 = review, pending) | green: 25,837 passed / 74 skipped / 0 failed (unit+schema 15,386; architecture 5,919 + 71 skipped; rest 4,532 + 3 skipped); ruff, format, mypy (524) clean | PG 15.15 local, PGTZ=UTC: full database-current-head lane 2,263 passed + 2 env failures (`tests/contract/test_health_probe.py` asserts PG 17) before the 2 new RE-AC-090 tests, then `test_record_events_list.py` 13 passed; full `-m recovery` 53 (no 40P01/lock_timeout); migration_empty_to_head 10; full migration_edge 1,033; `-m e2e` 31; web: npm test 3,563 passed, lint 0 errors (132 warnings), typecheck and build OK | no N fired |
+
+**CP-RE-01 out-of-matrix mechanical edits (as reported to the Manager):**
+- C5/C6 fan-out: 34 `HEAD_PIN_FILES` plus the control file `tests/schema/test_constraint_authoring_capability_migration.py`, 24 revision-count pins, and `tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py`.
+- `KNOWLEDGE_TABLES_BY_REVISION` in `tests/schema/test_extraction_schema_migration.py`.
+- The trigger inventory in `tests/schema/test_capture_schema_migration.py`.
+- The 5 hand-kept stacked-table lists (audit/entity/entity_assertion_provenance/enrollment/entity_relationship_types migration tests).
+- The `tests/unit/test_identifiers.py` prefix set.
+- `tests/schema/test_meeting_records_migration.py`: head and link assertions, plus `at=REVISION` in the two downgrade-refusal tests.
+- `TABLES_SHA256` re-pin in `tests/architecture/test_capture_project_binding.py` (MR-01).
+- Registry entries in `tests/architecture/test_principal_partition_is_reached_through_the_guard.py` and `tests/architecture/test_principal_is_never_caller_supplied.py` (`VERIFIED_CALLER_STATEMENTS`).
+- Head-citing docs forced by `test_readme_state_claims.py`: `README.md`, `docs/architecture/00_ARCHITECTURE_INDEX.md`, `docs/architecture/system-context.md`, `ops/runbooks/gateway-operations.md`, `ops/runbooks/mcp-and-cli-operations.md`.
+- `docs/plans/mcv-completion-plan.md`: head, count and module-count lines, plus a remeasurement paragraph. No OD-9 text.
+- `docs/plans/relationship-intelligence-implementation-plan.md` cells :660/:661/:663/:664. These overlap PR #287.
+- Schema strengthening: `'' <> ALL (changed_fields)`.
+
+## Working notes
+
+(Orchestrator notes; updated per WP.)
+
+### WP-RE-01 (CP-RE-01)
+
+- SFI worker (opus) did Phase A (substrate) and Phase B (adapter/flush/tests). The Orchestrator re-ran FAST (unit+schema 14,915; architecture 5,857 passed / 71 skipped; other 4,397 passed / 3 skipped), ruff, format, mypy, and the DB/recovery/migration subsets itself.
+- Port member `record_events` is a non-abstract refusing default. U1-U4 override it, and T-18 enforces this.
+- `RecordEventAuthority` = the union of `MutationAuthority` and `MemoryAuthority` (6 values).
+- Schema strengthening found in testing: `'' <> ALL (changed_fields)` in the changed_fields CHECK.
+- Prove-reds: 24 guards, each isolated. Two first attempts were masked or defective and were fixed before recording (N13 handled by a new non-masked test `test_a_refused_batch_rolls_back_the_canonical_change`). T-09 mutant gave 40P01. No deadlock or lock_timeout in the unmutated runs.
+- Mechanical out-of-matrix edits:
+  - C5/C6 head and revision-count fan-out: 34 HEAD_PIN_FILES plus the control file, and 24 revision-count files.
+  - Five hand-kept stacked-table lists.
+  - `KNOWLEDGE_TABLES_BY_REVISION`, the trigger inventory, and `test_identifiers.py` prefix set.
+  - `TABLES_SHA256` re-pin (`test_capture_project_binding.py`; tables.py diff is purely additive).
+  - `test_principal_partition_is_reached_through_the_guard.py` and `test_principal_is_never_caller_supplied.py` registry entries.
+  - Head-citing docs forced by `test_readme_state_claims.py` (README.md, 00_ARCHITECTURE_INDEX.md, system-context.md, gateway-operations.md, mcp-and-cli-operations.md).
+  - Count cells in both guarded docs/plans files: the relationship-intelligence plan :660/:661/:663/:664 cells overlap PR #287. No OD-9 text.
+- Local environment divergences: PG 15 locally vs PG 17 in CI. Two `test_health_probe.py` failures assert PG 17. Local time zone needs `PGTZ=UTC`.
+- Deferred to WP-RE-06: G1-MG-013 `CHECKED_VOCABULARY`. Deferred to WP-RE-07: unbound stale head comments (mcp-and-cli-operations.md:494,533; ops/nas configs; mcv-limitations.md).
+
+### WP-RE-02 (CP-RE-02)
+
+- Emitters:
+  - Task (`_mutate` APPLIED only; typed diff incl. the implicit `role` clear; transition closure fields);
+  - `continuity.tasks.create` (receipt = OPENED lifecycle event; `author_task` returns it; the port signature is updated);
+  - `bulk_confirm` (applied members, `mutations` order);
+  - Commitment create/update/close;
+  - Project create, then the bound Entity (causation = the Project event, receipts None);
+  - Project update/close (APPLIED and not replayed; an identical update gives `("version",)`).
+- `invoke` raises InternalError if a committed refusal has staged drafts (G1-TX-006).
+- `_continuity_project_mutation` takes `lock_project` before `mutate()`. This is the same row and lock the writer takes first, so the lock order is unchanged.
+- **Finding (T-12 premise):** the plan expected "concurrent same-name creates ⇒ one pair". Repository truth: `_mint_bound_project_entity` claims the name with an unlocked SELECT and there is no unique constraint (tables.py `projects`/`entities` indexes only), so both creates commit. This behaviour exists independently of this feature and is out of scope. The test asserts one pair per committed create instead. The RE-AC-028 text is met. This was referred to the Manager for a ruling.
+- Mechanical edits:
+  - `docs/plans/relationship-intelligence-implementation-plan.md` :660 (FAST 25,188) and :664 (DB 2,999), which are contended with PR #287;
+  - `docs/plans/mcv-completion-plan.md` module counts (359/602).
+- CP-RE-01 CI at `bf1bfe9c`: repository-checks run 36616266822 had all 9 jobs succeed, including `database-tier`. frontend-quality run 36616266764 had classify and required succeed; visual failed (continue-on-error, Darwin goldens).
+
+### WP-RE-03 (CP-RE-03)
+
+- Constraint, Category, Settings, sync and legacy-import emitters stage only on the U4 / `_Mutation.uow` / `active_uow` stager.
+  - `create_published` emits one final `created`, with its substeps suppressed.
+  - `close_with_follow_up` emits the predecessor `state_changed`, then the successor `created`, whose causation is the predecessor.
+  - `reorder` emits one `updated` per Category in `wanted` order.
+  - Settings events use `record_id = project_id`.
+  - Legacy import emits Category events, then record events, as one batch (actor `system`, token `constraint_legacy_import.apply`).
+  - Sync apply and resolve (accept_external, manual_patch, reopen) are covered; control rows emit nothing.
+- MR-02(b) is satisfied. The T-12 concurrent test proves the same batch via equal `xmin` (plus `recorded_at` and `correlation_id`), the bound Entity via `project_entity_links`, causation pointing at the create's own Project event, and no cross-linking. Two prove-reds were recorded.
+- RE-AC-043 prove-red: a new deterministic test, `test_a_composite_waiting_on_a_domain_lock_holds_no_allocator_lock`, gives 40P01 3/3 under the per-substep allocation mutant and is green unmutated.
+- N13 was found and fixed: the resolve mutant stayed green, so manual_patch and reopen resolve tests were added.
+- Edits outside the listed paths:
+  - `domain/record_events.py`: the `source_receipt_id` check changed from "a known IdKind" to the any-kind opaque shape that matches the DDL CHECK. This was forced by the settings ledger's `cpsh_` receipt, which by design is not an `IdKind`. The hardened package §3.5 says only "opaque identifiers".
+  - `tests/database/test_constraint_schema_invariants.py`: 7 `SimpleNamespace` stand-in units of work gain `record_events` (a test-double consequence).
+  - The `_FakeUnitOfWork` doubles in `tests/unit/test_constraint_management_service.py` and `tests/unit/test_project_controls_settings_service.py`.
+  - Doc count cells: `relationship-intelligence-implementation-plan.md` :660 (25,206) and :664 (3,023), contended with #287; `mcv-completion-plan.md` (359/608).
+- CP-RE-02 CI at `97cae35b`: repository-checks run 36631335712 succeeded on all 9 jobs. frontend-quality run 36631335886 had classify and required succeed; visual failed (continue-on-error).
+- Note: this CP-RE-03 ledger row and these notes were written after the CP-RE-03 commit (a script error) and are committed with CP-RE-04.
+
+### WP-RE-04 (CP-RE-04)
+
+- Phases were serialized on the SFI worker:
+  - 4A: Entity seams S-A/S-B/S-C, derived drafts incl. MR-05 E5-E10, `resolve_mention` (G1-EM-002), review promotion RP1/RP2 (OD-6), memory M1-M4 (OD-8), stager injection, T-20, and the N9 guard.
+  - 4B: merge/split seams, root = the lowest-entity_id Entity redirect/restore, staged first; all other events caused by the root; memory events de-duplicated; context-link owner; feed version; G1-EM-017; V-001; fail-closed on N17/N19.
+  - 4C: W5 rebind emitter (OD-5; R-008 flush placement), T-17, T-18 extensions (W5, memory never root, X1-X3 dormant writers), and `tests/security/test_record_events_carry_no_payload.py` including the MR-06 one-column guard.
+- MR-07: the exact reassignment columns come from the `_bound_records` domain objects. There is no new read, no new lock, and no signature change.
+- `A/entity_authoring.py` is intentionally unchanged (decision 3): `entity_source_capability` returns `review.decide` exactly for the REVIEW_PROMOTION actor, which is admitted only on the promotion path.
+- Prove-reds: 4A 21, 4B 17 (re-run after MR-07), 4C 15. All red on assertions. W5 flush-failure rollback is proven behaviourally rather than by mutant.
+- Edits outside the matrix:
+  - Mechanical:
+    - registry entries in `test_principal_is_never_caller_supplied.py`;
+    - `DECLARED_TABLE_REACH` and reasons in `test_every_capability_reaching_a_memory_row_is_declared.py`;
+    - T-20 READS;
+    - fakes and stubs in `tests/conftest.py`, `tests/evaluation/resolution_harness.py`, `tests/unit/test_identity_correction.py` and `tests/unit/test_identity_split_service.py` (MR-04 precedent);
+    - count cells in `relationship-intelligence-implementation-plan.md` :660/:661/:664 (#287 contended) and module counts in `mcv-completion-plan.md` (359/619).
+  - **MR-06:** `evidence/acceptance/RI-FINAL-COMPLETION-RM-AC-DELTA-20260828.md` (RM-API-AC-002 claim, classification column only).
+- Stager-less repositories use a private unflushed buffer. `test_record_event_stager_injection.py` requires `stager=` at every writing construction in `src`.
+- CI at `9102e2f2` (CP-RE-03): repository-checks 36644032291 succeeded on all jobs. frontend-quality 36644032408 had classify and required succeed; visual failed (continue-on-error).
+
+### WP-RE-05 (CP-RE-05)
+
+- The SFI worker was retired on the Manager's instruction. A fresh opus worker took over as SFI with a compact handoff brief (`scratchpad/WORKER-BRIEF-WP-RE-05.md`). The retired worker had completed, with no live children, per the harness completion notice; ListAgents is not in the Orchestrator toolset.
+- Meeting emitters MT1-MT4:
+  - a new series stages series `created` first, then meeting `created` with causation = the series event;
+  - material updates stage `updated` with exact scalar names plus attendees/attachments/notes;
+  - a series retitle stages `updated {title}`;
+  - NO_OP and replay stage nothing.
+- OD-7 (i) / D-21: `series_version: int | None` on `MeetingView` and `MeetingListEntry`, populated by the SQL read/list subquery. A standalone meeting refuses it.
+- Departure from P2b (exactness, following MR-07 and the E9 precedent): a cancel or uncancel names `{cancelled_at, status}`.
+- T-13 has 3 tests. The allocator-last hazard is proven red. The ascending entity-lock order is guarded by the existing `test_meeting_writes.py`, because FOR SHARE locks cannot deadlock, so the T-13 prove-red would stay green there.
+- Mechanical/guard-forced edits:
+  - `service.py` passes capability and correlation;
+  - `tests/conftest.py` fake `_Meetings` carries `series_version`;
+  - `tests/contract/test_meeting_contracts.py` `EXPECTED_FIELDS` gains `series_version` (exact-set guard, no weakening);
+  - count cells: `relationship-intelligence-implementation-plan.md` :660 (25,299) and :664 (3,084), contended with #287;
+  - `mcv-completion-plan.md` module count 359/623.
+- No `web/` edit: the web app does not consume meetings.
+- CI at `d442f923` (CP-RE-04): repository-checks 36664088723 succeeded on all jobs. frontend-quality 36664088720 had classify and required succeed; visual failed (continue-on-error).
+
+### WP-RE-06 (CP-RE-06)
+
+- R2 (above): no re-point, since the head is unchanged.
+- **6A, read core:**
+  - `RECORD_EVENT_FAMILY_READS` (20 rows, explicit), with the entity floor (OD-10).
+  - `A/record_events.py`: the cursor codec (OD-1 `{b,e,v}`, U-002 decode order), the binding with `cursor_version`/`memory_disclosure`/`grant_digest` (D-04), visible/effective families, and OD-12 causation nulling.
+  - `SqlRecordEventReader.page`: one statement, keyset page plus watermark via LEFT JOIN LATERAL (D-01). OD-8 stored OR current-version EXISTS in both subqueries.
+  - `contracts/v1/record_events.py`: 13 item fields, no `sequence_number`.
+  - N16 re-verified as not fired.
+- **6B, registration:**
+  - `record_events.list` → `record_event_read`, scopeless; the handler re-checks the grant for remote callers (G1-RD-008).
+  - Normalization builder and gateway `record_events` feature.
+  - ChatLLM `_DATA_REQUIRED` and profile `chatllm-data-v4` (OD-11; repository only).
+  - Migration `_restate_audit`: BEFORE is a byte copy of 7d9a450dfd07 (189/47); AT is 190/48. The downgrade refusal is widened to audit rows.
+  - G1-MG-013 `CHECKED_VOCABULARY`.
+  - The `success.json` `capabilities.get` entry was regenerated.
+- **Count ledger, R2 → CP-RE-06 actual (= projected):**
+  - Capability 179; Purpose 48; NativeSource 11.
+  - ChatLLM 70/90/2/15/2/0; profile v4.
+  - Audit vocabulary 190/48; pairs 181/8411.
+  - Handlers/builders/tools 179; default/withheld 109/70; local MCP/composed 106/176; ChatLLM desired 160/94.
+  - Write sets 14/96/34; revisions 109, head `1d9b248e7f83`; modules 361/631.
+- **Guard-forced pins:**
+  - The C7/C8 spelled and derived doc/prose pins moved forward from WP-RE-07 because FAST binds them: README.md, the three architecture docs, the gateway and MCP runbooks, web/README.md, the docstrings in `bootstrap/gateway.py` and `adapters/cli/app.py`, and test prose/literals including `SPELLED_COUNTS` +179 and `_ORDINAL_UNITS` +"hundred-eightieth".
+  - The unbound `chatllm-data-v3` doc mentions and the ops/nas head config remain for WP-RE-07.
+- **Other out-of-matrix edits, mechanical:**
+  - `application/errors.py` `SafeDetail.RECORD_FAMILIES`.
+  - `operation.py` `granted_purposes`, factored from `remote_request.py` with no behaviour change.
+  - The memory-reach guard's `MEMORY_SQL_MODULES`, port crossings, `UNCALLED_PORT_METHOD_REFERENCES` (`portfolio.page` name collision), `DECLARED`, `BEYOND_THE_NINE` and `DECLARED_TABLE_REACH`.
+  - Partition-guard reason texts.
+  - The conftest `FakeRecordEventReader`.
+  - The registries in PATH-SYMBOL §3.3.
+- **MR-06 precedent applied, ratification requested:** an appended dated paragraph in `evidence/acceptance/RI-FINAL-COMPLETION-RM-AC-DELTA-20260828.md`. `record_events.list` reads `relationship_memories` and `relationship_memory_versions`, keys plus `classification` only, inside the OD-8 EXISTS, for remote callers. The one-column guard is extended to the reader, with a prove-red.
+- **Prove-reds:** 6A 19 and 6B 13. All went red on assertions.
+- **CI at `f3ad197e` (CP-RE-05):**
+  - repository-checks 36670556653 succeeded on all jobs.
+  - frontend-quality 36670556632 attempt 1 failed `frontend / e2e-critical`: 3 `constraints-mutations.spec.ts` tests got HTML instead of JSON after the WebServer logged "destination stream closed early". This is the same tree class that passed at `9102e2f2`/`d442f923`, and CP-RE-05 touched only meetings.
+  - A rerun of the failed jobs (attempt 2) succeeded, including classify and required. Recorded as a flake; visual failed (continue-on-error).
+
+### CP-RE-06a (R3 prep, pre-amendment), 2026-09-30
+
+- R3: `origin/main` is still `d6c706bb`, so there is no rebase, no re-point, and every count is unchanged from CP-RE-06 (all equal the projections).
+- Doc items resolved, docs only:
+  - `docs/operations/mcv-limitations.md` §15 (Record Event feed, not commissioned);
+  - `ops/runbooks/managed-knowledge-context.md`: v4 commands, and the G1-MG-011 stale counts corrected to 160/94;
+  - `ops/runbooks/mcp-and-cli-operations.md` :448/:494/:527/:530/:533: v4 and head `1d9b248e7f83`;
+  - relationship-intelligence plan cells relabelled "WP-RE-07 final (R3)", with the PR #287 sequencing note.
+- `ops/nas/production-environment.{schema.toml,example.env}` are left unchanged and are an **operator item**. Deploy tooling reads both files (`ops/nas/validate-production-env.py`, `validate-delivery-config.py`, `preserved-runtime-env-preflight.py`). PATH-SYMBOL C6 says "only with operator agreement". Editing example.env also triggers frontend CI classification. The stale comment should read `1d9b248e7f83`.
+- The 85-row evidence map was drafted before the amendment (`scratchpad/RE-AC-EVIDENCE-MAP.md`, 85/85 node ids collected). It will be rebuilt after WP-RE-08.
+- FAST over this tree: 25,726 passed / 74 skipped / 0 failed (worker). The Orchestrator re-ran the doc guards and they were green.
+- **HOLD, operator scope amendment:** Captures and Task comments are to be included in this PR as WP-RE-08, planned and implemented before the WP-RE-07 terminal. No reviewer has been commissioned.
+
+### Restart after the OS reboot (2026-09-30)
+
+- An OS update rebooted the machine and killed the previous Orchestrator, the WP-RE-08 implementer and the disposable PG 15 (datadir was in `/private/tmp`). The Manager restarted one new Orchestrator with `ORCHESTRATOR-RESTART-BRIEF.md`.
+- **Restored-file provenance.** All working files now live in `/Users/bobbyfetting/my-pa-wt/record-event-changefeed-manager/` (not `/private/tmp`). The authorization (`1b867134…`), Amendment 01 (`5b4f4c4f…`), Amendment 02 (`ceccba79…`) and the WP-RE-08 plan (`94a7030f…`, rebuilt byte-exact from transcripts; also Drive `1hsb5u1bI8-jxYZXlAXXBeNwGDw2xMOGv`) were re-verified by SHA-256 by the Manager and again by the Orchestrator. Gate-1 evidence P1/P2b/P2c are exact; P2a/P2d are `.APPROX` reconstructions, reference only. The WIP snapshot is `recovery/wp08-wip-1706.patch` (`4a4e1ab2…`).
+- **PG 15.15 re-created** under the manager directory (`pg15/data`, 127.0.0.1:55439, role `my_pa`, db `my_pa_ci`, scram; `PGPASSWORD` via the environment only). Local and disposable.
+- **WIP triage** (`wp08/TRIAGE.md`). The dead implementer's uncommitted WIP (26 modified + 12 new files) covered 8A-8F in code and part of 8G (count cells). A health probe passed (342 FAST + 17 DB). **Nothing was discarded.** Every phase was re-verified under prove-red by one fresh opus SFI worker.
+- `origin/main` re-fetched: still `d6c706bb`, so no rebase, no re-point, and `1d9b248e7f83` is still the sole head.
+
+### WP-RE-08 (CP-RE-08)
+
+- **Scope.** Amendment 01: the `capture` and `task_comment` families (20 → 22), with the migration amended in place (family CHECK and docstring only). Amendment 02: stable user association. RE-AC-086..108.
+- **Phase verdicts** (SFI worker, re-verification):
+  - 8A, 8C, 8D, 8E and 8F: WIP kept, no fixes.
+  - 8B: WIP kept with one fix. `tests/capture/test_remote_capture_record_event.py` asserted a global count of local-operator capture events on the shared, never-truncated capture package database (the INFO-2 hazard). It now compares against a snapshot taken before the call: the earlier events are unchanged, exactly one new event appears, and the replay adds none. No assertion was weakened.
+- **Prove-reds:** 48 PASS (`wp08/prove_red_log.md`), all single-guard, red on assertions, restored SHA-exact. No N13.
+  - M-19b: the plan's second target `test_each_mapped_read_admits_exactly_its_families` does not exist. M-19's literal-table guard went red.
+  - M-09 was placed in the builder: `_admit` fixes PRIVATE_LOCAL, so a mutant in the service is not observable.
+  - M-22 was run as a planted production caller with the registry entry present. Removing the entry disables its own scan by design.
+  - Extras: M-CC1..3 (`character_count`), M-SV1/M-SV1db (`supersedes_version_id`), M-G3b3/M-G3b4 (sweeps), M-11b, and MR-10 (the CLI principal-shape check).
+- **T-21..T-25:** REC 3/3 by the worker (7/7 each run), plus the Orchestrator's full recovery lane (53). No 40P01 or `lock_timeout`, so N27 did not fire.
+- **Departure for Manager ratification: RE-AC-088 token sets.** The implementation follows MR-11 ("every non-narrative field that changed must be named") over the plan's literal RE-AC-088 set.
+  - created = {`character_count`, `classification`, `latest_version_id`, `latest_version_number`, `owner_principal_id`, `processing_policy`, `version_count`}, plus each of `client_created_at`/`display_label`/`occurred_at`/`project_id` written non-null.
+  - updated = {`latest_version_id`, `latest_version_number`, `supersedes_version_id`, `version_count`}, plus each of `character_count`/`classification`/`client_created_at`/`occurred_at`/`processing_policy` that differs from the predecessor.
+  - Every added token is a public `CaptureVersionView`/`CaptureListEntry` field and is neither narrative nor a digest.
+  - `character_count` is `char_length(content)` computed inside the one `_head` SELECT. Only an int leaves the server; there is no second statement and no new lock (N28 not fired).
+  - A text-only revise names exactly the head fields.
+- **Plan deviation (G-3b-4):** the redaction test sweeps the feed through a new `_SWEPT` tuple rather than `_TABLES`, because the fixture TRUNCATEs every `_TABLES` entry and the feed is append-only.
+- **MR-12:** no claim document. No capture claim document is guard-parsed or states the reach. The only statement of the reach is the new mcv-limitations §15 paragraph.
+- **OD-W8-12:** not implemented. It needs a `staged_principals()` port method on every stager and double plus a `_run` hook, which is not small or local. RE-AC-103 is covered by G-A02-1 and its prove-reds.
+- **Files outside plan §7.2:**
+  - `src/my_pa/application/record_events.py`: `MemoryDisclosure` docstring only (OD-W8-10). The plan listed the file as NO-CHANGE.
+  - `apps/cli/tbr_import.py` plus `tests/unit/test_tbr_import_principal_shape.py`: MR-10.
+  - `tests/database/test_record_events_bootstrap_race.py`, `tests/security/test_record_events_grant_narrowing.py`, `tests/unit/test_record_event_cursor.py`: plan §7.2 test rows.
+  - Count cells: `relationship-intelligence-implementation-plan.md` FAST 25,803 / architecture 5,990 / DB 3,134 (contended with PR #287); `mcv-completion-plan.md` module counts. Both are bound by FAST guards, which are green.
+- **Evidence map** rows 086..108: `wp08/RE-AC-086-108-EVIDENCE-MAP.md` in the manager directory. The full 108-row map is rebuilt at WP-RE-07.
+- **CI classification:**
+  - `40037597` frontend-quality run 36693560876: attempt 1 failed `frontend / responsive` (and so `required`); attempt 2 on the identical head succeeded on all required jobs. **Classified as a flake** (same tree, re-run green).
+  - CP-RE-06a `36e71e44`: repository-checks 36699008786 and frontend-quality 36699008389 both succeeded.
+- **New risk:** PR #298 (`bf/task-archive-option-b`, draft, opened 2026-09-30) edits `src/my_pa/application/service.py` and `tasks.py`, which overlap WP-RE-08. If it merges first, this branch needs a rebase (N3 check at R3).
+
+### CP-RE-08b: integration of `origin/main` `8940e60b` (PR #298) and scoped N3 re-plan
+
+- **Stop (after the CP-RE-08 push).** PR #298 (`fix(tasks): preserve archive state and logical replay`) was squash-merged to main at 18:11 UTC on 2026-09-30, during WP-RE-08. PR #297 became CONFLICTING, so zero workflows ran at `20f22413` (N10). #298 changed the owned surfaces `service.py` and `tasks.py` (N3). The Orchestrator halted and reported.
+- **MR-17 (Manager): rebase authorized.** When the Orchestrator ran `git rebase -X theirs origin/main`, the Claude Code auto-mode permission classifier denied it as "[Git Destructive]". A second, read-only command in the same session was also denied. The tree was verified untouched: HEAD `20f22413`, clean. The Orchestrator did not route around the denial and reported it.
+- **MR-17a (operator ruling, Option B):** merge `origin/main` into the branch instead of rebasing. There is no history rewrite and no force-push. This amends authorization §6 R3's "rebase" wording for this integration.
+  - Merge commit `953695a5` (parents `20f22413`, `8940e60b`), pushed fast-forward.
+  - The textual conflicts were only in the two count-guarded docs. Their cells were re-derived at the merged tree, not taken from either side.
+  - `service.py`, `tasks.py` and `tests/unit/test_task_management_service.py` merged automatically.
+- **Scoped N3 re-plan** (one opus worker; `$M/cp08b/`). New module `tests/database/test_task_archive_record_events.py` has 14 DB tests pinning the WP-RE-02 Task emitters against #298:
+  - (a) `tasks.update(archived=True)` is APPLIED at v+1 with `changed_fields` `["archived_at"]`, or `["archived_at","title"]` when the title also changes.
+  - (b) Archiving an already-archived task, through `tasks.update(archived=True)` or `archive()`, is **NO_OP**: no event and no sequence advance. The G1-EM-010 `("version",)` case therefore does not arise.
+  - (c) `unarchive()` and `archived=False` name `["archived_at"]`.
+  - (d) Logical replays (update, no-op update, and standalone archive/unarchive/re-archive) stage nothing and advance no sequence.
+  - (e) `bulk_confirm` does not call `_mutate`, but #298's `_bulk_candidate` now keeps an existing `archived_at`. In a 3-member bulk: 2 applied `["archived_at"]` events in `mutations` order, 1 NO_OP member, and the replay stages nothing.
+  - 18 single-guard prove-reds, all RED on assertions, each restored with a matching SHA. No N13. M8 mutates `service.py` `_bulk_candidate`, which is where #298's bulk guard lives.
+  - **RE-AC-018..024 all hold as written.** No emitter code changed.
+- **Counts at CP-RE-08b** (re-derived; guards green): FAST 25,911 collected / 25,837 passed / 74 skipped; architecture 5,990; database tier 3,150 (`3150/29073`); modules 361/645; mypy 524.
+- **Ratifications recorded:** MR-14, MR-15, MR-16 and MR-17a (below).
+
+### WP-RE-07 (CP-RE-07, terminal)
+
+- R3: see the R3 record above (merge `88f77c30`; no conflicts; single head `1d9b248e7f83`).
+- **Evidence map:** `record-event-changefeed-manager/final/RE-AC-EVIDENCE-MAP.md`, 108 rows built by a read-only opus worker. `check_map.py` PASS: 108 rows in order, criterion text verbatim, every one of the listed node ids collects at HEAD.
+  - Substitutions for test names that no longer exist (no weakening): RE-AC-005/006 trigger tests, RE-AC-083, RE-AC-082, and the line references in 073/074/076/081.
+  - Task archive pins were added to rows 019/021/022/024.
+  - Departures are carried in the row notes: MR-02, MR-07/MR-11/MR-14, OD-W8-11 ("22 rows"), MR-15.
+  - Correction to the CP-RE-08 note: M-19b's target `test_each_mapped_read_admits_exactly_its_families` does exist, in `tests/security/test_record_events_grant_narrowing.py`. Row 068 uses it.
+- **Gap closed:** the RE-AC-090 causation-probe arm had no direct test. A second opus worker added `tests/database/test_record_events_list.py::test_remote_causation_never_names_a_capture_event_stored_restricted` and `::test_remote_causation_never_names_an_event_of_a_currently_restricted_capture`.
+  - Single-guard prove-reds: in `visible_event_ids`, forcing `include_restricted_memory=True` turns both tests red; dropping the current-version EXISTS turns test 2 red while test 1 stays green.
+  - Log: `final/re-ac-090-prove-red.md`. Production code is unchanged.
+- Partial evidence recorded in the map: RE-AC-108's "only comment lines change" rests on the diff, not a test. RE-AC-102's "full history" is shown by the grant-change DB test.
+- Count cells re-derived: database tier 3,152 (`3152/29075`), FAST 25,911 (`25911/29075`), relabelled "WP-RE-07 final (R3)". Modules are unchanged at 361/645.
+- RE-AC-085 (independent exact-head review) is pending. The reviewer is commissioned at the CP-RE-07 head.
+
+## Manager rulings
+
+- **MR-01 (2026-09-29):** the `TABLES_SHA256` re-pin in `tests/architecture/test_capture_project_binding.py` is MECHANICAL and ACCEPTED, because the tables.py diff against the base only adds lines and the captures Table is unchanged. Each later tables.py edit re-pins it under the same rule, provided the captures Table stays unchanged. CP-RE-01 was accepted by the Manager, and draft PR #297 is open.
+
+- **MR-02 (2026-09-29):** the T-12 reframe is ACCEPTED as a correction to a plan premise, not a weakening.
+  - RE-AC-028 says only "Project create emits Project + bound Entity in causal order".
+  - The "concurrent same-name ⇒ one pair" clause exists only in the TRANSACTION matrix T-12 row.
+  - Evidence: `_mint_bound_project_entity` (`src/my_pa/infrastructure/persistence/continuity_authoring.py`) claims the canonical name with an unlocked `SELECT entities.entity_id WHERE canonical_name = …`. Neither `projects` nor `entities` in `tables.py` has a unique constraint on the name (indexes only: `projects_by_principal`, `projects_by_principal_state`, `entities_by_principal`, `entities_by_entity_type`). Two concurrent same-name creates therefore both commit.
+  - Conditions:
+    - the test runs the two creates truly concurrently, behind a barrier;
+    - for each committed create it asserts exactly one Project event followed by one Entity event, in the same batch, with causation pointing at that create's own Project event;
+    - it asserts no cross-linking between the two creates.
+  - The race is NOT fixed and no issue is opened; the Manager reports it to the operator as a separate candidate work item.
+  - CP-RE-02 was accepted.
+
+- **MR-03 (2026-09-29):** the `source_receipt_id` relaxation in `domain/record_events.py` is ACCEPTED as a correction toward the specification.
+  - Hardened package §3.5 requires only "opaque identifiers".
+  - `RECEIPT_IDENTIFIER_PATTERN` is byte-equivalent to the migration and `tables.py` CHECK `^[a-z]+_[A-Za-z0-9]{8,64}$`.
+  - `event_id`, `principal_id`, causation and correlation keep their exact-kind checks.
+  - The `cpsh_` provenance is kept.
+- **MR-04 (2026-09-29):** the stager additions are ACCEPTED as mechanical test-double consequences, with assertions unchanged. They are the `SimpleNamespace` stand-ins in `tests/database/test_constraint_schema_invariants.py` and the `_FakeUnitOfWork` doubles in `tests/unit/test_constraint_management_service.py` and `tests/unit/test_project_controls_settings_service.py`. CP-RE-03 was accepted.
+
+- **MR-05 (2026-09-29):** N8 did NOT fire. The `_advance_entity` parent-Entity advance (`P/entity_authoring.py` `_mutate` :455, `_advance_entity` :821-845) on the six identifier/alias operations is an enumerated compound write.
+  - Citation: Gate-1 evidence P2b emitter matrix (`scratchpad/sources/gate1-evidence/P2b-emitter-matrix.md`, SHA-256 `38c601a0beaa5fb4e1992622cc76afe2b8c71ee694d470c80113ec8d3a78d10b`), §3.5 rows E5-E10 (lines 251-256), and finding G1-EM-001(a) (line 494).
+  - Option (a) is the planned behaviour: a derived `entity` `updated` with `record_version = outcome.entity_version` and `changed_fields = ("version",)`; causation is the primary child event; it carries the same receipt, actor, authority and capability as the primary event.
+  - E7/E10 order: primary replacement `created`, then the predecessor `state_changed`, then the `entity` `updated`.
+  - P2b §3.5-§3.7 and §3.9 are the row-level reference for WP-RE-04, subordinate to the rulings where they differ.
+  - Worker design decisions 1-7 are accepted. Decision 3: `src/my_pa/application/entity_authoring.py` is intentionally unchanged. `review.decide` comes from one domain helper keyed on the REVIEW_PROMOTION actor (OD-6), and a REVIEW_PROMOTION actor is already refused off the review path.
+  - No GATE2_BLOCKED receipt.
+
+- **WP-RE-04 P2b departures (2026-09-29, accepted as repository-truth corrections):**
+  - E18: observation reject/defer is `updated {resolution_version}`, because `decide_observation` sets no state for them. Only quarantine is `state_changed`.
+  - E9: alias retire is `{retired_at, state}`, because `_transition_alias` also sets `retired_at`.
+- **MR-06 (2026-09-29):** option (a) is ACCEPTED. Under OD-8 (i), merge and split read `relationship_memory_versions`, but only the `classification` column plus the join key, to stamp memory events. This is a change to accepted privacy claim RM-API-AC-002, and the Manager surfaces it to the operator.
+  - Claim source edited: `evidence/acceptance/RI-FINAL-COMPLETION-RM-AC-DELTA-20260828.md`. It is a live guard-parsed claim document. The claim must name only the `classification` column plus keys, and it keeps the dated WP-RE-04 paragraph.
+  - The one-column limit is guard-enforced, with a single-guard prove-red.
+  - The edit is listed among the CP-RE-04 out-of-matrix edits.
+- **MR-07 (2026-09-29):** the S5 over-approximation is NOT accepted. `changed_fields` must name the exact changed column plus `version`.
+  - Use the recorded effect state if it names the column. Otherwise use one same-transaction read, with no new lock and no order change.
+  - STOP if this would need a repository signature change outside the matrix.
+  - Test: a multi-column family where only one column references the source.
+
+- **MR-08 (2026-09-30):** the feed-reader paragraph in `evidence/acceptance/RI-FINAL-COMPLETION-RM-AC-DELTA-20260828.md` is RATIFIED. It extends the MR-06 precedent on the same basis: OD-8 (i), mechanically enforced to keys plus `classification`. The Manager surfaces it to the operator with MR-06. CP-RE-06 accepted; the CP-RE-05 e2e-critical failure was accepted as a flake (same tree, re-run green).
+- **MR-09 (2026-09-30):** moving the C7/C8 spelled/derived doc pins into CP-RE-06 is RATIFIED. They are re-verified at R3.
+
+- **WP-RE-08 plan APPROVED (2026-09-30):** `scratchpad/wp08/WP-RE-08-PLAN.md`, SHA-256 `94a7030f89d2ca2925911d93ac347f152c6ff4ac6f3316783462e55e62c84063`. It covers Amendment 01 (Captures and Task comments; families 20→22; migration amended in place) and Amendment 02 (stable user association). It adds RE-AC-086..108, N24..N35, and phases 8A-8G, and is to be published alongside CP-RE-08.
+- **MR-10 (operator ruling OD-W8-2):** the legacy import CLI (`apps/cli/tbr_import.py`, disposable databases only) is the ONE enumerated exception to Amendment 02(1).
+  - The durable-principal guard names exactly that path; any other request- or argument-supplied principal fails the guard.
+  - `--principal` must be in the durable bound form: `prn_` + 32 lowercase hex, which is the `capture_principal_id` output. This gets a CLI check, a test, and a single-guard prove-red.
+- **MR-11 (OD-W8-3):** confirmed consistent with MR-07.
+  - Narrative fields (the `NARRATIVE_FIELDS` rule) are never named.
+  - A text-only capture revise still names `latest_version_id` / `latest_version_number` / `version_count`. A test covers exactly that case.
+  - Every non-narrative field that changed must be named.
+- **MR-12 (OD-W8-4):** the feed reader's read of `capture_versions.classification` is RATIFIED as the capture analogue of MR-08.
+  - It needs a one-column guard (classification plus join keys only).
+  - Add a dated paragraph to any capture claim document that a guard parses or that states the reach. If there is none, record "no claim document".
+  - The Manager surfaces this with MR-06 and MR-08.
+- **MR-13 (OD-W8-9):** accepted. Comment events are re-read through `tasks.comments.list`, following the entity sub-family precedent. No new capability.
+- **Minor items:**
+  - OD-W8-1, W8-5, W8-6, W8-7, W8-10 and W8-11 are accepted as recommended.
+  - OD-W8-8: TRUNCATE is an operator residual.
+  - OD-W8-12: include the runtime principal assertion only if it is small and local, and record the choice.
+  - The plan's unverified items are resolved against the code during 8A-8G. A lock-order change or a new capability is a STOP.
+
+- **CP-RE-08 ACCEPTED (2026-09-30).** The N10/N3 stop was correct. The `40037597` responsive-flake classification is accepted.
+- **MR-14:** the RE-AC-088 field lists are RATIFIED. They follow MR-11: public, non-narrative read fields only, and `character_count` is an int computed in the existing single statement.
+- **MR-15:** the `_SWEPT` redaction deviation (G-3b-4) is RATIFIED.
+- **MR-16:** the out-of-matrix files are RATIFIED as mechanical: the `application/record_events.py` docstring, and `apps/cli/tbr_import.py` with its test (MR-10).
+- Also accepted as recorded: the MR-12 "no claim document" finding, OD-W8-12 not implemented, and the M-19b/M-09/M-22 adaptations.
+- **MR-17 (N10 + N3):** rebase onto `8940e60b` authorized, with a scoped N3 re-plan (Task emitters (a)-(e) vs #298, each with a single-guard prove-red; STOP if any RE-AC-018..024 cannot be met as written). The rebase was denied by the permission system and not performed.
+- **MR-17a (operator ruling):** Option B. Merge `origin/main` into the branch; no history rewrite and no force-push. It amends authorization §6 R3's "rebase" wording for this integration.
+
+- **CP-RE-08b ACCEPTED (2026-09-30).** The CI timeout and `browsers` flake classifications are accepted, and so are the #298 Task semantics: a repeat archive is a no-op with no event.
+- **MR-18:** do NOT change the CI timeout (a workflow change outside scope). Handle timeouts by same-head re-run only and report the attempt counts.
+- **GO for WP-RE-07** (terminal): R3 by merge, full validation, the 108-row evidence map, CP-RE-07, CI, and one fresh independent reviewer. No ready-for-review flip and no merge.
+
+## Review outcome and final state
+
+Pending.

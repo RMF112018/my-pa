@@ -83,7 +83,7 @@ from typing import Any
 from sqlalchemy import and_, case, func, insert, or_, select, true, update
 from sqlalchemy.engine import Connection
 
-from my_pa.contracts.ports import ReviewDecisionRequest
+from my_pa.contracts.ports import RecordEventStager, ReviewDecisionRequest
 from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.review import (
     Disposition,
@@ -94,6 +94,15 @@ from my_pa.domain.capture.review import (
 )
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.record_events import (
+    MEMORY_ACTOR_CLASSES,
+    MEMORY_AUTHORITIES,
+    REVIEW_PROMOTION_CAPABILITY,
+    RecordEventDraft,
+    RecordEventFamily,
+    RecordEventKind,
+    field_set,
+)
 from my_pa.domain.relationship.entity import EntityStatus, EntityType
 from my_pa.domain.relationship.memory import (
     ContextLinkAuthority,
@@ -124,6 +133,7 @@ from my_pa.infrastructure.persistence.principal_scope import (
     partition_criterion,
     principal_bound_values,
 )
+from my_pa.infrastructure.persistence.record_events import RecordEventBuffer
 from my_pa.infrastructure.persistence.relationship_memory_context import (
     requested_entity_context_ids,
     require_own_writable_context_targets,
@@ -531,12 +541,23 @@ def _copy_evidence(
         )
 
 
+#: P2b RP2's static set.
+_PROMOTED_FIELDS = field_set(
+    "current_version_id",
+    "current_version_number",
+    "lifecycle_state",
+    "memory_kind",
+    "subject_entity_id",
+)
+
+
 def _promote(
     connection: Connection,
     request: ReviewDecisionRequest,
     proposal: Any,  # noqa: ANN401 - a SQLAlchemy Row of the proposal's columns
     *,
     decision_id: str,
+    stager: RecordEventStager,
 ) -> tuple[str, str]:
     """Create the real memory this acceptance produced, in this transaction.
 
@@ -583,6 +604,8 @@ def _promote(
     )
     memory_id = issue_identifier(IdKind.RELATIONSHIP_MEMORY)
     memory_version_id = issue_identifier(IdKind.RELATIONSHIP_MEMORY_VERSION)
+    authority = _promotion_authority(request.disposition, evidence_count=evidence_count)
+    classification = _promotion_classification(Classification(proposal.classification), kind)
     connection.execute(
         insert(relationship_memories).values(
             _bound(
@@ -618,12 +641,8 @@ def _promote(
                     "statement_sha256": statement_digest(statement),
                     "structured_value": structured_value,
                     "memory_kind": kind.value,
-                    "authority": _promotion_authority(
-                        request.disposition, evidence_count=evidence_count
-                    ).value,
-                    "classification": _promotion_classification(
-                        Classification(proposal.classification), kind
-                    ).value,
+                    "authority": authority.value,
+                    "classification": classification.value,
                     "cloud_eligible": False,
                     "created_by_actor": MemoryActorClass.REVIEW_PROMOTION.value,
                     "observed_at": None,
@@ -666,6 +685,27 @@ def _promote(
         principal_id=request.principal_id,
         memory_proposal_id=proposal.memory_proposal_id,
         memory_version_id=memory_version_id,
+    )
+    # WP-RE-04 RP2 (OD-6): the memory this acceptance created, as the request
+    # that caused it names it -- `review.decide`, by `review_promotion`, under
+    # the version's authority and classification. The receipt is the review
+    # decision: a promotion writes no submission row.
+    stager.stage(
+        RecordEventDraft.issue(
+            principal_id=request.principal_id,
+            record_family=RecordEventFamily.RELATIONSHIP_MEMORY,
+            record_id=memory_id,
+            event_kind=RecordEventKind.CREATED,
+            record_version=1,
+            changed_fields=_PROMOTED_FIELDS,
+            source_capability=REVIEW_PROMOTION_CAPABILITY,
+            actor_class=MEMORY_ACTOR_CLASSES[MemoryActorClass.REVIEW_PROMOTION],
+            classification=classification,
+            occurred_at=request.decided_at,
+            source_receipt_id=decision_id,
+            authority=MEMORY_AUTHORITIES[authority],
+            correlation_id=request.correlation_id,
+        )
     )
     return memory_id, memory_version_id
 
@@ -808,6 +848,7 @@ def decide_relationship_memory_review(
     request: ReviewDecisionRequest,
     *,
     has_operator_authority: bool = False,
+    stager: RecordEventStager | None = None,
 ) -> ReviewDecision:
     """Append one disposition and, for an acceptance, promote in the same transaction.
 
@@ -898,7 +939,15 @@ def decide_relationship_memory_review(
     corrected_payload = _promotion_content(proposal, request)[5]
     promoted: tuple[str, str] | None = None
     if request.disposition in _ACCEPTING:
-        promoted = _promote(connection, request, proposal, decision_id=decision_id)
+        promoted = _promote(
+            connection,
+            request,
+            proposal,
+            decision_id=decision_id,
+            # A caller outside a unit of work has no flush to join; the
+            # unit of work's `_Reviews` always passes its own buffer.
+            stager=RecordEventBuffer() if stager is None else stager,
+        )
     elif request.disposition is Disposition.REPROCESS:
         _reprocess(connection, request, proposal)
     decision_values: dict[str, object] = {

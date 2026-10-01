@@ -219,6 +219,18 @@ def _series_title() -> ColumnElement[Any]:
     )
 
 
+def _series_version() -> ColumnElement[Any]:
+    """The occurrence's series version, correlated to the outer Meeting row (D-21)."""
+    return (
+        select(meeting_series.c.version)
+        .where(
+            matching_partition_criterion(meeting_series, meetings),
+            meeting_series.c.meeting_series_id == meetings.c.meeting_series_id,
+        )
+        .scalar_subquery()
+    )
+
+
 def _active_count(table: Table) -> ColumnElement[Any]:
     """How many active relations of `table` the outer Meeting row has."""
     return (
@@ -384,6 +396,7 @@ def _to_list_entry(row: Row[Any]) -> MeetingListEntry:
         meeting_id=mapping["meeting_id"],
         meeting_series_id=mapping["meeting_series_id"],
         series_title=mapping["series_title"],
+        series_version=mapping["series_version"],
         title=mapping["title"],
         status=MeetingStatus(mapping["status"]),
         start_at=mapping["start_at"],
@@ -960,7 +973,11 @@ class SqlMeetingRepository(MeetingRepository):
     def read_meeting(self, principal_id: str, meeting_id: str) -> MeetingView | None:
         row = self._connection.execute(
             principal_scoped(
-                select(*_MEETING_COLUMNS, _series_title().label("series_title")),
+                select(
+                    *_MEETING_COLUMNS,
+                    _series_title().label("series_title"),
+                    _series_version().label("series_version"),
+                ),
                 meetings,
                 capture_context(principal_id),
             ).where(meetings.c.meeting_id == meeting_id)
@@ -972,6 +989,7 @@ class SqlMeetingRepository(MeetingRepository):
             meeting_id=mapping["meeting_id"],
             meeting_series_id=mapping["meeting_series_id"],
             series_title=mapping["series_title"],
+            series_version=mapping["series_version"],
             title=mapping["title"],
             status=MeetingStatus(mapping["status"]),
             start_at=mapping["start_at"],
@@ -1179,6 +1197,7 @@ class SqlMeetingRepository(MeetingRepository):
                     meetings.c.meeting_id,
                     meetings.c.meeting_series_id,
                     _series_title().label("series_title"),
+                    _series_version().label("series_version"),
                     meetings.c.title,
                     meetings.c.status,
                     meetings.c.start_at,

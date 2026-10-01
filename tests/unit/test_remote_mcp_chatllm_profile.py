@@ -273,7 +273,7 @@ def test_profile_apply_adds_the_meeting_grants_once_and_then_converges(
         desired = _grant_v2_catalog(repository)
         code, plan = _profile(repository, "profile-plan", capsys)
         assert code == 1
-        assert plan["profile_version"] == "chatllm-data-v3"
+        assert plan["profile_version"] == "chatllm-data-v4"
         assert plan["healthy"] is False
         assert plan["actions"] == [
             {
@@ -323,8 +323,8 @@ def test_profile_commands_refuse_the_previous_profile_version(
     with _repository() as (_, repository):
         _grant_v2_catalog(repository)
         with pytest.raises(SystemExit) as raised:
-            _profile(repository, "profile-apply", capsys, profile_version="chatllm-data-v2")
+            _profile(repository, "profile-apply", capsys, profile_version="chatllm-data-v3")
         assert raised.value.code == 2
-        assert "profile version must be chatllm-data-v3" in capsys.readouterr().err
+        assert "profile version must be chatllm-data-v4" in capsys.readouterr().err
         rows = repository.list_capability_grants(remote_client_id=CLIENT_UUID)
         assert not any(row.capability.startswith("meetings.") for row in rows)

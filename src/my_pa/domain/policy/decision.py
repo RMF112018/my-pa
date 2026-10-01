@@ -339,6 +339,11 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.MEETINGS_SEARCH,
         Capability.MEETINGS_UPDATE,
         Capability.MEETINGS_SERIES_UPDATE,
+        # `record_events.list` (WP-RE-06) is scopeless for the same reason: every
+        # event names a product-owned record in the acting Principal's own
+        # partition and carries no `source_id` or `enrollment_id`. Capability,
+        # purpose, the partition and the family grants still decide it.
+        Capability.RECORD_EVENTS_LIST,
         # `context.feedback` names a ranking preference, not a source. The rows
         # it writes belong to the acting Principal's partition and carry no
         # `enrollment_id` and no grant a scope could be compared against.

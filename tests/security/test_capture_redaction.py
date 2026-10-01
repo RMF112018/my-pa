@@ -78,6 +78,12 @@ _TABLES: Final = (
     "knowledge.audit_events",
 )
 
+#: What the sweep reads: the tables above plus the Record Event feed, which a
+#: capture admission also writes (WP-RE-08 G-3b-4, RE-AC-091). Kept apart from
+#: `_TABLES` because that tuple is also what the fixture truncates, and the feed
+#: is append-only: no fixture truncates it.
+_SWEPT: Final = (*_TABLES, "knowledge.record_events")
+
 WHEN: Final = datetime(2026, 8, 3, 12, 0, tzinfo=UTC)
 WHEN_WIRE: Final = "2026-08-03T12:00:00Z"
 
@@ -126,12 +132,12 @@ def _rows_as_json(engine: Engine) -> dict[str, list[str]]:
         return {
             table: [
                 str(row[0])
-                # S608: every name is a literal in `_TABLES`; nothing here is input.
+                # S608: every name is a literal in `_SWEPT`; nothing here is input.
                 for row in connection.execute(
                     text(f"SELECT row_to_json(t)::text FROM {table} t")  # noqa: S608
                 )
             ]
-            for table in _TABLES
+            for table in _SWEPT
         }
 
 
@@ -178,6 +184,9 @@ def test_the_stored_text_appears_in_exactly_one_column_and_reads_back_verbatim(
     assert rows["knowledge.audit_events"], (
         "no audit event was written at all, so its silence about the note proves "
         "nothing about redaction"
+    )
+    assert any(stored["capture_id"] in row for row in rows["knowledge.record_events"]), (
+        "no Record Event names the capture, so the feed's silence about the note proves nothing"
     )
     carrying = {
         table: [row for row in table_rows if SENTINEL in row] for table, table_rows in rows.items()

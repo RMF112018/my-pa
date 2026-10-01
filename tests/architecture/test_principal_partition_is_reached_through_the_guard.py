@@ -145,6 +145,15 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # correlated predicate between two tables composes
         # `matching_partition_criterion`. No hand-written partition comparison.
         "infrastructure/persistence/meetings.py",
+        # WP-RE-01's Record Event feed. Its two writes -- the allocator
+        # upsert on `record_event_sequences` and the ordered insert into
+        # `record_events` -- both compose `_bound` over `principal_bound_values`.
+        # WP-RE-06's reads (the one-statement page, the position lookup and the
+        # causation probe) scope every table they name -- both feed aliases, the
+        # two memory tables of the OD-8 predicate, and (WP-RE-08) the two
+        # `capture_versions` aliases of its capture analogue -- through
+        # `partition_criterion`. It writes no hand-written partition comparison.
+        "infrastructure/persistence/record_events.py",
         "infrastructure/persistence/write_requests.py",
         # The same plane's governed write path (`WP-RI-A-02`), separated from the
         # module above because a guarded write is a transaction rather than a
@@ -387,6 +396,14 @@ STATEMENT_LEVEL: Final = frozenset(
 #: modules is reached only through an application path that has already resolved
 #: the Principal, which is the same argument the `QUARANTINED` entries make.
 PER_MODULE_ONLY: Final = {
+    "infrastructure/persistence/record_events.py": (
+        "the allocator upsert and the ordered event insert both compose `_bound`, a "
+        "one-line wrapper over `principal_bound_values`; every read (the page, the "
+        "position lookup and the causation probe, including the OD-8 memory "
+        "predicate and its WP-RE-08 capture analogue) composes `partition_criterion`. "
+        "It has not joined a dedicated "
+        "statement-level scanner."
+    ),
     "infrastructure/persistence/write_requests.py": (
         "every reservation/result read and completion update uses `_mine`, and both "
         "the reservation and typed evidence inserts use `_bound`; the module has "

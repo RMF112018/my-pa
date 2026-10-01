@@ -15,7 +15,7 @@ from my_pa.infrastructure.persistence import capture, capture_search
 from my_pa.infrastructure.persistence.tables import captures
 
 ROOT: Final = Path(__file__).resolve().parents[2]
-TABLES_SHA256: Final = "da4df7a6e79cdf544a07f37068d88bdb51a17f2f3c6ddc826b68af0f64bc524d"
+TABLES_SHA256: Final = "49f0be102894cbc89118ec4690e25fd534f27b01783a894f9fc45bb69613567f"
 WP03_MIGRATION_SHA256: Final = "098edd98ccc1846b01c58f42e296e4751e7841b562a2827616cc4337e174c354"
 WP03_MIGRATION: Final = (
     ROOT / "migrations/versions/20260914_e6a4c2f91b73_project_controls_run01_integrity.py"
@@ -64,3 +64,20 @@ def test_project_binding_has_one_insert_and_no_update_or_delete_route() -> None:
 def test_only_create_can_assign_a_project() -> None:
     assert "project_id" in {field.name for field in dataclasses.fields(CreateCapture)}
     assert "project_id" not in {field.name for field in dataclasses.fields(ReviseCapture)}
+
+
+def test_the_capture_owner_comment_names_the_durable_partition() -> None:
+    """RE-AC-108: the `capture_versions` comment states WP-03's durable partition.
+
+    D-72's premise -- a restart mints a new principal, so the owner is recorded
+    and never authorized on -- was dissolved by WP-03; the comment above the
+    Table must say so, and the stale sentences must stay gone.
+    """
+    source = (ROOT / "src/my_pa/infrastructure/persistence/tables.py").read_text(encoding="utf-8")
+    comment_lines = source.split("\ncapture_versions = Table(", 1)[0].rsplit("\n\n", 1)[1]
+    comment = " ".join(line.removeprefix("#:").strip() for line in comment_lines.splitlines())
+    assert "is the partition and is authorized on" in comment
+    assert "superseding `D-72`" in comment
+    assert "recorded and never authorized on" not in comment
+    assert "a restart mints a new principal" not in comment
+    assert "*not* an authorization input" not in source

@@ -442,6 +442,14 @@ class IdKind(StrEnum):
     MEETING_HISTORY = "mhst"
     MEETING_NOTE_VERSION = "mnote"
     MEETING_SERIES_HISTORY = "mshst"
+    #: WP-RE-01: one committed Record Event (`knowledge.record_events`). Its own
+    #: prefix because an event is not the record it names, not that record's
+    #: history receipt, and not an audit event: a stored `causation_event_id` or
+    #: a feed cursor has to say which row it points at. Checked against every
+    #: prior member of this enum before use (a grep of the quoted value over this
+    #: file, and the uniqueness assertion in `tests/unit/test_identifiers.py`):
+    #: `rcev` collides with none (`rcpt` differs).
+    RECORD_EVENT = "rcev"
 
 
 class InvalidIdentifierError(ValueError):

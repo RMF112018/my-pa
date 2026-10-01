@@ -23,6 +23,12 @@ reread goes through the documented public read, keyed by the event's
   remote, and a withheld item contributes none.
 * **RECR-AC-008** `test_routing_is_read_by_the_page_statement`: the page,
   its routing and the watermark are one statement.
+* **R-1** `test_affiliations_beyond_the_profile_cap_are_the_documented_r1_residual`
+  (MR-R14): a person with more affiliations than the profile carries -- every
+  affiliation event still routes to the person, but `entities.profile` discloses
+  at most `ENTITY_PROFILE_COLLECTION_LIMIT` of them and names the overflow, so
+  the ones past the cap cannot be reread. It pins existing behaviour and guards
+  nothing RECR adds, so no single-guard prove-red applies.
 * `test_routing_never_reads_another_partition`: an owner lookup is scoped to the
   caller's partition, so a forged event naming another Principal's child routes
   nowhere (the RECR-AC-005 class; the M1c prove-red's target).
@@ -102,12 +108,14 @@ from my_pa.domain.record_events import (
 )
 from my_pa.domain.relationship.authoring import CallerNamespace
 from my_pa.domain.relationship.entity import (
+    ENTITY_PROFILE_COLLECTION_LIMIT,
     AddressTypeCode,
     AffiliationTypeCode,
     AliasType,
     AssignmentType,
     CommunicationMethodTypeCode,
     CommunicationUsageContextCode,
+    EntityProfileLimitation,
     EntityRelationshipType,
     EntityType,
     NameTypeCode,
@@ -748,3 +756,68 @@ def test_routing_never_reads_another_partition(runtime: Runtime) -> None:
     item = event_for(runtime.listing(), F.TASK_COMMENT, foreign_comment)
     assert (item.routing_family, item.routing_record_id) == (None, None)
     assert foreign_task not in {listed.routing_record_id for listed in runtime.listing().events}
+
+
+# ---- R-1 (MR-R14) --------------------------------------------------------------------
+
+
+def test_affiliations_beyond_the_profile_cap_are_the_documented_r1_residual(
+    runtime: Runtime,
+) -> None:
+    """Residual R-1, asserted as documented (consumer contract, section 5).
+
+    Affiliations route to the person end (MR-R05 (i)). Their only read is
+    `entities.profile`, which carries at most `ENTITY_PROFILE_COLLECTION_LIMIT`
+    per collection, names the overflow in `limitations`, and issues no cursor.
+    So with one affiliation more than the cap, every event routes to the person,
+    and exactly the ones past the cap cannot be found through the read.
+
+    This test documents a residual in code RECR did not change; it guards
+    nothing RECR adds, so a single-guard prove-red does not apply (MR-R14).
+    """
+    person = runtime.ok(
+        CreateEntity(
+            entity_type=EntityType.PERSON,
+            display_name="Robin Manyroles",
+            idempotency_key="recr-r1-person",
+        )
+    )["entity_id"]
+    beyond = ENTITY_PROFILE_COLLECTION_LIMIT + 1
+    created: list[str] = []
+    for index in range(beyond):
+        # One open-ended affiliation per person is allowed, so each is a closed,
+        # non-overlapping window.
+        created.append(
+            runtime.ok(
+                CreateEntityAffiliation(
+                    person_entity_id=person,
+                    affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+                    idempotency_key=f"recr-r1-affiliation-{index:02d}",
+                    effective_from=datetime(1990 + index, 1, 1, tzinfo=UTC),
+                    effective_to=datetime(1990 + index, 12, 31, tzinfo=UTC),
+                )
+            )["record_id"]
+        )
+    assert len(set(created)) == beyond
+    listed = {
+        item.record_id: item
+        for item in runtime.listing().events
+        if item.record_family is F.PERSON_ORGANIZATION_AFFILIATION
+    }
+    assert set(listed) == set(created)
+    for item in listed.values():
+        assert item.routing_family is F.ENTITY
+        assert item.routing_record_id == person
+    profile = runtime.ok(GetEntityProfile(entity_id=person))["profile"]
+    disclosed = values_of(profile["affiliations_as_person"], "affiliation_id")
+    # The exact bound as the code defines it: the cap, the overflow named, no
+    # completeness claimed, and no cursor to continue with.
+    assert len(profile["affiliations_as_person"]) == ENTITY_PROFILE_COLLECTION_LIMIT
+    assert (
+        EntityProfileLimitation.MORE_AFFILIATIONS_AS_PERSON_THAN_THIS_PROFILE_CARRIES.value
+        in profile["limitations"]
+    )
+    assert profile["is_complete"] is False
+    assert disclosed < set(created)
+    unreachable = set(created) - disclosed
+    assert len(unreachable) == beyond - ENTITY_PROFILE_COLLECTION_LIMIT

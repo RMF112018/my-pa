@@ -477,6 +477,8 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.SOURCES_ENROLL,
         Capability.CAPTURE_CREATE,
         Capability.CAPTURE_REVISE,
+        Capability.CAPTURE_ARCHIVE,
+        Capability.CAPTURE_RESTORE,
         Capability.REVIEW_DECIDE,
         Capability.CONTINUITY_PROJECTS_CREATE,
         Capability.CONTINUITY_PROJECTS_UPDATE,
@@ -585,6 +587,8 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
     }
     destructive_writes = {
         Capability.CAPTURE_REVISE,
+        Capability.CAPTURE_ARCHIVE,
+        Capability.CAPTURE_RESTORE,
         Capability.REVIEW_DECIDE,
         Capability.DOCUMENTS_REVISE,
         Capability.DOCUMENTS_ARCHIVE,

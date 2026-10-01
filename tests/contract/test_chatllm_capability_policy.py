@@ -76,15 +76,15 @@ _MEETINGS = _MEETING_READS | _MEETING_WRITES
 
 def test_policy_covers_every_public_capability_exactly_once() -> None:
     assert set(CHATLLM_CAPABILITY_POLICY) == set(Capability)
-    assert len(CHATLLM_CAPABILITY_POLICY) == 179
-    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v4"
+    assert len(CHATLLM_CAPABILITY_POLICY) == 181
+    assert CHATLLM_DATA_PROFILE_VERSION == "chatllm-data-v5"
 
 
 def test_classification_counts_match_the_approved_plan() -> None:
     counts = dict.fromkeys(ChatLLMCapabilityClass, 0)
     for policy in CHATLLM_CAPABILITY_POLICY.values():
         counts[policy.classification] += 1
-    assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 70
+    assert counts[ChatLLMCapabilityClass.DATA_REQUIRED] == 72
     assert counts[ChatLLMCapabilityClass.DATA_CONDITIONAL] == 90
     assert counts[ChatLLMCapabilityClass.COMPATIBILITY_ONLY] == 2
     assert counts[ChatLLMCapabilityClass.CONTROL_PLANE_EXCLUDED] == 15

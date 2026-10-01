@@ -128,7 +128,9 @@ the snapshot is its only source.
    re-applying a record already seen is harmless and expected. Skipping on
    `record_version <= held` is only an optimisation, valid where the read
    exposes the event's version, and never for `entity_observation`, whose feed
-   version is not a dedup key.
+   version is not a dedup key. A capture lifecycle `state_changed` event's
+   `record_version` is the Capture's current content head version, not a
+   lifecycle counter, so it is not a dedup key either (CRL-WP-03, MR-C02).
 
 **Why there is no gap.** Per Principal, sequence order is commit order: the
 allocator is one row lock held to COMMIT, so no transaction can commit an event
@@ -145,7 +147,8 @@ enumeration), on top of the single-snapshot page and watermark of
 ### 3.1 Snapshot enumeration
 
 - Direct enumerations: `tasks.list`, `commitments.list`, `continuity.projects`,
-  `capture.list`, `meetings.list` (meetings and their series), and
+  `capture.list` with `lifecycle` `all` (the default selector is `active`, so
+  a snapshot that omits the selector never sees an archived root), `meetings.list` (meetings and their series), and
   `entities.observations.list` with no `entity_id`.
 - Per Project: `constraints.list`, `constraint_categories.list`,
   `project_controls.status`.

@@ -28,7 +28,7 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with one hundred and seventy-nine capabilities and
+emits what it emitted on the day it merged, with one hundred and eighty-one capabilities and
 forty-eight purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
@@ -431,6 +431,10 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         # WP-RE-06. The Record Event revision is the forward `ALTER` that admits
         # it, and the same revision widens `purpose_is_known` for `record_event_read`.
         "record_events.list",
+        # CRL-WP-03. `0641c354ca85` restates `capability_is_known` in place and
+        # admits the two Capture lifecycle names. No new purpose.
+        "capture.archive",
+        "capture.restore",
     }
 )
 

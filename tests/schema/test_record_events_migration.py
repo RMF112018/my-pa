@@ -65,6 +65,7 @@ HEAD: Final = "0641c354ca85"
 PREVIOUS: Final = "7d9a450dfd07"
 MIGRATIONS: Final = ROOT / "migrations" / "versions"
 MIGRATION: Final = MIGRATIONS / "20260929_1d9b248e7f83_record_events.py"
+HEAD_MIGRATION: Final = MIGRATIONS / "20261001_0641c354ca85_capture_lifecycle.py"
 VOCABULARY_MIGRATION: Final = MIGRATIONS / "20260927_7d9a450dfd07_meeting_records.py"
 TABLE_NAMES: Final = frozenset({"record_event_sequences", "record_events"})
 TRIGGER: Final = "record_events_are_append_only"
@@ -206,8 +207,12 @@ def test_the_at_texts_add_exactly_the_record_event_vocabulary_and_stay_sorted() 
 
 
 def test_head_admits_every_declared_capability_and_purpose() -> None:
-    """A subset, not equality: the audit set also holds the operator names."""
-    source = MIGRATION.read_text(encoding="utf-8")
+    """A subset, not equality: the audit set also holds the operator names.
+
+    The chain head is `0641c354ca85`, which restates the vocabulary in place.
+    This revision's own AT set is proven above and no longer is that head.
+    """
+    source = HEAD_MIGRATION.read_text(encoding="utf-8")
     at = set(_literals(_constant(source, "_CAPABILITIES_AT_THIS_REVISION")))
     purposes_at = set(_literals(_constant(source, "_PURPOSES_AT_THIS_REVISION")))
     declared = {capability.value for capability in Capability}

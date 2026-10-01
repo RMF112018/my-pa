@@ -52,7 +52,13 @@ from my_pa.application.record_events import (
 )
 from my_pa.domain.capture.display_label import normalize_display_label
 from my_pa.domain.capture.errors import CaptureBoundsError, CaptureError
-from my_pa.domain.capture.lifecycle import CaptureLifecycleSelector
+from my_pa.domain.capture.lifecycle import (
+    CaptureLifecycleReasonError,
+    CaptureLifecycleRevisionError,
+    CaptureLifecycleSelector,
+    normalize_reason,
+    validate_expected_revision,
+)
 from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS, ProposalState
 from my_pa.domain.capture.review import (
     REVIEW_REASON_LIMIT,
@@ -255,6 +261,7 @@ from my_pa.domain.task.role import TaskRole
 __all__ = [
     "AddEntityAlias",
     "AddProjectCommand",
+    "ArchiveCapture",
     "ArchiveEntity",
     "ArchiveManagedDocument",
     "ArchiveManagedDocumentCommand",
@@ -335,6 +342,7 @@ __all__ = [
     "RecordTask",
     "Representation",
     "ResolveIntelligenceSet",
+    "RestoreCapture",
     "RestoreEntity",
     "RestoreManagedDocument",
     "RestoreManagedDocumentCommand",
@@ -529,6 +537,22 @@ def _lifecycle_selector(value: object) -> CaptureLifecycleSelector:
         except ValueError:
             pass
     raise InvalidRequestError(SafeDetail.LIFECYCLE)
+
+
+def _expected_lifecycle_revision(value: object) -> int:
+    """A lifecycle precondition is a non-negative int, and a bool is not an int."""
+    try:
+        return validate_expected_revision(value)
+    except CaptureLifecycleRevisionError:
+        raise InvalidRequestError(SafeDetail.EXPECTED_LIFECYCLE_REVISION) from None
+
+
+def _lifecycle_reason(value: object) -> str:
+    """Trim a lifecycle reason and refuse a blank or over-long one, without echoing it."""
+    try:
+        return normalize_reason(value)
+    except CaptureLifecycleReasonError:
+        raise InvalidRequestError(SafeDetail.REASON) from None
 
 
 def _idempotency_key(value: object) -> str:
@@ -1288,6 +1312,53 @@ class ReviseCapture:
         _idempotency_key(self.idempotency_key)
         _moment(self.client_created_at, SafeDetail.CLIENT_CREATED_AT)
         _moment(self.occurred_at, SafeDetail.OCCURRED_AT)
+
+
+def _bind_lifecycle_transition(command: ArchiveCapture | RestoreCapture) -> None:
+    """The shared bounds of `capture.archive` and `capture.restore`.
+
+    No principal, no capture text, no content version, no timestamp and no
+    delete alias. The reason is trimmed here and stored without its boundary
+    whitespace; `repr` omits it.
+    """
+    _identifier(command.capture_id, IdKind.CAPTURE, SafeDetail.CAPTURE_ID)
+    object.__setattr__(
+        command,
+        "expected_lifecycle_revision",
+        _expected_lifecycle_revision(command.expected_lifecycle_revision),
+    )
+    _idempotency_key(command.idempotency_key)
+    object.__setattr__(command, "reason", _lifecycle_reason(command.reason))
+
+
+@dataclass(frozen=True, slots=True)
+class ArchiveCapture:
+    """`capture.archive`: withdraw one owned root. Versions stay retrievable."""
+
+    capability: ClassVar[Capability] = Capability.CAPTURE_ARCHIVE
+
+    capture_id: str
+    expected_lifecycle_revision: int
+    idempotency_key: str
+    reason: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        _bind_lifecycle_transition(self)
+
+
+@dataclass(frozen=True, slots=True)
+class RestoreCapture:
+    """`capture.restore`: return one owned root under then-current policy."""
+
+    capability: ClassVar[Capability] = Capability.CAPTURE_RESTORE
+
+    capture_id: str
+    expected_lifecycle_revision: int
+    idempotency_key: str
+    reason: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        _bind_lifecycle_transition(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -10564,6 +10635,8 @@ type Command = (
     | ReadCapture
     | ListCaptures
     | SearchCaptures
+    | ArchiveCapture
+    | RestoreCapture
     | ListReviewCases
     | DecideReviewCase
     | GetPulse

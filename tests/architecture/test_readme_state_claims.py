@@ -438,6 +438,8 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     177: "One hundred and seventy-seven",
     178: "One hundred and seventy-eight",
     179: "One hundred and seventy-nine",
+    180: "One hundred and eighty",
+    181: "One hundred and eighty-one",
 }
 
 
@@ -567,7 +569,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     }
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
-    assert implemented == 179
+    assert implemented == 181
     assert len(withheld_families) == 70
     assert unwired == set()
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
@@ -595,7 +597,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # empty for the first time in this campaign.
     # WP-MTG-04's six Meeting names are core and in none of the three withheld
     # families, so the default grows by six and the withheld figure is unchanged.
-    assert default == 109 and total == 179 and withheld == 70
+    assert default == 111 and total == 181 and withheld == 70
 
     # Exercise the same application and MCP publication composition that owns
     # the current 91-tool measurement. GoodNotes pull is part of that measured
@@ -622,7 +624,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert authenticated_mcp_capabilities == {
         capability.value for capability in application_capabilities
     }
-    assert len(local_mcp_capabilities) == default - 3 == 106
+    assert len(local_mcp_capabilities) == default - 3 == 108
     assert authenticated_mcp_capabilities - local_mcp_capabilities == {
         "goodnotes.pull",
         "goodnotes.complete",
@@ -690,7 +692,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     system_context_text = SYSTEM_CONTEXT.read_text(encoding="utf-8")
     assert f"wires {implemented} through HTTP, MCP, and CLI composition" in system_context_text
     system_context = system_context_text.lower()
-    assert "one hundred and seventy-nine capabilities" in system_context
+    assert "one hundred and eighty-one capabilities" in system_context
     assert f"exposes {default} of them" in system_context
 
     architecture_index = (ROOT / "docs/architecture/00_ARCHITECTURE_INDEX.md").read_text(
@@ -699,7 +701,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     runbook = (ROOT / "ops/runbooks/mcp-and-cli-operations.md").read_text(encoding="utf-8")
     gateway_runbook = (ROOT / "ops/runbooks/gateway-operations.md").read_text(encoding="utf-8")
     assert f"default composition serves {default} of" in architecture_index
-    assert "one hundred and seventy-nine capabilities" in architecture_index
+    assert "one hundred and eighty-one capabilities" in architecture_index
     assert f"**{default} application-available capabilities**" in runbook
     assert f"publishes **{default - 3} tools**" in runbook
     assert f"unconfigured local stdio: {default - 3}" in runbook
@@ -750,7 +752,7 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     assert completion_unwired_claim in normalized_completion_state
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
-    assert "one hundred and seventy-nine capabilities" in module_boundaries
+    assert "one hundred and eighty-one capabilities" in module_boundaries
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:

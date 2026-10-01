@@ -33,6 +33,7 @@ from pydantic import Field, model_validator
 from my_pa.contracts.v1.base import StrictModel, UtcDatetime
 from my_pa.domain.capture.lifecycle import (
     CaptureLifecycleOperation,
+    CaptureLifecycleOutcome,
     CaptureLifecycleState,
     CaptureReasonCategory,
 )
@@ -42,6 +43,7 @@ from my_pa.domain.common.identifiers import IdKind, validate_identifier
 
 __all__ = [
     "CaptureLifecycleEventView",
+    "CaptureLifecycleReceiptView",
     "CaptureListEntry",
     "CaptureReceiptView",
     "CaptureVersionView",
@@ -106,6 +108,42 @@ class CaptureLifecycleEventView(StrictModel):
     @model_validator(mode="after")
     def _check(self) -> CaptureLifecycleEventView:
         validate_identifier(self.event_id, IdKind.CAPTURE_LIFECYCLE_EVENT)
+        return self
+
+
+class CaptureLifecycleReceiptView(StrictModel):
+    """The public answer to `capture.archive` and `capture.restore`.
+
+    CW-009's binding, and nothing else: the root, the operation, the original
+    outcome, both revisions, the event when one exists, the server time, and
+    the correlation and audit references. `replayed` says this is the original
+    receipt rather than the root's current state (CW-008). No reason, no
+    digest and no capture text.
+    """
+
+    receipt_id: str
+    capture_id: str
+    owner_principal_id: str
+    operation: CaptureLifecycleOperation
+    outcome: CaptureLifecycleOutcome
+    expected_lifecycle_revision: int = Field(ge=0)
+    resulting_lifecycle_revision: int = Field(ge=0)
+    event_id: str | None = None
+    issued_at: UtcDatetime
+    correlation_id: str
+    audit_id: str
+    idempotency_key: str = Field(min_length=1, max_length=128)
+    replayed: bool
+
+    @model_validator(mode="after")
+    def _check(self) -> CaptureLifecycleReceiptView:
+        validate_identifier(self.receipt_id, IdKind.CAPTURE_LIFECYCLE_RECEIPT)
+        validate_identifier(self.capture_id, IdKind.CAPTURE)
+        validate_identifier(self.owner_principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.correlation_id, IdKind.CORRELATION)
+        validate_identifier(self.audit_id, IdKind.AUDIT)
+        if self.event_id is not None:
+            validate_identifier(self.event_id, IdKind.CAPTURE_LIFECYCLE_EVENT)
         return self
 
 

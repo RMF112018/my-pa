@@ -1,9 +1,9 @@
 """CRL-WP-03: the Capture archive / restore use case.
 
-One function, `transition_capture`, that a later checkpoint's `capture.archive`
-and `capture.restore` handlers call with the Authorization `invoke` already
-resolved and the unit of work it already opened. Until then no Capability
-reaches it; tests drive it directly. It restates no rule the domain or the
+One function, `transition_capture`, that the `capture.archive` and
+`capture.restore` handlers call with the Authorization `invoke` already
+resolved and the unit of work it already opened. Tests may drive it directly.
+It restates no rule the domain or the
 store owns: intent normalization and the digest are `domain.capture.lifecycle`,
 alternation and the honest receipt are the domain's value objects, and
 contiguity, alternation and same-owner protection are also the tables'.
@@ -70,6 +70,7 @@ from my_pa.domain.capture.lifecycle import (
 )
 from my_pa.domain.capture.submission import MAX_IDEMPOTENCY_KEY_CHARACTERS
 from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, validate_identifier
+from my_pa.domain.identity.operation import Capability
 from my_pa.domain.record_events import (
     CAPTURE_LIFECYCLE_FIELDS,
     RecordEventKind,
@@ -84,13 +85,11 @@ __all__ = [
     "transition_capture",
 ]
 
-#: The operation name each lifecycle event records as `source_capability`. The
-#: same strings the later `Capability.CAPTURE_ARCHIVE` / `CAPTURE_RESTORE` will
-#: carry; stated here because no Capability exists yet at this checkpoint.
+#: The operation name each lifecycle event records as `source_capability`.
 LIFECYCLE_SOURCE_CAPABILITIES: Final[Mapping[CaptureLifecycleOperation, str]] = MappingProxyType(
     {
-        CaptureLifecycleOperation.ARCHIVE: "capture.archive",
-        CaptureLifecycleOperation.RESTORE: "capture.restore",
+        CaptureLifecycleOperation.ARCHIVE: Capability.CAPTURE_ARCHIVE.value,
+        CaptureLifecycleOperation.RESTORE: Capability.CAPTURE_RESTORE.value,
     }
 )
 

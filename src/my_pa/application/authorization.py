@@ -55,6 +55,7 @@ from my_pa.application.commands import (
     AddEntityCommunicationMethod,
     AddEntityName,
     ApplyConstraintSync,
+    ArchiveCapture,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
@@ -182,6 +183,7 @@ from my_pa.application.commands import (
     ResolveEntity,
     ResolveIntelligenceSet,
     ResolveUnresolvedMention,
+    RestoreCapture,
     RestoreEntity,
     RestoreManagedDocument,
     RestoreRelationshipMemory,
@@ -349,6 +351,8 @@ def _requested_scope(
         case (
             GetCapabilities()
             | ReviseCapture()
+            | ArchiveCapture()
+            | RestoreCapture()
             | ReadCapture()
             | ListCaptures()
             | SearchCaptures()

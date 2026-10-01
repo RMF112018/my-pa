@@ -122,6 +122,7 @@ from zoneinfo import ZoneInfo
 from my_pa.application import goodnotes_browse
 from my_pa.application.authorization import Authorization, authorize
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
+from my_pa.application.capture_lifecycle import transition_capture
 from my_pa.application.commands import (
     AcknowledgeConstraintSync,
     AddEntityAddress,
@@ -129,6 +130,7 @@ from my_pa.application.commands import (
     AddEntityCommunicationMethod,
     AddEntityName,
     ApplyConstraintSync,
+    ArchiveCapture,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveManagedDocumentCommand,
@@ -261,6 +263,7 @@ from my_pa.application.commands import (
     ResolveEntity,
     ResolveIntelligenceSet,
     ResolveUnresolvedMention,
+    RestoreCapture,
     RestoreEntity,
     RestoreManagedDocument,
     RestoreManagedDocumentCommand,
@@ -520,6 +523,7 @@ from my_pa.contracts.v1.canvas_workspace import (
 from my_pa.contracts.v1.capabilities import EffectiveLimits, ReadinessReport, ReadinessState
 from my_pa.contracts.v1.capture import (
     CaptureLifecycleEventView,
+    CaptureLifecycleReceiptView,
     CaptureListEntry,
     CaptureReceiptView,
     CaptureVersionView,
@@ -556,6 +560,7 @@ from my_pa.domain.capture.errors import (
 from my_pa.domain.capture.lifecycle import (
     MAX_LIFECYCLE_HISTORY,
     CaptureLifecycleEvent,
+    CaptureLifecycleOperation,
     CaptureLifecycleProjection,
     CaptureLifecycleSelector,
     CaptureWithdrawnError,
@@ -4854,6 +4859,64 @@ class ApplicationService:
             context_source_object_id=command.context_source_object_id,
             context_source_version_id=command.context_source_version_id,
             display_label=command.display_label,
+        )
+
+    def _capture_transition(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ArchiveCapture | RestoreCapture,
+        operation: CaptureLifecycleOperation,
+    ) -> _Result:
+        """Archive or restore one owned root and answer with the original receipt.
+
+        The use case owns the lock, the receipt and the Record Event. A foreign
+        root and an absent one are both `not_found`. The reason stays on the
+        command and does not enter the public payload.
+        """
+        with _translated():
+            result = transition_capture(
+                unit_of_work,
+                authorization,
+                operation=operation,
+                capture_id=command.capture_id,
+                expected_lifecycle_revision=command.expected_lifecycle_revision,
+                reason=command.reason,
+                idempotency_key=command.idempotency_key,
+                now=self._clock(),
+            )
+        receipt = result.receipt
+        return _Result(
+            payload=CaptureLifecycleReceiptView(
+                receipt_id=receipt.receipt_id,
+                capture_id=receipt.capture_id,
+                owner_principal_id=receipt.owner_principal_id,
+                operation=receipt.operation,
+                outcome=receipt.outcome,
+                expected_lifecycle_revision=receipt.expected_lifecycle_revision,
+                resulting_lifecycle_revision=receipt.resulting_lifecycle_revision,
+                event_id=receipt.event_id,
+                issued_at=receipt.issued_at,
+                correlation_id=receipt.correlation_id,
+                audit_id=receipt.audit_id,
+                idempotency_key=receipt.idempotency_key,
+                replayed=result.replayed,
+            ).to_canonical_dict(),
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CAPTURE_TRUST_BASIS),
+        )
+
+    def _capture_archive(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ArchiveCapture
+    ) -> _Result:
+        return self._capture_transition(
+            unit_of_work, authorization, command, CaptureLifecycleOperation.ARCHIVE
+        )
+
+    def _capture_restore(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: RestoreCapture
+    ) -> _Result:
+        return self._capture_transition(
+            unit_of_work, authorization, command, CaptureLifecycleOperation.RESTORE
         )
 
     def _capture_revise(
@@ -13869,6 +13932,8 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.CAPTURE_READ: ApplicationService._capture_read,
         Capability.CAPTURE_LIST: ApplicationService._capture_list,
         Capability.CAPTURE_SEARCH: ApplicationService._capture_search,
+        Capability.CAPTURE_ARCHIVE: ApplicationService._capture_archive,
+        Capability.CAPTURE_RESTORE: ApplicationService._capture_restore,
         Capability.CANVAS_WORKSPACE_GET: ApplicationService._canvas_workspace_get,
         Capability.CANVAS_WORKSPACE_PUT: ApplicationService._canvas_workspace_put,
         Capability.REVIEW_LIST: ApplicationService._review_list,

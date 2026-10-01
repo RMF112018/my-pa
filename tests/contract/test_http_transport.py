@@ -92,6 +92,7 @@ from my_pa.application.commands import (
     AddEntityCommunicationMethod,
     AddEntityName,
     ApplyConstraintSync,
+    ArchiveCapture,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
@@ -220,6 +221,7 @@ from my_pa.application.commands import (
     ResolveEntity,
     ResolveIntelligenceSet,
     ResolveUnresolvedMention,
+    RestoreCapture,
     RestoreEntity,
     RestoreManagedDocument,
     RestoreRelationshipMemory,
@@ -567,6 +569,20 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.CAPTURE_READ: {"capture_id": capture.capture_id},
         Capability.CAPTURE_LIST: {},
         Capability.CAPTURE_SEARCH: {"query": "synthetic"},
+        # Restore precedes archive so a full-matrix walk shares one active root:
+        # restore at revision 0 is a receipted no-op, and archive still expects 0.
+        Capability.CAPTURE_RESTORE: {
+            "capture_id": capture.capture_id,
+            "expected_lifecycle_revision": 0,
+            "idempotency_key": "http-capture-restore-0001",
+            "reason": "Synthetic lifecycle withdrawal",
+        },
+        Capability.CAPTURE_ARCHIVE: {
+            "capture_id": capture.capture_id,
+            "expected_lifecycle_revision": 0,
+            "idempotency_key": "http-capture-archive-0001",
+            "reason": "Synthetic lifecycle withdrawal",
+        },
         Capability.KNOWLEDGE_REVEAL: {"subject_id": capture.capture_id},
         Capability.REVIEW_LIST: {},
         Capability.CONTINUITY_PULSE: {},
@@ -1585,6 +1601,18 @@ def commands_for(
         Capability.CAPTURE_READ: ReadCapture(capture_id=capture_id),
         Capability.CAPTURE_LIST: ListCaptures(),
         Capability.CAPTURE_SEARCH: SearchCaptures(query="synthetic"),
+        Capability.CAPTURE_RESTORE: RestoreCapture(
+            capture_id=capture_id,
+            expected_lifecycle_revision=0,
+            idempotency_key="http-capture-restore-0001",
+            reason="Synthetic lifecycle withdrawal",
+        ),
+        Capability.CAPTURE_ARCHIVE: ArchiveCapture(
+            capture_id=capture_id,
+            expected_lifecycle_revision=0,
+            idempotency_key="http-capture-archive-0001",
+            reason="Synthetic lifecycle withdrawal",
+        ),
         Capability.KNOWLEDGE_REVEAL: RevealSubject(subject_id=capture_id),
         Capability.REVIEW_LIST: ListReviewCases(),
         Capability.CONTINUITY_PULSE: GetPulse(),
@@ -2527,7 +2555,7 @@ def test_handler_unwired_capabilities_return_the_canonical_http_problem(
     capability: Capability, scene: Scene, wire: Wire
 ) -> None:
     assert set(Capability) - set(_HANDLERS) == _UNIMPLEMENTED_CAPABILITIES
-    assert len(HANDLER_CAPABILITIES) == 179
+    assert len(HANDLER_CAPABILITIES) == 181
     reply = wire.send(capability.value, document_for(capability, scene, {}))
     problem = ProblemDetail.model_validate(reply.document())
     assert reply.status == 501

@@ -651,13 +651,19 @@ events after that watermark; a refused cursor means it bootstraps again. The
 routing guide, the bootstrap contract, recovery and the residuals are in
 [`../specs/record-event-consumer-contract-v0.1.md`](../specs/record-event-consumer-contract-v0.1.md).
 
+**Report provenance (CRL-WP-03, D-11, MR-C11).** `reports.commit` stores
+`evidence_subject_id` as the caller supplied it. Nothing resolves that string
+against a Capture, an assertion, or any other record, and the lifecycle overlay
+does not. It remains an unverified caller string.
+
 **Nothing here is commissioned.** The migration `1d9b248e7f83` is proven on
-disposable databases only. The ChatLLM data profile `chatllm-data-v4`, which
-adds `record_events.list` as `DATA_REQUIRED`, is repository desire. Whether any
+disposable databases only. The ChatLLM data profile `chatllm-data-v5`, which
+adds `capture.archive` and `capture.restore` as `DATA_REQUIRED` on top of
+`chatllm-data-v4`'s `record_events.list`, is repository desire. Whether any
 persistent database carries the feed tables and whether any client holds the
 feed grant are runtime facts that no repository evidence establishes; applying
 the profile needs separate operator authority, as in
-`ops/runbooks/mcp-and-cli-operations.md`.
+`ops/runbooks/mcp-and-cli-operations.md`. There is no live profile rollout.
 
 Evidence: `src/my_pa/domain/record_events.py`, `src/my_pa/application/record_events.py`,
 `src/my_pa/contracts/v1/record_events.py`,

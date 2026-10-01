@@ -120,9 +120,13 @@ def test_revision_imports_no_domain_or_persistence_modules() -> None:
     assert "create_all" not in source
 
 
-def test_the_revision_does_not_name_the_change_feed() -> None:
-    """MR-C20: until CP-CRL-07 narrows the never-rewritten guard, not even a comment."""
-    assert "record_event" not in MIGRATION.read_text(encoding="utf-8")
+def test_the_audit_restatement_names_the_capability_token_not_the_feed_tables() -> None:
+    """MR-C20: the copied vocabulary token is not a feed-table reference."""
+    source = MIGRATION.read_text(encoding="utf-8")
+    assert "'record_events.list'" in source
+    assert "CREATE TABLE knowledge.record_events" not in source
+    assert "record_event_sequences" not in source
+    assert "capture.archive" in source and "capture.restore" in source
 
 
 def test_the_frozen_ddl_names_every_declared_column_constraint_and_index() -> None:
@@ -192,7 +196,8 @@ def test_the_offline_upgrade_emits_the_tables_triggers_and_overlay(
         assert f"CREATE TRIGGER {trigger}" in rendered
     assert "ADD COLUMN lease_generation BIGINT DEFAULT 0 NOT NULL" in rendered
     assert "ADD COLUMN pause_cause TEXT" in rendered
-    assert "capability_is_known" not in rendered
+    assert "ADD CONSTRAINT capability_is_known CHECK" in rendered
+    assert "'capture.archive'" in rendered and "'capture.restore'" in rendered
     assert f"SET version_num='{REVISION}'" in rendered
 
 
@@ -210,6 +215,7 @@ def test_the_offline_downgrade_refuses_first_and_unwinds_everything(
     assert rendered.index(f"DROP CONSTRAINT {ROOT_UNIQUE}") > rendered.index(
         "DROP TABLE knowledge.capture_lifecycle_events RESTRICT"
     )
+    assert "capability IN ('capture.archive', 'capture.restore')" in rendered
     assert f"SET version_num='{PREVIOUS}'" in rendered
 
 

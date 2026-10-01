@@ -129,11 +129,12 @@ def evaluate(request: PolicyRequest) -> PolicyDecision:
 #: Capabilities that carry no source scope at all, and for which naming one is
 #: therefore a contradiction rather than a request.
 #:
-#: `capabilities.get` describes the interface itself. The five capture
+#: `capabilities.get` describes the interface itself. The capture
 #: capabilities read and write a product-owned record, which `ADR-003` makes a
 #: third authority class: a capture belongs to no configured source and no
 #: enrollment, so requiring one would make them permanently unusable in exactly
 #: the way requiring a held scope would make `sources.enroll` unusable.
+#: `capture.archive` and `capture.restore` are the same class (CRL-WP-03).
 #:
 #: `capture.search` is the fifth, and it is scopeless for the same reason and
 #: not for convenience: the plane it searches is `knowledge.capture_versions`,
@@ -151,6 +152,8 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.CAPTURE_READ,
         Capability.CAPTURE_LIST,
         Capability.CAPTURE_SEARCH,
+        Capability.CAPTURE_ARCHIVE,
+        Capability.CAPTURE_RESTORE,
         Capability.REVIEW_LIST,
         Capability.REVIEW_DECIDE,
         # `knowledge.reveal` names a subject, not a source. The rows it

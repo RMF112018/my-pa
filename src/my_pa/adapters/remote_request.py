@@ -111,6 +111,12 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     {
         Capability.CAPTURE_CREATE,
         Capability.CAPTURE_REVISE,
+        # CRL-WP-03. The remote key is a digest of the payload
+        # `{capture_id, expected_lifecycle_revision, reason}`. Identical intent
+        # replays; a changed intent hashes differently. Not server-replay:
+        # the command has a caller key, which a remote caller may not send.
+        Capability.CAPTURE_ARCHIVE,
+        Capability.CAPTURE_RESTORE,
         Capability.SOURCES_ENROLL,
         Capability.DOCUMENTS_CREATE,
         Capability.DOCUMENTS_REVISE,

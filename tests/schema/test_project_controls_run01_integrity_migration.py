@@ -122,7 +122,7 @@ def test_revision_identity_and_frozen_vocabulary_are_exact() -> None:
     }
     assert _literal("_PURPOSES_BEFORE_THIS_REVISION") == _literal("_PURPOSES_AT_THIS_REVISION")
     assert len(_values(_literal("_PURPOSES_AT_THIS_REVISION"))) == 45
-    assert len(Capability) == 179
+    assert len(Capability) == 181
     assert len(Purpose) == 48
     assert "from my_pa.domain" not in MIGRATION.read_text(encoding="utf-8")
 

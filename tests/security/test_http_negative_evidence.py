@@ -1703,6 +1703,8 @@ SCOPED_CAPABILITIES = [
         Capability.CAPTURE_READ,
         Capability.CAPTURE_LIST,
         Capability.CAPTURE_SEARCH,
+        Capability.CAPTURE_ARCHIVE,
+        Capability.CAPTURE_RESTORE,
         Capability.KNOWLEDGE_REVEAL,
         Capability.REVIEW_LIST,
         Capability.REVIEW_DECIDE,

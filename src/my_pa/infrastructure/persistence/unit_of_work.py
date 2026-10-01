@@ -150,7 +150,9 @@ from my_pa.infrastructure.persistence.capture_lifecycle import (
     lock_capture_root,
     record_lifecycle_event,
     record_lifecycle_receipt,
+    require_active_capture_roots,
     resume_capture_jobs,
+    retained_active_capture_roots,
     suspend_capture_jobs,
 )
 from my_pa.infrastructure.persistence.capture_search import search_captures
@@ -531,6 +533,19 @@ class _Captures(CaptureRepository):
                 captures.c.capture_id == reference,
                 captures.c.owner_principal_id == principal_id,
             )
+            owned = _read(lambda: self._connection.execute(statement).first() is not None)
+            if not owned:
+                return False
+            # CRL-WP-03 C-21: a newly supplied cap_ on an archived root is
+            # withdrawn. Stored references are not re-read by this method.
+            _read(
+                lambda: require_active_capture_roots(
+                    self._connection,
+                    capture_context(principal_id),
+                    capture_ids=(reference,),
+                )
+            )
+            return True
         elif reference.startswith("asrt_"):
             statement = select(capture_assertions.c.assertion_id).where(
                 capture_assertions.c.assertion_id == reference,
@@ -541,6 +556,18 @@ class _Captures(CaptureRepository):
         else:
             return False
         return _read(lambda: self._connection.execute(statement).first() is not None)
+
+    def retained_publication_roots(
+        self, principal_id: str, capture_ids: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """C-18: roots still active after a SHARE revalidation. Archived omitted."""
+        return _read(
+            lambda: retained_active_capture_roots(
+                self._connection,
+                capture_context(principal_id),
+                capture_ids=capture_ids,
+            )
+        )
 
 
 class _CaptureLifecycle(CaptureLifecycleRepository):

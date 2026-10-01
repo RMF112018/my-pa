@@ -98,6 +98,7 @@ from my_pa.infrastructure.persistence import conflicting_row
 from my_pa.infrastructure.persistence.capture_lifecycle import (
     latest_lifecycle,
     lifecycle_selected,
+    require_active_capture_roots,
     share_capture_root,
 )
 from my_pa.infrastructure.persistence.jobs import CAPTURE_JOBS, enqueue_job
@@ -245,6 +246,9 @@ def append_capture_label(
     ).one_or_none()
     if owned is None:
         raise UnknownScopeError("the request names no stored capture")
+    # CRL-WP-03 C-3: a label is a new derivation on the root. Ownership was
+    # decided above, so only this caller's archived root is withdrawn.
+    require_active_capture_roots(connection, context, capture_ids=(capture_id,))
     _insert_label(connection, capture_id=capture_id, owner_principal_id=owner, display_label=label)
     return label
 

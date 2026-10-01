@@ -191,6 +191,7 @@ class ContextLimitationCode(StrEnum):
     NO_MATCHING_EVIDENCE = "no_matching_evidence"
     RESULT_TRUNCATED = "result_truncated"
     PREFERENCE_FILTERED = "preference_filtered"
+    CAPTURE_WITHDRAWN = "capture_withdrawn"
 
 
 class ContradictionCode(StrEnum):

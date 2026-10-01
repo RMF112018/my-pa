@@ -822,6 +822,8 @@ def _memory_translated() -> Iterator[None]:
         raise InvalidRequestError(SafeDetail.STATEMENT) from None
     except RelationshipMemoryError:
         raise InvalidRequestError(SafeDetail.SUBJECT) from None
+    except CaptureWithdrawnError:
+        raise DeniedError(SafeDetail.CAPTURE_WITHDRAWN) from None
 
 
 def _memory_links(links: tuple[dict[str, object], ...]) -> tuple[dict[str, str], ...]:
@@ -1992,6 +1994,8 @@ def _entity_authoring_translated() -> Iterator[None]:
         failure = ConflictError(SafeDetail.DUPLICATE_FACT)
     except EntityEvidenceError:
         failure = InvalidRequestError(SafeDetail.EVIDENCE_INVALID)
+    except CaptureWithdrawnError:
+        failure = DeniedError(SafeDetail.CAPTURE_WITHDRAWN)
     except NormalizationError:
         failure = InvalidRequestError(SafeDetail.DISPLAY_VALUE)
     if failure is not None:
@@ -2032,6 +2036,8 @@ def _directed_translated() -> Iterator[None]:
         yield
     except UnknownScopeError:
         failure = NotFoundError(SafeDetail.SUBJECT)
+    except CaptureWithdrawnError:
+        failure = DeniedError(SafeDetail.CAPTURE_WITHDRAWN)
     except StaleDirectedVersionError:
         failure = ConflictError(SafeDetail.EXPECTED_VERSION)
     except DuplicateDirectedFactError:
@@ -2188,6 +2194,8 @@ def _entity_governance_translated() -> Iterator[None]:
         failure = InvalidRequestError(SafeDetail.OBSERVED_AT)
     except ObservationAuthorityError:
         failure = InvalidRequestError(SafeDetail.OBSERVATION_AUTHORITY)
+    except CaptureWithdrawnError:
+        failure = DeniedError(SafeDetail.CAPTURE_WITHDRAWN)
     except ProposalPayloadError:
         # `WP-RI-B-05`. A payload that names a field its kind's command does not
         # take, omits one the kind requires, carries a server-owned name, or
@@ -4061,10 +4069,13 @@ class ApplicationService:
         layer receives one boolean and therefore cannot accidentally expose
         capture or assertion content in a Work response or error.
         """
-        with _translated():
-            valid = unit_of_work.captures.accepts_work_evidence_reference(
-                reference, principal_id=principal_id
-            )
+        try:
+            with _translated():
+                valid = unit_of_work.captures.accepts_work_evidence_reference(
+                    reference, principal_id=principal_id
+                )
+        except CaptureWithdrawnError:
+            raise DeniedError(SafeDetail.CAPTURE_WITHDRAWN) from None
         if not valid:
             raise InvalidRequestError(SafeDetail.INVALID_EVIDENCE_REFERENCE)
 
@@ -5257,6 +5268,7 @@ class ApplicationService:
         unsupported = False
         denied = False
         invalid = False
+        withdrawn = False
         entity_case: EntityProposalReviewCase | None = None
         with _translated(), _entity_governance_translated():
             try:
@@ -5340,12 +5352,16 @@ class ApplicationService:
                 denied = True
             except ReviewCorrectionError:
                 invalid = True
+            except CaptureWithdrawnError:
+                withdrawn = True
         if conflict:
             raise ConflictError(SafeDetail.EXPECTED_REVIEW_VERSION)
         if unsupported:
             raise UnsupportedError(SafeDetail.DISPOSITION)
         if denied:
             raise DeniedError(SafeDetail.DISPOSITION)
+        if withdrawn:
+            raise DeniedError(SafeDetail.CAPTURE_WITHDRAWN)
         if invalid:
             raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
         if missing:

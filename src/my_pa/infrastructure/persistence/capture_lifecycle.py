@@ -47,6 +47,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.exc import IntegrityError
 
+from my_pa.contracts.ports import UnknownScopeError
+from my_pa.domain.capture.errors import CaptureConflictError
 from my_pa.domain.capture.lifecycle import (
     MAX_LIFECYCLE_HISTORY,
     CaptureLifecycleEvent,
@@ -61,6 +63,7 @@ from my_pa.domain.capture.lifecycle import (
     CaptureProcessingEligibility,
     CaptureProcessingSubject,
     CaptureReasonCategory,
+    CaptureWithdrawnError,
     pause_cause_for,
 )
 from my_pa.domain.common.classification import Classification
@@ -80,6 +83,7 @@ from my_pa.infrastructure.persistence.tables import (
     JobState,
     capture_lifecycle_events,
     capture_lifecycle_receipts,
+    capture_spans,
     capture_versions,
     captures,
 )
@@ -96,7 +100,9 @@ __all__ = [
     "pause_job_for_policy",
     "record_lifecycle_event",
     "record_lifecycle_receipt",
+    "require_active_capture_roots",
     "resume_capture_jobs",
+    "retained_active_capture_roots",
     "share_capture_root",
     "suspend_capture_jobs",
 ]
@@ -193,6 +199,195 @@ def share_capture_root(
         ).with_for_update(read=True)
     ).scalar_one_or_none()
     return held is not None
+
+
+def _identified(values: Iterable[str], kind: IdKind) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(validate_identifier(value, kind) for value in values))
+
+
+def _roots_for(
+    connection: Connection,
+    context: PrincipalContext | None,
+    *,
+    capture_ids: tuple[str, ...],
+    version_ids: tuple[str, ...],
+    span_ids: tuple[str, ...],
+    strict: bool,
+) -> set[str]:
+    """The owner-scoped roots these inputs name.
+
+    `strict` refuses when any input does not resolve inside this partition.
+    Absent and foreign inputs are the same `UnknownScopeError`. A non-strict
+    read omits them, which is how a publication revalidation drops a root it
+    can no longer see without saying which kind of absence it was.
+    """
+    roots: set[str] = set()
+    if capture_ids:
+        found = set(
+            connection.execute(
+                principal_scoped(
+                    select(captures.c.capture_id).where(captures.c.capture_id.in_(capture_ids)),
+                    captures,
+                    context,
+                )
+            ).scalars()
+        )
+        if strict and found != set(capture_ids):
+            raise UnknownScopeError("the request names no stored capture")
+        roots |= {str(capture_id) for capture_id in found}
+    if version_ids:
+        rows = connection.execute(
+            principal_scoped(
+                select(capture_versions.c.version_id, capture_versions.c.capture_id).where(
+                    capture_versions.c.version_id.in_(version_ids)
+                ),
+                capture_versions,
+                context,
+            )
+        ).all()
+        found = {str(row.version_id): str(row.capture_id) for row in rows}
+        if strict and set(found) != set(version_ids):
+            raise UnknownScopeError("the request names no stored capture")
+        roots |= set(found.values())
+    if span_ids:
+        rows = connection.execute(
+            principal_scoped(
+                select(capture_spans.c.span_id, capture_versions.c.capture_id)
+                .select_from(
+                    capture_spans.join(
+                        capture_versions,
+                        capture_versions.c.version_id == capture_spans.c.version_id,
+                    )
+                )
+                .where(capture_spans.c.span_id.in_(span_ids)),
+                capture_versions,
+                context,
+            )
+        ).all()
+        found = {str(row.span_id): str(row.capture_id) for row in rows}
+        if strict and set(found) != set(span_ids):
+            raise UnknownScopeError("the request names no stored capture")
+        roots |= set(found.values())
+    return roots
+
+
+def _share_roots(
+    connection: Connection, context: PrincipalContext | None, roots: list[str]
+) -> None:
+    """`FOR SHARE` on `roots`, which the caller has already sorted."""
+    if not roots:
+        return
+    connection.execute(
+        principal_scoped(
+            select(captures.c.capture_id)
+            .where(captures.c.capture_id.in_(roots))
+            .order_by(captures.c.capture_id),
+            captures,
+            context,
+        ).with_for_update(read=True)
+    )
+
+
+def _locked_roots(
+    connection: Connection,
+    context: PrincipalContext | None,
+    *,
+    capture_ids: tuple[str, ...],
+    version_ids: tuple[str, ...],
+    span_ids: tuple[str, ...],
+    strict: bool,
+) -> tuple[str, ...]:
+    """Discover, lock in `capture_id` order, and revalidate once (plan (h)).
+
+    A root set that still differs after the one restart is `conflict`: the
+    caller retries rather than locking a set it discovered out of order.
+    """
+    if not capture_ids and not version_ids and not span_ids:
+        return ()
+    for attempt in (1, 2):
+        roots = _roots_for(
+            connection,
+            context,
+            capture_ids=capture_ids,
+            version_ids=version_ids,
+            span_ids=span_ids,
+            strict=strict,
+        )
+        ordered = sorted(roots)
+        _share_roots(connection, context, ordered)
+        confirmed = _roots_for(
+            connection,
+            context,
+            capture_ids=capture_ids,
+            version_ids=version_ids,
+            span_ids=span_ids,
+            strict=strict,
+        )
+        if confirmed == roots:
+            return tuple(ordered)
+        if attempt == 2:
+            raise CaptureConflictError("the capture roots changed while they were being locked")
+    return ()
+
+
+def require_active_capture_roots(
+    connection: Connection,
+    context: PrincipalContext | None,
+    *,
+    capture_ids: Iterable[str] = (),
+    version_ids: Iterable[str] = (),
+    span_ids: Iterable[str] = (),
+) -> tuple[str, ...]:
+    """Share every owned root these inputs name, and refuse an archived one.
+
+    The publication fence (CRL-WP-03 C-3..C-21). Foreign and absent inputs are
+    `UnknownScopeError`. An owned archived root, and only that, is
+    `CaptureWithdrawnError`. Empty input shares nothing.
+    """
+    locked = _locked_roots(
+        connection,
+        context,
+        capture_ids=_identified(capture_ids, IdKind.CAPTURE),
+        version_ids=_identified(version_ids, IdKind.CAPTURE_VERSION),
+        span_ids=_identified(span_ids, IdKind.SPAN),
+        strict=True,
+    )
+    if not locked:
+        return ()
+    states = latest_lifecycles(connection, locked, context=context)
+    if any(states[capture_id].state is CaptureLifecycleState.ARCHIVED for capture_id in locked):
+        raise CaptureWithdrawnError("an archived capture accepts no new derivation")
+    return locked
+
+
+def retained_active_capture_roots(
+    connection: Connection,
+    context: PrincipalContext | None,
+    *,
+    capture_ids: Iterable[str] = (),
+) -> tuple[str, ...]:
+    """Share the cited roots and return the ones that are still active.
+
+    The `context.prepare` publication revalidation (C-18). An archived or
+    unresolvable root is omitted. The caller discloses the omission; this
+    function does not say why a root was left out.
+    """
+    locked = _locked_roots(
+        connection,
+        context,
+        capture_ids=_identified(capture_ids, IdKind.CAPTURE),
+        version_ids=(),
+        span_ids=(),
+        strict=False,
+    )
+    if not locked:
+        return ()
+    states = latest_lifecycles(connection, locked, context=context)
+    return tuple(
+        capture_id
+        for capture_id in locked
+        if states[capture_id].state is not CaptureLifecycleState.ARCHIVED
+    )
 
 
 def lifecycle_selected(

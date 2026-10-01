@@ -39,6 +39,7 @@ from types import SimpleNamespace
 from typing import Any, Final
 
 import pytest
+from sqlalchemy.sql import visitors
 
 import my_pa.application.relationship_memory as producer_module
 import my_pa.contracts.ports as ports_module
@@ -176,6 +177,22 @@ class RecordingRepository:
         raise AssertionError("the producer path reached the memory idempotency plane")
 
 
+def _bound_identifier_values(statement: Any) -> tuple[str, ...]:  # noqa: ANN401
+    """Every string bound into `statement`, including expanding `IN` lists.
+
+    `statement.compile().params` omits an expanding bind until a dialect executes
+    it. The fence fake has no dialect, so the span id is read off the clause tree.
+    """
+    found: list[str] = []
+    for element in visitors.iterate(statement):
+        value = getattr(element, "effective_value", getattr(element, "value", None))
+        items = value if isinstance(value, list | tuple | set) else (value,)
+        for item in items:
+            if isinstance(item, str):
+                found.append(item)
+    return tuple(found)
+
+
 class _FirstResult:
     def __init__(self, value: object | None) -> None:
         self._value = value
@@ -188,6 +205,12 @@ class _FirstResult:
 
     def one_or_none(self) -> object | None:
         return self._value
+
+    def all(self) -> list[object]:
+        return [] if self._value is None else [self._value]
+
+    def scalars(self) -> _FirstResult:
+        return self
 
 
 class EvidenceScopeConnection:
@@ -202,6 +225,18 @@ class EvidenceScopeConnection:
 
     def execute(self, statement: Any) -> _FirstResult:  # noqa: ANN401 - SQLAlchemy clause
         rendered = str(statement)
+        compact = " ".join(rendered.split())
+        if statement.is_select and compact.startswith(
+            "SELECT knowledge.capture_spans.span_id, knowledge.capture_versions.capture_id"
+        ):
+            span_id = next(
+                value for value in _bound_identifier_values(statement) if value.startswith("span_")
+            )
+            self.queries.append(rendered)
+            return _FirstResult(SimpleNamespace(span_id=span_id, capture_id="cap_syntheticfence01"))
+        if statement.is_select and "capture_lifecycle_events" in rendered:
+            self.queries.append(rendered)
+            return _FirstResult(None)
         if statement.is_select:
             if "pg_advisory_xact_lock" in rendered:
                 self.locks.append(rendered)
@@ -554,7 +589,17 @@ def test_persistence_validates_each_evidence_family_through_its_principal_chain(
     assert "pg_advisory_xact_lock" in connection.locks[0]
     assert len(connection.subject_queries) == 1
     assert "entities.principal_id" in connection.subject_queries[0]
-    observation, span, knowledge = connection.queries
+    family = [
+        query
+        for query in connection.queries
+        if "capture_lifecycle_events" not in query
+        and not " ".join(query.split()).startswith(
+            "SELECT knowledge.capture_spans.span_id, knowledge.capture_versions.capture_id"
+        )
+        and "FOR SHARE" not in query
+        and "ORDER BY knowledge.captures.capture_id FOR UPDATE" not in " ".join(query.split())
+    ]
+    observation, span, knowledge = family
     assert "entity_observations.principal_id" in observation
     assert "capture_versions.owner_principal_id" in span
     assert "captures.owner_principal_id" in span

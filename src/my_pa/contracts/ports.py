@@ -3982,8 +3982,23 @@ class CaptureRepository(ABC):
         Capture (``cap_...``), or an accepted, non-superseded assertion
         (``asrt_...``).  The operation deliberately exposes neither evidence
         content nor whether a differently-owned reference exists.
+
+        An owned archived ``cap_...`` raises `CaptureWithdrawnError` (C-21).
+        ``asrt_...`` stays class 3 and is not withdrawn by archive.
         """
         raise NotImplementedError
+
+    def retained_publication_roots(
+        self, principal_id: str, capture_ids: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """Roots among `capture_ids` that are still active for publication.
+
+        The default keeps every cited id. The SQL adapter shares the roots and
+        omits archived ones (CRL-WP-03 C-18). A fake with no lifecycle store
+        has nothing archived to drop.
+        """
+        del principal_id
+        return tuple(dict.fromkeys(capture_ids))
 
 
 @dataclass(frozen=True, slots=True)

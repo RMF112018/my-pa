@@ -123,12 +123,31 @@ class ContextPreparationService:
             unavailable = tuple(dict.fromkeys((*unavailable, *skipped)))
 
         limitations = packed.limitations + preference_limitations
-        if _no_matching_evidence(packed.items, coverage):
+        evidence = packed.items
+        cited = tuple(
+            dict.fromkeys(item.capture_id for item in evidence if item.capture_id is not None)
+        )
+        if cited:
+            retained = set(
+                unit_of_work.captures.retained_publication_roots(
+                    authorization.principal.principal_id, cited
+                )
+            )
+            if set(cited) - retained:
+                # C-18 / D-18: an archive between selection and publication
+                # drops the item and says so. The run stores only what remains.
+                limitations = (*limitations, ContextLimitationCode.CAPTURE_WITHDRAWN)
+                evidence = tuple(
+                    item
+                    for item in evidence
+                    if item.capture_id is None or item.capture_id in retained
+                )
+        if _no_matching_evidence(evidence, coverage):
             limitations = (*limitations, ContextLimitationCode.NO_MATCHING_EVIDENCE)
         applied = tuple(
             hint
             for hint in command.subject_hints
-            if any(_hint_applied(hint, item) for item in packed.items)
+            if any(_hint_applied(hint, item) for item in evidence)
         )
         prepared = PreparedContext(
             context_manifest_id=issue_identifier(IdKind.CONTEXT_MANIFEST),
@@ -138,7 +157,7 @@ class ContextPreparationService:
             policy_version=CONTEXT_POLICY_VERSION,
             generated_at=authorization.at,
             query_fingerprint=query.fingerprint,
-            evidence=packed.items,
+            evidence=evidence,
             coverage=coverage,
             unavailable_planes=unavailable,
             limitations=limitations,

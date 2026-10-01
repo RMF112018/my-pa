@@ -13,27 +13,43 @@ from __future__ import annotations
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any, Final
 
 import pytest
 from sqlalchemy import Engine, event, func, select, text
 from sqlalchemy.engine import Connection
 from tests.concurrency.test_meeting_writes import _wait_until_blocked
+from tests.database.test_capture_lifecycle_publication_fences import NOTE, _admit, _proposal
 from tests.pipeline.conftest import PRINCIPAL_ID, save
 
 from my_pa.application.authorization import Authorization
 from my_pa.application.capture_lifecycle import transition_capture
-from my_pa.contracts.ports import AuditSink
+from my_pa.application.context.providers import PlaneGather
+from my_pa.application.context.service import ContextPreparationService
+from my_pa.contracts.ports import AuditSink, ReviewDecisionRequest
 from my_pa.contracts.v1.errors import ErrorCode
-from my_pa.domain.capture.lifecycle import CaptureLifecycleOperation
+from my_pa.domain.capture.lifecycle import CaptureLifecycleOperation, CaptureWithdrawnError
+from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.context.prepared import (
+    ContextCoverage,
+    ContextLimitationCode,
+    ContextPlane,
+    CoverageState,
+    EvidenceLifecycle,
+    PreparedContextEvidence,
+    SourceAuthorityClass,
+)
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.policy.decision import POLICY_VERSION, PolicyDecision
+from my_pa.domain.search.query import SearchQuery
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.jobs.capture_pipeline import derive, process_capture_version
 from my_pa.infrastructure.jobs.worker import LeaseLostError, issue_worker_owner
+from my_pa.infrastructure.persistence.capture_lifecycle import require_active_capture_roots
 from my_pa.infrastructure.persistence.jobs import (
     CAPTURE_JOBS,
     claim_job,
@@ -42,7 +58,13 @@ from my_pa.infrastructure.persistence.jobs import (
     reap_abandoned_jobs,
     release_job,
 )
-from my_pa.infrastructure.persistence.tables import capture_stage_results
+from my_pa.infrastructure.persistence.principal_scope import capture_context
+from my_pa.infrastructure.persistence.review import decide_review, open_review_case
+from my_pa.infrastructure.persistence.tables import (
+    capture_assertions,
+    capture_stage_results,
+    context_run_items,
+)
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
 pytestmark = [pytest.mark.database, pytest.mark.recovery]
@@ -61,8 +83,9 @@ class _Audit(AuditSink):
 class Pause:
     """Hold the armed thread open immediately after one statement."""
 
-    def __init__(self, engine: Engine, statement_prefix: str) -> None:
+    def __init__(self, engine: Engine, statement_prefix: str, *, contains: bool = False) -> None:
         self._prefix = statement_prefix
+        self._contains = contains
         self._owner: int | None = None
         self.reached = threading.Event()
         self.release = threading.Event()
@@ -73,7 +96,12 @@ class Pause:
 
     def _after(self, *args: Any) -> None:  # noqa: ANN401
         statement = str(args[2])
-        if self._owner == threading.get_ident() and statement.lstrip().startswith(self._prefix):
+        matched = (
+            self._prefix in statement
+            if self._contains
+            else statement.lstrip().startswith(self._prefix)
+        )
+        if self._owner == threading.get_ident() and matched:
             self._owner = None
             self.reached.set()
             if not self.release.wait(JOIN_TIMEOUT_SECONDS):
@@ -90,8 +118,15 @@ def engine(db_engine: Engine) -> Engine:
     return db_engine
 
 
-def _archive(engine: Engine, capture_id: str, *, key: str, expected: int = 0) -> None:
-    principal = Principal(PRINCIPAL_ID, PrincipalKind.OPERATOR, authenticated=True)
+def _archive(
+    engine: Engine,
+    capture_id: str,
+    *,
+    key: str,
+    expected: int = 0,
+    principal_id: str = PRINCIPAL_ID,
+) -> None:
+    principal = Principal(principal_id, PrincipalKind.OPERATOR, authenticated=True)
     authorization = Authorization(
         principal=principal,
         capability=Capability.CAPTURE_REVISE,
@@ -333,3 +368,208 @@ def test_a_final_attempt_is_refunded_and_claimable_after_restore(engine: Engine)
         )
     assert resumed is not None
     assert resumed.operation_id == saved.operation_id
+
+
+def _assertions(engine: Engine, version_id: str) -> int:
+    with engine.connect() as connection:
+        return int(
+            connection.execute(
+                select(func.count())
+                .select_from(capture_assertions)
+                .where(capture_assertions.c.version_id == version_id)
+            ).scalar_one()
+        )
+
+
+def _decision(principal_id: str, case_id: str) -> ReviewDecisionRequest:
+    return ReviewDecisionRequest(
+        review_case_id=case_id,
+        expected_review_version=0,
+        disposition=Disposition.ACCEPT,
+        principal_id=principal_id,
+        correlation_id=issue_identifier(IdKind.CORRELATION),
+        audit_id=issue_identifier(IdKind.AUDIT),
+        policy_version=POLICY_VERSION,
+        decided_at=NOW,
+    )
+
+
+def test_an_accept_that_holds_the_root_survives_a_later_archive(engine: Engine) -> None:
+    """T-CRL-10, accept first: the assertion commits, then the archive proceeds."""
+    principal_id = issue_identifier(IdKind.PRINCIPAL)
+    with engine.begin() as connection:
+        capture_id, version_id = _admit(connection, principal_id)
+        proposal_id, _span = _proposal(connection, version_id)
+        case_id = open_review_case(connection, proposal_id)
+    assert case_id is not None
+    pause = Pause(engine, "FOR SHARE", contains=True)
+
+    def _accept() -> None:
+        pause.arm()
+        with engine.begin() as connection:
+            decide_review(connection, _decision(principal_id, str(case_id)))
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        accepted = pool.submit(_accept)
+        assert pause.reached.wait(JOIN_TIMEOUT_SECONDS), "accept never shared the root"
+        archived = pool.submit(
+            _archive, engine, capture_id, key="tcrl10-accept-first", principal_id=principal_id
+        )
+        try:
+            _wait_until_blocked(engine, archived)
+        finally:
+            pause.release.set()
+        accepted.result(timeout=JOIN_TIMEOUT_SECONDS)
+        archived.result(timeout=JOIN_TIMEOUT_SECONDS)
+    assert _assertions(engine, version_id) == 1
+
+
+def test_an_archive_that_holds_the_root_denies_the_accept(engine: Engine) -> None:
+    """T-CRL-10, archive first: the accept is withdrawn and writes no assertion."""
+    principal_id = issue_identifier(IdKind.PRINCIPAL)
+    with engine.begin() as connection:
+        capture_id, version_id = _admit(connection, principal_id)
+        proposal_id, _span = _proposal(connection, version_id)
+        case_id = open_review_case(connection, proposal_id)
+    assert case_id is not None
+    pause = Pause(engine, "SELECT knowledge.captures.capture_id")
+
+    def _hold_archive() -> None:
+        pause.arm()
+        _archive(engine, capture_id, key="tcrl10-archive-first", principal_id=principal_id)
+
+    def _accept() -> None:
+        with engine.begin() as connection:
+            decide_review(connection, _decision(principal_id, str(case_id)))
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        archived = pool.submit(_hold_archive)
+        assert pause.reached.wait(JOIN_TIMEOUT_SECONDS), "archive never locked the root"
+        accepted = pool.submit(_accept)
+        try:
+            _wait_until_blocked(engine, accepted)
+        finally:
+            pause.release.set()
+        archived.result(timeout=JOIN_TIMEOUT_SECONDS)
+        with pytest.raises(CaptureWithdrawnError):
+            accepted.result(timeout=JOIN_TIMEOUT_SECONDS)
+    assert _assertions(engine, version_id) == 0
+
+
+def test_prepare_drops_an_item_archived_while_it_waits(
+    engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T-CRL-11: archive commits first, and the run stores no archived item."""
+    principal_id = issue_identifier(IdKind.PRINCIPAL)
+    with engine.begin() as connection:
+        capture_id, version_id = _admit(connection, principal_id)
+    item = PreparedContextEvidence(
+        reference_id=capture_id,
+        principal_id=principal_id,
+        plane=ContextPlane.CAPTURE,
+        authority_class=SourceAuthorityClass.PRODUCT_OWNED_CAPTURE,
+        lifecycle=EvidenceLifecycle.USER_AUTHORED,
+        text=NOTE,
+        freshness=NOW,
+        capture_id=capture_id,
+        capture_version_id=version_id,
+    )
+
+    def _selected(plane: ContextPlane, **_kwargs: object) -> PlaneGather:
+        return PlaneGather(
+            plane=plane,
+            evidence=[item],
+            coverage=[ContextCoverage(plane=plane, state=CoverageState.SEARCHED_COMPLETE)],
+        )
+
+    monkeypatch.setattr("my_pa.application.context.service.search_plane", _selected)
+    pause = Pause(engine, "SELECT knowledge.captures.capture_id")
+
+    def _hold_archive() -> None:
+        pause.arm()
+        _archive(engine, capture_id, key="tcrl11-arch", principal_id=principal_id)
+
+    def _prepare() -> object:
+        principal = Principal(principal_id, PrincipalKind.OPERATOR, authenticated=True)
+        authorization = Authorization(
+            principal=principal,
+            capability=Capability.CONTEXT_PREPARE,
+            purpose=Purpose.CONTEXT_PREPARATION,
+            correlation_id=issue_identifier(IdKind.CORRELATION),
+            request_id=f"req-{issue_identifier(IdKind.CORRELATION)}",
+            audit_id=issue_identifier(IdKind.AUDIT),
+            at=NOW,
+            decision=PolicyDecision(allowed=True, policy_version=POLICY_VERSION),
+            requested_source_ids=frozenset(),
+            enrollments=(),
+        )
+        with SqlAlchemyUnitOfWork(engine, audit=_Audit()) as unit_of_work:
+            return ContextPreparationService(managed_documents_composed=False).prepare(
+                unit_of_work,
+                authorization,
+                command=SimpleNamespace(  # type: ignore[arg-type]
+                    query="fence",
+                    conversation_context=None,
+                    subject_hints=(),
+                    requested_planes=(ContextPlane.CAPTURE,),
+                ),
+                query=SearchQuery("fence"),
+            )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        archived = pool.submit(_hold_archive)
+        assert pause.reached.wait(JOIN_TIMEOUT_SECONDS), "archive never locked the root"
+        prepared_future = pool.submit(_prepare)
+        try:
+            _wait_until_blocked(engine, prepared_future)
+        finally:
+            pause.release.set()
+        archived.result(timeout=JOIN_TIMEOUT_SECONDS)
+        prepared = prepared_future.result(timeout=JOIN_TIMEOUT_SECONDS)
+    assert ContextLimitationCode.CAPTURE_WITHDRAWN in prepared.limitations
+    assert all(cited.capture_id != capture_id for cited in prepared.evidence)
+    with engine.connect() as connection:
+        cited = connection.execute(
+            select(func.count())
+            .select_from(context_run_items)
+            .where(context_run_items.c.capture_id == capture_id)
+        ).scalar_one()
+    assert cited == 0
+
+
+def test_overlapping_root_fences_do_not_deadlock_with_an_archive(engine: Engine) -> None:
+    """T-CRL-13: two overlapping shares plus one archive. No 40P01; the archived root is denied."""
+    principal_id = issue_identifier(IdKind.PRINCIPAL)
+    with engine.begin() as connection:
+        first, _one = _admit(connection, principal_id)
+        second, _two = _admit(connection, principal_id)
+        third, _three = _admit(connection, principal_id)
+    pause = Pause(engine, "FOR SHARE", contains=True)
+    context = capture_context(principal_id)
+
+    def _hold_pair() -> tuple[str, ...]:
+        pause.arm()
+        with engine.begin() as connection:
+            return require_active_capture_roots(connection, context, capture_ids=(second, first))
+
+    def _other_pair() -> tuple[str, ...]:
+        with engine.begin() as connection:
+            return require_active_capture_roots(connection, context, capture_ids=(third, second))
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        held = pool.submit(_hold_pair)
+        assert pause.reached.wait(JOIN_TIMEOUT_SECONDS), "the first fence never shared its roots"
+        other = pool.submit(_other_pair)
+        archived = pool.submit(
+            _archive, engine, first, key="tcrl13-arch", principal_id=principal_id
+        )
+        try:
+            _wait_until_blocked(engine, archived)
+            assert not other.done() or other.exception() is None
+        finally:
+            pause.release.set()
+        assert held.result(timeout=JOIN_TIMEOUT_SECONDS) == tuple(sorted((first, second)))
+        assert other.result(timeout=JOIN_TIMEOUT_SECONDS) == tuple(sorted((second, third)))
+        archived.result(timeout=JOIN_TIMEOUT_SECONDS)
+    with pytest.raises(CaptureWithdrawnError), engine.begin() as connection:
+        require_active_capture_roots(connection, context, capture_ids=(first, second))

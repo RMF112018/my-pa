@@ -2462,3 +2462,22 @@ frontend, deployment, or production changes.
 Retention, archive duration, draft expiry, hard-delete authority and audit
 retention remain unresolved under `O-10`; no deletion or risk acceptance is
 inferred. Historical Quick Capture mirrors and decision rows remain unchanged.
+
+## 19. Capture lifecycle implementation planning — CRL-WP-03
+
+On 2026-09-30 the operator authorized implementation planning following the
+accepted CRL-WP-02 product contract. The
+[capture lifecycle implementation plan](capture-lifecycle-implementation-plan.md)
+selects append-only lifecycle events and receipts, owner-root serialization,
+Capture-only lease generations and nonfailure suspension, current eligibility,
+active/default discovery, and current provenance disclosure. Its closure ledgers
+and CW-001–019 / CW-AC-01–10 matrix define the proofs required before a complete
+runtime slice can expose archive/restore.
+
+This is a planning disposition, not implementation evidence or runtime authority.
+No schema, capability, grant, worker, frontend, deployment or production change
+is activated. Runtime implementation requires separate explicit authorization,
+refreshed repository/migration identity, synthetic validation and independent
+exact-head review. Retention/privacy erasure, hard deletion and other record
+families remain outside this objective. Historical contract decisions and
+Quick Capture mirrors are unchanged.

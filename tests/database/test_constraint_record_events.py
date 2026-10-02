@@ -107,6 +107,9 @@ class ConstraintRuntime:
             constraint_management_unit_of_work=lambda: SqlAlchemyConstraintManagementUnitOfWork(
                 self.engine
             ),
+            # Lease authority is the service clock, not metadata.requested_at.
+            # The sync fixture lease is REQUESTED_AT + 30 days (2026-10-02 12:00Z).
+            clock=lambda: REQUESTED_AT,
         )
 
     def close(self) -> None:

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { ClipboardCheck, Moon, Sun, User } from "lucide-react";
+import { ClipboardCheck, Moon, Plus, Sun, User } from "lucide-react";
 import { activeFor } from "@/components/shell/destinations";
 import type { PrincipalSession } from "@/contracts/identity";
 import type { Density, Theme } from "@/components/shell/shell-preferences";
@@ -128,12 +128,14 @@ export function ContextHeader({
   density,
   onToggleTheme,
   onToggleDensity,
+  onNew,
 }: {
   principal: PrincipalSession;
   theme: Theme;
   density: Density;
   onToggleTheme: () => void;
   onToggleDensity: () => void;
+  onNew: () => void;
 }) {
   const pathname = usePathname() ?? "";
   const reviewActive = activeFor(pathname, "/review");
@@ -157,24 +159,35 @@ export function ContextHeader({
       className="flex min-h-12 items-center justify-between gap-2 border-b border-border bg-surface pt-[max(0.375rem,env(safe-area-inset-top))] pr-[max(0.75rem,env(safe-area-inset-right))] pb-1.5 pl-[max(0.75rem,env(safe-area-inset-left))]"
     >
       <span className="shrink-0 text-lg font-semibold text-interactive">My PA</span>
-      <div className="ml-auto flex min-w-0 items-center justify-end gap-1 lg:hidden">
-        <Link
-          href="/review"
-          aria-label="Review"
-          aria-current={reviewActive ? "page" : undefined}
-          className={`inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--radius-md)] ${
-            reviewActive ? "bg-interactive-subtle text-interactive" : "text-text-secondary"
-          }`}
+      <div className="ml-auto flex min-w-0 items-center justify-end gap-1">
+        <button
+          type="button"
+          onClick={onNew}
+          aria-haspopup="dialog"
+          className="inline-flex min-h-11 items-center gap-1 rounded-[var(--radius-md)] px-3 text-sm font-medium text-interactive hover:bg-interactive-subtle"
         >
-          <ClipboardCheck size={18} />
-        </Link>
-        <AccountMenu
-          principal={principal}
-          theme={theme}
-          density={density}
-          onToggleTheme={onToggleTheme}
-          onToggleDensity={onToggleDensity}
-        />
+          <Plus size={18} aria-hidden="true" />
+          New
+        </button>
+        <div className="flex items-center gap-1 lg:hidden">
+          <Link
+            href="/review"
+            aria-label="Review"
+            aria-current={reviewActive ? "page" : undefined}
+            className={`inline-flex min-h-11 min-w-11 items-center justify-center rounded-[var(--radius-md)] ${
+              reviewActive ? "bg-interactive-subtle text-interactive" : "text-text-secondary"
+            }`}
+          >
+            <ClipboardCheck size={18} />
+          </Link>
+          <AccountMenu
+            principal={principal}
+            theme={theme}
+            density={density}
+            onToggleTheme={onToggleTheme}
+            onToggleDensity={onToggleDensity}
+          />
+        </div>
       </div>
     </header>
   );

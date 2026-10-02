@@ -54,7 +54,7 @@ function NavLink({
       }`}
     >
       <Icon icon={item.icon} size={19} />
-      <span className={collapsed ? "sr-only" : ""}>{item.label}</span>
+      <span className={collapsed ? "sr-only" : "max-lg:sr-only"}>{item.label}</span>
     </Link>
   );
 }
@@ -77,13 +77,12 @@ export function NavRail({
       /*
        * The rail stretches the full height of the shell row inside
        * `min-h-screen`, so its bottom — which carries the collapse control
-       * under `mt-auto` — is the physical bottom edge on a tablet, where the
-       * home indicator lives. Its left edge is physical too, but no device that
-       * reaches `lg` reports a non-zero left inset, so it keeps the plain 8px.
+       * under `mt-auto` — is the physical bottom edge on a tablet. The compact
+       * rail also makes room for a landscape safe-area inset on its left.
        */
-      className={`hidden shrink-0 flex-col border-r bg-surface pt-2 pr-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pl-2 lg:flex ${collapsed ? "w-16" : "w-[232px]"}`}
+      className={`hidden w-[calc(4rem+env(safe-area-inset-left))] shrink-0 flex-col border-r bg-surface pt-2 pr-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pl-[max(0.5rem,env(safe-area-inset-left))] md:flex ${collapsed ? "lg:w-16" : "lg:w-[224px]"}`}
     >
-      <div className={`mb-3 px-2 ${collapsed ? "sr-only" : "text-lg font-semibold text-interactive"}`}>
+      <div className={`mb-3 px-2 ${collapsed ? "sr-only" : "max-lg:sr-only text-lg font-semibold text-interactive"}`}>
         My PA
       </div>
       <Button
@@ -94,7 +93,7 @@ export function NavRail({
         data-testid="capture-button-desktop"
       >
         <Plus size={18} />
-        <span className={collapsed ? "sr-only" : ""}>Capture</span>
+        <span className={collapsed ? "sr-only" : "max-lg:sr-only"}>Capture</span>
       </Button>
       <div className="space-y-1">
         {DESKTOP_PRIMARY.map((item) => (
@@ -110,9 +109,14 @@ export function NavRail({
         {UTILITY_DESTINATIONS.map((item) => (
           <NavLink key={item.href} item={item} pathname={pathname} collapsed={collapsed} />
         ))}
-        {account ? <AccountMenu {...account} collapsed={collapsed} labeled /> : null}
+        {account ? (
+          <div className="hidden lg:block">
+            <AccountMenu {...account} collapsed={collapsed} labeled />
+          </div>
+        ) : null}
         <IconButton
           label={collapsed ? "Expand navigation" : "Collapse navigation"}
+          className="max-lg:hidden"
           onClick={() => onCollapsedChange(!collapsed)}
         >
           {collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
@@ -140,7 +144,7 @@ export function MobileNav({ onCapture }: { onCapture: () => void }) {
          * on a zero base *is* `max(0, env())`; this matches the bottom rule
          * that was already here, which is left untouched.
          */
-        className="fixed inset-x-0 bottom-0 z-30 flex border-t bg-surface pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] lg:hidden"
+        className="fixed inset-x-0 bottom-0 z-30 flex border-t bg-surface pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] pl-[env(safe-area-inset-left)] md:hidden"
       >
         {left.map((item) => {
           const active = activeFor(pathname, item.href);

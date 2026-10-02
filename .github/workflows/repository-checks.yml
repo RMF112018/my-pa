@@ -17,13 +17,12 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    # 40, raised from 30 on 2026-09-13. Structured Actions timing (no job logs)
-    # recorded successful wall clocks of 24m16s, 23m04s, and 29m42s in runs
-    # 34776159694, 34783229248, and 34788354083. The same preserved FAST step in
-    # WP02 run 34792305535 ended at 29m32s and the job failed at 29m41s, at the
-    # prior budget boundary. Ten minutes of headroom keeps the complete gate and
-    # reports actual test failures instead of runner-capacity exhaustion.
-    timeout-minutes: 40
+    # Provisional 60-minute measurement headroom for the complete FAST gate.
+    # The prior 40-minute budget was classified CI_TIMEOUT_BUDGET_STALE,
+    # corroborated by BASELINE_PREEXISTING_CI_FAILURE. Coverage reduction is
+    # not authorized. Continued exhaustion requires separate Linux hotspot,
+    # sharding, or optimization authority; this is not a performance SLA.
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -183,7 +182,7 @@ jobs:
           exec 9<"$ledger" || exit 1
           export CI_PYTEST_FAILURE_LEDGER="$ledger"
           status=0
-          if python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery" 9<&-; then
+          if python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery" --durations=50 9<&-; then
             :
           else
             status=$?
@@ -324,13 +323,12 @@ jobs:
     # green. `src/my_pa/contracts/v1/envelope.py` avoids that form for this
     # reason, and this job is what keeps that reason true.
     runs-on: ubuntu-latest
-    # 40, raised from 30 on 2026-09-13. Structured Actions timing (no job logs)
-    # recorded successful wall clocks of 29m04s, 28m31s, and 29m25s in runs
-    # 34776159694, 34783229248, and 34788354083. WP02 run 34792305535 reached
-    # 30m15s job wall clock and was cancelled while the unchanged floor step was
-    # still running. Ten minutes of headroom preserves the full floor gate while
-    # separating test results from the runner budget.
-    timeout-minutes: 40
+    # Provisional 60-minute measurement headroom for the complete FAST gate.
+    # The prior 40-minute budget was classified CI_TIMEOUT_BUDGET_STALE,
+    # corroborated by BASELINE_PREEXISTING_CI_FAILURE. Coverage reduction is
+    # not authorized. Continued exhaustion requires separate Linux hotspot,
+    # sharding, or optimization authority; this is not a performance SLA.
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -538,7 +536,7 @@ jobs:
           exec 9<"$ledger" || exit 1
           export CI_PYTEST_FAILURE_LEDGER="$ledger"
           status=0
-          if python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery" 9<&-; then
+          if python -m pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery" --durations=50 9<&-; then
             :
           else
             status=$?

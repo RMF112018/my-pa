@@ -9296,9 +9296,23 @@ class ApplicationService:
                 )
         except TaskIdempotencyConflictError:
             raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
+        with _translated():
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (receipt.task.origin_evidence_ref, receipt.task.closure_evidence_ref),
+            )
         return _Result(
             payload={
-                "task": _task_view(receipt.task).to_canonical_dict(),
+                "task": _task_view(
+                    receipt.task,
+                    origin_evidence_capture_state=_ref_state(
+                        states, receipt.task.origin_evidence_ref
+                    ),
+                    closure_evidence_capture_state=_ref_state(
+                        states, receipt.task.closure_evidence_ref
+                    ),
+                ).to_canonical_dict(),
                 "history": _task_history_view(receipt.history).to_canonical_dict(),
                 "replayed": receipt.replayed,
             },
@@ -9386,9 +9400,23 @@ class ApplicationService:
                 raise InternalError() from None
             raise _CommitRejectedConflictError(ConflictError(SafeDetail.TASK_ID)) from None
 
+        with _translated():
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (receipt.task.origin_evidence_ref, receipt.task.closure_evidence_ref),
+            )
         return _Result(
             payload={
-                "task": _task_view(receipt.task).to_canonical_dict(),
+                "task": _task_view(
+                    receipt.task,
+                    origin_evidence_capture_state=_ref_state(
+                        states, receipt.task.origin_evidence_ref
+                    ),
+                    closure_evidence_capture_state=_ref_state(
+                        states, receipt.task.closure_evidence_ref
+                    ),
+                ).to_canonical_dict(),
                 "history": _task_history_view(receipt.history).to_canonical_dict(),
                 "replayed": receipt.replayed,
             },
@@ -9456,9 +9484,23 @@ class ApplicationService:
         except TaskIdempotencyConflictError:
             raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
 
+        with _translated():
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (receipt.task.origin_evidence_ref, receipt.task.closure_evidence_ref),
+            )
         return _Result(
             payload={
-                "task": _task_view(receipt.task).to_canonical_dict(),
+                "task": _task_view(
+                    receipt.task,
+                    origin_evidence_capture_state=_ref_state(
+                        states, receipt.task.origin_evidence_ref
+                    ),
+                    closure_evidence_capture_state=_ref_state(
+                        states, receipt.task.closure_evidence_ref
+                    ),
+                ).to_canonical_dict(),
                 "history": _task_history_view(receipt.history).to_canonical_dict(),
                 "replayed": receipt.replayed,
             },
@@ -10114,7 +10156,14 @@ class ApplicationService:
         except CommitmentIdempotencyConflictError:
             raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
         with _translated():
-            public = _commitment_public_view(unit_of_work, principal_id, receipt.commitment)
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (receipt.commitment.origin_evidence_ref, receipt.commitment.closure_evidence_ref),
+            )
+            public = _commitment_public_view(
+                unit_of_work, principal_id, receipt.commitment, states=states
+            )
         return _Result(
             payload={
                 "commitment": public,
@@ -10169,7 +10218,14 @@ class ApplicationService:
         except CommitmentIdempotencyConflictError:
             raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
         with _translated():
-            public = _commitment_public_view(unit_of_work, principal_id, receipt.commitment)
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (receipt.commitment.origin_evidence_ref, receipt.commitment.closure_evidence_ref),
+            )
+            public = _commitment_public_view(
+                unit_of_work, principal_id, receipt.commitment, states=states
+            )
         return _Result(
             payload={
                 "commitment": public,
@@ -10236,7 +10292,14 @@ class ApplicationService:
         except CommitmentIdempotencyConflictError:
             raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
         with _translated():
-            public = _commitment_public_view(unit_of_work, principal_id, receipt.commitment)
+            states = _evidence_capture_states(
+                unit_of_work,
+                principal_id,
+                (receipt.commitment.origin_evidence_ref, receipt.commitment.closure_evidence_ref),
+            )
+            public = _commitment_public_view(
+                unit_of_work, principal_id, receipt.commitment, states=states
+            )
         return _Result(
             payload={
                 "commitment": public,

@@ -182,10 +182,7 @@ def test_every_new_foreign_key_restricts_and_is_not_deferrable() -> None:
 # ---- offline SQL ----------------------------------------------------------------------
 
 
-def test_the_offline_upgrade_emits_the_tables_triggers_and_overlay(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("MY_PA_DATABASE_URL", "postgresql+psycopg://localhost/my_pa")
+def test_the_offline_upgrade_emits_the_tables_triggers_and_overlay() -> None:
     rendered = _offline(f"{PREVIOUS}:{REVISION}")
     assert f"ADD CONSTRAINT {ROOT_UNIQUE} UNIQUE (capture_id, owner_principal_id)" in rendered
     for name in TABLE_NAMES:
@@ -201,10 +198,7 @@ def test_the_offline_upgrade_emits_the_tables_triggers_and_overlay(
     assert f"SET version_num='{REVISION}'" in rendered
 
 
-def test_the_offline_downgrade_refuses_first_and_unwinds_everything(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("MY_PA_DATABASE_URL", "postgresql+psycopg://localhost/my_pa")
+def test_the_offline_downgrade_refuses_first_and_unwinds_everything() -> None:
     rendered = _offline(f"{REVISION}:{PREVIOUS}", down=True)
     refusal = rendered.index("refusing to downgrade")
     assert rendered.index("DROP COLUMN pause_cause") > refusal
